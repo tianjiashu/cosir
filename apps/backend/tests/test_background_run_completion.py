@@ -48,13 +48,15 @@ async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypa
             self.stopped = threading.Event()
             self.command = None
 
-        def execute(self, command, cwd, timeout, **kwargs):
+        def execute(self, command, cwd, timeout, output, **kwargs):
             self.command = command
             if not self.stopped.is_set():
                 assert gates[command].wait(10), "command was never released"
+            output.feed(command.encode())
+            output.finish()
             if self.stopped.is_set():
-                return ExecutionResult(end="cancelled", output=command)
-            return ExecutionResult(end="exited", output=command, exit_code=0)
+                return ExecutionResult(end="cancelled")
+            return ExecutionResult(end="exited", exit_code=0)
 
         def stop(self):
             self.stopped.set()

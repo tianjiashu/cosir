@@ -137,14 +137,18 @@ class GatedCommands:
                 self.stopped = threading.Event()
                 self.command: str | None = None
 
-            def execute(self, command: str, cwd: Any, timeout: Any, **_: Any) -> ExecutionResult:
+            def execute(
+                self, command: str, cwd: Any, timeout: Any, output: Any, **_: Any
+            ) -> ExecutionResult:
                 self.command = command
                 started.append(command)
                 if not self.stopped.is_set():
                     assert gates[command].wait(10), "command was never released"
+                output.feed(f"out:{command}".encode())
+                output.finish()
                 if self.stopped.is_set():
-                    return ExecutionResult(end="cancelled", output=f"out:{command}")
-                return ExecutionResult(end="exited", output=f"out:{command}", exit_code=0)
+                    return ExecutionResult(end="cancelled")
+                return ExecutionResult(end="exited", exit_code=0)
 
             def stop(self) -> None:
                 self.stopped.set()

@@ -33,10 +33,12 @@ describe("toolHeading", () => {
     expect(toolHeading("browser_evaluate", { expression: "a".repeat(70) }).target).toBe(`${"a".repeat(60)}…`);
   });
 
-  it("终端填入写「会话 · 命令」，MCP 与 Skill 按动作拼目标", () => {
-    expect(toolHeading("terminal_write", { session_id: "term_1", command: "npm test" }).target).toBe("term_1 · npm test");
-    expect(toolHeading("terminal_write", { session_id: "term_1" }).target).toBe("term_1");
-    // 流式参数里命令先于会话到达时不拼出「null · 命令」。
+  it("终端工具按 terminal_id 拼目标，MCP 与 Skill 按动作拼目标", () => {
+    expect(toolHeading("terminal_write", { terminal_id: "term_1", command: "npm test" }).target).toBe("term_1 · npm test");
+    expect(toolHeading("terminal_write", { terminal_id: "term_1" }).target).toBe("term_1");
+    expect(toolHeading("terminal_read", { terminal_id: "call-1" }).target).toBe("call-1");
+    expect(toolHeading("terminal_stop", { terminal_id: "call-1" })).toEqual({ title: "停止命令", target: "call-1" });
+    // 流式参数里命令先于终端 id 到达时不拼出「null · 命令」。
     expect(toolHeading("terminal_write", { command: "npm test" }).target).toBeNull();
     expect(toolHeading("mcp", { action: "call", server_name: "fs", tool_name: "read" })).toEqual({ title: "调用 MCP", target: "fs/read" });
     expect(toolHeading("mcp", { action: "list", server_name: "fs" }).target).toBe("fs");

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.tool.execute.tool_output_budget import ToolOutputBudget
+from app.core.tool.execute.tool_output_budget import ToolOutputBudget, fit_head_tail
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 
 
@@ -175,3 +175,41 @@ def test_tiny_budget_still_writes_full_artifact(tmp_path: Path) -> None:
     assert isinstance(artifact_path, str) and artifact_path
     assert (root / artifact_path).read_text(encoding="utf-8") == content
 
+
+
+def test_fit_head_tail_matches_the_original_truncation(tmp_path: Path) -> None:
+    """同一段文本作为头尾传入时，结果与原截断逐字相同（算法只有一份）。"""
+    content = "".join(f"line-{i:04d}\n" for i in range(500))
+    budget = ToolOutputBudget(max_chars=5000)
+
+    assert fit_head_tail(
+        content,
+        content,
+        total_chars=len(content),
+        total_lines=content.count("\n"),
+        artifact_path="artifact.txt",
+        max_chars=budget._max_chars,
+    ) == budget._truncate_content(content, "artifact.txt")
+
+
+def test_fit_head_tail_takes_prefix_from_head_and_suffix_from_tail() -> None:
+    """``CommandOutput`` 溢出后只有头尾两段：结果的头来自 head、尾来自 tail，长度不超预算。"""
+    lines = [f"line-{i:04d}\n" for i in range(1000)]
+    content = "".join(lines)
+    head = content[:4000]
+    tail = content[-4000:]
+
+    result = fit_head_tail(
+        head,
+        tail,
+        total_chars=len(content),
+        total_lines=len(lines),
+        artifact_path="artifact.txt",
+        max_chars=3000,
+    )
+
+    assert len(result) <= 3000
+    assert result.startswith("line-0000\n")
+    assert result.endswith(lines[-1])
+    assert "output truncated" in result
+    assert "artifact.txt" in result

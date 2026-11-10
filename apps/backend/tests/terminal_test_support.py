@@ -236,3 +236,22 @@ def wait_until(predicate: Callable[[], bool], timeout: float = 2.0) -> None:
         if time.monotonic() > deadline:
             raise AssertionError("condition not reached")
         time.sleep(0.01)
+
+
+def run_local_command(
+    command: str,
+    cwd: Any,
+    timeout: float,
+    *,
+    shell: str = "auto",
+) -> tuple[Any, Any]:
+    """直接跑 ``LocalExecutionBackend``（不经工具层），返回 (结局, 输出汇总)。
+
+    输出归调用方持有的 ``CommandOutput``，所以直接调后端的测试也要自己建一个再读它。
+    """
+    from app.tools.tool_handler.terminal.command_output import CommandOutput
+    from app.tools.tool_handler.terminal.local_backend import LocalExecutionBackend
+
+    output = CommandOutput(workspace_root=Path(cwd))
+    result = LocalExecutionBackend().execute(command, str(cwd), timeout, output, shell=shell)
+    return result, output.summary()

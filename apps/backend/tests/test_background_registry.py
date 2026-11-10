@@ -135,7 +135,7 @@ def test_close_waits_for_in_flight_delivery(
 
     def deliver() -> bool:
         if user_cancel:
-            return registry.request_user_cancel(1, "call-a", driving=False)
+            return registry.request_cancel(1, "call-a", driving=False)
         return registry.complete(1, "call-a", BackgroundConclusion({}))
 
     def close() -> bool:
@@ -149,7 +149,7 @@ def test_close_waits_for_in_flight_delivery(
             assert entered.wait(2)
             assert not registered(registry, 1, "call-a")
             assert not registry.complete(1, "call-a", BackgroundConclusion({}))
-            assert not registry.request_user_cancel(1, "call-a", driving=False)
+            assert not registry.request_cancel(1, "call-a", driving=False)
             closer = executor.submit(close)
             assert closing_started.wait(2)
             with pytest.raises(TimeoutError):
@@ -439,14 +439,14 @@ def test_single_stop_before_registration_is_taken_over_until_the_receipt_commits
     registry = BackgroundRegistry()
     signals = []
     try:
-        assert registry.request_user_cancel(3, "early", driving=True)
+        assert registry.request_cancel(3, "early", driving=True)
         registry.register(
             "early", task_id=3, run_id=5, kind="agent_team", label="review",
             on_cancel=signals.append, after_commit=lambda: signals.append("start"),
             reports_user_stop=True,
         )
         assert signals == ["user"]
-        assert not registry.request_user_cancel(3, "early", driving=True)
+        assert not registry.request_cancel(3, "early", driving=True)
         registry.commit_start(3, "early")
         registry.commit_start(3, "early")
         assert signals == ["user", "start"]

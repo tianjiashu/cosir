@@ -42,8 +42,8 @@ from app.models.message_metadata import BackgroundWork
 from app.tools.display.terminal_display import build_terminal_display_data
 from app.tools.tool_handler import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
+from app.tools.tool_handler.terminal.command_output import CommandOutput
 from app.tools.tool_handler.terminal.execution_result import ExecutionResult
-from app.tools.tool_handler.terminal.output_collector import _OutputCollector
 from app.tools.tool_handler.terminal.output_stream import TerminalOutputStream
 from tests.runtime_context_stub import runtime_stub
 from tests.transport_fixtures import consumed
@@ -69,46 +69,51 @@ def _terminal_output_update(
     )
 
 
-def test_output_collector_emits_each_chunk_as_it_arrives() -> None:
+def test_command_output_streams_each_chunk_as_it_arrives(tmp_path: Path) -> None:
     emitted: list[str] = []
-    collector = _OutputCollector(sink=emitted.append)
+    output = CommandOutput(workspace_root=tmp_path, on_text=emitted.append)
 
-    collector.feed(b"starting now\n")
+    output.feed(b"starting now\n")
     assert "".join(emitted) == "starting now\n"
-    collector.feed(b"finished\n")
+    output.feed(b"finished\n")
 
-    assert collector.finish() == "starting now\nfinished\n"
+    output.finish()
+    summary = output.summary()
+    assert summary.model_head == "starting now\nfinished\n"
 
 
-def test_output_collector_stream_does_not_apply_character_budget() -> None:
+def test_command_output_display_keeps_raw_text_without_character_budget(tmp_path: Path) -> None:
+    """卡片通道保留原始文本；本用例的长度远小于卡片窗口，窗口裁剪另有单测。"""
     expected = "x" * 200_001
     emitted: list[str] = []
-    collector = _OutputCollector(sink=emitted.append)
+    output = CommandOutput(workspace_root=tmp_path, on_text=emitted.append)
 
-    collector.feed(expected.encode("utf-8"))
+    output.feed(expected.encode("utf-8"))
 
     assert "".join(emitted) == expected
-    assert collector.finish() == expected
+    output.finish()
+    assert output.summary().display == expected
 
 
-def test_finished_output_collector_freezes_snapshot_and_closes_live_sink() -> None:
-    """连接关闭时还在路上的块不再收集也不再旁路，结果与实时视图停在同一处。"""
+def test_finished_command_output_freezes_snapshot_and_closes_live_sink(tmp_path: Path) -> None:
+    """封存之后迟到的块不再收集也不再旁路，结果与实时视图停在同一处。"""
 
     emitted: list[str] = []
-    collector = _OutputCollector(sink=emitted.append)
-    collector.feed(b"starting now\n")
+    output = CommandOutput(workspace_root=tmp_path, on_text=emitted.append)
+    output.feed(b"starting now\n")
 
-    output = collector.finish()
-    collector.feed(b"finished\n")
+    output.finish()
+    output.feed(b"finished\n")
 
     assert emitted == ["starting now\n"]
-    assert output == collector.finish() == "starting now\n"
-    assert "truncated" not in output
+    assert output.summary().display == "starting now\n"
 
 
-def test_output_collector_preserves_ansi_and_sensitive_text_in_stream_and_final_output() -> None:
+def test_command_output_preserves_ansi_and_sensitive_text_in_stream_and_display(
+    tmp_path: Path,
+) -> None:
     emitted: list[str] = []
-    collector = _OutputCollector(sink=emitted.append)
+    output = CommandOutput(workspace_root=tmp_path, on_text=emitted.append)
 
     for chunk in [
         b"hello \xe4",
@@ -116,8 +121,8 @@ def test_output_collector_preserves_ansi_and_sensitive_text_in_stream_and_final_
         b"31m token=",
         b"super-secret-value \x1b[0m done\n",
     ]:
-        collector.feed(chunk)
-    output = collector.finish()
+        output.feed(chunk)
+    output.finish()
 
     streamed = "".join(emitted)
     assert "hello 你" in streamed
@@ -125,7 +130,9 @@ def test_output_collector_preserves_ansi_and_sensitive_text_in_stream_and_final_
     assert "token=" in streamed
     assert "\x1b[31m" in streamed
     assert "\x1b[0m" in streamed
-    assert output == "hello 你\x1b[31m token=super-secret-value \x1b[0m done\n"
+    raw = "hello 你\x1b[31m token=super-secret-value \x1b[0m done\n"
+    assert output.summary().display == raw
+    assert output.summary().model_head == "hello 你 token=super-secret-value  done\n"
 
 
 def test_terminal_display_preserves_raw_command_and_output() -> None:
@@ -138,24 +145,31 @@ def test_terminal_display_preserves_raw_command_and_output() -> None:
         end="exited",
         exit_code=0,
         signal=None,
+        omitted_lines=0,
+        log_path="",
     )
 
     assert display_data["output"] == raw_output
     assert display_data["command"] == "token=command-secret"
 
 
-def test_execute_terminal_returns_unmodified_output_to_model_and_snapshot(
+def test_execute_terminal_normalizes_model_output_and_keeps_raw_display(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    """模型正文只留整理后的纯文本；卡片展示仍是原始文本（含控制序列）。"""
     raw_output = "\x1b[32mapi_key=visible-secret\x1b[0m\n"
 
     class Backend:
         def stop(self) -> None:
             pass
 
-        def execute(self, *_args: Any, **_kwargs: Any) -> ExecutionResult:
-            return ExecutionResult(end="exited", output=raw_output, exit_code=0)
+        def execute(
+            self, _command: str, _cwd: str, _timeout: float, output: Any, **_kwargs: Any
+        ) -> ExecutionResult:
+            output.feed(raw_output.encode())
+            output.finish()
+            return ExecutionResult(end="exited", exit_code=0)
 
     monkeypatch.setattr(execute_terminal_module, "LocalExecutionBackend", Backend)
     observation = ExecuteTerminalTool().execute(
@@ -171,11 +185,12 @@ def test_execute_terminal_returns_unmodified_output_to_model_and_snapshot(
         ),
     )
 
-    assert raw_output in observation.content
+    assert "api_key=visible-secret" in observation.content
+    assert "\x1b" not in observation.content
     assert observation.display_data is not None
     assert observation.display_data["output"] == raw_output
-    assert "truncated" not in observation.display_data
-    assert "stream_truncated" not in observation.display_data
+    assert "output_omitted_lines" not in observation.display_data
+    assert "output_log_path" not in observation.display_data
 
 
 def test_terminal_output_budget_preserves_raw_content_and_artifact(
@@ -409,6 +424,40 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
         "output": "newtail",
     }
     assert part["terminal_output_seq"] == 2
+
+
+def test_runtime_update_trims_terminal_output_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """连续追加超过卡片窗口后，snapshot 只保留最近一段，并累计省略行数。"""
+    monkeypatch.setattr(Constant.Terminal, "DISPLAY_OUTPUT_WINDOW_CHARS", 20)
+    state = empty_snapshot()
+    projector = ConversationEventProjector(_MemorySnapshotOwner(state))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
+    projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
+    projector.process(
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            task_id=7,
+            run_id=9,
+            status="running",
+        )
+    )
+    projector.process(
+        ToolCallCreatedEvent(
+            task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
+        )
+    )
+    projector.process(
+        ToolCallStatusChangedEvent(
+            task_id=7, run_id=9, tool_call_id="call-1", status="running"
+        )
+    )
+
+    projector.process(_terminal_output_update(1, "a\n" * 20))
+    projector.process(_terminal_output_update(2, "b\n" * 20))
+
+    part = state["messages"][1]["parts"][0]
+    assert part["display_data"]["output"] == "b\n" * 9
+    assert part["display_data"]["output_omitted_lines"] == 31
 
 
 def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None:

@@ -2,9 +2,9 @@
 
 import asyncio
 import json
-from pathlib import Path
 import re
 from concurrent.futures import Future
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,14 +15,14 @@ from pydantic import ValidationError as ModelValidationError
 from app.config.configuration import get_tool_registry
 from app.core.tool.multi_agent.agent_team_run import AgentTeamRunTool
 from app.core.tool.multi_agent.args.agent_team_args import AgentTeamArgs
+from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 from app.tools.tool_handler.mcp_tool import MCPTool
-from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_models.mcp_args import MCPArgs
 from app.tools.tool_models.read_file_args import ReadFileArgs
-from app.tools.tool_models.terminal_session_args import TerminalWriteArgs
+from app.tools.tool_models.terminal_tools_args import TerminalWriteArgs
 
 
 def _assert_strict_schema(schema):
@@ -236,7 +236,7 @@ def test_team_rejects_ambiguous_node_identity(kind):
 def test_terminal_write_prefills_one_command_line(command):
     schema = strict_parameters_schema(TerminalWriteArgs)
     _assert_strict_schema(schema)
-    raw = {"session_id": "s", "command": command}
+    raw = {"terminal_id": "s", "command": command}
     Draft202012Validator(schema).validate(raw)
     result = validate_tool_arguments(raw, schema, TerminalWriteArgs)
     assert result.ok

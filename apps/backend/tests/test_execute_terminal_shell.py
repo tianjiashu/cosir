@@ -8,7 +8,6 @@ import pytest
 from pydantic import ValidationError
 
 from app.tools.tool_handler.terminal.local_backend import (
-    LocalExecutionBackend,
     _Launch,
     _resolve_command,
 )
@@ -17,7 +16,7 @@ from app.tools.tool_models.execute_terminal_args import (
     WindowsExecuteTerminalArgs,
     resolve_execute_terminal_args_model,
 )
-from tests.terminal_test_support import requires_terminal_worker
+from tests.terminal_test_support import requires_terminal_worker, run_local_command
 
 
 def test_windows_args_default_to_auto_and_reject_posix_shells() -> None:
@@ -53,15 +52,12 @@ def test_platform_resolver_selects_args_model_by_system_name() -> None:
 @pytest.mark.skipif(os.name != "nt", reason="cmd smoke test is Windows-specific")
 @requires_terminal_worker
 def test_local_backend_runs_explicit_cmd(tmp_path) -> None:
-    result = LocalExecutionBackend().execute(  # noqa: S604 - explicit shell under test
-        "echo execute-terminal-cmd-smoke",
-        str(tmp_path),
-        10,
-        shell="cmd",
+    result, output = run_local_command(  # noqa: S604 - explicit shell under test
+        "echo execute-terminal-cmd-smoke", tmp_path, 10, shell="cmd"
     )
 
     assert result.exit_code == 0
-    assert "execute-terminal-cmd-smoke" in result.output
+    assert "execute-terminal-cmd-smoke" in output.display
 
 
 @pytest.mark.skipif(
@@ -70,15 +66,12 @@ def test_local_backend_runs_explicit_cmd(tmp_path) -> None:
 )
 @requires_terminal_worker
 def test_local_backend_runs_explicit_powershell(tmp_path) -> None:
-    result = LocalExecutionBackend().execute(  # noqa: S604 - explicit shell under test
-        "Write-Output execute-terminal-powershell-smoke",
-        str(tmp_path),
-        10,
-        shell="powershell",
+    result, output = run_local_command(  # noqa: S604 - explicit shell under test
+        "Write-Output execute-terminal-powershell-smoke", tmp_path, 10, shell="powershell"
     )
 
     assert result.exit_code == 0
-    assert "execute-terminal-powershell-smoke" in result.output
+    assert "execute-terminal-powershell-smoke" in output.display
 
 
 @pytest.mark.skipif(os.name != "nt", reason="cmd 是 Windows 专属 shell")
@@ -135,15 +128,12 @@ def test_local_backend_runs_explicit_cmd_with_quoted_path(tmp_path: Path) -> Non
     target.mkdir()
     (target / "marker.txt").write_text("x", encoding="utf-8")
 
-    result = LocalExecutionBackend().execute(  # noqa: S604 - explicit shell under test
-        f'dir /b "{target}"',
-        str(tmp_path),
-        10,
-        shell="cmd",
+    result, output = run_local_command(  # noqa: S604 - explicit shell under test
+        f'dir /b "{target}"', tmp_path, 10, shell="cmd"
     )
 
     assert result.exit_code == 0
-    assert "marker.txt" in result.output
+    assert "marker.txt" in output.display
 
 
 @pytest.mark.skipif(os.name != "nt", reason="cmd 引号命令是 Windows 专属回归")
@@ -158,16 +148,13 @@ def test_local_backend_runs_explicit_cmd_with_quoted_multiword_argument(tmp_path
     target = tmp_path / "sample.txt"
     target.write_text("alpha beta gamma\n", encoding="utf-8")
 
-    result = LocalExecutionBackend().execute(  # noqa: S604 - explicit shell under test
-        f'findstr /I "alpha beta" "{target}"',
-        str(tmp_path),
-        10,
-        shell="cmd",
+    result, output = run_local_command(  # noqa: S604 - explicit shell under test
+        f'findstr /I "alpha beta" "{target}"', tmp_path, 10, shell="cmd"
     )
 
     assert result.exit_code == 0
-    assert "alpha beta gamma" in result.output
-    assert "Cannot open" not in result.output
+    assert "alpha beta gamma" in output.display
+    assert "Cannot open" not in output.display
 
 
 @pytest.mark.skipif(os.name != "posix", reason="用 dup2 替换 fd 0 模拟宿主存活管道")
@@ -179,7 +166,7 @@ def test_local_backend_does_not_inherit_backend_stdin(tmp_path: Path) -> None:
     saved_stdin = os.dup(0)
     os.dup2(read_end, 0)
     try:
-        result = LocalExecutionBackend().execute("cat", str(tmp_path), 5, shell="auto")
+        result, _output = run_local_command("cat", tmp_path, 5)
     finally:
         os.dup2(saved_stdin, 0)
         for fd in (saved_stdin, read_end, write_end):

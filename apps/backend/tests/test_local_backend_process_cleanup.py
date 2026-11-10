@@ -14,8 +14,9 @@ from pathlib import Path
 
 import pytest
 
+from app.tools.tool_handler.terminal.command_output import CommandOutput as _CommandOutput
 from app.tools.tool_handler.terminal.local_backend import LocalExecutionBackend
-from tests.terminal_test_support import requires_terminal_worker
+from tests.terminal_test_support import requires_terminal_worker, run_local_command
 
 pytestmark = [
     pytest.mark.skipif(os.name != "posix", reason="POSIX process groups and signals"),
@@ -48,15 +49,15 @@ def test_processes_left_behind_are_cleaned_without_holding_the_call(tmp_path: Pa
     """旧实现里 ``&`` / ``nohup`` 进程全部存活，握着输出管道的那个还让调用多等 5 秒。"""
 
     started = time.monotonic()
-    result = LocalExecutionBackend().execute(
+    result, output = run_local_command(
         "sleep 60 & a=$!; nohup sleep 60 >/dev/null 2>&1 & b=$!; echo \"PIDS $a $b\"",
-        str(tmp_path),
+        tmp_path,
         30,
     )
 
     assert result.exit_code == 0
     assert time.monotonic() - started < 3
-    pids = [int(pid) for pid in result.output.split("PIDS", 1)[1].split()]
+    pids = [int(pid) for pid in output.display.split("PIDS", 1)[1].split()]
     _assert_gone(pids, "process left behind by the command")
 
 
@@ -64,19 +65,19 @@ def test_timeout_stops_the_command_gently_first(tmp_path: Path) -> None:
     """超时先发 HUP / TERM：命令有机会收尾（这里写下标记），宽限之后才 KILL。"""
 
     marker = tmp_path / "hup"
-    result = LocalExecutionBackend().execute(
+    result, output = run_local_command(
         f"trap 'echo got-hup > {marker}; exit 0' HUP; echo ready; while :; do sleep 0.05; done",
-        str(tmp_path),
+        tmp_path,
         0.5,
     )
 
     assert result.end == "timed_out" and result.exit_code is None
-    assert "ready" in result.output
+    assert "ready" in output.display
     assert marker.read_text().strip() == "got-hup"
 
 
 def test_a_command_killed_by_a_signal_reports_the_signal(tmp_path: Path) -> None:
-    result = LocalExecutionBackend().execute("kill -TERM $$", str(tmp_path), 10)
+    result, _output = run_local_command("kill -TERM $$", tmp_path, 10)
 
     assert result.end == "signaled"
     assert result.signal == signal.SIGTERM and result.exit_code is None
@@ -84,7 +85,7 @@ def test_a_command_killed_by_a_signal_reports_the_signal(tmp_path: Path) -> None
 
 def test_a_command_killed_by_sighup_is_not_mistaken_for_a_stop(tmp_path: Path) -> None:
     """SIGHUP 的旧编码是 -1，与「被停止」的占位值相撞；现在结局与信号各自独立。"""
-    result = LocalExecutionBackend().execute("kill -HUP $$", str(tmp_path), 10)
+    result, _output = run_local_command("kill -HUP $$", tmp_path, 10)
 
     assert result.end == "signaled" and result.signal == signal.SIGHUP
 
@@ -94,7 +95,8 @@ def test_stop_before_the_command_starts_never_starts_it(tmp_path: Path) -> None:
     backend = LocalExecutionBackend()
     backend.stop()
 
-    result = backend.execute(f"touch {marker}", str(tmp_path), 30)
+    output = _CommandOutput(workspace_root=tmp_path)
+    result = backend.execute(f"touch {marker}", str(tmp_path), 30, output)
 
     assert result.end == "cancelled"
     time.sleep(0.3)
@@ -106,16 +108,15 @@ def test_a_stop_after_the_command_exited_keeps_its_exit(tmp_path: Path) -> None:
     backend = LocalExecutionBackend()
     threading.Timer(0.3, backend.stop).start()
 
-    result = backend.execute(
-        "(trap '' HUP TERM; exec sleep 5) & echo done", str(tmp_path), 30
-    )
+    output = _CommandOutput(workspace_root=tmp_path)
+    result = backend.execute("(trap '' HUP TERM; exec sleep 5) & echo done", str(tmp_path), 30, output)
 
     assert result.end == "exited" and result.exit_code == 0
-    assert "done" in result.output
+    assert "done" in output.summary().display
 
 
 def test_a_missing_working_directory_is_a_start_failure(tmp_path: Path) -> None:
-    result = LocalExecutionBackend().execute("echo hi", str(tmp_path / "missing"), 10)
+    result, _output = run_local_command("echo hi", tmp_path / "missing", 10)
 
     assert result.end == "start_failed"
     assert result.failure and result.exit_code is None
@@ -131,9 +132,12 @@ def test_command_is_cleaned_up_when_the_backend_process_group_is_killed(tmp_path
     job_file = tmp_path / "job.pid"
     script = f"""
 import time
+from pathlib import Path
 from app.tools.tool_handler.terminal.local_backend import LocalExecutionBackend
+from app.tools.tool_handler.terminal.command_output import CommandOutput
+output = CommandOutput(workspace_root=Path({str(tmp_path)!r}))
 LocalExecutionBackend().execute(
-    "trap '' HUP TERM; sleep 60 & echo $! > {job_file}; wait", {str(tmp_path)!r}, 120
+    "trap '' HUP TERM; sleep 60 & echo $! > {job_file}; wait", {str(tmp_path)!r}, 120, output
 )
 time.sleep(60)
 """

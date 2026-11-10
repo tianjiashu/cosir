@@ -15,8 +15,7 @@ from app.tools.shell.login_environment import RESOLVING_FLAG, apply_login_shell_
 from app.tools.terminal_runtime import worker_client
 from app.tools.terminal_runtime.errors import TerminalWorkerUnavailableError
 from app.tools.terminal_runtime.shell_resolver import ShellSpec
-from app.tools.tool_handler.terminal.local_backend import LocalExecutionBackend
-from tests.terminal_test_support import requires_terminal_worker
+from tests.terminal_test_support import requires_terminal_worker, run_local_command
 
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="登录 shell 解析只在 POSIX 上进行")
 
@@ -118,10 +117,10 @@ def test_execute_terminal_command_does_not_inherit_host_variables(
     monkeypatch.setenv("CODING_AGENT_HOST_TOKEN", "secret")
     monkeypatch.setenv("USER_OWN", "kept")
 
-    result = LocalExecutionBackend().execute("env", str(tmp_path), timeout=10)
+    _result, output = run_local_command("env", tmp_path, 10.0)
 
-    assert "CODING_AGENT_HOST_TOKEN" not in result.output
-    assert "USER_OWN=kept" in result.output
+    assert "CODING_AGENT_HOST_TOKEN" not in output.display
+    assert "USER_OWN=kept" in output.display
 
 
 def test_terminal_worker_spawns_with_user_command_environment(

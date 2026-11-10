@@ -12,10 +12,10 @@ import pytest
 
 from app.config.configuration import get_tool_registry
 from app.config.settings import Settings
-from app.core.tool.multi_agent.derivation import DERIVATIONS
 from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import (
     materialize_node_tools,
 )
+from app.core.tool.multi_agent.derivation import DERIVATIONS
 from app.core.tool.multi_agent.task_tool_scope import banned_derivation_tools, tools_for_task
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.models.task_kind import TASK_KINDS, USER_FACING_TASK_TYPES, TaskType
@@ -65,6 +65,8 @@ def test_read_only_tasks_can_delegate_but_not_use_user_surfaces(task_type: str) 
     """委派子 Agent 与 Team 节点只读：去掉需要用户界面的工具与建 Team，委派与等待照常保留。"""
     names = _names(task_type)
     assert not names & (_USER_SURFACE_ONLY | _terminal_session_tools())
+    # 终端读取与停止不依赖用户界面：子 Agent 与 Team 节点也能读、停自己的命令。
+    assert {"terminal_list", "terminal_read", "terminal_stop"} <= names
     assert {"delegate_task", "send_message", "task_status", "wait_messages"} <= names
     # fork 出的是侧栏对话：只读 Task 不能 fork。
     assert "fork_task" not in names
@@ -82,7 +84,7 @@ def test_team_node_tools_filter_by_rule_and_keep_unregistered_names() -> None:
         allowed_tools=["read_file", "agent_team", "terminal_read", "delegate_task", "ghost"]
     )
     kept = materialize_node_tools(profile, depth=0)  # type: ignore[arg-type]
-    assert kept == ["read_file", "delegate_task", "ghost"]
+    assert kept == ["read_file", "terminal_read", "delegate_task", "ghost"]
 
 
 _DERIVATION_TOOLS = {"delegate_task", "fork_task", "agent_team"}

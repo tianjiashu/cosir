@@ -20,6 +20,7 @@ from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal import LocalExecutionBackend
+from app.tools.tool_handler.terminal.command_output import CommandOutput as _CommandOutput
 from tests.live_cold_support import registered
 from tests.terminal_test_support import requires_terminal_worker
 
@@ -162,7 +163,8 @@ def test_local_backend_kills_the_command_when_stopped(tmp_path) -> None:
     backend = LocalExecutionBackend()
     threading.Timer(0.2, backend.stop).start()
     started = time.monotonic()
-    result = backend.execute(f"sleep 2; touch {marker}", str(tmp_path), 30)
+    output = _CommandOutput(workspace_root=tmp_path)
+    result = backend.execute(f"sleep 2; touch {marker}", str(tmp_path), 30, output)
     assert result.end == "cancelled" and result.exit_code is None
     assert time.monotonic() - started < 1.5
     time.sleep(2)
@@ -209,7 +211,7 @@ def test_foreground_cancel_retains_real_output(tmp_path) -> None:
             execution_context=_context(tmp_path, "call-cancel-output"),
         )
         _wait_for(marker.exists)
-        assert background_registry.request_user_cancel(
+        assert background_registry.request_cancel(
             _TASK_ID, "call-cancel-output", driving=False
         )
         observation = result.result(timeout=5)

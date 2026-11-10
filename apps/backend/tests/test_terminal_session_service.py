@@ -218,12 +218,12 @@ def test_read_pattern_returns_only_matching_lines_with_continuation(monkeypatch,
 def test_read_pattern_rejects_tail_and_invalid_regex() -> None:
     from pydantic import ValidationError
 
-    from app.tools.tool_models.terminal_session_args import TerminalReadArgs
+    from app.tools.tool_models.terminal_tools_args import TerminalReadArgs
 
     with pytest.raises(ValidationError, match="tail"):
-        TerminalReadArgs.model_validate({"session_id": "s", "pattern": "x", "tail": 5})
+        TerminalReadArgs.model_validate({"terminal_id": "s", "pattern": "x", "tail": 5})
     with pytest.raises(ValidationError, match="invalid pattern"):
-        TerminalReadArgs.model_validate({"session_id": "s", "pattern": "("})
+        TerminalReadArgs.model_validate({"terminal_id": "s", "pattern": "("})
 
 
 def test_user_typed_lines_are_reported_once(monkeypatch, tmp_path: Path) -> None:
@@ -405,14 +405,14 @@ def test_command_started_by_the_user_after_a_prefill(monkeypatch, tmp_path: Path
 def test_write_arguments_reject_line_breaks_and_control_characters() -> None:
     from pydantic import ValidationError
 
-    from app.tools.tool_models.terminal_session_args import TerminalWriteArgs
+    from app.tools.tool_models.terminal_tools_args import TerminalWriteArgs
 
-    assert TerminalWriteArgs(session_id="s", command="echo hi").command == "echo hi"
+    assert TerminalWriteArgs(terminal_id="s", command="echo hi").command == "echo hi"
     for bad in ["a\nb", "a\rb", "a\x1bb", "a\x03b"]:
         with pytest.raises(ValidationError):
-            TerminalWriteArgs(session_id="s", command=bad)
+            TerminalWriteArgs(terminal_id="s", command=bad)
     with pytest.raises(ValidationError):
-        TerminalWriteArgs.model_validate({"session_id": "s", "command": "x", "input": {}})
+        TerminalWriteArgs.model_validate({"terminal_id": "s", "command": "x", "input": {}})
 
 
 def test_resize_is_forwarded_and_geometry_follows_screen(monkeypatch, tmp_path: Path) -> None:

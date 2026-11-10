@@ -28,15 +28,17 @@ class _Command:
         self.thread: threading.Thread | None = None
         self.error: Exception | None = None
 
-    def execute(self, command, _cwd, _timeout, **_kwargs) -> ExecutionResult:
+    def execute(self, command, _cwd, _timeout, output, **_kwargs) -> ExecutionResult:
         self.thread = threading.current_thread()
         self.started.set()
         assert self.release.wait(5)
         if self.error is not None:
             raise self.error
+        output.feed(command.encode())
+        output.finish()
         if self.stopped.is_set():
-            return ExecutionResult(end="cancelled", output=command)
-        return ExecutionResult(end="exited", output=command, exit_code=0)
+            return ExecutionResult(end="cancelled")
+        return ExecutionResult(end="exited", exit_code=0)
 
     def stop(self) -> None:
         self.stopped.set()
@@ -108,7 +110,7 @@ def test_foreground_returns_result_without_delivery(tmp_path, command, pool, del
     command.release.set()
     observation = result.result(timeout=2)
     assert observation.status == "success" and observation.background is None
-    assert observation.content == "[exit_code=0]\ncall-1"
+    assert observation.content == "[exit_code=0]\ncall-1\n"
     assert delivered == [] and not registered(background_registry, 1, "call-1")
 
 
@@ -144,7 +146,7 @@ def test_result_before_registration_is_not_lost(
     if background:
         assert len(delivered) == 1 and delivered[0][1]["end_reason"] == "exited"
     else:
-        assert observation.content == "[exit_code=0]\ncall-1" and delivered == []
+        assert observation.content == "[exit_code=0]\ncall-1\n" and delivered == []
 
 
 def test_detach_keeps_running_and_delivers_once(tmp_path, command, pool, delivered):
@@ -212,7 +214,7 @@ def test_foreground_cancel_stops_command_and_waits_for_result(
     if stop_run:
         cancellation_registry.request_cancel(1, "user")
     else:
-        assert background_registry.request_user_cancel(1, "call-1", driving=False)
+        assert background_registry.request_cancel(1, "call-1", driving=False)
     observation = result.result(timeout=2)
     assert command.stopped.is_set()
     assert observation.status == "cancelled" and observation.background is None
@@ -246,7 +248,7 @@ def test_same_tool_instance_keeps_overlapping_calls_independent(
         assert len(delivered) == 1 and delivered[0][0] == "call-1"
         second.release.set()
         observation = result.result(timeout=2)
-        assert observation.content == "[exit_code=0]\ncall-2"
+        assert observation.content == "[exit_code=0]\ncall-2\n"
         assert observation.background is None and len(delivered) == 1
     finally:
         second.stop()

@@ -26,7 +26,7 @@ from app.tools.tool_models.execute_terminal_args import (
     MacExecuteTerminalArgs,
     WindowsExecuteTerminalArgs,
 )
-from app.tools.tool_models.terminal_session_args import TerminalReadArgs
+from app.tools.tool_models.terminal_tools_args import TerminalReadArgs
 
 
 class _IntOrStrModel(BaseModel):
@@ -63,7 +63,7 @@ class TestWhitelistCoercion:
         assert facts == {"timeout": "str->float"}
 
         read_adapted, read_facts = _coerce(
-            {"session_id": "term_x", "tail": "2"},
+            {"terminal_id": "term_x", "tail": "2"},
             TerminalReadArgs,
         )
         assert read_adapted["tail"] == 2  # type: ignore[index]
@@ -73,7 +73,7 @@ class TestWhitelistCoercion:
         """``30.0`` 归一为 int 字段的 30。潜在缺陷：strict 下整数值浮点被拒造成无效重试。"""
 
         adapted, facts = _coerce(
-            {"session_id": "term_x", "tail": 30.0},
+            {"terminal_id": "term_x", "tail": 30.0},
             TerminalReadArgs,
         )
         assert adapted["tail"] == 30  # type: ignore[index]
@@ -128,7 +128,7 @@ class TestWhitelistRefusals:
         """``""`` 与 ``"abc"`` 不归一（不把空串当 None，也不猜语义）。"""
 
         for bad in ("", "abc"):
-            adapted, facts = _coerce({"session_id": "term_x", "tail": bad}, TerminalReadArgs)
+            adapted, facts = _coerce({"terminal_id": "term_x", "tail": bad}, TerminalReadArgs)
             assert adapted["tail"] == bad  # type: ignore[index]
             assert facts == {}
 
@@ -173,11 +173,11 @@ class TestValidationIntegration:
 
     def test_terminal_read_rejects_removed_paging_fields(self) -> None:
         """终端按行读取只认 start_line / limit / tail：旧的 ``cursor`` / ``after_seq`` 字段一律拒绝。"""
-        result = validate_tool_arguments({"session_id": "term_x"}, {}, TerminalReadArgs)
+        result = validate_tool_arguments({"terminal_id": "term_x"}, {}, TerminalReadArgs)
         assert result.ok is True
         assert result.coercions == ()
         for removed in ({"cursor": "g:2:0"}, {"after_seq": 2}):
-            old = validate_tool_arguments({"session_id": "term_x", **removed}, {}, TerminalReadArgs)
+            old = validate_tool_arguments({"terminal_id": "term_x", **removed}, {}, TerminalReadArgs)
             assert old.ok is False
 
     def test_native_arguments_have_no_fact(self) -> None:
@@ -232,7 +232,7 @@ class TestValidationIntegration:
         """类型类错误必须附带「传 JSON 原生类型」的可操作提示。潜在缺陷：模型无法自纠。"""
 
         result = validate_tool_arguments(
-            {"session_id": "term_x", "tail": "abc"},
+            {"terminal_id": "term_x", "tail": "abc"},
             {},
             TerminalReadArgs,
         )
