@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
 // 服务端渲染读 zustand 初始状态：交接登记表换成可控的表。
-const handoffs = vi.hoisted(() => new Map<string, { toolCallId: string; toolName: string; surface: "browser"; resourceId: string; reason: string }>());
+const handoffs = vi.hoisted(() => new Map<string, { toolCallId: string; toolName: string; resourceId: string; reason: string }>());
 vi.mock("@/lib/handoff/handoff-store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/handoff/handoff-store")>(),
   useHandoffStore: (selector: (state: { tasks: Record<number, unknown[]> }) => unknown) => selector({ tasks: { 7: [...handoffs.values()] } }),
@@ -42,7 +42,7 @@ describe("AttentionCard", () => {
   });
 
   it("有交接登记时给「打开面板」+「交还」；登记已清（后端重启）时仍可交还", () => {
-    handoffs.set("call-1", { toolCallId: "call-1", toolName: "browser_handoff", surface: "browser", resourceId: "t1", reason: "x" });
+    handoffs.set("call-1", { toolCallId: "call-1", toolName: "browser_handoff", resourceId: "t1", reason: "x" });
     const withEntry = render();
     expect(withEntry).toContain("打开面板");
     expect(withEntry).toContain(">交还<");

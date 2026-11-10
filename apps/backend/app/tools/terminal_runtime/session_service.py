@@ -1,4 +1,4 @@
-"""终端会话集合的唯一所有者：归属、容量、创建 / 关闭、终态历史、外部通知与副作用线程。
+"""终端会话集合的唯一所有者：归属、容量、创建 / 关闭、终态历史与副作用线程。
 
 单会话操作（输入、读取、交接、订阅、用户输入）由调用方经 ``require`` 取到 runtime 后直接调用，
 本服务不做转发；Agent 专属策略（新建后等集成就绪、列表摘要）在工具里。Agent 工具与用户路径
@@ -7,8 +7,7 @@
 
 线程边界：
 - worker 读线程只做内存更新；会话终态的 worker 清理在独立线程完成，不阻塞读线程；
-- 会话变化的 snapshot 重投影、会话结束通知与交接代为落定都经单线程副作用执行器在锁外串行执行
-  （副作用本身集中在 ``session_effects``），因此调用方（工具线程、HTTP、
+- 会话变化的 snapshot 重投影经单线程副作用执行器在锁外串行执行，因此调用方（工具线程、HTTP、
   WS 所在事件循环）都不会被外部副作用阻塞。
 """
 
@@ -19,7 +18,6 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Literal
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -57,14 +55,10 @@ class TerminalSessionService:
         task_id: int,
         workspace_root: str,
         shell: str = "auto",
-        cwd: str | None = None,
-        label: str | None = None,
         integration: str = "auto",
-        created_by: Literal["agent", "user"],
-        run_id: int | None,
     ) -> TerminalSessionRuntime:
-        """创建会话并完成 worker 握手；Agent 新建另受每 Task 上限，为用户保留名额。"""
-        cwd_path = self._resolve_cwd(workspace_root, cwd)
+        """在工作区根创建会话并完成 worker 握手；容量受全进程活跃会话上限约束。"""
+        cwd_path = self._resolve_workspace_root(workspace_root)
         spec = ShellResolver.resolve(shell, integration=integration)
         with self._registry_lock:
             if not self._accepting:
@@ -74,19 +68,10 @@ class TerminalSessionService:
             active = [runtime for runtime in self._registry.values() if runtime.active]
             if len(active) >= Constant.Terminal.MAX_ACTIVE_SESSIONS:
                 raise TerminalSessionCapacityError("maximum active terminal session count reached")
-            if created_by == "agent" and (
-                sum(r.task_id == task_id and r.created_by == "agent" for r in active)
-                >= Constant.Terminal.MAX_AGENT_SESSIONS_PER_TASK
-            ):
-                raise TerminalSessionCapacityError(
-                    "this task already has the maximum number of agent terminals"
-                )
             runtime = TerminalSessionRuntime(
                 task_id=task_id,
-                created_by=created_by,
                 initial_cwd=str(cwd_path),
                 spec=spec,
-                label=label,
                 schedule=self._schedule,
             )
             session_id = runtime.session_id
@@ -100,9 +85,7 @@ class TerminalSessionService:
                 "msg": "创建终端会话",
                 "data": {
                     "task_id": task_id,
-                    "run_id": run_id,
                     "session_id": session_id,
-                    "created_by": created_by,
                     "shell_kind": spec.kind,
                 },
             },
@@ -121,32 +104,25 @@ class TerminalSessionService:
                 raise TerminalSessionStateError("task or backend is closing")
         except Exception as exc:
             reason = f"worker_start_failed: {type(exc).__name__}"
-            if runtime.finish("failed", reason, announce=False):
+            if runtime.finish("failed", reason):
                 self._complete_termination(runtime)
             raise
         return runtime
 
-    def close(
-        self, session_id: str, *, task_id: int, by: Literal["agent", "user"]
-    ) -> SessionSnapshot:
+    def close(self, session_id: str, *, task_id: int) -> SessionSnapshot:
         """重复关闭只返回终态；显式关闭的资源清理失败向调用者报告。
 
-        用户关闭记为 ``closed_by_user`` 并告知创建它的 Agent；Agent 自己关闭不另行通知。
+        会话只由用户在终端面板关闭，原因恒为 ``closed_by_user``；Task 删除与后端退出走批量清理。
         """
         runtime = self.require(session_id, task_id)
-        reason = "closed" if by == "agent" else "closed_by_user"
-        if runtime.finish("closed", reason, announce=by == "user"):
+        if runtime.finish("closed", "closed_by_user"):
             error = self._complete_termination(runtime)
             if error is not None:
                 raise error
         return runtime.snapshot()
 
     def shutdown(self) -> None:
-        """后端退出：结束全部会话并排空副作用。
-
-        结束会话会唤醒前台等待；交接不在关闭时代为落定（等待中的决定按 HITL 契约保留，见
-        ``TerminalSessionRuntime.finish``），因此这里不会写 ``task_messages``。
-        """
+        """后端退出：结束全部会话（唤醒进行中的读取等待）并排空副作用。"""
         with self._registry_lock:
             self._accepting = False
         self._close_matching(lambda runtime: True, reason="backend_shutdown")
@@ -208,7 +184,7 @@ class TerminalSessionService:
             for runtime in runtimes:
                 self._registry.pop(runtime.session_id, None)
         for runtime in runtimes:
-            if runtime.finish("closed", reason, announce=False):
+            if runtime.finish("closed", reason):
                 self._complete_termination(runtime)
             # 迁移若被其他路径（worker 事件的收尾线程）赢得，这里等它的释放尝试完成。
             runtime.wait_for_disposal()
@@ -281,7 +257,7 @@ class TerminalSessionService:
         except Exception:
             log.exception(
                 "terminal_effect_failed",
-                extra={"msg": "终端副作用执行失败（通知或结论投递）", "data": {}},
+                extra={"msg": "终端副作用执行失败（会话列表重投影）", "data": {}},
             )
 
     def _lookup(self, session_id: str) -> TerminalSessionRuntime | None:
@@ -290,11 +266,11 @@ class TerminalSessionService:
             return self._registry.get(session_id) or self._ended.get(session_id)
 
     @staticmethod
-    def _resolve_cwd(workspace_root: str, cwd: str | None) -> Path:
-        """初始 cwd 限于工作区；终端允许访问 .cosir，不叠加文件工具保留区限制。"""
+    def _resolve_workspace_root(workspace_root: str) -> Path:
+        """会话从工作区根启动；工作区目录可能已被移走，这里给出明确错误而不是让 worker 启动失败。"""
         resolved, error = PathResolver(workspace_root).resolve_within_workspace(
-            cwd or ".", allow_reserved=True
+            ".", allow_reserved=True
         )
         if resolved is None or not resolved.is_dir():
-            raise TerminalSessionError(f"invalid terminal cwd: {error or cwd}")
+            raise TerminalSessionError(f"invalid terminal cwd: {error or workspace_root}")
         return resolved

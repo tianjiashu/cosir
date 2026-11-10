@@ -45,7 +45,7 @@ export function TerminalShellMenu({
               key={shell.kind}
               className={TERMINAL_MENU_ITEM_CLASS}
               onSelect={() => onCreate(shell.kind)}
-              title={shell.integrationSupported ? undefined : "该 shell 无集成：不支持「命令返回」等待、命令输出区间、退出码与 cwd 跟踪；按行读取、输入与交接不受影响"}
+              title={shell.integrationSupported ? undefined : "该 shell 无集成：不支持「命令返回」等待、命令输出区间、退出码与 cwd 跟踪，Agent 也无法往这里填入命令；按行读取不受影响"}
             >
               <span className="flex-1">{shell.label}</span>
               {shell.isDefault && <span className="text-muted-foreground text-2xs">默认</span>}
@@ -87,7 +87,7 @@ export function TerminalEndedMenu({
         <DropdownMenu.Content align="end" className={TERMINAL_MENU_CONTENT_CLASS}>
           {ended.map((session) => (
             <DropdownMenu.Item key={session.sessionId} className={TERMINAL_MENU_ITEM_CLASS} onSelect={() => onOpenEnded(session.sessionId)}>
-              <span className="flex-1 truncate">{session.label.trim() || session.shellKind}</span>
+              <span className="flex-1 truncate">{session.shellKind}</span>
               <span className="text-muted-foreground text-2xs">
                 {terminalStatusPresentation(session.status).label}{session.exitCode !== null ? ` · ${session.exitCode}` : ""}
               </span>

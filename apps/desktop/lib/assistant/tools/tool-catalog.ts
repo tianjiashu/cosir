@@ -72,14 +72,10 @@ function patchTargets(args: ToolArgs): string | null {
   return withMore(paths);
 }
 
+/** 填入终端：`会话 · 要填入的一行命令`；命令参数还没到时只有会话。 */
 function terminalInput(args: ToolArgs): string | null {
   const id = sessionId(args);
-  const input = typeof args.input === "object" && args.input !== null ? (args.input as ToolArgs) : null;
-  if (id === null || input === null) return id;
-  const summary = input.type === "keys" && Array.isArray(input.keys)
-    ? input.keys.filter((key) => typeof key === "string").join(" ")
-    : input.type === "signal" ? str(input.signal) : str(input.text);
-  return summary ? `${id} · ${summary}` : id;
+  return joined(id, " · ", str(args.command)) ?? id;
 }
 
 function mcpTarget(args: ToolArgs): string | null {
@@ -127,11 +123,8 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   move_file: { verb: "移动文件", icon: "file-symlink", target: (args) => joined(str(args.source_path), " → ", str(args.destination_path)) },
   execute_terminal: { verb: "执行命令", icon: "terminal" },
   terminal_list: { verb: "列出终端", icon: "terminal" },
-  terminal_start: { verb: "启动终端", icon: "terminal", target: (args) => str(args.label) ?? str(args.shell) },
   terminal_read: { verb: "读取终端", icon: "terminal", target: sessionId },
-  terminal_write: { verb: "输入终端", icon: "terminal", target: terminalInput },
-  terminal_handoff: { verb: "交给用户输入", icon: "keyboard", target: sessionId },
-  terminal_close: { verb: "关闭终端", icon: "x", target: sessionId },
+  terminal_write: { verb: "填入终端", icon: "terminal", target: terminalInput },
   browser_navigate: { verb: "打开网页", icon: "globe", target: (args) => str(args.url) ?? str(args.action) },
   browser_snapshot: { verb: "读取网页", icon: "globe", target: (args) => str(args.tab) },
   browser_act: { verb: "操作网页", icon: "globe", target: browserActTarget },

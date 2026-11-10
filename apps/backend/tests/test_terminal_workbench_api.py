@@ -12,10 +12,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.task_extra_fixtures import fork_extra
-from app.models.task_extra import TaskExtra
 from app.api import terminal_sessions_api
 from app.app import app
+from app.models.task_extra import TaskExtra
 from app.service import depends
 from app.service.terminal import terminal_workbench_service
 from app.tools.terminal_runtime.errors import (
@@ -27,6 +26,7 @@ from app.tools.terminal_runtime.errors import (
     TerminalWorkerUnavailableError,
 )
 from app.tools.terminal_runtime.shell_resolver import ShellResolver
+from tests.task_extra_fixtures import fork_extra
 
 _SHELLS = [{"kind": "zsh", "label": "zsh", "isDefault": True, "integrationSupported": True}]
 
@@ -104,7 +104,6 @@ def test_user_creates_session_for_sidebar_task(
             "task_id": task_id,
             "workspace_root": workspace.root_path,
             "shell": "bash",
-            "run_id": None,
         }
     ]
 

@@ -58,7 +58,7 @@ describe("Transport snapshot validation", () => {
 
     const snapshot = transportState({
       terminal_sessions: [
-        terminalSession("t1", { label: "dev server" }),
+        terminalSession("t1"),
         terminalSession("t2", { status: "exited", exitCode: 0, endReason: "shell_exited", integration: "unavailable" }),
       ],
     });
@@ -89,13 +89,12 @@ describe("Transport snapshot validation", () => {
     delete withoutHandoffs.handoffs;
     expect(() => parseTransportState(withoutHandoffs)).toThrow(/snapshot/);
 
-    const entry = { toolCallId: "c1", toolName: "browser_handoff", surface: "browser" as const, resourceId: "t1", reason: "登录" };
+    const entry = { toolCallId: "c1", toolName: "browser_handoff", resourceId: "t1", reason: "登录" };
     const snapshot = transportState({ handoffs: [entry, { ...entry, toolCallId: "c2", resourceId: "t2" }] });
     expect(parseTransportState(snapshot)).toBe(snapshot);
 
-    // 终端交接已删除，只接受浏览器。
-    expect(() => parseTransportState(transportState({ handoffs: [{ ...entry, surface: "terminal" } as never] }))).toThrow(/handoffs\[0\]\.surface/);
-    expect(() => parseTransportState(transportState({ handoffs: [{ ...entry, surface: "editor" } as never] }))).toThrow(/handoffs\[0\]\.surface/);
+    // 交接只有浏览器标签一种资源，不再带资源类型字段。
+    expect(() => parseTransportState(transportState({ handoffs: [{ ...entry, surface: "browser" } as never] }))).toThrow(TransportSnapshotValidationError);
     expect(() => parseTransportState(transportState({ handoffs: [entry, { ...entry, toolCallId: "c2" }] }))).toThrow(/handoffs\[1\]/);
     expect(() => parseTransportState(transportState({ handoffs: [{ ...entry, extra: 1 } as never] }))).toThrow(TransportSnapshotValidationError);
   });

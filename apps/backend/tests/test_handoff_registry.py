@@ -12,12 +12,12 @@ from app.core.tool.handoff.handoff_registry import (
     HandoffRegistry,
 )
 
+
 def _lease(call_id: str = "c1", resource: str = "t1", task_id: int = 1) -> HandoffLease:
     return HandoffLease(
         tool_call_id=call_id,
         task_id=task_id,
         tool_name="browser_handoff",
-        surface="browser",
         resource_id=resource,
         reason="sign in",
     )

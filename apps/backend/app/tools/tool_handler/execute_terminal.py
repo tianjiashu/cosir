@@ -72,7 +72,7 @@ from app.tools.tool_models.execute_terminal_args import (
 # 前台调用会一直占着这一步，直到命令退出或超时；长构建、测试套件把 timeout 调大并设
 # background=true，期间继续做别的事。命令用 & 或 nohup 留下的进程会在它结束时被结束（自行脱离会话
 # 的守护进程除外），所以要后台就用 background=true。必须一直开着（服务、watcher）或要交互的程序不
-# 适合本工具：到 timeout 会被结束。
+# 适合本工具：到 timeout 会被结束，这类程序留给用户。
 _DESCRIPTION = (
     "Run a non-interactive command or script in a fresh shell process and return its exit code "
     "with merged stdout/stderr. Each call starts from scratch: cd, exported variables and other "
@@ -85,7 +85,7 @@ _DESCRIPTION = (
     "command leaves behind (& or nohup) are stopped when it exits (daemons that detach into "
     "their own session are not), so use background=true instead. Programs that must keep "
     "running (servers, watchers) or need interaction do not fit this tool: they are stopped at "
-    "the timeout."
+    "the timeout, so leave them to the user."
 )
 
 # 取消后的模型文案：命令被强杀，结果未知且可能留下部分副作用。

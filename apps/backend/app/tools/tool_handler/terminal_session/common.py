@@ -1,4 +1,4 @@
-"""交互终端工具族的共享辅助：取消检查、领域错误与 write / read / handoff 观察归一化为
+"""交互终端工具族的共享辅助：取消检查、领域错误与 read / write 观察归一化为
 ``ToolObservation``。
 
 展示字段投影由 ``tools/display/terminal_display.py`` 负责；本模块不持有会话状态。
@@ -15,16 +15,14 @@ from app.core.workflow.cancel.tool_call_cancellation_registry import should_stop
 from app.tools.display.terminal_display import build_terminal_observation_display_data
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
+    TerminalPrefillRejectedError,
     TerminalSessionError,
-    TerminalUserCommandRunningError,
-    TerminalUserTypingError,
 )
 from app.tools.terminal_runtime.render import TerminalObservationResult
 
-# 受控短提示（约 5 字）：只按错误类型映射，不透传异常正文；子类按最近的已登记祖先命中。
+# 受控短提示（约 5 字）：只按错误类型映射，不透传异常正文；未登记的类型回落为「终端失败」。
 _STATUS_HINTS: dict[type, str] = {
-    TerminalUserTypingError: "用户输入中",
-    TerminalUserCommandRunningError: "用户命令中",
+    TerminalPrefillRejectedError: "无法填入",
     TerminalIntegrationRequiredError: "缺少集成",
 }
 
@@ -39,27 +37,8 @@ def cancelled(context: ToolExecutionContext) -> bool:
     return should_stop_call(context.task_id, context.tool_call_id)
 
 
-def service_error_observation(tool_name: str, exc: TerminalSessionError) -> ToolObservation:
-    """把终端领域错误转换为模型可消费的观察：事实来自 message，下一步动作来自错误类型的 advice。"""
-
-    content = f"terminal operation failed ({exc.code}): {exc}"
-    if exc.advice:
-        content = f"{content} {exc.advice}"
-    return tool_error(tool_name, content, status_hint=_status_hint(exc))
-
-
-def _status_hint(exc: TerminalSessionError) -> str:
-    """按最近的已登记祖先取 UI 短提示；未登记的错误回落为通用提示。"""
-
-    for basis in type(exc).__mro__:
-        hint = _STATUS_HINTS.get(basis)
-        if hint is not None:
-            return hint
-    return "终端失败"
-
-
 def observation_result(tool_name: str, result: TerminalObservationResult) -> ToolObservation:
-    """write / read / handoff 的观察文本原样交给模型，展示数据投影动作行。"""
+    """read / write 的观察文本原样交给模型，展示数据投影动作行。"""
 
     return tool_success(
         tool_name=tool_name,
@@ -72,9 +51,13 @@ def with_terminal_errors(
     tool_name: str,
     action: Callable[[], ToolObservation],
 ) -> ToolObservation:
-    """领域错误归一化为错误观察；其他异常继续上抛，避免把缺陷伪装成工具失败。"""
+    """领域错误归一化为错误观察（事实来自 message，下一步动作来自错误类型的 advice）；其他异常继续
+    上抛，避免把缺陷伪装成工具失败。"""
 
     try:
         return action()
     except TerminalSessionError as exc:
-        return service_error_observation(tool_name, exc)
+        content = f"terminal operation failed ({exc.code}): {exc}"
+        if exc.advice:
+            content = f"{content} {exc.advice}"
+        return tool_error(tool_name, content, status_hint=_STATUS_HINTS.get(type(exc), "终端失败"))

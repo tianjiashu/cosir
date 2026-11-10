@@ -1,5 +1,3 @@
-import type { TerminalSessionEntry } from "@/lib/assistant/contract";
-import { terminalStatusPresentation } from "@/lib/terminal/terminal-sessions";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { CallOpenButton } from "../call-open-button";
 import type { CallView } from "../call-view";
@@ -33,31 +31,10 @@ function lineRange(value: unknown): string | null {
 }
 
 /**
- * 行上的会话状态读 snapshot 的实时会话列表（Task 级），而不是工具执行那一刻的快照。
- * 「镜像尚未同步（sessions 为 null）」与「会话已消失」都返回 null、按已失效处理：行挂载时镜像已由同一份
- * snapshot 同步好。
+ * 元信息按载荷字段判别动作，不按工具名：`session_count` 是列表；`input_summary` 是填入；`lines` /
+ * `screen` 是读取。
  */
-function useLiveSession(taskId: number, sessionId: string | undefined): TerminalSessionEntry | null {
-  return useTerminalWorkbenchStore((state) => (
-    sessionId === undefined
-      ? null
-      : state.tasks[taskId]?.sessions?.find((session) => session.sessionId === sessionId) ?? null
-  ));
-}
-
-/**
- * 元信息按载荷字段判别动作，不按工具名：`session_count` 是列表；`input_summary` 是输入 / 交接；`lines` /
- * `screen` 是读取；其余（start / close）显示会话的实时状态与退出码。
- */
-function TerminalSessionMeta({ data, taskId }: { data: Record<string, unknown>; taskId: number; }) {
-  const sessionId = text(data.session_id);
-  const live = useLiveSession(taskId, sessionId);
-  return <SessionMeta data={data} live={live} />;
-}
-
-/** 历史只读调用时的快照，实时会话由上面的拥有方组件订阅。 */
-function SessionMeta({ data, live, inherited = false }: { data: Record<string, unknown>; live: TerminalSessionEntry | null; inherited?: boolean }) {
-  const sessionId = text(data.session_id);
+function SessionMeta({ data }: { data: Record<string, unknown> }) {
   if (typeof data.session_count === "number") return <>{data.session_count} 个会话</>;
   const wait = waitResultLabel(data.wait_result);
   const summary = text(data.input_summary);
@@ -65,32 +42,29 @@ function SessionMeta({ data, live, inherited = false }: { data: Record<string, u
   if (data.screen === true || Array.isArray(data.lines)) {
     return <>{[data.screen === true ? "全屏画面" : lineRange(data.lines), wait].filter(Boolean).join(" · ") || "读取输出"}</>;
   }
-  const status = live ? terminalStatusPresentation(live.status)
-    : data.status === "closed" || data.status === "exited" || data.status === "failed" ? terminalStatusPresentation(data.status) : null;
-  const items = [
-    text(data.shell_kind),
-    status?.label ?? (inherited ? "继承的会话记录" : sessionId ? "已失效" : null),
-    typeof data.exit_code === "number" ? `exit ${data.exit_code}` : null,
-  ].filter(Boolean);
-  return items.length > 0 ? <>{items.join(" · ")}</> : null;
+  return null;
 }
 
-/** 打开终端面板定位到会话：只读线程（子 Agent）与已失效会话不提供跳转。 */
+/**
+ * 打开终端面板定位到会话：只读线程（子 Agent）与已失效会话不提供跳转。会话是否还在读 snapshot 的实时
+ * 会话列表（镜像尚未同步与会话已消失都按已失效处理：行挂载时镜像已由同一份 snapshot 同步好）。
+ */
 function RevealSessionAction({ data, taskId }: { data: Record<string, unknown>; taskId: number; }) {
   const sessionId = text(data.session_id);
-  const live = useLiveSession(taskId, sessionId);
-  if (sessionId === undefined || live === null) return null;
+  const live = useTerminalWorkbenchStore((state) => (
+    sessionId !== undefined && (state.tasks[taskId]?.sessions?.some((session) => session.sessionId === sessionId) ?? false)
+  ));
+  if (sessionId === undefined || !live) return null;
   return <CallOpenButton label="在终端中打开" onClick={() => useTerminalWorkbenchStore.getState().reveal(taskId, sessionId)} />;
 }
 
 /**
- * `terminal-session`（`terminal_*`）：标题由后端 `heading` 给出（会话名、输入摘要），这里只投影结果——
- * 没有展开体（终端输出在终端面板里看）。交接（`terminal_handoff`）等待用户时由等待卡承载交还入口，行上只有
- * 通用的「等你操作」。
+ * `terminal-session`（`terminal_*`）：标题与目标由前端工具目录按工具名 + 参数算出，这里只投影结果——
+ * 没有展开体（终端输出在终端面板里看）。
  */
 export const terminalSessionView: CallView = (data, context) => {
   return {
-    meta: context.inherited ? <SessionMeta data={data} live={null} inherited /> : <TerminalSessionMeta data={data} taskId={context.taskId} />,
+    meta: <SessionMeta data={data} />,
     actions: (context.interactive ? <RevealSessionAction data={data} taskId={context.taskId} /> : null),
   };
 };

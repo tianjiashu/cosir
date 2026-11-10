@@ -13,7 +13,6 @@
 from pathlib import Path
 
 from app.core.tool.schemas import ToolExecutionContext
-from app.tools.terminal_runtime.session_service import TerminalSessionService
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.tools.tool_handler.delete_tool import DeleteTool
 from app.tools.tool_handler.move_tool import MoveTool
@@ -199,11 +198,3 @@ def test_read_file_can_still_read_cosir(tmp_path: Path) -> None:
 
 # --- 4. 调度期资源路径与终端边界 ----------------------------------------------
 
-
-def test_terminal_cwd_inside_cosir_is_allowed(tmp_path: Path) -> None:
-    """终端 cwd 是保留区的唯一豁免点之一，落在 ``.cosir`` 不得抛错。"""
-
-    root = tmp_path / "ws"
-    cosir = root / ".cosir"
-    cosir.mkdir(parents=True)
-    assert TerminalSessionService._resolve_cwd(str(root), ".cosir") == cosir

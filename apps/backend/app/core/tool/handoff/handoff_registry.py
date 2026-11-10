@@ -1,20 +1,18 @@
-"""交接登记表：Agent 把一个资源（终端会话、浏览器标签）暂时交给用户、等用户交还的进行中事实。
+"""交接登记表：Agent 把一个资源（浏览器标签）暂时交给用户、等用户交还的进行中事实。
 
 交接 = HITL（``execute`` 类）+ 资源租借。「是否还在等用户决定」的事实源仍是等待占位行（见
-``ToolDecisionService``），登记表只承载 HITL 不知道的那一半：交给用户的是哪个资源、为什么、交还时
-工具要接着报告什么（``memo``）。以 ``tool_call_id`` 为键，同一资源同一时刻至多一条。
+``ToolDecisionService``），登记表只承载 HITL 不知道的那一半：交给用户的是哪个资源、为什么。以
+``tool_call_id`` 为键，同一资源同一时刻至多一条。
 
 所有结束路径都经这里，资源一侧不再各自记一份交接状态：
 - 用户交还：决定到达后 ``prepare_input`` 重放原调用，工具调用 :meth:`HandoffRegistry.end` 取回登记；
-- 资源在交接中结束（Agent 不知道的结束，如 shell 退出）：资源一侧调用 :meth:`settle`，代用户驳回那次
-  调用，唤醒等它的 Agent；
 - 撤回这一回合：撤回方调用 :meth:`drop`（否则资源会一直显示交接中，也无法再次交接）；
 - Task 删除提交后：``TaskService`` 调用 :meth:`drop_task`。
 Run 停止不结束交接：等待中的决定按 HITL 契约在 Run 停止后仍可作出。
 
 为什么放在 core：撤回与 Task 删除在 core 之外的应用层，资源实现在 ``app.tools``；依赖方向只允许
-``app.tools → core``，登记表放在双方都能依赖的这一层。资源类型（``HandoffSurface``）是前端据以把
-交接提示放到对应面板的标识，新增一种可交接的资源只需加一个取值。
+``app.tools → core``，登记表放在双方都能依赖的这一层。当前唯一可交接的资源是浏览器标签
+（``resource_id`` 即标签 id），出现第二种资源时再引入资源类型。
 
 事实边界：进程内协调状态，不持久化、不跨重启、重启后不重建——等待中的决定照常保留，工具卡片上的
 交还入口仍在，重放时资源已不在由工具如实报告。变化经单线程通知执行器在锁外回调监听方（lifespan
@@ -27,34 +25,26 @@ import threading
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Literal
 
 from app.config.logging.logger import log
-
-HandoffSurface = Literal["terminal", "browser"]
 
 
 @dataclass(frozen=True)
 class HandoffLease:
-    """一次进行中的交接。
-
-    ``memo`` 是工具自己在交还时要用的数据（如终端交接时的末行号），登记表不解读。
-    """
+    """一次进行中的交接：``resource_id`` 是交给用户的浏览器标签。"""
 
     tool_call_id: str
     task_id: int
     tool_name: str
-    surface: HandoffSurface
     resource_id: str
     reason: str
-    memo: object = None
 
 
 class HandoffConflictError(Exception):
     """同一资源已经交给用户（另一次调用的交接还没交还）。"""
 
     def __init__(self, existing: HandoffLease) -> None:
-        super().__init__(f"{existing.surface} {existing.resource_id} is already handed to the user")
+        super().__init__(f"browser {existing.resource_id} is already handed to the user")
         self.existing = existing
 
 
@@ -81,7 +71,7 @@ class HandoffRegistry:
         """
 
         with self._lock:
-            existing = self._on(lease.surface, lease.resource_id)
+            existing = self._on(lease.resource_id)
             if existing is not None:
                 raise HandoffConflictError(existing)
             self._leases[lease.task_id, lease.tool_call_id] = lease
@@ -98,36 +88,6 @@ class HandoffRegistry:
         if lease is not None:
             self._log("handoff_returned", "用户交还资源", lease)
         return lease
-
-    def settle(self, task_id: int, tool_call_id: str, feedback: str) -> None:
-        """资源在交接中结束：取出登记并代用户驳回那次调用，唤醒等它的 Agent（会写 SQLite）。
-
-        用户可能恰好已经交还：决定已提交或已不在等待时只记录，不重复。资源一侧在锁外调用。
-        """
-
-        from app.core.task_actor import SessionConflictError
-        from app.service import depends
-
-        lease = self._pop(task_id, tool_call_id)
-        if lease is None:
-            return
-        self._log("handoff_settled", "资源在交接中结束，代用户落定", lease)
-        try:
-            depends.get_tool_decision_service().submit(
-                task_id, tool_call_id, "reject", feedback=feedback, source="runtime"
-            )
-        except SessionConflictError as exc:
-            log.info(
-                "handoff_settle_skipped",
-                extra={
-                    "msg": "交接已有决定或已不在等待，跳过代为落定",
-                    "data": {
-                        "task_id": lease.task_id,
-                        "tool_call_id": tool_call_id,
-                        "code": exc.code,
-                    },
-                },
-            )
 
     def drop(self, task_id: int, tool_call_ids: Iterable[str]) -> None:
         """撤回回合：静默丢弃这些调用的登记，不落定——等待占位已随这一回合移出。"""
@@ -159,24 +119,15 @@ class HandoffRegistry:
         with self._lock:
             self._leases.clear()
 
-    def on_resource(self, surface: HandoffSurface, resource_id: str) -> HandoffLease | None:
-        with self._lock:
-            return self._on(surface, resource_id)
-
     def leases(self, task_id: int) -> list[HandoffLease]:
         """本 Task 进行中的交接，按登记先后。"""
 
         with self._lock:
             return [lease for lease in self._leases.values() if lease.task_id == task_id]
 
-    def _on(self, surface: HandoffSurface, resource_id: str) -> HandoffLease | None:
+    def _on(self, resource_id: str) -> HandoffLease | None:
         return next(
-            (
-                lease
-                for lease in self._leases.values()
-                if lease.surface == surface and lease.resource_id == resource_id
-            ),
-            None,
+            (lease for lease in self._leases.values() if lease.resource_id == resource_id), None
         )
 
     def _pop(self, task_id: int, tool_call_id: str) -> HandoffLease | None:
@@ -212,7 +163,6 @@ class HandoffRegistry:
                 "data": {
                     "task_id": lease.task_id,
                     "tool_call_id": lease.tool_call_id,
-                    "surface": lease.surface,
                     "resource_id": lease.resource_id,
                 },
             },
@@ -225,6 +175,5 @@ __all__ = [
     "HandoffConflictError",
     "HandoffLease",
     "HandoffRegistry",
-    "HandoffSurface",
     "handoff_registry",
 ]

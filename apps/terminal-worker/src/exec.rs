@@ -212,13 +212,6 @@ fn drive(
                         message: Some("exec mode has no terminal".into()),
                     });
                 }
-                ControlFrame::Signal { request_id, .. } => {
-                    let _ = output.send(&WorkerEvent::SignalResult {
-                        request_id,
-                        status: "unsupported",
-                        reason: Some("exec_mode"),
-                    });
-                }
                 ControlFrame::StartSession { .. } | ControlFrame::StartExec { .. } => {
                     let _ = output.send(&WorkerEvent::Error {
                         code: "already_started",

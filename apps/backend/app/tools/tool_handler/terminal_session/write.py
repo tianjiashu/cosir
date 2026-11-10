@@ -1,6 +1,6 @@
-"""``terminal_write`` handler：整行、按键、信号或交接，按条件等待后返回新增行。"""
+"""``terminal_write`` handler：把一行命令填进用户终端的空提示符，不执行、不等待。"""
 
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.schemas import (
@@ -12,7 +12,6 @@ from app.core.tool.schemas import (
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.service import depends as service_depends
-from app.tools.terminal_runtime.inputs import TerminalWait
 from app.tools.tool_handler.terminal_session.common import (
     cancelled,
     observation_result,
@@ -23,32 +22,31 @@ from app.tools.tool_models import TerminalWriteArgs
 
 class TerminalWriteTool(HandlerBase):
     name = TOOL_TERMINAL_WRITE
-    # 中文译文：向会话发送一次输入动作，并按 terminal_read 的格式返回这次输入之后出现的行。
-    # 动作四选一的语义只在 input 各分支的字段描述里。多行脚本用 execute_terminal。用户正在打字
-    # 时会被拒绝（先短暂等待），前台是用户启动的命令时直接拒绝：等用户停手，或换一个会话。
-    # 需要用户亲自输入时（口令、不该由你回答的确认），用 terminal_handoff。
+    # 中文译文：把一行命令填进用户打开的终端提示符，但不执行：用户看过之后自己按回车，你也不会知道
+    # 他们按没按（之后用 terminal_read 看发生了什么）。用户让你把命令放进他们的终端时用它。只有
+    # shell 集成就绪、停在提示符且还没有任何输入时才可用；否则失败，你可以改为在回复里给出命令。
+    # 只能一行：多步操作先写脚本文件，再填运行它的那一行命令。
     description = (
-        "Send one input action to a session and return the lines that appeared after it, in "
-        "terminal_read's format. For multi-line scripts use execute_terminal. A write is refused "
-        "while the user is typing (after a short wait) or while the user's own command runs in "
-        "the foreground; wait for them or use another session. When the user must type instead "
-        "(passwords, confirmations you should not answer), use terminal_handoff."
+        "Fill one command line into the prompt of a terminal the user opened, without running "
+        "it: the user reviews it and presses Enter themselves, and you are not told whether they "
+        "did (read the terminal later to see what happened). Use it when the user asks you to put "
+        "a command in their terminal. It works only while the shell is idle at its prompt with "
+        "nothing typed yet (shell integration required); otherwise it fails and you can give the "
+        "command in your reply instead. One line only: for several steps, write a script file "
+        "first and fill in the command that runs it."
     )
-
     args_model = TerminalWriteArgs
-    timeout_seconds: ClassVar[float] = 55.0
+    timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_TERMINAL_SESSION
 
     def execute(
         self,
         session_id: str,
-        operation_id: str,
-        input: dict[str, Any],
-        wait: dict[str, Any] | None = None,
+        command: str,
         *,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-        """输入由参数边界校验；接受后的取消仍返回接受事实，避免模型重发。"""
+        """命令由参数边界校验；填入立即返回，用户回车与之后输出由 terminal_read 观察。"""
         if cancelled(execution_context):
             return tool_cancelled(self.name)
 
@@ -56,13 +54,10 @@ class TerminalWriteTool(HandlerBase):
             runtime = service_depends.get_terminal_session_service().require(
                 session_id, execution_context.task_id
             )
-            result = runtime.write(
-                input,
-                operation_id,
-                TerminalWait.model_validate(wait) if wait is not None else None,
+            result = runtime.prefill(
+                command,
                 run_id=execution_context.run_id,
                 tool_call_id=execution_context.tool_call_id,
-                is_cancelled=lambda: cancelled(execution_context),
             )
             return observation_result(self.name, result)
 
@@ -80,4 +75,3 @@ class TerminalWriteTool(HandlerBase):
             resource_keys=("shell",),
             execution_mode="thread",
         )
-

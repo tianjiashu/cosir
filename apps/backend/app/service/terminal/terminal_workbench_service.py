@@ -48,8 +48,6 @@ class TerminalWorkbenchService:
             task_id=task_id,
             workspace_root=workspace.root_path,
             shell=shell,
-            created_by="user",
-            run_id=None,
         )
         session_id = runtime.session_id
         log.info(
@@ -62,12 +60,12 @@ class TerminalWorkbenchService:
         return session_id
 
     def close_session(self, task_id: int, session_id: str) -> None:
-        """关闭本 Task 的一个会话（用户或 Agent 创建的都可关）；重复关闭由终端服务幂等处理。
+        """关闭本 Task 的一个会话；重复关闭由终端服务幂等处理。
 
         异常:
             TerminalSessionError: 会话不存在或不属于该 Task、清理失败等。
         """
-        get_terminal_session_service().close(session_id, task_id=task_id, by="user")
+        get_terminal_session_service().close(session_id, task_id=task_id)
         log.info(
             "terminal_user_session_closed",
             extra={

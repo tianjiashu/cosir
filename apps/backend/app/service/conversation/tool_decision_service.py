@@ -1,9 +1,7 @@
 """HITL 决定入队：对一次等待用户决定的工具调用提交决定的唯一入口。
 
-调用方有两类：用户经 HTTP 决定入口（``TransportAssistantService.decide``），以及工具运行时在用户已
-无法作出决定时代为落定（如交接中的终端会话结束，见 ``terminal_runtime.session_effects``）。两者走同一套
-校验与入队，所以放在 service 层，而不是只属于 HTTP 用户路径的 Transport 编排里——工具层不依赖
-``assistant_transport``。
+调用方是用户经 HTTP 决定入口（``TransportAssistantService.decide``）：校验与入队放在 service 层，
+而不是只属于 HTTP 用户路径的 Transport 编排里——工具层不依赖 ``assistant_transport``。
 """
 
 from __future__ import annotations
@@ -35,17 +33,15 @@ class ToolDecisionService:
             *,
             feedback: str | None = None,
             data: dict[str, Any] | None = None,
-            source: Literal["user", "runtime"] = "user",
     ) -> None:
         """对 ``tool_call_id`` 作出决定并入队；同步读库与写队列，异步调用方放进工作线程。
 
         只校验对所有 HITL 工具都成立、且能同步回答的事实：调用的等待占位仍为 ``pending``（事实源是
         context，不读工具自己的业务事实）、队列里没有它未处理的决定、批准载荷符合工具声明的
-        ``decision_model``。工具自己的业务状态在执行决定时由工具判定。``source`` 只进日志，区分用户
-        决定与运行时代为落定。
+        ``decision_model``。工具自己的业务状态在执行决定时由工具判定。
 
-        判定与入队在同一个 ``BEGIN IMMEDIATE`` 事务里：两次提交可能来自不同线程（用户交还与运行时
-        代为落定同时发生），分开读写会让两者都通过判定、各入队一条；写锁也让判定与 ``prepare_input``
+        判定与入队在同一个 ``BEGIN IMMEDIATE`` 事务里：同一调用的两次决定请求可能同时到达，
+        分开读写会让两者都通过判定、各入队一条；写锁也让判定与 ``prepare_input``
         「确认决定 + 占位推到 running」的事务互斥，两次读取看到的是同一时刻的事实。
 
         异常:
@@ -91,7 +87,6 @@ class ToolDecisionService:
                     "tool_call_id": tool_call_id,
                     "tool_name": tool_name,
                     "decision": decision,
-                    "source": source,
                 },
             },
         )

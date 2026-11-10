@@ -1,4 +1,4 @@
-"""系统通知消息：外部队列行（配置广播、终端结束等），或驱动内通知（``RunMailbox.notify``，不入队）。"""
+"""系统通知消息：外部队列行（配置广播、分叉交接等），或驱动内通知（``RunMailbox.notify``，不入队）。"""
 
 from collections.abc import Sequence
 from typing import ClassVar, Literal
@@ -13,7 +13,6 @@ from app.models.message_metadata import NoticeEntry, UserMessageMetadata
 NoticeKind = Literal[
     "system_prompt_delta",
     "catalog_change",
-    "terminal_session_ended",
     "fork_handover",
     "backend_restarted",
     "tool_availability",
@@ -23,7 +22,7 @@ NoticeKind = Literal[
 NoticeLevel = Literal["task", "run", "turn"]
 
 # 通知按它说的事属于哪一层分级，级别决定通知从哪来、撤回回合时怎么办：
-# - task：Task 环境的变化（系统提示词、能力目录、终端会话、分叉交接、后端重启）。事件只在那一刻
+# - task：Task 环境的变化（系统提示词、能力目录、分叉交接、后端重启）。事件只在那一刻
 #   存在，经外部队列投递、只投一次；所在回合被撤回时重新投递，否则之后的 Run 永远看不到这次变化。
 # - run：本 Run 的事实（工具准入）。驱动开始时对照上下文推导（``drive_notices``），不入队。
 # - turn：上一个回合怎样结束（用户已停止）或本次驱动内的提示（续写）。驱动开始时推导或驱动内投递，
@@ -32,7 +31,6 @@ NoticeLevel = Literal["task", "run", "turn"]
 NOTICE_LEVELS: dict[NoticeKind, NoticeLevel] = {
     "system_prompt_delta": "task",
     "catalog_change": "task",
-    "terminal_session_ended": "task",
     "fork_handover": "task",
     "backend_restarted": "task",
     "tool_availability": "run",

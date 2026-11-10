@@ -22,8 +22,7 @@ import { TerminalResizeController } from "./terminal-resize-controller";
 import { xtermPaneFont } from "./xterm-appearance";
 
 /**
- * 视图向 React 报告的连接期状态。交接与退出码是会话事实，只读 snapshot（`handoffs`、
- * `terminal_sessions`），这里不持有第二份。
+ * 视图向 React 报告的连接期状态。退出码是会话事实，只读 snapshot（`terminal_sessions`），这里不持有第二份。
  */
 export type TerminalViewRuntime = {
   connection: TerminalConnectionState;
@@ -304,7 +303,10 @@ export class TerminalView {
     if (!this.connection.sendInput(data)) this.flash("连接已断开，输入未送达", "warning");
   }
 
-  /** 排进写队列再标（与清屏同一写法）：要标在它之前的输出解析完后的光标行上，否则会标到旧行。 */
+  /**
+   * 排进写队列再标（与清屏同一写法）：要标在它之前的输出解析完后的光标行上，否则会标到旧行。
+   * 现在只在 Agent 把一行命令填进提示符时触发（回车仍由用户按）。
+   */
   private markAgentInput(): void {
     this.terminal.write("", () => {
       const marker = this.terminal.registerMarker(0);

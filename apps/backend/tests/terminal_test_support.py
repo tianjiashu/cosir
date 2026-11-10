@@ -170,7 +170,6 @@ def start(service: TerminalSessionService, tmp_path: Any, *, task_id: int = 1,
         task_id=task_id,
         workspace_root=str(tmp_path),
         shell=shell,
-        run_id=None,
     )
     return runtime.session_id
 
@@ -223,7 +222,7 @@ def run_in_thread(target: Callable[[], Any]) -> tuple[threading.Thread, dict[str
     def run() -> None:
         try:
             box["result"] = target()
-        except BaseException as exc:  # noqa: BLE001 - 测试把异常带回主线程断言
+        except BaseException as exc:
             box["error"] = exc
 
     thread = threading.Thread(target=run, daemon=True)

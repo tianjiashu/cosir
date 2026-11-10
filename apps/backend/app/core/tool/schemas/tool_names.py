@@ -19,11 +19,8 @@ TOOL_FIND_FILES: Final[str] = "find_files"
 TOOL_LIST_DIRECTORY: Final[str] = "list_directory"
 TOOL_EXECUTE_TERMINAL: Final[str] = "execute_terminal"
 TOOL_TERMINAL_LIST: Final[str] = "terminal_list"
-TOOL_TERMINAL_START: Final[str] = "terminal_start"
 TOOL_TERMINAL_READ: Final[str] = "terminal_read"
 TOOL_TERMINAL_WRITE: Final[str] = "terminal_write"
-TOOL_TERMINAL_HANDOFF: Final[str] = "terminal_handoff"
-TOOL_TERMINAL_CLOSE: Final[str] = "terminal_close"
 TOOL_WEB_SEARCH: Final[str] = "web_search"
 TOOL_WEB_EXTRACT: Final[str] = "web_extract"
 TOOL_BROWSER_NAVIGATE: Final[str] = "browser_navigate"
@@ -58,11 +55,8 @@ ToolName: TypeAlias = Literal[
     "list_directory",
     "execute_terminal",
     "terminal_list",
-    "terminal_start",
     "terminal_read",
     "terminal_write",
-    "terminal_handoff",
-    "terminal_close",
     "web_search",
     "web_extract",
     "browser_navigate",
@@ -98,11 +92,8 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_LIST_DIRECTORY,
     TOOL_EXECUTE_TERMINAL,
     TOOL_TERMINAL_LIST,
-    TOOL_TERMINAL_START,
     TOOL_TERMINAL_READ,
     TOOL_TERMINAL_WRITE,
-    TOOL_TERMINAL_HANDOFF,
-    TOOL_TERMINAL_CLOSE,
     TOOL_WEB_SEARCH,
     TOOL_WEB_EXTRACT,
     TOOL_BROWSER_NAVIGATE,

@@ -38,7 +38,6 @@ from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.attachment.image_normalizer import ImageNormalizationError
-from app.tools.terminal_runtime.session_service import TerminalSessionService
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.tools.tool_handler.delete_tool import DeleteTool
 from app.tools.tool_handler.find_files import FindFilesTool
@@ -544,15 +543,6 @@ def test_find_files_searches_cosir(tmp_path: Path) -> None:
     target.write_text("x", encoding="utf-8")
     obs = FindFilesTool().execute(pattern="*.txt", path=".cosir", execution_context=_ctx(root))
     assert obs.status == "success"
-
-
-def test_terminal_cwd_cosir_allowed(tmp_path: Path) -> None:
-    """终端 cwd 落在 ``.cosir`` 仍豁免。"""
-
-    root = tmp_path / "ws"
-    cosir = root / ".cosir"
-    cosir.mkdir(parents=True)
-    assert TerminalSessionService._resolve_cwd(str(root), ".cosir") == cosir
 
 
 # --- F. 附加对抗：resolve_for_model 与 relative_path 往返一致性 --------------------------

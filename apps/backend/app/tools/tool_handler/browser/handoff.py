@@ -35,7 +35,7 @@ _TAB_GONE = (
 
 
 class BrowserHandoffTool(HandlerBase):
-    """交接 = HITL（``execute`` 类，同 ``terminal_handoff``）+ 把标签交给用户
+    """交接 = HITL（``execute`` 类）+ 把标签交给用户
     （``handoff_registry``）：首次调用经标签列表确认标签存在、登记交接后返回等待占位、挂起 Agent；
     不为拿标签 id 读快照——宿主读快照会取走待报告的备注，交接前发生的事就到不了交还时的正文。
     用户交还即对这次调用作出决定，``prepare_input`` 绕过模型重放本调用，取回登记并返回交还时的
@@ -90,7 +90,6 @@ class BrowserHandoffTool(HandlerBase):
                     tool_call_id=execution_context.tool_call_id,
                     task_id=execution_context.task_id,
                     tool_name=self.name,
-                    surface="browser",
                     resource_id=page["tab_id"],
                     reason=reason,
                 )

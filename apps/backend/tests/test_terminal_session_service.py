@@ -166,7 +166,7 @@ def test_task_runtimes_orders_active_first_and_keeps_ten_ended(monkeypatch, tmp_
     assert len(entries) == 11
     assert [e["sessionId"] for e in entries[1:]] == ended[2:]
     assert set(entries[0]) == {
-        "sessionId", "label", "shellKind", "status", "endReason", "exitCode",
+        "sessionId", "shellKind", "status", "endReason", "exitCode",
         "integration", "commandRunning",
         "createdAt",
     }
@@ -331,7 +331,7 @@ def test_prefill_fills_the_prompt_without_running_it(monkeypatch, tmp_path: Path
     result = prefill(service, session_id, "echo hi")
 
     assert workers[0].writes == [{"type": "prefill", "text": "echo hi"}]
-    assert result.input_type == "prefill" and result.input_summary == "echo hi"
+    assert result.prefilled == "echo hi"
     assert "input prefill `echo hi`" in result.text
     assert "runs only if the user presses Enter" in result.text
     assert {"type": "input_mark", "by": "agent"} in marks

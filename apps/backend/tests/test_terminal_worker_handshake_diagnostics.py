@@ -1,7 +1,7 @@
 """Terminal Worker 握手失败与读线程结束的错误分类、可排查日志测试。
 
 覆盖：握手身份不匹配（确定性）判为不可重试、握手超时与握手前断开仍可重试、各类失败的 WARNING 事件
-与字段对照、经 ``service_error_observation`` 投影给模型时重试建议文本的变化，以及握手后读线程
+与字段对照、经 ``with_terminal_errors`` 投影给模型时重试建议文本的变化，以及握手后读线程
 意外结束（断开、事件处理出错）补发 ``disconnected`` 而非伪装成 shell 退出，以及握手前入队的输入
 在握手后按序发出。
 """
@@ -26,7 +26,7 @@ from app.tools.terminal_runtime.errors import (
 )
 from app.tools.terminal_runtime.shell_resolver import ShellSpec
 from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
-from app.tools.tool_handler.terminal_session.common import service_error_observation
+from app.tools.tool_handler.terminal_session.common import with_terminal_errors
 
 _FAKE_WORKER_PID = 4242
 
@@ -190,10 +190,10 @@ def test_handshake_error_is_non_retryable_worker_unavailable_subclass() -> None:
     assert TerminalWorkerUnavailableError.retryable is True
 
 
-def test_service_error_observation_marks_rejected_handshake_as_not_retryable() -> None:
+def test_terminal_error_observation_marks_rejected_handshake_as_not_retryable() -> None:
     """投影给模型的握手错误必须不可重试，并给「先修再试」而非「稍后重试」。"""
 
-    observation = service_error_observation(
+    observation = _observe(
         "terminal_write",
         TerminalWorkerHandshakeError("handshake rejected"),
     )
@@ -437,3 +437,12 @@ def test_input_queued_before_the_handshake_is_sent_in_order_after_it(monkeypatch
     assert [frame["type"] for frame in sent[:3]] == ["start_session", "write", "resize"]
     assert sent[1]["input"] == {"type": "raw", "data_base64": "bHM="}
     assert (sent[2]["rows"], sent[2]["cols"]) == (30, 100)
+
+
+def _observe(tool_name: str, exc: Exception):
+    """经工具入口共用的错误归一化（``with_terminal_errors``）把领域错误投影成观察。"""
+
+    def fail():
+        raise exc
+
+    return with_terminal_errors(tool_name, fail)

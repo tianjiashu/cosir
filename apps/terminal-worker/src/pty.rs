@@ -9,7 +9,8 @@ use crate::containment::Containment;
 use crate::exit_watch::ChildExit;
 use crate::geometry::Geometry;
 
-/// 写入队列容量（帧）：与后端输入队列同量级，单帧不超过后端的单次输入上限（64 KiB）。
+/// 写入队列容量（帧）：与后端输入队列同量级；单帧是一次输入，不超过 64 KiB（填入开启括号粘贴时
+/// 另加 12 字节包裹）。
 const WRITE_QUEUE_FRAMES: usize = 64;
 
 /// 写入没有交给写线程。`Full` 是背压，只拒绝这一次；`Closed` 是写线程已因 PTY 写失败退出。
@@ -19,22 +20,11 @@ pub enum WriteRejected {
     Closed,
 }
 
-impl std::fmt::Display for WriteRejected {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Full => "pty write queue is full",
-            Self::Closed => "pty writer stopped",
-        })
-    }
-}
-
-impl std::error::Error for WriteRejected {}
-
 pub struct PtyRuntime {
-    // master 随 shell 存活：resize、前台进程组查询与 ConPTY 都依赖它。
+    // master 随 shell 存活：resize 与 ConPTY 都依赖它。
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     // 写入只经专用写线程：前台程序不读输入时 PTY 只缓冲约 1 KB，同步写会卡住调用方——控制循环
-    // 卡住则心跳、信号、关闭都处理不了；读线程卡住（回写查询应答）则输出不再被读走，程序写输出也
+    // 卡住则心跳、关闭都处理不了；读线程卡住（回写查询应答）则输出不再被读走，程序写输出也
     // 阻塞、更不会读输入，形成死锁。
     writes: SyncSender<Vec<u8>>,
     // shell 的 PID：POSIX 上退出只经它观察、不回收（`exit_status`），回收只在 `terminate` 里清理之后。
@@ -47,13 +37,6 @@ pub struct PtyRuntime {
 pub struct SpawnedPty {
     pub runtime: Arc<PtyRuntime>,
     pub reader: Box<dyn Read + Send>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TerminalControlResult {
-    #[allow(dead_code)]
-    Applied,
-    Unsupported(&'static str),
 }
 
 impl PtyRuntime {
@@ -123,91 +106,6 @@ impl PtyRuntime {
             .lock()
             .map_err(|_| anyhow::anyhow!("pty master lock poisoned"))?;
         master.resize(pty_size(geometry))
-    }
-
-    pub fn signal(&self, signal: &str) -> anyhow::Result<TerminalControlResult> {
-        match signal {
-            "interrupt" => self.send_foreground_signal("interrupt"),
-            "eof" => self.send_eof(),
-            "suspend" => self.send_foreground_signal("suspend"),
-            _ => anyhow::bail!("unsupported terminal signal"),
-        }
-    }
-
-    #[cfg(unix)]
-    fn send_foreground_signal(&self, signal: &str) -> anyhow::Result<TerminalControlResult> {
-        let fd = self.master_fd()?;
-        let foreground = unsafe { libc::tcgetpgrp(fd) };
-        if foreground <= 0 {
-            anyhow::bail!("terminal foreground process group unavailable")
-        }
-        let signal_number = match signal {
-            "interrupt" => libc::SIGINT,
-            "suspend" => libc::SIGTSTP,
-            _ => anyhow::bail!("unsupported foreground signal"),
-        };
-        if unsafe { libc::kill(-foreground, signal_number) } != 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
-        Ok(TerminalControlResult::Applied)
-    }
-
-    #[cfg(windows)]
-    fn send_foreground_signal(&self, signal: &str) -> anyhow::Result<TerminalControlResult> {
-        if signal == "interrupt" {
-            self.write(&[0x03])?;
-            return Ok(TerminalControlResult::Applied);
-        }
-        Ok(TerminalControlResult::Unsupported(
-            "windows_signal_not_supported",
-        ))
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    fn send_foreground_signal(&self, _signal: &str) -> anyhow::Result<TerminalControlResult> {
-        Ok(TerminalControlResult::Unsupported(
-            "platform_signal_unavailable",
-        ))
-    }
-
-    #[cfg(unix)]
-    fn send_eof(&self) -> anyhow::Result<TerminalControlResult> {
-        let fd = self.master_fd()?;
-        let mut attributes = unsafe { std::mem::zeroed::<libc::termios>() };
-        if unsafe { libc::tcgetattr(fd, &mut attributes) } != 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
-        if attributes.c_lflag & libc::ICANON == 0 {
-            return Ok(TerminalControlResult::Unsupported(
-                "eof_requires_canonical_mode",
-            ));
-        }
-        let eof = attributes.c_cc[libc::VEOF] as i64;
-        if eof == libc::_POSIX_VDISABLE as i64 {
-            return Ok(TerminalControlResult::Unsupported(
-                "eof_disabled_by_termios",
-            ));
-        }
-        self.write(&[eof as u8])?;
-        Ok(TerminalControlResult::Applied)
-    }
-
-    #[cfg(not(unix))]
-    fn send_eof(&self) -> anyhow::Result<TerminalControlResult> {
-        Ok(TerminalControlResult::Unsupported(
-            "platform_eof_unavailable",
-        ))
-    }
-
-    #[cfg(unix)]
-    fn master_fd(&self) -> anyhow::Result<libc::c_int> {
-        let master = self
-            .master
-            .lock()
-            .map_err(|_| anyhow::anyhow!("pty master lock poisoned"))?;
-        master
-            .as_raw_fd()
-            .ok_or_else(|| anyhow::anyhow!("pty master file descriptor unavailable"))
     }
 
     /// shell 已退出时返回退出状态。POSIX 上只观察、不回收：回收之后 shell 的 PID（即会话号）可能
@@ -283,7 +181,7 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
 
-    // 目的：前台程序不读输入时写入不阻塞调用方；潜在缺陷：控制循环卡在 PTY 写上，心跳、信号、关闭全部停摆。
+    // 目的：前台程序不读输入时写入不阻塞调用方；潜在缺陷：控制循环卡在 PTY 写上，心跳、关闭全部停摆。
     #[test]
     fn write_never_blocks_when_the_foreground_program_does_not_read() {
         let spawned = PtyRuntime::spawn(

@@ -1,4 +1,4 @@
-"""终端会话领域错误；输入仲裁与等待条件错误不改变命令或会话生命周期。
+"""终端会话领域错误；Agent 填入被拒与等待条件错误不改变命令或会话生命周期。
 
 ``advice`` 是投影给模型的下一步动作（英文，模型可见），``message`` 只说明发生了什么，两者不重复
 （同一动作不在 message 与 advice 各写一遍）：需要不同动作时由抛出点给出不同的 message，动作本身
@@ -20,8 +20,8 @@ class TerminalSessionNotFoundError(TerminalSessionError):
 
     code = "TERMINAL_SESSION_NOT_FOUND"
     advice = (
-        "It ended earlier or the backend restarted; call terminal_list, then terminal_start "
-        "if you still need a terminal."
+        "It ended earlier or the backend restarted; call terminal_list to see the user's "
+        "terminals."
     )
 
 
@@ -32,29 +32,24 @@ class TerminalSessionOwnershipError(TerminalSessionError):
 
 
 class TerminalSessionStateError(TerminalSessionError):
-    """当前 session 状态不允许请求的操作；原因彼此不同（会话已结束、输入被取消、key 复用），
-    message 已把原因写清，不再给类型级动作。"""
+    """当前 session 状态不允许请求的操作（会话已结束、服务正在关闭）；message 已把原因写清，
+    不再给类型级动作。"""
 
     code = "TERMINAL_SESSION_STATE_ERROR"
 
 
-class TerminalUserTypingError(TerminalSessionError):
-    """用户一直在该会话打字，Agent 等不到空闲；用户停手几秒后可重试，不影响会话。"""
+class TerminalPrefillRejectedError(TerminalSessionError):
+    """当前不满足「把一行命令填进空提示符」的条件（无 shell 集成、不在提示符、提示符已有输入）。
 
-    code = "TERMINAL_USER_TYPING"
-    retryable = True
-    advice = "Wait a few seconds for the user to stop, then retry."
-
-
-class TerminalUserCommandRunningError(TerminalSessionError):
-    """会话前台正运行用户启动的命令：Agent 输入会落进用户的程序，立即拒绝、不等待。
-
-    不可重试：命令可能长驻（dev server、编辑器、ssh），等待只会让 Agent 卡住；
-    应改用别的会话或询问用户。
+    不可重试到同一提示符：用户敲了半行或已经填过一次时，Agent 应把命令写进回复里，或等下一个
+    提示符；原因由 message 写清。
     """
 
-    code = "TERMINAL_USER_COMMAND_RUNNING"
-    advice = "Use another session, or ask the user to finish it first."
+    code = "TERMINAL_PREFILL_REJECTED"
+    advice = (
+        "Give the command in your reply instead, or ask the user to clear the prompt and try "
+        "again later."
+    )
 
 
 class TerminalIntegrationRequiredError(TerminalSessionError):
@@ -75,11 +70,11 @@ class ShellResolutionError(TerminalSessionError):
 
 
 class TerminalSessionCapacityError(TerminalSessionError):
-    """达到全进程活跃会话上限，或该 Task 的 Agent 会话上限。"""
+    """达到全进程活跃会话上限。"""
 
     code = "TERMINAL_SESSION_CAPACITY"
     retryable = True
-    advice = "Reuse a session from terminal_list or close one with terminal_close, then retry."
+    advice = "Close a terminal in the terminal panel, then retry."
 
 
 class TerminalSessionResyncRequiredError(TerminalSessionError):
@@ -130,19 +125,3 @@ class TerminalWorkerBackpressureError(TerminalSessionError):
     retryable = True
     advice = "The program is not reading input yet; retry once it does."
 
-
-class TerminalWorkerSignalUnsupportedError(TerminalSessionError):
-    """Worker 明确拒绝当前平台或终端状态下的 signal。"""
-
-    code = "TERMINAL_SIGNAL_UNSUPPORTED"
-    advice = "Use another signal, or send the key with keys."
-
-
-class TerminalWorkerSignalFailedError(TerminalSessionError):
-    """Worker 已处理 signal 请求但无法完成实际投递。"""
-
-    code = "TERMINAL_SIGNAL_FAILED"
-    advice = (
-        "Check whether the program is still running; retry with keys if the signal "
-        "did not arrive."
-    )

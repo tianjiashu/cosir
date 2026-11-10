@@ -1,60 +1,43 @@
-"""单会话执行协调：会话锁保护输入仲裁、观察、条件等待、交接及唯一终态迁移。
+"""单会话执行协调：会话锁保护观察、条件等待、Agent 填入与唯一终态迁移。
 
-service 拥有会话集合、Task 归属与容量；本对象不访问 registry。会话锁内只做内存操作：
-外部副作用（snapshot 重投影、会话结束通知）都在 ``session_effects``（交接的代为落定在
-``handoff_registry``），经 service
-注入的 ``schedule`` 交给 service 的单线程副作用执行器；终态迁移的赢家由
-service 在锁外调用 ``dispose_worker`` 清理 worker。因此 worker 读线程回调本对象时只会短暂持锁，
+service 拥有会话集合、Task 归属与容量；本对象不访问 registry。会话锁内只做内存操作：外部副作用
+（snapshot 重投影）经 service 注入的 ``schedule`` 交给 service 的单线程副作用执行器；终态迁移的赢家
+由 service 在锁外调用 ``dispose_worker`` 清理 worker。因此 worker 读线程回调本对象时只会短暂持锁，
 不做阻塞 IO。
 
 并发约定：
 - 等待都在 ``self._condition`` 上进行：worker 事件 ``notify_all`` 唤醒，
   ``WAIT_CANCEL_CHECK_SECONDS`` 时间片只用于复查 Run 取消信号；
-- 输入仲裁只约束 Agent，用户输入从不被拒：用户最近在打字时 Agent 等其停手（防止拼进用户的半行），
-  前台跑着用户启动的命令时 Agent 输入立即被拒（不往用户的程序里打字）。Agent 不持锁：一次输入是
-  worker 队列里的一帧，用户按键切不开它；终端工具串行执行，同一会话也不会有两个 Agent 输入并发；
-- 需要 worker 回执的 signal 必须在锁外发送：回执由同一读线程接收，持锁发送会与读线程互等；
+- Agent 只能把一行命令填进空提示符（不执行、不等输出），准入只读 shell 集成给出的事实：集成 ready、
+  停在提示符、且这个提示符出现后还没有任何输入。用户输入从不被拒，也从不经过准入；
 - worker 握手（最多数秒）不在会话锁内进行：启动期间快照投影、订阅与 WS 输入都要拿会话锁，
   其中 snapshot 刷新持有全局投影锁、WS 在事件循环里调用，长持会话锁会拖住所有 Task 与事件循环。
   握手与 worker 关闭由独立的启动互斥 ``_start_lock`` 串行化。``starting`` 期间用户按键与尺寸照常
-  进入 worker 的有序输入队列，握手后按序发出（与真实终端的预输入一致）；Agent 输入要用握手声明的
-  能力，只在 ``running`` 后接受。
+  进入 worker 的有序输入队列，握手后按序发出（与真实终端的预输入一致）；Agent 填入的准入先判会话
+  状态，只在 ``running`` 后接受。
 """
 
 from __future__ import annotations
 
 import base64
-import json
 import re
 import threading
 import time
 import uuid
-from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from hashlib import sha256
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tool.handoff.handoff_registry import HandoffLease, handoff_registry
-from app.core.tool.schemas.tool_names import TOOL_TERMINAL_HANDOFF
-from app.tools.terminal_runtime import session_effects
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
-    TerminalSessionError,
+    TerminalPrefillRejectedError,
     TerminalSessionStateError,
-    TerminalUserCommandRunningError,
-    TerminalUserTypingError,
     TerminalWorkerUnavailableError,
 )
-from app.tools.terminal_runtime.inputs import (
-    DEFAULT_WRITE_WAIT,
-    TerminalWait,
-    require_input_capability,
-    summarize_input,
-)
+from app.tools.terminal_runtime.inputs import TerminalWait
 from app.tools.terminal_runtime.line_buffer import TerminalLineBuffer
 from app.tools.terminal_runtime.observation import InputSource, TerminalObservation
 from app.tools.terminal_runtime.render import (
@@ -62,7 +45,6 @@ from app.tools.terminal_runtime.render import (
     LineSearch,
     SessionFacts,
     TerminalObservationResult,
-    render_end_notice,
     render_observation,
     render_session_summary,
 )
@@ -91,6 +73,17 @@ _WORKER_EXIT_FAILURES = {
 }
 
 
+def refresh_task_sessions(task_id: int) -> None:
+    """影响会话条目的变化（生命周期、集成）后整表重投影该 Task 的终端会话列表。
+
+    终端运行时只关心会话本身；触达应用层的动作在函数内导入，避免终端包导入时拉起应用层。
+    由 service 的单线程副作用执行器在会话锁外调用，失败由执行器记录，不影响会话。
+    """
+    from app.service import depends
+
+    depends.get_conversation_task_state_service().refresh_terminal_sessions(task_id)
+
+
 @dataclass(frozen=True)
 class SessionSnapshot:
     """会话在某一时刻的只读事实，取自同一次会话锁内。
@@ -100,9 +93,7 @@ class SessionSnapshot:
     """
 
     session_id: str
-    label: str | None
     shell_kind: str
-    created_by: Literal["agent", "user"]
     initial_cwd: str
     created_at: datetime
     status: str
@@ -110,7 +101,7 @@ class SessionSnapshot:
     exit_code: int | None
     integration: str
     command_running: bool
-    # 给模型的一行摘要（start / close / list 共用）：身份、创建者、当前状态与最近命令。
+    # 给模型的一行摘要（terminal_list 用）：身份、当前状态与最近命令。
     summary: str
 
 
@@ -144,10 +135,8 @@ class TerminalSessionRuntime:
         self,
         *,
         task_id: int,
-        created_by: Literal["agent", "user"],
         initial_cwd: str,
         spec: ShellSpec,
-        label: str | None,
         schedule: EffectScheduler,
     ) -> None:
         """只建内存状态与 worker 句柄（解析 worker 路径，未配置时抛
@@ -155,16 +144,15 @@ class TerminalSessionRuntime:
         # 身份和用途在会话创建后不变；生命周期字段只在会话锁内更新。
         self.session_id: Final = f"term_{uuid.uuid4().hex[:12]}"
         self.task_id: Final = task_id
-        self.created_by: Final = created_by
         self.initial_cwd: Final = initial_cwd
         self.spec: Final = spec
-        self.label: Final = label
         self.created_at: Final = datetime.now(UTC)
         self._schedule = schedule
         self._status = "starting"
         self._end_reason: str | None = None
         self._exit_code: int | None = None
-        # 句柄随会话常驻；终态后 ``_mutable_worker`` 按状态拒绝，只有 ``dispose_worker`` 再碰它。
+        # 句柄随会话常驻；写入前按会话状态拒绝（见 ``_admit_prefill`` 与 ``user_input``），
+        # 终态后只有 ``dispose_worker`` 再碰它。
         self._worker: Final = ProcessTerminalWorker(uuid.uuid4().hex)
         # 会话锁：可重入（持锁的辅助方法互相调用），等待都在它上面进行。
         self._condition = threading.Condition(threading.RLock())
@@ -175,14 +163,11 @@ class TerminalSessionRuntime:
             self.session_id, Constant.Terminal.MAX_RING_BUFFER_BYTES
         )
         self._observation = TerminalObservation(spec.kind, spec.integration)
-        self._accepted_writes: OrderedDict[str, bytes] = OrderedDict()
         self._user_last_input = float("-inf")
-        # 最近一次被接受输入的来源：shell 报告命令开始时据此记下发起方（见 ``TerminalCommand``）。
+        # shell 报告命令开始时据此记下发起方（见 ``TerminalCommand``）：Agent 只填不执行，命令只可能
+        # 由用户回车发起；会话启动脚本等之前没有任何输入时为 None。
         self._last_input_by: InputSource | None = None
         self._user_marks = _UserInputMarks()
-        # 正在会话条件变量上进行的 Agent 条件等待；会话结束时它们会把结果带给 Agent，
-        # 不必另发结束通知。
-        self._agent_waits = 0
         # 上一次无等待读取的（信息版本, 状态, 请求参数），用于识别「无变化的重复读取」。
         self._last_read: tuple[object, ...] | None = None
 
@@ -221,7 +206,6 @@ class TerminalSessionRuntime:
                     "data": {
                         "task_id": self.task_id,
                         "session_id": self.session_id,
-                        "created_by": self.created_by,
                         "worker_instance_id": worker.instance_id,
                         "worker_pid": worker.pid,
                         "shell_executable": self.spec.executable,
@@ -243,41 +227,17 @@ class TerminalSessionRuntime:
         finally:
             self._disposal_finished.set()
 
-    def wait_for_integration(self) -> None:
-        """集成初始化超时记为 unavailable；迟到的真实 ready 事件仍可恢复能力。"""
-        deadline = time.monotonic() + Constant.Terminal.INTEGRATION_READY_TIMEOUT_SECONDS
-        timed_out = False
-        with self._condition:
-            while self._observation.integration_status == "starting" and self._status in _ACTIVE:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    self._observation.shell_event(
-                        {"kind": "unavailable", "reason": "initialization_timeout"}
-                    )
-                    timed_out = True
-                    break
-                self._condition.wait(remaining)
-        if timed_out:
-            self.notify_changed()
-
     def finish(
         self,
         status: Literal["closed", "exited", "failed"],
         reason: str,
         exit_code: int | None = None,
-        *,
-        announce: bool,
     ) -> bool:
         """原子确定终态并唤醒所有等待。
 
-        只有首次迁移返回 True，调用方随后在锁外 ``dispose_worker``；重复迁移返回 False。
-
-        ``announce`` 由调用方声明这次结束是否是 Agent 不知道的（shell 退出、worker 故障、用户
-        关闭）；Agent 自己关闭、启动失败（错误直接返回给调用方）、Task 删除与后端关闭不需要告知。
-        仅当会话由 Agent 创建、且没有条件等待或交接会把 ``session_ended`` 带回给它时，经副作用
-        执行器投递一条结束通知（系统通知，不唤醒 Run，随下一次推进并入）。交接中的会话结束、且这次
-        结束需要告知时，由运行时代用户落定那次 HITL 调用（``handoff_registry.settle``）；后端关闭与
-        Task 删除不代为落定：等待中的决定按 HITL 契约保留，之后交还会报告会话已不在。
+        只有首次迁移返回 True，调用方随后在锁外 ``dispose_worker``；重复迁移返回 False。终态只落
+        ``terminal_session_ended`` 日志、不通知 Agent：会话都是用户的，Agent 经 snapshot 与
+        ``terminal_list`` / ``terminal_read`` 看到终态。
         """
         with self._condition:
             if self._status not in _ACTIVE:
@@ -288,18 +248,6 @@ class TerminalSessionRuntime:
             self._status = status
             self._stream.finish()
             self._condition.notify_all()
-            # 交接中结束：取登记要在会话锁内，与 ``begin_handoff`` 的登记原子地裁决先后。
-            handoff = handoff_registry.on_resource("terminal", self.session_id)
-            notice = (
-                render_end_notice(
-                    self._facts(), self._observation, label=self.label, created_by=self.created_by
-                )
-                if announce
-                and self.created_by == "agent"
-                and handoff is None
-                and self._agent_waits == 0
-                else None
-            )
         log.info(
             "terminal_session_ended",
             extra={
@@ -310,31 +258,14 @@ class TerminalSessionRuntime:
                     "status": status,
                     "reason": reason,
                     "exit_code": exit_code,
-                    "announced": notice is not None,
                 },
             },
         )
-        if notice is not None:
-            self._schedule(lambda: session_effects.post_session_ended_notice(self.task_id, notice))
-        if handoff is not None and announce:
-            self._schedule(
-                lambda: handoff_registry.settle(
-                    handoff.task_id,
-                    handoff.tool_call_id,
-                    "the terminal session ended before the user handed it back",
-                )
-            )
         return True
 
     def wait_for_disposal(self) -> None:
         """仅供批量清理等待已有句柄持有者；普通回调或重复 close 不等待自身收尾。"""
         self._disposal_finished.wait()
-
-    def _mutable_worker(self) -> ProcessTerminalWorker:
-        """持锁调用：取 running 会话的 worker；``starting`` 时握手未完成、worker 尚不接受输入。"""
-        if self._status != "running":
-            raise TerminalSessionStateError(f"terminal session is {self._status}")
-        return self._worker
 
     # ------------------------------------------------------------------ worker 事件
 
@@ -357,7 +288,7 @@ class TerminalSessionRuntime:
             if reason == "exited":
                 code = event.get("exit_code")
                 return self.finish(
-                    "exited", "shell_exited", code if isinstance(code, int) else None, announce=True
+                    "exited", "shell_exited", code if isinstance(code, int) else None
                 )
             log.warning(
                 "terminal_session_worker_ended",
@@ -370,9 +301,9 @@ class TerminalSessionRuntime:
                     },
                 },
             )
-            return self.finish("failed", _WORKER_EXIT_FAILURES[reason], announce=True)
+            return self.finish("failed", _WORKER_EXIT_FAILURES[reason])
         elif kind == "disconnected":
-            return self.finish("failed", "worker_disconnected", announce=True)
+            return self.finish("failed", "worker_disconnected")
         elif kind == "error":
             code = event.get("code")
             if code == "input_backpressure":
@@ -429,13 +360,13 @@ class TerminalSessionRuntime:
         # 缺失或非字符串的 ``data_base64`` 与解码失败同属 worker 协议违约，一律收敛会话。
         encoded = event.get("data_base64")
         if not isinstance(encoded, str):
-            return self.finish("failed", "invalid_worker_output", announce=True)
+            return self.finish("failed", "invalid_worker_output")
         try:
             data = base64.b64decode(encoded, validate=True)
         except ValueError:
-            return self.finish("failed", "invalid_worker_output", announce=True)
+            return self.finish("failed", "invalid_worker_output")
         if not data or len(data) > Constant.Terminal.MAX_WORKER_OUTPUT_CHUNK_BYTES:
-            return self.finish("failed", "worker_output_chunk_too_large", announce=True)
+            return self.finish("failed", "worker_output_chunk_too_large")
         with self._condition:
             if self._status in _ACTIVE:
                 self._stream.append(encoded, len(data))
@@ -443,106 +374,46 @@ class TerminalSessionRuntime:
                 self._condition.notify_all()
         return False
 
-    # ------------------------------------------------------------------ Agent 输入
+    # ------------------------------------------------------------------ Agent 填入
 
-    def write(
-        self,
-        input: Mapping[str, Any],
-        operation_id: str,
-        wait: TerminalWait | None,
-        *,
-        run_id: int | None,
-        tool_call_id: str,
-        is_cancelled: RunCancellationCheck,
+    def prefill(
+        self, command: str, *, run_id: int | None, tool_call_id: str
     ) -> TerminalObservationResult:
-        """投递一次 Agent 输入并按条件等待；输入接受后的取消仍返回接受事实，避免模型重发。
+        """把一行命令填进空提示符，立即返回尾部观察；不执行、也不等输出。
 
-        等待只在前台、在工具线程里进行，期间用户照常可以输入（输入行会标注给 Agent）；长时间的
-        工作交给 ``execute_terminal`` 的后台执行，不在交互终端里挂着等。交接是独立的 HITL 工具，
-        见 :meth:`begin_handoff`；输入仲裁见 :meth:`_admit_agent_input`。
+        回车只能由用户按：填入后命令仍在提示符上，用户核对后自己决定是否运行。命令里的回车、控制
+        字符与空串在参数模型和 worker 两侧都被拒绝，所以文本不会触发执行，也不会提前结束括号粘贴
+        包裹。这里不发等待：用户何时回车、是否运行，由之后的:meth:`read` 观察。
 
-        worker 不可用（含信号回执超时）只作为本次调用的错误抛出，不结束会话：会话终态只来自 worker
-        事件流（``exit`` / 读线程补发的 ``disconnected``）与显式关闭，在命令路径上判死会误伤回执慢的
-        正常会话。
+        异常:
+            TerminalSessionStateError: 会话尚在握手或已结束。
+            TerminalPrefillRejectedError: 该会话当前不满足填入条件（见 :meth:`_admit_prefill`）。
         """
-        kind = input["type"]
-        summary = summarize_input(input)
-        spec = wait or DEFAULT_WRITE_WAIT
-        fingerprint = sha256(
-            json.dumps(dict(input), sort_keys=True, ensure_ascii=False).encode()
-        ).digest()
+        preview = command[:200]
         with self._condition:
-            self._require_wait_supported(spec)
-            cached = self._accepted_writes.get(operation_id)
-            if cached is not None:
-                if cached != fingerprint:
-                    raise TerminalSessionError(
-                        "terminal operation_id was reused with different input"
-                    )
-                return self._tail_result(
-                    note="duplicate operation_id: input was already accepted and was not resent",
-                    input_type=kind,
-                    input_summary=summary,
-                )
-            if is_cancelled():
-                raise TerminalSessionStateError("terminal input was not accepted: run cancelled")
-            worker = self._mutable_worker()
-            require_input_capability(input, worker.capabilities)
-            self._admit_agent_input(is_cancelled)
-            self._last_input_by = "agent"
-            baseline = WaitBaseline.of(
-                self._observation, after_line_input=kind == "line", after_input=True
-            )
-            if kind in {"line", "text", "keys"}:
-                self._stream.publish("input_mark", by="agent")
-        self._deliver_agent_input(worker, input)
+            self._admit_prefill()
+            self._observation.note_input()
+            self._stream.publish("input_mark", by="agent")
+            worker = self._worker
+        worker.write({"type": "prefill", "text": command})
         with self._condition:
-            self._accepted_writes[operation_id] = fingerprint
-            while len(self._accepted_writes) > Constant.Terminal.MAX_WRITE_OPERATION_CACHE:
-                self._accepted_writes.popitem(last=False)
             self._last_read = None
             log.info(
-                "terminal_agent_input_accepted",
+                "terminal_agent_prefill_accepted",
                 extra={
-                    "msg": "Agent 终端输入已投递",
+                    "msg": "Agent 把一行命令填进终端提示符（不执行）",
                     "data": {
                         "task_id": self.task_id,
                         "run_id": run_id,
                         "session_id": self.session_id,
                         "tool_call_id": tool_call_id,
-                        "operation_id": operation_id,
-                        "input_type": kind,
-                        "wait_until": spec.until,
-                        "timeout_ms": spec.effective_timeout_ms,
+                        "command_preview": preview,
                     },
                 },
             )
-        wait_result = self._wait(WaitEvaluator(spec, baseline), is_cancelled)
-        with self._condition:
+            last = self._observation.buffer.last_line
             return self._build_result(
-                baseline.line,
-                self._observation.buffer.last_line,
-                "both",
-                wait_result=wait_result,
-                input_type=kind,
-                input_summary=summary,
-            )
-
-    def _deliver_agent_input(self, worker: ProcessTerminalWorker, input: Mapping[str, Any]) -> None:
-        """锁外投递：line / text / keys 只入队；signal 等待 worker 回执，持锁会与读线程互等。"""
-        kind = input["type"]
-        if kind == "signal":
-            worker.signal(str(input["signal"]))
-        elif kind in {"line", "text"}:
-            worker.write({"type": kind, "text": input["text"]})
-        else:
-            worker.write({"type": "keys", "keys": list(input["keys"])})
-
-    def _require_wait_supported(self, spec: TerminalWait) -> None:
-        if spec.until == "command_returned" and self._observation.integration_status != "ready":
-            raise TerminalIntegrationRequiredError(
-                "wait until=command_returned needs shell integration, which is "
-                f"{self._observation.integration_status} for this session"
+                last - Constant.Terminal.READ_DEFAULT_TAIL + 1, last, "tail", prefilled=preview
             )
 
     # ------------------------------------------------------------------ Agent 读取
@@ -561,15 +432,17 @@ class TerminalSessionRuntime:
 
         ``pattern`` 把读取变成搜索：从 ``start_line``（缺省为最早保留行）扫到末行，只返回命中行，
         ``limit`` 限制命中数；搜索总是按逻辑行（全屏程序期间搜冻结的主屏）。正则已在参数边界校验。
-        等待规则同 :meth:`write`。
         """
         wait_result: dict[str, object] | None = None
         if wait is not None:
             with self._condition:
-                self._require_wait_supported(wait)
-                baseline = WaitBaseline.of(
-                    self._observation, after_line_input=False, after_input=False
-                )
+                integration = self._observation.integration_status
+                if wait.until == "command_returned" and integration != "ready":
+                    raise TerminalIntegrationRequiredError(
+                        "wait until=command_returned needs shell integration, which is "
+                        f"{integration} for this session"
+                    )
+                baseline = WaitBaseline.of(self._observation)
             # 没有执行中的命令就没有可等的返回，直接给出空闲结果。
             if wait.until == "command_returned" and baseline.active is None:
                 wait_result = {"until": wait.until, "end_reason": "idle"}
@@ -635,149 +508,60 @@ class TerminalSessionRuntime:
     ) -> dict[str, object]:
         """不持锁调用：在工具线程里持会话锁等条件（worker 事件 ``notify_all`` 唤醒），返回等待结果。
 
-        ``_agent_waits`` 让会话结束时不再另发结束通知：等待结果本身会告诉 Agent，见 :meth:`finish`。
-        时间片只为复查取消。
+        时间片只为复查取消；会话结束时以 ``session_ended`` 作为结束原因返回，不再另发通知。
         """
         with self._condition:
-            self._agent_waits += 1
-            try:
-                while True:
-                    if is_cancelled():
-                        reason = "cancelled"
-                        break
-                    if self._status not in _ACTIVE:
-                        reason = "session_ended"
-                        break
-                    now = time.monotonic()
-                    checked, due = evaluator.check(self._observation, now)
-                    if checked is not None:
-                        reason = checked
-                        break
-                    self._condition.wait(
-                        min(max(due - now, 0.0), Constant.Terminal.WAIT_CANCEL_CHECK_SECONDS)
-                    )
-            finally:
-                self._agent_waits -= 1
+            while True:
+                if is_cancelled():
+                    reason = "cancelled"
+                    break
+                if self._status not in _ACTIVE:
+                    reason = "session_ended"
+                    break
+                now = time.monotonic()
+                checked, due = evaluator.check(self._observation, now)
+                if checked is not None:
+                    reason = checked
+                    break
+                self._condition.wait(
+                    min(max(due - now, 0.0), Constant.Terminal.WAIT_CANCEL_CHECK_SECONDS)
+                )
             return evaluator.result(reason)
 
-    # ------------------------------------------------------------------ 交接
-
-    def begin_handoff(self, reason: str, tool_call_id: str) -> TerminalObservationResult:
-        """登记一次交接（``terminal_handoff`` 首次调用），返回给卡片展示的当前尾部。
-
-        交接事实在 ``handoff_registry``（会话上不另记一份）；在会话锁内登记，与会话结束原子地裁决
-        先后——结束时看得到这条登记，才能代用户落定。交接不改变输入仲裁（用户本来就能输入），也不
-        登记后台结果：等待交给 HITL，用户交还即对这次调用作出决定。``memo`` 记下交接那一刻的末行，
-        交还时从这里报告用户做了什么。
-
-        异常:
-            HandoffConflictError: 这个会话已在交接中。
-        """
-        with self._condition:
-            self._mutable_worker()
-            buffer = self._observation.buffer
-            handoff_registry.begin(
-                HandoffLease(
-                    tool_call_id=tool_call_id,
-                    task_id=self.task_id,
-                    tool_name=TOOL_TERMINAL_HANDOFF,
-                    surface="terminal",
-                    resource_id=self.session_id,
-                    reason=reason,
-                    memo=buffer.last_line,
-                )
-            )
-            return self._tail_result(input_type="handoff", input_summary=reason)
-
-    def end_handoff(self, handoff: HandoffLease | None) -> TerminalObservationResult:
-        """交接的决定到达后重放 ``terminal_handoff``：报告交接以来的输出。
-
-        ``handoff`` 是工具从登记表取回的那条；已不在（重复决定、被代为落定、后端重启过）时只给尾部，
-        不报错：决定只会执行一次，结果总要让等待占位收尾。会话已结束时报告尾部并说明。
-        """
-        with self._condition:
-            buffer = self._observation.buffer
-            if self._status not in _ACTIVE:
-                return self._tail_result(
-                    note="the session ended before the user handed it back",
-                    input_type="handoff",
-                )
-            return self._build_result(
-                cast(int, handoff.memo) if handoff is not None else self._default_tail_start(),
-                buffer.last_line,
-                "both",
-                note="the user handed the terminal back to you",
-                input_type="handoff",
-                input_summary=handoff.reason if handoff is not None else None,
-            )
-
     def notify_changed(self) -> None:
-        """影响 snapshot 会话条目的变化：经副作用线程整表重投影（见 ``session_effects``）。"""
+        """影响 snapshot 会话条目的变化：经副作用线程整表重投影该 Task 的会话列表。"""
         task_id = self.task_id
-        self._schedule(lambda: session_effects.refresh_task_sessions(task_id))
+        self._schedule(lambda: refresh_task_sessions(task_id))
 
     # ------------------------------------------------------------------ 输入仲裁
 
     def _user_typing(self) -> bool:
         return time.monotonic() - self._user_last_input < Constant.Terminal.USER_TYPING_IDLE_SECONDS
 
-    def _admit_agent_input(self, is_cancelled: RunCancellationCheck) -> None:
-        """持锁调用：判定 Agent 这次输入能否送达，不能时抛错；用户输入从不经过这里。
+    def _admit_prefill(self) -> None:
+        """持锁调用：判定这次填入能否落到提示符，不能时抛错；用户输入从不经过这里。
 
-        前台是用户启动的命令时立即拒绝：命令可能长驻，等它返回会让 Agent 无声卡住，往里打字又会落进
-        用户的程序。用户最近在打字时最多等 ``AGENT_TYPING_WAIT_SECONDS`` 让其停手，防止 Agent 的输入
-        拼进用户的半行；这里只看按键时间，不需要用户侧的释放动作。没有 shell 集成的会话看不到命令
-        边界，只有打字判定。
-
-        两项判定在等待的每一轮都重新做：用户刚回车启动的命令，其 ``command_started`` 往往在 Agent
-        开始等待之后才到（集成事件会唤醒等待者），只在进门时查一次会让 Agent 的输入在用户停手后
-        落进那个程序。
+        会话须在运行（``starting`` 握手未完成、终态后 worker 已不接受输入），其余三个条件都是 shell
+        集成与观察给出的既有事实，任一不满足即拒绝：
+        - 没有 shell 集成就看不到提示符，无法确认行里是否为空；
+        - 有命令在执行（或尚未回到提示符）时，填入会落进正在运行的程序；
+        - 这个提示符出现后已经有输入（用户敲了半行，或同一提示符上已经填过一次）时再填会拼进已有
+          内容。最后一条也覆盖了旧的幂等缓存：同一个提示符至多填一次。
         """
-        deadline = time.monotonic() + Constant.Terminal.AGENT_TYPING_WAIT_SECONDS
-        waited = False
-        while True:
-            command = self._observation.active_command
-            if command is not None and command.started_by == "user":
-                log.info(
-                    "terminal_agent_input_rejected_user_command",
-                    extra={
-                        "msg": "前台是用户启动的命令，拒绝 Agent 输入",
-                        "data": {"session_id": self.session_id, "command_number": command.number},
-                    },
-                )
-                raise TerminalUserCommandRunningError(
-                    f"the user started `{command.command}` in this session and it is still "
-                    "running; your input would go into the user's program"
-                )
-            if not self._user_typing():
-                break
-            waited = True
-            if self._status not in _ACTIVE:
-                raise TerminalSessionStateError(f"terminal session is {self._status}")
-            if is_cancelled():
-                raise TerminalSessionStateError("terminal input was not accepted: run cancelled")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                log.info(
-                    "terminal_agent_typing_wait_timeout",
-                    extra={
-                        "msg": "Agent 等待用户停止打字超时",
-                        "data": {"session_id": self.session_id},
-                    },
-                )
-                raise TerminalUserTypingError(
-                    "the user kept typing in this terminal; "
-                    "retry after they pause for a few seconds"
-                )
-            # 用户按键不唤醒等待者，时间片只为复查停手、取消与会话结束。
-            self._condition.wait(min(remaining, Constant.Terminal.WAIT_CANCEL_CHECK_SECONDS))
-        if waited:
-            log.info(
-                "terminal_agent_input_after_user_typing",
-                extra={
-                    "msg": "用户停止打字后 Agent 输入送达",
-                    "data": {"session_id": self.session_id},
-                },
+        if self._status != "running":
+            raise TerminalSessionStateError(f"terminal session is {self._status}")
+        if self._observation.integration_status != "ready":
+            raise TerminalPrefillRejectedError(
+                "this shell has no shell integration, so its prompt cannot be detected"
+            )
+        # 有命令在执行时 phase 必为 executing，这一条同时覆盖「命令在跑」与「尚未回到提示符」。
+        if self._observation.phase != "editing":
+            raise TerminalPrefillRejectedError(
+                "a command is running in this terminal (or it is not at its prompt)"
+            )
+        if self._observation.prompt_has_input:
+            raise TerminalPrefillRejectedError(
+                "the prompt already has input (typed by the user or filled earlier)"
             )
 
     def user_input(self, data: bytes) -> UserInputResult:
@@ -798,6 +582,7 @@ class TerminalSessionRuntime:
             except TerminalWorkerUnavailableError:
                 return "session_ended"
             self._user_marks.record(self._observation.buffer)
+            self._observation.note_input()
             self._user_last_input = time.monotonic()
             self._last_input_by = "user"
         return "accepted"
@@ -812,30 +597,6 @@ class TerminalSessionRuntime:
 
     # ------------------------------------------------------------------ 结果渲染
 
-    def _default_tail_start(self) -> int:
-        """持锁调用：默认尾部窗口（``READ_DEFAULT_TAIL`` 行）的首行。
-
-        下限由 ``_build_result`` 收拢。
-        """
-        return self._observation.buffer.last_line - Constant.Terminal.READ_DEFAULT_TAIL + 1
-
-    def _tail_result(
-        self,
-        *,
-        note: str | None = None,
-        input_type: str | None = None,
-        input_summary: str | None = None,
-    ) -> TerminalObservationResult:
-        """持锁调用：默认尾部窗口的结果（用户输入标注随交付清空）。"""
-        return self._build_result(
-            self._default_tail_start(),
-            self._observation.buffer.last_line,
-            "tail",
-            note=note,
-            input_type=input_type,
-            input_summary=input_summary,
-        )
-
     def _build_result(
         self,
         first: int,
@@ -843,14 +604,12 @@ class TerminalSessionRuntime:
         mode: KeepMode,
         *,
         wait_result: dict[str, object] | None = None,
-        note: str | None = None,
-        input_type: str | None = None,
-        input_summary: str | None = None,
+        prefilled: str | None = None,
         logical: bool = False,
         search: LineSearch | None = None,
     ) -> TerminalObservationResult:
-        """持锁调用：渲染观察文本（屏幕视图 / 逻辑行的选择见 ``render_observation``）；
-        用户输入标注在交付后清空。"""
+        """持锁调用：渲染观察文本（屏幕视图 / 逻辑行的选择见 ``render_observation``；区间下限由
+        它收拢）；用户输入标注在交付后清空。"""
         result = render_observation(
             self._facts(),
             self._observation,
@@ -860,9 +619,7 @@ class TerminalSessionRuntime:
             logical=logical,
             search=search,
             wait_result=wait_result,
-            note=note,
-            input_type=input_type,
-            input_summary=input_summary,
+            prefilled=prefilled,
         )
         self._user_marks = _UserInputMarks()
         return result
@@ -876,7 +633,6 @@ class TerminalSessionRuntime:
             end_reason=self._end_reason,
             exit_code=self._exit_code,
             user_typing=self._user_typing(),
-            handed_off=handoff_registry.on_resource("terminal", self.session_id) is not None,
             user_marks=self._user_marks.lines,
             user_typed_in_screen=self._user_marks.in_screen,
         )
@@ -887,9 +643,7 @@ class TerminalSessionRuntime:
         with self._condition:
             return SessionSnapshot(
                 session_id=self.session_id,
-                label=self.label,
                 shell_kind=self.spec.kind,
-                created_by=self.created_by,
                 initial_cwd=self.initial_cwd,
                 created_at=self.created_at,
                 status=self._status,
@@ -897,9 +651,7 @@ class TerminalSessionRuntime:
                 exit_code=self._exit_code,
                 integration=self._observation.integration_status,
                 command_running=self._observation.active_command is not None,
-                summary=render_session_summary(
-                    self._facts(), self._observation, label=self.label, created_by=self.created_by
-                ),
+                summary=render_session_summary(self._facts(), self._observation),
             )
 
     def subscribe(self, after_seq: int | None, loop: Any) -> TerminalStreamAttachment:

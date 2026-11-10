@@ -16,10 +16,8 @@ import struct
 import subprocess
 import sys
 import threading
-import uuid
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any, cast
 
@@ -30,24 +28,13 @@ from app.tools.terminal_runtime.errors import (
     TerminalWorkerBackpressureError,
     TerminalWorkerHandshakeError,
     TerminalWorkerProtocolError,
-    TerminalWorkerSignalFailedError,
-    TerminalWorkerSignalUnsupportedError,
     TerminalWorkerUnavailableError,
 )
 from app.tools.terminal_runtime.shell_resolver import ShellSpec
 
 WorkerEventCallback = Callable[[Mapping[str, object]], None]
-SIGNAL_ACK_TIMEOUT_SECONDS = 5.0
 HANDSHAKE_TIMEOUT_SECONDS = 5.0
 _STDERR_LINE_MAX_CHARS = 4096
-
-
-@dataclass
-class _PendingSignal:
-    """等待 worker signal_result 的单次请求状态；``result`` 先写入、``event`` 后 set。"""
-
-    event: threading.Event
-    result: Mapping[str, object] = field(default_factory=dict)
 
 
 class ProcessTerminalWorker:
@@ -98,10 +85,7 @@ class ProcessTerminalWorker:
         self._input_queue_bytes = 0
         self._handshake_valid = False
         self._handshake_payload: dict[str, object] | None = None
-        self._capabilities = frozenset[str]()
         self.geometry: dict[str, int] = {}
-        self._signal_lock = threading.Lock()
-        self._pending_signals: dict[str, _PendingSignal] = {}
         # 由首帧决定：``session``（PTY 交互会话）或 ``exec``（一次性命令），握手按它校验。
         self._mode = "session"
 
@@ -110,12 +94,6 @@ class ProcessTerminalWorker:
         """返回当前 sidecar PID。"""
 
         return self._process.pid if self._process is not None else None
-
-    @property
-    def capabilities(self) -> frozenset[str]:
-        """返回最近一次 handshake 声明的静态 worker 能力。"""
-
-        return self._capabilities
 
     def start(
         self,
@@ -288,7 +266,7 @@ class ProcessTerminalWorker:
         threading.Thread(target=target, args=args, name=name, daemon=True).start()
 
     def write(self, input: Mapping[str, object]) -> None:
-        """将已校验的单次输入（line / text / keys / raw）入队；worker 负责编码并一次写入 PTY。"""
+        """将已校验的单次输入（Agent 的 prefill 或用户的 raw）入队；worker 负责编码并写入 PTY。"""
 
         self._enqueue({"type": "write", "input": dict(input)})
 
@@ -303,10 +281,9 @@ class ProcessTerminalWorker:
     def _enqueue(self, message: Mapping[str, object]) -> None:
         """非阻塞入队；队列满抛背压错误，调用方（含事件循环里的 WS）不会被阻塞。
 
-        write / resize / signal 都经这条队列由写线程按序发出，保证相对顺序；heartbeat 与
-        shutdown 是控制面帧，直接写。写线程在握手成功后才启动，所以启动与握手期间入队的帧（会话
-        启动时用户的预输入与尺寸）在握手后按序发出；握手失败时 ``close`` 丢弃它们。只有关闭之后或
-        worker 已退出才拒绝。
+        write / resize 都经这条队列由写线程按序发出，保证相对顺序；heartbeat 与 shutdown 是控制面
+        帧，直接写。写线程在握手成功后才启动，所以启动与握手期间入队的帧（会话启动时用户的预输入与
+        尺寸）在握手后按序发出；握手失败时 ``close`` 丢弃它们。只有关闭之后或 worker 已退出才拒绝。
         """
 
         process = self._process
@@ -320,39 +297,6 @@ class ProcessTerminalWorker:
             self._input_queue.put_nowait(payload)
             self._input_queue_bytes += len(payload)
 
-    def signal(self, signal_name: str) -> None:
-        """经输入同一有序队列发送 signal，并等待 worker 确认实际投递结果。
-
-        不能直接写 stdin：队列里可能还排着先前入队的 line / keys，越过它们会让中断先于命令到达。
-        队列满时抛 ``TerminalWorkerBackpressureError``（与输入一致）。回执由读线程接收，调用方
-        不得持有会被读线程回调获取的锁。
-        """
-
-        request_id = uuid.uuid4().hex
-        pending = _PendingSignal(threading.Event())
-        with self._signal_lock:
-            self._pending_signals[request_id] = pending
-        try:
-            self._enqueue({"type": "signal", "request_id": request_id, "signal": signal_name})
-            if not pending.event.wait(timeout=SIGNAL_ACK_TIMEOUT_SECONDS):
-                raise TerminalWorkerUnavailableError(
-                    "terminal worker signal acknowledgement timed out"
-                )
-            # 事件已 set 意味着 result 已写入：读线程的回执，或 close 收敛的 ``unavailable``。
-            status = pending.result.get("status")
-            if status == "applied":
-                return
-            if status == "unsupported":
-                raise TerminalWorkerSignalUnsupportedError(
-                    str(pending.result.get("reason", "unsupported"))
-                )
-            if status == "failed":
-                raise TerminalWorkerSignalFailedError("terminal worker failed to deliver signal")
-            raise TerminalWorkerUnavailableError("terminal worker signal result is missing")
-        finally:
-            with self._signal_lock:
-                self._pending_signals.pop(request_id, None)
-
     def close(self) -> None:
         """请求 worker 关闭 shell，超时后终止 worker 进程。"""
 
@@ -360,10 +304,6 @@ class ProcessTerminalWorker:
         if process is None:
             return
         self._stop_event.set()
-        with self._signal_lock:
-            for pending in self._pending_signals.values():
-                pending.result = {"status": "unavailable"}
-                pending.event.set()
         with self._input_queue_lock:
             while True:
                 try:
@@ -460,23 +400,9 @@ class ProcessTerminalWorker:
                     # 保留原始握手内容：校验不通过时由 start() 输出期望/实际字段对照与日志。
                     self._handshake_payload = dict(event)
                     self._handshake_valid = self._validate_handshake(event, process.pid)
-                    raw_capabilities = event.get("capabilities")
-                    if isinstance(raw_capabilities, list):
-                        self._capabilities = frozenset(
-                            value for value in raw_capabilities if isinstance(value, str)
-                        )
                     if self._handshake_valid and self._mode == "session":
                         self.geometry = {"rows": event["rows"], "columns": event["columns"]}
                     self._handshake_event.set()
-                if event.get("type") == "signal_result":
-                    request_id = event.get("request_id")
-                    if isinstance(request_id, str):
-                        with self._signal_lock:
-                            pending = self._pending_signals.get(request_id)
-                            if pending is not None:
-                                pending.result = event
-                                pending.event.set()
-                    continue
                 on_event(event)
         except (
             OSError,

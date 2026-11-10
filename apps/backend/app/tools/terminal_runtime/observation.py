@@ -16,7 +16,8 @@ from typing import Any, Literal
 from app.tools.terminal_runtime.errors import TerminalSessionError
 from app.tools.terminal_runtime.line_buffer import TerminalLineBuffer
 
-InputSource = Literal["agent", "user"]
+# 只有用户会发起命令：Agent 只把一行填进提示符，回车只能由用户按。
+InputSource = Literal["user"]
 
 # 在下一次读取输入（提示符已打印之后）才报告 returned 的 shell：结束行取光标行 - 1。
 _RETURN_AFTER_PROMPT_SHELLS = frozenset({"powershell", "pwsh"})
@@ -49,7 +50,12 @@ class TerminalCommand:
 
 
 class TerminalObservation:
-    """逻辑行 + shell 状态；``information_version`` 在任何 Agent 可见变化时推进。"""
+    """逻辑行 + shell 状态；``information_version`` 在任何 Agent 可见变化时推进。
+
+    ``prompt_has_input`` 是「这个提示符出现之后，用户或 Agent 是否已经往这一行写过东西」：Agent
+    填入的准入依据，也替代了旧的幂等缓存（同一个提示符至多填一次）。它只在 ``shell_prompt`` 到达时
+    复位，与屏幕内容无关。
+    """
 
     def __init__(self, shell_kind: str, integration: str) -> None:
         self.shell_kind = shell_kind
@@ -61,6 +67,7 @@ class TerminalObservation:
         self.command_counter = 0
         self.latest_command: TerminalCommand | None = None
         self.integration_status = "starting" if integration == "auto" else "off"
+        self.prompt_has_input = False
 
     @property
     def active_command(self) -> TerminalCommand | None:
@@ -114,6 +121,7 @@ class TerminalObservation:
                 self.end_tracking("prompt_without_command_result")
             self.phase = "editing"
             self.cwd = event.get("cwd")
+            self.prompt_has_input = False
         else:
             raise TerminalSessionError(f"unknown shell observation: {kind}")
         self.information_version += 1
@@ -125,6 +133,14 @@ class TerminalObservation:
         if self.shell_kind in _RETURN_AFTER_PROMPT_SHELLS or self.buffer.cursor_column == 0:
             return cursor - 1
         return cursor
+
+    def note_input(self) -> None:
+        """记下「这个提示符上已经有输入」；输入真的写进 PTY 之后由会话运行时调用。
+
+        Agent 填入与用户按键都算。提示符上已有输入后，Agent 填入被拒（见会话运行时的填入准入），
+        直到下一个 ``shell_prompt`` 把它复位。
+        """
+        self.prompt_has_input = True
 
     def end_tracking(self, reason: str) -> None:
         command = self.active_command

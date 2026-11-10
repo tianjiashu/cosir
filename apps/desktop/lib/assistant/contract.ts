@@ -256,14 +256,12 @@ export type TerminalSessionStatus = "starting" | "running" | "exited" | "closed"
  * Task 级交互终端会话条目（snapshot 顶层 `terminal_sessions`）。
  *
  * 事实源在后端 `TerminalSessionService`，这里只是投影：活跃会话在前、按创建时间排序，已结束
- * 会话最多保留 10 个。前端标签栏、工具卡片状态都只读它，不自行推断会话存活；后端重启后列表清空。
- * `label` 为 Agent 指定的用途名，未指定时为空串（标签按「终端 N」编号）。
+ * 会话最多保留 10 个。前端标签栏与工具卡片的「在终端中打开」都只读它，不自行推断会话存活；后端重启后
+ * 列表清空。会话都由用户新建，标签按「终端 N」编号。
  */
 export type TerminalSessionEntry = {
   sessionId: string;
-  label: string;
   shellKind: string;
-  createdBy: "agent" | "user";
   status: TerminalSessionStatus;
   endReason: string | null;
   exitCode: number | null;
@@ -304,13 +302,12 @@ export type BackgroundTaskEntry = {
  * 一次进行中的交接（snapshot 顶层 `handoffs`）：Agent 把一个资源交给用户、等用户交还。
  *
  * 事实源是后端进程内的交接登记表，按登记先后排列，同一资源至多一条；后端重启后清空（工具卡片上的交还入口
- * 仍在）。`surface` + `resourceId` 指向交出去的资源（终端会话 id、浏览器标签 id），「交还」即对 `toolCallId`
- * 作出 HITL 决定。
+ * 仍在）。`resourceId` 是交出去的浏览器标签 id（目前唯一可交接的资源），「交还」即对 `toolCallId` 作出
+ * HITL 决定。
  */
 export type HandoffEntry = {
   toolCallId: string;
   toolName: string;
-  surface: "terminal" | "browser";
   resourceId: string;
   reason: string;
 };

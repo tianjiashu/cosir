@@ -9,7 +9,6 @@ import {
   GitForkIcon,
   GlobeIcon,
   InfoIcon,
-  KeyboardIcon,
   NetworkIcon,
   PuzzleIcon,
   SearchIcon,
@@ -19,7 +18,6 @@ import {
   UsersIcon,
   WorkflowIcon,
   WrenchIcon,
-  XIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -34,7 +32,6 @@ const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   "file-symlink": FileSymlinkIcon,
   globe: GlobeIcon,
   info: InfoIcon,
-  keyboard: KeyboardIcon,
   network: NetworkIcon,
   puzzle: PuzzleIcon,
   search: SearchIcon,
@@ -43,7 +40,6 @@ const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   users: UsersIcon,
   workflow: WorkflowIcon,
   wrench: WrenchIcon,
-  x: XIcon,
 };
 
 export function ToolIcon({

@@ -38,10 +38,8 @@ class Constant:
         服务侧与子进程，需两侧同步评估，不可只改一侧。
         """
 
-        # 单进程同时活跃的终端会话数上限（全局容量闸门，用户与 Agent 新建都受它约束）。
+        # 单进程同时活跃的终端会话数上限（全局容量闸门，用户新建受它约束）。
         MAX_ACTIVE_SESSIONS: int = 32
-        # Agent 在单个 Task 内新建的活跃会话上限；用户新建只受全局上限，保证 Agent 占不满名额。
-        MAX_AGENT_SESSIONS_PER_TASK: int = 8
         # 每个 Task 保留的已结束会话数（snapshot 与 terminal_list 可见）。
         MAX_ENDED_SESSIONS_PER_TASK: int = 10
         # 全进程已结束会话的总保留上限；每个终态会话仍持有行缓冲与预览缓冲，需整体有界。
@@ -70,8 +68,6 @@ class Constant:
         OBSERVATION_TAIL_LINES: int = 60
         # 观察文本中单行的最大字符数，超出部分以省略标记代替。
         OBSERVATION_LINE_MAX_CHARS: int = 2000
-        # 会话意外结束通知附带的尾部行数。
-        END_NOTICE_TAIL_LINES: int = 20
         # write 默认等待：输出静默 500ms，总超时 3s。
         WAIT_DEFAULT_QUIET_MS: int = 500
         WAIT_DEFAULT_TIMEOUT_MS: int = 3000
@@ -80,13 +76,9 @@ class Constant:
         WAIT_MAX_TIMEOUT_MS: int = 30_000
         # 事件驱动等待的复查时间片：只用于复查 Run 取消信号，条件判定由 worker 事件唤醒。
         WAIT_CANCEL_CHECK_SECONDS: float = 0.25
-        # start 等待 shell 集成就绪的上限；超时记为 unavailable，迟到的 ready 仍可恢复。
-        INTEGRATION_READY_TIMEOUT_SECONDS: float = 2.0
-        # --- 输入仲裁 ---
-        # 用户最后一次按键后多久内视为「正在打字」：只防 Agent 的输入与用户半行输入拼接。
+        # --- Agent 观察 ---
+        # 用户最后一次按键后多久内视为「正在打字」：terminal_list / read 据此提示 user typing。
         USER_TYPING_IDLE_SECONDS: float = 3.0
-        # Agent 输入等用户停手的上限，超时返回可重试错误。
-        AGENT_TYPING_WAIT_SECONDS: float = 10.0
         # --- Worker 子进程协议与约束 ---
         # 单帧最大字节数（Worker 与服务侧帧编解码的共同上限）。
         MAX_FRAME_BYTES: int = 4 * 1024 * 1024
@@ -94,8 +86,6 @@ class Constant:
         MAX_INPUT_QUEUE_FRAMES: int = 64
         # Worker 输入队列最大字节数（需容纳一帧 base64 编码的最大原始输入）。
         MAX_INPUT_QUEUE_BYTES: int = 512 * 1024
-        # 每个 session 保留的最近已接受输入摘要数；随终态历史淘汰或 Task 删除释放。
-        MAX_WRITE_OPERATION_CACHE: int = 4096
         # Worker 子进程启动时注入的环境变量键，用于标识自身为终端 worker。
         WORKER_ENV: str = "CODING_AGENT_TERMINAL_WORKER"
 

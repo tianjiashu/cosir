@@ -28,11 +28,8 @@ from app.tools.tool_models.replace_args import ReplaceArgs
 from app.tools.tool_models.search_content_args import SearchContentArgs
 from app.tools.tool_models.skill_args import SkillArgs
 from app.tools.tool_models.terminal_session_args import (
-    TerminalCloseArgs,
-    TerminalHandoffArgs,
     TerminalListArgs,
     TerminalReadArgs,
-    TerminalStartArgs,
     TerminalWriteArgs,
 )
 from app.tools.tool_models.write_file_args import WriteFileArgs
@@ -59,11 +56,8 @@ __all__ = [
     "ReplaceArgs",
     "SearchContentArgs",
     "SkillArgs",
-    "TerminalCloseArgs",
-    "TerminalHandoffArgs",
     "TerminalListArgs",
     "TerminalReadArgs",
-    "TerminalStartArgs",
     "TerminalWriteArgs",
     "WindowsExecuteTerminalArgs",
     "WriteFileArgs",

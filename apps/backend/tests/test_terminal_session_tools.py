@@ -27,7 +27,7 @@ from app.tools.tool_handler.terminal_session import (
     TerminalWriteTool,
     build_terminal_definitions,
 )
-from app.tools.tool_handler.terminal_session.common import service_error_observation
+from app.tools.tool_handler.terminal_session.common import with_terminal_errors
 from app.tools.tool_models import TerminalReadArgs, TerminalWriteArgs
 
 
@@ -60,19 +60,19 @@ def test_read_arguments_bound_limits() -> None:
 
 
 def test_error_observations_use_controlled_status_hints() -> None:
-    rejected = service_error_observation(
+    rejected = _observe(
         "terminal_write", TerminalPrefillRejectedError("a command is running")
     )
     assert rejected.display_data["status_hint"] == "无法填入"
     assert "Give the command in your reply" in (rejected.content or "")
-    need = service_error_observation("terminal_read", TerminalIntegrationRequiredError("x"))
+    need = _observe("terminal_read", TerminalIntegrationRequiredError("x"))
     assert need.display_data["status_hint"] == "缺少集成"
     assert "until=output_quiet" in (need.content or "")
-    gone = service_error_observation(
+    gone = _observe(
         "terminal_read", TerminalSessionNotFoundError("session s no longer exists")
     )
     assert "terminal_list" in (gone.content or "")
-    other = service_error_observation("terminal_read", TerminalSessionStateError("x"))
+    other = _observe("terminal_read", TerminalSessionStateError("x"))
     assert other.display_data["status_hint"] == "终端失败"
     # 多因的 StateError 不追加类型级建议：message 已是完整事实。
     assert (other.content or "").endswith(": x")
@@ -126,7 +126,7 @@ def _context(tmp_path: Path) -> Any:
 def test_tool_handlers_return_observation_text_and_display_data(tool_service, tmp_path) -> None:
     service, workers = tool_service
     runtime = service.start(  # noqa: S604 - 显式 shell 取值，测试不启动真实 shell
-        task_id=1, workspace_root=str(tmp_path), shell="auto", label="dev", run_id=None
+        task_id=1, workspace_root=str(tmp_path), shell="auto"
     )
     session_id = runtime.session_id
     workers[0].screen(["$ "], cursor=(0, 2))
@@ -142,7 +142,6 @@ def test_tool_handlers_return_observation_text_and_display_data(tool_service, tm
     assert filled.display_data == {
         "kind": "terminal-session",
         "session_id": session_id,
-        "status": "running",
         "lines": [1, 1],
         "screen": False,
         "wait_result": None,
@@ -160,9 +159,8 @@ def test_tool_handlers_return_observation_text_and_display_data(tool_service, tm
     assert read.display_data["lines"] == [1, 1] and "input_summary" not in read.display_data
 
     listed = TerminalListTool().execute(execution_context=_context(tmp_path))
-    session_line, shells_line = (listed.content or "").split("\n")
-    assert session_line.startswith(f'session {session_id} "dev" · zsh · running')
-    assert shells_line.startswith("shells: ")
+    assert (listed.content or "").startswith(f"session {session_id} · zsh · running")
+    assert "shells:" not in (listed.content or "")
     assert listed.display_data == {"kind": "terminal-session", "session_count": 1}
 
 
@@ -174,7 +172,7 @@ def test_command_returned_without_integration_is_tool_error(monkeypatch, tmp_pat
         lambda task_id, tool_call_id: False,
     )
     runtime = service.start(  # noqa: S604 - 显式 shell 取值，测试不启动真实 shell
-        task_id=1, workspace_root=str(tmp_path), shell="auto", run_id=None
+        task_id=1, workspace_root=str(tmp_path), shell="auto"
     )
     result = TerminalReadTool().execute(
         session_id=runtime.session_id,
@@ -183,3 +181,12 @@ def test_command_returned_without_integration_is_tool_error(monkeypatch, tmp_pat
     )
     assert result.status == "error"
     assert "TERMINAL_INTEGRATION_REQUIRED" in (result.content or "")
+
+
+def _observe(tool_name: str, exc: Exception):
+    """经工具入口共用的错误归一化（``with_terminal_errors``）把领域错误投影成观察。"""
+
+    def fail():
+        raise exc
+
+    return with_terminal_errors(tool_name, fail)

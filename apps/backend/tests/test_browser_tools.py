@@ -856,7 +856,7 @@ def test_handoff_registers_the_tab_then_returns_the_page(
     assert waiting.display_data["handoff_reason"] == "sign in"
     assert BrowserHandoffTool().to_definition().user_decision == "execute"
     [lease] = handoff_registry.leases(42)
-    assert (lease.surface, lease.resource_id, lease.tool_call_id) == ("browser", "t1", "call-9")
+    assert (lease.resource_id, lease.tool_call_id) == ("t1", "call-9")
 
     # 同一个标签不能再交接一次。
     again = BrowserHandoffTool().execute(

@@ -125,16 +125,16 @@ describe("终端工作台 store", () => {
 });
 
 describe("终端标签命名", () => {
-  it("单会话显示「终端」不编号；多会话按序编号，label 优先", () => {
+  it("单会话显示「终端」不编号；多会话按序编号", () => {
     expect(terminalTabs([terminalSession("t1")], "t1")).toEqual([
       expect.objectContaining({ title: "终端" }),
     ]);
     const tabs = terminalTabs([
       terminalSession("t1"),
-      terminalSession("a1", { label: "dev server" }),
+      terminalSession("t2"),
       terminalSession("t3"),
     ], "t1");
-    expect(tabs.map((tab) => tab.title)).toEqual(["终端 1", "dev server", "终端 3"]);
+    expect(tabs.map((tab) => tab.title)).toEqual(["终端 1", "终端 2", "终端 3"]);
   });
 
   it("编号取会话在完整列表中的序号：关掉前面的会话不让后面的标签改名", () => {

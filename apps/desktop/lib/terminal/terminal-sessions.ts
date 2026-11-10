@@ -4,14 +4,14 @@ import type { TerminalSessionEntry, TerminalSessionStatus } from "@/lib/assistan
  * 终端会话的展示规则（纯函数）：生命周期分组、状态文案与标签命名。
  *
  * 会话事实只来自 snapshot 的 `terminal_sessions`，这里不做任何推断，只决定「怎么显示」；
- * 标签栏、页头角标与工具卡片共用同一套规则。
+ * 标签栏、菜单与页头角标共用同一套规则。
  */
 
 export function isActiveTerminalSession(session: Pick<TerminalSessionEntry, "status">): boolean {
   return session.status === "starting" || session.status === "running";
 }
 
-/** `dot` / `text` 是 Tailwind 语义色类，标签状态点与工具卡片状态文字共用。 */
+/** `dot` / `text` 是 Tailwind 语义色类（`dot` 用于标签状态点）。 */
 const STATUS_PRESENTATION: Record<TerminalSessionStatus, { label: string; dot: string; text: string }> = {
   starting: { label: "启动中", dot: "bg-warning", text: "text-warning" },
   running: { label: "运行中", dot: "bg-success", text: "text-success" },
@@ -32,7 +32,7 @@ export type TerminalTab = {
 /**
  * 计算标签栏：活跃会话按 snapshot 顺序在前；当前选中的已结束会话（用户从「已结束」打开、或正在看的
  * 会话刚退出）追加在后，以便继续查看最后画面。只有一个标签时显示「终端」不编号；多个时显示
- * 「终端 N」。Agent 指定的 label 优先作为标签名。
+ * 「终端 N」。
  *
  * N 取会话在完整列表（含已结束）里的序号，而不是在可见标签里的位置：关掉「终端 1」后「终端 2」
  * 不会改名为「终端 1」，关闭确认框里引用的标题也就始终指向用户看到的那个标签。
@@ -43,11 +43,11 @@ export function terminalTabs(sessions: readonly TerminalSessionEntry[], selected
   const single = visible.length === 1;
   return visible.map((session) => ({
     session,
-    title: session.label.trim() || (single ? "终端" : `终端 ${ordinals.get(session.sessionId)}`),
+    title: single ? "终端" : `终端 ${ordinals.get(session.sessionId)}`,
   }));
 }
 
-/** 异常结束：会话失败，或 shell 以非 0 退出码退出；用户 / Agent 主动关闭不算。 */
+/** 异常结束：会话失败，或 shell 以非 0 退出码退出；用户主动关闭不算。 */
 function isAbnormalTerminalEnd(session: Pick<TerminalSessionEntry, "status" | "exitCode">): boolean {
   return session.status === "failed" || (session.status === "exited" && session.exitCode !== null && session.exitCode !== 0);
 }
@@ -75,7 +75,7 @@ export function terminalBadge(
   // 已结束的会话不在标签栏里，按它在标签栏时的编号称呼（「终端 N」），与用户看到过的名字一致。
   const titleOf = (session: TerminalSessionEntry) => (
     tabs.find((tab) => tab.session.sessionId === session.sessionId)?.title
-      ?? (session.label.trim() || `终端 ${sessions.indexOf(session) + 1}`)
+      ?? `终端 ${sessions.indexOf(session) + 1}`
   );
   const count = tabs.length;
   const failed = sessions.filter((session) => isAbnormalTerminalEnd(session) && !acknowledgedEnds.includes(session.sessionId));

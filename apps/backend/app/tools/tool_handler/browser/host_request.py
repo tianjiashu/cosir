@@ -59,9 +59,7 @@ def call_browser(
         **asdict(BrowserTabContext.from_workspace(execution_context.workspace_root)),
         **params,
         "handoff_tabs": [
-            lease.resource_id
-            for lease in handoff_registry.leases(execution_context.task_id)
-            if lease.surface == "browser"
+            lease.resource_id for lease in handoff_registry.leases(execution_context.task_id)
         ],
     }
     return call_host(

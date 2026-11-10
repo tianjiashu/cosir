@@ -10,8 +10,6 @@ pub const MAX_INPUT_BYTES: usize = 64 * 1024;
 
 /// 单次 raw 输入（人工按键 / 粘贴）解码后的字节上限。
 pub const MAX_RAW_INPUT_BYTES: usize = 64 * 1024;
-/// 单次 keys 输入的按键个数上限。
-pub const MAX_KEYS_PER_INPUT: usize = 32;
 
 /// 首帧决定 worker 的模式，之后不能再换：`start_session` 起交互会话（PTY、屏幕模型、shell 集成，
 /// 会话结束才退出），`start_exec` 跑一条一次性命令（管道、无 stdin，命令结束即退出）。
@@ -40,172 +38,50 @@ pub enum ControlFrame {
         rows: u16,
         cols: u16,
     },
-    Signal {
-        request_id: String,
-        signal: String,
-    },
     Heartbeat,
     Shutdown,
 }
 
 /// 帧结构（类型名、字段）不合法属于 Python 侧协议缺陷，仍按协议错误终止；
-/// 内容校验（控制字符、长度、平台不支持的键、base64）由 `encode_input` 负责并且非致命。
+/// 内容校验（控制字符、长度、base64）由 `encode_input` 负责并且非致命。
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TerminalInput {
-    /// Agent 单行输入：拒绝控制字符，追加 Enter。
-    Line { text: String },
-    /// Agent 可打印字符：与 `Line` 同样拒绝控制字符，但不追加 Enter
-    /// （全屏程序单键命令、单键确认；多出的 Enter 会落到下一个读输入的程序上）。
-    Text { text: String },
-    /// Agent 按键序列：按顺序编码后一次写入。
-    Keys { keys: Vec<KeyName> },
+    /// Agent 唯一的输入：只填进提示符、绝不执行，不带回车；拒绝空串与控制字符。
+    Prefill { text: String },
     /// 人工输入的原始字节：不过滤控制字符（方向键、Ctrl 组合键、粘贴都原样送达）。
     Raw { data_base64: String },
 }
 
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum KeyName {
-    CtrlC,
-    CtrlD,
-    CtrlZ,
-    Up,
-    Down,
-    Left,
-    Right,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    Delete,
-    Tab,
-    ShiftTab,
-    Escape,
-    Backspace,
-    Enter,
-}
-
-const COMMON_KEYS: [KeyName; 15] = [
-    KeyName::CtrlC,
-    KeyName::Up,
-    KeyName::Down,
-    KeyName::Left,
-    KeyName::Right,
-    KeyName::Home,
-    KeyName::End,
-    KeyName::PageUp,
-    KeyName::PageDown,
-    KeyName::Delete,
-    KeyName::Tab,
-    KeyName::ShiftTab,
-    KeyName::Escape,
-    KeyName::Backspace,
-    KeyName::Enter,
-];
-
-impl KeyName {
-    /// 握手与编码共用同一集合，避免声明可用却无法投递。
-    /// 平台差异只在 EOF 类控制键：Unix 为 Ctrl-D，Windows 控制台为 Ctrl-Z。
-    pub fn supported() -> Vec<Self> {
-        let platform = if cfg!(windows) {
-            KeyName::CtrlZ
-        } else {
-            KeyName::CtrlD
-        };
-        COMMON_KEYS.iter().copied().chain([platform]).collect()
-    }
-
-    pub fn capability(self) -> &'static str {
-        match self {
-            Self::CtrlC => "key_ctrl_c",
-            Self::CtrlD => "key_ctrl_d",
-            Self::CtrlZ => "key_ctrl_z",
-            Self::Up => "key_up",
-            Self::Down => "key_down",
-            Self::Left => "key_left",
-            Self::Right => "key_right",
-            Self::Home => "key_home",
-            Self::End => "key_end",
-            Self::PageUp => "key_page_up",
-            Self::PageDown => "key_page_down",
-            Self::Delete => "key_delete",
-            Self::Tab => "key_tab",
-            Self::ShiftTab => "key_shift_tab",
-            Self::Escape => "key_escape",
-            Self::Backspace => "key_backspace",
-            Self::Enter => "key_enter",
-        }
-    }
-
-    /// xterm 兼容编码。方向键与 Home/End 随 DECCKM（`app_cursor`）切换 `ESC [` / `ESC O`，
-    /// 否则 vim、less 等开启应用光标模式的程序收不到可识别的方向键。
-    fn encode(self, app_cursor: bool, out: &mut Vec<u8>) {
-        let cursor = |out: &mut Vec<u8>, final_byte: u8| {
-            out.extend_from_slice(if app_cursor { b"\x1bO" } else { b"\x1b[" });
-            out.push(final_byte);
-        };
-        match self {
-            Self::CtrlC => out.push(0x03),
-            Self::CtrlD => out.push(0x04),
-            Self::CtrlZ => out.push(0x1a),
-            Self::Up => cursor(out, b'A'),
-            Self::Down => cursor(out, b'B'),
-            Self::Right => cursor(out, b'C'),
-            Self::Left => cursor(out, b'D'),
-            Self::Home => cursor(out, b'H'),
-            Self::End => cursor(out, b'F'),
-            Self::PageUp => out.extend_from_slice(b"\x1b[5~"),
-            Self::PageDown => out.extend_from_slice(b"\x1b[6~"),
-            Self::Delete => out.extend_from_slice(b"\x1b[3~"),
-            Self::Tab => out.push(b'\t'),
-            Self::ShiftTab => out.extend_from_slice(b"\x1b[Z"),
-            Self::Escape => out.push(0x1b),
-            Self::Backspace => out.push(0x7f),
-            Self::Enter => out.push(b'\r'),
-        }
-    }
-}
-
-/// worker 是独立进程输入边界：文本拒绝控制字符，不能让 line / text 绕过按键能力。
-/// `reserved` 是随后追加的字节数（Enter），计入 64 KiB 上限。
-fn printable_bytes(text: String, reserved: usize) -> anyhow::Result<Vec<u8>> {
-    if text.chars().any(char::is_control) {
-        anyhow::bail!("text contains control characters");
-    }
-    if text.len() + reserved > MAX_INPUT_BYTES {
-        anyhow::bail!("input exceeds 64 KiB");
-    }
-    Ok(text.into_bytes())
-}
-
 /// 把输入编码为写入 PTY 的字节；`Err` 表示内容被拒，调用方回 `input_rejected` 后继续运行。
-pub fn encode_input(input: TerminalInput, app_cursor: bool) -> anyhow::Result<Vec<u8>> {
+/// `bracketed_paste` 是读线程已解析到的终端模式位，只决定填入文本是否被包裹。
+pub fn encode_input(input: TerminalInput, bracketed_paste: bool) -> anyhow::Result<Vec<u8>> {
     match input {
-        TerminalInput::Line { text } => {
-            let mut bytes = printable_bytes(text, 1)?;
-            bytes.push(13);
-            Ok(bytes)
-        }
-        TerminalInput::Text { text } => {
+        TerminalInput::Prefill { text } => {
+            // worker 是独立进程输入边界：拒绝空串与控制字符，既不能回车、也不能发 ESC，保证填入
+            // 只会停在提示符上。长度上限只算文本本身，包裹的 12 字节不计入。
             if text.is_empty() {
-                anyhow::bail!("text must not be empty");
+                anyhow::bail!("prefill must not be empty");
             }
-            printable_bytes(text, 0)
-        }
-        TerminalInput::Keys { keys } => {
-            if keys.is_empty() || keys.len() > MAX_KEYS_PER_INPUT {
-                anyhow::bail!("keys must contain 1..={MAX_KEYS_PER_INPUT} entries");
+            if text.chars().any(char::is_control) {
+                anyhow::bail!("text contains control characters");
             }
-            let supported = KeyName::supported();
-            let mut bytes = Vec::new();
-            for key in keys {
-                if !supported.contains(&key) {
-                    anyhow::bail!("key {} is not supported on this platform", key.capability());
-                }
-                key.encode(app_cursor, &mut bytes);
+            if text.len() > MAX_INPUT_BYTES {
+                anyhow::bail!("input exceeds 64 KiB");
             }
-            Ok(bytes)
+            let text = text.into_bytes();
+            if bracketed_paste {
+                // 粘贴模式下 shell 把整段当一次粘贴处理，不触发用户自定义的按键绑定。
+                let mut bytes = Vec::with_capacity(text.len() + 12);
+                bytes.extend_from_slice(b"\x1b[200~");
+                bytes.extend_from_slice(&text);
+                bytes.extend_from_slice(b"\x1b[201~");
+                Ok(bytes)
+            } else {
+                // 不包裹也安全：文本里没有控制字符（连 ESC 都没有，结束序列不可能出现），
+                // 写入后只会停在提示符上，不会执行。
+                Ok(text)
+            }
         }
         TerminalInput::Raw { data_base64 } => {
             // 先按编码长度粗判，避免为超大载荷分配解码缓冲。
@@ -229,7 +105,6 @@ pub struct PtyHandshake {
     pub pty_kind: &'static str,
     pub rows: u16,
     pub columns: u16,
-    pub capabilities: Vec<&'static str>,
 }
 
 /// worker 为什么结束：`exit` 帧唯一的结局事实，后端只按它判定终态，不从错误帧或自己的标志推断。
@@ -276,11 +151,6 @@ pub enum WorkerEvent {
         code: &'static str,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
-    },
-    SignalResult {
-        request_id: String,
-        status: &'static str,
-        reason: Option<&'static str>,
     },
     /// 握手之后的最后一个事件，每条结束路径恰好一次（只有 stdout 已断开时发不出）。退出码与信号
     /// 只在命令或 shell 确实结束时出现（`stopped` 也会带上被停下时的状态）；Windows 会话模式只有
@@ -399,13 +269,12 @@ mod tests {
                 pty_kind: "unix_pty",
                 rows: 24,
                 columns: 80,
-                capabilities: vec!["input_keys"],
             }),
         })
         .expect("event");
         assert_eq!(
             &session[4..],
-            br#"{"type":"handshake","instance_id":"i","pid":7,"mode":"session","pty_kind":"unix_pty","rows":24,"columns":80,"capabilities":["input_keys"]}"#
+            br#"{"type":"handshake","instance_id":"i","pid":7,"mode":"session","pty_kind":"unix_pty","rows":24,"columns":80}"#
         );
         let exec = encode_event(&WorkerEvent::Handshake {
             instance_id: "i".into(),
@@ -465,178 +334,52 @@ mod tests {
             br#"{"type":"exit","reason":"start_failed","message":"no such file"}"#
         );
     }
-
-    #[test]
-    fn reads_signal_frame_with_request_id() {
-        let payload = br#"{"type":"signal","request_id":"req-1","signal":"interrupt"}"#;
-        let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
-        frame.extend_from_slice(payload);
-
-        let parsed = read_control_frame(&mut Cursor::new(frame))
-            .expect("valid frame")
-            .expect("one frame");
-        match parsed {
-            ControlFrame::Signal { request_id, signal } => {
-                assert_eq!(request_id, "req-1");
-                assert_eq!(signal, "interrupt");
-            }
-            _ => panic!("expected signal frame"),
-        }
-    }
-
-    #[test]
-    fn encodes_signal_result_event() {
-        let frame = encode_event(&WorkerEvent::SignalResult {
-            request_id: "req-1".to_owned(),
-            status: "unsupported",
-            reason: Some("platform_signal_unavailable"),
-        })
-        .expect("event");
-        let size = u32::from_be_bytes(frame[..4].try_into().expect("length prefix")) as usize;
-        assert_eq!(size, frame.len() - 4);
-        assert_eq!(
-            &frame[4..],
-            br#"{"type":"signal_result","request_id":"req-1","status":"unsupported","reason":"platform_signal_unavailable"}"#
-        );
-    }
 }
 
 #[cfg(test)]
 mod input_tests {
     use super::*;
 
-    fn keys(json: &str, app_cursor: bool) -> anyhow::Result<Vec<u8>> {
-        encode_input(serde_json::from_str(json).unwrap(), app_cursor)
+    fn prefill(text: &str) -> TerminalInput {
+        TerminalInput::Prefill { text: text.into() }
     }
 
     #[test]
-    fn complete_line_preserves_spaces_and_literal_escapes_and_appends_one_enter() {
+    fn prefill_encodes_printable_characters_with_or_without_paste_wrapping() {
         let input: TerminalInput =
-            serde_json::from_str(r#"{"type":"line","text":"  literal\\n  "}"#).unwrap();
-        assert_eq!(encode_input(input, false).unwrap(), b"  literal\\n  \r");
-        assert_eq!(
-            encode_input(
-                TerminalInput::Line {
-                    text: String::new()
-                },
-                false
-            )
-            .unwrap(),
-            b"\r"
-        );
-    }
-
-    #[test]
-    fn text_sends_printable_characters_without_enter() {
-        let input: TerminalInput = serde_json::from_str(r#"{"type":"text","text":":wq"}"#).unwrap();
+            serde_json::from_str(r#"{"type":"prefill","text":":wq"}"#).unwrap();
+        assert!(matches!(input, TerminalInput::Prefill { .. }));
         assert_eq!(encode_input(input, false).unwrap(), b":wq");
-        assert!(encode_input(
-            TerminalInput::Text {
-                text: String::new()
-            },
-            false
-        )
-        .is_err());
-        for text in ["q\r", "\u{1b}", "\t"] {
-            assert!(encode_input(TerminalInput::Text { text: text.into() }, false).is_err());
+        assert_eq!(
+            encode_input(prefill(":wq"), true).unwrap(),
+            b"\x1b[200~:wq\x1b[201~"
+        );
+        assert!(encode_input(prefill(""), false).is_err());
+        for text in ["a\nb", "a\r", "\t", "\u{1b}", "\u{85}", "q\u{3}"] {
+            assert!(encode_input(prefill(text), true).is_err(), "{text:?}");
         }
         assert_eq!(
-            encode_input(
-                TerminalInput::Text {
-                    text: "a".repeat(MAX_INPUT_BYTES)
-                },
-                false
-            )
-            .unwrap()
-            .len(),
-            MAX_INPUT_BYTES
+            encode_input(prefill(&"a".repeat(MAX_INPUT_BYTES)), true)
+                .unwrap()
+                .len(),
+            MAX_INPUT_BYTES + 12
         );
+        assert!(encode_input(prefill(&"a".repeat(MAX_INPUT_BYTES + 1)), false).is_err());
     }
 
     #[test]
-    fn rejects_old_inputs_newlines_control_characters_and_utf8_overflow() {
+    fn rejects_removed_input_kinds() {
         for json in [
+            r#"{"type":"line","text":"ls"}"#,
+            r#"{"type":"keys","keys":["enter"]}"#,
+            r#"{"type":"text","text":"ls"}"#,
             r#"{"type":"key","key":"ctrl_c"}"#,
-            r#"{"type":"keys","keys":["f1"]}"#,
         ] {
-            assert!(serde_json::from_str::<TerminalInput>(json).is_err());
+            assert!(
+                serde_json::from_str::<TerminalInput>(json).is_err(),
+                "{json}"
+            );
         }
-        for text in ["a\nb", "a\r", "\t", "\u{1b}", "\u{85}"] {
-            assert!(encode_input(TerminalInput::Line { text: text.into() }, false).is_err());
-        }
-        assert!(encode_input(
-            TerminalInput::Line {
-                text: "中".repeat(22000)
-            },
-            false
-        )
-        .is_err());
-        assert_eq!(
-            encode_input(
-                TerminalInput::Line {
-                    text: "a".repeat(MAX_INPUT_BYTES - 1)
-                },
-                false
-            )
-            .unwrap()
-            .len(),
-            MAX_INPUT_BYTES
-        );
-        assert!(encode_input(
-            TerminalInput::Line {
-                text: "a".repeat(MAX_INPUT_BYTES)
-            },
-            false
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn cursor_keys_follow_app_cursor_mode_and_others_do_not() {
-        let json = r#"{"type":"keys","keys":["up","down","right","left","home","end"]}"#;
-        assert_eq!(
-            keys(json, false).unwrap(),
-            b"\x1b[A\x1b[B\x1b[C\x1b[D\x1b[H\x1b[F"
-        );
-        assert_eq!(
-            keys(json, true).unwrap(),
-            b"\x1bOA\x1bOB\x1bOC\x1bOD\x1bOH\x1bOF"
-        );
-        let other = r#"{"type":"keys","keys":["page_up","page_down","delete","tab","shift_tab","escape","backspace","enter","ctrl_c"]}"#;
-        let expected: &[u8] = b"\x1b[5~\x1b[6~\x1b[3~\t\x1b[Z\x1b\x7f\r\x03";
-        assert_eq!(keys(other, false).unwrap(), expected);
-        assert_eq!(keys(other, true).unwrap(), expected);
-    }
-
-    #[test]
-    fn keys_count_and_platform_control_keys_are_enforced() {
-        assert!(keys(r#"{"type":"keys","keys":[]}"#, false).is_err());
-        let max = format!(
-            r#"{{"type":"keys","keys":[{}]}}"#,
-            vec![r#""enter""#; MAX_KEYS_PER_INPUT].join(",")
-        );
-        assert_eq!(keys(&max, false).unwrap().len(), MAX_KEYS_PER_INPUT);
-        let over = format!(
-            r#"{{"type":"keys","keys":[{}]}}"#,
-            vec![r#""enter""#; MAX_KEYS_PER_INPUT + 1].join(",")
-        );
-        assert!(keys(&over, false).is_err());
-        let ctrl_d = keys(r#"{"type":"keys","keys":["ctrl_d"]}"#, false);
-        let ctrl_z = keys(r#"{"type":"keys","keys":["ctrl_z"]}"#, false);
-        if cfg!(windows) {
-            assert!(ctrl_d.is_err());
-            assert_eq!(ctrl_z.unwrap(), b"\x1a");
-        } else {
-            assert_eq!(ctrl_d.unwrap(), b"\x04");
-            assert!(ctrl_z.is_err());
-        }
-        let capabilities: Vec<_> = KeyName::supported()
-            .into_iter()
-            .map(KeyName::capability)
-            .collect();
-        assert_eq!(capabilities.len(), 16);
-        assert!(capabilities.contains(&"key_ctrl_c"));
-        assert_eq!(capabilities.contains(&"key_ctrl_z"), cfg!(windows));
     }
 
     #[test]

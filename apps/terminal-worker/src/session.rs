@@ -13,10 +13,9 @@ use crate::geometry::Geometry;
 use crate::io::SharedFrameWriter;
 use crate::lifecycle::LifecycleArbiter;
 use crate::protocol::{
-    encode_input, ControlFrame, ExitReason, KeyName, PtyHandshake, WorkerEvent,
-    MAX_OUTPUT_CHUNK_BYTES,
+    encode_input, ControlFrame, ExitReason, PtyHandshake, WorkerEvent, MAX_OUTPUT_CHUNK_BYTES,
 };
-use crate::pty::{PtyRuntime, TerminalControlResult, WriteRejected};
+use crate::pty::{PtyRuntime, WriteRejected};
 use crate::shell_integration::{ShellLaunch, ShellParser};
 use crate::terminal_screen::TerminalScreen;
 use crate::worker::{spawn_control_reader, ControlEvent, HEARTBEAT_TIMEOUT};
@@ -61,7 +60,7 @@ pub fn run(
     spawn_control_reader(events_tx.clone());
     let runtime = spawned.runtime;
     let terminal_screen = TerminalScreen::new(geometry);
-    let app_cursor = terminal_screen.app_cursor_flag();
+    let bracketed_paste = terminal_screen.bracketed_paste_flag();
     let screen: SharedScreen = Arc::new(Mutex::new(terminal_screen));
     output.send(&WorkerEvent::Handshake {
         instance_id,
@@ -71,7 +70,6 @@ pub fn run(
             pty_kind: pty_kind(),
             rows: geometry.rows,
             columns: geometry.cols,
-            capabilities: capabilities(),
         }),
     })?;
     if let Some(reason) = launch.unavailable {
@@ -106,7 +104,7 @@ pub fn run(
             Ok(InternalEvent::Control(frame)) => match frame {
                 ControlFrame::Write { input } => {
                     // 内容被拒只影响这一次输入；会话照常运行，由 Python 侧决定如何回报。
-                    let data = match encode_input(input, app_cursor.load(Ordering::Relaxed)) {
+                    let data = match encode_input(input, bracketed_paste.load(Ordering::Relaxed)) {
                         Ok(data) => data,
                         Err(error) => {
                             let _ = output.send(&WorkerEvent::Error {
@@ -157,29 +155,6 @@ pub fn run(
                         });
                     }
                 }
-                ControlFrame::Signal { request_id, signal } => match runtime.signal(&signal) {
-                    Ok(TerminalControlResult::Applied) => {
-                        let _ = output.send(&WorkerEvent::SignalResult {
-                            request_id,
-                            status: "applied",
-                            reason: None,
-                        });
-                    }
-                    Ok(TerminalControlResult::Unsupported(_reason)) => {
-                        let _ = output.send(&WorkerEvent::SignalResult {
-                            request_id,
-                            status: "unsupported",
-                            reason: Some(_reason),
-                        });
-                    }
-                    Err(_) => {
-                        let _ = output.send(&WorkerEvent::SignalResult {
-                            request_id,
-                            status: "failed",
-                            reason: Some("signal_delivery_failed"),
-                        });
-                    }
-                },
                 ControlFrame::Heartbeat => last_heartbeat = Instant::now(),
                 ControlFrame::Shutdown => {
                     end_session(
@@ -456,46 +431,4 @@ fn pty_kind() -> &'static str {
 #[cfg(not(windows))]
 fn pty_kind() -> &'static str {
     "unix_pty"
-}
-
-/// 握手能力是 Python 侧判定可用输入与信号的唯一依据；按键能力与编码表同源。
-fn capabilities() -> Vec<&'static str> {
-    // 只上报 backend 会复查的能力：`input_keys`、`key_<name>`、`signal_*`。
-    let mut capabilities = vec!["input_keys"];
-    capabilities.extend(platform_signals());
-    capabilities.extend(KeyName::supported().into_iter().map(KeyName::capability));
-    capabilities
-}
-
-fn platform_signals() -> &'static [&'static str] {
-    #[cfg(unix)]
-    {
-        &["signal_interrupt", "signal_suspend", "signal_eof_canonical"]
-    }
-    #[cfg(windows)]
-    {
-        &["signal_interrupt"]
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        &[]
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::capabilities;
-
-    #[test]
-    fn handshake_advertises_input_keys_and_platform_keys() {
-        let capabilities = capabilities();
-        for required in ["input_keys", "key_up", "key_enter", "key_ctrl_c"] {
-            assert!(capabilities.contains(&required), "{required}");
-        }
-        assert_eq!(capabilities.contains(&"key_ctrl_d"), !cfg!(windows));
-        assert_eq!(capabilities.contains(&"key_ctrl_z"), cfg!(windows));
-        assert!(!capabilities
-            .iter()
-            .any(|name| name.starts_with("input_ctrl_")));
-    }
 }

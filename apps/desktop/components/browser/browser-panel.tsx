@@ -52,7 +52,7 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
   const host = desktopHost;
   const canOpen = host !== null && taskId !== null;
   const handoffs = useHandoffStore((state) => (taskId === null ? null : state.tasks[taskId]));
-  const handoffOf = (tabId: string) => handoffOn(handoffs, "browser", tabId);
+  const handoffOf = (tabId: string) => handoffOn(handoffs, tabId);
   const activeHandoff = active ? handoffOf(active.tabId) : null;
   const agentRunning = useTaskExecutionStatus(taskId) === "running";
 

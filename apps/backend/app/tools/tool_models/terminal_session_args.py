@@ -1,4 +1,4 @@
-"""交互终端工具的输入契约（6 个工具：start / write / read / handoff / list / close）。
+"""交互终端工具的输入契约（list / read / write）。
 
 模型可见说明只来自字段描述：schema 生成边界会剥离模型级 description，类 docstring 只服务
 源码阅读，不能当作投递渠道。
@@ -6,18 +6,12 @@
 
 import re
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.config.constant import Constant
-from app.tools.terminal_runtime.inputs import (
-    InputKeys,
-    InputLine,
-    InputSignal,
-    InputText,
-    TerminalWait,
-)
+from app.tools.terminal_runtime.inputs import TerminalWait
 
-_SESSION_ID_DESCRIPTION = "Session ID from terminal_start or terminal_list."
+_SESSION_ID_DESCRIPTION = "Session ID from terminal_list."
 
 
 # 会话归属取自执行上下文，不允许模型指定其他 Task。
@@ -25,53 +19,32 @@ class TerminalListArgs(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
 
-class TerminalStartArgs(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-
-    shell: str = Field(
-        default="auto",
-        min_length=1,
-        max_length=256,
-        # 模型可见描述由 terminal_start 按宿主改写（补 auto 的解析结果），此处只是本地兜底。
-        description="'auto' uses the host default shell; terminal_list shows the others.",
-    )
-    label: str | None = Field(
-        default=None,
-        max_length=64,
-        description="Short purpose shown on the tab and in terminal_list, e.g. 'dev server'.",
-    )
-    cwd: str | None = Field(
-        default=None,
-        description="Start directory inside the workspace; relative paths resolve from the "
-        "workspace root (the default). It must exist.",
-    )
-
-
 class TerminalWriteArgs(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     session_id: str = Field(min_length=1, max_length=128, description=_SESSION_ID_DESCRIPTION)
-    operation_id: str = Field(
+    command: str = Field(
         min_length=1,
-        max_length=128,
+        max_length=Constant.Terminal.MAX_AGENT_INPUT_BYTES,
         description=(
-            "Idempotency key: retrying with the same key and identical input is not sent twice. "
-            "Use a new key for each new write (the last "
-            f"{Constant.Terminal.MAX_WRITE_OPERATION_CACHE} are remembered)."
+            "One command line to place at the prompt, without a line break or control "
+            "characters. It is not run: the user decides whether to press Enter."
         ),
     )
-    # 普通 union 导出 strict 支持的 anyOf，不把判别联合的 discriminator/oneOf 泄漏到模型 schema。
-    input: InputLine | InputText | InputKeys | InputSignal = Field(
-        # 各输入类型的语义由各分支字段描述承载，这里只点明「每次一个动作」。
-        description="Exactly one input action: line, text, keys, or signal.",
-    )
-    wait: TerminalWait | None = Field(
-        default=None,
-        description=(
-            "When to return after the input; null means until=output_quiet with default "
-            "quiet_ms and timeout_ms."
-        ),
-    )
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, value: str) -> str:
+        """填入命令的边界校验：只检查可打印与字节预算，不解析接收程序的语法。
+
+        worker 编码时另行复查（``encode_input``）：这条规则同时保证文本里不可能出现 ``ESC``，括号
+        粘贴的包裹不会被提前结束，填入也就不可能变成执行。
+        """
+        if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+            raise ValueError("command must not contain CR/LF or terminal control characters")
+        if len(value.encode("utf-8")) > Constant.Terminal.MAX_AGENT_INPUT_BYTES:
+            raise ValueError("terminal input exceeds 64 KiB")
+        return value
 
 
 # 按行读取；带 wait 时先按条件等待再读。
@@ -124,24 +97,3 @@ class TerminalReadArgs(BaseModel):
         except re.error as exc:
             raise ValueError(f"invalid pattern: {exc}") from exc
         return self
-
-
-# 交接（HITL）：只是会话上的提示，不写任何字节；用户交还即对这次调用作出决定。
-class TerminalHandoffArgs(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-
-    session_id: str = Field(min_length=1, max_length=128, description=_SESSION_ID_DESCRIPTION)
-    reason: str = Field(
-        min_length=1,
-        max_length=200,
-        description=(
-            "One sentence telling the user what to do, e.g. 'Enter the sudo password'. It is "
-            "shown to the user, so write it in the user's language."
-        ),
-    )
-
-
-class TerminalCloseArgs(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-
-    session_id: str = Field(min_length=1, max_length=128, description=_SESSION_ID_DESCRIPTION)

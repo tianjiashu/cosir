@@ -47,7 +47,7 @@ def terminal(request: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> A
     capture_terminal_effects(monkeypatch)
     service = TerminalSessionService()
     runtime = service.start(
-        task_id=1, workspace_root=str(tmp_path), shell=shell, run_id=None,
+        task_id=1, workspace_root=str(tmp_path), shell=shell,
     )
     wait_for_integration(runtime)
     try:

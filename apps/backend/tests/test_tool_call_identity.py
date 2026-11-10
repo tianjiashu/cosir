@@ -193,8 +193,8 @@ async def test_same_id_in_two_tasks_runs_independently(backend_env, tmp_path, mo
 
 def test_handoffs_with_the_same_id_stay_in_their_own_task():
     registry = HandoffRegistry()
-    registry.begin(HandoffLease("call_0", 1, "browser_handoff", "browser", "t1", "r"))
-    registry.begin(HandoffLease("call_0", 2, "browser_handoff", "browser", "t2", "r"))
+    registry.begin(HandoffLease("call_0", 1, "browser_handoff", "t1", "r"))
+    registry.begin(HandoffLease("call_0", 2, "browser_handoff", "t2", "r"))
     ended = registry.end(1, "call_0")
     assert ended is not None and ended.task_id == 1
     assert [lease.task_id for lease in registry.leases(2)] == [2]

@@ -30,7 +30,6 @@ pytestmark = pytest.mark.usefixtures("isolated_storage", "empty_tool_registry")
 def _entry(session_id: str = "term_1", **overrides: Any) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "sessionId": session_id,
-        "label": "终端 1",
         "shellKind": "zsh",
         "status": "running",
         "endReason": None,
@@ -53,7 +52,6 @@ class _FakeRuntime:
         entry = self._entry
         return SessionSnapshot(
             session_id=entry["sessionId"],
-            label=entry["label"] or None,
             shell_kind=entry["shellKind"],
             initial_cwd="/workspace",
             created_at=datetime.fromisoformat(entry["createdAt"]),
@@ -131,7 +129,7 @@ def test_snapshot_without_terminal_sessions_is_rejected() -> None:
     "entry",
     [
         _entry(status="interrupted"),
-        _entry(label=1),
+        _entry(shellKind=1),
         _entry(integration="maybe"),
         _entry(commandRunning="yes"),
         _entry(exitCode=True),

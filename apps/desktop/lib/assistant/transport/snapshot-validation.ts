@@ -264,15 +264,13 @@ const TERMINAL_INTEGRATION_STATES = ["starting", "ready", "unavailable", "off"] 
 function validateTerminalSession(value: unknown, path: string, seenIds: Set<string>): void {
   const session = requireRecord(value, path);
   requireExactKeys(session, [
-    "sessionId", "label", "shellKind", "createdBy", "status", "endReason", "exitCode",
+    "sessionId", "shellKind", "status", "endReason", "exitCode",
     "integration", "commandRunning", "createdAt",
   ], path);
   const sessionId = requireString(session.sessionId, `${path}.sessionId`);
   if (sessionId === "" || seenIds.has(sessionId)) throw new TransportSnapshotValidationError(`${path}.sessionId`, "非空且在 Task 内唯一");
   seenIds.add(sessionId);
-  requireString(session.label, `${path}.label`);
   if (requireString(session.shellKind, `${path}.shellKind`).trim() === "") throw new TransportSnapshotValidationError(`${path}.shellKind`, "非空字符串");
-  if (session.createdBy !== "agent" && session.createdBy !== "user") throw new TransportSnapshotValidationError(`${path}.createdBy`, "agent 或 user");
   if (!(TERMINAL_SESSION_STATUSES as readonly unknown[]).includes(session.status)) throw new TransportSnapshotValidationError(`${path}.status`, "受支持的终端会话状态");
   if (session.endReason !== null && typeof session.endReason !== "string") throw new TransportSnapshotValidationError(`${path}.endReason`, "字符串或 null");
   if (session.exitCode !== null && !Number.isInteger(session.exitCode)) throw new TransportSnapshotValidationError(`${path}.exitCode`, "整数或 null");
@@ -415,18 +413,16 @@ export function parseTransportState(value: unknown): TransportState {
   state.handoffs.forEach((raw, index) => {
     const path = `handoffs[${index}]`;
     const entry = requireRecord(raw, path);
-    requireExactKeys(entry, ["toolCallId", "toolName", "surface", "resourceId", "reason"], path);
+    requireExactKeys(entry, ["toolCallId", "toolName", "resourceId", "reason"], path);
     const toolCallId = requireString(entry.toolCallId, `${path}.toolCallId`);
     const resourceId = requireString(entry.resourceId, `${path}.resourceId`);
     requireString(entry.toolName, `${path}.toolName`);
     requireString(entry.reason, `${path}.reason`);
-    if (entry.surface !== "terminal" && entry.surface !== "browser") throw new TransportSnapshotValidationError(`${path}.surface`, "terminal 或 browser");
-    const resource = `${entry.surface}:${resourceId}`;
-    if (toolCallId === "" || resourceId === "" || handoffCalls.has(toolCallId) || handoffResources.has(resource)) {
+    if (toolCallId === "" || resourceId === "" || handoffCalls.has(toolCallId) || handoffResources.has(resourceId)) {
       throw new TransportSnapshotValidationError(path, "调用与资源非空且唯一");
     }
     handoffCalls.add(toolCallId);
-    handoffResources.add(resource);
+    handoffResources.add(resourceId);
   });
   return state as unknown as TransportState;
 }

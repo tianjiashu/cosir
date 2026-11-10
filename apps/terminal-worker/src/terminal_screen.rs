@@ -87,7 +87,7 @@ pub struct TerminalScreen {
     history: Vec<String>,
     previous: Option<ScreenSnapshot>,
     geometry: Arc<AtomicU32>,
-    app_cursor: Arc<AtomicBool>,
+    bracketed_paste: Arc<AtomicBool>,
 }
 impl TerminalScreen {
     pub fn new(geometry: Geometry) -> Self {
@@ -110,14 +110,17 @@ impl TerminalScreen {
             history: Vec::new(),
             previous: None,
             geometry: shared_geometry,
-            app_cursor: Arc::new(AtomicBool::new(false)),
+            bracketed_paste: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// 光标键模式（DECCKM）的只读视图：控制线程编码方向键时无锁读取，
-    /// 不必为一次按键等待读线程处理完整个输出块。
-    pub fn app_cursor_flag(&self) -> Arc<AtomicBool> {
-        self.app_cursor.clone()
+    /// bracketed paste 模式（DECSET 2004）的只读视图：控制线程编码填入时无锁读取，
+    /// 不必为一次输入等待读线程处理完整个输出块。
+    ///
+    /// 模式位反映的是读线程**已解析**到的输出，有固有延迟；即使读到旧值，也只影响包不包裹，
+    /// 不影响「不执行」。
+    pub fn bracketed_paste_flag(&self) -> Arc<AtomicBool> {
+        self.bracketed_paste.clone()
     }
 
     /// 逐字节推进后导出历史，避免同一块内的清屏/切换屏幕抹去尚未移交的行。
@@ -127,8 +130,8 @@ impl TerminalScreen {
         if self.parser.sync_timeout().sync_timeout().is_some() {
             self.parser.stop_sync(&mut self.terminal);
         }
-        self.app_cursor.store(
-            self.terminal.mode().contains(TermMode::APP_CURSOR),
+        self.bracketed_paste.store(
+            self.terminal.mode().contains(TermMode::BRACKETED_PASTE),
             Ordering::Relaxed,
         );
         self.drain_history();
@@ -333,13 +336,13 @@ mod tests {
     }
 
     #[test]
-    fn app_cursor_flag_follows_decckm() {
+    fn bracketed_paste_flag_follows_mode() {
         let mut s = TerminalScreen::new(Geometry::DEFAULT);
-        let flag = s.app_cursor_flag();
+        let flag = s.bracketed_paste_flag();
         assert!(!flag.load(Ordering::Relaxed));
-        feed(&mut s, b"\x1b[?1h");
+        feed(&mut s, b"\x1b[?2004h");
         assert!(flag.load(Ordering::Relaxed));
-        feed(&mut s, b"\x1b[?1l");
+        feed(&mut s, b"\x1b[?2004l");
         assert!(!flag.load(Ordering::Relaxed));
     }
 }

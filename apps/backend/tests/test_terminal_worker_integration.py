@@ -441,7 +441,6 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
         task_id=1,
         workspace_root=str(tmp_path),
         shell="cmd" if os.name == "nt" else "bash",
-        run_id=1,
     )
     wait_for_integration(runtime)
     session_id = runtime.session_id

@@ -36,6 +36,8 @@ describe("toolHeading", () => {
   it("终端填入写「会话 · 命令」，MCP 与 Skill 按动作拼目标", () => {
     expect(toolHeading("terminal_write", { session_id: "term_1", command: "npm test" }).target).toBe("term_1 · npm test");
     expect(toolHeading("terminal_write", { session_id: "term_1" }).target).toBe("term_1");
+    // 流式参数里命令先于会话到达时不拼出「null · 命令」。
+    expect(toolHeading("terminal_write", { command: "npm test" }).target).toBeNull();
     expect(toolHeading("mcp", { action: "call", server_name: "fs", tool_name: "read" })).toEqual({ title: "调用 MCP", target: "fs/read" });
     expect(toolHeading("mcp", { action: "list", server_name: "fs" }).target).toBe("fs");
     expect(toolHeading("skill", { action: "load", skill_name: "pdf", resource_path: "ref.md" }).target).toBe("pdf/ref.md");

@@ -10,7 +10,7 @@
 
 全屏程序（备用屏幕）期间默认给「屏幕视图」：整屏物理行以 ``s1│`` 起的屏幕行号返回，与逻辑行号
 分属两套编号，模型不会把重绘中的屏幕行当作可按行号引用的历史；按 start_line 读取仍读冻结的主屏
-逻辑行。全屏程序原地重绘、不追加行，因此 write 不按「输入后新增行」取窗，而是返回整屏。
+逻辑行。全屏程序原地重绘、不追加行，因此默认读取给整屏而不是按行窗口裁剪。
 
 纯函数，不持有状态、不做 IO：会话侧只读事实由 runtime 在会话锁内取成 ``SessionFacts`` 传入，
 「交付后清空用户输入标注」这类写操作留在 runtime。
@@ -30,6 +30,8 @@ Line = tuple[int, str]
 KeepMode = Literal["both", "tail", "head"]
 
 _SEPARATOR = "│"
+# 填入后告诉 Agent 命令没有执行：回车只能由用户按。
+_PREFILL_NOTE = "filled into the prompt; it runs only if the user presses Enter"
 
 
 @dataclass(frozen=True)
@@ -138,8 +140,8 @@ class TerminalObservationResult:
     lines: tuple[int, int] | None = None
     screen: bool = False
     wait_result: dict[str, object] | None = None
-    input_type: str | None = None
-    input_summary: str | None = None
+    # Agent 填入提示符的那一行命令（只有 write 有）；展示数据投影为 ``input_summary``。
+    prefilled: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,7 +154,6 @@ class SessionFacts:
     end_reason: str | None
     exit_code: int | None
     user_typing: bool
-    handed_off: bool
     user_marks: tuple[int, int] | None
     # 用户在全屏程序里有输入：屏幕行没有稳定行号，只能标出「有输入」。
     user_typed_in_screen: bool = False
@@ -168,9 +169,7 @@ def render_observation(
     logical: bool = False,
     search: LineSearch | None = None,
     wait_result: dict[str, object] | None = None,
-    note: str | None = None,
-    input_type: str | None = None,
-    input_summary: str | None = None,
+    prefilled: str | None = None,
 ) -> TerminalObservationResult:
     """渲染观察文本：表头 + 区间说明 + 预算内的行。
 
@@ -179,7 +178,7 @@ def render_observation(
     ``search`` 只保留命中行（行号不连续），超出命中上限或预算时提示续搜的 start_line。
     """
     buffer = observation.buffer
-    header = _header_lines(facts, observation, wait_result, note, input_type, input_summary)
+    header = _header_lines(facts, observation, wait_result, prefilled)
     budget = budget_chars() - sum(len(line) + 1 for line in header) - 200
     screen = buffer.alternate and not logical
     if screen:
@@ -212,8 +211,7 @@ def render_observation(
         lines=lines,
         screen=screen,
         wait_result=wait_result,
-        input_type=input_type,
-        input_summary=input_summary,
+        prefilled=prefilled,
     )
 
 
@@ -231,7 +229,7 @@ def session_state_parts(facts: SessionFacts, observation: TerminalObservation) -
         if facts.exit_code is not None:
             parts.append(f"exit {facts.exit_code}")
     elif command is not None:
-        # 用户启动的命令要让 Agent 一眼看到：它在跑时 Agent 输入会被拒，先换会话而不是去撞。
+        # 用户启动的命令要让 Agent 一眼看到：是用户在用这个终端，不是 Agent 的命令。
         owner = ", started by user" if command.started_by == "user" else ""
         parts.append(f"executing `{command.command}` (cmd {command.number}{owner})")
     elif observation.phase == "editing":
@@ -244,8 +242,6 @@ def session_state_parts(facts: SessionFacts, observation: TerminalObservation) -
         parts.append(f"full-screen app (alternate screen {buffer.rows}x{buffer.columns})")
     if facts.user_typing:
         parts.append("user is typing")
-    if facts.handed_off:
-        parts.append("handed off to user")
     return parts
 
 
@@ -261,57 +257,25 @@ def latest_command_phrase(observation: TerminalObservation) -> str | None:
     return text + (f" · output lines {output[0]}-{output[1]}" if output else " · no output")
 
 
-def render_session_summary(
-    facts: SessionFacts,
-    observation: TerminalObservation,
-    *,
-    label: str | None,
-    created_by: str,
-) -> str:
-    """terminal_list 的单会话一行：身份、创建者、当前状态与最近命令结果。"""
-    name = f"session {facts.session_id}" + (f' "{label}"' if label else "")
-    parts = [f"{name} by {created_by}", *session_state_parts(facts, observation)]
+def render_session_summary(facts: SessionFacts, observation: TerminalObservation) -> str:
+    """terminal_list 的单会话一行：身份、当前状态与最近命令结果。"""
+    parts = [f"session {facts.session_id}", *session_state_parts(facts, observation)]
     latest = latest_command_phrase(observation)
     if latest is not None:
         parts.append(f"last {latest}")
     return " · ".join(parts)
 
 
-def render_end_notice(
-    facts: SessionFacts,
-    observation: TerminalObservation,
-    *,
-    label: str | None,
-    created_by: str,
-) -> str:
-    """Agent 创建的会话意外结束时给它的系统通知正文：会话摘要（含终态与最近命令）+ 尾部若干行。"""
-    buffer = observation.buffer
-    summary = render_session_summary(facts, observation, label=label, created_by=created_by)
-    tail = Constant.Terminal.END_NOTICE_TAIL_LINES
-    rendered = render_lines(
-        buffer.get(buffer.last_line - tail + 1, buffer.last_line), "tail", budget_chars() // 4
-    )
-    text = (
-        f"A terminal session you started has ended: {summary}. Anything that relied on it "
-        "(a dev server, a watcher) is gone; start a new session if you still need it."
-    )
-    if rendered.body:
-        text += "\nLast lines:\n" + "\n".join(rendered.body)
-    return text
-
-
 def _header_lines(
     facts: SessionFacts,
     observation: TerminalObservation,
     wait_result: dict[str, object] | None,
-    note: str | None,
-    input_type: str | None,
-    input_summary: str | None,
+    prefilled: str | None,
 ) -> list[str]:
     header = [" · ".join([f"session {facts.session_id}", *session_state_parts(facts, observation)])]
     result: list[str] = []
-    if input_type is not None:
-        result.append(f"input {input_type} `{input_summary}`")
+    if prefilled is not None:
+        result.append(f"input prefill `{prefilled}`")
     if wait_result is not None:
         reason = wait_result["end_reason"]
         text = f"wait={wait_result['until']} → {reason}"
@@ -323,8 +287,8 @@ def _header_lines(
     latest = latest_command_phrase(observation)
     if latest is not None:
         result.append(latest)
-    if note:
-        result.append(note)
+    if prefilled is not None:
+        result.append(_PREFILL_NOTE)
     if result:
         header.append("result: " + " · ".join(result))
     return header

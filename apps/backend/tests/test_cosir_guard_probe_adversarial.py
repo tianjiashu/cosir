@@ -29,7 +29,6 @@ import pytest
 
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
-from app.tools.terminal_runtime.session_service import TerminalSessionService
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.tools.tool_handler.delete_tool import DeleteTool
 from app.tools.tool_handler.find_files import FindFilesTool
@@ -566,35 +565,6 @@ def test_find_files_searches_cosir(tmp_path: Path) -> None:
 
 
 # --- F. 终端豁免 ---------------------------------------------------------------
-
-
-def test_terminal_cwd_cosir_allowed(tmp_path: Path) -> None:
-    """终端 cwd 落在 `.cosir` 不抛错。"""
-
-    root = tmp_path / "ws"
-    cosir = root / ".cosir"
-    cosir.mkdir(parents=True)
-    assert TerminalSessionService._resolve_cwd(str(root), ".cosir") == cosir
-
-
-def test_terminal_cwd_cosir_subdir_allowed(tmp_path: Path) -> None:
-    """终端 cwd 落在 `.cosir` 子目录同样不抛错。"""
-
-    root = tmp_path / "ws"
-    sub = root / ".cosir" / "tool-artifacts"
-    sub.mkdir(parents=True)
-    assert TerminalSessionService._resolve_cwd(str(root), ".cosir/tool-artifacts") == sub
-
-
-def test_terminal_cwd_outside_workspace_still_rejected(tmp_path: Path) -> None:
-    """终端豁免仅针对 `.cosir`；越界 cwd 仍必须抛错。"""
-
-    from app.tools.terminal_runtime.session_service import TerminalSessionError
-
-    root = tmp_path / "ws"
-    root.mkdir()
-    with pytest.raises(TerminalSessionError):
-        TerminalSessionService._resolve_cwd(str(root), "../outside")
 
 
 # --- G. tool_output_budget artifact 落盘 ---------------------------------------

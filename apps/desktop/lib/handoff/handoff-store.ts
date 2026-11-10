@@ -1,15 +1,15 @@
 import { create } from "zustand";
 
 import type { HandoffEntry } from "@/lib/assistant/contract";
-import { revealHandoff } from "@/lib/handoff/reveal";
+import { revealBrowserTab } from "@/lib/browser/panel-store";
 
 /**
- * 每个 Task 进行中的交接：snapshot `handoffs` 的只读镜像（事实源是后端交接登记表），终端面板、浏览器面板
- * 的交接提示条与标签标记都从这里读，按 `surface` + `resourceId`（`handoffOn`）找到自己的资源。
+ * 每个 Task 进行中的交接：snapshot `handoffs` 的只读镜像（事实源是后端交接登记表），浏览器面板
+ * 的交接提示条与标签标记都从这里读，按标签 id（`handoffOn`）找到自己的那条。
  *
  * 写入时机与终端会话、后台看板镜像相同：Assistant 会话每次提交 state 时写入，离开 Task 页时置回 null。
- * 新出现的交接（含回到这个 Task 时已在进行的）会把对应面板弹出并选中那个资源——交接是需要用户动手的唯一
- * 时机，弹出的判断只在这一处。前端不修改条目：交还只发决定命令，等 snapshot 回推。
+ * 新出现的交接（含回到这个 Task 时已在进行的）会把浏览器面板弹出并选中那个标签——交接是需要用户动手的
+ * 唯一时机，弹出的判断只在这一处。前端不修改条目：交还只发决定命令，等 snapshot 回推。
  */
 type HandoffStore = {
   tasks: Record<number, readonly HandoffEntry[] | null>;
@@ -28,7 +28,7 @@ export const useHandoffStore = create<HandoffStore>()((set, get) => ({
     if (entries === null) return;
     const known = new Set((previous ?? []).map((entry) => entry.toolCallId));
     for (const entry of entries) {
-      if (!known.has(entry.toolCallId)) revealHandoff(taskId, entry);
+      if (!known.has(entry.toolCallId)) revealBrowserTab(taskId, entry.resourceId);
     }
   },
   forget: (taskIds) => set((state) => {
@@ -39,7 +39,7 @@ export const useHandoffStore = create<HandoffStore>()((set, get) => ({
   }),
 }));
 
-/** 一组交接里落在某个资源上的那条；没有时为 null。 */
-export function handoffOn(entries: readonly HandoffEntry[] | null | undefined, surface: HandoffEntry["surface"], resourceId: string): HandoffEntry | null {
-  return entries?.find((entry) => entry.surface === surface && entry.resourceId === resourceId) ?? null;
+/** 一组交接里落在某个浏览器标签上的那条；没有时为 null。 */
+export function handoffOn(entries: readonly HandoffEntry[] | null | undefined, tabId: string): HandoffEntry | null {
+  return entries?.find((entry) => entry.resourceId === tabId) ?? null;
 }

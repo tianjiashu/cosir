@@ -12,8 +12,7 @@ import { isActiveTerminalSession, terminalBadge } from "@/lib/terminal/terminal-
  *   由 TaskPage 置回 null（不能挂在 Assistant 会话卸载上：渲染恢复会重挂会话而终端面板不动，清空
  *   会卸掉正在使用的 xterm），再回来时不按过期列表挂载窗格、判定自动新建。
  * - `open` / `activeSessionId` 是纯 UI 偏好：每个 Task 独立记住，切走再回来恢复；不持久化。
- * - `focusToken` 递增即请求把焦点放到当前终端（打开面板、切换标签、从卡片跳转、交接）。交接是唯一自动
- *   弹出面板的时机，由 `lib/handoff` 调用 `reveal`；Agent 新开会话不弹出。
+ * - `focusToken` 递增即请求把焦点放到当前终端（打开面板、切换标签、从卡片跳转）。
  * - `acknowledgedEnds` 是用户已经看过的已结束会话：面板打开期间结束的、或打开面板时已在列表里的都算
  *   看过；页头角标只为没看过的异常结束提醒，避免同一次退出一直标红。
  * - `autoCreate` 表示「本次打开时若没有活跃会话需新建一个默认终端」：打开时 snapshot 可能尚未
@@ -37,7 +36,7 @@ type TerminalWorkbenchStore = {
   setOpen: (taskId: number, open: boolean) => void;
   toggle: (taskId: number) => void;
   select: (taskId: number, sessionId: string | null) => void;
-  /** 打开面板、选中会话并请求焦点：工具卡片「在终端中查看」与交接共用。 */
+  /** 打开面板、选中会话并请求焦点：工具卡片「在终端中打开」用。 */
   reveal: (taskId: number, sessionId: string) => void;
   consumeAutoCreate: (taskId: number) => void;
   /** Task（或其所在工作区）删除成功后丢弃该 Task 的桶，避免已删除 Task 的状态常驻。 */

@@ -17,39 +17,26 @@ from app.tools.terminal_runtime.observation import TerminalObservation
 
 @dataclass(frozen=True)
 class WaitBaseline:
-    """等待起点：输入时刻（或读取时刻）的光标行、命令计数与正在执行的命令。
+    """等待起点：读取时刻的光标行、命令计数与正在执行的命令。
 
-    ``match_from`` 是 ``match`` 条件的首个扫描行，与观察起点 ``line`` 分开：
-    - 行输入（write ``line``）：光标行就是命令回显行，``make && echo BUILD_DONE`` 配
-      ``pattern=BUILD_DONE`` 会被回显立即命中，因此从回显行的下一行开始扫描；
-    - 读取与按键输入：从光标行开始。读取时光标行可能已有尚未换行的输出（如 ``Password:``
-      提示），应当参与匹配；按键不回显文本。
-    全屏程序（备用屏幕）期间不用这些起点，``match`` 扫描整屏（见 :meth:`WaitEvaluator._match`）。
-    ``screen_after_version`` 只在输入后的等待设置：输入前的整屏可能已含 pattern（如在 less 里按
-    down 等一个早已可见的行），不要求重绘会立即误命中，所以须等屏幕在输入后至少更新一次；读取时
-    为 None，当前屏幕即可命中。
+    ``line`` 是 ``match`` 条件的首个扫描行：读取时光标行可能已有尚未换行的输出（如
+    ``Password:`` 提示），应当参与匹配。全屏程序（备用屏幕）期间不用它，``match`` 扫描整屏
+    （见 :meth:`WaitEvaluator._match`）。
     """
 
     line: int
-    match_from: int
     counter: int
     active: int | None
     at: float
-    screen_after_version: int | None
 
     @classmethod
-    def of(
-        cls, observation: TerminalObservation, *, after_line_input: bool, after_input: bool
-    ) -> WaitBaseline:
+    def of(cls, observation: TerminalObservation) -> WaitBaseline:
         active = observation.active_command
-        line = observation.buffer.cursor_line
         return cls(
-            line=line,
-            match_from=line + 1 if after_line_input else line,
+            line=observation.buffer.cursor_line,
             counter=observation.command_counter,
             active=active.number if active is not None else None,
             at=time.monotonic(),
-            screen_after_version=observation.information_version if after_input else None,
         )
 
 
@@ -63,7 +50,7 @@ class WaitEvaluator:
         self.matched_line: int | None = None
         self.matched_screen_row: int | None = None
         self._pattern = re.compile(spec.pattern) if spec.until == "match" and spec.pattern else None
-        self._scan_from = baseline.match_from
+        self._scan_from = baseline.line
 
     def check(self, observation: TerminalObservation, now: float) -> tuple[str | None, float]:
         """返回 ``(结束原因或 None, 下次需要醒来的时刻)``；超时也在这里判定。"""
@@ -98,9 +85,6 @@ class WaitEvaluator:
         buffer = observation.buffer
         if buffer.alternate:
             # 全屏程序原地重绘：每次扫整屏，命中记屏幕行（主屏逻辑行此时冻结，不会出现新内容）。
-            after = self.baseline.screen_after_version
-            if after is not None and observation.information_version <= after:
-                return False
             for row, text in buffer.screen_lines():
                 if self._pattern.search(text):
                     self.matched_screen_row = row

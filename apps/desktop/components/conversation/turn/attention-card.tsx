@@ -2,9 +2,9 @@ import { readBrowserPageDisplay } from "@/components/conversation/tools/browser-
 import { asRecord } from "@/components/conversation/tools/display-data-readers";
 import { ToolIcon } from "@/components/conversation/tools/tool-icons";
 import { Button } from "@/components/ui/button";
-import { revealHandoff } from "@/lib/handoff/reveal";
 import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { useHandBack } from "@/lib/handoff/use-hand-back";
+import { revealBrowserTab } from "@/lib/browser/panel-store";
 import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 import { toolHeading, toolIconName } from "@/lib/assistant/tools/tool-catalog";
 import { cn } from "@/lib/utils";
@@ -19,18 +19,14 @@ export type AttentionCardProps = {
   interactive?: boolean;
 };
 
-/** 等待卡的说明：交接要用户做的事（浏览器 `handoff_reason`、终端 `input_summary`），其余工具用后端短提示。 */
+/** 等待卡的说明：交接要用户做的事（浏览器 `handoff_reason`），其余工具用后端短提示。 */
 export function attentionDescription(artifact: ToolArtifact): string | null {
   const data = asRecord(artifact.display_data);
   const browser = readBrowserPageDisplay(data);
   if (browser?.handoffReason) return browser.handoffReason;
-  if (typeof data.input_summary === "string" && data.input_summary.trim()) return data.input_summary;
   if (typeof data.status_hint === "string" && data.status_hint.trim()) return data.status_hint;
   return null;
 }
-
-/** 能「交还」的 kind：交接是 HITL 调用，等待占位为 `pending` 时对它作出决定即交还。 */
-const HANDOFF_KINDS = new Set(["browser-page", "terminal-session"]);
 
 /**
  * 等待用户卡：`awaitingUser` 的调用从过程里提出来常显，是对话流里唯一带边框、唯一用信息蓝的容器
@@ -43,10 +39,10 @@ const HANDOFF_KINDS = new Set(["browser-page", "terminal-session"]);
 export function AttentionCard({ taskId, toolCallId, toolName, args, artifact, interactive = true }: AttentionCardProps) {
   const handoff = useHandoffStore((state) => state.tasks[taskId]?.find((entry) => entry.toolCallId === toolCallId) ?? null);
   const { handBack, returning } = useHandBack(taskId, toolCallId);
-  const kind = typeof artifact.display_data?.kind === "string" ? artifact.display_data.kind : null;
   const { title } = toolHeading(toolName, args, artifact.intent);
   const description = attentionDescription(artifact);
-  const canHandBack = interactive && (handoff !== null || (kind !== null && HANDOFF_KINDS.has(kind)));
+  // 交接是 HITL 调用：浏览器页面卡等待时对它作出决定即交还；重启后登记表为空也仍能交还。
+  const canHandBack = interactive && (handoff !== null || artifact.display_data?.kind === "browser-page");
 
   return (
     <section
@@ -66,7 +62,7 @@ export function AttentionCard({ taskId, toolCallId, toolName, args, artifact, in
       {(handoff !== null || canHandBack) && (
         <div className="flex shrink-0 items-center gap-1.5">
           {handoff !== null && (
-            <Button type="button" size="xs" variant="secondary" onClick={() => revealHandoff(taskId, handoff)}>
+            <Button type="button" size="xs" variant="secondary" onClick={() => revealBrowserTab(taskId, handoff.resourceId)}>
               打开面板
             </Button>
           )}

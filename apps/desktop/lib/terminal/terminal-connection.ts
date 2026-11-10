@@ -25,9 +25,10 @@ type TerminalServerFrame =
   }
   | { type: "output"; seq: number; data_base64: string }
   | { type: "geometry"; rows: number; columns: number }
+  /** Agent 把一行命令填进提示符后广播：视图据此在填入行画来源标记（现在是 Agent 对终端的唯一输入方式）。 */
   | { type: "input_mark"; by: "agent" }
   | { type: "input_rejected"; reason: "session_ended" | "backpressure" }
-  /** 只标记流结束；终态与退出码由 snapshot `terminal_sessions` 投影（交接在顶层 `handoffs`）。 */
+  /** 只标记流结束；终态与退出码由 snapshot `terminal_sessions` 投影。 */
   | { type: "exit" }
   | { type: "resync_required"; first_available_seq?: number; next_seq?: number }
   /** `code` 与 HTTP 错误体同源的稳定码，按它分支；`message` 只用于日志。 */

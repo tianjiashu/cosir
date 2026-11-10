@@ -556,7 +556,7 @@ body > :not(#root) > * {
   --diff-code-delete-edit-background-color: color-mix(in oklab, var(--destructive) 30%, transparent);
 }
 
-/* 终端工作台里 Agent 输入行的来源标记：xterm 装饰元素占首个单元格，画左侧色条。 */
+/* 终端工作台里 Agent 填入行的来源标记：xterm 装饰元素占首个单元格，画左侧色条；只在 Agent 把一行命令填进提示符时出现。 */
 .terminal-agent-input-mark {
   box-shadow: inset 2px 0 0 var(--info);
   pointer-events: none;

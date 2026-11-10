@@ -102,7 +102,6 @@ export function usage(overrides: Partial<TransportUsage> = {}): TransportUsage {
 export function terminalSession(sessionId: string, overrides: Partial<TerminalSessionEntry> = {}): TerminalSessionEntry {
   return {
     sessionId,
-    label: "",
     shellKind: "zsh",
     status: "running",
     endReason: null,

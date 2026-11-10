@@ -2,14 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { Maximize2Icon, Minimize2Icon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { HandoffBanner } from "@/components/handoff/handoff-banner";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { Button } from "@/components/ui/button";
 import { PanelDock } from "@/components/ui/panel-dock";
 import { PANEL_HEADER_CLASS } from "@/components/ui/panel-tokens";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
 import { useOpenLink } from "@/components/links/use-open-link";
-import { handoffOn, useHandoffStore } from "@/lib/handoff/handoff-store";
 import { queryKeys } from "@/lib/query/query-keys";
 import { listTerminalShells } from "@/lib/terminal/terminal-api";
 import { terminalNoticeClass, terminalPaneStatus } from "@/lib/terminal/terminal-pane-status";
@@ -39,7 +37,7 @@ import { useTerminalSessionActions } from "./use-terminal-session-actions";
  * 会话列表只读 snapshot 镜像（`useTerminalWorkbenchStore`），新建 / 关闭经 HTTP 后等 snapshot 回推；
  * 每个会话的 xterm + WS 由 `TerminalSessionPane` 承载，挂载 / 释放规则见 `mountedTerminalSessionIds`
  * （活跃会话常驻、面板收起只隐藏；已结束会话只在查看时存在）。窗格卸载即销毁 xterm 与 WS，并删掉
- * 该会话的运行期状态。首次打开面板之前什么都不挂载，交接等事件通过 snapshot 让 store 自动打开面板。
+ * 该会话的运行期状态。首次打开面板之前什么都不挂载。
  */
 export function TerminalWorkbench({ taskId }: { taskId: number }) {
   const state = useTerminalWorkbenchStore(selectTerminalTask(taskId));
@@ -85,8 +83,6 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
   const ended = useMemo(() => endedTerminalSessions(sessions ?? []), [sessions]);
   const activeSession = sessions?.find((session) => session.sessionId === activeSessionId) ?? null;
   const activeRuntime = activeSessionId ? runtimes[activeSessionId] : undefined;
-  const handoffs = useHandoffStore((store) => store.tasks[taskId]);
-  const activeHandoff = activeSessionId ? handoffOn(handoffs, "terminal", activeSessionId) : null;
 
   const shellsQuery = useQuery({
     queryKey: queryKeys.terminalShells(),
@@ -138,7 +134,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
     useTerminalWorkbenchStore.getState().select(taskId, sessionId);
   };
 
-  // 切换会话的路径有多条（点标签、卡片跳转、交接、关闭后选相邻、snapshot 回落），不逐条关搜索，
+  // 切换会话的路径有多条（点标签、卡片跳转、关闭后选相邻、snapshot 回落），不逐条关搜索，
   // 而在渲染期统一收敛：搜索所属会话不再可见就关闭。旧会话的高亮由窗格隐藏时清除。
   const searchOpen = open && searchSessionId !== null && searchSessionId === activeSessionId;
   if (searchSessionId !== null && !searchOpen) {
@@ -168,7 +164,6 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
             <TerminalTabBar
               tabs={tabs}
               activeSessionId={activeSessionId}
-              handedOff={(sessionId) => handoffOn(handoffs, "terminal", sessionId) !== null}
               shells={shellsQuery.data?.shells ?? null}
               shellsLoading={shellsQuery.isLoading}
               createDisabled={creating || sessions === null}
@@ -201,7 +196,6 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
               </TooltipIconButton>
             </div>
           </header>
-          {activeHandoff && <HandoffBanner taskId={taskId} entry={activeHandoff} />}
           {paneStatus && (
             <div
               role="status"

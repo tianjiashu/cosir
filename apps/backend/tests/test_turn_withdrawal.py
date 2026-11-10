@@ -137,7 +137,6 @@ def side_effects(history, monkeypatch):
             tool_call_id="call-late",
             task_id=history.task_id,
             tool_name="browser_handoff",
-            surface="browser",
             resource_id="tab",
             reason="sign in",
         )

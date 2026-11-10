@@ -704,7 +704,6 @@ function createTerminalSession(taskId, shell) {
     taskId,
     entry: {
       sessionId,
-      label: "",
       shellKind: shell === "auto" ? "zsh" : shell,
       status: "running",
       endReason: null,

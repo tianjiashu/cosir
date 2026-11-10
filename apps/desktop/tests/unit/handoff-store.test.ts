@@ -6,7 +6,7 @@ import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { useDockStore } from "@/lib/layout/dock-store";
 
 const TASK = 7;
-const browser: HandoffEntry = { toolCallId: "c2", toolName: "browser_handoff", surface: "browser", resourceId: "t3", reason: "登录" };
+const browser: HandoffEntry = { toolCallId: "c2", toolName: "browser_handoff", resourceId: "t3", reason: "登录" };
 
 afterEach(() => {
   useHandoffStore.setState({ tasks: {} });

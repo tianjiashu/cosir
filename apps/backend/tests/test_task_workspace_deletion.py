@@ -554,7 +554,7 @@ def test_committed_deletion_closes_task_terminals(storage, tmp_path, monkeypatch
     workspace = get_workspace_crud().create("terminal", str(tmp_path))
     task = get_task_crud().create(workspace.id, "owner")
     terminal, workers = make_service(monkeypatch)
-    terminal.start(task_id=task.id, workspace_root=str(tmp_path), run_id=1)
+    terminal.start(task_id=task.id, workspace_root=str(tmp_path))
     monkeypatch.setattr(depends, "get_terminal_session_service", lru_cache()(lambda: terminal))
     try:
         if delete_workspace:
@@ -577,7 +577,7 @@ def test_failed_task_deletion_does_not_close_or_fence_terminal(storage, tmp_path
     workspace = get_workspace_crud().create("terminal", str(tmp_path))
     task = get_task_crud().create(workspace.id, "owner")
     terminal, workers = make_service(monkeypatch)
-    terminal.start(task_id=task.id, workspace_root=str(tmp_path), run_id=1)
+    terminal.start(task_id=task.id, workspace_root=str(tmp_path))
     monkeypatch.setattr(depends, "get_terminal_session_service", lru_cache()(lambda: terminal))
 
     def fail_delete(*args, **kwargs):
@@ -591,7 +591,7 @@ def test_failed_task_deletion_does_not_close_or_fence_terminal(storage, tmp_path
         assert not workers[0].closed
         assert (
             terminal.start(
-                task_id=task.id, workspace_root=str(tmp_path), run_id=2
+                task_id=task.id, workspace_root=str(tmp_path)
             )
             .snapshot()
             .status
