@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Delegate bridge",
+    "description": "Exposes a token-authenticated local HTTP surface for listing and creating workspaces and sessions, sending prompts with a permission preset, and waiting for the final answer."
+  }
+}

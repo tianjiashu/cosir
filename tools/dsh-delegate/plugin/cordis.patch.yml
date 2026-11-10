@@ -1,0 +1,5 @@
+# The delegate bridge bundle layer: one host row that publishes the local
+# /delegate/v1 HTTP surface on the running Harness web server.
+- insert:
+    - id: delegate-bridge
+      name: 'dsh-delegate'
