@@ -42,7 +42,8 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     请求）；请求期间由流式读取边界检查。本节点检出的取消统一在 ``except RunStopped`` 里落定。
     调用 Run 独占的 SDK 模型，逐帧替换持久化响应，结束后纳入上下文；部分输出留作展示，
     不进入模型上下文或工具执行。工具调用只按 id 与注册名过滤，参数交 tools；无保留调用时，
-    有完成原因且本 Run 的后台调用均已结算时落定 Run；缺少完成原因时，输出仅供展示并重新请求模型。"""
+    有完成原因时落定 Run（后台工作属于 Task，不等它们：结论稍后到达时唤醒或开出新 Run）；缺少完成原因时，
+    输出仅供展示并重新请求模型。"""
 
     rc = _runtime_context()
     model = rc.model
@@ -182,22 +183,6 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             },
         },
     )
-
-    if not calls and await asyncio.to_thread(
-        service_depends.get_conversation_task_context_service().run_awaits_background,
-        task_id,
-        run_id,
-    ):
-        # 这次输出仍是中间过程。释放流式草稿的身份，但不把它送进下次模型上下文。
-        _message_context().abandon_model_response()
-        log.info(
-            "model_completion_waiting_for_background",
-            extra={
-                "msg": "本 Run 尚有后台结论未并入",
-                "data": {"run_id": run_id, "step_id": step_id},
-            },
-        )
-        return {**route_state(step_count, ReactRoute.PREPARE_INPUT), "wait_for_input": True}
 
     response = _message_context().save_model_response(
         aggregated_message,

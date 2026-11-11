@@ -76,8 +76,8 @@ class TaskMessage:
 
     def wakes(self, run_id: int | None) -> bool:
         """可否唤醒指定 Run；None 表示可否凭此消息新建 Run。"""
-        if isinstance(self.body, BackgroundResultBody) and self.body.wake_run_id is not None:
-            return self.body.wake_run_id == run_id
+        if isinstance(self.body, BackgroundResultBody) and not self.body.starts_run:
+            return run_id is not None
         return type(self.body).WAKES
 
     @classmethod

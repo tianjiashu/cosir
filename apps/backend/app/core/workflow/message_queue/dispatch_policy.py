@@ -78,9 +78,10 @@ def next_action(
 
     - 有执行者：投递全部 ``immediate`` 消息，``next_run`` 留给下一个 Run；mailbox 按行 id 去重。
     - 挂起：新到达的 ``immediate`` 消息里有能推进的（``WAKES``，系统通知除外）就唤醒同一个 Run。
-    - 终态或尚无 Run：新到达的消息里有能推进的就新开 Run，不区分谁发起——用户停止后到达的后台
-      正常结果同样会开出新 Run；只为原 Run 唤醒的取消或中断回执不会。配置取这个 Run 将消费的那条输入（:func:`next_input`），没有这样的
-      输入时继承当前 Run；无从继承（模型配置已删除、尚无 Run）时不动，消息留在队列里。
+    - 终态或尚无 Run：新到达的消息里有能推进的就新开 Run，不区分谁发起——用户停止不结束后台
+      工作，之后到达的正常结果同样会开出新 Run；单项取消的回执不会（它只唤醒挂起中的 Run）。配置取这个 Run 将
+      消费的那条输入（:func:`next_input`），没有这样的输入时继承当前 Run；无从继承（模型配置已删除、
+      尚无 Run）时不动，消息留在队列里。
     """
     if phase == "driving":
         return Deliver([message for message in pending if message.delivery == "immediate"])

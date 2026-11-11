@@ -38,6 +38,7 @@
 | `terminal_list` | `terminal-session` | 结构化结果见第 4 节 |
 | `terminal_read` | `terminal-session` | 结构化结果见第 4 节 |
 | `terminal_write` | `terminal-session` | 结构化结果见第 4 节 |
+| `terminal_stop` | 无 | 结构化结果见第 4 节 |
 | `web_search` | `web-search-results` | 结构化结果见第 4 节 |
 | `web_extract` | `web-extract-urls` | 结构化结果见第 4 节 |
 | `browser_navigate` | `browser-page` | 结构化结果见第 4 节 |
@@ -71,8 +72,8 @@
 | content-search-results | pattern、path、matches[{path,line,content,is_match}]、page、total_rows、match_count、scanned_files、skipped_files |
 | file-list | files[{path}]、pattern、path、page、match_count |
 | directory-list | path、entries、page、total_entries |
-| terminal-result | command、workdir、output、end（exited/signaled/timed_out/cancelled/start_failed/worker_failed），exit_code 只在 exited、signal 只在 signaled 时出现；后台占位只有 command/workdir，不能把缺失 exit_code 当作零 |
-| terminal-session | list: session_count；read/write: session_id/lines/screen/wait_result，可含 input_summary（write 为填入的命令摘要） |
+| terminal-result | command、workdir、output、end（exited/signaled/timed_out/cancelled/start_failed/worker_failed），exit_code 只在 exited、signal 只在 signaled 时出现；后台占位只有 command/workdir，不能把缺失 exit_code 当作零；`output` 是原始文本的最近一段（窗口见 `core/tool/terminal_output_window.py`），可选 `output_omitted_lines`（前面省略的行数）与 `output_log_path`（完整输出日志的工作区相对路径，只在超过模型预算时存在） |
+| terminal-session | list: terminal_count；read/write: terminal_id/lines/screen/wait_result，可含 input_summary（write 为填入的命令摘要） |
 | web-search-results | query、results[{title,url}]，不含网页正文 |
 | web-extract-urls | partial（必有 boolean）、urls[{url}]；URL 可能包含失败页面，URL 数不是成功页数；全部失败走错误观察，不出现此 kind |
 | browser-page | tab_id/url/title；可含 screenshot（asset ID）、handoff_reason、steps[{action,target,status,hint}]；步骤 status 为 done/failed/skipped/unknown；done 只表示输入执行完成，unknown 表示可能生效、须观察后决定，skipped 不算执行失败 |
@@ -84,6 +85,8 @@
 | agent-team-approval | team_run_id/team_id/name/goal/node_goals/start_node/nodes/edges/configuration；审批/执行状态读 TeamRun，不从展示字符串推断 |
 | mcp-tool-result | action=call: server_name/tool_name/scope；action=list: servers[{server_name,scope,tools,error?}]，`scope` 为 system / workspace，单服务 error 不改变整个调用的生命周期 |
 | skill-content | action=list: skills[{name,description,scope}]；action=load: skill_name/resource_path/scope，正文只进模型上下文 |
+
+`terminal-result` 的实时预览与终态展示数据使用同一窗口规则（`trim_output_window`）：卡片只保留最近一段，终态展示数据到达后整体覆盖实时预览，前端不自己截断。
 
 分页 page 为 offset/limit/has_more/next_offset。链接须经现有 URL 边界处理；本机图片经附件资源入口读取，不直接拼接本机路径。
 

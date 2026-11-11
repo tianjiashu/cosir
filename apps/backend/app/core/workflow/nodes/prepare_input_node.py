@@ -53,7 +53,7 @@ from app.storage.store_engines import main_session_factory
 async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     """按「取消 → 挂起 → 步数上限 → 并入消息」的顺序判定，通过后流转到 model 节点。
 
-    挂起请求来自工具观察或被后台占位挡住的模型完成，读完即清空。
+    挂起请求来自工具观察（``wait_messages``、等审批的 HITL 调用），读完即清空。
     取消优先于挂起：工具要求等待时 Run 恰好被停，按取消落定。挂起先于步数上限：Agent 明确在等
     消息时不按「步数用完」失败，唤醒后回到这里再检查上限。挂起前 mailbox 已有可唤醒消息（如子 Agent
     结论在工具执行期间送达）就直接继续，省掉「挂起 → 复查 → 唤醒」一圈；之后才到达的消息仍由 actor
