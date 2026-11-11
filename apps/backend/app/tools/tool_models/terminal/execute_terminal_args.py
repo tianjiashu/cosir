@@ -36,21 +36,23 @@ MacExecuteTerminalShell = Literal["auto", PosixShell]
 ExecuteTerminalShell = WindowsExecuteTerminalShell | MacExecuteTerminalShell
 
 # 命令级超时：handler 按它缺省与钳制，模型可见描述按它插值，二者同源。命令在后端线程里跑、可转到
-# 后台，超时由执行后端杀进程树，没有外层工具子进程的硬超时，所以上限可以覆盖长构建与测试。
+# 后台，超时由执行后端杀进程树，没有外层工具子进程的硬超时，所以上限可以覆盖长构建与测试。缺省值
+# 只给前台：后台命令属于 Task，缺省不限时（开发服务器要常驻）。
 DEFAULT_COMMAND_TIMEOUT_S = 300.0
 MAX_COMMAND_TIMEOUT_S = 3600.0
 
 _BACKGROUND_DESCRIPTION = (
-    "true returns immediately and delivers the result later as a <background_result> message. "
-    "false or null waits here until the command ends. Use wait_messages to wait for "
-    "background work."
+    "true returns immediately with a terminal_id and delivers the result later as a "
+    "<background_result> message; terminal_read reads its output meanwhile. false or null waits "
+    "here until the command ends. Use wait_messages to wait for background work that will "
+    "finish on its own."
 )
 
 # 只写语义与取值范围；「长任务调大并转后台」是选用决策，在工具描述里说一次。
 _TIMEOUT_DESCRIPTION = (
     "Seconds before the command and every process it started are stopped and the call fails. "
-    "Defaults to "
-    f"{DEFAULT_COMMAND_TIMEOUT_S:g}, capped at {MAX_COMMAND_TIMEOUT_S:g}."
+    f"Capped at {MAX_COMMAND_TIMEOUT_S:g}. Null means {DEFAULT_COMMAND_TIMEOUT_S:g} in the "
+    "foreground and no limit in the background."
 )
 
 
