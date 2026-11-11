@@ -12,12 +12,6 @@ from app.tools.tool_models.browser_args import (
     BrowserTabsArgs,
 )
 from app.tools.tool_models.delete_file_args import DeleteFileArgs
-from app.tools.tool_models.execute_terminal_args import (
-    ExecuteTerminalShell,
-    MacExecuteTerminalArgs,
-    WindowsExecuteTerminalArgs,
-    resolve_execute_terminal_args_model,
-)
 from app.tools.tool_models.find_files_args import FindFilesArgs
 from app.tools.tool_models.list_directory_args import ListDirectoryArgs
 from app.tools.tool_models.mcp_args import MCPArgs
@@ -27,10 +21,15 @@ from app.tools.tool_models.read_image_args import ReadImageArgs
 from app.tools.tool_models.replace_args import ReplaceArgs
 from app.tools.tool_models.search_content_args import SearchContentArgs
 from app.tools.tool_models.skill_args import SkillArgs
-from app.tools.tool_models.terminal_session_args import (
+from app.tools.tool_models.terminal import (
+    ExecuteTerminalShell,
+    MacExecuteTerminalArgs,
     TerminalListArgs,
     TerminalReadArgs,
+    TerminalStopArgs,
     TerminalWriteArgs,
+    WindowsExecuteTerminalArgs,
+    resolve_execute_terminal_args_model,
 )
 from app.tools.tool_models.write_file_args import WriteFileArgs
 
@@ -58,6 +57,7 @@ __all__ = [
     "SkillArgs",
     "TerminalListArgs",
     "TerminalReadArgs",
+    "TerminalStopArgs",
     "TerminalWriteArgs",
     "WindowsExecuteTerminalArgs",
     "WriteFileArgs",
