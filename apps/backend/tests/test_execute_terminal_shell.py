@@ -11,7 +11,7 @@ from app.tools.terminal_runtime.command.local_backend import (
     _Launch,
     _resolve_command,
 )
-from app.tools.tool_models.execute_terminal_args import (
+from app.tools.tool_models.terminal.execute_terminal_args import (
     MacExecuteTerminalArgs,
     WindowsExecuteTerminalArgs,
     resolve_execute_terminal_args_model,

@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.tool.validation.arguments import validate_tool_arguments
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
-from app.tools.tool_models.execute_terminal_args import (
+from app.tools.tool_models.terminal.execute_terminal_args import (
     MacExecuteTerminalArgs,
     MacExecuteTerminalShell,
     WindowsExecuteTerminalArgs,

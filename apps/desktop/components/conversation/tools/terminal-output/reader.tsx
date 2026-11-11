@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 import { CopyIconButton } from "@/components/ui/copy-icon-button";
 import type { TerminalLinkOptions } from "@/components/terminal/terminal-links";
 import { useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
+import { OmittedOutputNotice } from "./omitted-notice";
 import { TerminalViewport, type TerminalViewportHandle } from "./viewport";
 
-/** 下载后端累计原文；不把有限的 xterm 屏幕缓冲伪称为完整输出。 */
+/** 下载卡片保留的原始输出（后端只保留最近一段，更早的在完整日志里）；不把有限的 xterm 屏幕缓冲伪称为它。 */
 function downloadTerminalOutput(output: string) {
   const url = URL.createObjectURL(new Blob([output], { type: "text/plain;charset=utf-8" }));
   const anchor = document.createElement("a");
@@ -17,8 +18,8 @@ function downloadTerminalOutput(output: string) {
 }
 
 /** 阅读位置属于 Task UI，-1 表示跟随最新；不会写入后端执行事实。 */
-export function TerminalOutputReader({ taskId, toolCallId, output, links, open, onOpenChange, command, statusLabel, finalFocus }: {
-  taskId: number; toolCallId: string; output: string; links: TerminalLinkOptions;
+export function TerminalOutputReader({ taskId, toolCallId, output, omittedLines, logPath, links, open, onOpenChange, command, statusLabel, finalFocus }: {
+  taskId: number; toolCallId: string; output: string; omittedLines?: number; logPath?: string; links: TerminalLinkOptions;
   open: boolean; onOpenChange: (open: boolean) => void; command?: string; statusLabel: string; finalFocus?: () => HTMLElement | boolean;
 }) {
   const viewport = useRef<TerminalViewportHandle>(null);
@@ -40,8 +41,9 @@ export function TerminalOutputReader({ taskId, toolCallId, output, links, open, 
           <Button variant="ghost" size="sm" onClick={() => downloadTerminalOutput(output)}>下载原始输出</Button>
           {pausedAtOutput !== null && pausedAtOutput !== output && <Button variant="outline" size="sm" onClick={() => viewport.current?.scrollToBottom()}>有新输出 · 回到最新</Button>}
         </div>
-        {truncated && <p className="text-muted-foreground text-xs">较早内容已移出显示缓冲；下载可获取当前已收集的全部原始输出（含控制字符）。</p>}
+        {truncated && <p className="text-muted-foreground text-xs">较早内容已移出显示缓冲；下载可获取卡片保留的全部原始输出（含控制字符）。</p>}
         <div className="bg-surface min-h-0 flex-1 rounded-lg p-2" data-terminal-reader="true">
+          <OmittedOutputNotice omittedLines={omittedLines} logPath={logPath} links={{ workspaceRoot: links.getWorkspaceRoot(), open: links.onOpenLink }} />
           <TerminalViewport ref={viewport} output={output} links={links} initialLine={position} onTruncatedChange={setTruncated}
             onPositionChange={(line, bottom) => {
               if (!open) return;

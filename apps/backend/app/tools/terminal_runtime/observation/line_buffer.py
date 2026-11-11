@@ -15,12 +15,16 @@ worker 交出两类物理行：滚出屏幕的 ``history``（软换行行不带 
 重发主屏，可变区照常重建。若备用屏幕行占用可变区行号，全屏程序重绘会让同一行号先后指向不同内容，
 破坏「行号永不复用」——这是观察层把全屏程序单列的原因。worker 保证备用屏幕不产出滚动历史。
 
+管道来源（运行中的 ``execute_terminal`` 命令）经 :meth:`TerminalLineBuffer.append_lines` 写入完成行
+与未完成行，与屏幕来源共用同一套封口、淘汰与行号规则；管道没有屏幕几何与备用屏幕。
+
 线程模型：不加锁，由所属会话锁串行访问；不做 IO。
 """
 
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -146,6 +150,16 @@ class TerminalLineBuffer:
             if texts[index].strip():
                 return index
         return -1
+
+    def append_lines(self, lines: Sequence[str], pending: str) -> None:
+        """管道来源（运行中的命令）的写入：完成行逐条封口，未换行的那一行作为唯一的可变行。
+
+        屏幕来源走 :meth:`apply`；两条路径共用封口、淘汰与行号规则。管道没有屏幕几何，rows /
+        columns 保持 0，也没有备用屏幕。
+        """
+        for line in lines:
+            self._append_history(line + "\n")
+        self._live = LiveRegion((pending,) if pending else (), 0, len(pending))
 
     def get(self, start: int, end: int) -> list[tuple[int, str]]:
         """返回 ``[start, end]``（闭区间，自动夹到可用范围）的 ``(行号, 文本)``。"""

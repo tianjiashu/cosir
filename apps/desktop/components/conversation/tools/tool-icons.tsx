@@ -18,6 +18,7 @@ import {
   UsersIcon,
   WorkflowIcon,
   WrenchIcon,
+  XIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +41,7 @@ const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   users: UsersIcon,
   workflow: WorkflowIcon,
   wrench: WrenchIcon,
+  x: XIcon,
 };
 
 export function ToolIcon({

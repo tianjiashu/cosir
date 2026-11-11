@@ -1,6 +1,6 @@
-"""``execute_terminal`` 实时输出从读取线程到事件循环的批量投递。
+"""``execute_terminal`` 卡片的实时输出通道：读取线程旁路出的文本批量投递到事件循环。
 
-与 ``output_collector`` 分工：采集器负责解码与完整收集（最终结果），本模块只负责把读取线程
+与 ``command_output`` 分工：收集点负责解码、整理与封顶（最终结果），本模块只负责把读取线程
 旁路出的文本合并、分帧，再以 ``ToolCallRuntimeUpdateEvent`` 投递到 Run 的事件循环（只服务
 运行中与后台运行中卡片的实时视图）。投递失败只记日志，不改变工具执行结果。
 """
@@ -22,7 +22,7 @@ _BATCH_INTERVAL_SECONDS = 0.075
 _EVENT_TEXT_LIMIT = 4096
 
 
-class TerminalOutputStream:
+class LiveOutputChannel:
     """把读取线程产生的文本合并后，按序投递到事件循环。
 
     ``emit`` 由读取线程调用、``finish`` 由工具线程调用，缓冲与发布在事件循环上进行；
@@ -51,7 +51,7 @@ class TerminalOutputStream:
         self._seq = 0
 
     @classmethod
-    def open(cls, execution_context: ToolExecutionContext) -> TerminalOutputStream | None:
+    def open(cls, execution_context: ToolExecutionContext) -> LiveOutputChannel | None:
         """无 Run 的直接调用没有事件循环或事件回调，此时不建实时通道。
 
         工具在 ``asyncio.to_thread`` 的工作线程里调用本方法，不能用 ``get_running_loop``，
@@ -188,4 +188,4 @@ def _iter_chunks(texts: list[str]) -> Iterator[str]:
         yield "".join(parts)
 
 
-__all__ = ["TerminalOutputStream"]
+__all__ = ["LiveOutputChannel"]

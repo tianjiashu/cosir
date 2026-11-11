@@ -3,6 +3,8 @@
 可等待的工作只以后台结果登记表 ``background_registry`` 为准（委派子 Agent、``execute_terminal`` 的
 后台命令、批准后执行的 Agent Team）。
 
+后台工作属于 Task，等的是整个 Task 仍在后台执行的工作（含更早 Run 开出的）。Agent 不必在答复前等：
+答复之后才到的结论会唤醒或开出新 Run，所以本工具只用于「需要结论才能继续」。
 取代轮询式等待：调用当步闭合并带 ``suspend``，Run 随即挂起、不占执行者；后台工作每到一个结论、
 用户发来消息时都会唤醒同一个 Run，结论统一以 ``<background_result>`` 消息并入（``tool_name``
 标明来源）。是否继续等由模型决定（再次调用本工具）。没有任何未完成工作时返回错误、不挂起：挂起会无人唤醒，
@@ -30,9 +32,11 @@ class WaitMessagesTool(HandlerBase):
 
     name: str = TOOL_WAIT_MESSAGES
     description: str = (
-        "Pause yourself until a result arrives, instead of polling. Use it while background "
-        "work is pending: delegated child agents, forks, approved agent teams or background terminal commands. "
-        "When such work finishes, "
+        "Pause yourself until a result arrives, instead of polling. Use it when you need the result "
+        "of background work before you can go on: delegated child agents, forks, approved agent "
+        "teams or background terminal commands, including ones started earlier in this task. You "
+        "do not have to wait before answering: work that finishes after you answer resumes you "
+        "with its result. When such work finishes, "
         "another agent messages you, or an immediate input arrives, you resume; results arrive as "
         "<background_result> messages, one at a time, so call this tool again if you still need "
         "to wait for others. If nothing is pending, it fails immediately without pausing."
@@ -43,7 +47,7 @@ class WaitMessagesTool(HandlerBase):
 
     def execute(self, execution_context: ToolExecutionContext) -> ToolObservation:
         # 标签由登记方给出，原样展示给模型。
-        pending = background_registry.pending(execution_context.task_id, execution_context.run_id)
+        pending = background_registry.pending(execution_context.task_id)
         if not pending:
             return tool_error(
                 self.name,

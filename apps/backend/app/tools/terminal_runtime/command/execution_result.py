@@ -1,7 +1,8 @@
 """终端命令执行结果值对象。
 
 本模块只承载 ``ExecutionResult``，作为执行后端（``LocalExecutionBackend``）与工具编排层
-（``ExecuteTerminalTool``）之间的结构化结果契约。它不含任何 I/O 或业务逻辑。
+（``ExecuteTerminalTool``）之间的结构化结果契约。它只表达结局，不含命令输出（输出归
+``CommandOutput``），也不含任何 I/O 或业务逻辑。
 """
 
 from dataclasses import dataclass
@@ -21,14 +22,23 @@ CommandEnd = Literal[
 class ExecutionResult:
     """一条 shell 命令的归一化执行结果。
 
-    ``output`` 是合并 stdout+stderr（按到达顺序）后的原始解码文本，ANSI 控制序列原样保留、不在执行
-    后端截断；结局被停止或失败时仍是已收到的部分输出。``exit_code`` 只在 ``exited`` 时有值，
-    ``signal`` 只在 ``signaled`` 时有值，``failure`` 只在 ``start_failed`` / ``worker_failed``
-    时说明原因。
+    ``exit_code`` 只在 ``exited`` 时有值，``signal`` 只在 ``signaled`` 时有值，``failure`` 只在
+    ``start_failed`` / ``worker_failed`` 时说明原因。命令输出由调用方的 ``CommandOutput`` 收集，
+    本对象不携带。
     """
 
     end: CommandEnd
-    output: str
     exit_code: int | None = None
     signal: int | None = None
     failure: str | None = None
+
+    def end_marker(self) -> str:
+        """结局标记（``[exit_code=N]`` 等）：前台模型正文与后台结论共用同一张表。"""
+        return {
+            "exited": f"[exit_code={self.exit_code}]",
+            "signaled": f"[signal={self.signal}]",
+            "timed_out": "[timed_out]",
+            "cancelled": "[cancelled]",
+            "start_failed": "[start_failed]",
+            "worker_failed": "[outcome_unknown]",
+        }[self.end]

@@ -138,10 +138,14 @@ class ModelStreamStateMachine:
             self._publish_phase(None)
 
     def cancel(self) -> None:
-        """收敛本请求尚未执行的调用，落占位供冷重建；不可在正常完成路径调用。"""
+        """收敛本请求尚未执行的调用，落占位供冷重建；不可在正常完成路径调用。
+
+        每个调用只收敛一次，重复调用不发事件：model 节点的外层失败边界可能在已收敛之后再调用
+        （如取消落定写库失败），重复收敛会写出重复占位。"""
         self.finish()
         context = _message_context()
-        for call_id, name in self._calls.items():
+        calls, self._calls = self._calls, {}
+        for call_id, name in calls.items():
             self._emit(
                 ToolCallStatusChangedEvent(
                     task_id=self._task_id,

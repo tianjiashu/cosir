@@ -670,11 +670,12 @@ class AgentTeamCoordinator:
     async def cancel_for_parent_task(self, parent_task_id: int) -> None:
         """取消主 Agent Task 的全部活动 Team：待确认方案与运行中的 Team。
 
-        由主 Task 的 actor 在停止时调用。待批准的方案也随主 Task 放弃。
+        由主 Task 被上游收回时调用（``TaskRecall``）；用户停止主 Task 不取消 Team。待批准的方案也随主 Task
+        放弃。
 
         按 Task 而不按 Run 寻址：TeamRun 的 ``parent_run_id`` 是提出方案的 Run，批准可能发生在它
-        结束之后，由新开的 Run 重放执行，按执行中的 Run 匹配会漏掉它。待确认方案一并取消：停止即
-        放弃这个 Task 进行中的全部 Team 工作，用户要继续须让主 Agent 重新提出方案。
+        结束之后，由新开的 Run 重放执行，按执行中的 Run 匹配会漏掉它。待确认方案一并取消：收回即
+        放弃这个 Task 进行中的全部 Team 工作。
 
         已由事件循环接手的 Team 在节点停下后写终态。仍在确认或交接中的 Team 用同一次条件更新收敛，
         即使确认与停止同时发生也不会再开始节点。

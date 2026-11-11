@@ -22,17 +22,17 @@ from pathlib import Path
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.tools.terminal_runtime.errors import (
+    TerminalError,
     TerminalSessionCapacityError,
-    TerminalSessionError,
     TerminalSessionNotFoundError,
     TerminalSessionOwnershipError,
     TerminalSessionStateError,
 )
-from app.tools.terminal_runtime.session_runtime import (
+from app.tools.terminal_runtime.session.session_runtime import (
     SessionSnapshot,
     TerminalSessionRuntime,
 )
-from app.tools.terminal_runtime.shell_resolver import ShellResolver
+from app.tools.terminal_runtime.session.shell_resolver import ShellResolver
 from app.tools.tool_handler.security.path_resolver import PathResolver
 
 
@@ -272,5 +272,5 @@ class TerminalSessionService:
             ".", allow_reserved=True
         )
         if resolved is None or not resolved.is_dir():
-            raise TerminalSessionError(f"invalid terminal cwd: {error or workspace_root}")
+            raise TerminalError(f"invalid terminal cwd: {error or workspace_root}")
         return resolved

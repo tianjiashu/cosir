@@ -24,11 +24,11 @@ actor 随 ``TaskRuntimeSpace`` 物化而创建，由注册表在事件循环上�
   活动判断都只看阶段，不各自组合两者：执行者的释放滞后于 Run 落定。
 - **执行登记归 ``TaskExecution``。** 至多一个后台执行，以及取消信号「有执行者才打、注销执行时取走」
   的不变量都在那里；actor 只决定何时启动、释放后怎么处理（:meth:`_after_drive`）。
-- **取消编排归 actor。** :meth:`cancel` 有执行者就交给 ``TaskExecution.cancel``（打信号并立即取消
-  这次执行的 Agent Team），工作流在检查点落定；挂起的 Run 没有执行者，在闸门内直接迁移为
-  cancelled；没有可停止的对象时什么也不登记。取消对下游做什么（取消 Team、撤销后台结果、停止
-  子 Task、留用户取消通知）在 ``TaskCancellation``，actor 只决定调用时机。上游停止下游从工具或
-  工作线程发起，经 :meth:`request_cancel` 投递到 actor 所在的事件循环、不等待。
+- **取消编排归 actor。** 停止有两种语义（见 :meth:`cancel`）：用户停止只打断当前驱动，后台工作、
+  Team 与子 Task 照常运行；上游停止另外收回这个 Task 交出去的一切（``TaskRecall``）。有执行者就交给
+  ``TaskExecution.cancel`` 打信号，工作流在检查点落定；挂起的 Run 没有执行者，在闸门内直接迁移为
+  cancelled。上游停止下游从工具或工作线程发起，经 :meth:`request_cancel` 投递到 actor 所在的事件
+  循环、不等待。
 """
 
 from __future__ import annotations
@@ -40,8 +40,9 @@ from typing import TYPE_CHECKING, cast
 
 from app.config.logging.logger import log
 from app.core.context.context_store import ContextStore
-from app.core.task_cancellation import TaskCancellation
 from app.core.task_execution import TaskExecution
+from app.core.task_recall import TaskRecall
+from app.core.tool.background.background_registry import background_registry
 from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     CancelReason,
     cancel_end_reason,
@@ -82,12 +83,10 @@ class TaskActor:
         self._space = space
         # Task 级投递通道（space 持有）：每次开始执行时清空，运行中 loop 往里投递，prepare_input 取光。
         self.mailbox = space.mailbox
-        # 取消对下游做什么由它承载；actor 只决定何时调用。
-        self._cancellation = TaskCancellation(self.task_id)
+        # 上游停止时收回交出去的工作；actor 只决定何时调用。
+        self._recall = TaskRecall(self.task_id)
         # 执行登记：至多一个后台执行，释放后回到 :meth:`_after_drive`。
-        self._execution = TaskExecution(
-            self.task_id, self.mailbox, self._cancellation, self._after_drive
-        )
+        self._execution = TaskExecution(self.task_id, self.mailbox, self._after_drive)
         self._loop_task: asyncio.Task[None] | None = None
         # actor 所在的事件循环，``start`` 时记下；:meth:`request_cancel` 据此从任意线程投递取消。
         self._event_loop: asyncio.AbstractEventLoop | None = None
@@ -132,9 +131,13 @@ class TaskActor:
             self._loop_task.add_done_callback(self._on_loop_done)
 
     async def stop(self) -> None:
-        """Task 即将删除：停止当前执行并等它落定，再停下 loop。不调度后续 Run。"""
+        """Task 即将删除：停止当前执行并等它落定，再停下 loop。不调度后续 Run。
+
+        不收回：删除入口已停下整棵所有权子树、排空 Team，后台工作在删除提交后撤销——删除没提交时
+        Task 仍在，交出去的工作不该丢。
+        """
         self._stopping = True
-        if await self._execution.cancel("parent"):
+        if self._execution.cancel("parent"):
             await self._execution.wait_released()
         await self._cancel_loop()
 
@@ -274,30 +277,43 @@ class TaskActor:
         self._publish_state()
 
     async def cancel(self, reason: CancelReason = "user") -> None:
-        """停止当前执行或挂起的 Run；没有可停止的对象时什么也不做。只发起停止，不等执行落定。
+        """停止这个 Task；只发起停止，不等执行落定。重复取消幂等。
 
-        有执行者时打信号并立即取消本 Task 的全部活动 Team，由工作流在检查点落定、收尾时传播与接续；
-        挂起的 Run 没有执行者，在闸门内取消 Team、直接迁移为 cancelled 并传播。重复取消幂等。快路径只发起停止、不发布
-        状态：阶段仍是 ``driving``，等待方不必被唤醒。
+        两种语义按 ``reason`` 区分：
+
+        - ``user``（打断）：只停当前执行或挂起的 Run。后台工作、活动 Team（含待批准的方案）与子 Task 都
+          不动——它们属于 Task，结论到达时照常唤醒或开新 Run；要停它们用看板逐项或全部停止。Task 空闲时
+          什么也不做。
+        - ``parent``（收回）：上游不再需要这个 Task 的任何结果，在打断之外收回它交出去的一切
+          （``TaskRecall``）。有执行者时先打信号再收回：信号在时登记表拒收新登记、不交付结论（见
+          ``background_registry``），收回之后这次驱动不会再留下后台工作；挂起的 Run 先收回再迁移：迁移之后
+          才到的结论会被 loop 当作新消息开出新 Run。
+
+        有执行者时打信号，由工作流在检查点落定、收尾时接续；挂起的 Run 没有执行者，在闸门内直接迁移为
+        cancelled。快路径只打断、不发布状态：阶段仍是 ``driving``，等待方不必被唤醒。
 
         异常:
             KeyError: Task 不存在。
         """
-        if await self._execution.cancel(reason):
+        if self._execution.cancel(reason):
+            if reason == "parent":
+                await self._recall.recall()
             return
         async with self._space.async_operation():
             # 拿闸门期间可能已开出新执行：重新判定，不让信号落空或残留。
-            if not await self._execution.cancel(reason) and not await self._cancel_suspended(reason):
-                return
+            if self._execution.cancel(reason):
+                if reason == "parent":
+                    await self._recall.recall()
+            else:
+                await self._cancel_suspended(reason)
         self._publish_state()
 
     def request_cancel(self, reason: CancelReason) -> None:
         """从任意线程发起 :meth:`cancel`，只投递、不等待；失败只记录。
 
-        给上游停止下游用（父 Run 取消后传播、撤销委派、Coordinator 停节点）：调用方多在工具或工作
-        线程里，没有可 await 的事件循环；在事件循环上的调用方（``after_cancelled``）正持自己的 Task
-        闸门，等对方的闸门会让父子互等。能 await 且可以等的调用方（HTTP 用户停止）直接用
-        :meth:`cancel`。
+        给上游停止下游用（收回向下传播、撤销委派）：调用方多在工具或工作线程里，没有可 await 的事件
+        循环；在事件循环上的调用方（``TaskRecall``）正持自己的 Task 闸门，等对方的闸门会让父子互等。
+        能 await 且可以等的调用方（HTTP 用户停止、Coordinator 停节点）直接用 :meth:`cancel`。
 
         actor 尚未拉起（注册表还没 ``bind_loop``）或事件循环已关闭（进程退出中）时没有执行取消的
         地方，记录后放弃：前者只在启动瞬间出现，后者遗留的 running Run 由下次启动收敛。
@@ -323,26 +339,21 @@ class TaskActor:
                 exc_info=done.exception(),
             )
 
-    async def _cancel_suspended(self, reason: CancelReason) -> bool:
-        """挂起的 Run 没有执行者：撤销后台结果后直接迁移为 cancelled 并传播；调用方持 Task 闸门。
+    async def _cancel_suspended(self, reason: CancelReason) -> None:
+        """没有执行者：上游停止先收回，挂起的 Run 再直接迁移为 cancelled；调用方持 Task 闸门。
 
-        停止挂起 Run 时先撤销投递权，随后停止其全部待批准与已启动的 Team。
+        收回在迁移之前（见 :meth:`cancel`）；Task 空闲时用户停止什么也不做，上游停止只收回。
         """
+        if reason == "parent":
+            await self._recall.recall()
         current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
-        if self._phase(current) != "suspended":
-            return False
-        # 先撤销后台结果再迁移：迁移之后才到的结论会被 loop 当作新消息开出新 Run。
-        await self._cancellation.cancel_background_task()
-        await self._cancellation.cancel_teams()
-        cancelled = await asyncio.to_thread(
-            self._ledger.transition,
-            current.id,
-            RunTransition.CANCEL,
-            end_reason=cancel_end_reason(reason),
-        )
-        if cancelled is not None:
-            await self._cancellation.after_cancelled(cancelled)
-        return True
+        if self._phase(current) == "suspended":
+            await asyncio.to_thread(
+                self._ledger.transition,
+                current.id,
+                RunTransition.CANCEL,
+                end_reason=cancel_end_reason(reason),
+            )
 
     async def resume(self) -> None:
         """当前 Run 为 cancelled / failed 且没有执行者时，从 prepare_input 续跑同一个 Run。
@@ -408,8 +419,14 @@ class TaskActor:
         时队列里也没有可推进的消息——执行结束后会接续它们；取消、失败不自动接续，留着的消息等新
         消息到来再一起推进。系统通知不推进，不影响判定。
 
+        后台工作属于 Task：Run 可以先结束，结论到达后再开新 Run 收尾，所以还有没交付完的后台工作就
+        不算静止，否则等待方会读走「已在后台跑」的中间结论。登记表变化经 :meth:`notify_state_changed`
+        唤醒等待方。
+
         调度器已停止时不报告静止：那些消息再也推不动，报静止会让等待方读走上一次 Run 的结论。"""
         if self.stopped.is_set():
+            return False
+        if background_registry.has_work(self.task_id):
             return False
         current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
         if self._phase(current) != "idle":
@@ -490,13 +507,12 @@ class TaskActor:
         )
 
     async def _after_drive(self, run: ConversationRunRecord, reason: CancelReason | None) -> None:
-        """执行已释放（``TaskExecution`` 的回调）：按 Run 落定状态与取消原因传播取消、接续剩余消息，
-        最后唤醒等待方。
+        """执行已释放（``TaskExecution`` 的回调）：按 Run 落定状态与取消原因接续剩余消息，最后唤醒
+        等待方。
 
         ``reason`` 是收尾时取走的取消原因（没收到取消为 ``None``）。取消在最后一个检查点之后才到时
         Run 可能已挂起或完成：挂起的直接迁移为 cancelled；收到取消时不接续剩余消息，停止之后才到的
-        消息由 loop 在本执行结束后判定。删除前停止（``_stopping``）不接续、不传播。传播或接续失败
-        只记录。
+        消息由 loop 在本执行结束后判定。删除前停止（``_stopping``）不接续。接续失败只记录。
         """
         if self._stopping:
             # 执行已注销，仍要唤醒 ``wait_quiescent`` 的等待方重新判定，否则它们只能等到自己的超时。
@@ -511,8 +527,6 @@ class TaskActor:
                     RunTransition.CANCEL,
                     end_reason=cancel_end_reason(reason),
                 ) or settled
-            if settled.status == ConversationRunStatus.CANCELLED.value:
-                await self._cancellation.after_cancelled(settled)
             if reason is None and settled.status in CONTINUE_AFTER_STATUSES:
                 pending = await asyncio.to_thread(self._queue.pending_nowait, self.task_id)
                 if pending:
@@ -523,11 +537,21 @@ class TaskActor:
             log.exception(
                 "task_actor_settle_failed",
                 extra={
-                    "msg": "Run 落定后的向下游传播或接续剩余消息失败",
+                    "msg": "Run 落定后接续剩余消息失败",
                     "data": {"task_id": self.task_id, "run_id": run.id},
                 },
             )
         self._publish_state()
+
+    def notify_state_changed(self) -> None:
+        """从任意线程告知「静止判定的输入变了」（后台结果登记表变化），在 actor 的事件循环上唤醒等待方。
+
+        actor 尚未拉起或事件循环已关闭时没有等待方可唤醒，直接返回。
+        """
+        loop = self._event_loop
+        if loop is None or loop.is_closed():
+            return
+        loop.call_soon_threadsafe(self._publish_state)
 
     def _publish_state(self) -> None:
         """阶段可能已变化：换新事件并置位，唤醒 ``wait_quiescent`` 等待方重新判定。"""

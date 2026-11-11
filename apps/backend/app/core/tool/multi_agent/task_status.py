@@ -16,6 +16,7 @@ from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.service.depends import get_conversation_run_ledger, get_task_service
 
+
 class TaskStatusTool(HandlerBase):
     """只做「task → current_run_id → run」这一条读取，不推断生命周期、不写任何事实。
 

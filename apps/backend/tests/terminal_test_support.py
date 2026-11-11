@@ -250,10 +250,11 @@ def run_local_command(
     输出归调用方持有的 ``CommandOutput``：谁创建谁封存，所以直接调后端的测试也要自己建、自己
     ``finish`` 再读它。
     """
+    from app.config.constant import Constant
     from app.tools.terminal_runtime.command.command_output import CommandOutput
     from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
 
-    output = CommandOutput(workspace_root=Path(cwd))
+    output = CommandOutput(workspace_root=Path(cwd), model_budget_chars=Constant.Tools.MAX_OUTPUT_CHARS)
     result = LocalExecutionBackend().execute(command, str(cwd), timeout, output, shell=shell)
     output.finish()
     return result, output.summary()

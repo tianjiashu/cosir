@@ -26,7 +26,6 @@ from app.core.tool.tool_registry import ToolRegistry
 from app.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
 from app.tools.tool_handler.browser import build_browser_definitions
 from app.tools.tool_handler.delete_tool import build_delete_file_definition
-from app.tools.tool_handler.execute_terminal import build_execute_terminal_definition
 from app.tools.tool_handler.find_files import build_find_files_definition
 from app.tools.tool_handler.list_directory import build_list_directory_definition
 from app.tools.tool_handler.mcp_tool import build_mcp_definition
@@ -36,7 +35,8 @@ from app.tools.tool_handler.read_image import ReadImageTool
 from app.tools.tool_handler.replace_tool import build_replace_definition
 from app.tools.tool_handler.search_content import build_search_content_definition
 from app.tools.tool_handler.skill_tool import build_skill_definition
-from app.tools.tool_handler.terminal_session import build_terminal_definitions
+from app.tools.tool_handler.terminal import build_terminal_definitions
+from app.tools.tool_handler.terminal.execute_terminal import build_execute_terminal_definition
 from app.tools.tool_handler.write_file import build_write_file_definition
 
 

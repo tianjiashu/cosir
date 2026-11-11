@@ -1,7 +1,7 @@
-"""条件等待的判定：在会话锁内、每次 worker 事件唤醒时对当前观察求值。
+"""条件等待：Agent 读取终端时的等待条件契约（``terminal_read`` 的 ``wait``）与它的判定。
 
-只做纯判定，不等待、不加锁：等待循环由 runtime 在 ``threading.Condition`` 上进行，worker 事件
-``notify_all`` 唤醒；短时间片只用于复查 Run 取消信号，不是轮询条件。返回的「下次到期时刻」让
+判定只做纯求值，不等待、不加锁：等待循环由 ``ObservedTerminal`` 在 ``threading.Condition`` 上进行，
+来源写入 ``notify_all`` 唤醒；短时间片只用于复查取消信号，不是轮询条件。返回的「下次到期时刻」让
 ``output_quiet`` 能在静默满额的那一刻醒来，而不必等下一个事件。
 """
 
@@ -10,9 +10,68 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
+from typing import Literal
 
-from app.tools.terminal_runtime.inputs import TerminalWait
-from app.tools.terminal_runtime.observation import TerminalObservation
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.config.constant import Constant
+from app.tools.terminal_runtime.observation.terminal_observation import TerminalObservation
+
+WaitUntil = Literal["command_returned", "output_quiet", "match", "elapsed"]
+
+
+# 结束条件 + 总超时。等待只在前台、占着工具线程进行，所以总超时有上限；更长的工作交给
+# execute_terminal 的后台执行。模型可见说明只在字段描述里，类 docstring 只服务源码阅读。
+class TerminalWait(BaseModel):
+    """结束条件与总超时的组合；跨字段约束在 ``validate_condition``。"""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+    until: WaitUntil = Field(
+        description="command_returned: the shell reports the command returned (needs shell "
+        "integration). output_quiet: no output for quiet_ms. match: pattern matches a line from "
+        "the cursor line on, or the redrawn screen in a full-screen app. elapsed: wait "
+        "timeout_ms."
+    )
+    pattern: str | None = Field(
+        default=None,
+        max_length=512,
+        description="Python regex for until=match; null otherwise.",
+    )
+    quiet_ms: int | None = Field(
+        default=None,
+        ge=100,
+        le=60_000,
+        description="Silence for until=output_quiet "
+        f"(default {Constant.Terminal.WAIT_DEFAULT_QUIET_MS}); null otherwise.",
+    )
+    timeout_ms: int | None = Field(
+        default=None,
+        ge=0,
+        le=Constant.Terminal.WAIT_MAX_TIMEOUT_MS,
+        description=f"Overall limit (default {Constant.Terminal.WAIT_DEFAULT_TIMEOUT_MS}). For "
+        "long builds or test suites, use execute_terminal with background=true instead.",
+    )
+
+    @model_validator(mode="after")
+    def validate_condition(self) -> TerminalWait:
+        if self.until == "match":
+            if not self.pattern:
+                raise ValueError("until=match requires pattern")
+            try:
+                re.compile(self.pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid pattern: {exc}") from exc
+        return self
+
+    @property
+    def effective_timeout_ms(self) -> int:
+        if self.timeout_ms is None:
+            return Constant.Terminal.WAIT_DEFAULT_TIMEOUT_MS
+        return self.timeout_ms
+
+    @property
+    def effective_quiet_ms(self) -> int:
+        return self.quiet_ms or Constant.Terminal.WAIT_DEFAULT_QUIET_MS
 
 
 @dataclass(frozen=True)

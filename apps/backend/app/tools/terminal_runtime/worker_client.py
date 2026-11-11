@@ -18,6 +18,7 @@ import sys
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Any, cast
 
@@ -30,11 +31,23 @@ from app.tools.terminal_runtime.errors import (
     TerminalWorkerProtocolError,
     TerminalWorkerUnavailableError,
 )
-from app.tools.terminal_runtime.shell_resolver import ShellSpec
 
 WorkerEventCallback = Callable[[Mapping[str, object]], None]
 HANDSHAKE_TIMEOUT_SECONDS = 5.0
 _STDERR_LINE_MAX_CHARS = 4096
+
+
+@dataclass(frozen=True)
+class ShellSpec:
+    """worker 会话模式启动 shell 的不可变描述；由交互终端的 ``ShellResolver`` 产出。
+
+    放在 worker 边界而不是会话侧：它是 ``start`` 的入参契约，worker 不依赖会话域。
+    """
+
+    kind: str
+    executable: str
+    argv: tuple[str, ...]
+    integration: str = "auto"
 
 
 class ProcessTerminalWorker:

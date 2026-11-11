@@ -4,12 +4,13 @@
 登记、驱动、释放，以及取消信号在执行边界上的生命周期。
 
 信号的不变量只在这里成立：**有执行者才打信号，注销执行时一并取走信号**，两步各自之间没有 await。
-:meth:`_signal` 判定 ``driving`` 与打信号是同步的，:meth:`_drive` 注销执行与 ``consume`` 也是同步的，
+:meth:`cancel` 判定 ``driving`` 与打信号是同步的，:meth:`_drive` 注销执行与 ``consume`` 也是同步的，
 二者在事件循环上互斥——信号要么被这次执行的收尾取走，要么根本不打，不会残留到下一个执行（残留
 信号会让下一个 Run 一启动就被取消）。没有执行者时取消该做什么（挂起 Run 的迁移）不归这里，由 actor
 在 Task 闸门内处理。
 
-打信号时一起取消本 Task 的待批准与运行中 Team，收尾时撤销尚未投递的后台结论。
+本类不碰后台工作与 Team：用户停止只打断这次驱动，上游停止的收回由 actor 在打信号之后另做
+（``TaskRecall``）。
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 
 from app.config.logging.logger import log
-from app.core.task_cancellation import TaskCancellation
 from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     CancelReason,
     cancellation_registry,
@@ -39,12 +39,10 @@ class TaskExecution:
             self,
             task_id: int,
             mailbox: RunMailbox,
-            cancellation: TaskCancellation,
             on_released: OnReleased,
     ) -> None:
         self.task_id = task_id
         self._mailbox = mailbox
-        self._cancellation = cancellation
         # 释放后的处理（传播、接续）是调度判定，归 actor；这里只在释放后交出去。
         self._on_released = on_released
         # 当前后台执行（驱动一个 Run 的子 task）及其 Run；没有执行时为 ``None``，注销时一起清空。
@@ -87,18 +85,8 @@ class TaskExecution:
         # 兜底：释放边界之外的异常在这里留下日志，不留无人取回失败的 task。
         self._task.add_done_callback(self._on_drive_done)
 
-    async def cancel(self, reason: CancelReason) -> bool:
-        """有执行者时打取消信号，并立即取消本 Task 的全部活动 Team；返回是否打了信号。
-
-        没有执行者时什么也不做（挂起的 Run 由 actor 自己取消 Team）。
-        """
-        if not self._signal(reason):
-            return False
-        await self._cancellation.cancel_teams()
-        return True
-
-    def _signal(self, reason: CancelReason) -> bool:
-        """有执行者时打 Task 取消信号，返回是否打了；没有执行者时什么也不登记。"""
+    def cancel(self, reason: CancelReason) -> bool:
+        """有执行者时打 Task 取消信号，返回是否打了；没有执行者时什么也不登记（挂起的 Run 归 actor）。"""
         if not self.driving:
             return False
         cancellation_registry.request_cancel(self.task_id, reason)
@@ -131,7 +119,7 @@ class TaskExecution:
     ) -> None:
         """驱动一个 Run 并释放执行，再交给 ``on_released``；失败由 ``RunDriver`` 落定。
 
-        注销执行与取走信号之间没有 await（与 :meth:`_signal` 互斥），这是信号的唯一清理点。
+        注销执行与取走信号之间没有 await（与 :meth:`cancel` 互斥），这是信号的唯一清理点。
         驱动异常退出（``RunDriver`` 落定自身失败、装配期读库失败）同样走这条释放路径：否则
         取消信号会残留到下一次执行，而剩余消息也不会被接续。进程关闭的取消由 :meth:`abort`
         负责收尾，不在这里跑释放回调。
@@ -140,11 +128,6 @@ class TaskExecution:
         # 等许多路径上物化，构造执行登记不应牵出 Run / Task service 与存储的装配。
         try:
             await RunDriver().drive(run, preceding_run)
-            if cancellation_registry.is_cancelled(self.task_id):
-                # 取走信号前先撤销后台结果：信号在时迟到结论被 ``deliver_background_result``
-                # 丢弃，取走之后、撤销之前却会入队并开出新 Run。撤销期间执行仍登记着，
-                # 新到的取消照常打信号。
-                await self._cancellation.cancel_background_task()
         except asyncio.CancelledError:
             # 进程关闭：``abort`` 自己补取信号并注销，不调度后续 Run。
             raise

@@ -1,4 +1,8 @@
-"""终端会话领域错误；Agent 填入被拒与等待条件错误不改变命令或会话生命周期。
+"""终端领域错误：会话、运行中命令与 Terminal Worker 共用一个基类；Agent 填入被拒与等待条件错误
+不改变命令或会话生命周期。
+
+``code`` 是对外契约：会话错误码经工作台 HTTP 与 ``terminal-v2`` WS 交给前端（前端按码分支），
+Agent 工具的错误观察也带上它。
 
 ``advice`` 是投影给模型的下一步动作（英文，模型可见），``message`` 只说明发生了什么，两者不重复
 （同一动作不在 message 与 advice 各写一遍）：需要不同动作时由抛出点给出不同的 message，动作本身
@@ -6,39 +10,43 @@
 """
 
 
-class TerminalSessionError(Exception):
-    """终端 session 领域错误基类。"""
+class TerminalError(Exception):
+    """终端领域错误基类。"""
 
-    code = "TERMINAL_SESSION_ERROR"
+    code = "TERMINAL_ERROR"
     retryable = False
     # 模型可见的下一步动作；None 表示 message 已自足，不追加建议。
     advice: str | None = None
 
 
-class TerminalSessionNotFoundError(TerminalSessionError):
-    """session 不存在。"""
+class TerminalNotFoundError(TerminalError):
+    """Agent 按 id 找本 Task 的终端：既不是用户打开的会话，也不是自己仍在运行的命令。"""
+
+    code = "TERMINAL_NOT_FOUND"
+    advice = "Call terminal_list to see the user's terminals and your running commands."
+
+
+class TerminalSessionNotFoundError(TerminalError):
+    """session 不存在（工作台 HTTP 映射 404、WS 按码关闭；``terminal_write`` 只找会话）。"""
 
     code = "TERMINAL_SESSION_NOT_FOUND"
-    advice = (
-        "It ended earlier or the backend restarted; call terminal_list to see the user's "
-        "terminals."
-    )
+    advice = "Call terminal_list to see the user's terminals and your running commands."
 
 
-class TerminalSessionOwnershipError(TerminalSessionError):
+class TerminalSessionOwnershipError(TerminalError):
     """session 不属于当前 Task。"""
 
     code = "TERMINAL_SESSION_OWNERSHIP_ERROR"
 
 
-class TerminalSessionStateError(TerminalSessionError):
+class TerminalSessionStateError(TerminalError):
     """当前 session 状态不允许请求的操作（会话已结束、服务正在关闭）；message 已把原因写清，
     不再给类型级动作。"""
 
     code = "TERMINAL_SESSION_STATE_ERROR"
 
 
-class TerminalPrefillRejectedError(TerminalSessionError):
+class TerminalPrefillRejectedError(TerminalError):
     """当前不满足「把一行命令填进空提示符」的条件（无 shell 集成、不在提示符、提示符已有输入）。
 
     不可重试到同一提示符：用户敲了半行或已经填过一次时，Agent 应把命令写进回复里，或等下一个
@@ -52,14 +60,14 @@ class TerminalPrefillRejectedError(TerminalSessionError):
     )
 
 
-class TerminalIntegrationRequiredError(TerminalSessionError):
+class TerminalIntegrationRequiredError(TerminalError):
     """等待条件依赖 shell 集成，而该会话没有可用集成；改用 output_quiet / match。"""
 
     code = "TERMINAL_INTEGRATION_REQUIRED"
     advice = "Use wait until=output_quiet or until=match in this session."
 
 
-class ShellResolutionError(TerminalSessionError):
+class ShellResolutionError(TerminalError):
     """shell 参数无法解析（未知名称、可执行文件不存在或当前平台不支持）。"""
 
     code = "TERMINAL_SHELL_UNAVAILABLE"
@@ -69,7 +77,7 @@ class ShellResolutionError(TerminalSessionError):
     )
 
 
-class TerminalSessionCapacityError(TerminalSessionError):
+class TerminalSessionCapacityError(TerminalError):
     """达到全进程活跃会话上限。"""
 
     code = "TERMINAL_SESSION_CAPACITY"
@@ -77,7 +85,7 @@ class TerminalSessionCapacityError(TerminalSessionError):
     advice = "Close a terminal in the terminal panel, then retry."
 
 
-class TerminalSessionResyncRequiredError(TerminalSessionError):
+class TerminalSessionResyncRequiredError(TerminalError):
     """请求 cursor 已早于 ring buffer 当前可用范围。"""
 
     code = "TERMINAL_RESYNC_REQUIRED"
@@ -91,7 +99,7 @@ class TerminalSessionResyncRequiredError(TerminalSessionError):
         self.after_seq = after_seq
 
 
-class TerminalWorkerUnavailableError(TerminalSessionError):
+class TerminalWorkerUnavailableError(TerminalError):
     """Terminal Worker sidecar 不可用。"""
 
     code = "TERMINAL_WORKER_UNAVAILABLE"
@@ -118,7 +126,7 @@ class TerminalWorkerHandshakeError(TerminalWorkerUnavailableError):
     advice = "Tell the user; the worker configuration needs fixing before retrying."
 
 
-class TerminalWorkerBackpressureError(TerminalSessionError):
+class TerminalWorkerBackpressureError(TerminalError):
     """Terminal Worker 输入队列已满。"""
 
     code = "TERMINAL_INPUT_BACKPRESSURE"

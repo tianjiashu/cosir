@@ -9,8 +9,9 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 
 CancelReason = Literal["user", "parent"]
-"""取消原因：用户停止、上游（父 Agent / Team）停止。两者都让下游结果不再回投；落库成不同的结束
-原因（:func:`cancel_end_reason`），只有用户停止会在下一次驱动推导出「用户已停止」通知。"""
+"""取消原因：用户停止（打断当前驱动）、上游（父 Agent / Team）停止（另外收回 Task 交出去的工作，见
+``TaskActor.cancel``）。落库成不同的结束原因（:func:`cancel_end_reason`），只有用户停止会在下一次驱动
+推导出「用户已停止」通知。"""
 
 _END_REASONS: dict[CancelReason, str] = {
     "user": Constant.Run.RUN_END_REASON_USER_CANCELLED,
@@ -37,13 +38,18 @@ class ConversationRunCancellationRegistry:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # task_id → 首个取消原因；重复请求不覆盖，释放时连同原因一起取走。
+        # task_id → 取消原因；释放时连同原因一起取走。
         self._reasons: dict[int, CancelReason] = {}
 
     def request_cancel(self, task_id: int, reason: CancelReason = "user") -> None:
-        """记录取消意图与原因；幂等（保留首个原因），可从工具线程调用。"""
+        """记录取消意图与原因；幂等，可从工具线程调用。
+
+        已有信号时只允许 ``user`` 升级为 ``parent``：用户打断途中上游又收回，后台结果登记表要按收回
+        拒收这次驱动剩下的登记；反过来不降级。
+        """
         with self._lock:
-            if task_id in self._reasons:
+            current = self._reasons.get(task_id)
+            if current == reason or current == "parent":
                 return
             self._reasons[task_id] = reason
         log.info(
@@ -55,6 +61,7 @@ class ConversationRunCancellationRegistry:
         )
 
     def is_cancelled(self, task_id: int) -> bool:
+        """有任一原因的信号：当前执行应停下。"""
         with self._lock:
             return task_id in self._reasons
 

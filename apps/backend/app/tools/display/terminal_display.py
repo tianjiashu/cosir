@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from app.tools.terminal_runtime.render import TerminalObservationResult
+    from app.tools.terminal_runtime.observation.render import TerminalObservationResult
 
 
 def build_terminal_display_data(
@@ -17,12 +17,15 @@ def build_terminal_display_data(
     end: str,
     exit_code: int | None,
     signal: int | None,
+    omitted_lines: int,
+    log_path: str,
 ) -> dict[str, Any]:
     """构造完整的终端展示数据。
 
-    命令和输出均按调用方提供的原文展示；输出保留 ANSI 控制序列。``end`` 是执行结局
+    命令和输出均按调用方提供的原文展示；输出保留 ANSI 控制序列，是原始输出的最近一段（窗口规则见
+    ``core/tool/terminal_output_window.py``），完整输出在 ``output_log_path``。``end`` 是执行结局
     （``CommandEnd``），``exit_code`` / ``signal`` 只在命令自己结束时出现。本函数不执行命令、不截断
-    输出，也不负责工具状态判断。
+    输出，也不负责工具状态判断；省略行数与日志路径只在该有值时出现。
     """
 
     data: dict[str, Any] = {
@@ -36,6 +39,10 @@ def build_terminal_display_data(
         data["exit_code"] = exit_code
     if signal is not None:
         data["signal"] = signal
+    if omitted_lines > 0:
+        data["output_omitted_lines"] = omitted_lines
+    if log_path:
+        data["output_log_path"] = log_path
     return data
 
 
@@ -50,23 +57,23 @@ def build_terminal_placeholder_display_data(*, command: str, workdir: Path) -> d
     return {"kind": "terminal-result", "command": command, "workdir": str(workdir)}
 
 
-def build_terminal_session_list_display_data(session_count: int) -> dict[str, object]:
+def build_terminal_list_display_data(terminal_count: int) -> dict[str, object]:
     """只展示本次发现数量；会话实时状态由 snapshot 的 terminal_sessions 提供。"""
 
-    return {"kind": "terminal-session", "session_count": session_count}
+    return {"kind": "terminal-session", "terminal_count": terminal_count}
 
 
 def build_terminal_observation_display_data(
     result: TerminalObservationResult,
 ) -> dict[str, object]:
-    """read / write 动作行：会话、填入命令摘要、等待结果与返回行范围；不承载终端输出。
+    """read / write 动作行：终端、填入命令摘要、等待结果与返回行范围；不承载终端输出。
 
     全屏程序期间返回的是整屏（``screen``），没有逻辑行区间。
     """
 
     data: dict[str, object] = {
         "kind": "terminal-session",
-        "session_id": result.session_id,
+        "terminal_id": result.terminal_id,
         "lines": list(result.lines) if result.lines is not None else None,
         "screen": result.screen,
         "wait_result": dict(result.wait_result) if result.wait_result is not None else None,

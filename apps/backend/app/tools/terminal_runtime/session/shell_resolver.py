@@ -2,13 +2,12 @@
 
 支持的 shell 清单与可执行文件定位走共用的 ``app.tools.shell.host_shells``；本模块只承载交互
 终端自己的语义：``auto`` 指用户默认 shell、接受任意可执行文件、展示名与集成支持，以及 worker
-启动 shell 的 argv。
+启动 shell 的 argv（产出 worker 会话模式的启动描述 ``ShellSpec``）。
 """
 
 import os
 import platform
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from typing import get_args
 
@@ -19,18 +18,8 @@ from app.tools.shell.host_shells import (
     find_shell,
 )
 from app.tools.terminal_runtime.errors import ShellResolutionError
+from app.tools.terminal_runtime.worker_client import ShellSpec
 from app.utils.host_platform import is_windows
-
-
-@dataclass(frozen=True)
-class ShellSpec:
-    """worker 启动 shell 所需的不可变描述。"""
-
-    kind: str
-    executable: str
-    argv: tuple[str, ...]
-    integration: str = "auto"
-
 
 # 可按名称请求的 shell（两个平台的并集）；指向它们的可执行路径也按该 shell 处理。
 _KNOWN_SHELLS = frozenset(get_args(WindowsShell)) | frozenset(get_args(PosixShell))

@@ -20,7 +20,6 @@ service 拥有会话集合、Task 归属与容量；本对象不访问 registry�
 from __future__ import annotations
 
 import base64
-import re
 import threading
 import time
 import uuid
@@ -32,34 +31,31 @@ from typing import Any, Final, Literal
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.tools.terminal_runtime.errors import (
-    TerminalIntegrationRequiredError,
     TerminalPrefillRejectedError,
     TerminalSessionStateError,
     TerminalWorkerUnavailableError,
 )
-from app.tools.terminal_runtime.inputs import TerminalWait
-from app.tools.terminal_runtime.line_buffer import TerminalLineBuffer
-from app.tools.terminal_runtime.observation import InputSource, TerminalObservation
-from app.tools.terminal_runtime.render import (
-    KeepMode,
-    LineSearch,
-    SessionFacts,
+from app.tools.terminal_runtime.observation.line_buffer import TerminalLineBuffer
+from app.tools.terminal_runtime.observation.observed_terminal import ObservedTerminal
+from app.tools.terminal_runtime.observation.render import (
+    TerminalFacts,
     TerminalObservationResult,
-    render_observation,
-    render_session_summary,
+    render_terminal_summary,
 )
-from app.tools.terminal_runtime.shell_resolver import ShellSpec
-from app.tools.terminal_runtime.stream import (
+from app.tools.terminal_runtime.observation.terminal_observation import (
+    InputSource,
+    TerminalObservation,
+)
+from app.tools.terminal_runtime.session.stream import (
     TerminalStreamAttachment,
     TerminalStreamBuffer,
 )
-from app.tools.terminal_runtime.wait import WaitBaseline, WaitEvaluator
 from app.tools.terminal_runtime.worker_client import (
     ProcessTerminalWorker,
+    ShellSpec,
     WorkerEventCallback,
 )
 
-RunCancellationCheck = Callable[[], bool]
 EffectScheduler = Callable[[Callable[[], None]], None]
 UserInputResult = Literal["accepted", "session_ended"]
 
@@ -128,8 +124,12 @@ class _UserInputMarks:
         self.lines = (min(first, cursor), max(last, cursor))
 
 
-class TerminalSessionRuntime:
-    """单会话的状态与并发边界；不访问会话集合。"""
+class TerminalSessionRuntime(ObservedTerminal):
+    """单会话的状态与并发边界；不访问会话集合。
+
+    读取、条件等待与结果渲染在 ``ObservedTerminal``；本类只提供会话的事实快照、活跃判定与交付后
+    清空用户输入标注。
+    """
 
     def __init__(
         self,
@@ -143,6 +143,8 @@ class TerminalSessionRuntime:
         ``TerminalWorkerUnavailableError``），不启动子进程；握手见 :meth:`start`。"""
         # 身份和用途在会话创建后不变；生命周期字段只在会话锁内更新。
         self.session_id: Final = f"term_{uuid.uuid4().hex[:12]}"
+        # 读取底座按 ``terminal_id`` 统一寻址；会话保留 ``session_id``（服务、WS、snapshot 都在用）。
+        self.terminal_id = self.session_id
         self.task_id: Final = task_id
         self.initial_cwd: Final = initial_cwd
         self.spec: Final = spec
@@ -416,118 +418,6 @@ class TerminalSessionRuntime:
                 last - Constant.Terminal.READ_DEFAULT_TAIL + 1, last, "tail", prefilled=preview
             )
 
-    # ------------------------------------------------------------------ Agent 读取
-
-    def read(
-        self,
-        *,
-        start_line: int | None = None,
-        limit: int | None = None,
-        tail: int | None = None,
-        pattern: str | None = None,
-        wait: TerminalWait | None = None,
-        is_cancelled: RunCancellationCheck,
-    ) -> TerminalObservationResult:
-        """按行读取；带 wait 时先按条件等待再读。无变化且无等待的重复读取只给一行提示。
-
-        ``pattern`` 把读取变成搜索：从 ``start_line``（缺省为最早保留行）扫到末行，只返回命中行，
-        ``limit`` 限制命中数；搜索总是按逻辑行（全屏程序期间搜冻结的主屏）。正则已在参数边界校验。
-        """
-        wait_result: dict[str, object] | None = None
-        if wait is not None:
-            with self._condition:
-                integration = self._observation.integration_status
-                if wait.until == "command_returned" and integration != "ready":
-                    raise TerminalIntegrationRequiredError(
-                        "wait until=command_returned needs shell integration, which is "
-                        f"{integration} for this session"
-                    )
-                baseline = WaitBaseline.of(self._observation)
-            # 没有执行中的命令就没有可等的返回，直接给出空闲结果。
-            if wait.until == "command_returned" and baseline.active is None:
-                wait_result = {"until": wait.until, "end_reason": "idle"}
-            else:
-                wait_result = self._wait(WaitEvaluator(wait, baseline), is_cancelled)
-        with self._condition:
-            buffer = self._observation.buffer
-            mode: KeepMode
-            search: LineSearch | None = None
-            max_limit = Constant.Terminal.READ_MAX_LIMIT
-            if pattern is not None:
-                first = start_line or buffer.first_available_line
-                last, mode = buffer.last_line, "head"
-                search = LineSearch(re.compile(pattern), min(limit or max_limit, max_limit))
-            elif start_line is not None:
-                count = min(limit or max_limit, max_limit)
-                first, last, mode = start_line, start_line + count - 1, "head"
-            else:
-                count = min(tail or limit or Constant.Terminal.READ_DEFAULT_TAIL, max_limit)
-                first, last, mode = buffer.last_line - count + 1, buffer.last_line, "tail"
-            logical = start_line is not None or search is not None
-            # 全屏程序期间，不指定 start_line 的读取就是读整屏，整屏总在变动区。
-            screen_view = buffer.alternate and not logical
-            signature = (
-                self._observation.information_version,
-                self._status,
-                start_line,
-                limit,
-                tail,
-                pattern,
-            )
-            touches_live = screen_view or last >= buffer.live_from_line
-            if (
-                wait is None
-                and touches_live
-                and self._last_read == signature
-                and self._user_marks.empty
-            ):
-                cursor = (
-                    f"cursor s{buffer.screen_cursor_row}"
-                    if screen_view
-                    else f"cursor line {buffer.cursor_line}"
-                )
-                return TerminalObservationResult(
-                    session_id=self.session_id,
-                    status=self._status,
-                    text=(
-                        f"session {self.session_id}: no change since your last read "
-                        f"({cursor}). Use wait to block until something happens instead of "
-                        "reading again."
-                    ),
-                    screen=screen_view,
-                )
-            self._last_read = signature if wait is None else None
-            return self._build_result(
-                first, last, mode, wait_result=wait_result, logical=logical, search=search
-            )
-
-    # ------------------------------------------------------------------ 条件等待
-
-    def _wait(
-        self, evaluator: WaitEvaluator, is_cancelled: RunCancellationCheck
-    ) -> dict[str, object]:
-        """不持锁调用：在工具线程里持会话锁等条件（worker 事件 ``notify_all`` 唤醒），返回等待结果。
-
-        时间片只为复查取消；会话结束时以 ``session_ended`` 作为结束原因返回，不再另发通知。
-        """
-        with self._condition:
-            while True:
-                if is_cancelled():
-                    reason = "cancelled"
-                    break
-                if self._status not in _ACTIVE:
-                    reason = "session_ended"
-                    break
-                now = time.monotonic()
-                checked, due = evaluator.check(self._observation, now)
-                if checked is not None:
-                    reason = checked
-                    break
-                self._condition.wait(
-                    min(max(due - now, 0.0), Constant.Terminal.WAIT_CANCEL_CHECK_SECONDS)
-                )
-            return evaluator.result(reason)
-
     def notify_changed(self) -> None:
         """影响 snapshot 会话条目的变化：经副作用线程整表重投影该 Task 的会话列表。"""
         task_id = self.task_id
@@ -595,39 +485,11 @@ class TerminalSessionRuntime:
             worker = self._worker
         worker.resize(rows, columns)
 
-    # ------------------------------------------------------------------ 结果渲染
-
-    def _build_result(
-        self,
-        first: int,
-        last: int,
-        mode: KeepMode,
-        *,
-        wait_result: dict[str, object] | None = None,
-        prefilled: str | None = None,
-        logical: bool = False,
-        search: LineSearch | None = None,
-    ) -> TerminalObservationResult:
-        """持锁调用：渲染观察文本（屏幕视图 / 逻辑行的选择见 ``render_observation``；区间下限由
-        它收拢）；用户输入标注在交付后清空。"""
-        result = render_observation(
-            self._facts(),
-            self._observation,
-            first,
-            last,
-            mode,
-            logical=logical,
-            search=search,
-            wait_result=wait_result,
-            prefilled=prefilled,
-        )
-        self._user_marks = _UserInputMarks()
-        return result
-
-    def _facts(self) -> SessionFacts:
+    def _facts(self) -> TerminalFacts:
         """持锁调用：渲染所需的会话侧事实。"""
-        return SessionFacts(
-            session_id=self.session_id,
+        return TerminalFacts(
+            terminal_id=self.session_id,
+            kind="session",
             status=self._status,
             ended=self._status not in _ACTIVE,
             end_reason=self._end_reason,
@@ -636,6 +498,14 @@ class TerminalSessionRuntime:
             user_marks=self._user_marks.lines,
             user_typed_in_screen=self._user_marks.in_screen,
         )
+
+    def _is_active(self) -> bool:
+        """持锁调用：会话仍在产出（starting / running）。"""
+        return self._status in _ACTIVE
+
+    def _on_delivered(self) -> None:
+        """持锁调用：一次观察交付后清空用户输入标注。"""
+        self._user_marks = _UserInputMarks()
 
     # ------------------------------------------------------------------ 只读投影
 
@@ -651,7 +521,7 @@ class TerminalSessionRuntime:
                 exit_code=self._exit_code,
                 integration=self._observation.integration_status,
                 command_running=self._observation.active_command is not None,
-                summary=render_session_summary(self._facts(), self._observation),
+                summary=render_terminal_summary(self._facts(), self._observation),
             )
 
     def subscribe(self, after_seq: int | None, loop: Any) -> TerminalStreamAttachment:

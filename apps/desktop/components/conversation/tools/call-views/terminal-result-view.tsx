@@ -10,6 +10,7 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useDisclosure } from "@/lib/assistant/turn/disclosure-store";
+import { OmittedOutputNotice } from "../terminal-output/omitted-notice";
 import { TerminalOutputPreview, useParsedOutput } from "../terminal-output/preview";
 import { TerminalOutputReader } from "../terminal-output/reader";
 import { resolvePathText } from "@/lib/links/resolve-link";
@@ -27,6 +28,15 @@ function rawOutput(data: Record<string, unknown>): string {
 
 function exitCode(data: Record<string, unknown>): number | undefined {
   return typeof data.exit_code === "number" ? data.exit_code : undefined;
+}
+
+/** 卡片输出只保留最近一段；被省略的行数与完整日志路径由后端展示数据给出。 */
+function omittedLines(data: Record<string, unknown>): number | undefined {
+  return typeof data.output_omitted_lines === "number" ? data.output_omitted_lines : undefined;
+}
+
+function outputLogPath(data: Record<string, unknown>): string | undefined {
+  return typeof data.output_log_path === "string" ? data.output_log_path : undefined;
 }
 
 /** 命令自己结束时的结局文案；结局事实是后端的 `end`，前端不从退出码或工具状态反推。 */
@@ -73,6 +83,7 @@ function TerminalResultBody({ data, context }: { data: Record<string, unknown>; 
         {(commandOpen || commandClipped) && <Button variant="ghost" size="sm" onClick={() => setCommandOpen(!commandOpen)} aria-expanded={commandOpen}>{commandOpen ? "收起命令" : "显示完整命令"}</Button>}
       </div>}
       {output ? <div className="relative border-t pt-2">
+        <OmittedOutputNotice omittedLines={omittedLines(data)} logPath={outputLogPath(data)} links={{ workspaceRoot: links.workspaceRoot, open: links.open }} />
         <div className={cn("bg-surface absolute top-1 right-0 flex gap-1", REVEAL_ON_HOVER_CLASS)}>
           <CopyIconButton label="复制输出" size="xs" getText={() => parsed?.text ?? ""} logEvent="terminal_output_copy_failed" logData={{ taskId, toolCallId }} />
           <TooltipIconButton tooltip="查看输出" className="size-6" onClick={() => setReaderOpen(true)}><Maximize2Icon aria-hidden="true" /></TooltipIconButton>
@@ -105,6 +116,7 @@ function TerminalReaderOverlay({ data, context }: { data: Record<string, unknown
     return processHead?.checkVisibility() ? processHead : false;
   };
   return <><span ref={anchor} hidden /><TerminalOutputReader finalFocus={finalFocus} taskId={taskId} toolCallId={toolCallId} output={rawOutput(data)}
+    omittedLines={omittedLines(data)} logPath={outputLogPath(data)}
     links={{ getWorkspaceRoot: () => links.workspaceRoot, onOpenLink: links.open }} open={open} onOpenChange={setOpen}
     command={text(data.command) ?? text(context.args.command)}
     statusLabel={context.inherited && (artifact.backendStatus === "pending" || artifact.backendStatus === "running") ? "继承时未结束" : commandLive(context) ? "运行中" : context.workStatus === "settling" ? "后台结果收尾中" : artifact.backendStatus === "cancelled" ? "已取消" : data.end === "timed_out" ? "命令超时" : artifact.backendStatus === "failed" ? "执行失败" : endedLabel(data)} /></>;

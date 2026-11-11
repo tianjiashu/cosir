@@ -12,6 +12,7 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 from app.config.logging.logger import log
 from app.core.events import TerminalOutputDeltaData, ToolCallRuntimeUpdateEvent
 from app.core.tool.schemas.tool_names import TOOL_EXECUTE_TERMINAL
+from app.core.tool.terminal_output_window import trim_output_window
 
 
 def plan_tool_call_runtime_update(
@@ -54,6 +55,8 @@ def _plan_terminal_output(
     """命令还活着时追加输出块：前台调用是 ``running``，转到后台的是带 ``background`` 的 ``pending`` 占位。
 
     命令结束、取消或被撤销时 part 都会离开这两种状态，迟到的块因此自然丢弃；``seq`` 另外挡住重复帧。
+    卡片输出只保留最近一段，规则与终态展示数据同源（``trim_output_window``）；终态展示数据到达后
+    整体覆盖实时预览。
     """
 
     data = event.data
@@ -70,12 +73,12 @@ def _plan_terminal_output(
 
     display_data = part.get("display_data")
     if display_data is None:
+        kept, dropped = trim_output_window(data.text)
+        first: dict[str, object] = {"kind": "terminal-result", "output": kept}
+        if dropped > 0:
+            first["output_omitted_lines"] = dropped
         mutations: list[ConversationStateMutation] = [
-            ConversationStateMutation(
-                "set",
-                (*base, "display_data"),
-                {"kind": "terminal-result", "output": data.text},
-            )
+            ConversationStateMutation("set", (*base, "display_data"), first)
         ]
     elif display_data.get("kind") != "terminal-result":
         return []
@@ -83,14 +86,34 @@ def _plan_terminal_output(
         mutations = []
         current_output = display_data.get("output")
         if not isinstance(current_output, str):
+            kept, dropped = trim_output_window(data.text)
             mutations.append(
-                ConversationStateMutation("set", (*base, "display_data", "output"), data.text)
+                ConversationStateMutation("set", (*base, "display_data", "output"), kept)
             )
-        elif data.text:
-            mutations.append(
-                ConversationStateMutation(
-                    "append-text", (*base, "display_data", "output"), data.text
+            if dropped > 0:
+                mutations.append(
+                    ConversationStateMutation(
+                        "set", (*base, "display_data", "output_omitted_lines"), dropped
+                    )
                 )
-            )
+        elif data.text:
+            kept, dropped = trim_output_window(current_output + data.text)
+            if dropped == 0:
+                mutations.append(
+                    ConversationStateMutation(
+                        "append-text", (*base, "display_data", "output"), data.text
+                    )
+                )
+            else:
+                previous = display_data.get("output_omitted_lines")
+                omitted = (previous if isinstance(previous, int) else 0) + dropped
+                mutations.append(
+                    ConversationStateMutation("set", (*base, "display_data", "output"), kept)
+                )
+                mutations.append(
+                    ConversationStateMutation(
+                        "set", (*base, "display_data", "output_omitted_lines"), omitted
+                    )
+                )
     mutations.append(ConversationStateMutation("set", (*base, "terminal_output_seq"), event.seq))
     return mutations

@@ -10,8 +10,12 @@
 为避免循环依赖，先按「最大可能位数」渲染标记取保守上界，再据此分配头尾预算；预算连标记都
 装不下时退化为「只保留裁到预算内的标记」。
 
-边界：截断只发生在模型通道。落盘 artifact 与 ``display_data``（客户端展示）都保持完整原文，
-见 ``ToolObservationBudget`` 与 ``tool_ui_display_contract.md``。
+边界：截断只发生在模型通道。模型通道落盘的是完整正文（终端命令是整理后、不含控制序列的全文，
+由 ``CommandOutput`` 边跑边写）；``display_data`` 不归这里截断（终端卡片只保留最近一段，见
+``core/tool/terminal_output_window.py``）。
+
+头尾算法的唯一一份实现是 :func:`fit_head_tail`：``CommandOutput`` 溢出后手里只有头尾两段，与
+从这里裁一整段正文共用同一套切口与标记规则。
 """
 
 from __future__ import annotations
@@ -61,6 +65,57 @@ def _render_truncation_marker(
         f"\n\n... [output truncated: omitted {omitted_chars} of {total_chars} characters "
         f"({omitted_lines} lines); {location}] ...\n\n"
     )
+
+
+def fit_head_tail(
+    head: str,
+    tail: str,
+    *,
+    total_chars: int,
+    total_lines: int,
+    artifact_path: str,
+    max_chars: int,
+) -> str:
+    """从全文的前缀 ``head`` 与后缀 ``tail`` 里取「头 + 截断标记 + 尾」，总长不超过 ``max_chars``。
+
+    调用方保证 ``head`` 至少有 ``max_chars`` 个字符或就是全文，``tail`` 同理；因此两个切片不会
+    重叠。切口回退/前推到整行边界，避免留下半行；标记长度与省略量互相依赖，所以先用最大位数渲染
+    保守上界。
+
+    参数:
+        head: 全文的前缀（可以就是全文）。
+        tail: 全文的后缀（可以就是全文）。
+        total_chars: 全文总字符数。
+        total_lines: 全文总行数（按 ``\n`` 计）。
+        artifact_path: 完整正文的 artifact 路径，供标记引用；为空时说明未落盘。
+        max_chars: 「头 + 标记 + 尾」的总长度上限。
+
+    异常:
+        无。
+    """
+
+    digits = len(str(total_chars))
+    marker_upper_bound = _render_truncation_marker(
+        total_chars, 10**digits - 1, 10**digits - 1, artifact_path
+    )
+    if max_chars <= len(marker_upper_bound):
+        # 预算连标记都装不下：退化为只保留标记本身（裁到预算内），不保留正文。
+        return _render_truncation_marker(total_chars, total_chars, total_lines, artifact_path)[
+            :max_chars
+        ]
+
+    budget = max_chars - len(marker_upper_bound)
+    head_len = min(budget, max(0, int(budget * _HEAD_BUDGET_RATIO)))
+    tail_len = budget - head_len
+    head_part = _snap_head_to_line_end(head[:head_len])
+    tail_part = _snap_tail_to_line_start(tail[-tail_len:]) if tail_len and tail else ""
+    marker = _render_truncation_marker(
+        total_chars,
+        total_chars - len(head_part) - len(tail_part),
+        total_lines - head_part.count("\n") - tail_part.count("\n"),
+        artifact_path,
+    )
+    return head_part + marker + tail_part
 
 
 def _snap_head_to_line_end(head: str) -> str:
@@ -173,31 +228,14 @@ class ToolOutputBudget:
             无（纯字符串处理）。
         """
 
-        max_chars = self._max_chars
-        total = len(content)
-        total_lines = content.count("\n")
-        digits = len(str(total))
-        # 标记里同时含省略字符数与省略行数，二者都不超过 total；用最大位数占位渲染出标记
-        # 长度的保守上界，避免「标记长度 ↔ 省略量」的循环依赖。
-        marker_upper_bound = _render_truncation_marker(
-            total, 10**digits - 1, 10**digits - 1, artifact_path
+        return fit_head_tail(
+            content,
+            content,
+            total_chars=len(content),
+            total_lines=content.count("\n"),
+            artifact_path=artifact_path,
+            max_chars=self._max_chars,
         )
-        if max_chars <= len(marker_upper_bound):
-            # 预算连标记都装不下：退化为只保留标记本身（裁到预算内），不保留正文。
-            return _render_truncation_marker(total, total, total_lines, artifact_path)[:max_chars]
-
-        budget = max_chars - len(marker_upper_bound)
-        head_len = min(budget, max(0, int(budget * _HEAD_BUDGET_RATIO)))
-        tail_len = budget - head_len
-        head = _snap_head_to_line_end(content[:head_len])
-        tail = _snap_tail_to_line_start(content[total - tail_len :]) if tail_len else ""
-        marker = _render_truncation_marker(
-            total,
-            total - len(head) - len(tail),
-            total_lines - head.count("\n") - tail.count("\n"),
-            artifact_path,
-        )
-        return head + marker + tail
 
     def _write_artifact(
         self,

@@ -60,7 +60,7 @@ function joined(...parts: (string | null)[]): string | null {
 }
 
 const path = (args: ToolArgs) => str(args.path);
-const sessionId = (args: ToolArgs) => str(args.session_id);
+const terminalId = (args: ToolArgs) => str(args.terminal_id);
 const taskRef = (args: ToolArgs) => (typeof args.task_id === "number" ? `#${args.task_id}` : null);
 
 const PATCH_FILE_HEADER = /^diff --git a\/(\S+) b\//gm;
@@ -72,9 +72,9 @@ function patchTargets(args: ToolArgs): string | null {
   return withMore(paths);
 }
 
-/** 填入终端：`会话 · 要填入的一行命令`；命令参数还没到时只有会话。 */
+/** 填入终端：`终端 · 要填入的一行命令`；命令参数还没到时只有终端。 */
 function terminalInput(args: ToolArgs): string | null {
-  const id = sessionId(args);
+  const id = terminalId(args);
   return joined(id, " · ", str(args.command)) ?? id;
 }
 
@@ -123,8 +123,9 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   move_file: { verb: "移动文件", icon: "file-symlink", target: (args) => joined(str(args.source_path), " → ", str(args.destination_path)) },
   execute_terminal: { verb: "执行命令", icon: "terminal" },
   terminal_list: { verb: "列出终端", icon: "terminal" },
-  terminal_read: { verb: "读取终端", icon: "terminal", target: sessionId },
+  terminal_read: { verb: "读取终端", icon: "terminal", target: terminalId },
   terminal_write: { verb: "填入终端", icon: "terminal", target: terminalInput },
+  terminal_stop: { verb: "停止命令", icon: "x", target: terminalId },
   browser_navigate: { verb: "打开网页", icon: "globe", target: (args) => str(args.url) ?? str(args.action) },
   browser_snapshot: { verb: "读取网页", icon: "globe", target: (args) => str(args.tab) },
   browser_act: { verb: "操作网页", icon: "globe", target: browserActTarget },

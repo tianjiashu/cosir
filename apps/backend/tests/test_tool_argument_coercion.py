@@ -21,12 +21,11 @@ from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
 from app.core.tool.multi_agent.args.task_status_args import TaskStatusArgs
 from app.core.tool.validation.argument_coercion import coerce_tool_arguments
 from app.core.tool.validation.arguments import validate_tool_arguments
-from app.tools.tool_models import ListDirectoryArgs
-from app.tools.tool_models.execute_terminal_args import (
+from app.tools.tool_models import ListDirectoryArgs, TerminalReadArgs
+from app.tools.tool_models.terminal.execute_terminal_args import (
     MacExecuteTerminalArgs,
     WindowsExecuteTerminalArgs,
 )
-from app.tools.tool_models.terminal_tools_args import TerminalReadArgs
 
 
 class _IntOrStrModel(BaseModel):

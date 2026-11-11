@@ -21,7 +21,10 @@ from app.core.workflow.message_queue.message_bodies.notice import NoticeBody
 
 # 准入通知的固定前缀：通知文本会成为 canonical 历史的一行，前缀同时充当稳定标识。
 _TOOL_NOTICE_PREFIX = "Tool availability notice:"
-_USER_STOPPED = "The user stopped your previous turn before it finished."
+_USER_STOPPED = (
+    "The user stopped your previous turn before it finished. Background work you started keeps "
+    "running and its results will still arrive."
+)
 
 
 def drive_notices(rc: RuntimeContext, context: RuntimeMessageContextManager) -> list[NoticeBody]:

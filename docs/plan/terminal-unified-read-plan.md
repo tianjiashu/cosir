@@ -1,6 +1,6 @@
 # 终端二期：后台命令并入终端读取
 
-> 状态：2026-11-10 实施方案，待执行（同日补入命令输出封顶，见 S1 与 Q6）。主设计会话调研定稿，交给执行者（没有讨论上下文）按本文实施。
+> 状态：2026-11-10 已实施（同日补入命令输出封顶，见 S1 与 Q6）。验收修订，代码为准、本文手册不再回改：`CommandOutput` 的 tail 从第一行起维护、由创建者（`execute_terminal`）封存、不再自己打日志（写盘失败经 `log_error` 并入 `terminal_command_finished`）；`output_normalizer` 在 `tool_handler/terminal/`；来源结束时等待按已成立的条件或 `<kind>_ended` 收尾；`terminal_stop` 复用 `find_terminal`；列表计数键为 `terminal_count`。
 > 修订经过：11-10 上午的初稿（新增 `read_command_output` / `stop_command`）已作废，本稿取代它，原文件 `execute-terminal-read-stop-plan.md` 改名为本文。
 > 上游：[`terminal-ownership-redesign.md`](terminal-ownership-redesign.md) 二期；一期已落地（[`terminal-agent-read-prefill-plan.md`](terminal-agent-read-prefill-plan.md)，提交 `68399308`）。也是 [`terminal-gap-assessment.md`](terminal-gap-assessment.md) §3 T3 / T4 的定稿。
 > 不在范围：沙箱、权限、「请你执行」、Agent 往运行中的命令输入（stdin / TTY）。

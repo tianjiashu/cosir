@@ -20,9 +20,9 @@ from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
 from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 from app.tools.tool_handler.mcp_tool import MCPTool
+from app.tools.tool_models import TerminalWriteArgs
 from app.tools.tool_models.mcp_args import MCPArgs
 from app.tools.tool_models.read_file_args import ReadFileArgs
-from app.tools.tool_models.terminal_tools_args import TerminalWriteArgs
 
 
 def _assert_strict_schema(schema):

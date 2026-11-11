@@ -12,7 +12,7 @@ import pytest
 from pydantic import BaseModel
 
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
-from app.tools.tool_models.execute_terminal_args import (
+from app.tools.tool_models.terminal.execute_terminal_args import (
     MacExecuteTerminalArgs,
     MacExecuteTerminalShell,
     WindowsExecuteTerminalArgs,

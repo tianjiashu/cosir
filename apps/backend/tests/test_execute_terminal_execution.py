@@ -271,3 +271,91 @@ def test_same_tool_instance_keeps_overlapping_calls_independent(
         second.stop()
         result.result(timeout=2)
         second.join()
+
+
+class _NoisyCommand:
+    """立即结束、带大量输出的后端：只为模型正文的预算口径。"""
+
+    def __init__(self, text: str, result: ExecutionResult) -> None:
+        self.text, self.result = text, result
+
+    def execute(self, _command, _cwd, _timeout, output, **_kwargs) -> ExecutionResult:
+        output.feed(self.text.encode())
+        output.finish()
+        return self.result
+
+    def stop(self) -> None:
+        pass
+
+
+def _lines_totalling(chars: int) -> str:
+    line = "x" * 39 + "\n"
+    return line * (chars // len(line))
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        ExecutionResult(end="exited", exit_code=1),
+        ExecutionResult(end="timed_out"),
+        ExecutionResult(end="worker_failed", failure="the terminal worker stopped unexpectedly"),
+    ],
+    ids=lambda result: result.end,
+)
+@pytest.mark.parametrize(
+    "output_chars",
+    [
+        ExecuteTerminalTool.model_output_budget() - 40,  # 刚好不溢出
+        ExecuteTerminalTool.model_output_budget() + 40,  # 刚好溢出
+        200_000,  # 远超预算
+    ],
+)
+@pytest.mark.parametrize("background", [False, True])
+def test_model_text_fits_the_channel_once_whatever_the_ending(
+    tmp_path, monkeypatch, delivered, result, output_chars, background
+):
+    """目的：执行器的通用预算对本工具恒为空操作。潜在缺陷：结局提示在裁剪之后才追加，正文越过上限，
+    通用预算再截一次、切掉中段指向完整日志的标记，并另写一份截断后的 artifact。"""
+    from app.config.constant import Constant
+    from app.core.tool.execute.tool_output_budget import ToolOutputBudget
+
+    text = _lines_totalling(output_chars)
+    monkeypatch.setattr(
+        terminal_module, "LocalExecutionBackend", lambda: _NoisyCommand(text, result)
+    )
+    monkeypatch.setattr(terminal_module.LiveOutputChannel, "open", lambda _: None)
+    context = ToolExecutionContext(
+        call_intent="noisy", task_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
+        step_id="step-1", tool_call_id="call-1",
+    )
+    try:
+        observation = ExecuteTerminalTool().execute(
+            command="noisy", background=background, execution_context=context
+        )
+        if background:
+            deadline = time.monotonic() + 2
+            while not delivered:
+                assert time.monotonic() < deadline, "not delivered"
+                time.sleep(0.01)
+            content = str(delivered[0][1]["output"])
+        else:
+            content = observation.content or ""
+            assert ToolOutputBudget().apply(observation, context) is observation
+    finally:
+        background_registry.drop_task(1)
+
+    assert len(content) <= Constant.Tools.MAX_OUTPUT_CHARS
+    assert content.startswith(result.end_marker())
+    artifacts = tmp_path / ".cosir" / "tool-artifacts"
+    overflowed = output_chars > ExecuteTerminalTool.model_output_budget()
+    if overflowed:
+        [log] = list(artifacts.iterdir())  # 只有命令自己的完整日志，没有兜底写的副本
+        assert log.read_text(encoding="utf-8") == text
+        assert content.count("[output truncated:") == 1
+        assert log.relative_to(tmp_path).as_posix() in content
+    else:
+        assert not artifacts.exists()
+        assert text in content
+    hint = terminal_module._END_HINTS.get(result.end)
+    if hint is not None:
+        assert content.endswith(hint)

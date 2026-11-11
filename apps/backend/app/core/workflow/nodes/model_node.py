@@ -40,6 +40,8 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     取消检查分三段：进入本步之前由 prepare_input 检查并落定（遇取消不取 mailbox，取消不会吞掉排队
     消息）；上下文加载后、开请求前在这里再查一次（加载含附件读取，窗口不可忽略，漏查会白发一次模型
     请求）；请求期间由流式读取边界检查。本节点检出的取消统一在 ``except RunStopped`` 里落定。
+    流结束到响应提交（``include_in_context=True``）之间预览过的调用不在上下文里，RunDriver 的失败
+    收尾看不到，这段内的失败由本节点收敛为 cancelled；提交之后的失败归 RunDriver 按上下文补结果。
     调用 Run 独占的 SDK 模型，逐帧替换持久化响应，结束后纳入上下文；部分输出留作展示，
     不进入模型上下文或工具执行。工具调用只按 id 与注册名过滤，参数交 tools；无保留调用时，
     有完成原因时落定 Run（后台工作属于 Task，不等它们：结论稍后到达时唤醒或开出新 Run）；缺少完成原因时，
@@ -78,117 +80,122 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     # SDK 快照负责聚合；context 只保存请求正文副本和独立响应元数据。
     aggregated_message: ParsedChatCompletionSnapshot | None = None
 
+    # 两层边界：内层是流的生命周期（取消在流收口内落定，正文与意图在任何出口都先 finish）；
+    # 外层是「响应提交前」——调用只在流里预览过、还没随响应进上下文，RunDriver 的失败收尾看不到，
+    # 这段内的任何失败都由这里写成事实。提交之后的失败由 RunDriver 按上下文补结果。
     try:
-        # 加载上下文期间到达的取消：不开模型请求，走下方同一个取消落定分支。
-        if rc.is_cancelled():
-            raise RunStopped()
-        parts.start()
-        async with aclosing(model.stream(messages)) as chunks:
-            async for event in chunks:
-                if rc.is_cancelled():
-                    raise RunStopped()
-                aggregated_message = event.snapshot
-                response = _message_context().save_model_response(
-                    aggregated_message,
-                    include_in_context=False,
-                    registered_tool_names=registered_tool_names,
-                )
-
-                delta = event.chunk.choices[0].delta if event.chunk.choices else None
-                reasoning = (
-                    (delta.model_extra or {}).get(rc.thinking_channel)
-                    if delta is not None and rc.thinking_channel
-                    else None
-                )
-                # 工具预览使用完整快照里的调用身份；参数只在流结束后解析一次。
-                raw_tool_calls: list[ParsedFunctionToolCall] = (
-                    aggregated_message.choices[0].message.tool_calls or []
-                )
-                parts.receive(
-                    source_sequence=response.sequence,
-                    turn=response.turn,
-                    text=delta.content if delta else None,
-                    reasoning=bool(reasoning),
-                    tool_delta=bool(delta and delta.tool_calls),
-                    tool_calls=raw_tool_calls,
-                )
-            # 最后一帧之后仍可能收到取消信号，进入完成判定前再检查一次。
+        try:
+            # 加载上下文期间到达的取消：不开模型请求，走下方同一个取消落定分支。
             if rc.is_cancelled():
                 raise RunStopped()
-        if aggregated_message is None:
-            raise RuntimeError("模型流没有产出响应")
-        # 最终快照是调用身份的权威集合：在 finish 收口前补记最后一帧才完整的身份。只在流正常
-        # 结束时做；取消路径已由 parts.cancel() 收敛，失败路径没有可信快照。
-        parts.tool_call(aggregated_message.choices[0].message.tool_calls or [])
-    except RunStopped:
+            parts.start()
+            async with aclosing(model.stream(messages)) as chunks:
+                async for event in chunks:
+                    if rc.is_cancelled():
+                        raise RunStopped()
+                    aggregated_message = event.snapshot
+                    response = _message_context().save_model_response(
+                        aggregated_message,
+                        include_in_context=False,
+                        registered_tool_names=registered_tool_names,
+                    )
+
+                    delta = event.chunk.choices[0].delta if event.chunk.choices else None
+                    reasoning = (
+                        (delta.model_extra or {}).get(rc.thinking_channel)
+                        if delta is not None and rc.thinking_channel
+                        else None
+                    )
+                    # 工具预览使用完整快照里的调用身份；参数只在流结束后解析一次。
+                    raw_tool_calls: list[ParsedFunctionToolCall] = (
+                        aggregated_message.choices[0].message.tool_calls or []
+                    )
+                    parts.receive(
+                        source_sequence=response.sequence,
+                        turn=response.turn,
+                        text=delta.content if delta else None,
+                        reasoning=bool(reasoning),
+                        tool_delta=bool(delta and delta.tool_calls),
+                        tool_calls=raw_tool_calls,
+                    )
+                # 最后一帧之后仍可能收到取消信号，进入完成判定前再检查一次。
+                if rc.is_cancelled():
+                    raise RunStopped()
+            if aggregated_message is None:
+                raise RuntimeError("模型流没有产出响应")
+            # 最终快照是调用身份的权威集合：在 finish 收口前补记最后一帧才完整的身份。只在流正常
+            # 结束时做；取消路径已由 parts.cancel() 收敛，失败路径没有可信快照。
+            parts.tool_call(aggregated_message.choices[0].message.tool_calls or [])
+        except RunStopped:
+            log.info(
+                "model_node_cancelled_usage_summary",
+                extra={
+                    "msg": "模型调用已关闭，保存中断输出并收口工具预览",
+                    "data": {
+                        "task_id": task_id,
+                        "run_id": run_id,
+                        "step_id": step_id,
+                        "usage": rc.usage_stats.to_dict(),
+                    },
+                },
+            )
+            # 取消时工具 part 的收敛由状态机按「本请求已投影的调用」完成，不再查询生命周期记录。
+            parts.cancel()
+            service_depends.get_conversation_run_ledger().transition(
+                run_id,
+                RunTransition.CANCEL,
+                end_reason=rc.cancel_end_reason(),
+                usage_stats=rc.usage_stats,
+            )
+            raise
+        finally:
+            parts.finish()
+        choice = aggregated_message.choices[0]
+        # SDK 快照的静态类型只列完整原因，流被截断时运行时仍可能为 None。
+        finish_reason = cast(str | None, choice.finish_reason)
+        ai_message: ChatCompletionAssistantMessageParam = assistant_message(
+            choice.message, registered_tool_names
+        )
+        calls = [
+            cast(ChatCompletionMessageFunctionToolCallParam, call)
+            for call in ai_message.get("tool_calls") or []
+        ]
+
+        if not calls and finish_reason is None:
+            parts.cancel()
+            _message_context().abandon_model_response()
+            rc.mailbox.notify(
+                NoticeBody(
+                    content="Please continue the unfinished task.",
+                    notice_kind="model_continuation",
+                )
+            )
+            return route_state(step_count, ReactRoute.PREPARE_INPUT)
+
+        usage = usage_from_response(aggregated_message.usage)
+        rc.usage_stats.add_usage_metadata(usage)
         log.info(
-            "model_node_cancelled_usage_summary",
+            "model_node_completed",
             extra={
-                "msg": "模型调用已关闭，保存中断输出并收口工具预览",
+                "msg": f"模型产出完成，step_id={step_id}",
                 "data": {
-                    "task_id": task_id,
-                    "run_id": run_id,
                     "step_id": step_id,
-                    "usage": rc.usage_stats.to_dict(),
+                    "output_text_length": len(content_to_text(ai_message.get("content"))),
+                    "finish_reason": finish_reason,
                 },
             },
         )
-        # 取消时工具 part 的收敛由状态机按「本请求已投影的调用」完成，不再查询生命周期记录。
-        parts.cancel()
-        service_depends.get_conversation_run_ledger().transition(
-            run_id,
-            RunTransition.CANCEL,
-            end_reason=rc.cancel_end_reason(),
-            usage_stats=rc.usage_stats,
+
+        response = _message_context().save_model_response(
+            aggregated_message,
+            include_in_context=True,
+            registered_tool_names=registered_tool_names,
         )
+    except RunStopped:
         raise
     except Exception:
-        # 流中失败：已预览的调用不会再有结果，和取消一样写成事实；Run 的失败由 RunDriver 落定。
         parts.cancel()
         raise
-    finally:
-        parts.finish()
-    choice = aggregated_message.choices[0]
-    # SDK 快照的静态类型只列完整原因，流被截断时运行时仍可能为 None。
-    finish_reason = cast(str | None, choice.finish_reason)
-    ai_message: ChatCompletionAssistantMessageParam = assistant_message(
-        choice.message, registered_tool_names
-    )
-    calls = [
-        cast(ChatCompletionMessageFunctionToolCallParam, call)
-        for call in ai_message.get("tool_calls") or []
-    ]
-
-    if not calls and finish_reason is None:
-        parts.cancel()
-        _message_context().abandon_model_response()
-        rc.mailbox.notify(
-            NoticeBody(
-                content="Please continue the unfinished task.",
-                notice_kind="model_continuation",
-            )
-        )
-        return route_state(step_count, ReactRoute.PREPARE_INPUT)
-
-    usage = usage_from_response(aggregated_message.usage)
-    rc.usage_stats.add_usage_metadata(usage)
-    log.info(
-        "model_node_completed",
-        extra={
-            "msg": f"模型产出完成，step_id={step_id}",
-            "data": {
-                "step_id": step_id,
-                "output_text_length": len(content_to_text(ai_message.get("content"))),
-                "finish_reason": finish_reason,
-            },
-        },
-    )
-
-    response = _message_context().save_model_response(
-        aggregated_message,
-        include_in_context=True,
-        registered_tool_names=registered_tool_names,
-    )
 
     if calls:
         # 有任意有效工具调用都进 tools 节点；参数是否合法由执行边界决定，失败由 observe 结算；

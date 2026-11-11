@@ -218,7 +218,7 @@ def test_read_pattern_returns_only_matching_lines_with_continuation(monkeypatch,
 def test_read_pattern_rejects_tail_and_invalid_regex() -> None:
     from pydantic import ValidationError
 
-    from app.tools.tool_models.terminal_tools_args import TerminalReadArgs
+    from app.tools.tool_models import TerminalReadArgs
 
     with pytest.raises(ValidationError, match="tail"):
         TerminalReadArgs.model_validate({"terminal_id": "s", "pattern": "x", "tail": 5})
@@ -405,7 +405,7 @@ def test_command_started_by_the_user_after_a_prefill(monkeypatch, tmp_path: Path
 def test_write_arguments_reject_line_breaks_and_control_characters() -> None:
     from pydantic import ValidationError
 
-    from app.tools.tool_models.terminal_tools_args import TerminalWriteArgs
+    from app.tools.tool_models import TerminalWriteArgs
 
     assert TerminalWriteArgs(terminal_id="s", command="echo hi").command == "echo hi"
     for bad in ["a\nb", "a\rb", "a\x1bb", "a\x03b"]:

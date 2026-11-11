@@ -71,7 +71,11 @@ def _terminal_output_update(
 
 def test_command_output_streams_each_chunk_as_it_arrives(tmp_path: Path) -> None:
     emitted: list[str] = []
-    output = CommandOutput(workspace_root=tmp_path, on_text=emitted.append)
+    output = CommandOutput(
+        workspace_root=tmp_path,
+        model_budget_chars=Constant.Tools.MAX_OUTPUT_CHARS,
+        on_text=emitted.append,
+    )
 
     output.feed(b"starting now\n")
     assert "".join(emitted) == "starting now\n"
@@ -86,7 +90,11 @@ def test_command_output_display_keeps_raw_text_without_character_budget(tmp_path
     """卡片通道保留原始文本；本用例的长度远小于卡片窗口，窗口裁剪另有单测。"""
     expected = "x" * 200_001
     emitted: list[str] = []
-    output = CommandOutput(workspace_root=tmp_path, on_text=emitted.append)
+    output = CommandOutput(
+        workspace_root=tmp_path,
+        model_budget_chars=Constant.Tools.MAX_OUTPUT_CHARS,
+        on_text=emitted.append,
+    )
 
     output.feed(expected.encode("utf-8"))
 
@@ -99,7 +107,11 @@ def test_finished_command_output_freezes_snapshot_and_closes_live_sink(tmp_path:
     """封存之后迟到的块不再收集也不再旁路，结果与实时视图停在同一处。"""
 
     emitted: list[str] = []
-    output = CommandOutput(workspace_root=tmp_path, on_text=emitted.append)
+    output = CommandOutput(
+        workspace_root=tmp_path,
+        model_budget_chars=Constant.Tools.MAX_OUTPUT_CHARS,
+        on_text=emitted.append,
+    )
     output.feed(b"starting now\n")
 
     output.finish()
@@ -113,7 +125,11 @@ def test_command_output_preserves_ansi_and_sensitive_text_in_stream_and_display(
     tmp_path: Path,
 ) -> None:
     emitted: list[str] = []
-    output = CommandOutput(workspace_root=tmp_path, on_text=emitted.append)
+    output = CommandOutput(
+        workspace_root=tmp_path,
+        model_budget_chars=Constant.Tools.MAX_OUTPUT_CHARS,
+        on_text=emitted.append,
+    )
 
     for chunk in [
         b"hello \xe4",

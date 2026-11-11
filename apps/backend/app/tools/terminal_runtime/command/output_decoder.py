@@ -1,16 +1,16 @@
-"""终端命令输出的解码与完整收集。
+"""终端命令输出字节的解码：在字节块边界保留编码状态，按 UTF-8、GBK、宿主机编码顺序尝试。
 
-本模块只负责把执行后端交来的输出字节块解码成文本，保留完整的已收到文本，并可选旁路发送原样
-运行期文本片段。命令的启动、超时与进程清理由执行后端（经 Terminal Worker）负责。
+命令输出是字节流，按块到达；多字节字符可能被块边界切开。解码器只把字节变成文本，不做收集、
+整理与截断（那些归 ``command_output.CommandOutput``）。
 """
+
+from __future__ import annotations
 
 import codecs
 import locale
-from collections.abc import Callable
-from threading import RLock
 
 
-class _IncrementalOutputDecoder:
+class IncrementalOutputDecoder:
     """在字节块边界保留编码状态，按 UTF-8、GBK、宿主机编码顺序解码。"""
 
     def __init__(self) -> None:
@@ -72,48 +72,3 @@ class _IncrementalOutputDecoder:
             return prefix + self._decoder.decode(undecided, final=False)
         self._pending.clear()
         return prefix + undecided.decode("utf-8", errors="replace")
-
-
-class _OutputCollector:
-    """按到达顺序收下合并流的字节块，保留完整已收文本并旁路回传原始增量。
-
-    终端 UI 需要把控制字符交给终端模拟器解释，因此这里不做 head/tail 截断、预算裁剪或
-    插入截断标记；模型上下文的长度控制由 ``ToolOutputBudget`` 在 handler 返回后负责。
-    ``sink`` 的契约是不抛异常（实时通道自行吸收投递故障），这里不包裹。
-    """
-
-    def __init__(self, sink: Callable[[str], None] | None = None) -> None:
-        self._chunks: list[str] = []
-        self._sink = sink
-        self._sealed = False
-        self._state_lock = RLock()
-        self._decoder = _IncrementalOutputDecoder()
-
-    def feed(self, raw_chunk: bytes) -> None:
-        """收下一块输出（worker 读线程里调用）；封存后丢弃。"""
-        with self._state_lock:
-            if not self._sealed:
-                self._accept(self._decoder.decode(raw_chunk))
-
-    def finish(self) -> str:
-        """冲出解码器尾部、封存并返回完整输出。
-
-        封存之后迟到的块（连接关闭时还在路上的帧）不再收集也不再旁路，返回给调用方的结果与
-        实时视图停在同一处，且不追加任何伪造的截断标记。
-        """
-        with self._state_lock:
-            if not self._sealed:
-                self._accept(self._decoder.decode(b"", final=True))
-                self._sealed = True
-            return "".join(self._chunks)
-
-    def _accept(self, text: str) -> None:
-        """把解码文本加入完整缓存并旁路发送；调用方持锁。"""
-        if not text:
-            return
-        self._chunks.append(text)
-        if self._sink is not None:
-            self._sink(text)
-
-
-__all__ = ["_OutputCollector"]

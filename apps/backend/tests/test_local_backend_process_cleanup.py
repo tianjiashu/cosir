@@ -95,7 +95,7 @@ def test_stop_before_the_command_starts_never_starts_it(tmp_path: Path) -> None:
     backend = LocalExecutionBackend()
     backend.stop()
 
-    output = _CommandOutput(workspace_root=tmp_path)
+    output = _CommandOutput(workspace_root=tmp_path, model_budget_chars=20_000)
     result = backend.execute(f"touch {marker}", str(tmp_path), 30, output)
 
     assert result.end == "cancelled"
@@ -108,7 +108,7 @@ def test_a_stop_after_the_command_exited_keeps_its_exit(tmp_path: Path) -> None:
     backend = LocalExecutionBackend()
     threading.Timer(0.3, backend.stop).start()
 
-    output = _CommandOutput(workspace_root=tmp_path)
+    output = _CommandOutput(workspace_root=tmp_path, model_budget_chars=20_000)
     result = backend.execute("(trap '' HUP TERM; exec sleep 5) & echo done", str(tmp_path), 30, output)
     output.finish()
 
@@ -136,7 +136,7 @@ import time
 from pathlib import Path
 from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
 from app.tools.terminal_runtime.command.command_output import CommandOutput
-output = CommandOutput(workspace_root=Path({str(tmp_path)!r}))
+output = CommandOutput(workspace_root=Path({str(tmp_path)!r}), model_budget_chars=20_000)
 LocalExecutionBackend().execute(
     "trap '' HUP TERM; sleep 60 & echo $! > {job_file}; wait", {str(tmp_path)!r}, 120, output
 )

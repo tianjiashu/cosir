@@ -4,7 +4,11 @@
 结论；登记表只记录「结论回投给谁、谁在等、撤销时通知谁」，不持有工作本身的执行状态——工作的
 生命周期归各执行单元（终端 runtime 等），登记表不是任何一种 Run 的第二套状态机。
 
-为什么放在 core：``wait_messages`` 判定是否还有可等待的工作、``TaskActor`` 在 Run 停止时撤销条目，
+归属：后台工作属于 Task，不属于登记它的 Run——Run 可以先结束，结论稍后到达时照常唤醒或开出新 Run；
+``wait_messages`` 等的是整个 Task 的后台工作，Task「无事可做」（``TaskActor.wait_quiescent``）也要等
+它们全部交付。用户停止 Task 不碰它们（只打断当前驱动）；上游收回、删除与关闭撤销 Task 的全部条目。
+
+为什么放在 core：``wait_messages`` 判定是否还有可等待的工作、``TaskActor`` 判定静止与收回时撤销条目，
 都在 core；而具体的工作在 ``app.tools`` 一侧实现。依赖方向只允许 ``app.tools → core``，所以由
 执行单元显式 ``register`` 并传入撤销回调（依赖倒置），core 不 import 工具层。
 
@@ -15,12 +19,13 @@
 状态」），占位行的结算由调用方完成，登记表不碰 context。
 
 生命周期（每条恰好结束一次，由 ``_entries`` 的 pop 保证）：
-- 完成：执行单元产出结论时调用 ``complete``，出队与投递在同一入口（pop-once 防重复投递）；Task
-  正在停止时 ``complete`` 不出队，条目由随后的撤销结束（结局只有「投递」与「撤销」两种）；前台
-  条目正常结束时调用 ``settle_foreground``，与 ``detach`` 在同一把锁内裁决先后；
-- 撤销：Run 停止（用户停止、父 Task 停止）时 ``TaskCancellation`` 调用 ``drop_task``，Task 删除
-  提交后 ``TaskService`` 同样调用，撤销该 Task 的全部条目（含更早 Run 登记的）并逐条调用撤销回调，
-  之后到达的 ``complete`` 不投递；用户单停经 ``request_user_cancel``，编辑撤回经 ``withdraw``；
+- 完成：执行单元产出结论时调用 ``complete``，出队与投递在同一入口（pop-once 防重复投递，结局只有
+  「投递」与「撤销」两种）；前台条目正常结束时调用 ``settle_foreground``，与 ``detach`` 在同一把锁内
+  裁决先后；
+- 撤销：上游收回 Task 时 ``TaskRecall`` 调用 ``drop_task``，Task 删除提交后 ``TaskService`` 同样调用，
+  撤销该 Task 的全部条目（含更早 Run 登记的）并逐条调用撤销回调，之后到达的 ``complete`` 不投递；
+  ``parent`` 信号在时 ``register`` 拒收，收回之后这次驱动剩下的工具不会再留下条目。用户单停（看板的
+  逐项与全部停止）与 Agent 的 ``terminal_stop`` 同经 ``request_cancel``，编辑撤回经 ``withdraw``；
 - 关闭：后端关闭时 lifespan 在停 actor、关终端之前调用 ``close``：撤销全部条目并等在途投递落定，
   此后 ``complete`` 一律不投递。关闭期间仍在跑的后台命令被杀后会以结论回调，若不先关闭，
   这些线程会在服务依赖关闭期间写 ``task_messages``，重启后挂起的 Run 先收到过期结论再收到
@@ -122,7 +127,9 @@ class BackgroundRegistry:
         ``collect_cancelled`` 由能保证停止收尾的执行器提供：父停止在锁外取唯一结论，
         用于原占位展示结算，不投递消息；收尾时限只归执行器。
         前台等待传入 ``detached``，转后台与结算在同一把锁内裁决。
-        重复调用 ID 是装配缺陷，抛 ValueError。关闭后的登记立即通知作业退出。
+        重复调用 ID 是装配缺陷，抛 ValueError。关闭后、或 Task 正被收回（``parent`` 信号在）时的登记
+        不入表，立即通知作业退出：收回已撤销了表里的条目，被打断的驱动里还没登记完的工具不能再留下
+        工作。被拒的后台占位不会结算，由重启收尾推到「已中断」。
         """
         work = BackgroundWork(kind=kind, label=label, started_at=_now(), run_id=run_id)
         data = {
@@ -135,20 +142,27 @@ class BackgroundRegistry:
         with self._lock:
             if (task_id, tool_call_id) in self._entries:
                 raise ValueError(f"background result already registered: {tool_call_id}")
-            closed = self._closed
-            if not closed:
+            rejected: DropReason | None = (
+                "shutdown" if self._closed
+                else "parent" if cancellation_registry.reason(task_id) == "parent"
+                else None
+            )
+            if rejected is None:
                 self._entries[task_id, tool_call_id] = _Entry(
                     task_id=task_id, work=work, mode=mode, on_cancel=on_cancel,
                     after_commit=after_commit, reports_user_stop=reports_user_stop,
                     stop_requested=False, detached=detached, collect_cancelled=collect_cancelled,
                 )
                 pending = sum(entry.task_id == task_id for entry in self._entries.values())
-        if closed:
+        if rejected is not None:
             log.info(
-                "background_result_rejected_closed",
-                extra={"msg": "后端正在关闭，后台结果不登记", "data": data},
+                "background_result_rejected",
+                extra={
+                    "msg": "后端正在关闭或 Task 正被收回，后台结果不登记",
+                    "data": {**data, "reason": rejected},
+                },
             )
-            on_cancel("shutdown")
+            on_cancel(rejected)
             return work
         log.info(
             "background_result_registered",
@@ -161,7 +175,7 @@ class BackgroundRegistry:
         # 命令在 handler 通过准入后、交接作业前就可能被点名停止。登记后接过该信号，
         # 工具线程返回时会清理它；此后单停直接按活条目处理。
         if tool_call_cancellation_registry.is_cancelled(task_id, tool_call_id):
-            self.request_user_cancel(task_id, tool_call_id, driving=False)
+            self.request_cancel(task_id, tool_call_id, driving=False)
         return work
 
     def commit_start(self, task_id: int, tool_call_id: str) -> None:
@@ -174,8 +188,10 @@ class BackgroundRegistry:
         if start is not None:
             start()
 
-    def request_user_cancel(self, task_id: int, tool_call_id: str, *, driving: bool) -> bool:
-        """在与登记相同的锁里选择停止对象。作业自行报告时保留条目直到实际收尾。
+    def request_cancel(self, task_id: int, tool_call_id: str, *, driving: bool) -> bool:
+        """在与登记相同的锁里选择停止对象；用户点卡片停止与 Agent 的 ``terminal_stop`` 共用。
+
+        作业自行报告时保留条目直到实际收尾。
 
         工作还在工具线程时先打工具信号，登记会接过它；普通后台作业撤销后立即投递取消回执。
         """
@@ -235,29 +251,18 @@ class BackgroundRegistry:
         return [call_id for call_id, _ in dropped]
 
     def complete(self, task_id: int, tool_call_id: str, conclusion: BackgroundConclusion) -> bool:
-        """结束一条登记并把结论投递给它的 Task；已撤销、已完成、已关闭或 Task 正在停止时不投递，
-        返回 False。
+        """结束一条登记并把结论投递给它的 Task；已撤销、已完成或已关闭时不投递，返回 False。
 
-        出队与「在途计数」在同一把锁内：``close`` 要么先于出队（不投递），要么等这次投递落定。
-        Task 正在停止（有取消信号）时不出队：停止期间到达的结论已无人需要，条目留给执行收尾的
-        ``drop_task`` 统一撤销，占位行随撤销推到 ``cancelled``。若在这里出队再丢弃，撤销看不到它，
-        结论也不会并入，占位行就没有任何结算路径。取消信号只在有执行者时打出，且执行收尾先撤销
-        再取走信号，所以留下的条目必然被撤销。
+        出队与「在途计数」在同一把锁内：``close`` 要么先于出队（不投递），要么等这次投递落定。不看取消
+        信号：用户停止不结束后台工作，结论入队后由 loop 在执行落定后照常推进；删除中入队的结论随删除级联
+        清掉，删除没提交时留给新 actor 照常处理。收回在打信号后立即撤销，结论恰落在两步之间时仍会入队并
+        开出新 Run：窗口只有一次撤销调用，接受。
         会同步写 SQLite，调用方不得在 PTY 读线程等热路径上调用。
         """
 
         with self._lock:
             entry = self._entries.get((task_id, tool_call_id))
             if entry is None or self._closed:
-                return False
-            if cancellation_registry.is_cancelled(task_id):
-                log.info(
-                    "background_result_left_for_drop",
-                    extra={
-                        "msg": "Task 正在停止，结论不投递，条目留给撤销",
-                        "data": {"task_id": task_id, "tool_call_id": tool_call_id},
-                    },
-                )
                 return False
             self._take_for_delivery_locked(task_id, tool_call_id)
         return self._deliver(tool_call_id, entry, conclusion)
@@ -277,7 +282,7 @@ class BackgroundRegistry:
                 self._cancel_all([(tool_call_id, entry)], "user")
             if conclusion.cancel_hint is not None:
                 return report_cancelled_result(
-                    entry.task_id, tool_call_id, entry.work.kind, entry.work.run_id,
+                    entry.task_id, tool_call_id, entry.work.kind,
                     conclusion.result, conclusion.cancel_hint, conclusion.display_data,
                 )
             return deliver_background_result(
@@ -384,15 +389,26 @@ class BackgroundRegistry:
             )
             self._notify(task_id)
 
-    def pending(self, task_id: int, run_id: int) -> list[str]:
-        """返回本 Run 仍在后台执行的工作标签，供 ``wait_messages`` 判定与提示。"""
+    def pending(self, task_id: int) -> list[str]:
+        """返回 Task 仍在后台执行的工作标签（含更早 Run 登记的），供 ``wait_messages`` 判定与提示。"""
 
         with self._lock:
             return [
                 entry.work.label for entry in self._entries.values()
-                if entry.task_id == task_id and entry.work.run_id == run_id
-                and entry.mode == "background"
+                if entry.task_id == task_id and entry.mode == "background"
             ]
+
+    def has_work(self, task_id: int) -> bool:
+        """Task 还有没交付完的工作：有登记条目，或有已出队、正在写入消息队列的结论。
+
+        供 Task 静止判定：只看条目不够，结论出队到入队之间条目已不在、消息还没进队列，这时报静止会让
+        等待方读走上一次 Run 的结论。变化经 ``set_listener`` 的监听方通知（见模块说明）。
+        """
+
+        with self._lock:
+            return bool(self._delivering[task_id]) or any(
+                owner == task_id for owner, _ in self._entries
+            )
 
     def live_background(self, task_id: int) -> dict[str, BackgroundWork]:
         """Task 下还在跑的后台工作：``tool_call_id`` → 工作记录，按登记先后；前台条目不在其中。
@@ -421,7 +437,7 @@ class BackgroundRegistry:
             ]
 
     def drop_task(self, task_id: int) -> dict[str, dict[str, object] | None]:
-        """撤销 Task 的全部条目（Run 停止、Task 删除提交后调用）；回调异常记录后继续，不阻断收尾。
+        """撤销 Task 的全部条目（上游收回、Task 删除提交后调用）；回调异常记录后继续，不阻断收尾。
 
         返回需要结算后台占位的调用及最终展示（删除时占位行已不在）。
         所有作业先取消，再在锁外收集支持取消输出的作业结论；不向 Agent 投递消息。
@@ -509,22 +525,26 @@ def _now() -> str:
 
 
 def report_cancelled_result(
-    task_id: int, tool_call_id: str, kind: BackgroundKind, run_id: int | None,
+    task_id: int, tool_call_id: str, kind: BackgroundKind,
     result: dict[str, object], hint: str,
     display_data: dict[str, object] | None = None,
 ) -> bool:
-    """单项停止只唤醒工作所属的活动 Run；已经结束时直接落定历史卡。"""
+    """单项停止的回执：交给 Task 当前的活动 Run（不论是哪个 Run 登记的），但不开新 Run——用户刚停掉
+    一项工作，不该因此让 Agent 自己动起来。
+
+    Task 空闲时卡片立即落定（用户点了停止，卡片不能等到下一个 Run 才变），回执照样入队、随下一次推进
+    并入，Agent 因此知道这项工作被停了（Team 的取消结论里还有档案位置）；并入时占位已不是 ``pending``，
+    不会重复结算。"""
     from app.core.tool.background.cancel_placeholders import cancel_placeholders
     from app.service.depends import get_task_service
 
     current = get_task_service().require_current_run(task_id)
-    if current is not None and current.id == run_id and current.status in ACTIVE_RUN_STATUSES:
-        return deliver_background_result(
-            task_id, tool_call_id=tool_call_id, tool_name=kind, result=result,
-            cancel_hint=hint, wake_run_id=run_id, placeholder_display_data=display_data,
-        )
-    cancel_placeholders(task_id, [tool_call_id], hint, displays={tool_call_id: display_data})
-    return False
+    if current is None or current.status not in ACTIVE_RUN_STATUSES:
+        cancel_placeholders(task_id, [tool_call_id], hint, displays={tool_call_id: display_data})
+    return deliver_background_result(
+        task_id, tool_call_id=tool_call_id, tool_name=kind, result=result,
+        cancel_hint=hint, starts_run=False, placeholder_display_data=display_data,
+    )
 
 
 def deliver_background_result(
@@ -535,7 +555,7 @@ def deliver_background_result(
     result: dict[str, object],
     placeholder_display_data: dict[str, object] | None = None,
     cancel_hint: str | None = None,
-    wake_run_id: int | None = None,
+    starts_run: bool = True,
 ) -> bool:
     """把后台工作的结论作为 ``background_result`` 投递给 Task，返回是否已入队。
 
@@ -556,7 +576,7 @@ def deliver_background_result(
         tool_result=json.dumps(result, ensure_ascii=False),
         placeholder_display_data=placeholder_display_data,
         placeholder_status="cancelled" if cancel_hint else "completed",
-        placeholder_error=cancel_hint, wake_run_id=wake_run_id,
+        placeholder_error=cancel_hint, starts_run=starts_run,
         ended_at=_now(),
     )
     try:

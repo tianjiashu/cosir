@@ -12,8 +12,9 @@ from app.models.message_metadata import UserMessageMetadata
 class BackgroundResultBody(EnqueuedMessageBody):
     """后台工作的结论：委派子 Agent 一次 Run 的终态（``child_agent``）、后台命令和 Agent Team 的结束。
 
-    委派、fork、Team 和后台命令对原调用回投一次结论。单项取消只唤醒所属 Run；
-    整个 Run 停止或编辑撤回则放弃工作，不逐项投递。重启通知由 system_notice 承载。
+    委派、fork、Team 和后台命令对原调用回投一次结论，Task 空闲时开出新 Run（工作属于 Task，登记它的
+    Run 可能早已结束）。单项取消的回执只唤醒活动 Run、不开新 Run（Task 空闲时随下一次推进并入）；
+    上游收回、删除或编辑撤回则放弃工作，不逐项投递；用户停止 Task 不影响它们。重启通知由 system_notice 承载。
     ``tool_name`` 标明来源，``tool_result`` 是模型读到的结论。占位终态表示结论已交付或
     调用被取消；工作本身成功、失败或超时记在结论里。
     ``placeholder_display_data`` 只供结论并入时写回这次调用的后台占位卡片（终端命令的完整输出等），
@@ -37,8 +38,8 @@ class BackgroundResultBody(EnqueuedMessageBody):
     tool_call_id: str | None = None
     tool_name: str
     tool_result: str
-    # 单项取消或重启中断只为所属 Run 唤醒，不单独开启另一个 Run。
-    wake_run_id: int | None = None
+    # 单项取消的回执为 False：只唤醒挂起中的 Run，Task 空闲时不凭它开新 Run。
+    starts_run: bool = True
     placeholder_status: Literal["completed", "cancelled"] = "completed"
     placeholder_error: str | None = None
     placeholder_display_data: dict[str, object] | None = None

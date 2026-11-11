@@ -11,9 +11,9 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
+from app.core.workflow.cancel.tool_call_cancellation_registry import should_stop_call
 from app.service import depends as service_depends
-from app.tools.tool_handler.terminal_session.common import (
-    cancelled,
+from app.tools.tool_handler.terminal.tool_observation import (
     observation_result,
     with_terminal_errors,
 )
@@ -41,18 +41,19 @@ class TerminalWriteTool(HandlerBase):
 
     def execute(
         self,
-        session_id: str,
+        terminal_id: str,
         command: str,
         *,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """命令由参数边界校验；填入立即返回，用户回车与之后输出由 terminal_read 观察。"""
-        if cancelled(execution_context):
+        if should_stop_call(execution_context.task_id, execution_context.tool_call_id):
             return tool_cancelled(self.name)
 
         def action() -> ToolObservation:
+            # 填入只针对用户终端：不经 ``find_terminal``（运行中的命令不能输入）。
             runtime = service_depends.get_terminal_session_service().require(
-                session_id, execution_context.task_id
+                terminal_id, execution_context.task_id
             )
             result = runtime.prefill(
                 command,

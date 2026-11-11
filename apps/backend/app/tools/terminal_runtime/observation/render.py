@@ -12,7 +12,7 @@
 分属两套编号，模型不会把重绘中的屏幕行当作可按行号引用的历史；按 start_line 读取仍读冻结的主屏
 逻辑行。全屏程序原地重绘、不追加行，因此默认读取给整屏而不是按行窗口裁剪。
 
-纯函数，不持有状态、不做 IO：会话侧只读事实由 runtime 在会话锁内取成 ``SessionFacts`` 传入，
+纯函数，不持有状态、不做 IO：会话侧只读事实由 runtime 在会话锁内取成 ``TerminalFacts`` 传入，
 「交付后清空用户输入标注」这类写操作留在 runtime。
 """
 
@@ -24,7 +24,7 @@ from dataclasses import dataclass, replace
 from typing import Literal
 
 from app.config.constant import Constant
-from app.tools.terminal_runtime.observation import TerminalObservation
+from app.tools.terminal_runtime.observation.terminal_observation import TerminalObservation
 
 Line = tuple[int, str]
 KeepMode = Literal["both", "tail", "head"]
@@ -131,9 +131,9 @@ class LineSearch:
 
 @dataclass(frozen=True)
 class TerminalObservationResult:
-    """一次 Agent 观察（write / read）的结果：模型文本 + 展示所需的结构化事实。"""
+    """一次 Agent 观察（read / write）的结果：模型文本 + 展示所需的结构化事实。"""
 
-    session_id: str
+    terminal_id: str
     status: str
     text: str
     # 逻辑行区间；屏幕视图时为 None（屏幕行号不是可引用的行号），由 ``screen`` 标出。
@@ -145,10 +145,15 @@ class TerminalObservationResult:
 
 
 @dataclass(frozen=True)
-class SessionFacts:
-    """渲染所需的会话侧事实快照（runtime 持锁时取）；``ended`` 为已离开 starting / running。"""
+class TerminalFacts:
+    """渲染所需的终端事实快照（runtime 持锁时取）；``ended`` 为已离开 starting / running。
 
-    session_id: str
+    ``kind`` 区分来源：交互会话写 ``session``，运行中的命令写 ``command``；表头与摘要据此写
+    ``session <id>`` 或 ``command <id>``。
+    """
+
+    terminal_id: str
+    kind: Literal["session", "command"]
     status: str
     ended: bool
     end_reason: str | None
@@ -160,7 +165,7 @@ class SessionFacts:
 
 
 def render_observation(
-    facts: SessionFacts,
+    facts: TerminalFacts,
     observation: TerminalObservation,
     first: int,
     last: int,
@@ -205,7 +210,7 @@ def render_observation(
         else None
     )
     return TerminalObservationResult(
-        session_id=facts.session_id,
+        terminal_id=facts.terminal_id,
         status=facts.status,
         text="\n".join([*header, range_line, *rendered.body]),
         lines=lines,
@@ -215,8 +220,8 @@ def render_observation(
     )
 
 
-def session_state_parts(facts: SessionFacts, observation: TerminalObservation) -> list[str]:
-    """会话此刻状态的短语（shell、生命周期、在做什么、集成、cwd、全屏、输入权）。
+def terminal_state_parts(facts: TerminalFacts, observation: TerminalObservation) -> list[str]:
+    """终端此刻状态的短语（shell、生命周期、在做什么、集成、cwd、全屏、输入权）。
 
     read / write 的 header 与 terminal_list 共用这一份措辞，Agent 在两处看到的状态写法一致。
     """
@@ -257,9 +262,9 @@ def latest_command_phrase(observation: TerminalObservation) -> str | None:
     return text + (f" · output lines {output[0]}-{output[1]}" if output else " · no output")
 
 
-def render_session_summary(facts: SessionFacts, observation: TerminalObservation) -> str:
-    """terminal_list 的单会话一行：身份、当前状态与最近命令结果。"""
-    parts = [f"session {facts.session_id}", *session_state_parts(facts, observation)]
+def render_terminal_summary(facts: TerminalFacts, observation: TerminalObservation) -> str:
+    """terminal_list 的单个终端一行：身份（``session`` / ``command``）、当前状态与最近命令结果。"""
+    parts = [f"{facts.kind} {facts.terminal_id}", *terminal_state_parts(facts, observation)]
     latest = latest_command_phrase(observation)
     if latest is not None:
         parts.append(f"last {latest}")
@@ -267,12 +272,14 @@ def render_session_summary(facts: SessionFacts, observation: TerminalObservation
 
 
 def _header_lines(
-    facts: SessionFacts,
+    facts: TerminalFacts,
     observation: TerminalObservation,
     wait_result: dict[str, object] | None,
     prefilled: str | None,
 ) -> list[str]:
-    header = [" · ".join([f"session {facts.session_id}", *session_state_parts(facts, observation)])]
+    header = [
+        " · ".join([f"{facts.kind} {facts.terminal_id}", *terminal_state_parts(facts, observation)])
+    ]
     result: list[str] = []
     if prefilled is not None:
         result.append(f"input prefill `{prefilled}`")
@@ -295,7 +302,7 @@ def _header_lines(
 
 
 def _screen_range_line(
-    facts: SessionFacts, observation: TerminalObservation, rendered: RenderedLines
+    facts: TerminalFacts, observation: TerminalObservation, rendered: RenderedLines
 ) -> str:
     buffer = observation.buffer
     rows = (
@@ -314,7 +321,7 @@ def _screen_range_line(
 
 
 def _search_range_line(
-    facts: SessionFacts,
+    facts: TerminalFacts,
     observation: TerminalObservation,
     search: LineSearch,
     first: int,
@@ -337,7 +344,7 @@ def _search_range_line(
 
 
 def _range_line(
-    facts: SessionFacts, observation: TerminalObservation, rendered: RenderedLines
+    facts: TerminalFacts, observation: TerminalObservation, rendered: RenderedLines
 ) -> str:
     buffer = observation.buffer
     text = "no lines" if rendered.first is None else f"lines {rendered.first}-{rendered.last}"

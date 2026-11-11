@@ -1,20 +1,22 @@
-"""单会话的 Agent 观察事实：逻辑行缓冲 + shell 集成语义（命令边界、退出结果、cwd）。
+"""一个终端的 Agent 观察事实：逻辑行缓冲 + shell 集成语义（命令边界、退出结果、cwd）。
 
-命令只由 shell 集成事件创建；输入接受、输出静默与提示符文字都不构成命令返回。命令输出区间按
+会话的命令事件来自 shell 集成；运行中的 ``execute_terminal`` 命令用同一词表合成（``RunningCommand``），
+输出经 ``pipe_output`` 写入。命令只由这些事件创建；输入接受、输出静默与提示符文字都不构成命令返回。命令输出区间按
 「事件到达时光标所在逻辑行」记录：worker 保证语义事件前的输出与屏幕快照先到，因此事件时刻的
 光标位置就是命令输出的边界。
 
-线程模型：由所属会话锁串行访问；不做 IO、不写数据库。
+线程模型：由所属终端的锁串行访问；不做 IO、不写数据库。
 """
 
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from app.tools.terminal_runtime.errors import TerminalSessionError
-from app.tools.terminal_runtime.line_buffer import TerminalLineBuffer
+from app.tools.terminal_runtime.errors import TerminalError
+from app.tools.terminal_runtime.observation.line_buffer import TerminalLineBuffer
 
 # 只有用户会发起命令：Agent 只把一行填进提示符，回车只能由用户按。
 InputSource = Literal["user"]
@@ -84,12 +86,19 @@ class TerminalObservation:
         self.information_version += 1
         return resized
 
+    def pipe_output(self, lines: Sequence[str], pending: str) -> None:
+        """管道来源的输出：写进行缓冲、推进信息版本、记下最近输出时刻（output_quiet 等待用）。"""
+        self.buffer.append_lines(lines, pending)
+        self.output_arrived()
+        self.information_version += 1
+
     def shell_event(
         self, event: dict[str, Any], *, last_input_by: InputSource | None = None
     ) -> str | None:
         """应用一条集成事件，返回用于日志的事件名；与当前状态矛盾的事件收敛跟踪而不报错。
 
         ``last_input_by`` 由会话 runtime 给出，只在 ``command_started`` 时记为命令发起方。
+        执行模式没有 shell：运行中命令的开始与结束也按同一词表喂进来，由 ``RunningCommand`` 负责。
         """
         kind = event["kind"]
         if kind == "ready":
@@ -123,7 +132,7 @@ class TerminalObservation:
             self.cwd = event.get("cwd")
             self.prompt_has_input = False
         else:
-            raise TerminalSessionError(f"unknown shell observation: {kind}")
+            raise TerminalError(f"unknown shell observation: {kind}")
         self.information_version += 1
         return str(kind)
 

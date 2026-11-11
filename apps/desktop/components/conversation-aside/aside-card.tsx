@@ -10,13 +10,13 @@ import { cn } from "@/lib/utils";
 import { CONVERSATION_ASIDE_CARDS } from "./aside-card-registry";
 
 /**
- * 侧栏里一张卡片的外壳：标题行（折叠开关 + 摘要）、拖拽手柄与正文，所有卡片共用。
+ * 侧栏里一张卡片的外壳：标题行（折叠开关 + 摘要 + 卡片级操作）、拖拽手柄与正文，所有卡片共用。
  *
  * 只有手柄能拖（整张卡可拖会让点标题折叠时误拖）；手柄与折叠箭头平时隐藏，悬停标题行或键盘聚焦时出现，
  * 键盘排序由 dnd-kit 提供（空格拿起、方向键移动、空格放下）。折叠状态是全局偏好，见 `useConversationAsideStore`。
  */
 export function AsideCard({ id, taskId }: { id: AsideCardId; taskId: number }) {
-  const { title, Summary, Body } = CONVERSATION_ASIDE_CARDS[id];
+  const { title, Summary, Actions, Body } = CONVERSATION_ASIDE_CARDS[id];
   const collapsed = useConversationAsideStore((state) => state.collapsed[id] ?? false);
   const setCollapsed = useConversationAsideStore((state) => state.setCollapsed);
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id });
@@ -36,6 +36,7 @@ export function AsideCard({ id, taskId }: { id: AsideCardId; taskId: number }) {
             <DisclosureChevron open={!collapsed} reveal />
           </CollapsibleTrigger>
           {collapsed && <span className="text-muted-foreground shrink-0 text-xs tabular-nums"><Summary taskId={taskId} /></span>}
+          {Actions && <Actions taskId={taskId} />}
           <button
             ref={setActivatorNodeRef}
             type="button"

@@ -14,8 +14,12 @@ from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 
 
-def _output(tmp_path: Path, **hooks: Any) -> CommandOutput:
-    return CommandOutput(workspace_root=tmp_path, **hooks)
+def _output(tmp_path: Path, budget: int | None = None, **hooks: Any) -> CommandOutput:
+    return CommandOutput(
+        workspace_root=tmp_path,
+        model_budget_chars=ExecuteTerminalTool.model_output_budget() if budget is None else budget,
+        **hooks,
+    )
 
 
 def test_short_output_keeps_raw_display_and_normalized_model_text(tmp_path: Path) -> None:
@@ -35,12 +39,9 @@ def test_short_output_keeps_raw_display_and_normalized_model_text(tmp_path: Path
     assert not (tmp_path / ".cosir" / "tool-artifacts").exists()
 
 
-def test_over_budget_writes_the_normalized_full_text_to_a_log(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(Constant.Tools, "MAX_OUTPUT_CHARS", 50)
+def test_over_budget_writes_the_normalized_full_text_to_a_log(tmp_path: Path) -> None:
     raw = "a\n" * 100
-    output = _output(tmp_path)
+    output = _output(tmp_path, budget=50)
 
     output.feed(raw.encode())
     output.finish()
@@ -66,7 +67,8 @@ def test_output_just_over_the_budget_keeps_its_ending_for_the_model(tmp_path: Pa
         "exit summary: see the failures listed above",
     ]
     lines: list[str] = []
-    while len("".join(f"{line}\n" for line in [*lines, *ending])) <= Constant.Tools.MAX_OUTPUT_CHARS:
+    budget = ExecuteTerminalTool.model_output_budget()
+    while len("".join(f"{line}\n" for line in [*lines, *ending])) <= budget:
         lines.append(f"test_case_{len(lines):05d} PASSED")
     raw = "".join(f"{line}\n" for line in [*lines, *ending])
     output = _output(tmp_path)
@@ -77,7 +79,7 @@ def test_output_just_over_the_budget_keeps_its_ending_for_the_model(tmp_path: Pa
     summary = output.summary()
     assert summary.overflowed is True
     assert raw.endswith(summary.model_tail)
-    assert len(summary.model_tail) > Constant.Tools.MAX_OUTPUT_CHARS // 2
+    assert len(summary.model_tail) > budget // 2
     content = ExecuteTerminalTool._render_content(ExecutionResult(end="exited", exit_code=1), summary)
     assert "=== 3 failed, 897 passed ===" in content
     assert len(content) <= Constant.Tools.MAX_OUTPUT_CHARS
@@ -139,14 +141,12 @@ def test_summary_before_finish_is_a_defect(tmp_path: Path) -> None:
 def test_log_write_failure_does_not_break_collection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(Constant.Tools, "MAX_OUTPUT_CHARS", 50)
-
     def failing_open(*_args: Any, **_kwargs: Any) -> Any:
         raise OSError("disk full")
 
     monkeypatch.setattr(command_output_module, "open", failing_open, raising=False)
     raw = "a\n" * 100
-    output = _output(tmp_path)
+    output = _output(tmp_path, budget=50)
 
     output.feed(raw.encode())
     output.finish()

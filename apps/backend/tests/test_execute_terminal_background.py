@@ -19,7 +19,6 @@ from app.core.tool.background.background_registry import background_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.terminal_runtime.command.command_output import CommandOutput as _CommandOutput
 from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
-from app.tools.tool_handler.terminal import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from tests.live_cold_support import registered
 from tests.terminal_test_support import requires_terminal_worker
@@ -142,12 +141,13 @@ def test_cancelling_a_background_command_kills_its_process_tree(tmp_path, delive
     assert delivered == []
 
 
-def test_background_payload_goes_through_the_output_budget(
+def test_background_payload_fits_the_tools_own_budget(
     tmp_path, delivered, monkeypatch
 ) -> None:
-    from app.core.tool.execute.tool_output_budget import ToolOutputBudget
+    """后台结论通道没有执行器的通用预算：正文由工具裁一次，标记指向命令自己的完整日志。"""
+    from app.config.constant import Constant
 
-    monkeypatch.setattr(execute_terminal_module, "ToolOutputBudget", lambda: ToolOutputBudget(200))
+    monkeypatch.setattr(Constant.Tools, "MAX_OUTPUT_CHARS", 1000)
     ExecuteTerminalTool().execute(
         command="seq 1 2000",
         background=True,
@@ -155,7 +155,10 @@ def test_background_payload_goes_through_the_output_budget(
     )
     _wait_for(lambda: len(delivered) == 1)
     output = str(delivered[0][2]["output"])
-    assert len(output) <= 200 and "2000" in output
+    [log] = list((tmp_path / ".cosir" / "tool-artifacts").iterdir())
+    assert len(output) <= 1000 and "2000" in output
+    assert output.count("[output truncated:") == 1
+    assert log.relative_to(tmp_path).as_posix() in output
 
 
 def test_local_backend_kills_the_command_when_stopped(tmp_path) -> None:
@@ -163,7 +166,7 @@ def test_local_backend_kills_the_command_when_stopped(tmp_path) -> None:
     backend = LocalExecutionBackend()
     threading.Timer(0.2, backend.stop).start()
     started = time.monotonic()
-    output = _CommandOutput(workspace_root=tmp_path)
+    output = _CommandOutput(workspace_root=tmp_path, model_budget_chars=20_000)
     result = backend.execute(f"sleep 2; touch {marker}", str(tmp_path), 30, output)
     assert result.end == "cancelled" and result.exit_code is None
     assert time.monotonic() - started < 1.5

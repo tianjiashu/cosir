@@ -17,7 +17,8 @@ on:
       - "apps/backend/app/tools/tool_handler/terminal/**"
       - "apps/backend/app/tools/tool_handler/terminal_session/**"
       - "apps/backend/app/tools/tool_handler/execute_terminal.py"
-      - "apps/backend/app/tools/tool_models/execute_terminal_args.py"
+      - "../../apps/backend/app/tools/tool_models/terminal/execute_ter\
+        minal_args.py"
       - "apps/backend/app/tools/tool_models/terminal_session_args.py"
       - "apps/backend/app/tools/display/terminal_display.py"
       - "apps/backend/app/tools/shell/**"
@@ -48,7 +49,8 @@ on:
       - "apps/backend/app/tools/tool_handler/terminal/**"
       - "apps/backend/app/tools/tool_handler/terminal_session/**"
       - "apps/backend/app/tools/tool_handler/execute_terminal.py"
-      - "apps/backend/app/tools/tool_models/execute_terminal_args.py"
+      - "../../apps/backend/app/tools/tool_models/terminal/execute_ter\
+        minal_args.py"
       - "apps/backend/app/tools/tool_models/terminal_session_args.py"
       - "apps/backend/app/tools/display/terminal_display.py"
       - "apps/backend/app/tools/shell/**"
