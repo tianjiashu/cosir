@@ -1,4 +1,4 @@
-"""Agent Team 配置保存与本地状态查询接口。
+"""Agent Team 配置保存、本地状态查询与单独停止接口。
 
 TeamRun 的「确认 / 驳回」不在本模块：它是通用 HITL 决定，按工具调用寻址走
 ``POST /tasks/{id}/tool-calls/{tool_call_id}/decision``，入队后由 ``agent_team`` 工具按决定执行。
@@ -17,7 +17,7 @@ from app.api.configuration.agent_team_error_messages import (
     team_graph_issue_message,
 )
 from app.api.schemas.request.AgentTeamGraphIssuesRequest import AgentTeamGraphIssuesRequest
-from app.api.schemas.request.save_agent_team_configuration_request import (
+from app.api.schemas.request.SaveAgentTeamConfigurationRequest import (
     SaveAgentTeamConfigurationRequest,
 )
 from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
@@ -26,6 +26,7 @@ from app.api.schemas.response.AgentTeamGraphIssuesResponse import (
     AgentTeamGraphIssuesResponse,
 )
 from app.app import app
+from app.config.logging.logger import log
 from app.models.agent_team.configuration.graph_validation import collect_team_graph_issues
 from app.service.agent_team.agent_team_run_service import AgentTeamRunService
 from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
@@ -33,7 +34,7 @@ from app.service.configuration.agent_team_configuration_service import (
     get_agent_team_configuration_service,
 )
 from app.service.configuration.workspace_configuration_root import resolve_workspace_root
-from app.service.depends import get_workspace_service
+from app.service.depends import get_agent_team_coordinator, get_workspace_service
 
 TeamIdPath = Annotated[
     str,
@@ -250,3 +251,23 @@ async def get_agent_team_run(run_id: int) -> AgentTeamRunResponse:
         return AgentTeamRunResponse.model_validate(payload)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Team run not found") from exc
+
+
+@app.post("/agent-team/runs/{run_id}/cancel")
+async def cancel_agent_team_run(run_id: int) -> dict[str, int]:
+    """用户单独停止一个运行中的 Agent Team；只表示停止已被接受，终态以 TeamRun 状态为准。
+
+    Team 是编排实体，按 TeamRun 停止，不经工具调用取消：节点与档案收尾后，主 Task 得到一条不唤醒
+    的停止通知（见 ``derived_report``）。
+
+    异常:
+        HTTPException: TeamRun 不在运行中（已落定、仍待确认或不存在）时 409。
+    """
+
+    if not get_agent_team_coordinator().cancel_by_user(run_id):
+        raise HTTPException(status_code=409, detail="team run is not running")
+    log.info(
+        "agent_team_run_cancel_requested",
+        extra={"msg": "用户请求单独停止 Agent Team", "data": {"team_run_id": run_id}},
+    )
+    return {"team_run_id": run_id}
