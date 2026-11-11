@@ -17,26 +17,23 @@ from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL, TOOL_GROUP_TERMINAL_SESSION
 from app.service import depends
+from app.tools.terminal_runtime.command.execution_result import ExecutionResult
+from app.tools.terminal_runtime.command.running_command_registry import running_commands
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
+    TerminalNotFoundError,
     TerminalPrefillRejectedError,
     TerminalSessionNotFoundError,
     TerminalSessionStateError,
 )
-from app.tools.terminal_runtime.running_command_registry import running_commands
-from app.tools.terminal_runtime.shell_resolver import ShellResolver
-from app.tools.tool_handler.terminal.execution_result import ExecutionResult
-from app.tools.tool_handler.terminal_tools import (
-    TerminalListTool,
-    TerminalReadTool,
-    TerminalStopTool,
-    TerminalWriteTool,
-    build_terminal_definitions,
-)
-from app.tools.tool_handler.terminal_tools.common import (
-    find_terminal,
-    with_terminal_errors,
-)
+from app.tools.terminal_runtime.session.shell_resolver import ShellResolver
+from app.tools.tool_handler.terminal import build_terminal_definitions
+from app.tools.tool_handler.terminal.task_terminals import find_terminal
+from app.tools.tool_handler.terminal.terminal_list import TerminalListTool
+from app.tools.tool_handler.terminal.terminal_read import TerminalReadTool
+from app.tools.tool_handler.terminal.terminal_stop import TerminalStopTool
+from app.tools.tool_handler.terminal.terminal_write import TerminalWriteTool
+from app.tools.tool_handler.terminal.tool_observation import with_terminal_errors
 from app.tools.tool_models import TerminalReadArgs, TerminalStopArgs, TerminalWriteArgs
 
 
@@ -144,10 +141,11 @@ def test_shell_resolver_lists_installed_shells_with_integration(monkeypatch) -> 
 def tool_service(monkeypatch):
     service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
     monkeypatch.setattr(depends, "get_terminal_session_service", lambda: service)
-    monkeypatch.setattr(
-        "app.tools.tool_handler.terminal_tools.common.should_stop_call",
-        lambda task_id, tool_call_id: False,
-    )
+    for tool in ("terminal_list", "terminal_read", "terminal_write", "terminal_stop"):
+        monkeypatch.setattr(
+            f"app.tools.tool_handler.terminal.{tool}.should_stop_call",
+            lambda task_id, tool_call_id: False,
+        )
     yield service, workers
     background_registry.drop_task(1)
     for command in running_commands.task_commands(1):
@@ -220,19 +218,17 @@ def test_tool_handlers_return_observation_text_and_display_data(tool_service, tm
     listed = TerminalListTool().execute(execution_context=_context(tmp_path))
     [session_line] = (listed.content or "").split("\n")
     assert session_line.startswith(f"session {session_id} · zsh · running")
-    assert listed.display_data == {"kind": "terminal-session", "session_count": 1}
+    assert listed.display_data == {"kind": "terminal-session", "terminal_count": 1}
 
 
 def test_list_reports_no_terminals_when_nothing_is_open(tool_service, tmp_path) -> None:
     listed = TerminalListTool().execute(execution_context=_context(tmp_path))
     assert listed.content == "no terminals"
-    assert listed.display_data == {"kind": "terminal-session", "session_count": 0}
+    assert listed.display_data == {"kind": "terminal-session", "terminal_count": 0}
 
 
 def test_find_terminal_prefers_sessions_then_running_commands(tool_service, tmp_path) -> None:
     service, workers = tool_service
-    if not callable(find_terminal):  # pragma: no cover - 仅守导入
-        raise AssertionError("find_terminal is missing")
     session_id = _start_session(service, workers, tmp_path)
     session = find_terminal(1, session_id)
     assert session.terminal_id == session_id and session.snapshot().status == "running"
@@ -246,7 +242,7 @@ def test_find_terminal_prefers_sessions_then_running_commands(tool_service, tmp_
     lines = (listed.content or "").split("\n")
     assert lines[0].startswith(f"session {session_id}")
     assert lines[1].startswith(f"command {command_id} · sh · running · executing `npm run dev`")
-    assert listed.display_data == {"kind": "terminal-session", "session_count": 2}
+    assert listed.display_data == {"kind": "terminal-session", "terminal_count": 2}
 
     read = TerminalReadTool().execute(
         terminal_id=command_id, execution_context=_context(tmp_path)
@@ -254,7 +250,7 @@ def test_find_terminal_prefers_sessions_then_running_commands(tool_service, tmp_
     assert "1│booting" in (read.content or "")
     assert (read.content or "").startswith(f"command {command_id} · sh · running")
 
-    with pytest.raises(TerminalSessionNotFoundError):
+    with pytest.raises(TerminalNotFoundError):
         find_terminal(1, "call-missing")
 
 
@@ -271,7 +267,7 @@ def test_stop_rejects_user_terminals_and_missing_commands(tool_service, tmp_path
         terminal_id="call-missing", execution_context=_context(tmp_path)
     )
     assert missing.status == "error"
-    assert "no running command call-missing" in (missing.content or "")
+    assert "no terminal call-missing" in (missing.content or "")
 
 
 def test_stop_waits_for_the_command_to_exit(tool_service, tmp_path) -> None:

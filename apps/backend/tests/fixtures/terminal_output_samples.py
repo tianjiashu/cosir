@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 
 from app.app import app  # noqa: F401 — 与真实入口一致装配模块依赖，不启动 lifespan
 from app.core.tool.schemas import ToolExecutionContext
-from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
+from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 
 
 def collect() -> dict[str, object]:

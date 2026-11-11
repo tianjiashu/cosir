@@ -107,23 +107,25 @@ def test_any_new_message_starts_a_run_after_any_terminal_status(status, make) ->
     assert isinstance(action, StartRun)
 
 
-def test_single_call_cancellation_only_wakes_its_owner():
+def test_single_call_cancellation_wakes_the_suspended_run_but_never_starts_one():
+    """后台工作属于 Task：回执唤醒挂起中的任意 Run（不论是谁登记的），Task 空闲时不凭它开新 Run。"""
     receipt = TaskMessage.of(
         BackgroundResultBody(
             tool_call_id="bg",
             tool_name="terminal_command",
             tool_result="cancelled",
             ended_at="t",
-            wake_run_id=10,
+            starts_run=False,
             placeholder_status="cancelled",
         ),
         message_id=1,
     )
     assert _next(_run("suspended"), False, [receipt], [receipt]) == Wake()
     assert _next(_run("cancelled"), False, [receipt], [receipt]) == Stay()
+    assert _next(_run("completed"), False, [receipt], [receipt]) == Stay()
     other = _run("suspended")
     other.id = 11
-    assert _next(other, False, [receipt], [receipt]) == Stay()
+    assert _next(other, False, [receipt], [receipt]) == Wake()
 
 
 def test_new_run_takes_the_launch_of_the_input_it_consumes() -> None:

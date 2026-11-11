@@ -211,11 +211,8 @@ def test_consumed_result_leaves_other_rows_alone(monkeypatch, metadata) -> None:
     assert context.updates == []
 
 
-def test_result_arriving_while_stopping_settles_placeholder_as_cancelled(stored) -> None:
-    """停止信号已打出、收尾撤销之前后台工作恰好完成：占位仍随撤销推到 cancelled，不悬空在 pending。"""
-    import asyncio
-
-    from app.core.task_cancellation import TaskCancellation
+def test_result_arriving_while_user_stopping_is_still_delivered(stored) -> None:
+    """用户停止只打断当前驱动：停止信号在时后台工作完成，结论照常入队，占位不被撤销。"""
     from app.core.tool.background.background_registry import background_registry
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
@@ -233,14 +230,14 @@ def test_result_arriving_while_stopping_settles_placeholder_as_cancelled(stored)
     try:
         assert background_registry.complete(
             stored.task_id, "call-bg", BackgroundConclusion({"exit_code": 0})
-        ) is False
-        asyncio.run(TaskCancellation(stored.task_id).cancel_background_task())
+        ) is True
     finally:
         cancellation_registry.consume(stored.task_id)
         background_registry.drop_task(stored.task_id)
 
-    assert _metadata(stored, "call-bg").status == "cancelled"
-    assert depends.get_task_message_queue().pending_nowait(stored.task_id) == []
+    assert _metadata(stored, "call-bg").status == "pending"
+    queued = depends.get_task_message_queue().pending_nowait(stored.task_id)
+    assert [message.kind for message in queued] == ["background_result"]
 
 
 def test_restart_interrupts_hitl_calls_whose_decision_was_executing(stored) -> None:
@@ -272,13 +269,13 @@ def test_real_parent_stop_persists_output_without_waking_agent(stored, tmp_path)
     import asyncio
     import time
 
-    from app.core.task_cancellation import TaskCancellation
+    from app.core.task_recall import TaskRecall
     from app.core.tool.background.background_registry import background_registry
     from app.core.tool.schemas import ToolExecutionContext
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
     )
-    from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
+    from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
     from tests.terminal_test_support import terminal_worker_path
     if not terminal_worker_path().is_file():
         pytest.skip("terminal worker not built")
@@ -295,8 +292,8 @@ def test_real_parent_stop_persists_output_without_waking_agent(stored, tmp_path)
         while not marker.exists():
             assert time.monotonic() < deadline
             time.sleep(0.01)
-        cancellation_registry.request_cancel(stored.task_id, "user")
-        asyncio.run(TaskCancellation(stored.task_id).cancel_background_task())
+        cancellation_registry.request_cancel(stored.task_id, "parent")
+        asyncio.run(TaskRecall(stored.task_id).recall())
     finally:
         background_registry.drop_task(stored.task_id)
         cancellation_registry.consume(stored.task_id)

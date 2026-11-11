@@ -25,7 +25,7 @@ from app.tools.terminal_runtime.errors import (
     TerminalSessionStateError,
     TerminalWorkerUnavailableError,
 )
-from app.tools.terminal_runtime.shell_resolver import ShellResolver
+from app.tools.terminal_runtime.session.shell_resolver import ShellResolver
 from tests.task_extra_fixtures import fork_extra
 
 _SHELLS = [{"kind": "zsh", "label": "zsh", "isDefault": True, "integrationSupported": True}]

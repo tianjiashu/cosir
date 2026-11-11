@@ -207,8 +207,9 @@ async def test_approved_team_runs_in_background(proposed_team, ending):
         await service.decide(task_id, CALL_ID, decision)
         await model.receipt_seen.wait()
         await model.node_started.wait()
+        # 后台工作属于 Task：批准的 Run 读到启动回执就答复并完成，Team 继续在后台跑。
         owner = await _parked(actor)
-        assert owner.status == "suspended"
+        assert owner.status == "completed"
         assert (owner.id != first.id) == (ending == "done")
         if ending == "done":
             assert owner.model_config_id != first.model_config_id
@@ -224,6 +225,7 @@ async def test_approved_team_runs_in_background(proposed_team, ending):
         if ending == "user_stop":
             assert await asyncio.to_thread(service.cancel_tool_call, task_id, CALL_ID)
         elif ending == "parent_stop":
+            # Run 已答复、Task 空闲，停止照样撤销它的后台工作。
             await actor.cancel()
         elif ending in {"delete", "shutdown"}:
             if ending == "shutdown":
@@ -243,7 +245,9 @@ async def test_approved_team_runs_in_background(proposed_team, ending):
         if ending == "parent_stop":
             await asyncio.gather(*(task for _, task in coordinator._active.values()))
         runs = depends.get_conversation_run_crud().list_by_task(task_id)
-        assert len(runs) == (3 if ending == "done" else 1)
+        # 结论到达时 Task 空闲，开出新 Run 收尾；停止（单停与整停）不开新 Run。
+        stopped = ending in {"user_stop", "parent_stop"}
+        assert len(runs) == (4 if ending == "done" else 1 if stopped else 2)
         current = depends.get_task_service().require_current_run(task_id)
         records = depends.get_conversation_task_context_crud().get(task_id)
         results = [
@@ -257,16 +261,19 @@ async def test_approved_team_runs_in_background(proposed_team, ending):
         assert placeholder.metadata.background.run_id == owner.id
         assert placeholder.metadata.display_data["kind"] == "agent-team-approval"
         state = service.get_state(task_id)["background_tasks"][0]
-        if ending == "parent_stop":
-            assert current.status == "cancelled" and results == []
+        if stopped:
+            # 空闲时停止没有 Run 可落定；单停的回执留在队列里，等下一次推进告诉 Agent。
+            assert current.status == "completed" and results == []
             assert state["status"] == "cancelled"
+            queued = depends.get_task_message_queue().pending_nowait(task_id)
+            assert [m.kind for m in queued] == (["background_result"] if ending == "user_stop" else [])
         else:
             assert current.status == "completed"
             [result] = results
             body = str(result.message["content"])
-            expected = {"user_stop": "cancelled", "done": "completed", "failed": "failed"}[ending]
+            expected = {"done": "completed", "failed": "failed"}[ending]
             assert f'"status": "{expected}"' in body and ".cosir/agent-team-runs/" in body
-            assert state["status"] == ("cancelled" if ending == "user_stop" else "completed")
+            assert state["status"] == "completed"
 
 
 async def test_approval_with_deleted_agent_fails_team_and_card(proposed_team, reviewer):

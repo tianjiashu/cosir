@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 
 from app.config.constant import Constant
-from app.tools.terminal_runtime.line_buffer import TerminalLineBuffer
-from app.tools.terminal_runtime.render import render_lines
+from app.tools.terminal_runtime.observation.line_buffer import TerminalLineBuffer
+from app.tools.terminal_runtime.observation.render import render_lines
 
 
 def screen(rows: list[Any], cursor: tuple[int, int] = (0, 0), alternate: bool = False) -> dict:

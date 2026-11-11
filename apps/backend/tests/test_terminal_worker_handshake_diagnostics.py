@@ -24,9 +24,8 @@ from app.tools.terminal_runtime.errors import (
     TerminalWorkerProtocolError,
     TerminalWorkerUnavailableError,
 )
-from app.tools.terminal_runtime.shell_resolver import ShellSpec
-from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
-from app.tools.tool_handler.terminal_tools.common import with_terminal_errors
+from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker, ShellSpec
+from app.tools.tool_handler.terminal.tool_observation import with_terminal_errors
 
 _FAKE_WORKER_PID = 4242
 

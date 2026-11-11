@@ -23,8 +23,8 @@ from terminal_test_support import (
     wait_until,
 )
 
-from app.tools.terminal_runtime.inputs import TerminalWait
-from app.tools.terminal_runtime.session_service import TerminalSessionService
+from app.tools.terminal_runtime.observation.wait import TerminalWait
+from app.tools.terminal_runtime.session.session_service import TerminalSessionService
 
 _UNIX_SHELLS = ["zsh", "/bin/bash", "/opt/homebrew/bin/bash"]
 _WINDOWS_SHELLS = ["powershell", "pwsh"]

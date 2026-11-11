@@ -7,7 +7,7 @@ import random
 import pytest
 
 from app.config.constant import Constant
-from app.tools.terminal_runtime.output_normalizer import OutputNormalizer
+from app.tools.terminal_runtime.command.output_normalizer import OutputNormalizer
 
 
 def _normalize(chunks: list[str]) -> list[str]:

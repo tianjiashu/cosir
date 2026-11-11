@@ -40,7 +40,7 @@ from app.tools.terminal_runtime.errors import (
     TerminalWorkerBackpressureError,
     TerminalWorkerUnavailableError,
 )
-from app.tools.terminal_runtime.inputs import TerminalWait
+from app.tools.terminal_runtime.observation.wait import TerminalWait
 
 
 @pytest.fixture(autouse=True)

@@ -22,7 +22,7 @@ import pytest
 from app.assistant_transport.service import transport_assistant_service as service_module
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.core import task_actor as actor_module
-from app.core import task_cancellation as cancellation_module
+from app.core import task_recall as recall_module
 from app.core import task_execution as execution_module
 from app.core.task_actor import TaskActor
 from app.core.tool.background import cancel_placeholders as placeholder_module
@@ -222,7 +222,7 @@ async def chain(monkeypatch):
             enqueue=lambda task_id, message, **_kw: queue.put(task_id, message),
         ),
     )
-    # actor 收尾时经子 Task 的 actor 停止子 Task、经 Coordinator 停止 Agent Team。
+    # 收回时经子 Task 的 actor 停止子 Task、经 Coordinator 停止 Agent Team。
     monkeypatch.setattr(
         registry_module.task_runtime_spaces,
         "get_or_create",
@@ -238,7 +238,7 @@ async def chain(monkeypatch):
         cancelled_teams.append(task_id)
 
     monkeypatch.setattr(
-        cancellation_module.service_depends,
+        recall_module.service_depends,
         "get_agent_team_coordinator",
         lambda: SimpleNamespace(cancel_for_parent_task=cancel_teams),
     )
@@ -344,6 +344,8 @@ async def test_queued_inputs_wait_after_cancel_and_a_new_send_runs_first(chain) 
     await chain.service.send(_TASK_ID, _send_request("first"))
     await _settle()
     await chain.service.send(_TASK_ID, _send_request("queued"))
+    # 等 loop 读到排队消息再停止：停止之后才读到的消息算停止后的新消息，会开新 Run。
+    await _settle()
     await chain.service.cancel(_TASK_ID)
     await _finish(chain.ledger.current.id, "cancelled")
     assert chain.ledger.current.status == "cancelled"
@@ -404,10 +406,11 @@ def _register_background_work(tool_call_id: str, mode: str, calls: list[str]) ->
     return detached
 
 
-async def test_cancel_background_work_without_active_owner_only_settles_placeholder(
+async def test_cancel_background_work_while_idle_settles_now_and_tells_the_next_drive(
     chain, monkeypatch
 ) -> None:
-    """后台工作不要求 Run 在执行：撤销登记、占位推到 cancelled，不唤醒或新开 Run。"""
+    """后台工作不要求 Run 在执行：撤销登记、占位立即推到 cancelled；回执留在队列里随下一次推进并入，
+    但不凭它开新 Run。"""
     settled: list[tuple[int, list[str], str | None]] = []
     monkeypatch.setattr(
         placeholder_module,
@@ -421,7 +424,8 @@ async def test_cancel_background_work_without_active_owner_only_settles_placehol
 
     assert calls == ["cancel"]
     assert settled == [(_TASK_ID, ["call-bg"], USER_CANCELLED_HINT)]
-    assert not chain.queue.pending_nowait(_TASK_ID)
+    [receipt] = chain.queue.pending_nowait(_TASK_ID)
+    assert receipt.kind == "background_result" and not receipt.wakes(None)
     assert chain.service.cancel_tool_call(_TASK_ID, "call-bg") is False
 
 
@@ -575,56 +579,70 @@ async def test_signal_is_cleared_when_the_cancelled_execution_finishes(chain) ->
 
 
 # ---------------------------------------------------------------------------
-# 级联取消：Run 落定 cancelled 后以 parent 原因停止下游
+# 用户停止只打断；上游停止（parent）另外收回 Team、后台工作与子 Task
 # ---------------------------------------------------------------------------
 
 
-async def test_cancelled_run_stops_downstream_with_parent_reason(chain) -> None:
+@pytest.mark.parametrize("phase", ["running", "suspended", "idle"])
+async def test_user_stop_leaves_teams_and_children_alone(chain, phase) -> None:
     chain.ledger.list_child_tasks = lambda _task_id: [SimpleNamespace(id=_CHILD_TASK_ID)]
-    await chain.service.send(_TASK_ID, _send_request("first"))
-    await _settle()
-    run = chain.ledger.current
+    if phase == "running":
+        await chain.service.send(_TASK_ID, _send_request("first"))
+        await _settle()
+        run = chain.ledger.current
+    else:
+        run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+        run.status = "suspended" if phase == "suspended" else "completed"
 
     await chain.service.cancel(_TASK_ID)
-    # Team 在发起停止时就取消：agent_team 工具阻塞在 Team 上，等 Run 落定会互等。
-    assert chain.cancelled_teams == [_TASK_ID]
-    # 子 Task 不阻塞父 Run：等 Run 真正落定 cancelled 后才传播。
+    if phase == "running":
+        await _finish(run.id, "cancelled")
+
+    assert run.status == ("completed" if phase == "idle" else "cancelled")
+    assert chain.cancelled_teams == []
     assert chain.child_cancels == []
-    await _finish(run.id, "cancelled")
-
-    assert chain.child_cancels == [(_CHILD_TASK_ID, "parent")]
-    # 落定后不再重复取消 Team。
-    assert chain.cancelled_teams == [_TASK_ID]
 
 
-async def test_cancelling_a_suspended_run_stops_downstream_immediately(chain) -> None:
+@pytest.mark.parametrize("phase", ["running", "suspended", "idle"])
+async def test_parent_stop_recalls_teams_and_children_at_once(chain, phase) -> None:
     chain.ledger.list_child_tasks = lambda _task_id: [SimpleNamespace(id=_CHILD_TASK_ID)]
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
-    run.status = "suspended"
+    if phase == "running":
+        await chain.service.send(_TASK_ID, _send_request("first"))
+        await _settle()
+        run = chain.ledger.current
+    else:
+        run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+        run.status = "suspended" if phase == "suspended" else "completed"
 
-    await chain.service.cancel(_TASK_ID)
+    await chain.actor.cancel("parent")
 
-    assert chain.child_cancels == [(_CHILD_TASK_ID, "parent")]
-    # 挂起的 Run 常带着待确认方案：停止即放弃本 Task 的全部 Team 工作。
+    # 收回在发起停止时就完成：agent_team 工具阻塞在 Team 上，等 Run 落定会互等。
     assert chain.cancelled_teams == [_TASK_ID]
+    assert chain.child_cancels == [(_CHILD_TASK_ID, "parent")]
+    if phase == "running":
+        await _finish(run.id, "cancelled")
+        # 落定后不再重复收回。
+        assert chain.cancelled_teams == [_TASK_ID]
+        assert chain.child_cancels == [(_CHILD_TASK_ID, "parent")]
 
 
 def _fail_settling(monkeypatch) -> None:
     def _raise(*_args) -> int:
         raise RuntimeError("database is locked")
 
-    monkeypatch.setattr(cancellation_module, "cancel_placeholders", _raise)
+    monkeypatch.setattr(recall_module, "cancel_placeholders", _raise)
 
 
 async def test_placeholder_settle_failure_does_not_block_running_cancel(chain, monkeypatch) -> None:
-    """占位结算写库失败只记录：信号照常取走、执行照常注销，Task 不会卡在停止中。"""
+    """收回时占位结算写库失败只记录：信号照常取走、执行照常注销，Task 不会卡在停止中。"""
     _fail_settling(monkeypatch)
+    chain.ledger.list_child_tasks = lambda _task_id: []
     await chain.service.send(_TASK_ID, _send_request("first"))
     await _settle()
     run = chain.ledger.current
     _register_background_work("call-bg", "background", [])
 
-    await chain.service.cancel(_TASK_ID)
+    await chain.actor.cancel("parent")
     await _finish(run.id, "cancelled")
 
     assert not cancellation_registry.is_cancelled(_TASK_ID)
@@ -636,11 +654,12 @@ async def test_placeholder_settle_failure_does_not_block_suspended_cancel(
     chain, monkeypatch
 ) -> None:
     _fail_settling(monkeypatch)
+    chain.ledger.list_child_tasks = lambda _task_id: []
     run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
     _register_background_work("call-bg", "background", [])
 
-    await chain.service.cancel(_TASK_ID)
+    await chain.actor.cancel("parent")
 
     assert run.status == "cancelled"
 

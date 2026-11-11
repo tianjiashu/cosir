@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.tools.tool_handler.terminal.local_backend import (
+from app.tools.terminal_runtime.command.local_backend import (
     _Launch,
     _resolve_command,
 )

@@ -1,4 +1,4 @@
-"""``TerminalOutputStream`` 的关闭语义：``finish`` 不阻塞，事件循环停摆时不能挂住工具线程。"""
+"""``LiveOutputChannel`` 的关闭语义：``finish`` 不阻塞，事件循环停摆时不能挂住工具线程。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 from app.core.events import TerminalOutputDeltaData
 from app.core.tool.schemas import ToolExecutionContext
-from app.tools.tool_handler.terminal.output_stream import TerminalOutputStream
+from app.tools.tool_handler.terminal.live_output_channel import LiveOutputChannel
 
 
 def _context(loop: asyncio.AbstractEventLoop, sink) -> ToolExecutionContext:
@@ -42,7 +42,7 @@ def test_finish_returns_while_event_loop_is_stopped() -> None:
     """回归：``finish`` 曾阻塞等待 drain，而停掉的循环永不执行该回调，工具线程永久挂死。"""
 
     loop = _stopped_loop()
-    stream = TerminalOutputStream.open(_context(loop, lambda _event: None))
+    stream = LiveOutputChannel.open(_context(loop, lambda _event: None))
     assert stream is not None
     stream.emit("pending-when-loop-stopped")
 
@@ -57,7 +57,7 @@ async def test_finish_is_idempotent_and_late_output_is_dropped() -> None:
 
     loop = asyncio.get_running_loop()
     events: list[object] = []
-    stream = TerminalOutputStream.open(_context(loop, events.append))
+    stream = LiveOutputChannel.open(_context(loop, events.append))
     assert stream is not None
 
     stream.finish()
@@ -73,7 +73,7 @@ async def test_finish_still_publishes_already_received_text() -> None:
 
     loop = asyncio.get_running_loop()
     events: list = []
-    stream = TerminalOutputStream.open(_context(loop, events.append))
+    stream = LiveOutputChannel.open(_context(loop, events.append))
     assert stream is not None
     stream.emit("before-finish")
 

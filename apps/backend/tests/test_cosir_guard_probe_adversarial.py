@@ -763,7 +763,7 @@ def test_allow_reserved_only_used_by_internal_call_sites() -> None:
             if re.search(r"allow_reserved=True\s*(,|\)|$)", stripped):
                 call_sites.append(f"{path.relative_to(app_dir)}:{lineno}")
     expected = {
-        "tools/terminal_runtime/session_service.py",
+        "tools/terminal_runtime/session/session_service.py",
     }
     actual = {site.split(":", 1)[0].replace("\\", "/") for site in call_sites}
     assert actual == expected, f"allow_reserved=True 调用面异常：{call_sites}"

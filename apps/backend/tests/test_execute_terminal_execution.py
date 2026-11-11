@@ -14,9 +14,9 @@ from app.core.tool.background.background_job import BackgroundJob
 from app.core.tool.background.background_registry import background_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
-from app.tools.tool_handler import execute_terminal as terminal_module
-from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
-from app.tools.tool_handler.terminal import ExecutionResult
+from app.tools.terminal_runtime.command.execution_result import ExecutionResult
+from app.tools.tool_handler.terminal import execute_terminal as terminal_module
+from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from tests.live_cold_support import registered
 
 
@@ -27,8 +27,10 @@ class _Command:
         self.stopped = threading.Event()
         self.thread: threading.Thread | None = None
         self.error: Exception | None = None
+        self.timeout: float | None = None
 
-    def execute(self, command, _cwd, _timeout, output, **_kwargs) -> ExecutionResult:
+    def execute(self, command, _cwd, timeout, output, **_kwargs) -> ExecutionResult:
+        self.timeout = timeout
         self.thread = threading.current_thread()
         self.started.set()
         assert self.release.wait(5)
@@ -55,7 +57,7 @@ class _Command:
 def command(monkeypatch):
     command = _Command()
     monkeypatch.setattr(terminal_module, "LocalExecutionBackend", lambda: command)
-    monkeypatch.setattr(terminal_module.TerminalOutputStream, "open", lambda _: None)
+    monkeypatch.setattr(terminal_module.LiveOutputChannel, "open", lambda _: None)
     yield command
     command.stop()
     if command.thread is not None:
@@ -101,6 +103,21 @@ def _wait_registered(call_id="call-1") -> None:
     while not registered(background_registry, 1, call_id):
         assert time.monotonic() < deadline, "not registered"
         time.sleep(0.01)
+
+
+@pytest.mark.parametrize(("background", "expected"), [(True, None), (False, 300.0)])
+def test_only_background_commands_run_without_a_timeout_by_default(
+    tmp_path, command, pool, delivered, background, expected,
+):
+    """后台命令属于 Task、缺省不限时（开发服务器要常驻）；前台缺省仍是 300 秒。"""
+    result = pool.submit(_execute, tmp_path, background=background)
+    assert command.started.wait(2)
+    assert command.timeout == expected
+    if background:
+        assert "no timeout" in (result.result(timeout=2).content or "")
+    command.release.set()
+    result.result(timeout=2)
+    command.join()
 
 
 def test_foreground_returns_result_without_delivery(tmp_path, command, pool, delivered):

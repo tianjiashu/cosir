@@ -14,7 +14,7 @@ from app.tools.shell.command_environment import user_command_environment
 from app.tools.shell.login_environment import RESOLVING_FLAG, apply_login_shell_environment
 from app.tools.terminal_runtime import worker_client
 from app.tools.terminal_runtime.errors import TerminalWorkerUnavailableError
-from app.tools.terminal_runtime.shell_resolver import ShellSpec
+from app.tools.terminal_runtime.worker_client import ShellSpec
 from tests.terminal_test_support import requires_terminal_worker, run_local_command
 
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="登录 shell 解析只在 POSIX 上进行")

@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from app.tools.terminal_runtime.session_service import TerminalSessionService
+from app.tools.terminal_runtime.session.session_service import TerminalSessionService
 
 
 def terminal_worker_path() -> Path:
@@ -134,10 +134,10 @@ def make_service(
         return worker
 
     monkeypatch.setattr(
-        "app.tools.terminal_runtime.session_runtime.ProcessTerminalWorker", construct
+        "app.tools.terminal_runtime.session.session_runtime.ProcessTerminalWorker", construct
     )
     monkeypatch.setattr(
-        "app.tools.terminal_runtime.session_service.ShellResolver.resolve",
+        "app.tools.terminal_runtime.session.session_service.ShellResolver.resolve",
         lambda shell, integration="auto", **_: _spec(shell, integration),
     )
     capture_terminal_effects(monkeypatch, on_changed=on_changed)
@@ -150,7 +150,7 @@ def capture_terminal_effects(
     on_changed: Callable[[int], None] | None = None,
 ) -> None:
     """替换会话对应用层的副作用（snapshot 重投影）；会话本身不触达其他应用层动作。"""
-    from app.tools.terminal_runtime import session_runtime
+    from app.tools.terminal_runtime.session import session_runtime
 
     monkeypatch.setattr(
         session_runtime, "refresh_task_sessions", on_changed or (lambda _task: None)
@@ -158,7 +158,7 @@ def capture_terminal_effects(
 
 
 def _spec(shell: str, integration: str) -> Any:
-    from app.tools.terminal_runtime.shell_resolver import ShellSpec
+    from app.tools.terminal_runtime.worker_client import ShellSpec
 
     kind = "zsh" if shell == "auto" else shell
     return ShellSpec(kind, f"/bin/{kind}", (f"/bin/{kind}",), integration)
@@ -247,11 +247,13 @@ def run_local_command(
 ) -> tuple[Any, Any]:
     """直接跑 ``LocalExecutionBackend``（不经工具层），返回 (结局, 输出汇总)。
 
-    输出归调用方持有的 ``CommandOutput``，所以直接调后端的测试也要自己建一个再读它。
+    输出归调用方持有的 ``CommandOutput``：谁创建谁封存，所以直接调后端的测试也要自己建、自己
+    ``finish`` 再读它。
     """
-    from app.tools.tool_handler.terminal.command_output import CommandOutput
-    from app.tools.tool_handler.terminal.local_backend import LocalExecutionBackend
+    from app.tools.terminal_runtime.command.command_output import CommandOutput
+    from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
 
     output = CommandOutput(workspace_root=Path(cwd))
     result = LocalExecutionBackend().execute(command, str(cwd), timeout, output, shell=shell)
+    output.finish()
     return result, output.summary()

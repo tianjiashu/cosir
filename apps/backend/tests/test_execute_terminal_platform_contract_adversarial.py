@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.tool.validation.arguments import validate_tool_arguments
-from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
+from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_models.execute_terminal_args import (
     MacExecuteTerminalArgs,
     MacExecuteTerminalShell,
@@ -34,7 +34,7 @@ from app.tools.tool_models.execute_terminal_args import (
 )
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-_TOOL_MODULE = "app.tools.tool_handler.execute_terminal"
+_TOOL_MODULE = "app.tools.tool_handler.terminal.execute_terminal"
 _SHELLS_MODULE = "app.tools.shell.host_shells"
 
 # execute 的形参必须是「args_model 字段 + 执行链注入的 execution_context / output_sink」。

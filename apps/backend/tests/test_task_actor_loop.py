@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 import pytest
 
 from app.core import task_actor as actor_module
-from app.core import task_cancellation
+from app.core import task_recall
 from app.core import task_execution as execution_module
 from app.core.task_actor import SessionConflictError, TaskActor
 from app.core.tool.background.background_job import BackgroundConclusion
@@ -181,7 +181,7 @@ def harness(monkeypatch):
     # 撤销时的占位结算写库；记下调用，不触达存储（占位结算见 test_background_placeholders）。
     settled: list[tuple[int, list[str]]] = []
     monkeypatch.setattr(
-        task_cancellation,
+        task_recall,
         "cancel_placeholders",
         lambda task_id, ids, _hint, **_kw: settled.append((task_id, list(ids)))
         or frozenset({task_id}),
@@ -527,6 +527,52 @@ async def test_wait_quiescent_settles_on_a_cancelled_run_with_leftovers(harness)
     await harness.actor.abort()
 
 
+async def test_wait_quiescent_waits_for_the_tasks_background_work(harness) -> None:
+    """后台工作属于 Task：Run 已完成、工作还在跑就不算静止；登记表变化经通知唤醒等待方。"""
+    from app.core.tool.background.background_registry import background_registry
+
+    harness.actor.start()
+    harness.queue.put(_user())
+    await _settle()
+    [run] = harness.ledger.created
+    background_registry.register(
+        "call-bg", task_id=_TASK_ID, run_id=run.id, kind="terminal_command", label="bg",
+        on_cancel=lambda _reason: None,
+    )
+    try:
+        await _finish(run.id, "completed")
+        waiting = asyncio.create_task(harness.actor.wait_quiescent(1))
+        await _settle()
+        assert not waiting.done()
+
+        background_registry.withdraw(_TASK_ID, "call-bg")
+        harness.actor.notify_state_changed()
+        assert await waiting is True
+    finally:
+        background_registry.drop_task(_TASK_ID)
+        await harness.actor.abort()
+
+
+def test_background_changes_wake_quiescence_waiters_before_the_board(monkeypatch) -> None:
+    """登记表监听方先唤醒静止等待方再刷新看板：看板投影失败不能拖住委派与 Team 节点。"""
+    from app import lifespan as lifespan_module
+
+    calls: list[tuple[str, int]] = []
+    actor = SimpleNamespace(notify_state_changed=lambda: calls.append(("actor", 7)))
+    monkeypatch.setattr(
+        lifespan_module.task_runtime_spaces, "get", lambda task_id: SimpleNamespace(actor=actor)
+    )
+    monkeypatch.setattr(
+        lifespan_module,
+        "get_conversation_task_state_service",
+        lambda: SimpleNamespace(
+            refresh_background_results=lambda task_id: calls.append(("board", task_id))
+        ),
+    )
+    lifespan_module._on_background_changed(7)
+    assert calls == [("actor", 7), ("board", 7)]
+
+
 async def test_wait_quiescent_ignores_a_lone_system_notice(harness) -> None:
     """系统通知不推进，留在队列里也不算有事可做。"""
     harness.actor.start()
@@ -699,8 +745,8 @@ async def test_stop_only_touches_materialized_spaces_and_aclose_aborts_all(regis
 # ── 后台结果与首次驱动提醒 ─────────────────────────────────────────────────
 
 
-async def test_cancelling_suspended_run_drops_background_entries(harness) -> None:
-    """Run 取消即撤销本 Task 的后台等待：撤销回调被调用，之后的完成返回 False、不再投递。"""
+async def test_recalling_a_suspended_run_drops_background_entries(harness) -> None:
+    """上游收回即撤销本 Task 的后台等待：撤销回调被调用，之后的完成返回 False、不再投递。"""
     from app.core.tool.background.background_registry import background_registry
 
     run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
@@ -728,7 +774,7 @@ async def test_cancelling_suspended_run_drops_background_entries(harness) -> Non
         assert cancelled == ["t1"]
         # 被撤销的后台条目随即把占位行推到 cancelled。
         assert harness.settled == [(_TASK_ID, ["call-t1"])]
-        assert background_registry.pending(_TASK_ID, run.id) == []
+        assert background_registry.pending(_TASK_ID) == []
         assert background_registry.complete(_TASK_ID, "call-t1", BackgroundConclusion({})) is False
         # 其他 Task 的等待不受影响。
         assert set(background_registry.live_background(_TASK_ID + 1)) == {"call-x"}
@@ -737,7 +783,39 @@ async def test_cancelling_suspended_run_drops_background_entries(harness) -> Non
         assert background_registry.complete(_TASK_ID, "call-x", BackgroundConclusion({})) is False
 
 
-async def test_running_run_cancel_drops_watches_when_execution_settles(harness) -> None:
+async def test_user_stop_keeps_background_work_in_every_phase(harness) -> None:
+    """用户停止只打断当前驱动：挂起、运行中与空闲时停止都不撤销后台工作，挂起与运行中的 Run 照常取消。"""
+    from app.core.tool.background.background_registry import background_registry
+
+    dropped: list[str] = []
+    background_registry.register(
+        "call-keep", task_id=_TASK_ID, run_id=None, kind="terminal_command", label="keep",
+        on_cancel=dropped.append,
+    )
+    try:
+        suspended = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+        suspended.status = "suspended"
+        await harness.actor.cancel("user")
+        assert suspended.status == "cancelled"
+
+        harness.actor.start()
+        harness.queue.put(_user())
+        await _settle()
+        running = harness.ledger.created[-1]
+        await harness.actor.cancel("user")
+        await _finish(running.id, "cancelled")
+
+        await harness.actor.cancel("user")
+        assert dropped == []
+        assert harness.settled == []
+        assert background_registry.pending(_TASK_ID) == ["keep"]
+    finally:
+        background_registry.drop_task(_TASK_ID)
+        await harness.actor.abort()
+
+
+async def test_recalling_a_running_run_drops_work_after_the_signal(harness) -> None:
+    """收回运行中的 Run：先打信号再撤销，信号在时这次驱动剩下的登记被拒收，不会留下后台工作。"""
     from app.core.tool.background.background_registry import background_registry
 
     harness.actor.start()
@@ -748,7 +826,6 @@ async def test_running_run_cancel_drops_watches_when_execution_settles(harness) 
     signalled_at_drop: list[bool] = []
 
     def on_cancel(_reason) -> None:
-        # 撤销必须先于取走取消信号：取走之后到达的结论不再被丢弃，会开出新 Run。
         signalled_at_drop.append(execution_module.cancellation_registry.is_cancelled(_TASK_ID))
         dropped.append(run.id)
 
@@ -760,12 +837,43 @@ async def test_running_run_cancel_drops_watches_when_execution_settles(harness) 
         label="terminal:t2",
         on_cancel=on_cancel,
     )
-    await harness.actor.cancel("user")
-    await _finish(run.id, "cancelled")
+    await harness.actor.cancel("parent")
     assert dropped == [run.id]
     assert signalled_at_drop == [True]
-    assert background_registry.pending(_TASK_ID, run.id) == []
+    late: list[str] = []
+    background_registry.register(
+        "call-late", task_id=_TASK_ID, run_id=run.id, kind="terminal_command", label="late",
+        on_cancel=late.append,
+    )
+    assert late == ["parent"]
+    assert not background_registry.has_work(_TASK_ID)
+    await _finish(run.id, "cancelled")
     await harness.actor.abort()
+
+
+async def test_recalling_an_idle_task_drops_its_background_work(harness) -> None:
+    """Run 已答复、Task 空闲：上游收回照样撤销后台工作，答复过的 Run 不改结局。"""
+    from app.core.tool.background.background_registry import background_registry
+
+    harness.actor.start()
+    harness.queue.put(_user())
+    await _settle()
+    [run] = harness.ledger.created
+    dropped: list[str] = []
+    background_registry.register(
+        "call-idle", task_id=_TASK_ID, run_id=run.id, kind="terminal_command", label="idle",
+        on_cancel=dropped.append,
+    )
+    try:
+        await _finish(run.id, "completed")
+        await harness.actor.cancel("parent")
+        assert dropped == ["parent"]
+        assert not background_registry.has_work(_TASK_ID)
+        assert harness.settled == [(_TASK_ID, ["call-idle"])]
+        assert run.status == "completed"
+    finally:
+        background_registry.drop_task(_TASK_ID)
+        await harness.actor.abort()
 
 
 async def test_completed_run_keeps_background_entries(harness) -> None:
@@ -785,6 +893,6 @@ async def test_completed_run_keeps_background_entries(harness) -> None:
         on_cancel=lambda _reason: None,
     )
     await _finish(run.id, "suspended")
-    assert background_registry.pending(_TASK_ID, run.id) == ["terminal:t3"]
+    assert background_registry.pending(_TASK_ID) == ["terminal:t3"]
     background_registry.drop_task(_TASK_ID)
     await harness.actor.abort()

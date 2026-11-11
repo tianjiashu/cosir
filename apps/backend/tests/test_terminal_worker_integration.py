@@ -11,8 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from app.tools.terminal_runtime.shell_resolver import ShellSpec
-from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
+from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker, ShellSpec
 from tests.terminal_test_support import requires_terminal_worker
 
 
@@ -237,7 +236,7 @@ def test_worker_cleans_up_when_the_backend_process_group_is_killed(tmp_path: Pat
     job_file = tmp_path / "job.pid"
     script = f"""
 import threading, time
-from app.tools.terminal_runtime.shell_resolver import ShellSpec
+from app.tools.terminal_runtime.worker_client import ShellSpec
 from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
 
 handshake = threading.Event()
@@ -428,8 +427,9 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
         cancellation_registry,
     )
     from app.service import depends as service_depends
-    from app.tools.terminal_runtime.session_service import TerminalSessionService
-    from app.tools.tool_handler.terminal_tools import TerminalListTool, TerminalReadTool
+    from app.tools.terminal_runtime.session.session_service import TerminalSessionService
+    from app.tools.tool_handler.terminal.terminal_list import TerminalListTool
+    from app.tools.tool_handler.terminal.terminal_read import TerminalReadTool
     from tests.runtime_context_stub import singleton_getter
 
     capture_terminal_effects(monkeypatch)

@@ -11,7 +11,7 @@ from typing import cast, get_args
 import pytest
 from pydantic import BaseModel
 
-from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
+from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_models.execute_terminal_args import (
     MacExecuteTerminalArgs,
     MacExecuteTerminalShell,
@@ -20,7 +20,7 @@ from app.tools.tool_models.execute_terminal_args import (
 )
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-_TOOL_MODULE = "app.tools.tool_handler.execute_terminal"
+_TOOL_MODULE = "app.tools.tool_handler.terminal.execute_terminal"
 _SHELLS_MODULE = "app.tools.shell.host_shells"
 
 

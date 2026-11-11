@@ -8,8 +8,10 @@ from typing import Any
 import pytest
 
 from app.config.constant import Constant
-from app.tools.tool_handler.terminal import command_output as command_output_module
-from app.tools.tool_handler.terminal.command_output import CommandOutput
+from app.tools.terminal_runtime.command import command_output as command_output_module
+from app.tools.terminal_runtime.command.command_output import CommandOutput
+from app.tools.terminal_runtime.command.execution_result import ExecutionResult
+from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 
 
 def _output(tmp_path: Path, **hooks: Any) -> CommandOutput:
@@ -28,6 +30,7 @@ def test_short_output_keeps_raw_display_and_normalized_model_text(tmp_path: Path
     assert summary.model_head == "hello\nworld\n"
     assert summary.overflowed is False
     assert summary.log_path == ""
+    assert summary.log_error == ""
     assert summary.display_omitted_lines == 0
     assert not (tmp_path / ".cosir" / "tool-artifacts").exists()
 
@@ -50,6 +53,34 @@ def test_over_budget_writes_the_normalized_full_text_to_a_log(
     assert raw.endswith(summary.model_tail) and 0 < len(summary.model_tail) <= 50
     assert summary.log_path.startswith(".cosir/tool-artifacts/")
     assert (tmp_path / summary.log_path).read_text(encoding="utf-8") == raw
+
+
+def test_output_just_over_the_budget_keeps_its_ending_for_the_model(tmp_path: Path) -> None:
+    """溢出恰好发生在最后一行时，模型正文仍带结尾汇总。
+
+    回归：tail 曾在溢出那一刻才开始攒，刚过预算就结束的输出只剩最后一行，测试汇总这类结尾全丢。
+    """
+    ending = [
+        "=== 3 failed, 897 passed ===",
+        "FAILED test_a",
+        "exit summary: see the failures listed above",
+    ]
+    lines: list[str] = []
+    while len("".join(f"{line}\n" for line in [*lines, *ending])) <= Constant.Tools.MAX_OUTPUT_CHARS:
+        lines.append(f"test_case_{len(lines):05d} PASSED")
+    raw = "".join(f"{line}\n" for line in [*lines, *ending])
+    output = _output(tmp_path)
+
+    output.feed(raw.encode())
+    output.finish()
+
+    summary = output.summary()
+    assert summary.overflowed is True
+    assert raw.endswith(summary.model_tail)
+    assert len(summary.model_tail) > Constant.Tools.MAX_OUTPUT_CHARS // 2
+    content = ExecuteTerminalTool._render_content(ExecutionResult(end="exited", exit_code=1), summary)
+    assert "=== 3 failed, 897 passed ===" in content
+    assert len(content) <= Constant.Tools.MAX_OUTPUT_CHARS
 
 
 def test_card_display_is_trimmed_to_the_recent_window(
@@ -123,6 +154,7 @@ def test_log_write_failure_does_not_break_collection(
     summary = output.summary()
     assert summary.overflowed is True
     assert summary.log_path == ""
+    assert "disk full" in summary.log_error
     assert summary.model_head == raw[:50]
     assert raw.endswith(summary.model_tail)
 

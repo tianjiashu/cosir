@@ -17,10 +17,10 @@ import pytest
 from app.core.tool.background import background_registry as background_module
 from app.core.tool.background.background_registry import background_registry
 from app.core.tool.schemas import ToolExecutionContext
-from app.tools.tool_handler import execute_terminal as execute_terminal_module
-from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
-from app.tools.tool_handler.terminal import LocalExecutionBackend
-from app.tools.tool_handler.terminal.command_output import CommandOutput as _CommandOutput
+from app.tools.terminal_runtime.command.command_output import CommandOutput as _CommandOutput
+from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
+from app.tools.tool_handler.terminal import execute_terminal as execute_terminal_module
+from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from tests.live_cold_support import registered
 from tests.terminal_test_support import requires_terminal_worker
 

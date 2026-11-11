@@ -40,11 +40,11 @@ from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import BackgroundWork
 from app.tools.display.terminal_display import build_terminal_display_data
-from app.tools.tool_handler import execute_terminal as execute_terminal_module
-from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
-from app.tools.tool_handler.terminal.command_output import CommandOutput
-from app.tools.tool_handler.terminal.execution_result import ExecutionResult
-from app.tools.tool_handler.terminal.output_stream import TerminalOutputStream
+from app.tools.terminal_runtime.command.command_output import CommandOutput
+from app.tools.terminal_runtime.command.execution_result import ExecutionResult
+from app.tools.tool_handler.terminal import execute_terminal as execute_terminal_module
+from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
+from app.tools.tool_handler.terminal.live_output_channel import LiveOutputChannel
 from tests.runtime_context_stub import runtime_stub
 from tests.transport_fixtures import consumed
 
@@ -257,7 +257,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
         dispatch_threads.append(threading.get_ident())
         return "stream"
 
-    channel = TerminalOutputStream.open(
+    channel = LiveOutputChannel.open(
         ToolExecutionContext(
             call_intent="test",
             step_id="step-1",
@@ -270,7 +270,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
             tool_call_id="call-1",
         ),
     )
-    assert isinstance(channel, TerminalOutputStream)
+    assert isinstance(channel, LiveOutputChannel)
     expected = "x" * (Constant.Tools.MAX_OUTPUT_CHARS + 1)
     producer = threading.Thread(target=channel.emit, args=(expected,))
     producer.start()
@@ -357,7 +357,7 @@ async def test_terminal_output_channel_is_built_from_worker_thread(tmp_path: Pat
     """工具执行线程里必须能按 ``event_loop`` 建出逐调用通道。
 
     回归：通道创建一度不再接收 ``loop``（改从 ``asyncio.get_running_loop()`` 取），而
-    ``TerminalOutputStream.open`` 在 ``asyncio.to_thread`` 的
+    ``LiveOutputChannel.open`` 在 ``asyncio.to_thread`` 的
     工作线程里调用它——工作线程内没有运行中循环，于是每次 ``execute_terminal`` 都抛
     ``TypeError``、只记一条 ERROR 日志，实时输出静默消失。
     """
@@ -377,10 +377,10 @@ async def test_terminal_output_channel_is_built_from_worker_thread(tmp_path: Pat
     def build_channel() -> Any:
         with pytest.raises(RuntimeError):
             asyncio.get_running_loop()
-        return TerminalOutputStream.open(replace(context, tool_call_id="call-1"))
+        return LiveOutputChannel.open(replace(context, tool_call_id="call-1"))
 
     channel = await asyncio.to_thread(build_channel)
-    assert isinstance(channel, TerminalOutputStream)
+    assert isinstance(channel, LiveOutputChannel)
 
 
 def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() -> None:

@@ -12,13 +12,11 @@ import pytest
 from app.core.tool.background import background_registry as background_module
 from app.core.tool.background.background_registry import background_registry
 from app.core.tool.schemas import ToolExecutionContext
-from app.tools.terminal_runtime.running_command_registry import running_commands
-from app.tools.tool_handler.execute_terminal import ExecuteTerminalTool
-from app.tools.tool_handler.terminal_tools import (
-    TerminalListTool,
-    TerminalReadTool,
-    TerminalStopTool,
-)
+from app.tools.terminal_runtime.command.running_command_registry import running_commands
+from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
+from app.tools.tool_handler.terminal.terminal_list import TerminalListTool
+from app.tools.tool_handler.terminal.terminal_read import TerminalReadTool
+from app.tools.tool_handler.terminal.terminal_stop import TerminalStopTool
 from tests.terminal_test_support import requires_terminal_worker
 
 pytestmark = [
@@ -41,7 +39,6 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
         task_id: int,
         tool_call_id: str,
         kind: str,
-        run_id: int | None,
         result: dict[str, object],
         hint: str,
         display_data: dict[str, object] | None = None,
@@ -126,7 +123,7 @@ def test_stop_and_read_reject_unknown_or_foreign_terminals(tmp_path) -> None:
     missing_stop = TerminalStopTool().execute(
         terminal_id="call-missing", execution_context=_context(tmp_path, "call-s1")
     )
-    assert missing_stop.status == "error" and "no running command call-missing" in (
+    assert missing_stop.status == "error" and "no terminal call-missing" in (
         missing_stop.content or ""
     )
 
@@ -171,5 +168,23 @@ def test_read_wakes_when_the_command_ends_by_itself(tmp_path, delivered) -> None
     assert time.monotonic() - started < 5
     assert result.status == "success"
     assert "exited" in (result.content or "") and "exit 3" in (result.content or "")
+    assert (result.display_data or {})["wait_result"]["end_reason"] == "command_ended"
     _wait_for(lambda: len(delivered) == 1)
     assert delivered[0][2]["exit_code"] == 3
+
+
+def test_a_shell_gone_after_startup_is_a_start_failure(tmp_path, delivered, monkeypatch) -> None:
+    """shell 在工具启动后才消失：执行后端报启动失败，输出照常由调用方封存，不变成内部错误。"""
+    from app.tools.terminal_runtime.command import local_backend
+
+    tool = ExecuteTerminalTool()
+    monkeypatch.setattr(local_backend, "find_shell", lambda _name: None)
+
+    result = tool.execute(  # noqa: S604 - 显式 shell 取值，find_shell 已被替换，不会启动
+        command="echo hi", shell="sh", execution_context=_context(tmp_path, "call-gone")
+    )
+
+    assert result.status == "error"
+    assert "[start_failed]" in (result.content or "")
+    assert "sh is not available" in (result.content or "")
+    assert running_commands.task_commands(_TASK_ID) == []

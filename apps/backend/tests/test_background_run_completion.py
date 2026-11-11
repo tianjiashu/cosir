@@ -15,8 +15,8 @@ from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage,
 from app.models.conversation_input import UserInputPresentation
 from app.service import depends
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
-from app.tools.tool_handler import execute_terminal
-from app.tools.tool_handler.terminal import ExecutionResult
+from app.tools.terminal_runtime.command.execution_result import ExecutionResult
+from app.tools.tool_handler.terminal import execute_terminal
 from tests.model_config_fixtures import create_model_config
 from tests.sdk_fixtures import sdk_events
 
@@ -25,7 +25,7 @@ from tests.sdk_fixtures import sdk_events
     "last",
     ["command", "delegate", "fork", "cancel", "restart", "queued_restart", "delegate_restart"],
 )
-async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypatch, last):
+async def test_background_results_reopen_the_task_after_its_run_answered(backend_env, tmp_path, monkeypatch, last):
     model = create_model_config(
         name="test",
         base_url="http://127.0.0.1",
@@ -150,17 +150,20 @@ async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypa
             ),
         )
         actor = spaces.get(task.id).actor
+        # 后台工作属于 Task：Run 不等它们，先答复并完成。
         first = await parked(actor)
-        assert (first.status, first.final_output) == ("suspended", None)
+        assert (first.status, first.final_output) == ("completed", "answer with 0 results")
         assert set(background_registry.live_background(task.id)) == {"bg-A", "bg-B"}
         gates["A"].set()
         await asyncio.wait_for(saw_first.wait(), 8)
+        # 结论到达时 Task 已空闲：开出新 Run 收尾，另一项工作仍在后台。
         second = await parked(actor)
-        assert (second.id, second.status, second.final_output) == (first.id, "suspended", None)
+        assert second.id != first.id
+        assert (second.status, second.final_output) == ("completed", "answer with 1 results")
         assert set(background_registry.live_background(task.id)) == {"bg-B"}
         if last in {"restart", "queued_restart", "delegate_restart"}:
             if last == "queued_restart":
-                # 结果已落队列，但原执行者没来得及消费就退出。
+                # 结果已落队列，但调度器没来得及处理就退出。
                 from app.core.tool.background.background_job import BackgroundConclusion
 
                 await actor.abort()
@@ -173,7 +176,8 @@ async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypa
             spaces.bind_loop(asyncio.get_running_loop())
             background_registry.open()
             depends.get_recover_service().recover_after_restart()
-            actor = spaces.get(task.id).actor
+            # 只有带可推进消息的 Task 会被恢复物化；重启后空闲的 Task 在这里按需物化。
+            actor = spaces.get_or_create(task.id).actor
         elif last == "cancel":
             assert await asyncio.to_thread(
                 TransportAssistantService().cancel_tool_call, task.id, "bg-B"
@@ -182,12 +186,8 @@ async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypa
             child_gate.set()
         else:
             gates["B"].set()
-        if last in {"restart", "delegate_restart"}:
-            # 挂起不是静止：重启收尾同步完成后停在挂起，没有执行者也没有新消息。
-            assert await actor.phase() == "suspended"
-        else:
-            assert await actor.wait_quiescent(8)
-        [run] = depends.get_conversation_run_crud().list_by_task(task.id)
+        assert await actor.wait_quiescent(8)
+        runs = depends.get_conversation_run_crud().list_by_task(task.id)
         rows = depends.get_conversation_task_context_crud().get(task.id)
         statuses = {
             r.message["tool_call_id"]: r.metadata.status
@@ -204,33 +204,31 @@ async def test_results_resume_one_run_in_batches(backend_env, tmp_path, monkeypa
             for r in rows
             if r.message["role"] == "assistant" and not r.message.get("tool_calls")
         ]
-        if last in {"restart", "delegate_restart"}:
-            # 重启只收敛：占位推「已中断」，不投结论、不唤醒，Run 停在挂起等下一条用户消息。
-            assert (run.id, run.status, run.final_output) == (first.id, "suspended", None)
+        pending = depends.get_task_message_queue().pending_nowait(task.id)
+        if last in {"restart", "delegate_restart", "cancel"}:
+            # 重启只收敛（占位推「已中断」、留一条通知）；单停只落定卡片、回执留给下一次推进。都不开新 Run。
+            assert [(r.status, r.final_output) for r in runs] == [
+                ("completed", "answer with 0 results"),
+                ("completed", "answer with 1 results"),
+            ]
             assert statuses == {"bg-A": "completed", "bg-B": "cancelled"}
             assert result_call_ids == ["bg-A"]
             assert [len(results) for results in parent_inputs] == [0, 0, 1]
-            assert final_answers == []
+            assert final_answers == ["answer with 0 results", "answer with 1 results"]
+            expected_kind = "background_result" if last == "cancel" else "system_notice"
+            assert [message.kind for message in pending] == [expected_kind]
         else:
-            assert (run.id, run.status, run.final_output) == (
-                first.id,
-                "completed",
-                "answer with 2 results",
-            )
-            assert statuses == {
-                "bg-A": "completed",
-                "bg-B": "cancelled" if last == "cancel" else "completed",
-            }
+            assert [(r.status, r.final_output) for r in runs] == [
+                ("completed", "answer with 0 results"),
+                ("completed", "answer with 1 results"),
+                ("completed", "answer with 2 results"),
+            ]
+            assert statuses == {"bg-A": "completed", "bg-B": "completed"}
             assert result_call_ids == ["bg-A", "bg-B"]
             if last == "queued_restart":
                 assert "already queued" in parent_inputs[-1][1]
             assert [len(results) for results in parent_inputs] == [0, 0, 1, 2]
-            assert final_answers == [run.final_output]
-        pending = depends.get_task_message_queue().pending_nowait(task.id)
-        if last in {"restart", "delegate_restart"}:
-            # 中断通知留在队列，等这个挂起的 Task 下次被驱动时并入。
-            assert [message.kind for message in pending] == ["system_notice"]
-        else:
+            assert final_answers == [r.final_output for r in runs]
             assert pending == []
     finally:
         child_gate.set()

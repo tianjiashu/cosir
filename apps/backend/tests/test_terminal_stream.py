@@ -13,7 +13,7 @@ import pytest
 from terminal_test_support import ReadyWorker, make_service, start
 
 from app.config.constant import Constant
-from app.tools.terminal_runtime.stream import (
+from app.tools.terminal_runtime.session.stream import (
     OVERFLOW_EVENT_TYPE,
     TerminalStreamBuffer,
     TerminalStreamSubscription,

@@ -19,7 +19,7 @@ vi.mock("@/lib/assistant/turn/disclosure-store", async (importOriginal) => ({
 
 import { ForegroundWaitAction } from "@/components/conversation/tools/foreground-wait-action";
 import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
-import { BackgroundTasksBody, BackgroundTasksSummary } from "@/components/conversation-aside/background-tasks-card";
+import { BackgroundTasksActions, BackgroundTasksBody, BackgroundTasksSummary } from "@/components/conversation-aside/background-tasks-card";
 import { formatElapsed } from "@/components/conversation-aside/background-task-row";
 import type { BackgroundTaskEntry, TransportBackgroundWork, TransportToolCallPart } from "@/lib/assistant/contract";
 import { toToolCallPart } from "@/lib/assistant/transport-message-converter";
@@ -159,6 +159,14 @@ describe("后台任务卡", () => {
     expect(html).not.toContain("已结束");
     expect(html).not.toContain("停止");
     expect(html).not.toMatch(/\d+s</);
+  });
+
+  // 目的：用户停止 Task 不动后台工作，「全部停止」是一次停掉它们的入口；潜在缺陷：没有运行中的条目时仍露出按钮。
+  it("标题行的「全部停止」只在有运行中的条目时出现", () => {
+    board.entries.set(1, [entry("a", { status: "settling" }), entry("b", { status: "completed" })]);
+    expect(renderToStaticMarkup(<BackgroundTasksActions taskId={1} />)).toBe("");
+    board.entries.set(1, [entry("a"), entry("b", { status: "settling" })]);
+    expect(renderToStaticMarkup(<BackgroundTasksActions taskId={1} />)).toContain("全部停止");
   });
 
   it("运行数与耗时格式", () => {

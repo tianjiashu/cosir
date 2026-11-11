@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from app.tools.tool_handler.terminal.command_output import CommandOutput as _CommandOutput
-from app.tools.tool_handler.terminal.local_backend import LocalExecutionBackend
+from app.tools.terminal_runtime.command.command_output import CommandOutput as _CommandOutput
+from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
 from tests.terminal_test_support import requires_terminal_worker, run_local_command
 
 pytestmark = [
@@ -110,6 +110,7 @@ def test_a_stop_after_the_command_exited_keeps_its_exit(tmp_path: Path) -> None:
 
     output = _CommandOutput(workspace_root=tmp_path)
     result = backend.execute("(trap '' HUP TERM; exec sleep 5) & echo done", str(tmp_path), 30, output)
+    output.finish()
 
     assert result.end == "exited" and result.exit_code == 0
     assert "done" in output.summary().display
@@ -133,8 +134,8 @@ def test_command_is_cleaned_up_when_the_backend_process_group_is_killed(tmp_path
     script = f"""
 import time
 from pathlib import Path
-from app.tools.tool_handler.terminal.local_backend import LocalExecutionBackend
-from app.tools.tool_handler.terminal.command_output import CommandOutput
+from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
+from app.tools.terminal_runtime.command.command_output import CommandOutput
 output = CommandOutput(workspace_root=Path({str(tmp_path)!r}))
 LocalExecutionBackend().execute(
     "trap '' HUP TERM; sleep 60 & echo $! > {job_file}; wait", {str(tmp_path)!r}, 120, output

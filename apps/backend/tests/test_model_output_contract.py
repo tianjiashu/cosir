@@ -97,11 +97,6 @@ class _ModelHarness:
 def _patch_model_runtime(monkeypatch: Any, harness: _ModelHarness) -> None:
     """把流式投影依赖绑定到测试桩。"""
 
-    monkeypatch.setattr(
-        model_module.service_depends,
-        "get_conversation_task_context_service",
-        lambda: SimpleNamespace(run_awaits_background=lambda *_: False),
-    )
     monkeypatch.setattr(streaming_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(streaming_module, "emit", harness.events.append)
 

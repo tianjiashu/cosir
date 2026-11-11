@@ -40,8 +40,8 @@ from app.service import depends
 from app.storage.model.task_model import TaskModel
 from app.storage.store_engines import main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
-from app.tools.tool_handler import execute_terminal
-from app.tools.tool_handler.terminal import ExecutionResult
+from app.tools.terminal_runtime.command.execution_result import ExecutionResult
+from app.tools.tool_handler.terminal import execute_terminal
 from tests.model_config_fixtures import create_model_config
 from tests.sdk_fixtures import sdk_events
 

@@ -8,10 +8,10 @@ import pytest
 from terminal_test_support import run_in_thread
 
 from app.config.constant import Constant
-from app.tools.terminal_runtime.inputs import TerminalWait
-from app.tools.terminal_runtime.running_command import RunningCommand
-from app.tools.terminal_runtime.running_command_registry import RunningCommandRegistry
-from app.tools.tool_handler.terminal.execution_result import ExecutionResult
+from app.tools.terminal_runtime.command.execution_result import ExecutionResult
+from app.tools.terminal_runtime.command.running_command import RunningCommand
+from app.tools.terminal_runtime.command.running_command_registry import RunningCommandRegistry
+from app.tools.terminal_runtime.observation.wait import TerminalWait
 
 
 def never() -> bool:
@@ -20,7 +20,7 @@ def never() -> bool:
 
 def _command(command: str = "npm run dev") -> RunningCommand:
     return RunningCommand(
-        task_id=1, command_id="call-1", command=command, shell_kind="sh", cwd="/workspace"
+        command_id="call-1", command=command, shell_kind="sh", cwd="/workspace"
     )
 
 
@@ -77,6 +77,30 @@ def test_wait_conditions_are_woken_by_feed_and_finish() -> None:
     command.finish(ExecutionResult(end="exited", exit_code=0))
     returned_thread.join(2)
     assert returned["result"].wait_result["end_reason"] == "command_returned"
+
+
+def test_wait_settles_by_its_condition_or_by_the_command_ending() -> None:
+    """来源结束时的统一规则：已成立的条件优先，否则 command_ended（不再借用 session_ended）。"""
+    unmet = _command()
+    thread, box = run_in_thread(
+        lambda: _read(unmet, wait=TerminalWait(until="match", pattern="never", timeout_ms=5000))
+    )
+    time.sleep(0.05)
+    unmet.finish(ExecutionResult(end="exited", exit_code=3))
+    thread.join(2)
+    assert box["result"].wait_result["end_reason"] == "command_ended"
+
+    met = _command()
+    thread, box = run_in_thread(
+        lambda: _read(met, wait=TerminalWait(until="match", pattern="^ready$", timeout_ms=5000))
+    )
+    time.sleep(0.05)
+    # 最后一批输出与结束在同一次唤醒前到达：等待按已成立的条件结算。
+    with met._condition:
+        met.feed(["ready"], "")
+        met.finish(ExecutionResult(end="exited", exit_code=0))
+    thread.join(2)
+    assert box["result"].wait_result["end_reason"] == "matched"
 
 
 def test_finished_command_reports_its_end_in_the_header() -> None:
