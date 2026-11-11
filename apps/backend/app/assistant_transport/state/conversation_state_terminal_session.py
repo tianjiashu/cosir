@@ -23,7 +23,7 @@ from app.assistant_transport.state.wire_shape import (
 )
 
 if TYPE_CHECKING:
-    from app.tools.terminal_runtime.session_runtime import SessionSnapshot
+    from app.tools.terminal_runtime.session.session_runtime import SessionSnapshot
 
 TerminalSessionStatus = Literal["starting", "running", "exited", "closed", "failed"]
 TerminalSessionIntegration = Literal["starting", "ready", "unavailable", "off"]

@@ -187,7 +187,7 @@ async def proposed_team(reviewer, tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     "ending",
-    ["done", "failed", "user_stop", "parent_stop", "delete", "shutdown"],
+    ["done", "failed", "user_stop", "task_stop", "parent_stop", "delete", "shutdown"],
 )
 async def test_approved_team_runs_in_background(proposed_team, ending):
     first, decision, model = proposed_team
@@ -224,9 +224,12 @@ async def test_approved_team_runs_in_background(proposed_team, ending):
         assert caught.value.code == "DECISION_NOT_AWAITED"
         if ending == "user_stop":
             assert await asyncio.to_thread(service.cancel_tool_call, task_id, CALL_ID)
+        elif ending == "task_stop":
+            # 用户停止 Task 只打断当前驱动：Task 空闲时什么也不做，Team 照常跑完并开新 Run 收尾。
+            await service.cancel(task_id)
         elif ending == "parent_stop":
-            # Run 已答复、Task 空闲，停止照样撤销它的后台工作。
-            await actor.cancel()
+            # Run 已答复、Task 空闲，上游收回照样撤销它的后台工作。
+            await actor.cancel("parent")
         elif ending in {"delete", "shutdown"}:
             if ending == "shutdown":
                 # 模型一直不发下一帧，协调者仍应当退出。
@@ -271,7 +274,7 @@ async def test_approved_team_runs_in_background(proposed_team, ending):
             assert current.status == "completed"
             [result] = results
             body = str(result.message["content"])
-            expected = {"done": "completed", "failed": "failed"}[ending]
+            expected = {"done": "completed", "failed": "failed", "task_stop": "completed"}[ending]
             assert f'"status": "{expected}"' in body and ".cosir/agent-team-runs/" in body
             assert state["status"] == "completed"
 

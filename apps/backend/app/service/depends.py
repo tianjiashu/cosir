@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from app.storage.crud.workspace_crud import WorkspaceCrud
     from app.tools.host.host_link import HostLink
     from app.tools.mcp.connection_pool import MCPConnectionPool
-    from app.tools.terminal_runtime.session_service import TerminalSessionService
+    from app.tools.terminal_runtime.session.session_service import TerminalSessionService
 
 
 _T = TypeVar("_T")
@@ -177,7 +177,7 @@ def get_workspace_crud() -> WorkspaceCrud:
 def get_terminal_session_service() -> TerminalSessionService:
     """返回进程级 terminal session service 单例。"""
 
-    from app.tools.terminal_runtime.session_service import TerminalSessionService
+    from app.tools.terminal_runtime.session.session_service import TerminalSessionService
 
     return TerminalSessionService()
 

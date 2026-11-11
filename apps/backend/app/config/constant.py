@@ -68,6 +68,9 @@ class Constant:
         OBSERVATION_TAIL_LINES: int = 60
         # 观察文本中单行的最大字符数，超出部分以省略标记代替。
         OBSERVATION_LINE_MAX_CHARS: int = 2000
+        # 卡片里命令输出保留的最近字符数；完整输出在日志文件里。每次重新订阅，首帧都要带上全部卡片，
+        # 窗口越大重连越慢。
+        DISPLAY_OUTPUT_WINDOW_CHARS: int = 256 * 1024
         # write 默认等待：输出静默 500ms，总超时 3s。
         WAIT_DEFAULT_QUIET_MS: int = 500
         WAIT_DEFAULT_TIMEOUT_MS: int = 3000
@@ -76,6 +79,8 @@ class Constant:
         WAIT_MAX_TIMEOUT_MS: int = 30_000
         # 事件驱动等待的复查时间片：只用于复查 Run 取消信号，条件判定由 worker 事件唤醒。
         WAIT_CANCEL_CHECK_SECONDS: float = 0.25
+        # terminal_stop 等命令进程收尾的时限；到点仍未退出返回受控错误，结论稍后照常回投。
+        COMMAND_STOP_WAIT_SECONDS: float = 10.0
         # --- Agent 观察 ---
         # 用户最后一次按键后多久内视为「正在打字」：terminal_list / read 据此提示 user typing。
         USER_TYPING_IDLE_SECONDS: float = 3.0

@@ -24,13 +24,13 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service.depends import get_terminal_session_service
 from app.tools.terminal_runtime.errors import (
-    TerminalSessionError,
+    TerminalError,
     TerminalSessionResyncRequiredError,
     TerminalWorkerBackpressureError,
 )
-from app.tools.terminal_runtime.session_runtime import TerminalSessionRuntime
-from app.tools.terminal_runtime.session_service import TerminalSessionService
-from app.tools.terminal_runtime.stream import (
+from app.tools.terminal_runtime.session.session_runtime import TerminalSessionRuntime
+from app.tools.terminal_runtime.session.session_service import TerminalSessionService
+from app.tools.terminal_runtime.session.stream import (
     OVERFLOW_EVENT_TYPE,
     PROTOCOL,
     TerminalStreamSubscription,
@@ -57,7 +57,7 @@ async def terminal_session_stream(
         after_seq = _parse_attach(await _receive_frame(websocket))
         try:
             runtime = terminal_service.require(session_id, task_id)
-        except TerminalSessionError as exc:
+        except TerminalError as exc:
             await _send_protocol_error(websocket, session_id, exc.code, _public_error(exc))
             return
         try:
@@ -68,7 +68,7 @@ async def terminal_session_stream(
             await websocket.send_json(await asyncio.to_thread(runtime.resync_event, exc.after_seq))
             await websocket.close(code=1013, reason="terminal output resync required")
             return
-        except TerminalSessionError as exc:
+        except TerminalError as exc:
             await _send_protocol_error(websocket, session_id, exc.code, _public_error(exc))
             return
         subscription = attachment.subscription
@@ -185,7 +185,7 @@ async def _handle_client_frame(
             "terminal_stream_control_backpressure",
             extra={"msg": "终端控制帧遇到 worker 背压", "data": {"session_id": runtime.session_id}},
         )
-    except TerminalSessionError as exc:
+    except TerminalError as exc:
         log.info(
             "terminal_stream_control_ignored",
             extra={
@@ -278,7 +278,7 @@ async def _send_protocol_error(
         pass
 
 
-def _public_error(exc: TerminalSessionError) -> str:
+def _public_error(exc: TerminalError) -> str:
     """把领域错误转换为不泄漏路径 / 异常正文的 WS 错误。"""
 
     if exc.code == "TERMINAL_SESSION_NOT_FOUND":

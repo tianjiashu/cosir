@@ -109,7 +109,8 @@ class BackgroundWork(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: BackgroundKind
-    # 实际启动工作的 Run；批准 Team 的 Run 可能与原工具行所属 Run 不同。
+    # 实际启动工作的 Run（只是来历：工作属于 Task，生命周期不看它）；批准 Team 的 Run 可能与原工具行
+    # 所属 Run 不同。
     run_id: int | None
     # 启动时的原始命令意图 / 子 Task 名快照；UI 动词、图标与本地化仍归前端。
     label: str

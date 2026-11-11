@@ -70,6 +70,14 @@ from app.utils.path import system_cosir as paths
 from app.utils.path.system_cosir import system_cosir_dir
 
 
+def _on_background_changed(task_id: int) -> None:
+    """后台结果登记表的监听方：静止判定先于看板投影，投影失败不能拖住等待方。"""
+    space = task_runtime_spaces.get(task_id)
+    if space is not None:
+        space.actor.notify_state_changed()
+    get_conversation_task_state_service().refresh_background_results(task_id)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """包装生命周期：把启动异常写入启动状态，并保证日志管线一定被卸载。
@@ -197,10 +205,9 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     # ``RecoverService.recover_after_restart``。
     task_runtime_spaces.bind_loop(asyncio.get_running_loop())
     background_registry.open()
-    # 看板与前台等待随登记表变化整表重投影进 Transport snapshot（通知线程、锁外）。
-    background_registry.set_listener(
-        lambda task_id: get_conversation_task_state_service().refresh_background_results(task_id)
-    )
+    # 登记表变化：先唤醒等 Task 静止的等待方（委派、Team 节点），再把看板与前台等待整表重投影进
+    # Transport snapshot（通知线程、锁外）。
+    background_registry.set_listener(_on_background_changed)
     # 进行中的交接随登记表变化整表重投影进 snapshot 顶层 ``handoffs``。
     handoff_registry.set_listener(
         lambda task_id: get_conversation_task_state_service().refresh_handoffs(task_id)

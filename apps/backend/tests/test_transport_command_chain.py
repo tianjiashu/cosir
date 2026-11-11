@@ -22,8 +22,8 @@ import pytest
 from app.assistant_transport.service import transport_assistant_service as service_module
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.core import task_actor as actor_module
-from app.core import task_recall as recall_module
 from app.core import task_execution as execution_module
+from app.core import task_recall as recall_module
 from app.core.task_actor import TaskActor
 from app.core.tool.background import cancel_placeholders as placeholder_module
 from app.core.tool.background.cancel_placeholders import USER_CANCELLED_HINT

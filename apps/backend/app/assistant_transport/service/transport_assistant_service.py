@@ -180,8 +180,8 @@ class TransportAssistantService:
     async def cancel(self, task_id: int) -> None:
         """用户停止 Task：交给 Task 的 actor（运行中打信号，挂起的 Run 直接迁移为 cancelled）。
 
-        向 Agent Team 与子 Task 的传播、「用户已取消」通知都在 Run 落定 cancelled 后由 actor 完成，
-        这里不提前做：此刻 Run 还没停下，也可能根本没有可停止的对象。
+        用户停止只打断当前驱动：后台工作、Agent Team 与子 Task 照常运行（见 ``TaskActor.cancel``），停它们
+        走调用级的 :meth:`cancel_tool_call`。「用户已停止」通知由下一次驱动从结束原因推导。
 
         异常:
             KeyError: Task 不存在。
@@ -193,15 +193,16 @@ class TransportAssistantService:
         """取消一次工具调用；没有可取消的对象（或已标记过）时返回 ``False``。
 
         这次调用登记了后台结果时撤销登记，不要求 Run 在执行（后台工作本来就在 Run 之外）：前台条目
-        由撤销回调唤醒工具线程、以取消结果收尾；后台条目向其活动 Run 回投取消结论，所属 Run 已结束
-        时只结算占位。没有登记时只中止当前执行中的工具调用：看执行者而不是 Run 状态，挂起的 Run
-        没有执行者，标记了也没人取。
+        由撤销回调唤醒工具线程、以取消结果收尾；后台条目回投取消结论：有活动 Run 就交给它（不论
+        登记它的是哪个 Run）；Task 空闲时先结算占位，结论留在队列里随下一次推进并入、不开新 Run。
+        没有登记时只中止当前执行中的工具调用：看执行者而不是 Run 状态，挂起的 Run 没有执行者，标记了
+        也没人取。
 
         异常:
             KeyError: Task 不存在。
         """
         self._tasks.get_task(task_id)
-        return background_registry.request_user_cancel(
+        return background_registry.request_cancel(
             task_id, tool_call_id, driving=task_runtime_spaces.get_or_create(task_id).actor.driving
         )
 

@@ -72,10 +72,6 @@ class ConversationTaskContextService:
             return rows, None
         return rows, self._run_crud.get(run_id)
 
-    def run_awaits_background(self, task_id: int, run_id: int) -> bool:
-        """正常完成前检查本 Run 是否还有后台调用尚欠结论。"""
-        return self._crud.run_awaits_background(task_id, run_id)
-
     def claimed_decisions(self, task_id: int) -> list[str]:
         """决定已认领、还在执行的 HITL 调用（占位 ``running``）；后台占位是 ``pending``，不在其中。"""
         return [

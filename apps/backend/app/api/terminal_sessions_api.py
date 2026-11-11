@@ -29,12 +29,12 @@ from app.service.terminal.terminal_workbench_service import (
 )
 from app.tools.terminal_runtime.errors import (
     ShellResolutionError,
-    TerminalSessionError,
+    TerminalError,
     TerminalSessionNotFoundError,
     TerminalSessionOwnershipError,
     TerminalWorkerUnavailableError,
 )
-from app.tools.terminal_runtime.shell_resolver import ShellResolver
+from app.tools.terminal_runtime.session.shell_resolver import ShellResolver
 
 _service = TerminalWorkbenchService()
 
@@ -46,7 +46,7 @@ def _raise(status_code: int, code: str, message: str, *, retryable: bool) -> NoR
     )
 
 
-def _raise_terminal_error(exc: TerminalSessionError, *, task_id: int, operation: str) -> NoReturn:
+def _raise_terminal_error(exc: TerminalError, *, task_id: int, operation: str) -> NoReturn:
     """把终端领域错误映射为 HTTP 状态；未单列的领域错误一律按状态冲突（409）处理。"""
 
     if isinstance(exc, TerminalSessionNotFoundError | TerminalSessionOwnershipError):
@@ -107,7 +107,7 @@ async def create_terminal_session(
         _raise(404, "TASK_NOT_FOUND", "task not found", retryable=False)
     except TerminalWorkbenchTaskTypeError as exc:
         _raise(409, exc.code, str(exc), retryable=exc.retryable)
-    except TerminalSessionError as exc:
+    except TerminalError as exc:
         _raise_terminal_error(exc, task_id=task_id, operation="start")
     return CreateTerminalSessionResponse(session_id=session_id)
 
@@ -118,6 +118,6 @@ async def close_terminal_session(task_id: int, session_id: str) -> dict[str, obj
 
     try:
         await asyncio.to_thread(_service.close_session, task_id, session_id)
-    except TerminalSessionError as exc:
+    except TerminalError as exc:
         _raise_terminal_error(exc, task_id=task_id, operation="close")
     return {}

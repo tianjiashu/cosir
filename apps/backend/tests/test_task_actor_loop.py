@@ -13,8 +13,8 @@ from typing import Any, ClassVar
 import pytest
 
 from app.core import task_actor as actor_module
-from app.core import task_recall
 from app.core import task_execution as execution_module
+from app.core import task_recall
 from app.core.task_actor import SessionConflictError, TaskActor
 from app.core.tool.background.background_job import BackgroundConclusion
 from app.core.workflow.execution_state.run_mailbox import RunMailbox

@@ -61,19 +61,6 @@ class ConversationTaskContextCrud:
             func.json_extract(metadata, "$.status") == "pending",
         )
 
-    def run_awaits_background(self, task_id: int, run_id: int) -> bool:
-        """本 Run 仍在上下文中、尚未并入结论的后台调用是否存在。"""
-        row = ConversationTaskContextModel
-        pending = select(row.sequence).where(
-            row.task_id == task_id,
-            row.include_in_context.is_(True),
-            row.run_id.is_not(None),
-            func.json_extract(row.metadata_json, "$.background.run_id") == run_id,
-            self._pending_background(),
-        )
-        with self._session_factory.begin() as session:
-            return bool(session.scalar(select(pending.exists())))
-
     def list_unsettled_placeholders(
         self, task_id: int | None = None, session: Session | None = None
     ) -> list[ConversationTaskContextRecord]:

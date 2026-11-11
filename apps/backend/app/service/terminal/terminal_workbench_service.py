@@ -35,7 +35,7 @@ class TerminalWorkbenchService:
         异常:
             KeyError: Task 或其工作区不存在。
             TerminalWorkbenchTaskTypeError: Task 不是 ``user`` / ``fork``。
-            TerminalSessionError: 终端服务拒绝（shell 不可用、容量、状态、worker 不可用）。
+            TerminalError: 终端服务拒绝（shell 不可用、容量、状态、worker 不可用）。
         """
         task = get_task_service().get_task(task_id)
         # 只有侧栏对话有终端工作台，与终端工具只给侧栏对话同一条规则（``models.task_kind``）。
@@ -63,7 +63,7 @@ class TerminalWorkbenchService:
         """关闭本 Task 的一个会话；重复关闭由终端服务幂等处理。
 
         异常:
-            TerminalSessionError: 会话不存在或不属于该 Task、清理失败等。
+            TerminalError: 会话不存在或不属于该 Task、清理失败等。
         """
         get_terminal_session_service().close(session_id, task_id=task_id)
         log.info(
