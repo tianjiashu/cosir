@@ -7,6 +7,7 @@ part 联合类型 ConversationStatePart 以及文本阶段与工具调用状态�
 from .conversation_state_agent_message_part import (
     ConversationStateAgentMessagePart,
     ConversationStateMessageSource,
+    ConversationStateReport,
 )
 from .conversation_state_image_part import ConversationStateImagePart
 from .conversation_state_text_part import ConversationStateTextPart, TextPartStatus
@@ -29,6 +30,7 @@ __all__ = [
     "ConversationStateImagePart",
     "ConversationStateMessageSource",
     "ConversationStatePart",
+    "ConversationStateReport",
     "ConversationStateTextPart",
     "ConversationStateToolCallPart",
     "TextPartStatus",

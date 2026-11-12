@@ -5,11 +5,22 @@ from typing import Literal
 from typing_extensions import TypedDict
 
 
-class ConversationStateMessageSource(TypedDict):
-    """Agent 消息的发送方：前端据 ``taskId`` 跳到来源 Task，``name`` 是发送时的显示名。"""
+class ConversationStateReport(TypedDict):
+    """派生 Task 的汇报：它的 Run 以什么结局落定，以及这是不是中间结果（之后还会再汇报）。"""
 
-    taskId: int
+    status: Literal["completed", "failed"]
+    intermediate: bool
+
+
+class ConversationStateMessageSource(TypedDict):
+    """Agent 消息的发送方：``taskId`` 与 ``teamRunId`` 恰好一个非空（Agent Team 的汇报来自 TeamRun），前端
+    据 ``taskId`` 跳到来源 Task；``name`` 是发送时的显示名；``report`` 非空时这条消息是来源的汇报（见
+    领域 ``MessageSource``）。"""
+
+    taskId: int | None
+    teamRunId: int | None
     name: str
+    report: ConversationStateReport | None
 
 
 class ConversationStateAgentMessagePart(TypedDict):

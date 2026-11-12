@@ -26,8 +26,10 @@ class ToolResultFields(TypedDict):
 def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
     """实时状态与冷重建采用同一错误口径和关联信息，返回副本避免污染持久事实。
 
-    ``awaitingUser`` 只在这里计算：占位行 ``pending`` 且不是后台占位，就是「等你操作」（HITL 等
-    决定、交接等交还）。每次都显式写，决定到达、重放写回终态时自然清回 ``False``。
+    ``awaitingUser`` 按 metadata 计算：占位行 ``pending`` 且不是后台占位，就是「等你操作」（HITL 等
+    决定、交接等交还）。每次都显式写，决定到达、重放写回终态时自然清回 ``False``。实时投影的行
+    恒属当前 Run、在上下文里；冷重建另按行级规则 ``ConversationTaskContextRecord.awaits_user``
+    纠正继承副本与撤回移出的行。
     """
     fields = ToolResultFields(
         status=metadata.status,

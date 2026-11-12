@@ -11,7 +11,7 @@ import asyncio
 from collections.abc import Awaitable
 from typing import NoReturn
 
-from fastapi import Depends, HTTPException, Query, Response
+from fastapi import Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.app import app
@@ -265,10 +265,11 @@ async def background_tool_call(
     结论与转后台同时到达时由登记表裁决，结论先到则本请求 409、工具照常返回结果。
     """
 
-    async def detach() -> None:
-        await asyncio.to_thread(service.background_tool_call, task_id, tool_call_id)
-
-    return await _accept(task_id, "background_tool_call", detach())
+    return await _accept(
+        task_id,
+        "background_tool_call",
+        asyncio.to_thread(service.background_tool_call, task_id, tool_call_id),
+    )
 
 
 @app.post("/tasks/{task_id}/tool-calls/{tool_call_id}/cancel")
@@ -276,25 +277,16 @@ async def cancel_tool_call(
     task_id: int,
     tool_call_id: str,
     service: TransportAssistantService = Depends(get_transport_assistant_service),
-) -> Response:
+) -> JSONResponse:
     """取消一次工具调用，Run 与 Agent 继续执行。
 
     登记了后台结果的调用（前台等待或后台工作）撤销登记，不要求 Run 在执行；其余只给 Task 当前
-    执行中的调用打工具级取消信号。本端点只表示取消已被接受；工具调用终态以 canonical snapshot
-    为准。
-
-    异常:
-        HTTPException: 没有可取消的对象（Task 当前没有执行、调用已结束或已标记过取消）时 409。
+    执行中的调用打工具级取消信号。成功只表示取消已被接受，工具调用终态以 snapshot 为准；
+    409 ``TOOL_CALL_NOT_CANCELLABLE``：调用已结束、已标记过取消，或 Task 当前没有执行者。
     """
-    if not await asyncio.to_thread(service.cancel_tool_call, task_id, tool_call_id):
-        raise HTTPException(
-            status_code=409, detail="task has no running execution or call is already cancelled"
-        )
-    log.info(
-        "tool_call_cancelled",
-        extra={
-            "msg": "工具调用取消信号已接受",
-            "data": {"task_id": task_id, "tool_call_id": tool_call_id},
-        },
+
+    return await _accept(
+        task_id,
+        "cancel_tool_call",
+        asyncio.to_thread(service.cancel_tool_call, task_id, tool_call_id),
     )
-    return JSONResponse(content={"task_id": task_id, "tool_call_id": tool_call_id})

@@ -27,7 +27,8 @@ from app.assistant_transport.state.wire_shape import (
 from app.models.message_metadata import BackgroundKind, BackgroundWork
 
 # ``settling``：工作已不在登记表里，但占位行还没落定——结论已到、等下一个模型步并入，或撤销已出队、
-# 结算还没写完。两者都马上会落到 ``completed`` / ``cancelled``，看板不猜结局，也不让条目消失。
+# 结算还没写完（收回早于占位写入时，actor 在驱动释放后结算）。两者都会落到 ``completed`` /
+# ``cancelled``，看板不猜结局，也不让条目消失。
 BackgroundTaskStatus = Literal["running", "settling", "completed", "cancelled"]
 
 

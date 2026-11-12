@@ -51,7 +51,20 @@ def build_turn_input(
     if source is None:
         return build_presentation_parts(presentation), None
     text: UserInputPart = {"type": "text", "text": presentation.text, "status": "completed"}
-    return [text], {"taskId": source.task_id, "name": source.name}
+    return [text], wire_source(source)
+
+
+def wire_source(source: MessageSource) -> ConversationStateMessageSource:
+    """领域来源 → wire 来源；开回合的消息与途中来信共用，两处展示一致。"""
+    report = source.report
+    return {
+        "taskId": source.task_id,
+        "teamRunId": source.team_run_id,
+        "name": source.name,
+        "report": None
+        if report is None
+        else {"status": report.status, "intermediate": report.intermediate},
+    }
 
 
 def build_agent_message_part(
@@ -62,7 +75,7 @@ def build_agent_message_part(
         "type": "agent-message",
         "id": user_message_id(message_id),
         "text": presentation.text,
-        "source": {"taskId": source.task_id, "name": source.name},
+        "source": wire_source(source),
     }
 
 

@@ -187,8 +187,9 @@ class ConversationEventProjector:
                         },
                     },
                 )
-        # Task 执行状态推送：只有 Run 开始与状态迁移会改变它；在投影锁外发布（要读库）。
-        if event.type in ("run_initialized", "run_status_changed"):
+        # Task 状态推送：执行状态随 Run 开始与迁移变化，等你操作随工具调用状态迁移变化（等待占位
+        # 的写入、决定被接收、Run 外结算都经这个事件）；在投影锁外发布（要读库）。
+        if event.type in ("run_initialized", "run_status_changed", "tool_call_status_changed"):
             get_task_status_feed().publish(event.task_id)
         return change
 

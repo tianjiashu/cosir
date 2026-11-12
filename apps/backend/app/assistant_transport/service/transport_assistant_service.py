@@ -25,7 +25,7 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 from app.assistant_transport.state.snapshot_window import HistoryPage, window_snapshot
 from app.config.logging.logger import log
 from app.core.task_actor import SessionConflictError
-from app.core.tool.background.background_registry import background_registry
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.workflow.message_queue.task_message import (
     Delivery,
     RunLaunch,
@@ -100,6 +100,8 @@ class TransportAssistantService:
         await asyncio.to_thread(self._states.refresh_queued_messages, task_id)
 
     def _send_queued_now(self, task_id: int, message_id: int) -> None:
+        # 先认 Task：队列对不存在的 Task 只是「没有这一行」，会被说成 MESSAGE_CONSUMED 而不是 404。
+        self._tasks.get_task(task_id)
         with main_session_factory().begin() as session:
             queued = self._withdraw_user_input(session, task_id, message_id)
             new_id = task_runtime_spaces.enqueue(
@@ -125,6 +127,7 @@ class TransportAssistantService:
         await asyncio.to_thread(self._states.refresh_queued_messages, task_id)
 
     def _delete_queued(self, task_id: int, message_id: int) -> None:
+        self._tasks.get_task(task_id)
         with main_session_factory().begin() as session:
             self._withdraw_user_input(session, task_id, message_id)
         log.info(
@@ -180,8 +183,9 @@ class TransportAssistantService:
     async def cancel(self, task_id: int) -> None:
         """用户停止 Task：交给 Task 的 actor（运行中打信号，挂起的 Run 直接迁移为 cancelled）。
 
-        用户停止只打断当前驱动：后台工作、Agent Team 与子 Task 照常运行（见 ``TaskActor.cancel``），停它们
-        走调用级的 :meth:`cancel_tool_call`。「用户已停止」通知由下一次驱动从结束原因推导。
+        用户停止只打断当前驱动：后台工作、Agent Team 与子 Task 照常运行（见 ``TaskActor.cancel``）。停后台
+        命令走调用级的 :meth:`cancel_tool_call`，停 Team 按 TeamRun（``POST /agent-team/runs/{id}/cancel``），
+        停子 Task 就是对它本身发停止。「用户已停止」通知由下一次驱动从结束原因推导。
 
         异常:
             KeyError: Task 不存在。
@@ -189,8 +193,8 @@ class TransportAssistantService:
         space = await asyncio.to_thread(task_runtime_spaces.get_or_create, task_id)
         await space.actor.cancel("user")
 
-    def cancel_tool_call(self, task_id: int, tool_call_id: str) -> bool:
-        """取消一次工具调用；没有可取消的对象（或已标记过）时返回 ``False``。
+    def cancel_tool_call(self, task_id: int, tool_call_id: str) -> None:
+        """取消一次工具调用。
 
         这次调用登记了后台结果时撤销登记，不要求 Run 在执行（后台工作本来就在 Run 之外）：前台条目
         由撤销回调唤醒工具线程、以取消结果收尾；后台条目回投取消结论：有活动 Run 就交给它（不论
@@ -200,11 +204,15 @@ class TransportAssistantService:
 
         异常:
             KeyError: Task 不存在。
+            SessionConflictError: ``TOOL_CALL_NOT_CANCELLABLE``（没有可取消的对象：调用已结束、
+                已标记过取消，或 Task 当前没有执行者）。
         """
         self._tasks.get_task(task_id)
-        return background_registry.request_cancel(
-            task_id, tool_call_id, driving=task_runtime_spaces.get_or_create(task_id).actor.driving
-        )
+        driving = task_runtime_spaces.get_or_create(task_id).actor.driving
+        if not command_results.request_cancel(task_id, tool_call_id, driving=driving):
+            raise SessionConflictError(
+                "TOOL_CALL_NOT_CANCELLABLE", "这次工具调用已结束或已在取消", retryable=False
+            )
 
     def background_tool_call(self, task_id: int, tool_call_id: str) -> None:
         """把一次前台等待中的工具调用转到后台；结论以后作为 ``background_result`` 回投。
@@ -215,7 +223,7 @@ class TransportAssistantService:
         """
         self._tasks.get_task(task_id)
         # 结论与转后台的先后由登记表在锁内裁决。
-        if background_registry.detach(task_id, tool_call_id) != "detached":
+        if command_results.detach(task_id, tool_call_id) != "detached":
             raise SessionConflictError(
                 "TOOL_CALL_NOT_DETACHABLE", "这次工具调用已结束或不能转到后台", retryable=False
             )

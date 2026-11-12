@@ -152,6 +152,8 @@ class ConversationTaskStateRebuilder:
                         intent=intent,
                         status="cancelled",
                         awaitingUser=False,
+                        # 冷重建没有运行中的调用，运行起点恒为空（与实时投影离开 running 后同形）。
+                        startedAt=None,
                     )
                     tool_parts[call["id"]] = tool_part
             if message["role"] == "tool" and isinstance(row.metadata, ToolMessageMetadata):
@@ -161,6 +163,8 @@ class ConversationTaskStateRebuilder:
                     raise RuntimeError("未闭合tool")
                 tool_part = paired_part
                 tool_part.update(project_tool_result(row.metadata))
+                # 继承副本与撤回移出的调用不能作出决定：按行级规则纠正，不只看 metadata。
+                tool_part["awaitingUser"] = row.awaits_user
 
         return tool_parts
 
@@ -320,9 +324,6 @@ class ConversationTaskStateRebuilder:
         """
 
         tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows, presentations)
-        if run_id is None:
-            for part in tool_parts.values():
-                part["awaitingUser"] = False
         turns: dict[int, list[ConversationTaskContextRecord]] = {}
         for row in rows:
             turns.setdefault(row.turn, []).append(row)

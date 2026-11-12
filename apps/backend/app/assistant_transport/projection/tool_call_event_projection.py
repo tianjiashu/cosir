@@ -22,6 +22,7 @@ from app.core.events import (
 )
 from app.core.tool.presentation import ToolPresentation
 from app.models.message_metadata import ToolMessageMetadata
+from app.utils.datetime_utils import to_text
 
 # 工具状态迁移白名单：投影层只放行领域侧已确认的迁移，其余（陈旧、重复投递）丢弃并留痕。
 # ``cancelled -> completed/failed`` 是「占位被真实结果覆盖」的合法迁移：
@@ -66,6 +67,8 @@ def plan_tool_call_created(
         # 刚创建的 ``pending`` 是「准备执行」不是「等你操作」；后者由结果投影按占位行判定。
         "awaitingUser": False,
         "isError": False,
+        # 运行起点只在 running 期间有值，见 ``plan_tool_call_status_changed``。
+        "startedAt": None,
     }
     message_index, mutations = ensure_reply(state, event.turn, new_part)
     if message_index is None:
@@ -162,13 +165,10 @@ def plan_tool_call_status_changed(
     )
     display = fields["display_data"]
     current_display = part.get("display_data")
-    if (
-        "terminal_output_seq" in part
-        and isinstance(current_display, dict)
-        and current_display.get("kind") == "terminal-result"
-    ):
+    if isinstance(current_display, dict) and current_display.get("kind") == "terminal-result":
+        # 运行中的 terminal-result 只来自实时通道（启动时就建立，见 ``LiveOutputChannel.start``）。
         # 最终 ExecutionResult 的展示数据是权威值；实时通道可能尚未送达尾部。
-        # 只有缺少结构化终态（例如执行器异常）时才保留已经收到的预览。
+        # 只有缺少结构化终态（例如执行器异常、没有输出就被取消）时才保留已经收到的命令与预览。
         if (
             display is not None
             and display.get("kind") == "terminal-result"
@@ -178,4 +178,15 @@ def plan_tool_call_status_changed(
                 display["output"] = current_display["output"]
         elif display is None or "kind" not in display:
             fields["display_data"] = {**copy.deepcopy(current_display), **(display or {})}
-    return [ConversationStateMutation("set", (*base, key), value) for key, value in fields.items()]
+    mutations = [
+        ConversationStateMutation("set", (*base, key), value) for key, value in fields.items()
+    ]
+    # ``startedAt`` 只表达「从何时起在运行」：进入 running 时取那次事件的发生时刻（投影器不读墙钟），
+    # 重复投递的自迁移不改它；离开 running 时清空，结束的调用因此与冷重建（没有运行中的调用）一致。
+    if event.status == "running" and current != "running":
+        mutations.append(
+            ConversationStateMutation("set", (*base, "startedAt"), to_text(event.occurred_at))
+        )
+    elif event.status != "running" and current == "running":
+        mutations.append(ConversationStateMutation("set", (*base, "startedAt"), None))
+    return mutations

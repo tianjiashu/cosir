@@ -55,5 +55,8 @@ class ConversationStateToolCallPart(TypedDict):
     # 委派行据此读应用级任务状态推送，不在展示数据里镜像子 Run 状态。
     child_task_id: NotRequired[int]
     agent_role: NotRequired[str]
-    # Runtime terminal output sequence; it guards against stale delta events.
+    # 进入 ``running`` 的时刻（ISO 8601，取自状态事件），前端据此本地计时运行时长；其余时候为
+    # ``None``（建 part、冷重建与离开 running 时）。冷重建没有运行中的调用，所以恒为 ``None``。
+    startedAt: NotRequired[str | None]
+    # 运行期终端输出的序号，挡住陈旧或重复的输出块。
     terminal_output_seq: NotRequired[int]

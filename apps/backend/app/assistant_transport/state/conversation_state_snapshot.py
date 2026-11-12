@@ -34,6 +34,7 @@ from app.assistant_transport.state.conversation_state_part import (
     ConversationStateAgentMessagePart,
     ConversationStateImagePart,
     ConversationStateMessageSource,
+    ConversationStateReport,
     ConversationStateTextPart,
     ConversationStateToolCallPart,
     TextPartStatus,
@@ -250,8 +251,19 @@ def _validate_message_fields(
 
 def _validate_source(value: object) -> None:
     source = as_shape(value, ConversationStateMessageSource, "snapshot message source")
-    require_int(source["taskId"], "snapshot message source taskId", minimum=0)
+    if (source["taskId"] is None) == (source["teamRunId"] is None):
+        raise ValueError("snapshot message source needs exactly one of taskId and teamRunId")
+    for key in ("taskId", "teamRunId"):
+        if source[key] is not None:
+            require_int(source[key], f"snapshot message source {key}", minimum=0)
     require_str(source["name"], "snapshot message source name")
+    report = source["report"]
+    if report is not None:
+        report = as_shape(report, ConversationStateReport, "snapshot message source report")
+        require_one_of(
+            report["status"], frozenset({"completed", "failed"}), "snapshot report status"
+        )
+        require_bool(report["intermediate"], "snapshot report intermediate")
 
 
 def _validate_launch(value: object) -> None:
@@ -341,6 +353,8 @@ def _validate_tool_call_part(part: object) -> None:
         require_int(tool_part["child_task_id"], "snapshot tool child_task_id", minimum=1)
     if "agent_role" in tool_part:
         require_non_empty_str(tool_part["agent_role"], "snapshot tool agent_role")
+    if "startedAt" in tool_part:
+        require_str(tool_part["startedAt"], "snapshot tool startedAt", nullable=True)
     if "terminal_output_seq" in tool_part:
         require_int(
             tool_part["terminal_output_seq"], "snapshot tool terminal_output_seq", minimum=0

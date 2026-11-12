@@ -47,7 +47,7 @@ from app.core.events import (
     ToolCallStatusChangedEvent,
     WorkflowEvent,
 )
-from app.core.tool.background.background_registry import background_registry
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.workflow.message_queue.task_message import UserInputBody
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -138,13 +138,18 @@ class ConversationTaskStateService:
         与消费投影串行，先读后提交的旧结果会被随后的消费投影覆盖，不会把已并入的消息留成排队。
 
         不全量重建：流式输出的 context 可能领先于尚未发出的 Transport delta，重建会提前展示正文
-        再重复追加。snapshot 尚未物化时什么也不做，之后的懒重建自会读到队列。
+        再重复追加。snapshot 尚未物化时什么也不做，之后的懒重建自会读到队列；Task 已删除或 space
+        不存在时同样静默返回（规则同 :meth:`refresh_terminal_sessions`）。
+
+        这是命令提交之后、actor 推进之前的旁路：失败只记录，不能把已成功的命令报成 500，也不能让
+        actor 跳过这次推进。
         """
         try:
             with self._lock:
-                self._ensure_not_deleted(task_id)
-                space = task_runtime_spaces.get_or_create(task_id)
-                if not space.has_snapshot():
+                if task_runtime_spaces.is_deleted(task_id):
+                    return
+                space = task_runtime_spaces.get(task_id)
+                if space is None or not space.has_snapshot():
                     return
                 state = space.get_working_snapshot(lambda: self._rebuild(task_id))
                 queued = self._queued_messages(task_id)
@@ -265,14 +270,14 @@ class ConversationTaskStateService:
     ) -> list[ConversationBackgroundTask]:
         """从工作副本里的工具 part 与登记表活条目投影看板；纯内存，可在快照锁内调用。"""
         return project_background_tasks(
-            state["messages"], background_registry.live_background(task_id)
+            state["messages"], command_results.live_background(task_id)
         )
 
     @staticmethod
     def _foreground_waits(task_id: int) -> list[str]:
-        from app.core.tool.background.background_registry import background_registry
+        from app.tools.tool_handler.terminal.command_results import command_results
 
-        return background_registry.foreground_calls(task_id)
+        return command_results.foreground_calls(task_id)
 
     @staticmethod
     def _terminal_sessions(task_id: int) -> list[ConversationTerminalSession]:
