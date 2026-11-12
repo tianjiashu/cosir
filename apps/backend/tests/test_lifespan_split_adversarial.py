@@ -147,7 +147,7 @@ def test_domain_route_modules_share_the_singleton() -> None:
         "app.api.tasks_api",
         "app.api.workspaces_api",
         "app.api.configuration.models",
-        "app.assistant_transport.assistant_api",
+        "app.api.assistant_transport_api",
     ):
         module = sys.modules.get(module_name) or importlib.import_module(module_name)
         assert module.app is app_module.app, module_name

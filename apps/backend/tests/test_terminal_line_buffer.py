@@ -101,41 +101,12 @@ def test_alternate_screen_is_a_separate_view_and_freezes_line_numbers() -> None:
     assert texts(buffer)[-1] == (5, "$ ")
 
 
-def test_render_both_keeps_head_and_tail_and_marks_omitted_range() -> None:
-    lines = [(n, f"line {n}") for n in range(1, 201)]
-    rendered = render_lines(lines, "both", 100_000)
-    assert rendered.omitted == (21, 140)
-    assert rendered.body[0] == "1│line 1"
-    assert rendered.body[20].startswith("--- omitted lines 21-140")
-    assert rendered.body[-1] == "200│line 200"
-    small = render_lines(lines[:50], "both", 100_000)
-    assert small.omitted is None and len(small.body) == 50
-
-
-def test_render_both_within_window_over_budget_keeps_the_tail() -> None:
-    # 行数不超过头 20 + 尾 60 但总长超预算：尾部优先，最后一行必须保留，省略区间在中间。
-    lines = [(n, "x" * 1500) for n in range(1, 41)]
-    rendered = render_lines(lines, "both", 18_000)
-    assert rendered.body[-1].startswith("40│")
-    assert rendered.omitted is not None
-    first_omitted, last_omitted = rendered.omitted
-    assert 1 < first_omitted <= last_omitted < 40
-    assert rendered.body[0].startswith("1│")
-    assert sum(len(row) + 1 for row in rendered.body) <= 18_000 + 200
-    # 预算放得下时原样全部返回，不制造省略。
-    fits = render_lines(lines, "both", 100_000)
-    assert fits.omitted is None and len(fits.body) == 40
-
-
 def test_render_budget_trims_tail_mode_from_front_and_head_mode_from_back() -> None:
     lines = [(n, "x" * 50) for n in range(1, 101)]
     tail = render_lines(lines, "tail", 600)
     assert tail.last == 100 and tail.first is not None and tail.first >= 89
     head = render_lines(lines, "head", 600)
     assert head.first == 1 and head.truncated_after is not None
-    both = render_lines(lines, "both", 1200)
-    assert both.omitted is not None
-    assert sum(len(row) + 1 for row in both.body) < 1400
 
 
 def test_long_lines_are_clipped() -> None:
@@ -144,6 +115,6 @@ def test_long_lines_are_clipped() -> None:
     assert rendered.body[0].endswith("…(+10 chars)")
 
 
-@pytest.mark.parametrize("mode", ["both", "tail", "head"])
+@pytest.mark.parametrize("mode", ["tail", "head"])
 def test_render_empty(mode: str) -> None:
     assert render_lines([], mode, 100).first is None  # type: ignore[arg-type]

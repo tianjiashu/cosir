@@ -202,7 +202,7 @@ def _creation_service(store, monkeypatch, projector):
     service._task = store.tasks
     service._session_factory = store.factory
     monkeypatch.setattr(
-        "app.core.workflow.conversation_run_ledger.get_conversation_event_projector",
+        "app.service.depends.get_conversation_event_projector",
         lambda: projector,
     )
     monkeypatch.setattr(
@@ -212,7 +212,7 @@ def _creation_service(store, monkeypatch, projector):
         ),
     )
     monkeypatch.setattr(
-        "app.assistant_transport.service.user_input_service.get_model_config_service",
+        "app.service.user_input.user_input_service.get_model_config_service",
         lambda: model_configs(
             lambda _id: model_config_record(model_name="test", context_window_k=128)
         ),
@@ -295,7 +295,7 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
     service = ConversationRunLedger.__new__(ConversationRunLedger)
     service._run = _RunCrud()
     service._session_factory = None
-    from app.core.workflow import conversation_run_ledger as ledger_module
+    from app.service import depends as ledger_module
 
     ledger_getter = ledger_module.get_conversation_event_projector
     ledger_module.get_conversation_event_projector = lambda: _Projector()
@@ -338,7 +338,7 @@ def test_terminal_run_projector_failure_is_non_fatal_after_database_commit() -> 
 
     service = ConversationRunLedger.__new__(ConversationRunLedger)
     service._run = _RunCrud()
-    from app.core.workflow import conversation_run_ledger as ledger_module
+    from app.service import depends as ledger_module
 
     original_getter = ledger_module.get_conversation_event_projector
     ledger_module.get_conversation_event_projector = lambda: _Projector()

@@ -373,6 +373,27 @@ def test_second_prefill_on_the_same_prompt_is_rejected(monkeypatch, tmp_path: Pa
     assert len(workers[0].writes) == 1
 
 
+def test_failed_prefill_write_leaves_the_prompt_free(monkeypatch, tmp_path: Path) -> None:
+    """入队失败（背压）时状态不变：不发 Agent 标注，同一提示符之后仍可再填。"""
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
+    session_id = start(service, tmp_path)
+    prompt(workers[0])
+    runtime = service.require(session_id, 1)
+    marks: list[str] = []
+    monkeypatch.setattr(runtime._stream, "publish", lambda name, **_fields: marks.append(name))
+
+    def full(_worker: Any, _input: dict[str, Any]) -> None:
+        raise TerminalWorkerBackpressureError("input queue is full")
+
+    workers[0].on_write = full
+    with pytest.raises(TerminalWorkerBackpressureError):
+        prefill(service, session_id, "echo first")
+    assert runtime._observation.prompt_has_input is False and "input_mark" not in marks
+    workers[0].on_write = None
+    prefill(service, session_id, "echo first")
+    assert runtime._observation.prompt_has_input is True and "input_mark" in marks
+
+
 def test_user_typing_on_the_prompt_blocks_prefill_until_the_next_prompt(
     monkeypatch, tmp_path: Path
 ) -> None:

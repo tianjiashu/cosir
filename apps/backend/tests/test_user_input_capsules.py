@@ -6,11 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-import app.assistant_transport.service.user_input_service as user_input_module
-from app.assistant_transport.service.user_input_service import UserInputService
+import app.service.user_input.user_input_service as user_input_module
 from app.core.user_input.capsules import FileCapsule, serialize_capsule
 from app.models.conversation_run_command import ConversationRunCommand
 from app.models.errors.input_errors import UserInputRejectedError
+from app.service.user_input.user_input_service import UserInputService
 from tests.model_config_fixtures import model_config_record, model_configs
 
 _TASK_ID = 7
@@ -43,7 +43,7 @@ def _service(monkeypatch: pytest.MonkeyPatch, workspace_root: Path) -> UserInput
 
 
 def _prepare(service: UserInputService, text: str):
-    return service.prepare(_TASK_ID, ConversationRunCommand(text=text), "test/m1")
+    return service.prepare(_TASK_ID, ConversationRunCommand(text=text), "test/m1", None, "main_agent")
 
 
 def _write_skill(root: Path, name: str, *, enabled: list[str]) -> None:
@@ -68,7 +68,7 @@ def test_file_capsule_accepts_existing_file(workspace: Path, monkeypatch) -> Non
     path = workspace / "notes.md"
     path.write_text("hi", encoding="utf-8")
 
-    body = _prepare(_service(monkeypatch, workspace), f'看 <file path="{path}" />').body
+    body = _prepare(_service(monkeypatch, workspace), f'看 <file path="{path}" />')
 
     assert body.text == f'看 <file path="{path}" />'
     assert body.presentation.text == body.text
@@ -91,7 +91,7 @@ def test_file_capsule_accepts_directory_with_trailing_slash(workspace: Path, mon
     sub = workspace / "src"
     sub.mkdir()
 
-    body = _prepare(_service(monkeypatch, workspace), f'看 <file path="{sub}/" />').body
+    body = _prepare(_service(monkeypatch, workspace), f'看 <file path="{sub}/" />')
 
     assert body.text == f'看 <file path="{sub}/" />'
 
@@ -153,7 +153,7 @@ def test_file_capsule_attribute_xml_escaping_round_trips(workspace: Path, monkey
     path.write_text("hi", encoding="utf-8")
 
     text = f"看 {serialize_capsule(FileCapsule(path=str(path)))}"
-    body = _prepare(_service(monkeypatch, workspace), text).body
+    body = _prepare(_service(monkeypatch, workspace), text)
 
     assert body.text == f'看 <file path="{workspace}/a &amp; b &quot;q&quot;.md" />'
 
@@ -169,7 +169,7 @@ def test_ref_capsule_accepts_workspace_relative_path(workspace: Path, monkeypatc
 
     body = _prepare(
         _service(monkeypatch, workspace), '检查 <ref path="src/a.py" lines="12-14" />'
-    ).body
+    )
 
     assert body.text == '检查 <ref path="src/a.py" lines="12-14" />'
 
@@ -177,7 +177,7 @@ def test_ref_capsule_accepts_workspace_relative_path(workspace: Path, monkeypatc
 def test_ref_capsule_accepts_workspace_root_as_empty_path(workspace: Path, monkeypatch) -> None:
     workspace.mkdir()
 
-    body = _prepare(_service(monkeypatch, workspace), '<ref path="" />').body
+    body = _prepare(_service(monkeypatch, workspace), '<ref path="" />')
 
     assert body.text == '<ref path="" />'
 
@@ -211,7 +211,7 @@ def test_skill_capsule_writes_back_the_skill_file_path(workspace: Path, monkeypa
     _write_skill(workspace, "review", enabled=["review"])
     expected = (workspace / ".cosir" / "skills" / "review" / "SKILL.md").resolve()
 
-    body = _prepare(_service(monkeypatch, workspace), '用 <skill name="review" /> 检查').body
+    body = _prepare(_service(monkeypatch, workspace), '用 <skill name="review" /> 检查')
 
     assert body.text == f'用 <skill name="review" path="{expected}" /> 检查'
     assert body.presentation.text == body.text
@@ -237,7 +237,7 @@ def test_code_block_capsules_stay_literal_text(workspace: Path, monkeypatch) -> 
     workspace.mkdir()
     text = '```\n<file path="/missing" />\n<ref path="../outside" />\n```'
 
-    body = _prepare(_service(monkeypatch, workspace), text).body
+    body = _prepare(_service(monkeypatch, workspace), text)
 
     assert body.text == text
 
@@ -246,7 +246,7 @@ def test_invalid_capsule_syntax_stays_literal_text(workspace: Path, monkeypatch)
     workspace.mkdir()
     text = '<file path="/missing"> 与 <ref path="a" lines="x" />'
 
-    body = _prepare(_service(monkeypatch, workspace), text).body
+    body = _prepare(_service(monkeypatch, workspace), text)
 
     assert body.text == text
 
@@ -256,15 +256,8 @@ def test_capsule_only_input_is_not_empty(workspace: Path, monkeypatch) -> None:
     path = workspace / "notes.md"
     path.write_text("hi", encoding="utf-8")
 
-    body = _prepare(_service(monkeypatch, workspace), f'<file path="{path}" />').body
+    body = _prepare(_service(monkeypatch, workspace), f'<file path="{path}" />')
 
     assert body.text == f'<file path="{path}" />'
 
 
-def test_blank_input_is_rejected(workspace: Path, monkeypatch) -> None:
-    workspace.mkdir()
-
-    with pytest.raises(UserInputRejectedError) as caught:
-        _prepare(_service(monkeypatch, workspace), "  \n ")
-
-    assert caught.value.code == "EMPTY_INPUT"

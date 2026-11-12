@@ -67,6 +67,7 @@ def test_run_status_transition_drop_is_logged() -> None:
                     task_id=_TASK_ID, run_id=11, status=ConversationRunStatus.RUNNING
                 ),
                 settled,
+                {},
             )
             == []
         )

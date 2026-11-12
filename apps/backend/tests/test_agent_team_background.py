@@ -10,14 +10,13 @@ from types import SimpleNamespace
 import pytest
 
 from app.assistant_transport.request import DecisionRequest
-from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
-from app.core.task_actor import SessionConflictError
-from app.tools.tool_handler.terminal.command_results import command_results
+from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
 from app.core.workflow import workflow
 from app.core.workflow.branch import task_title
 from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody
 from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.conversation_input import UserInputPresentation
+from app.models.errors.task_command_errors import TaskCommandConflictError
 from app.models.message_metadata import UserMessageMetadata
 from app.service import depends
 from app.service.configuration.agent_configuration import AgentConfiguration
@@ -26,6 +25,7 @@ from app.service.configuration.agent_team_configuration_registry import get_agen
 from app.storage.queries.task_status_queries import TaskStatus, TaskStatusQueries
 from app.storage.store_engines import main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
+from app.tools.tool_handler.terminal.command_results import command_results
 from tests.model_config_fixtures import create_model_config
 from tests.sdk_fixtures import sdk_completion, sdk_events
 
@@ -197,7 +197,7 @@ async def proposed_team(reviewer, tmp_path, monkeypatch):
 )
 async def test_approved_team_reports_to_the_main_task(proposed_team, ending):
     first, decision, model = proposed_team
-    service = TransportAssistantService()
+    service = AssistantTransportService()
     task_id = first.task_id
     actor = spaces.get(task_id).actor
     coordinator = depends.get_agent_team_coordinator()
@@ -222,7 +222,7 @@ async def test_approved_team_reports_to_the_main_task(proposed_team, ending):
             assert owner.model_config_id != first.model_config_id
             assert row.state_json["node_runtime"]["a"]["model_config_id"] == first.model_config_id
         assert service.get_state(task_id)["background_tasks"] == []
-        with pytest.raises(SessionConflictError) as caught:
+        with pytest.raises(TaskCommandConflictError) as caught:
             await service.decide(task_id, CALL_ID, decision)
         assert caught.value.code == "DECISION_NOT_AWAITED"
         if ending == "user_stop":
@@ -286,7 +286,7 @@ async def test_approval_with_deleted_agent_fails_team_and_card(proposed_team, re
     first, decision, _ = proposed_team
     agents, document = reviewer
     agents.delete(document.agent_id)
-    service = TransportAssistantService()
+    service = AssistantTransportService()
     await service.decide(first.task_id, CALL_ID, decision)
     assert await spaces.get(first.task_id).actor.wait_quiescent(5)
 
@@ -302,7 +302,7 @@ async def test_approval_with_deleted_agent_fails_team_and_card(proposed_team, re
         if isinstance(r.metadata, UserMessageMetadata) and r.metadata.kind == "tool_result"
     ]
     assert document.agent_id in receipt.message["content"]
-    with pytest.raises(SessionConflictError) as rejected:
+    with pytest.raises(TaskCommandConflictError) as rejected:
         await service.decide(first.task_id, CALL_ID, decision)
     assert rejected.value.code == "DECISION_NOT_AWAITED"
 
@@ -312,7 +312,7 @@ async def test_failed_node_input_does_not_start_another_run_after_restart(propos
     agents, document = reviewer
     coordinator = depends.get_agent_team_coordinator()
     async with asyncio.timeout(12):
-        await TransportAssistantService().decide(first.task_id, CALL_ID, decision)
+        await AssistantTransportService().decide(first.task_id, CALL_ID, decision)
         await model.node_started.wait()
         # A 正在请求模型；删除 B 的配置后，B 的 Run 能建立，但在并入输入前失败。
         agents.delete(document.agent_id)
@@ -339,7 +339,7 @@ async def test_failed_node_input_does_not_start_another_run_after_restart(propos
 async def test_withdrawing_the_proposal_turn_stops_the_running_team_silently(proposed_team):
     """撤回提出方案的那一回合：运行中的 Team 停下、不汇报，主 Task 不会被它的结论再叫醒。"""
     first, decision, model = proposed_team
-    service = TransportAssistantService()
+    service = AssistantTransportService()
     task_id = first.task_id
     actor = spaces.get(task_id).actor
     coordinator = depends.get_agent_team_coordinator()
@@ -364,7 +364,7 @@ async def test_a_pending_proposal_awaits_the_user_whatever_the_run_does(proposed
     """「等你操作」与 Run 正交：提案 Run 被停下后方案仍在等你；作出决定或撤回那一回合后清零，
     并经 Task 状态推送交给订阅者。"""
     first, decision, model = proposed_team
-    service = TransportAssistantService()
+    service = AssistantTransportService()
     task_id = first.task_id
     actor = spaces.get(task_id).actor
     reads = TaskStatusQueries(main_session_factory())

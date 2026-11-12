@@ -10,13 +10,12 @@ from typing import Any
 
 import pytest
 
-from tests.task_extra_fixtures import fork_extra
-from app.models.task_extra import TaskExtra
-from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.tool.multi_agent import send_message
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.conversation_run_options import ConversationRunOptions
 from app.models.task_record import TaskRecord
+from app.tools.tool_handler.terminal.command_results import command_results
+from tests.task_extra_fixtures import fork_extra
 
 _PARENT = 7
 _CHILD = 11
@@ -135,7 +134,11 @@ def test_peers_can_send_but_team_self_and_other_workspace_are_refused(env, tmp_p
 
 
 def test_target_without_first_run_inherits_its_queued_launch(env, tmp_path, monkeypatch):
-    from app.core.workflow.message_queue.task_message import AgentMessageBody, RunLaunch, TaskMessage
+    from app.core.workflow.message_queue.task_message import (
+        AgentMessageBody,
+        RunLaunch,
+        TaskMessage,
+    )
     from app.models.conversation_input import MessageSource
 
     target = _task(30, current_run_id=None)
@@ -181,11 +184,11 @@ def test_new_manual_fork_uses_frozen_launch_without_source_task(env, tmp_path, m
 def test_deleted_fork_model_is_rejected_before_enqueue(env, isolated_storage, tmp_path, monkeypatch):
     """Real model deletion + send_message preparation: a frozen ID never bypasses admission."""
     from app.core.tool.multi_agent.agent_message import prepare_agent_message
+    from app.models.task_kind import TaskType
     from app.service.depends import get_model_config_service
-    from tests.model_config_fixtures import create_model_config
     from app.storage.crud.task_crud import TaskCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
-    from app.models.task_kind import TaskType
+    from tests.model_config_fixtures import create_model_config
 
     model = create_model_config(name="fork", base_url="http://localhost", api_key="test",
                                 model_name="test", context_window_k=8,

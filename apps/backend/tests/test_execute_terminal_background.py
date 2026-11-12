@@ -14,11 +14,10 @@ from typing import Any
 
 import pytest
 
-from app.tools.tool_handler.terminal import command_results as background_module
-from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.terminal_runtime.command.command_output import CommandOutput as _CommandOutput
 from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
+from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from tests.live_cold_support import registered
 from tests.terminal_test_support import requires_terminal_worker
@@ -35,11 +34,13 @@ _TASK_ID = 31
 def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, dict[str, Any]]]:
     calls: list[tuple[str | None, str, dict[str, Any]]] = []
 
-    def deliver(task_id, *, tool_call_id, tool_name, result, placeholder_display_data=None) -> bool:
-        calls.append((tool_call_id, tool_name, {**result, "card": placeholder_display_data}))
+    def deliver(task_id, tool_call_id, conclusion, *, starts_run=True) -> bool:
+        calls.append(
+            (tool_call_id, "execute_terminal", {**conclusion.result, "card": conclusion.display_data})
+        )
         return True
 
-    monkeypatch.setattr(background_module, "deliver_background_result", deliver)
+    monkeypatch.setattr(CommandResultRegistry, "_enqueue_result", staticmethod(deliver))
     yield calls
     command_results.drop_task(_TASK_ID)
 
@@ -92,7 +93,7 @@ def test_background_command_returns_a_placeholder_then_delivers(tmp_path, delive
     }
     _wait_for(lambda: len(delivered) == 1)
     tool_call_id, tool_name, payload = delivered[0]
-    assert (tool_call_id, tool_name) == ("call-bg", "terminal_command")
+    assert (tool_call_id, tool_name) == ("call-bg", "execute_terminal")
     assert payload["end_reason"] == "exited" and payload["exit_code"] == 0
     assert "done" in str(payload["output"])
     # 占位卡片的终态展示随结论走：完整输出与退出码，不经模型的输出预算。
@@ -133,8 +134,9 @@ def test_cancelling_a_background_command_kills_its_process_tree(tmp_path, delive
         background=True,
         execution_context=_context(tmp_path, "call-cancel"),
     )
-    dropped = command_results.withdraw(_TASK_ID, "call-cancel")
-    assert dropped
+    assert "call-cancel" in command_results.live_background(_TASK_ID)
+    command_results.withdraw_calls(_TASK_ID, ["call-cancel"])
+    assert command_results.live_background(_TASK_ID) == {}
     time.sleep(2.5)
     # 进程树被杀：命令没有跑完；撤销后的结论被登记表丢弃，不回投。
     assert not marker.exists()
@@ -187,7 +189,7 @@ def test_parent_stop_retains_real_output_without_delivery(tmp_path, delivered) -
     _wait_for(marker.exists)
     cancellation_registry.request_cancel(_TASK_ID, "user")
     try:
-        displays = command_results.drop_task(_TASK_ID)
+        displays = command_results.recall_task(_TASK_ID)
     finally:
         cancellation_registry.consume(_TASK_ID)
     assert "已收集" in displays["call-parent-stop"]["output"]

@@ -5,15 +5,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
-from app.assistant_transport.service.transport_stream_service import (
-    AssistantTransportStreamService,
-)
+from app.assistant_transport.stream.task_sse_stream import TaskSseStream
 from app.core.events import RunStatusChangedEvent
 from app.core.workflow import conversation_run_ledger as conversation_run_ledger_module
 from app.core.workflow.conversation_run_ledger import ConversationRunLedger
@@ -87,21 +86,23 @@ def _reset_task_runtime_spaces(monkeypatch, backend_env) -> None:
         "app.task_runtime.task_runtime_space.get_workspace_service",
         lambda: SimpleNamespace(get_workspace=lambda _id: SimpleNamespace(id=3)),
     )
-    ConversationTaskStateService.clear_process_state()
+    task_runtime_spaces.close()
     yield
-    ConversationTaskStateService.clear_process_state()
+    task_runtime_spaces.close()
 
 
 def _make_state_service(
     task_source: object, run_source: object, context_source: object
 ) -> ConversationTaskStateService:
-    """按当前生产构造装配一个状态服务并注入三个来源（构造器从 depends 读取，这里直接注入）。"""
+    """按生产构造装配一个状态服务；构造器从 depends 读三个来源，这里临时换成给定的来源。"""
 
-    service = ConversationTaskStateService.__new__(ConversationTaskStateService)
-    service._task_source = task_source
-    service._run_source = run_source
-    service._context_source = context_source
-    return service
+    with patch.multiple(
+        "app.service.depends",
+        get_task_crud=lambda: task_source,
+        get_conversation_run_crud=lambda: run_source,
+        get_conversation_task_context_crud=lambda: context_source,
+    ):
+        return ConversationTaskStateService()
 
 
 def test_cold_state_rebuild_reads_only_task_runs_and_context() -> None:
@@ -198,7 +199,7 @@ def test_cold_state_rebuild_ignores_task_system_prompt() -> None:
 
 
 def test_state_snapshot_is_lazily_rebuilt_once_per_task_runtime_space() -> None:
-    ConversationTaskStateService.clear_process_state()
+    task_runtime_spaces.close()
     task_runtime_spaces.close()
     task = _task()
     run = _run(2, "completed")
@@ -243,7 +244,7 @@ def test_state_snapshot_is_lazily_rebuilt_once_per_task_runtime_space() -> None:
         assert space.has_snapshot()
     finally:
         task_runtime_spaces.close()
-        ConversationTaskStateService.clear_process_state()
+        task_runtime_spaces.close()
 
 
 def test_memory_state_is_not_written_to_persistence_and_rebuilds_after_restart() -> None:
@@ -277,7 +278,7 @@ def test_memory_state_is_not_written_to_persistence_and_rebuilds_after_restart()
     assert first["activity"]["status"] == "completed"
     assert service.get_state(7) == first
 
-    ConversationTaskStateService.clear_process_state()
+    task_runtime_spaces.close()
     restarted = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
     rebuilt = restarted.get_state(7)
     assert rebuilt["messages"][0]["parts"][0]["text"] == "durable"
@@ -363,6 +364,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             "background_tasks": [],
             "foreground_waits": [],
             "handoffs": [],
+            "queued_messages": [],
         }
     )
 
@@ -391,8 +393,7 @@ def test_transition_propagates_post_commit_projector_failure(
             raise RuntimeError("transport unavailable")
 
     monkeypatch.setattr(
-        conversation_run_ledger_module,
-        "get_conversation_event_projector",
+        "app.service.depends.get_conversation_event_projector",
         lambda: FailingProjector(),
     )
     service = ConversationRunLedger.__new__(ConversationRunLedger)
@@ -434,7 +435,7 @@ def test_persisted_snapshot_model_and_crud_are_removed() -> None:
 async def test_cold_sse_first_frame_uses_canonical_rebuild() -> None:
     """The first SSE frame must come from canonical records when no working copy exists."""
 
-    ConversationTaskStateService.clear_process_state()
+    task_runtime_spaces.close()
 
     class CanonicalSources:
         def get(
@@ -446,10 +447,7 @@ async def test_cold_sse_first_frame_uses_canonical_rebuild() -> None:
             return [_run(2, "completed")]
 
     state_service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
-    stream_service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
-    stream_service._snapshots = state_service
-
-    stream = stream_service.stream(7, lambda: False)
+    stream = TaskSseStream(state_service).frames(7)
     first = await anext(stream)
     await stream.aclose()
 

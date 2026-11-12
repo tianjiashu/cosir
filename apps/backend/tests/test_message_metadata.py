@@ -4,8 +4,8 @@ import pytest
 from pydantic import ValidationError
 
 from app.assistant_transport.projection.event_projection import plan_event
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    pair_tool_parts,
 )
 from app.core.events import ToolCallStatusChangedEvent
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -157,7 +157,7 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
         metadata=metadata,
         turn=1,
     )
-    initial = ConversationTaskStateRebuilder.build_pair_tool_part([call])["call-1"]
+    initial = pair_tool_parts([call], {})["call-1"]
     initial["status"] = "running"
     initial["display_data"] = {"kind": "read-file-meta", "path": "old.txt"}
     initial["error"] = "old error"
@@ -171,10 +171,10 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
         display_data=metadata.display_data,
         team_run_id=metadata.team_run_id,
     )
-    for mutation in plan_event(event, state):
+    for mutation in plan_event(event, state, {}):
         initial[mutation.path[-1]] = mutation.value
     restored = ConversationTaskContextRecord._from_model(result._to_model())
-    cold = ConversationTaskStateRebuilder.build_pair_tool_part([call, restored])["call-1"]
+    cold = pair_tool_parts([call, restored], {})["call-1"]
     assert initial == cold
     assert "model-only result" not in str(cold)
     if metadata.display_data is not None:
@@ -201,7 +201,7 @@ def test_final_tool_metadata_uses_authoritative_terminal_output():
         status="completed",
         display_data={"kind": "terminal-result", "output": "truncated"},
     )
-    for mutation in plan_event(event, state):
+    for mutation in plan_event(event, state, {}):
         part[mutation.path[-1]] = mutation.value
     assert part["status"] == "completed"
     assert part["display_data"]["output"] == "truncated"

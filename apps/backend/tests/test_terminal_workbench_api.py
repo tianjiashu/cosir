@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -25,7 +26,6 @@ from app.tools.terminal_runtime.errors import (
     TerminalSessionStateError,
     TerminalWorkerUnavailableError,
 )
-from app.tools.terminal_runtime.session.shell_resolver import ShellResolver
 from tests.task_extra_fixtures import fork_extra
 
 _SHELLS = [{"kind": "zsh", "label": "zsh", "isDefault": True, "integrationSupported": True}]
@@ -61,7 +61,7 @@ def terminals(monkeypatch: pytest.MonkeyPatch) -> _FakeTerminals:
     fake = _FakeTerminals()
     monkeypatch.setattr(terminal_workbench_service, "get_terminal_session_service", lambda: fake)
     monkeypatch.setattr(terminal_sessions_api, "get_terminal_session_service", lambda: fake)
-    monkeypatch.setattr(ShellResolver, "available", staticmethod(lambda: _SHELLS))
+    monkeypatch.setattr(terminal_sessions_api, "available_session_shells", lambda: _SHELLS)
     return fake
 
 
@@ -102,7 +102,7 @@ def test_user_creates_session_for_sidebar_task(
     assert terminals.started == [
         {
             "task_id": task_id,
-            "workspace_root": workspace.root_path,
+            "cwd": str(Path(workspace.root_path).resolve()),
             "shell": "bash",
         }
     ]
@@ -124,6 +124,17 @@ def test_create_rejects_child_task(
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "TERMINAL_TASK_UNSUPPORTED"
     assert response.json()["detail"]["retryable"] is False
+    assert terminals.started == []
+
+
+def test_create_when_workspace_directory_is_gone_is_rejected_before_starting(
+    client: TestClient, terminals: _FakeTerminals, tmp_path: Path
+) -> None:
+    gone = depends.get_workspace_crud().create("gone", str(tmp_path / "moved-away"))
+    task_id = _task(gone)
+    response = client.post(f"/tasks/{task_id}/terminal/sessions", json={"shell": "bash"})
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "TERMINAL_ERROR"
     assert terminals.started == []
 
 

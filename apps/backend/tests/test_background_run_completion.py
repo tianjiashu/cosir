@@ -7,8 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
-from app.tools.tool_handler.terminal.command_results import command_results
+from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
 from app.core.workflow import workflow
 from app.core.workflow.branch import task_title
 from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody
@@ -17,6 +16,7 @@ from app.service import depends
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal import execute_terminal
+from app.tools.tool_handler.terminal.command_results import command_results
 from tests.model_config_fixtures import create_model_config
 from tests.sdk_fixtures import sdk_events
 
@@ -159,8 +159,8 @@ async def test_background_results_reopen_the_task_after_its_run_answered(backend
             # 只有带可推进消息的 Task 会被恢复物化；重启后空闲的 Task 在这里按需物化。
             actor = spaces.get_or_create(task.id).actor
         elif last == "cancel":
-            assert await asyncio.to_thread(
-                TransportAssistantService().cancel_tool_call, task.id, "bg-B"
+            await asyncio.to_thread(
+                AssistantTransportService().cancel_tool_call, task.id, "bg-B"
             )
         else:
             gates["B"].set()

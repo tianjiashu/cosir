@@ -46,7 +46,6 @@ from app.core.tool.schemas import (
     tool_definition as tool_definition_module,
 )
 from app.core.tool.tool_registry import ToolRegistry
-from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 from tests.runtime_context_stub import runtime_stub

@@ -661,22 +661,9 @@ class _MemorySnapshotOwner:
         return copy.deepcopy(self.state)
 
     def apply_planned(self, event: Any) -> TransportFrame:
-        mutations = tuple(plan_event(event, copy.deepcopy(self.state)))
+        mutations = tuple(plan_event(event, copy.deepcopy(self.state), {}))
         for mutation in mutations:
-            parent: Any = self.state
-            if not mutation.path:
-                parent.clear()
-                parent.update(copy.deepcopy(mutation.value))
-                continue
-            for key in mutation.path[:-1]:
-                parent = parent[key]
-            key = mutation.path[-1]
-            if mutation.kind == "append-text":
-                parent[key] += mutation.value
-            elif isinstance(parent, list) and key == len(parent):
-                parent.append(copy.deepcopy(mutation.value))
-            else:
-                parent[key] = copy.deepcopy(mutation.value)
+            mutation.apply_to(self.state)
         validate_snapshot(self.state)
         return TransportFrame(
             task_id=event.task_id,

@@ -8,18 +8,18 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from app.assistant_transport.service.conversation_task_state_service import (
     ConversationTaskStateService,
 )
-from app.assistant_transport.service.transport_stream_service import (
-    AssistantTransportStreamService,
-)
 from app.assistant_transport.stream import TransportFrame
+from app.assistant_transport.stream.task_sse_stream import TaskSseStream
 from app.core.events import RunInitializedEvent, RunStatusChangedEvent
 from app.models.conversation_run_record import ConversationRunRecord
 from app.models.conversation_task_context import ConversationTaskContextRecord
@@ -69,24 +69,24 @@ def _reset_process_state(monkeypatch: pytest.MonkeyPatch) -> None:
         "app.task_runtime.task_runtime_space.get_workspace_service",
         lambda: SimpleNamespace(get_workspace=lambda _id: SimpleNamespace(id=3)),
     )
-    ConversationTaskStateService.clear_process_state()
+    task_runtime_spaces.close()
     yield
-    ConversationTaskStateService.clear_process_state()
+    task_runtime_spaces.close()
 
 
 def _state_service() -> ConversationTaskStateService:
-    service = ConversationTaskStateService.__new__(ConversationTaskStateService)
     sources = _EmptyTaskSources()
-    service._task_source = sources
-    service._run_source = sources
-    service._context_source = sources
-    return service
+    with patch.multiple(
+        "app.service.depends",
+        get_task_crud=lambda: sources,
+        get_conversation_run_crud=lambda: sources,
+        get_conversation_task_context_crud=lambda: sources,
+    ):
+        return ConversationTaskStateService()
 
 
-def _stream_service(state_service: ConversationTaskStateService) -> AssistantTransportStreamService:
-    stream_service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
-    stream_service._snapshots = state_service
-    return stream_service
+def _stream_service(state_service: ConversationTaskStateService) -> TaskSseStream:
+    return TaskSseStream(state_service)
 
 
 class _Collector:
@@ -95,17 +95,14 @@ class _Collector:
     静默边界（``None``）不是帧，单独记成「出现边界时已收到的帧数」。
     """
 
-    def __init__(self, stream_service: AssistantTransportStreamService) -> None:
+    def __init__(self, stream_service: TaskSseStream) -> None:
         self.frames: list[TransportFrame] = []
         self.idle_after: list[int] = []
-        self._cancelled = False
         self._received = asyncio.Condition()
         self.task = asyncio.create_task(self._run(stream_service))
 
-    async def _run(self, stream_service: AssistantTransportStreamService) -> None:
-        async for frame in stream_service.stream(
-            _TASK_ID, lambda: self._cancelled, poll_interval=0.01
-        ):
+    async def _run(self, stream_service: TaskSseStream) -> None:
+        async for frame in stream_service.frames(_TASK_ID, poll_interval=0.01):
             async with self._received:
                 if frame is None:
                     self.idle_after.append(len(self.frames))
@@ -113,8 +110,11 @@ class _Collector:
                     self.frames.append(frame)
                 self._received.notify_all()
 
-    def cancel(self) -> None:
-        self._cancelled = True
+    async def disconnect(self) -> None:
+        """客户端断开：生产里由 Starlette 取消订阅协程，订阅随之撤下。"""
+        self.task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait_for(self.task, 1)
 
     async def wait_frames(self, count: int) -> None:
         async with self._received:
@@ -164,8 +164,7 @@ async def test_attach_without_run_pushes_full_frame_and_stays_open() -> None:
     await _settle()
     assert not collector.task.done()
 
-    collector.cancel()
-    await asyncio.wait_for(collector.task, 1)
+    await collector.disconnect()
     assert len(collector.frames) == 1
 
 
@@ -212,8 +211,7 @@ async def test_one_connection_survives_run_completion_new_run_cancel_and_suspend
     assert activity["status"] == "cancelled"
     assert all(frame.kind == "mutation" for frame in collector.frames[1:])
 
-    collector.cancel()
-    await asyncio.wait_for(collector.task, 1)
+    await collector.disconnect()
 
 
 @pytest.mark.asyncio
@@ -241,14 +239,13 @@ async def test_idle_boundary_follows_each_burst_exactly_once() -> None:
     assert len(collector.frames) > 2
     assert collector.idle_after == [1, len(collector.frames)]
 
-    collector.cancel()
-    await asyncio.wait_for(collector.task, 1)
+    await collector.disconnect()
 
 
 @pytest.mark.asyncio
 async def test_envelopes_encode_idle_boundary_as_sse_comment() -> None:
     """边界编码为 SSE 注释行：客户端只读 ``data:`` 记录，会跳过它，只起推出前文的作用。"""
-    envelopes = _stream_service(_state_service()).stream_envelopes(_TASK_ID, lambda: False)
+    envelopes = _stream_service(_state_service()).sse_records(_TASK_ID)
 
     first = await anext(envelopes)
     boundary = await asyncio.wait_for(anext(envelopes), 1)
@@ -297,7 +294,7 @@ async def test_attach_envelopes_encode_task_view_frames_without_run_fields() -> 
 
     service = _state_service()
     stream_service = _stream_service(service)
-    envelopes = stream_service.stream_envelopes(_TASK_ID, lambda: False)
+    envelopes = stream_service.sse_records(_TASK_ID)
 
     first = json.loads((await anext(envelopes)).removeprefix("data: "))
     await envelopes.aclose()

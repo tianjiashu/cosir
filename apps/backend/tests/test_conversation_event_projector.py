@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -15,14 +14,12 @@ from app.assistant_transport.projection.user_input_projection import build_prese
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
 )
-from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     empty_snapshot,
     validate_snapshot,
 )
 from app.assistant_transport.stream import TransportFrame
-from app.config.constant import Constant
 from app.core.events import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
@@ -58,32 +55,12 @@ class InMemorySnapshotService:
 
         task_id = event.task_id
         state = self.get_state(task_id)
-        mutations = tuple(plan_event(event, copy.deepcopy(state)))
+        mutations = tuple(plan_event(event, copy.deepcopy(state), {}))
         for mutation in mutations:
-            _apply_mutation(state, mutation)
+            mutation.apply_to(state)
         validate_snapshot(state)
         self.states[task_id] = copy.deepcopy(state)
         return TransportFrame(task_id=task_id, kind="mutation", mutations=mutations)
-
-
-def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:
-    """在测试内应用生产 snapshot mutation。"""
-
-    parent: Any = state
-    if not mutation.path:
-        parent.clear()
-        parent.update(copy.deepcopy(mutation.value))
-        return
-    for key in mutation.path[:-1]:
-        parent = parent[key]
-    key = mutation.path[-1]
-    if mutation.kind == "set":
-        if isinstance(parent, list) and key == len(parent):
-            parent.append(copy.deepcopy(mutation.value))
-        else:
-            parent[key] = copy.deepcopy(mutation.value)
-    else:
-        parent[key] += mutation.value
 
 
 @pytest.fixture
@@ -252,11 +229,11 @@ def test_user_input_supports_image_only_and_duplicate_event(
     event = consumed(1, 1, 1, presentation)
 
     first = event_projector.process(event)
-    # 同一事件重复投递：按 event_id 去重，不再产出帧。
+    # 消费投影按消息身份幂等：重复投递不再改快照。
     second = event_projector.process(event)
 
-    assert first is not None
-    assert second is None
+    assert first.mutations
+    assert second.mutations == ()
     assert _messages(snapshots.states[1], 1)[0]["parts"] == [
         {"type": "image", "image": f"cosir-attachment://{image_id}"}
     ]
@@ -294,21 +271,6 @@ def test_assistant_text_and_reasoning_parts(
     parts = _messages(snapshots.states[1], 1)[1]["parts"]
     assert [part["type"] for part in parts] == ["text"]
     assert parts[0]["text"] == "答案"
-
-
-def test_duplicate_text_delta_is_not_appended_twice(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    event_projector, snapshots = projector
-    _start(event_projector)
-    event = AssistantTextDeltaEvent(
-        source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="一次"
-    )
-    first = event_projector.process(event)
-    second = event_projector.process(event)
-    assert first is not None and first.mutations
-    assert second is None
-    assert _messages(snapshots.states[1], 1)[1]["parts"][0]["text"] == "一次"
 
 
 def test_cancelled_run_resume_status_is_projected(
@@ -591,14 +553,6 @@ def test_unknown_run_event_raises_and_is_not_projected(
     assert snapshots.states.get(1, empty_snapshot()) == empty_snapshot()
 
 
-def test_unknown_event_is_ignored(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    event_projector, snapshots = projector
-    assert event_projector.process({"type": "future_event", "task_id": 1, "run_id": 1}) is None
-    assert snapshots.states == {}
-
-
 def test_model_chunk_event_becomes_assistant_transport_update() -> None:
     """验证 model chunk → event → mutation frame 的闭环。"""
 
@@ -610,17 +564,6 @@ def test_model_chunk_event_becomes_assistant_transport_update() -> None:
     )
     change = event_projector.process(event)
     assert change is not None and change.mutations
-
-
-def _projector_with_window(
-    limit: int,
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[ConversationEventProjector, InMemorySnapshotService]:
-    """按指定容量构造投影器（容量来源是 ``Constant.Transport``，此处临时覆盖）。"""
-
-    monkeypatch.setattr(Constant.Transport, "EVENT_DEDUP_WINDOW", limit)
-    snapshots = InMemorySnapshotService()
-    return ConversationEventProjector(snapshots), snapshots
 
 
 def _assert_reapply_changes_nothing(
@@ -638,120 +581,6 @@ def _assert_reapply_changes_nothing(
     before = copy.deepcopy(snapshots.states[1])
     event_projector.process(factory())
     assert snapshots.states[1] == before
-
-
-def test_dedup_window_is_bounded_by_configured_limit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """去重窗口是全局有界 FIFO：条目数不随事件数增长。"""
-
-    event_projector, _ = _projector_with_window(4, monkeypatch)
-    _start(event_projector)
-    for _ in range(10):
-        event_projector.process(
-            AssistantTextDeltaEvent(
-                source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="x"
-            )
-        )
-    assert event_projector._dedup_window.size == 4
-
-
-def test_dedup_window_is_not_keyed_by_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    """窗口不按 task 分桶：task 数量增加也不会突破容量上界。"""
-
-    event_projector, snapshots = _projector_with_window(3, monkeypatch)
-    for task_id in range(1, 6):
-        event_projector.process(
-            RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=task_id, run_id=task_id)
-        )
-        _append_user_input(event_projector, task_id=task_id, run_id=task_id)
-        event_projector.process(
-            AssistantTextDeltaEvent(
-                source_sequence=1,
-                task_id=task_id,
-                run_id=task_id,
-                turn=task_id,
-                part="text",
-                delta="x",
-            )
-        )
-    assert event_projector._dedup_window.size == 3
-    assert len(snapshots.states) == 5
-
-
-def test_duplicate_delta_event_is_dropped(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-) -> None:
-    """同一 event_id 的增量事件只被投影一次。"""
-
-    event_projector, snapshots = projector
-    _start(event_projector)
-    event = AssistantTextDeltaEvent(
-        source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="abc"
-    )
-    assert event_projector.process(event) is not None
-    assert event_projector.process(event) is None
-    parts = _messages(snapshots.states[1], 1)[1]["parts"]
-    assert [part["text"] for part in parts] == ["abc"]
-
-
-def test_evicted_delta_is_no_longer_deduplicated(monkeypatch: pytest.MonkeyPatch) -> None:
-    """超出窗口的旧 event_id 不再去重——这是有界化**记录在案**的取舍。"""
-
-    event_projector, snapshots = _projector_with_window(2, monkeypatch)
-    _start(event_projector)
-    events = [
-        AssistantTextDeltaEvent(
-            source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta=delta
-        )
-        for delta in ("a", "b", "c")
-    ]
-    for event in events:
-        event_projector.process(event)
-    assert event_projector._dedup_window.size == 2
-    # 最早的 a 已被淘汰：重放它会再次被应用（后果是文本重复，而非崩溃）。
-    assert event_projector.process(events[0]) is not None
-    parts = _messages(snapshots.states[1], 1)[1]["parts"]
-    assert [part["text"] for part in parts] == ["abca"]
-
-
-def test_duplicate_delta_drop_is_logged(
-    projector: tuple[ConversationEventProjector, InMemorySnapshotService],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """重复投递被丢弃时留下可观测日志（回答「该机制是否真被触发」）。"""
-
-    event_projector, _ = projector
-    _start(event_projector)
-    event = AssistantTextDeltaEvent(
-        source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="a"
-    )
-    event_projector.process(event)
-    with caplog.at_level(logging.DEBUG):
-        event_projector.process(event)
-    assert "conversation_event_duplicate_dropped" in caplog.text
-
-
-def test_window_eviction_is_logged(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """窗口淘汰最旧 event_id 时记录容量预警。"""
-
-    event_projector, _ = _projector_with_window(1, monkeypatch)
-    _start(event_projector)
-    with caplog.at_level(logging.WARNING):
-        event_projector.process(
-            AssistantTextDeltaEvent(
-                source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="a"
-            )
-        )
-        event_projector.process(
-            AssistantTextDeltaEvent(
-                source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="b"
-            )
-        )
-    assert "conversation_event_dedup_window_evicted" in caplog.text
 
 
 def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(

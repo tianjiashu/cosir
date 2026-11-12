@@ -10,8 +10,8 @@ from typing import Any
 import pytest
 from sqlalchemy.orm import sessionmaker
 
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    rebuild_snapshot,
 )
 from app.core.events import RunInitializedEvent
 from app.core.workflow.conversation_run_ledger import ConversationRunLedger
@@ -133,7 +133,7 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
 
     service._session_factory = SimpleNamespace(begin=lambda: nullcontext(object()))
     monkeypatch.setattr(
-        "app.core.workflow.conversation_run_ledger.get_conversation_event_projector",
+        "app.service.depends.get_conversation_event_projector",
         lambda: Projector(),
     )
     monkeypatch.setattr(
@@ -159,7 +159,7 @@ def test_rebuild_reads_run_owned_context_windows_without_capability_lookup() -> 
     runs[1].context_window_total = 16384
     task = _task()
     task.current_run_id = 12
-    state = ConversationTaskStateRebuilder.rebuild(task, runs, [])
+    state = rebuild_snapshot(task, runs, [], {})
     # 只有最新 Run 的冻结窗口进入 activity；历史 Run 的窗口不进 wire。
     assert state["activity"] is not None
     assert state["activity"]["contextWindowTotal"] == 16384

@@ -29,6 +29,7 @@ from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import init_storage, main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils.path import system_cosir as paths
+from tests.command_job_fakes import FakeCommandJob
 from tests.task_extra_fixtures import fork_extra, node_extra
 
 
@@ -403,6 +404,8 @@ async def test_delete_task_tree_stops_until_the_tree_stops_growing(
     trees = iter([{1}, {1, 2}, {1, 2}])
     deleted: list[int] = []
     monkeypatch.setattr(service, "collect_task_tree_ids", lambda _task_id: next(trees))
+    # 这里的 Task id 没有记录：删除后通知派生方的读取另有用例覆盖。
+    monkeypatch.setattr(service, "_active_derived", lambda _task_ids: [])
     monkeypatch.setattr(service, "delete_task", lambda task_id, _fork_ids: deleted.append(task_id))
 
     await service.delete_task_tree(1)
@@ -420,6 +423,7 @@ async def test_failed_task_deletion_restarts_the_stopped_actors(
     """删除没提交时 Task 仍在，停下的 actor 不可逆，必须换上新的调度者。"""
     service = get_task_service()
     monkeypatch.setattr(service, "collect_task_tree_ids", lambda _task_id: {1, 2})
+    monkeypatch.setattr(service, "_active_derived", lambda _task_ids: [])
 
     def fail(_task_id: int, _fork_ids: frozenset[int]) -> None:
         raise error
@@ -532,15 +536,14 @@ def test_deleting_an_idle_task_revokes_its_background_work(storage, tmp_path) ->
         "call-bg",
         task_id=task,
         run_id=None,
-        kind="terminal_command",
         label="sleep",
-        on_cancel=lambda _reason: cancelled.append("call-bg"),
+        job=FakeCommandJob(lambda: cancelled.append("call-bg")),
     )
 
     get_task_service().delete_task(task)
 
     assert cancelled == ["call-bg"]
-    assert command_results.drop_task(task) == {}
+    assert not command_results.has_work(task)
 
 
 @pytest.mark.parametrize("delete_workspace", [False, True])
@@ -554,7 +557,7 @@ def test_committed_deletion_closes_task_terminals(storage, tmp_path, monkeypatch
     workspace = get_workspace_crud().create("terminal", str(tmp_path))
     task = get_task_crud().create(workspace.id, "owner")
     terminal, workers = make_service(monkeypatch)
-    terminal.start(task_id=task.id, workspace_root=str(tmp_path))
+    terminal.start(task_id=task.id, cwd=str(tmp_path))
     monkeypatch.setattr(depends, "get_terminal_session_service", lru_cache()(lambda: terminal))
     try:
         if delete_workspace:
@@ -577,7 +580,7 @@ def test_failed_task_deletion_does_not_close_or_fence_terminal(storage, tmp_path
     workspace = get_workspace_crud().create("terminal", str(tmp_path))
     task = get_task_crud().create(workspace.id, "owner")
     terminal, workers = make_service(monkeypatch)
-    terminal.start(task_id=task.id, workspace_root=str(tmp_path))
+    terminal.start(task_id=task.id, cwd=str(tmp_path))
     monkeypatch.setattr(depends, "get_terminal_session_service", lru_cache()(lambda: terminal))
 
     def fail_delete(*args, **kwargs):
@@ -591,7 +594,7 @@ def test_failed_task_deletion_does_not_close_or_fence_terminal(storage, tmp_path
         assert not workers[0].closed
         assert (
             terminal.start(
-                task_id=task.id, workspace_root=str(tmp_path)
+                task_id=task.id, cwd=str(tmp_path)
             )
             .snapshot()
             .status

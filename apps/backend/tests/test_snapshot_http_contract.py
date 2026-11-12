@@ -24,7 +24,7 @@ def test_snapshot_and_history_use_real_storage_over_http(backend_env, tmp_path):
 @pytest.mark.parametrize("presentation", ["activity", "standalone", "quiet"])
 def test_nested_tool_parts_serialize_through_actual_routes(presentation):
     """服务替身控制载荷；路由、依赖解析和 Pydantic 响应序列化保持真实。"""
-    from app.assistant_transport.assistant_api import get_transport_assistant_service
+    from app.api.assistant_transport_api import get_assistant_transport_service
 
     state = empty_snapshot()
     state["messages"] = [
@@ -54,7 +54,7 @@ def test_nested_tool_parts_serialize_through_actual_routes(presentation):
         def get_history_page(self, task_id, end):
             return {"messages": state["messages"], "messageOffset": 0}
 
-    app.dependency_overrides[get_transport_assistant_service] = Source
+    app.dependency_overrides[get_assistant_transport_service] = Source
     try:
         client = TestClient(app)
         for path in ["state", "messages?end=1"]:
@@ -64,7 +64,7 @@ def test_nested_tool_parts_serialize_through_actual_routes(presentation):
             assert part["presentation"] == presentation
             assert part["status"] == "failed"
     finally:
-        del app.dependency_overrides[get_transport_assistant_service]
+        del app.dependency_overrides[get_assistant_transport_service]
 
 
 def test_snapshot_json_schema_resolves_runtime_types():

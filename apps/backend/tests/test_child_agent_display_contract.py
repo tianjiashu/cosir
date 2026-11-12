@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 # Load the tool package before the transport event package to match the production
 # dependency bootstrap and avoid the legacy import cycle during isolated collection.
 import app.tools  # noqa: F401
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    pair_tool_parts,
 )
 from app.core.tool.multi_agent.delegate_task import DelegateTaskTool
 from app.core.tool.multi_agent.task_status import TaskStatusTool
@@ -125,7 +125,7 @@ def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
     ]
 
     # 历史展示仅来自持久化载荷，未保存 role 时不从当前配置推断。
-    parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
+    parts = pair_tool_parts(rows, {})
 
     assert parts["delegate-call"]["display_data"] == rows[1].metadata.display_data
     assert "final_output" not in parts["delegate-call"]["display_data"]

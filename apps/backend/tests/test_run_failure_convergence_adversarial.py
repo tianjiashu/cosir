@@ -24,8 +24,8 @@ from typing import Any, cast
 
 import pytest
 
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    run_error,
 )
 from app.assistant_transport.state.conversation_state_activity import ConversationStateActivity
 from app.assistant_transport.state.conversation_state_snapshot import (
@@ -134,9 +134,9 @@ def _make_runtime(
         AgentRuntimeConfig, "for_run", classmethod(lambda *_args: object())
     )
     monkeypatch.setattr(
-        run_driver,
-        "get_conversation_event_projector",
-        lambda: SimpleNamespace(process=lambda _event: None),
+        "app.service.depends.get_conversation_event_projector",
+        lambda: SimpleNamespace(process=lambda _event: None,
+    ),
     )
     monkeypatch.setattr(
         run_driver,
@@ -657,16 +657,16 @@ def test_build_run_error_rejects_malformed_payload(payload: object) -> None:
     run = SimpleNamespace(id=3, error=payload)
     if payload is None:
         assert (
-            ConversationTaskStateRebuilder.build_run_error(cast(ConversationRunRecord, run)) is None
+            run_error(cast(ConversationRunRecord, run)) is None
         )
         return
     if isinstance(payload, dict) and payload.get("message") == "   ":
         # 空白 message 的期望：显式失败（不得静默降级成空白提示）。
         with pytest.raises(ValueError):
-            ConversationTaskStateRebuilder.build_run_error(cast(ConversationRunRecord, run))
+            run_error(cast(ConversationRunRecord, run))
         return
     with pytest.raises(ValueError):
-        ConversationTaskStateRebuilder.build_run_error(cast(ConversationRunRecord, run))
+        run_error(cast(ConversationRunRecord, run))
 
 
 def test_build_run_error_accepts_valid_contract() -> None:
@@ -679,7 +679,7 @@ def test_build_run_error_accepts_valid_contract() -> None:
             "message": run_failure_message("model_insufficient_quota"),
         },
     )
-    assert ConversationTaskStateRebuilder.build_run_error(cast(ConversationRunRecord, run)) == {
+    assert run_error(cast(ConversationRunRecord, run)) == {
         "code": "model_insufficient_quota",
         "message": run_failure_message("model_insufficient_quota"),
     }
@@ -691,7 +691,7 @@ def test_build_run_error_does_not_raise_attribute_error_for_non_mapping() -> Non
     for weird in ("oops", 42, ["a"], object()):
         run = SimpleNamespace(id=3, error=weird)
         with pytest.raises(ValueError):
-            ConversationTaskStateRebuilder.build_run_error(cast(ConversationRunRecord, run))
+            run_error(cast(ConversationRunRecord, run))
 
 
 def test_validate_snapshot_rejects_run_error_with_extra_keys() -> None:

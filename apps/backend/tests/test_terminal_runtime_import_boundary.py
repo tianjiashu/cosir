@@ -1,4 +1,4 @@
-"""依赖方向守卫：终端运行时不依赖终端工具，子包之间只向下依赖。
+"""依赖方向守卫：终端运行时不依赖工具与应用层，子包之间只向下依赖。
 
 方向：``tool_handler/terminal``（工具）→ ``session`` / ``command`` → ``observation`` → 根上的
 ``worker_client`` / ``errors``。会话与命令互不依赖；运行时一旦导入工具包，一条命令的事实就会再次被
@@ -43,8 +43,10 @@ def _violations(forbidden_for: Callable[[Path], tuple[str, ...]]) -> list[str]:
     ]
 
 
-def test_runtime_does_not_import_terminal_tools() -> None:
-    assert _violations(lambda _path: ("app.tools.tool_handler.terminal",)) == []
+def test_runtime_does_not_import_tools_or_application_layers() -> None:
+    """运行时只被工具与应用层调用：应用层的回调（如会话变化重投影）在装配时注入。"""
+    forbidden = ("app.tools.tool_handler", "app.service", "app.assistant_transport", "app.api")
+    assert _violations(lambda _path: forbidden) == []
 
 
 def test_runtime_subpackages_only_depend_downward() -> None:

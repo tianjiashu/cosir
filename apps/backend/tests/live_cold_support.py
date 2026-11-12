@@ -19,7 +19,6 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import update
 
 from app.config.configuration import get_tool_registry
-from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolDefinition
@@ -42,6 +41,7 @@ from app.storage.store_engines import main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal import execute_terminal
+from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
 from tests.model_config_fixtures import create_model_config
 from tests.sdk_fixtures import sdk_events
 

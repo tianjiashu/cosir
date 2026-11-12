@@ -313,7 +313,9 @@ def test_observe_node_only_settles_and_keeps_batch(monkeypatch, suspend) -> None
     assert patch == {"next_node": ReactRoute.PREPARE_INPUT, "wait_for_input": suspend}
 
 
-def _gate_runtime(monkeypatch, *, cancelled=False, result_ids=(), notice_rows=(), local_notices=()):
+def _gate_runtime(
+    monkeypatch, *, cancelled=False, result_ids=(), notice_rows=(), local_notices=(), notice_kind="catalog_change"
+):
     """prepare_input 关口用的最小运行时：记录状态迁移，并入消息与通知不落库。
 
     ``result_ids`` 是可唤醒的外部行（后台结论），``notice_rows`` 是外部队列里的通知行，
@@ -322,10 +324,13 @@ def _gate_runtime(monkeypatch, *, cancelled=False, result_ids=(), notice_rows=()
     transitions: list[tuple[int, RunTransition]] = []
     mailbox = RunMailbox()
     for message_id in result_ids:
-        body = BackgroundResultBody(tool_name="child_agent", tool_result="{}", ended_at="t")
+        body = BackgroundResultBody(
+            tool_call_id=f"call-{message_id}", tool_name="execute_terminal", tool_result="{}",
+            ended_at="t",
+        )
         mailbox.post(TaskMessage.of(body, message_id=message_id))
     for message_id, text in notice_rows:
-        notice = NoticeBody(content=text, notice_kind="backend_restarted")
+        notice = NoticeBody(content=text, notice_kind=notice_kind)
         mailbox.post(TaskMessage.of(notice, message_id=message_id))
     for text in local_notices:
         mailbox.notify(NoticeBody(content=text, notice_kind="model_continuation"))
@@ -373,7 +378,7 @@ def _gate_state(*, suspend: bool, step_count: int = 1, step_limit: int = 10) -> 
     [{}, {"local_notices": ("run notice",)}, {"notice_rows": ((5, "terminal ended"),)}],
 )
 def test_prepare_input_suspends_without_wakeable_messages(monkeypatch, notices) -> None:
-    """没有可唤醒消息时落定 suspended、结束驱动、什么都不写；通知不论来源都不挡挂起。"""
+    """没有可唤醒消息时落定 suspended、结束驱动、什么都不写；普通通知不论来源都不挡挂起。"""
     transitions, drained = _gate_runtime(monkeypatch, **notices)
 
     patch = asyncio.run(prepare_input_node._prepare_input_node(_gate_state(suspend=True)))
@@ -401,6 +406,19 @@ def test_prepare_input_skips_suspend_when_external_message_waiting(monkeypatch) 
     assert message.id == 7
     assert patch["next_node"] is ReactRoute.MODEL
     assert patch["batch"] == ToolBatch()
+
+
+def test_prepare_input_does_not_suspend_past_a_notice_that_ends_the_wait(monkeypatch) -> None:
+    """派生工作被停止的通知在挂起前一刻已到：挂起就再没有人来叫醒，所以直接继续、先写这条通知。"""
+    transitions, drained = _gate_runtime(
+        monkeypatch, notice_rows=((5, "child stopped"),), notice_kind="derived_task_stopped"
+    )
+
+    patch = asyncio.run(prepare_input_node._prepare_input_node(_gate_state(suspend=True)))
+
+    assert transitions == []
+    assert drained == [[(5, "child stopped")]]
+    assert patch["next_node"] is ReactRoute.MODEL
 
 
 def test_prepare_input_cancel_wins_over_suspend(monkeypatch) -> None:

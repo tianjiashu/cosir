@@ -65,9 +65,9 @@ def _line(worker: ProcessTerminalWorker, text: str) -> None:
 
 def _output_text(events: list[dict[str, object]]) -> str:
     return b"".join(
-        base64.b64decode(event["data_base64"])
+        event["data"]
         for event in events
-        if event.get("type") == "output" and isinstance(event.get("data_base64"), str)
+        if event.get("type") == "output" and isinstance(event.get("data"), bytes)
     ).decode("utf-8", errors="replace")
 
 
@@ -127,9 +127,9 @@ def test_real_worker_round_trip_and_exit(tmp_path: Path) -> None:
         worker.close()
 
     output = b"".join(
-        base64.b64decode(event["data_base64"])
+        event["data"]
         for event in events
-        if event.get("type") == "output" and isinstance(event.get("data_base64"), str)
+        if event.get("type") == "output" and isinstance(event.get("data"), bytes)
     )
     assert b"terminal-worker-smoke" in output
     handshake = next(event for event in events if event.get("type") == "handshake")
@@ -155,9 +155,9 @@ def test_real_worker_powershell_command_exits(tmp_path: Path) -> None:
         worker.close()
 
     output = b"".join(
-        base64.b64decode(event["data_base64"])
+        event["data"]
         for event in events
-        if event.get("type") == "output" and isinstance(event.get("data_base64"), str)
+        if event.get("type") == "output" and isinstance(event.get("data"), bytes)
     )
     assert b"terminal-worker-powershell-smoke" in output
 
@@ -296,9 +296,9 @@ def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
 
     def output_bytes(events: list[dict[str, object]]) -> bytes:
         return b"".join(
-            base64.b64decode(event["data_base64"])
+            event["data"]
             for event in events
-            if event.get("type") == "output" and isinstance(event.get("data_base64"), str)
+            if event.get("type") == "output" and isinstance(event.get("data"), bytes)
         )
 
     def output_contains(events: list[dict[str, object]], marker: bytes) -> bool:
@@ -416,7 +416,7 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
     """
     from terminal_test_support import (
         active_session_ids,
-        capture_terminal_effects,
+        ignore_session_changes,
         user_enter,
         wait_for_integration,
         wait_until,
@@ -429,24 +429,19 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
     from app.service import depends as service_depends
     from app.tools.terminal_runtime.session.session_service import TerminalSessionService
     from app.tools.tool_handler.terminal.terminal_list import TerminalListTool
-    from app.tools.tool_handler.terminal.terminal_read import TerminalReadTool
     from tests.runtime_context_stub import singleton_getter
 
-    capture_terminal_effects(monkeypatch)
-    terminal = TerminalSessionService()
+    terminal = TerminalSessionService(on_sessions_changed=ignore_session_changes)
     monkeypatch.setattr(
         service_depends, "get_terminal_session_service", singleton_getter(lambda: terminal)
     )
     runtime = terminal.start(
         task_id=1,
-        workspace_root=str(tmp_path),
+        cwd=str(tmp_path),
         shell="cmd" if os.name == "nt" else "bash",
     )
     wait_for_integration(runtime)
     session_id = runtime.session_id
-    first = ToolExecutionContext(
-        step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1
-    )
     second = ToolExecutionContext(
         step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=2
     )
@@ -469,9 +464,9 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
             else "export COSIR_TERMINAL_STATE=kept"
         )
         run_as_user(set_command)
+        # 第一个 Run 被停止（取消前的拦截归执行器，不在 handler）；执行释放取走 Task 信号后，同一 Task 的
+        # 后续 Run 复用终端不受影响。
         cancellation_registry.request_cancel(1)
-        assert TerminalReadTool().execute(session_id, execution_context=first).status == "cancelled"
-        # 第一个 Run 的执行释放取走 Task 信号；同一 Task 的后续 Run 复用终端不受影响。
         cancellation_registry.consume(1)
         listed = TerminalListTool().execute(execution_context=second)
         session_line = listed.content.split("\n", 1)[0]

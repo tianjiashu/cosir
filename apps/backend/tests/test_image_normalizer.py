@@ -5,7 +5,6 @@ import pytest
 from PIL import Image
 
 from app.assistant_transport.projection.event_projection import plan_event
-from app.assistant_transport.service.conversation_task_state_service import _apply_mutation
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
 from app.config.constant import Constant
 from app.core.events import RunInitializedEvent
@@ -64,8 +63,8 @@ def test_normalize_uses_unified_image_policy_as_format_source() -> None:
 
 
 def _apply_planned(event, snapshot):
-    for mutation in plan_event(event, snapshot):
-        _apply_mutation(snapshot, mutation)
+    for mutation in plan_event(event, snapshot, {}):
+        mutation.apply_to(snapshot)
     return snapshot
 
 

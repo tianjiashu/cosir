@@ -22,7 +22,6 @@ from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
 )
-from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     empty_snapshot,
@@ -57,6 +56,7 @@ from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.tools.tool_handler.read_file import ReadFileTool
 from tests.runtime_context_stub import runtime_stub
 from tests.tool_executor_fakes import emit_running
@@ -84,9 +84,9 @@ class _MemorySnapshotOwner:
 
 
     def apply_planned(self, event: Any) -> TransportFrame:
-        mutations = tuple(plan_event(event, copy.deepcopy(self.state)))
+        mutations = tuple(plan_event(event, copy.deepcopy(self.state), {}))
         for mutation in mutations:
-            _apply_mutation(self.state, mutation)
+            mutation.apply_to(self.state)
         validate_snapshot(self.state)
         self.applied.append(event)
         return TransportFrame(
@@ -94,23 +94,6 @@ class _MemorySnapshotOwner:
             kind="mutation",
             mutations=mutations,
         )
-
-
-def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:
-    parent: Any = state
-    if not mutation.path:
-        parent.clear()
-        parent.update(copy.deepcopy(mutation.value))
-        return
-    for key in mutation.path[:-1]:
-        parent = parent[key]
-    key = mutation.path[-1]
-    if mutation.kind == "append-text":
-        parent[key] += mutation.value
-    elif isinstance(parent, list) and key == len(parent):
-        parent.append(copy.deepcopy(mutation.value))
-    else:
-        parent[key] = copy.deepcopy(mutation.value)
 
 
 class _EventRecorder:
@@ -1169,12 +1152,9 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
     的 id 驱动投影（不硬编码一个不存在的 task_id）。
     """
 
-    from app.assistant_transport.service.conversation_task_state_service import (
-        ConversationTaskStateService,
-    )
-    from app.service.depends import get_workspace_service
+    from app.service.depends import get_conversation_task_state_service, get_workspace_service
 
-    ConversationTaskStateService.clear_process_state()
+    task_runtime_spaces.close()
     projector = ConversationEventProjector()
 
     root = tmp_path / "projection-workspace"
@@ -1215,7 +1195,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
         "startedAt": "2026-01-01T00:00:00+00:00",
         "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
     }
-    projector.state_service.publish_state(task_id, state)
+    task_runtime_spaces.get_or_create(task_id).replace_snapshot(state)
 
     projector.process(
         terminal_event(
@@ -1227,10 +1207,10 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
         )
     )
 
-    part = _part_from_state(projector.state_service.get_state(task_id), 5, "call-r")
+    part = _part_from_state(get_conversation_task_state_service().get_state(task_id), 5, "call-r")
     assert part["status"] == "completed"
     assert part["display_data"] == {"kind": "read-file-meta"}
-    ConversationTaskStateService.clear_process_state()
+    task_runtime_spaces.close()
 
 
 def _part_from_state(state: ConversationStateSnapshot, run_id: int, call_id: str) -> dict[str, Any]:

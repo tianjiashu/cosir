@@ -16,10 +16,11 @@ from app.assistant_transport.state.conversation_state_background_task import (
 )
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.placeholder_settlement import cancel_placeholders
-from app.tools.tool_handler.terminal.command_results import command_results
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
 from app.service import depends
+from app.tools.tool_handler.terminal.command_results import command_results
+from tests.command_job_fakes import FakeCommandJob
 
 pytestmark = pytest.mark.usefixtures("empty_tool_registry")
 
@@ -149,9 +150,8 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
         "call-bg",
         task_id=task.id,
         run_id=run.id,
-        kind="terminal_command",
         label="build",
-        on_cancel=lambda _reason: None,
+        job=FakeCommandJob(),
     )
     service.refresh_background_results(task.id)
     assert [entry["status"] for entry in service.get_state(task.id)["background_tasks"]] == [
@@ -177,13 +177,12 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
             background=work,
         )
     )
-    assert service.get_state(task.id)["background_tasks"][0]["status"] == "running"
-    assert (
-        service.get_state(task.id)["background_tasks"]
-        == service.rebuild_state(task.id)["background_tasks"]
-    )
+    hot = service.get_state(task.id)["background_tasks"]
+    assert hot[0]["status"] == "running"
+    service.republish_from_canonical(task.id)
+    assert hot == service.get_state(task.id)["background_tasks"]
 
-    command_results.withdraw(task.id, "call-bg")
+    command_results.withdraw_calls(task.id, ["call-bg"])
     service.refresh_background_results(task.id)
     assert service.get_state(task.id)["background_tasks"][0]["status"] == "settling"
     monkeypatch.setattr(
@@ -196,7 +195,8 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
     ) == frozenset({task.id})
     hot = service.get_state(task.id)["background_tasks"]
     assert hot[0]["status"] == "cancelled" and hot[0]["endedAt"] is not None
-    assert hot == service.rebuild_state(task.id)["background_tasks"]
+    service.republish_from_canonical(task.id)
+    assert hot == service.get_state(task.id)["background_tasks"]
 
 
 def test_withdrawn_rounds_are_not_listed(tmp_path, isolated_storage):

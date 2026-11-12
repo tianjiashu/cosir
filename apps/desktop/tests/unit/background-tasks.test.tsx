@@ -217,7 +217,7 @@ describe("后台任务卡", () => {
       <QueryClientProvider client={createQueryClient()}><BackgroundTasksBody taskId={1} /></QueryClientProvider>,
     );
     expect(html).toContain('aria-expanded="false"');
-    expect(html).not.toContain("等待输出");
+    expect(html).not.toContain('data-slot="terminal-status-bar"');
   });
 
   it("定位到看板时展开这一条，并打开侧栏与卡片", () => {
@@ -239,7 +239,7 @@ describe("后台任务卡", () => {
     );
     expect(html).toContain('aria-expanded="true"');
     expect(html).not.toContain('data-tool-call-id="a"');
-    expect(html).toContain("等待输出");
+    expect(html).toContain('data-slot="terminal-status-bar"');
     expect(html).not.toContain("停止终端命令");
     expect(html).not.toContain("转到后台");
   });

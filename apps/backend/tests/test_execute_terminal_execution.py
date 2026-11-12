@@ -9,13 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from app.tools.tool_handler.terminal import command_results as background_module
-from app.tools.tool_handler.terminal.command_job import CommandJob
-from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal import execute_terminal as terminal_module
+from app.tools.tool_handler.terminal.command_job import CommandJob
+from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from tests.live_cold_support import registered
 
@@ -79,11 +78,12 @@ def pool(command):
 def delivered(monkeypatch):
     calls = []
 
-    def deliver(task_id, *, tool_call_id, tool_name, result, placeholder_display_data=None):
-        calls.append((tool_call_id, result))
+    def deliver(task_id, tool_call_id, conclusion, *, starts_run=True):
+        calls.append((tool_call_id, conclusion.result))
         return True
 
-    monkeypatch.setattr(background_module, "deliver_background_result", deliver)
+    monkeypatch.setattr(CommandResultRegistry, "_enqueue_result", staticmethod(deliver))
+    monkeypatch.setattr(CommandResultRegistry, "_enqueue_cancel_receipt", staticmethod(deliver))
     return calls
 
 
@@ -184,20 +184,20 @@ def test_detach_before_waiter_returns_keeps_placeholder(
     tmp_path, command, pool, monkeypatch, delivered, withdraw,
 ):
     entered, release = threading.Event(), threading.Event()
-    wait_result = terminal_module._ForegroundWait.wait_result
+    wait = CommandJob.wait
 
-    def paused_wait(handle, timeout):
+    def paused_wait(job, timeout):
         entered.set()
         assert release.wait(2)
-        return wait_result(handle, timeout)
+        return wait(job, timeout)
 
-    monkeypatch.setattr(terminal_module._ForegroundWait, "wait_result", paused_wait)
+    monkeypatch.setattr(CommandJob, "wait", paused_wait)
     result = pool.submit(_execute, tmp_path)
     try:
         assert entered.wait(2)
         assert command_results.detach(1, "call-1") == "detached"
         if withdraw:
-            command_results.withdraw(1, "call-1")
+            command_results.withdraw_calls(1, ["call-1"])
         else:
             command.release.set()
         command.join()
@@ -240,7 +240,7 @@ def test_foreground_cancel_stops_command_and_waits_for_result(
 
 def test_parent_stop_drops_background_result(tmp_path, command, delivered):
     _execute(tmp_path, background=True)
-    dropped = command_results.drop_task(1)
+    dropped = command_results.recall_task(1)
     assert dropped["call-1"]["output"] == "call-1"
     command.join()
     assert command.stopped.is_set() and delivered == []
@@ -359,3 +359,46 @@ def test_model_text_fits_the_channel_once_whatever_the_ending(
     hint = terminal_module._END_HINTS.get(result.end)
     if hint is not None:
         assert content.endswith(hint)
+
+
+@pytest.mark.parametrize("background", [False, True])
+def test_refused_registration_returns_cancelled_without_a_placeholder(
+    tmp_path, command, delivered, background,
+):
+    """Task 正被收回时登记被拒：作业已停下，工具按取消返回，不写一张没人结算的后台占位。"""
+    cancellation_registry.request_cancel(1, "parent")
+    observation = _execute(tmp_path, background=background)
+    command.join()
+    assert command.stopped.is_set()
+    assert observation.status == "cancelled" and observation.background is None
+    assert delivered == []
+
+
+def test_run_cancel_right_after_detach_keeps_the_command_running(
+    tmp_path, command, pool, monkeypatch, delivered,
+):
+    """转后台后、等待线程下一次检查之前 Run 被用户停止：已转后台的命令不受影响（两者在登记表锁内的
+    裁决见 ``test_command_results`` 的 ``cancel_foreground`` 用例）。"""
+    entered, release = threading.Event(), threading.Event()
+    wait = CommandJob.wait
+
+    def paused_wait(job, timeout):
+        if timeout is not None:
+            entered.set()
+            assert release.wait(2)
+        return wait(job, timeout)
+
+    monkeypatch.setattr(CommandJob, "wait", paused_wait)
+    result = pool.submit(_execute, tmp_path)
+    try:
+        assert entered.wait(2)
+        assert command_results.detach(1, "call-1") == "detached"
+        cancellation_registry.request_cancel(1, "user")
+    finally:
+        release.set()
+    observation = result.result(timeout=2)
+    assert observation.background is not None and "the user moved" in observation.content
+    assert not command.stopped.is_set()
+    command.release.set()
+    command.join()
+    assert len(delivered) == 1

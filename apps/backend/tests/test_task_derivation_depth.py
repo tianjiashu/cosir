@@ -7,12 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.task_extra_fixtures import fork_extra
-from app.models.task_extra import TaskExtra
 from app.config.environment_field_catalog import ENVIRONMENT_FIELDS
 from app.core.tool.multi_agent.derivation import DERIVATIONS, child_depth
+from app.models.task_extra import TaskExtra
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
+from tests.task_extra_fixtures import fork_extra
 
 
 def test_team_nodes_share_the_main_task_depth_and_other_derivations_go_one_deeper() -> None:

@@ -539,7 +539,7 @@ def test_cancelled_event_mutates_running_part_to_cancelled() -> None:
 
     mutations = {
         mutation.path: mutation.value
-        for mutation in plan_event(event, _running_tool_state("call-1"))
+        for mutation in plan_event(event, _running_tool_state("call-1"), {})
     }
     base = ("messages", 0, "parts", 0)
 
@@ -559,7 +559,7 @@ def test_cancelled_observation_plan_tolerates_missing_tool_part() -> None:
         error="已取消",
     )
 
-    assert list(plan_event(event, {"messages": [], "activity": None})) == []
+    assert list(plan_event(event, {"messages": [], "activity": None}, {})) == []
 
 
 def _tool_state_with_status(status: str, tool_call_id: str) -> dict[str, Any]:
@@ -590,7 +590,7 @@ def test_placeholder_overwrite_transition_cancelled_to_completed_is_applied() ->
 
     mutations = {
         mutation.path: mutation.value
-        for mutation in plan_event(event, _tool_state_with_status("cancelled", "call-1"))
+        for mutation in plan_event(event, _tool_state_with_status("cancelled", "call-1"), {})
     }
     base = ("messages", 0, "parts", 0)
 
@@ -611,7 +611,7 @@ def test_late_event_cannot_revive_a_completed_part_and_is_logged(caplog: Any) ->
     )
 
     with caplog.at_level("WARNING"):
-        mutations = list(plan_event(event, _tool_state_with_status("completed", "call-1")))
+        mutations = list(plan_event(event, _tool_state_with_status("completed", "call-1"), {}))
 
     assert mutations == []
     assert [

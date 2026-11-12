@@ -62,17 +62,17 @@ test("看板只列后台工作；前台等待在卡片上转到后台后才进�
   await page.locator('[data-background-task="call-bg"]').getByRole("button", { name: "停止" }).click();
   await expect(card).toContainText("2 已结束");
 
-  // 前台等待：行上只有标题与运行时长，去留操作在终端卡片头部；转走后才出现在看板，卡片不再提供转后台。
+  // 前台等待：行上只有标题与运行时长，去留操作在终端卡片底部状态条；转走后才出现在看板，卡片不再提供转后台。
   await page.locator('[data-slot="activity-head"]').click();
   const fgCall = page.locator('[data-slot="turn"] [data-tool-call-id="call-fg"]');
   await expect(fgCall.locator('[data-slot="call-elapsed"]')).toHaveText(/^\d+秒$/);
   await expect(fgCall.locator('[data-foreground-wait="call-fg"]')).toHaveCount(0);
   await fgCall.locator('[data-slot="call-row"]').click();
-  const header = fgCall.locator('[data-slot="terminal-card-header"]');
+  const bar = fgCall.locator('[data-slot="terminal-status-bar"]');
   await expect(fgCall.locator("[data-terminal-command]")).toHaveText("npm test");
-  await expect(fgCall).toContainText("等待输出…");
-  await expect(header.getByRole("button", { name: "停止终端命令" })).toBeVisible();
-  const fgActions = header.locator('[data-foreground-wait="call-fg"]');
+  await expect(bar).toContainText("运行中");
+  await expect(bar.getByRole("button", { name: "停止终端命令" })).toBeVisible();
+  const fgActions = bar.locator('[data-foreground-wait="call-fg"]');
   await expect(fgActions).toHaveText("转到后台");
   await fgCall.screenshot({ path: `${OUTPUT_DIR}/terminal-card-running.png` });
   await fgActions.click();

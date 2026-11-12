@@ -20,6 +20,7 @@ from app.core.events import (
     RunInitializedEvent,
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
+    TaskQueueChangedEvent,
     ToolCallCreatedEvent,
     ToolCallIntentEvent,
     ToolCallStatusChangedEvent,
@@ -395,10 +396,17 @@ def test_union_covers_every_event_type() -> None:
 
 
 def test_every_event_type_has_a_planner() -> None:
-    """联合中的每个事件类型都必须注册投影 planner，否则投影时以 KeyError 暴露。"""
+    """联合中的每个事件类型都必须有投影 planner，否则投影时以 KeyError 暴露。
+
+    建立工具调用要额外读工具呈现类别，由 ``plan_event`` 单独分派；「队列变了」由 projector 交给
+    state service 整表重读队列，不经 planner。两者都不在表里。
+    """
     from app.assistant_transport.projection.event_projection import _PLANNERS
 
-    assert set(get_args(get_args(WorkflowEvent)[0])) == set(_PLANNERS)
+    assert set(get_args(get_args(WorkflowEvent)[0])) == set(_PLANNERS) | {
+        ToolCallCreatedEvent,
+        TaskQueueChangedEvent,
+    }
 
 
 def test_event_type_literals_are_unique() -> None:

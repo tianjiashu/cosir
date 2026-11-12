@@ -105,6 +105,12 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     # 重启恢复整体由替身代替，不触达存储。
     monkeypatch.setattr(lifespan_module, "get_recover_service", lambda: _RecoverService())
     monkeypatch.setattr(lifespan_module, "build_tool_registry", lambda: object())
+    # 装配期注入事件出口要构造投影器（读主库）；本用例不初始化存储。
+    monkeypatch.setattr(
+        lifespan_module,
+        "get_conversation_event_projector",
+        lambda: SimpleNamespace(process=lambda _event: None),
+    )
     # Registry 只保存内置 profile，用户 JSON 由注册表在作用域首次被读取时按需装载，
     # 因此启动编排不再遍历 workspace 调用装载方法。
     monkeypatch.setattr(lifespan_module, "build_agent_registry", lambda *_args, **_kwargs: object())

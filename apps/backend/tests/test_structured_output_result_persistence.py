@@ -24,9 +24,9 @@ def test_structured_result_only_updates_completed_fields(
 
     events = []
     monkeypatch.setattr(
-        ledger_module,
-        "get_conversation_event_projector",
-        lambda: SimpleNamespace(process=events.append),
+        "app.service.depends.get_conversation_event_projector",
+        lambda: SimpleNamespace(process=events.append,
+    ),
     )
     workspace = get_workspace_crud().create("structured-test", str(Path.cwd()))
     task = get_task_crud().create(workspace.id, "task")
@@ -60,9 +60,9 @@ def test_completion_persists_empty_output_and_finish_reason(
 
     events = []
     monkeypatch.setattr(
-        ledger_module,
-        "get_conversation_event_projector",
-        lambda: SimpleNamespace(process=events.append),
+        "app.service.depends.get_conversation_event_projector",
+        lambda: SimpleNamespace(process=events.append,
+    ),
     )
     workspace = get_workspace_crud().create("empty-output-test", str(Path.cwd()))
     task = get_task_crud().create(workspace.id, "task")

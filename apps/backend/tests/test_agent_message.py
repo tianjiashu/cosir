@@ -11,10 +11,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.assistant_transport.projection.user_input_projection import plan_input_consumed
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    rebuild_snapshot,
 )
+from app.assistant_transport.projection.user_input_projection import plan_input_consumed
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.events import InputConsumedEvent
 from app.core.tool.multi_agent import agent_message as agent_message_module
@@ -191,7 +191,7 @@ def test_rebuild_projects_agent_messages_as_turns_with_source() -> None:
         ),
     ]
 
-    state = ConversationTaskStateRebuilder.rebuild(task, [run], rows)
+    state = rebuild_snapshot(task, [run], rows, {})
 
     user, reply = state["messages"]
     assert user["source"] == {"taskId": 4, "teamRunId": None, "name": '主任务 "A"', "report": None}
@@ -220,6 +220,7 @@ def test_snapshot_rejects_a_source_on_assistant_messages() -> None:
         "background_tasks": [],
         "foreground_waits": [],
         "handoffs": [],
+        "queued_messages": [],
     }
     with pytest.raises(ValueError, match="only user messages carry a source"):
         validate_snapshot(state)  # type: ignore[arg-type]

@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from app.assistant_transport.projection.tool_call_event_projection import plan_tool_call_intent
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    pair_tool_parts,
 )
+from app.assistant_transport.projection.tool_call_event_projection import plan_tool_call_intent
 from app.config.configuration import get_tool_registry
 from app.core.events import ToolCallIntentEvent, ToolCallStatusChangedEvent
 from app.core.tool.call_intent import display_call_arguments, model_parameters_with_intent
@@ -197,7 +197,7 @@ def test_stream_close_intent_matches_cold_projection_even_without_execution(
             sequence=1,
         )
     ]
-    parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
+    parts = pair_tool_parts(rows, {})
     assert parts["c"]["intent"] == expected
     assert "intent" not in parts["c"]["args"]
     state = {"messages": [{"parts": [parts["c"]]}]}

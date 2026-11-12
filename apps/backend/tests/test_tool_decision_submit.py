@@ -12,9 +12,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.task_actor import SessionConflictError
 from app.core.workflow.message_queue.task_message import DecisionBody
 from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.errors.task_command_errors import TaskCommandConflictError
 from app.models.message_metadata import ToolMessageMetadata
 from app.service import depends
 from app.service.conversation import tool_decision_service as module
@@ -85,7 +85,7 @@ def test_claimed_call_is_no_longer_awaiting(awaiting) -> None:
         ),
     )
 
-    with pytest.raises(SessionConflictError) as caught:
+    with pytest.raises(TaskCommandConflictError) as caught:
         module.ToolDecisionService().submit(awaiting.task_id, _CALL_ID, "approve")
 
     assert caught.value.code == "DECISION_NOT_AWAITED"
@@ -113,7 +113,7 @@ def test_concurrent_submissions_enqueue_exactly_one(awaiting, monkeypatch: pytes
         try:
             module.ToolDecisionService().submit(awaiting.task_id, _CALL_ID, decision)  # type: ignore[arg-type]
             outcomes.append("enqueued")
-        except SessionConflictError as exc:
+        except TaskCommandConflictError as exc:
             outcomes.append(exc.code)
 
     first = threading.Thread(target=submit, args=("approve",))

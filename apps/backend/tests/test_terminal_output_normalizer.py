@@ -39,6 +39,18 @@ def test_line_erase_truncates_after_the_cursor() -> None:
     assert _normalize(["abc\x1b[1KX\n"]) == ["   X"]
     # 2K：清空整行，光标不动。
     assert _normalize(["abcdef\x1b[2K\r12\n"]) == ["12"]
+    # 1K 含光标所在格：光标在 d 上时 a-d 都被清掉。
+    assert _normalize(["abcdef\b\b\b\x1b[1K\n"]) == ["    ef"]
+
+
+def test_horizontal_cursor_moves_rewrite_the_line() -> None:
+    # Node readline 的刷新写法：回到第 1 列、清行、再写下一帧。
+    assert _normalize(["frame1\x1b[1G\x1b[0Kframe2\n"]) == ["frame2"]
+    assert _normalize(["frame1\x1b[2K\x1b[1Gframe2\n"]) == ["frame2"]
+    assert _normalize(["abcdef\x1b[3DX\n"]) == ["abcXef"]
+    assert _normalize(["ab\x1b[2CX\n"]) == ["ab  X"]
+    # 私有前缀的序列不是定位。
+    assert _normalize(["ab\x1b[?25lc\n"]) == ["abc"]
 
 
 @pytest.mark.parametrize(

@@ -6,7 +6,7 @@
   A. ``cosir_paths`` 边界绕过：``.cosir2`` / 大小写 / ``./.cosir`` / 尾随分隔符 / ``..`` /
      深层 ``a/../../.cosir`` / 绝对路径 / ``\\`` 分隔符 / NUL / 空串 / ``None``。
   B. 符号链接与 reparse point 双向绕过。
-  C. ``PathResolver.resolve_within_workspace`` 的 ``allow_reserved`` 语义与穿越。
+  C. ``PathResolver.resolve_within_workspace`` 的保留区判定与穿越。
   D. 五个文件工具指向 ``.cosir`` 必须失败且磁盘不变（含 ``.cosir`` 目录本身）。
   E. 只读工具读 ``.cosir`` 必须成功。
   F. 终端 cwd 豁免。
@@ -18,8 +18,8 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -741,32 +741,10 @@ def test_no_coding_agent_literal_in_backend_app() -> None:
     assert hits == [], f"仍引用 .coding-agent 的文件：{hits}"
 
 
-def test_allow_reserved_only_used_by_internal_call_sites() -> None:
-    """全仓 grep：`allow_reserved=True` 仅应出现在后端内部写 `.cosir` 的白名单调用点。
+def test_resolve_within_workspace_has_no_reserved_bypass() -> None:
+    """保留区没有放行开关：终端 cwd 不经 ``PathResolver``，后端自拼路径靠 ``containment_root``。"""
 
-    白名单：交互终端 cwd；它是系统自身写入，不经模型工具入参。Agent Team 运行档案等
-    后端自拼路径不经 ``PathResolver``，只靠 ``atomic_write_text`` 的 ``containment_root``。为避免命中 docstring，只统计关键字实参 ``allow_reserved=True``
-    （调用可能跨行，故实参后允许 ``,`` / ``)`` / 行尾；docstring 里的 ``allow_reserved=True``
-    后跟反引号，不会命中）。
-    """
-
-    backend_root = Path(__file__).resolve().parents[1]
-    app_dir = backend_root / "app"
-    call_sites: list[str] = []
-    for path in app_dir.rglob("*.py"):
-        for lineno, line in enumerate(
-            path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1
-        ):
-            stripped = line.strip()
-            if stripped.startswith("#"):
-                continue
-            if re.search(r"allow_reserved=True\s*(,|\)|$)", stripped):
-                call_sites.append(f"{path.relative_to(app_dir)}:{lineno}")
-    expected = {
-        "tools/terminal_runtime/session/session_service.py",
-    }
-    actual = {site.split(":", 1)[0].replace("\\", "/") for site in call_sites}
-    assert actual == expected, f"allow_reserved=True 调用面异常：{call_sites}"
+    assert "allow_reserved" not in inspect.signature(PathResolver.resolve_within_workspace).parameters
 
 
 # --- J. 磁盘实机证据（可选：真实 git 状态不动） --------------------------------

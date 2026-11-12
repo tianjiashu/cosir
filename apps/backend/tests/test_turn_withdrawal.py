@@ -9,8 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.context.context_store import ContextStore
-from app.tools.tool_handler.terminal.command_job import CommandConclusion
-from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.tool.handoff.handoff_registry import HandoffLease, handoff_registry
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, notices_to_context
 from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
@@ -30,6 +28,9 @@ from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
+from app.tools.tool_handler.terminal.command_job import CommandConclusion
+from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
+from tests.command_job_fakes import FakeCommandJob
 from tests.test_agent_team_definitions import _configuration
 
 
@@ -55,7 +56,8 @@ def _placeholder(call_id: str) -> tuple[dict, ToolMessageMetadata]:
         ToolMessageMetadata(
             status="pending",
             background=BackgroundWork(
-                run_id=1, kind="terminal_command", label="t", started_at="2026-01-01T00:00:00+00:00"
+                run_id=1, kind="terminal_command", label="t",
+                started_at="2026-01-01T00:00:00+00:00",
             ),
         ),
     )
@@ -127,10 +129,8 @@ def side_effects(history, monkeypatch):
             call_id,
             task_id=history.task_id,
             run_id=history.run_id,
-            kind="terminal_command",
             label="t",
-            mode="background",
-            on_cancel=lambda _reason, call_id=call_id: revoked.append(call_id),
+            job=FakeCommandJob(lambda call_id=call_id: revoked.append(call_id)),
         )
     handoff_registry.begin(
         HandoffLease(
@@ -175,7 +175,7 @@ def side_effects(history, monkeypatch):
     )
     queued_input = queue.put(history.task_id, _input("排着的"))
     yield SimpleNamespace(revoked=revoked, team_id=team.id, queued_input=queued_input)
-    command_results.withdraw(history.task_id, "call-early")
+    command_results.withdraw_calls(history.task_id, ["call-early"])
     handoff_registry.drop_task(history.task_id)
 
 
@@ -230,9 +230,9 @@ def test_withdraw_gathers_every_side_effect_of_the_turn(history, side_effects) -
 
 
 def test_withdraw_rejects_a_stale_target_before_touching_anything(history, side_effects) -> None:
-    from app.core.task_actor import SessionConflictError
+    from app.models.errors.task_command_errors import TaskCommandConflictError
 
-    with pytest.raises(SessionConflictError) as caught:
+    with pytest.raises(TaskCommandConflictError) as caught:
         depends.get_turn_withdrawal_service().withdraw(history.task_id, 11)
 
     assert caught.value.code == "WITHDRAW_TARGET_STALE"
@@ -255,10 +255,8 @@ def test_withdraw_waits_for_a_conclusion_already_leaving_the_registry(monkeypatc
         call_id,
         task_id=task_id,
         run_id=1,
-        kind="terminal_command",
         label="t",
-        mode="background",
-        on_cancel=lambda _reason: None,
+        job=FakeCommandJob(),
     )
     writing, release = threading.Event(), threading.Event()
 
@@ -267,9 +265,7 @@ def test_withdraw_waits_for_a_conclusion_already_leaving_the_registry(monkeypatc
         assert release.wait(5)
         return True
 
-    monkeypatch.setattr(
-        "app.tools.tool_handler.terminal.command_results.deliver_background_result", slow_delivery
-    )
+    monkeypatch.setattr(CommandResultRegistry, "_enqueue_result", staticmethod(slow_delivery))
     delivering = threading.Thread(
         target=command_results.complete,
         args=(task_id, call_id, CommandConclusion({"ok": True})),
@@ -318,9 +314,9 @@ def test_cold_rebuild_is_not_resumable_once_the_last_turn_is_withdrawn(
     history, side_effects
 ) -> None:
     """可恢复是后端事实：cancelled 的 Run 撤回最后一个回合后，冷重建给出的 ``resumable`` 为假。"""
-    from app.assistant_transport.service.conversation_task_state_rebuilder import (
-        ConversationTaskStateRebuilder,
-    )
+    from app.assistant_transport.projection.snapshot_rebuild import (
+    rebuild_snapshot,
+)
 
     runs = ConversationRunCrud()
     run = runs.get(history.run_id)
@@ -330,7 +326,7 @@ def test_cold_rebuild_is_not_resumable_once_the_last_turn_is_withdrawn(
 
     def resumable() -> bool:
         rows = ConversationTaskContextCrud().get(history.task_id, include_in_context=False)
-        state = ConversationTaskStateRebuilder.rebuild(task, [cancelled], rows)
+        state = rebuild_snapshot(task, [cancelled], rows, {})
         return state["activity"]["resumable"]
 
     assert resumable() is True

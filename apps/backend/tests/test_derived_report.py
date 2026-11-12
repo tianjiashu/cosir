@@ -11,9 +11,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
+from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
 from app.core.workflow import workflow
 from app.core.workflow.branch import task_title
+from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody
 from app.models.conversation_input import UserInputPresentation
 from app.service import depends
@@ -39,10 +40,13 @@ def _call(call_id: str, name: str, args: dict) -> dict:
 class _Model:
     """按请求里出现的输入决定回复；父子 Task 共用这一个替身，靠输入区分是谁在请求。"""
 
-    def __init__(self, child_plan: str) -> None:
+    def __init__(self, child_plan: str, *, parent_waits: bool = False) -> None:
         self.child_plan = child_plan  # "answer" | "background" | "block"
+        # 父 Agent 委派后调用 ``wait_messages`` 挂起等子 Task，而不是直接答复。
+        self.parent_waits = parent_waits
         self.child_gate = asyncio.Event()
         self.parent_reports: list[str] = []
+        self.parent_notices: list[str] = []
         self.child_started = asyncio.Event()
 
     async def stream(self, messages):
@@ -51,7 +55,7 @@ class _Model:
         if any('from="parent"' in text and ASSIGNMENT in text for text in inputs):
             frames = await self._child(inputs, tools_done)
         else:
-            frames = self._parent(inputs, tools_done)
+            frames = await self._parent(inputs, tools_done)
         for frame in frames:
             yield frame
 
@@ -69,7 +73,7 @@ class _Model:
         finished = any("<background_result" in text for text in inputs)
         return sdk_events([{"content": "child done" if finished else "child result"}])
 
-    def _parent(self, inputs, tools_done):
+    async def _parent(self, inputs, tools_done):
         reports = [text for text in inputs if "report=" in text]
         if not tools_done and not reports:
             call = _call(
@@ -83,7 +87,13 @@ class _Model:
                 },
             )
             return sdk_events([{"tool_calls": [call]}], finish_reason="tool_calls")
+        if self.parent_waits and len(tools_done) == 1 and not reports:
+            # 子 Task 的 Run 开起来之后才有可等的东西。
+            await self.child_started.wait()
+            call = _call("call-wait", "wait_messages", {"intent": "wait for review"})
+            return sdk_events([{"tool_calls": [call]}], finish_reason="tool_calls")
         self.parent_reports = reports
+        self.parent_notices = [text for text in inputs if "<system_notice" in text]
         return sdk_events([{"content": f"parent saw {len(reports)} reports"}])
 
     async def close(self):
@@ -235,7 +245,7 @@ async def test_stopped_children_do_not_wake_the_deriver(derived, stop):
     await asyncio.wait_for(derived.model.child_started.wait(), 8)
     child_id = _child_id(derived.parent.id)
     if stop == "user":
-        await TransportAssistantService().cancel(child_id)
+        await AssistantTransportService().cancel(child_id)
     else:
         await spaces.get_or_create(child_id).actor.cancel("parent")
     derived.model.child_gate.set()
@@ -292,10 +302,63 @@ async def test_withdrawing_the_turn_recalls_its_child_and_drops_its_report(deriv
     )
     target = depends.get_conversation_task_context_service().latest_user_input(derived.parent.id)
 
-    await TransportAssistantService().withdraw(derived.parent.id, target.message_id)
+    await AssistantTransportService().withdraw(derived.parent.id, target.message_id)
     derived.model.child_gate.set()
     await _settle(child_id, derived.parent.id)
 
     assert _runs(child_id)[-1].end_reason == "parent_cancelled"
     assert len(_runs(derived.parent.id)) == 1
     assert _pending_kinds(derived.parent.id) == []
+
+
+async def _waiting_parent(derived) -> int:
+    """父 Agent 委派后在 ``wait_messages`` 上挂起，子 Task 卡在模型调用里；返回子 Task id。"""
+    derived.model = _Model("block", parent_waits=True)
+    _send(derived.parent.id, derived.model_config.id, "start")
+    await asyncio.wait_for(derived.model.child_started.wait(), 8)
+    await _until(derived.parent.id, lambda: _runs(derived.parent.id)[-1].status == "suspended")
+    return _child_id(derived.parent.id)
+
+
+@pytest.mark.parametrize("ending", ["user_stop", "delete"])
+async def test_a_deriver_waiting_on_a_stopped_child_wakes_up(derived, ending):
+    """父 Agent 挂起等子 Task 时，子 Task 被用户停止或删除都不会再汇报：停止通知唤醒同一个父 Run，
+    父 Agent 读到通知后自行收尾，不会一直挂着。"""
+    child_id = await _waiting_parent(derived)
+    if ending == "user_stop":
+        await AssistantTransportService().cancel(child_id)
+        derived.model.child_gate.set()
+    else:
+        # 删除先停下子 Task 并等它落定：停止信号打上之后再放行替身模型，驱动在下一个检查点看到
+        # 停止（先放行的话子 Task 会抢先答完并汇报，测的就不是删除了）。
+        deletion = asyncio.create_task(depends.get_task_service().delete_task_tree(child_id))
+        async with asyncio.timeout(8):
+            while not cancellation_registry.is_cancelled(child_id):  # noqa: ASYNC110 - 登记表没有可等的事件
+                await asyncio.sleep(0.01)
+        derived.model.child_gate.set()
+        assert await deletion == frozenset({child_id})
+    await _settle(derived.parent.id)
+
+    [run] = _runs(derived.parent.id)
+    assert run.status == "completed" and run.final_output == "parent saw 0 reports"
+    [notice] = [text for text in derived.model.parent_notices if "which you derived" in text]
+    assert f"task {child_id}" in notice
+    assert ("deleted" if ending == "delete" else "stopped") in notice
+
+
+async def test_a_deriver_waiting_across_a_restart_wakes_up(derived):
+    """重启收敛了父 Agent 在等的子 Task：重启通知唤醒挂起的父 Run，而不是让它一直挂着。"""
+    from app.service.recover_service import RecoverService
+
+    child_id = await _waiting_parent(derived)
+    # 模拟进程退出：执行被直接中止，子 Run 留在 running，父 Run 留在 suspended。
+    await spaces.aclose()
+    derived.model.child_gate.set()
+    spaces.bind_loop(asyncio.get_running_loop())
+    await asyncio.to_thread(RecoverService().recover_after_restart)
+    await _settle(derived.parent.id)
+
+    assert _runs(child_id)[-1].end_reason == "runtime_restarted"
+    [run] = _runs(derived.parent.id)
+    assert run.status == "completed"
+    assert any("The backend restarted" in text for text in derived.model.parent_notices)

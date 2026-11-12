@@ -15,8 +15,9 @@ import pytest
 from app.core import task_actor as actor_module
 from app.core import task_execution as execution_module
 from app.core import task_recall
-from app.core.task_actor import SessionConflictError, TaskActor
-from app.tools.tool_handler.terminal.command_job import CommandConclusion
+from app.core.events import TaskQueueChangedEvent
+from app.core.events.event_sink import set_event_sink
+from app.core.task_actor import TaskActor
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.message_queue.task_message import (
     BackgroundResultBody,
@@ -27,6 +28,9 @@ from app.core.workflow.message_queue.task_message import (
 )
 from app.models.conversation_input import UserInputPresentation
 from app.models.enums.conversation_run_status import RunTransition
+from app.models.errors.task_command_errors import TaskCommandConflictError
+from app.tools.tool_handler.terminal.command_job import CommandConclusion
+from tests.command_job_fakes import FakeCommandJob
 
 _TASK_ID = 7
 
@@ -144,7 +148,8 @@ def _notice() -> NoticeBody:
 
 def _result() -> BackgroundResultBody:
     return BackgroundResultBody(
-        ended_at="2026-01-01T00:01:00+00:00", tool_name="probe", tool_result="done"
+        ended_at="2026-01-01T00:01:00+00:00", tool_call_id="call-probe",
+        tool_name="execute_terminal", tool_result="done",
     )
 
 
@@ -161,12 +166,13 @@ def harness(monkeypatch):
         lambda: SimpleNamespace(run_last_turn_withdrawn=lambda _task_id, _run_id: False),
     )
     refreshed: list[list[int | None]] = []
-    # 记下每次刷新排队投影时队列里已有的消息，用来断言「先刷新、再投递」。
-    states = SimpleNamespace(
-        refresh_queued_messages=lambda _task_id: refreshed.append(
-            [message.id for message in queue.pending_nowait(_TASK_ID)]
-        )
-    )
+
+    # 记下每次交出「队列变了」时队列里已有的消息，用来断言「先刷新排队投影、再投递」。
+    def sink(event: object) -> None:
+        if isinstance(event, TaskQueueChangedEvent):
+            refreshed.append([message.id for message in queue.pending_nowait(_TASK_ID)])
+
+    set_event_sink(sink)  # 下一个用例由 conftest 的 autouse 夹具换回
     # 模型配置文件替身：开新 Run 前 actor 查模型是否还在，列在 ``missing`` 里的视为已删除。
     missing: set[str] = set()
     models = SimpleNamespace(exists=lambda model_config_id: model_config_id not in missing)
@@ -175,7 +181,6 @@ def harness(monkeypatch):
         ("get_conversation_run_ledger", ledger),
         ("get_task_service", ledger),
         ("get_task_message_queue", queue),
-        ("get_conversation_task_state_service", states),
     ):
         monkeypatch.setattr(actor_module.service_depends, getter, lambda fake=fake: fake)
     # 运行中的 TeamRun 读库：本文件不建 Team（Team 见 test_agent_team_background）。
@@ -361,7 +366,7 @@ async def test_resume_starts_the_stopped_run_and_rejects_while_running(harness) 
 
     await harness.actor.resume()
     assert run.status == "running"
-    with pytest.raises(SessionConflictError):
+    with pytest.raises(TaskCommandConflictError):
         await harness.actor.resume()
     await harness.actor.abort()
 
@@ -373,7 +378,7 @@ async def test_resume_is_rejected_after_stop_for_deletion(harness) -> None:
 
     await harness.actor.stop()
 
-    with pytest.raises(SessionConflictError):
+    with pytest.raises(TaskCommandConflictError):
         await harness.actor.resume()
     assert run.status == "cancelled"
 
@@ -538,8 +543,8 @@ async def test_wait_quiescent_waits_for_the_tasks_background_work(harness) -> No
     await _settle()
     [run] = harness.ledger.created
     command_results.register(
-        "call-bg", task_id=_TASK_ID, run_id=run.id, kind="terminal_command", label="bg",
-        on_cancel=lambda _reason: None,
+        "call-bg", task_id=_TASK_ID, run_id=run.id, label="bg",
+        job=FakeCommandJob(),
     )
     try:
         await _finish(run.id, "completed")
@@ -547,7 +552,7 @@ async def test_wait_quiescent_waits_for_the_tasks_background_work(harness) -> No
         await _settle()
         assert not waiting.done()
 
-        command_results.withdraw(_TASK_ID, "call-bg")
+        command_results.withdraw_calls(_TASK_ID, ["call-bg"])
         harness.actor.notify_state_changed()
         assert await waiting is True
     finally:
@@ -758,17 +763,15 @@ async def test_recalling_a_suspended_run_drops_background_entries(harness) -> No
         "call-t1",
         task_id=_TASK_ID,
         run_id=run.id,
-        kind="terminal_command",
         label="terminal:t1",
-        on_cancel=lambda _reason: cancelled.append("t1"),
+        job=FakeCommandJob(lambda: cancelled.append("t1")),
     )
     command_results.register(
         "call-x",
         task_id=_TASK_ID + 1,
         run_id=None,
-        kind="terminal_command",
         label="x",
-        on_cancel=lambda _reason: None,
+        job=FakeCommandJob(),
     )
     try:
         await harness.actor.cancel("parent")
@@ -791,8 +794,8 @@ async def test_user_stop_keeps_background_work_in_every_phase(harness) -> None:
 
     dropped: list[str] = []
     command_results.register(
-        "call-keep", task_id=_TASK_ID, run_id=None, kind="terminal_command", label="keep",
-        on_cancel=dropped.append,
+        "call-keep", task_id=_TASK_ID, run_id=None, label="keep",
+        job=FakeCommandJob(lambda: dropped.append("cancel")),
     )
     try:
         suspended = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
@@ -827,7 +830,7 @@ async def test_recalling_a_running_run_drops_work_after_the_signal(harness) -> N
     dropped: list[int] = []
     signalled_at_drop: list[bool] = []
 
-    def on_cancel(_reason) -> None:
+    def on_cancel() -> None:
         signalled_at_drop.append(execution_module.cancellation_registry.is_cancelled(_TASK_ID))
         dropped.append(run.id)
 
@@ -835,21 +838,22 @@ async def test_recalling_a_running_run_drops_work_after_the_signal(harness) -> N
         "call-t2",
         task_id=_TASK_ID,
         run_id=run.id,
-        kind="terminal_command",
         label="terminal:t2",
-        on_cancel=on_cancel,
+        job=FakeCommandJob(on_cancel),
     )
     await harness.actor.cancel("parent")
     assert dropped == [run.id]
     assert signalled_at_drop == [True]
-    late: list[str] = []
-    command_results.register(
-        "call-late", task_id=_TASK_ID, run_id=run.id, kind="terminal_command", label="late",
-        on_cancel=late.append,
-    )
-    assert late == ["parent"]
+    late = FakeCommandJob()
+    assert command_results.register(
+        "call-late", task_id=_TASK_ID, run_id=run.id, label="late", job=late,
+    ) is None
+    assert late.cancels == 1
     assert not command_results.has_work(_TASK_ID)
+    # 收回时先结算已写入的行；同一批的占位行要等驱动写完，驱动释放后再结算一次。
+    assert harness.settled == [(_TASK_ID, ["call-t2"])]
     await _finish(run.id, "cancelled")
+    assert harness.settled == [(_TASK_ID, ["call-t2"]), (_TASK_ID, ["call-t2"])]
     await harness.actor.abort()
 
 
@@ -863,8 +867,8 @@ async def test_recalling_an_idle_task_drops_its_background_work(harness) -> None
     [run] = harness.ledger.created
     dropped: list[str] = []
     command_results.register(
-        "call-idle", task_id=_TASK_ID, run_id=run.id, kind="terminal_command", label="idle",
-        on_cancel=dropped.append,
+        "call-idle", task_id=_TASK_ID, run_id=run.id, label="idle",
+        job=FakeCommandJob(lambda: dropped.append("parent")),
     )
     try:
         await _finish(run.id, "completed")
@@ -890,9 +894,8 @@ async def test_completed_run_keeps_background_entries(harness) -> None:
         "call-t3",
         task_id=_TASK_ID,
         run_id=run.id,
-        kind="terminal_command",
         label="terminal:t3",
-        on_cancel=lambda _reason: None,
+        job=FakeCommandJob(),
     )
     await _finish(run.id, "suspended")
     assert command_results.pending(_TASK_ID) == ["terminal:t3"]

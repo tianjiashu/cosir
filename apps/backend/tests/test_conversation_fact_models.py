@@ -8,8 +8,7 @@ from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-import app.assistant_transport.service.user_input_service as user_input_module
-from app.assistant_transport.service.user_input_service import UserInputService
+import app.service.user_input.user_input_service as user_input_module
 from app.core.context.context_store import ContextStore
 from app.core.events import RunStatusChangedEvent
 from app.core.workflow.conversation_run_ledger import (
@@ -30,6 +29,7 @@ from app.service.conversation.conversation_task_context_service import (
     ConversationTaskContextService,
 )
 from app.service.recover_service import RecoverService
+from app.service.user_input.user_input_service import UserInputService
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -191,7 +191,7 @@ def test_run_service_prepares_new_command_for_model_and_persistence(monkeypatch,
     service = _input_service(monkeypatch, tmp_path)
     command = ConversationRunCommand(text=f'请阅读 <file path="{attachment_path}" />')
 
-    prepared = service.prepare(7, command, "test/m3").body
+    prepared = service.prepare(7, command, "test/m3", None, "main_agent")
 
     # 模型正文与展示正文是同一份规范化胶囊文本。
     assert prepared.text == command.text
@@ -199,16 +199,15 @@ def test_run_service_prepares_new_command_for_model_and_persistence(monkeypatch,
     assert prepared.presentation.image_paths == []
 
 
-def test_prepare_returns_an_unqueued_user_input_message_with_delivery(
-    monkeypatch, tmp_path
-) -> None:
+def test_prepare_returns_a_user_input_body_for_the_caller_to_queue(monkeypatch, tmp_path) -> None:
+    """投递方式是信封属性，由入队方按 Task 当时的阶段决定；这里只产出消息体。"""
     service = _input_service(monkeypatch, tmp_path)
 
-    message = service.prepare(7, ConversationRunCommand(text="检查项目"), "test/m3", delivery="next_run")
+    body = service.prepare(7, ConversationRunCommand(text="检查项目"), "test/m3", None, "main_agent")
 
-    assert (message.id, message.kind, message.delivery) == (None, "user_input", "next_run")
-    assert message.project_to_transport is True
-    assert message.body.text == "检查项目"
+    assert isinstance(body, UserInputBody)
+    assert body.text == "检查项目"
+    assert body.launch.agent_id == "main_agent"
 
 
 def test_input_preparation_keeps_run_options_out_of_message(monkeypatch, tmp_path) -> None:
@@ -218,7 +217,8 @@ def test_input_preparation_keeps_run_options_out_of_message(monkeypatch, tmp_pat
         ConversationRunCommand(text="检查项目", disabled_tool_groups=["终端工具"]),
         "test/m3",
         "high",
-    ).body
+        "main_agent",
+    )
     assert queued.launch.options.disabled_tool_groups == ["终端工具"]
     assert queued.launch.options.reasoning_effort == "high"
     assert queued.launch.model_config_id == "test/m3"
@@ -244,7 +244,7 @@ def test_prepare_maps_missing_model_config_to_input_rejection(monkeypatch, tmp_p
     service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))
 
     with pytest.raises(UserInputRejectedError) as caught:
-        service.prepare(7, ConversationRunCommand(text="你好"), "test/m3")
+        service.prepare(7, ConversationRunCommand(text="你好"), "test/m3", None, "main_agent")
 
     assert caught.value.code == "MODEL_CONFIG_UNAVAILABLE"
 

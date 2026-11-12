@@ -310,7 +310,7 @@ describe("CallRow 运行时长", () => {
 describe("终端卡片", () => {
   const running = { backendStatus: "running" as const, display_data: { kind: "terminal-result", command: "git pull origin main", workdir: "/w" } };
 
-  it("行上没有停止与转到后台：去留操作在卡片头部", () => {
+  it("行上没有停止与转到后台：去留操作在卡片底部状态条", () => {
     surface.waits.set(7, ["call-1"]);
     const collapsed = render(running, { toolName: "execute_terminal" });
     expect(collapsed).not.toContain("停止终端命令");
@@ -318,19 +318,37 @@ describe("终端卡片", () => {
 
     openCall();
     const html = render(running, { toolName: "execute_terminal" });
-    const header = html.slice(html.indexOf('data-slot="terminal-card-header"'), html.indexOf('data-terminal-command'));
-    expect(header).toContain("转到后台");
-    expect(header).toContain("停止终端命令");
+    const bar = html.slice(html.indexOf('data-slot="terminal-status-bar"'));
+    expect(html.indexOf("data-terminal-command")).toBeLessThan(html.indexOf('data-slot="terminal-status-bar"'));
+    expect(bar).toContain("运行中");
+    expect(bar).toContain("转到后台");
+    expect(bar).toContain("停止终端命令");
   });
 
-  it("还没有输出时命令已可见，输出区是占位", () => {
+  it("去留操作与时长同一门槛：刚启动不出现，跑满 3 秒或没有运行起点（冷重建）才出现", () => {
+    surface.waits.set(7, ["call-1"]);
+    openCall();
+    const startedAgo = (seconds: number) => new Date(Date.now() - seconds * 1000).toISOString();
+    const fresh = render({ ...running, startedAt: startedAgo(1) }, { toolName: "execute_terminal" });
+    expect(fresh).toContain("运行中");
+    expect(fresh).not.toContain("转到后台");
+    expect(fresh).not.toContain("停止终端命令");
+    const ranAWhile = render({ ...running, startedAt: startedAgo(5) }, { toolName: "execute_terminal" });
+    expect(ranAWhile).toContain("转到后台");
+    expect(ranAWhile).toContain("停止终端命令");
+    expect(render(running, { toolName: "execute_terminal" })).toContain("停止终端命令");
+  });
+
+  it("还没有输出时命令已可见，不画输出占位、由状态条说运行中", () => {
     openCall();
     const html = render(running, { toolName: "execute_terminal" });
     expect(html).toMatch(/data-terminal-command="true"[^>]*>git pull origin main</);
-    expect(html).toContain("等待输出…");
+    expect(html).not.toContain("等待输出");
+    expect(html).not.toContain("无输出");
+    expect(html).toContain("运行中");
   });
 
-  it("不在前台等待表里时只有停止；结束后头部换成状态、操作消失", () => {
+  it("不在前台等待表里时只有停止；结束后状态条换成结局、操作消失", () => {
     openCall();
     const live = render(running, { toolName: "execute_terminal" });
     expect(live).not.toContain("转到后台");
@@ -340,7 +358,7 @@ describe("终端卡片", () => {
     expect(done).toContain("已结束");
   });
 
-  it("Task 停止中收起操作，头部说正在停止", () => {
+  it("Task 停止中收起操作，状态条说正在停止", () => {
     openCall();
     const html = render(running, { toolName: "execute_terminal", taskCancelling: true });
     expect(html).not.toContain("停止终端命令");

@@ -14,8 +14,8 @@ from typing import Any
 
 import pytest
 from terminal_test_support import (
-    capture_terminal_effects,
     geometry,
+    ignore_session_changes,
     session_entries,
     terminal_worker_path,
     user_enter,
@@ -44,10 +44,9 @@ def terminal(request: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> A
     # 用户配置可能很慢或吞掉集成，测试使用干净的 HOME。
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("ZDOTDIR", str(tmp_path))
-    capture_terminal_effects(monkeypatch)
-    service = TerminalSessionService()
+    service = TerminalSessionService(on_sessions_changed=ignore_session_changes)
     runtime = service.start(
-        task_id=1, workspace_root=str(tmp_path), shell=shell,
+        task_id=1, cwd=str(tmp_path), shell=shell,
     )
     wait_for_integration(runtime)
     try:

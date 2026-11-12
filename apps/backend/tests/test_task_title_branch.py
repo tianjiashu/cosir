@@ -247,12 +247,12 @@ def test_title_event_projects_to_snapshot_and_repeats_are_no_ops() -> None:
     state = empty_snapshot("你好")
     event = TaskTitleUpdatedEvent(task_id=1, run_id=2, title="重构登录模块")
 
-    mutations = list(plan_event(event, state))
+    mutations = list(plan_event(event, state, {}))
     assert [(m.kind, m.path, m.value) for m in mutations] == [("set", ("title",), "重构登录模块")]
 
     state["title"] = "重构登录模块"
     validate_snapshot(state)
-    assert list(plan_event(event, state)) == []
+    assert list(plan_event(event, state, {})) == []
 
 
 def test_snapshot_requires_a_non_empty_title() -> None:

@@ -19,17 +19,16 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from collections.abc import Awaitable
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
 
 from app.assistant_transport.projection.event_projection import plan_event
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    run_error,
 )
 from app.assistant_transport.state.conversation_state_activity import ConversationStateActivity
 from app.assistant_transport.state.conversation_state_snapshot import (
@@ -126,7 +125,7 @@ def _error_mutation_values(
 ) -> list[object]:
     """取出事件 plan 中对 Run ``error`` 写入的全部取值。"""
 
-    mutations = plan_event(event, state)
+    mutations = plan_event(event, state, {})
     return [mutation.value for mutation in mutations if mutation.path == ("activity", "error")]
 
 
@@ -214,9 +213,9 @@ def _make_runtime(
         AgentRuntimeConfig, "for_run", classmethod(lambda *_args: object())
     )
     monkeypatch.setattr(
-        run_driver,
-        "get_conversation_event_projector",
-        lambda: SimpleNamespace(process=lambda _event: None),
+        "app.service.depends.get_conversation_event_projector",
+        lambda: SimpleNamespace(process=lambda _event: None,
+    ),
     )
     monkeypatch.setattr(
         run_driver,
@@ -356,7 +355,7 @@ def test_build_run_error_projects_persisted_contract() -> None:
         },
     )
 
-    assert ConversationTaskStateRebuilder.build_run_error(cast(ConversationRunRecord, run)) == {
+    assert run_error(cast(ConversationRunRecord, run)) == {
         "code": _SERVICE_ERROR_CODE,
         "message": run_failure_message(_SERVICE_ERROR_CODE),
     }
@@ -367,7 +366,7 @@ def test_build_run_error_returns_none_without_persisted_error() -> None:
 
     run = SimpleNamespace(id=3, error=None)
 
-    assert ConversationTaskStateRebuilder.build_run_error(cast(ConversationRunRecord, run)) is None
+    assert run_error(cast(ConversationRunRecord, run)) is None
 
 
 @pytest.mark.parametrize(
@@ -390,7 +389,7 @@ def test_build_run_error_rejects_malformed_payload(payload: dict[str, object]) -
     run = SimpleNamespace(id=3, error=payload)
 
     with pytest.raises(ValueError):
-        ConversationTaskStateRebuilder.build_run_error(cast(ConversationRunRecord, run))
+        run_error(cast(ConversationRunRecord, run))
 
 
 def test_validate_snapshot_rejects_malformed_run_error() -> None:
@@ -462,7 +461,10 @@ def test_a_broken_context_still_ends_claimed_decisions(monkeypatch: pytest.Monke
             close_unclosed_tool_calls_for_run=broken, claimed_decisions=lambda _task_id: ["h1"]
         ),
     )
-    monkeypatch.setattr(run_driver, "get_conversation_event_projector", lambda: None)
+    monkeypatch.setattr(
+        "app.service.depends.get_conversation_event_projector",
+        lambda: None,
+    )
     monkeypatch.setattr(
         run_driver, "cancel_placeholders", lambda _task, ids, _hint: cancelled.append(list(ids))
     )

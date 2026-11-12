@@ -53,7 +53,6 @@ class _FakeRuntime:
         return SessionSnapshot(
             session_id=entry["sessionId"],
             shell_kind=entry["shellKind"],
-            initial_cwd="/workspace",
             created_at=datetime.fromisoformat(entry["createdAt"]),
             status=entry["status"],
             end_reason=entry["endReason"],

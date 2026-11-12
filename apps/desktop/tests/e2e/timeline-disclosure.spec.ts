@@ -172,7 +172,7 @@ test("A10 a focused control unmounting with its tool never blocks automatic fold
   await seedState(request, 42, state([text("进展"), run("running")]));
   await page.goto("/tasks/42");
   await page.locator('[data-slot="activity-head"]').click();
-  // 去留操作在终端卡片头部：先展开这条调用。
+  // 去留操作在终端卡片底部状态条：先展开这条调用。
   await page.locator('[data-tool-call-id="term"] [data-slot="call-row"]').click();
   const button = page.getByRole("button", { name: "转到后台" });
   await button.focus();

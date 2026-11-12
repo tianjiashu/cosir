@@ -5,14 +5,14 @@ import threading
 from contextlib import contextmanager
 
 import pytest
+from pydantic import ValidationError
 from fastapi import HTTPException
 from sqlalchemy import update
 
 from app.api.schemas import ForkTaskRequest
 from app.api.tasks_api import fork_task
-from app.assistant_transport.request import TransportRequestError
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    rebuild_snapshot,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.config.settings import Settings
@@ -158,10 +158,10 @@ def fork_api(store, reply_id):
 
 
 def snapshot(store, target):
-    state = ConversationTaskStateRebuilder.rebuild(
+    state = rebuild_snapshot(
         target,
         store.runs.list_by_task(target.id),
-        store.contexts.get(target.id, include_in_context=False),
+        store.contexts.get(target.id, include_in_context=False), {},
     )
     validate_snapshot(state)
     return state
@@ -571,7 +571,7 @@ def test_orphan_protocol_aborts_whole_copy(fork_store):
     ],
 )
 def test_api_accepts_only_a_reply_id(payload):
-    with pytest.raises(TransportRequestError):
+    with pytest.raises(ValidationError):
         ForkTaskRequest.model_validate(payload)
 
 

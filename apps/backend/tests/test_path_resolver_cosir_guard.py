@@ -3,7 +3,7 @@
 覆盖四层：
 
 1. ``PathResolver.resolve_within_workspace`` 的保留区判定（含 ``.cosir`` 目录本身、
-   ``allow_reserved`` 显式放行、同前缀兄弟目录不误判）；
+   同前缀兄弟目录不误判）；
 2. 五个文件工具（write_file / patch_write / apply_patch / delete_file / move_file）端到端被拒绝，
    且**磁盘状态不变**；
 3. 只读工具仍可读取 ``.cosir``（产品要求「允许读」）；
@@ -49,19 +49,6 @@ def test_cosir_directory_itself_is_rejected(tmp_path: Path) -> None:
     resolved, error = PathResolver(root).resolve_within_workspace(".cosir")
     assert resolved is None
     assert error
-
-
-def test_allow_reserved_lets_internal_writers_through(tmp_path: Path) -> None:
-    """显式 ``allow_reserved=True`` 时保留区放行（内部子系统使用）。"""
-
-    root = tmp_path / "ws"
-    root.mkdir()
-    resolved, error = PathResolver(root).resolve_within_workspace(
-        ".cosir/tool-artifacts/x.txt",
-        allow_reserved=True,
-    )
-    assert resolved == root / ".cosir" / "tool-artifacts" / "x.txt"
-    assert error == ""
 
 
 def test_path_outside_cosir_still_resolves(tmp_path: Path) -> None:

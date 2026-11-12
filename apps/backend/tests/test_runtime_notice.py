@@ -39,9 +39,9 @@ def _stub_for_run_deps(monkeypatch, agent) -> None:
         agent_module.AgentRuntimeConfig, "for_run", classmethod(lambda _cls, _run: agent)
     )
     monkeypatch.setattr(
-        runtime_context_module,
-        "get_conversation_event_projector",
-        lambda: SimpleNamespace(process=print),
+        "app.service.depends.get_conversation_event_projector",
+        lambda: SimpleNamespace(process=print,
+    ),
     )
     # 测试里每个「组」只含同名工具，断言仍按工具名写。
     monkeypatch.setattr(
@@ -266,13 +266,15 @@ def test_mailbox_dedupes_persisted_rows_within_one_execution() -> None:
 
 
 def test_mailbox_takes_notices_from_both_sources_in_delivery_order() -> None:
-    """通知一次取光（外部行与执行内通知都在内），其余消息不动；通知不算可唤醒消息。"""
+    """通知一次取光（外部行与执行内通知都在内），其余消息不动；普通通知不算可唤醒消息。"""
     mailbox = RunMailbox()
     row = TaskMessage.of(
-        NoticeBody(content="terminal ended", notice_kind="backend_restarted"), message_id=5
+        NoticeBody(content="catalog changed", notice_kind="catalog_change"), message_id=5
     )
     result = TaskMessage.of(
-        BackgroundResultBody(tool_name="child_agent", tool_result="{}", ended_at="t"),
+        BackgroundResultBody(
+            tool_call_id="call-bg", tool_name="execute_terminal", tool_result="{}", ended_at="t",
+        ),
         message_id=6,
     )
     mailbox.post(row)
@@ -284,7 +286,7 @@ def test_mailbox_takes_notices_from_both_sources_in_delivery_order() -> None:
     notices = mailbox.take_notices()
 
     assert [(n.id, cast(NoticeBody, n.body).content) for n in notices] == [
-        (5, "terminal ended"),
+        (5, "catalog changed"),
         (None, "run notice"),
     ]
     assert mailbox.pop() == result

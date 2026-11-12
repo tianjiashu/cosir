@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 from app.api.schemas.response.agent_team_run_response import AgentTeamRunResponse
 from app.assistant_transport.projection.event_projection import plan_event
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    pair_tool_parts,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.events import ToolCallStatusChangedEvent
@@ -66,6 +66,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
         "background_tasks": [],
         "foreground_waits": [],
         "handoffs": [],
+        "queued_messages": [],
     }
     event = ToolCallStatusChangedEvent(
         task_id=2,
@@ -77,7 +78,7 @@ def test_failed_tool_event_keeps_team_run_locator_outside_display_data() -> None
         team_run_id=17,
     )
 
-    for mutation in plan_event(event, state):
+    for mutation in plan_event(event, state, {}):
         target = state
         for key in mutation.path[:-1]:
             target = target[key]
@@ -209,7 +210,7 @@ def test_cold_rebuild_keeps_failed_team_run_locator(monkeypatch) -> None:
         ),
     ]
 
-    part = ConversationTaskStateRebuilder.build_pair_tool_part(rows)["call-1"]
+    part = pair_tool_parts(rows, {})["call-1"]
     assert part["team_run_id"] == 17
     assert part["display_data"] == {"status_hint": "执行失败"}
 

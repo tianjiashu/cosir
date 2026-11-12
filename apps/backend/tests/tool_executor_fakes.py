@@ -7,8 +7,6 @@ running 与批次入口发出的终态落在同一时间线上。
 
 from __future__ import annotations
 
-import json
-
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.schemas import ToolCall, ToolExecutionContext

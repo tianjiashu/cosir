@@ -1,70 +1,70 @@
-"""通用作业的一次性交付、线程取消和纯后台登记；终端前台编排由终端测试覆盖。"""
+"""命令作业的一次性交付、线程取消与后台登记；终端前台编排由终端测试覆盖。"""
 
 from __future__ import annotations
 
 import threading
-import time
 
-from app.tools.tool_handler.terminal import command_results as background_module
 from app.tools.tool_handler.terminal.command_job import CommandConclusion, CommandJob
-from app.tools.tool_handler.terminal.command_results import start_command_job
-
-
-def _job() -> CommandJob:
-    return CommandJob(
-        on_cancel=lambda: None,
-        cancelled_result=CommandConclusion({"end_reason": "cancelled"}),
-    )
+from app.tools.tool_handler.terminal.command_results import (
+    CommandResultRegistry,
+    command_results,
+)
 
 
 def test_start_in_thread_runs_work_off_thread_and_wakes_on_cancel() -> None:
-    gate = threading.Condition()
-    results: list[dict[str, object]] = []
+    woken = threading.Event()
 
-    def work(is_cancelled) -> CommandConclusion:
-        with gate:
-            while not is_cancelled():
-                gate.wait(1)
+    def work() -> CommandConclusion:
+        assert woken.wait(2)
         return CommandConclusion({
             "end_reason": "cancelled", "thread": threading.current_thread().name,
         })
 
-    def wake() -> None:
-        with gate:
-            gate.notify_all()
-
-    job = CommandJob.start_in_thread(work, wake=wake, name="job-test")
-    job.on_done(lambda conclusion: results.append(conclusion.result))
+    job = CommandJob.start_in_thread(work, wake=woken.set, name="job-test")
+    assert job.wait(0.05) is None
     job.cancel()
-    deadline = time.monotonic() + 2
-    while not results:
-        assert time.monotonic() < deadline
-        time.sleep(0.01)
-    assert results[0]["thread"] == "job-test"
+    conclusion = job.wait(2)
+    assert conclusion is not None and conclusion.result["thread"] == "job-test"
 
 
-def test_job_delivers_once() -> None:
+def test_job_delivers_once_and_late_subscribers_get_the_conclusion() -> None:
     seen: list[dict[str, object]] = []
-    job = _job()
+    gate = threading.Event()
+
+    def work() -> CommandConclusion:
+        gate.wait(2)
+        return CommandConclusion({"a": 1})
+
+    job = CommandJob.start_in_thread(work, wake=lambda: None, name="job-once")
     job.on_done(lambda conclusion: seen.append(conclusion.result))
-    assert job.finish(CommandConclusion({"a": 1})) is True
-    assert job.finish(CommandConclusion({"a": 2})) is False
-    job.cancel()
-    assert seen == [{"a": 1}]
+    gate.set()
+    assert job.wait(2) == CommandConclusion({"a": 1})
+    job.on_done(lambda conclusion: seen.append(conclusion.result))
+    assert seen == [{"a": 1}, {"a": 1}]
+
+
+def test_failed_work_concludes_as_failed() -> None:
+    def work() -> CommandConclusion:
+        raise RuntimeError("boom")
+
+    job = CommandJob.start_in_thread(work, wake=lambda: None, name="job-fail")
+    conclusion = job.wait(2)
+    assert conclusion is not None
+    assert conclusion.result == {"end_reason": "failed", "error": "boom"}
 
 
 def test_background_registration_delivers_an_already_finished_job(monkeypatch) -> None:
     calls = []
 
-    def deliver(task_id, *, tool_call_id, tool_name, result, placeholder_display_data=None):
-        calls.append((task_id, tool_call_id, tool_name, result))
+    def enqueue(task_id, tool_call_id, conclusion, *, starts_run=True):
+        calls.append((task_id, tool_call_id, conclusion.result))
         return True
 
-    monkeypatch.setattr(background_module, "deliver_background_result", deliver)
-    job = _job()
-    job.finish(CommandConclusion({"value": 3}))
-    work = start_command_job(
-        job, task_id=1, run_id=2, tool_call_id="call-1", kind="terminal_command", label="child",
+    monkeypatch.setattr(CommandResultRegistry, "_enqueue_result", staticmethod(enqueue))
+    job = CommandJob.start_in_thread(
+        lambda: CommandConclusion({"value": 3}), wake=lambda: None, name="job-done",
     )
+    assert job.wait(2) is not None
+    work = command_results.register("call-1", task_id=1, run_id=2, label="child", job=job)
     assert (work.kind, work.label, work.run_id) == ("terminal_command", "child", 2)
-    assert calls == [(1, "call-1", "terminal_command", {"value": 3})]
+    assert calls == [(1, "call-1", {"value": 3})]

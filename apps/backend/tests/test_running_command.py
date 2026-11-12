@@ -146,3 +146,15 @@ def test_line_buffer_eviction_keeps_line_numbers(monkeypatch: pytest.MonkeyPatch
     assert "1│" not in result.text
     assert "6│line-5" in result.text
     assert "10│line-9" in result.text
+
+
+def test_polling_a_quiet_command_whose_output_ends_with_a_newline_says_no_change() -> None:
+    """管道输出以换行结尾时可变区为空：轮询末尾与搜索仍按「无变化」提示改用 wait，回看历史不提示。"""
+    command = _command()
+    command.feed(["booting", "listening on 3000"], "")
+    _read(command)
+    assert "no change since your last read" in _read(command).text
+    _read(command, pattern="listening")
+    assert "no change since your last read" in _read(command, pattern="listening").text
+    _read(command, start_line=1, limit=1)
+    assert "no change" not in _read(command, start_line=1, limit=1).text

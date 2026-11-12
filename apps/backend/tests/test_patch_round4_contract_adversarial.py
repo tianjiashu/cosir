@@ -678,11 +678,11 @@ def test_syntax_stage_resolution_failure_is_skipped_not_raised(
 
     # 写前校验/应用各用一次解析；写后 syntax 阶段是最后一次解析——让它失败，
     # 验证该结果被安全跳过而不是中断整次调用。
-    def flaky_resolve(self, path, *, allow_reserved=False):
+    def flaky_resolve(self, path):
         calls["count"] += 1
         if calls["count"] >= 4:
             return None, "simulated post-write resolution failure"
-        return real_resolve(self, path, allow_reserved=allow_reserved)
+        return real_resolve(self, path)
 
     monkeypatch.setattr(PathResolver, "resolve_within_workspace", flaky_resolve)
     try:

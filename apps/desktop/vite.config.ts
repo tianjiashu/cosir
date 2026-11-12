@@ -1,5 +1,6 @@
+import { devServerCacheDirPlugin } from "./scripts/dev-server-cache-dir-plugin";
 import { pdfAssetsPlugin } from "./scripts/pdf-assets-plugin";
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "node:path";
 
@@ -96,27 +97,7 @@ function getVendorChunk(packageName: string): string | undefined {
   return "vendor-shared";
 }
 
-/**
- * 开发服务器按端口各用一个依赖预构建缓存目录（`node_modules/.vite/port-<端口>`）。
- *
- * 同一项目常同时跑多个 Vite（Electron 开发 3000、各 E2E 槽位 4173+、预览服务器），共用默认的
- * `node_modules/.vite` 时，后启动或重新预构建的进程会覆盖别人的 `deps/`：先前的进程仍按内存里的
- * 文件名提供模块，页面里懒加载的依赖分块（Mermaid、代码高亮）请求到已被换掉的文件，得到 504，
- * 消息渲染失败。所有启动方都带 `--strictPort`，端口即进程身份，按端口分目录就不需要各启动方
- * 记得传参；同一端口重启时沿用自己的缓存。插件的 `config` 钩子拿到的是已合并命令行参数的配置。
- */
 const DEV_SERVER_PORT = 3000;
-
-function cacheDirPerDevServerPort(): Plugin {
-  return {
-    name: "cosir:cache-dir-per-dev-server-port",
-    apply: "serve",
-    config(config) {
-      const port = config.server?.port ?? DEV_SERVER_PORT;
-      return { cacheDir: path.resolve(__dirname, "node_modules", ".vite", `port-${port}`) };
-    },
-  };
-}
 
 export default defineConfig(({ command }) => {
   // Vite 决定 NODE_ENV 的规则是 `process.env.NODE_ENV || mode`，且仅在未设置时才回退到
@@ -127,7 +108,7 @@ export default defineConfig(({ command }) => {
   process.env.NODE_ENV = command === "serve" ? "development" : "production";
 
   return {
-    plugins: [react(), pdfAssetsPlugin(), cacheDirPerDevServerPort()],
+    plugins: [react(), pdfAssetsPlugin(), devServerCacheDirPlugin(DEV_SERVER_PORT)],
     resolve: {
       alias: { "@": path.resolve(__dirname, ".") },
     },

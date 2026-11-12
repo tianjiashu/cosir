@@ -9,8 +9,10 @@ from typing import Any
 
 import pytest
 
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    pair_tool_parts,
+    rebuild_snapshot,
+    run_error,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.events import ToolCallCreatedEvent, ToolCallStatusChangedEvent
@@ -267,7 +269,7 @@ def test_t4_cold_rebuild_retains_disabled_call_failure(
         ),
     ]
 
-    parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
+    parts = pair_tool_parts(rows, {})
 
     assert set(parts) == {"normal-1", "hidden-1"}, f"实际 part={sorted(parts)}"
     assert parts["normal-1"]["status"] == "completed"
@@ -302,7 +304,7 @@ def test_t4_cold_rebuild_unfinished_call_stays_cancelled(
         ),
     ]
 
-    parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
+    parts = pair_tool_parts(rows, {})
 
     assert len(parts) == 2
     assert parts["hidden-1"]["status"] == "cancelled"
@@ -369,7 +371,7 @@ def test_t4_rebuild_snapshot_materializes_all_tool_results(
         ),
     ]
 
-    snapshot = ConversationTaskStateRebuilder.rebuild(task, [run], rows)
+    snapshot = rebuild_snapshot(task, [run], rows, {})
     parts = snapshot["messages"][-1]["parts"]
 
     tool_part_ids = [part["toolCallId"] for part in parts if part["type"] == "tool-call"]
@@ -406,7 +408,7 @@ def test_t4_orphan_tool_message_raises_runtime_error(
     ]
 
     with pytest.raises(RuntimeError, match="未闭合tool"):
-        ConversationTaskStateRebuilder.build_pair_tool_part(rows)
+        pair_tool_parts(rows, {})
 
 
 def test_t4_build_run_error_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -418,11 +420,11 @@ def test_t4_build_run_error_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     是否符合预期：符合（受控字段被污染时显式失败，而不是渲染出空错误气泡）。
     """
 
-    ok = ConversationTaskStateRebuilder.build_run_error(
+    ok = run_error(
         SimpleNamespace(id=5, error={"code": "tool_error_limit", "message": "连续工具错误"})
     )
     assert ok == {"code": "tool_error_limit", "message": "连续工具错误"}
-    assert ConversationTaskStateRebuilder.build_run_error(SimpleNamespace(id=5, error=None)) is None
+    assert run_error(SimpleNamespace(id=5, error=None)) is None
 
     for bad in (
         SimpleNamespace(id=5, error=["not", "a", "mapping"]),
@@ -430,7 +432,7 @@ def test_t4_build_run_error_contract(monkeypatch: pytest.MonkeyPatch) -> None:
         SimpleNamespace(id=5, error={"code": "c", "message": "m", "extra": 1}),
     ):
         with pytest.raises(ValueError):
-            ConversationTaskStateRebuilder.build_run_error(bad)
+            run_error(bad)
 
 
 def test_t4_delegation_display_data_backfills_child_locators(
@@ -481,7 +483,7 @@ def test_t4_delegation_display_data_backfills_child_locators(
         ),
     ]
 
-    part = ConversationTaskStateRebuilder.build_pair_tool_part(rows)["delegate-1"]
+    part = pair_tool_parts(rows, {})["delegate-1"]
 
     assert part["child_task_id"] == 22
     assert part["agent_role"] == "workspace-reviewer"

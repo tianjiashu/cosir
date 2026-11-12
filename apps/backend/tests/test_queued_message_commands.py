@@ -11,11 +11,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.assistant_transport.service import transport_assistant_service as service_module
-from app.assistant_transport.service.transport_assistant_service import (
-    TransportAssistantService,
+from app.assistant_transport.service import assistant_transport_service as service_module
+from app.assistant_transport.service.assistant_transport_service import (
+    AssistantTransportService,
 )
-from app.core.task_actor import SessionConflictError
 from app.core.workflow.message_queue.task_message import (
     BackgroundResultBody,
     RunLaunch,
@@ -24,6 +23,7 @@ from app.core.workflow.message_queue.task_message import (
 )
 from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
 from app.models.conversation_input import UserInputPresentation
+from app.models.errors.task_command_errors import TaskCommandConflictError
 
 _LAUNCH = RunLaunch(model_config_id="test/m5")
 
@@ -47,8 +47,9 @@ def harness(canonical_store, monkeypatch):
         ),
     )
     refreshed: list[int] = []
-    service = TransportAssistantService.__new__(TransportAssistantService)
+    service = AssistantTransportService.__new__(AssistantTransportService)
     service._queue = queue
+    service._tasks = SimpleNamespace(get_task=lambda _task_id: None)
     service._states = SimpleNamespace(refresh_queued_messages=refreshed.append)
     return SimpleNamespace(
         queue=queue, service=service, refreshed=refreshed, task_id=canonical_store.task.id
@@ -84,7 +85,7 @@ async def test_delete_withdraws_only_the_target(harness) -> None:
 
 @pytest.mark.parametrize("command", ["send_queued_now", "delete_queued"])
 async def test_consumed_message_is_a_non_retryable_conflict(harness, command) -> None:
-    with pytest.raises(SessionConflictError) as caught:
+    with pytest.raises(TaskCommandConflictError) as caught:
         await getattr(harness.service, command)(harness.task_id, 999)
 
     assert caught.value.code == "MESSAGE_CONSUMED"
@@ -99,12 +100,13 @@ async def test_non_user_input_is_rejected_and_kept(harness, command) -> None:
         harness.task_id,
         TaskMessage.of(
             BackgroundResultBody(
-                ended_at="2026-01-01T00:01:00+00:00", tool_name="probe", tool_result="x"
+                ended_at="2026-01-01T00:01:00+00:00", tool_call_id="call-probe",
+                tool_name="execute_terminal", tool_result="x",
             )
         ),
     )
 
-    with pytest.raises(SessionConflictError):
+    with pytest.raises(TaskCommandConflictError):
         await getattr(harness.service, command)(harness.task_id, result)
 
     assert [row.id for row in harness.queue.pending_nowait(harness.task_id)] == [result]

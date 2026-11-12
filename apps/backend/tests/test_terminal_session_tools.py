@@ -12,7 +12,6 @@ from pydantic import ValidationError
 from terminal_test_support import ReadyWorker, make_service, wait_until
 
 from app.config.constant import Constant
-from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL, TOOL_GROUP_TERMINAL_SESSION
@@ -26,8 +25,12 @@ from app.tools.terminal_runtime.errors import (
     TerminalSessionNotFoundError,
     TerminalSessionStateError,
 )
-from app.tools.terminal_runtime.session.shell_resolver import ShellResolver
+from app.tools.terminal_runtime.session.shell_resolver import (
+    available_session_shells,
+    resolve_session_shell,
+)
 from app.tools.tool_handler.terminal import build_terminal_definitions
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.tools.tool_handler.terminal.task_terminals import find_terminal
 from app.tools.tool_handler.terminal.terminal_list import TerminalListTool
 from app.tools.tool_handler.terminal.terminal_read import TerminalReadTool
@@ -128,20 +131,59 @@ def test_shell_resolver_lists_installed_shells_with_integration(monkeypatch) -> 
     # /bin/sh 按固定路径探测，不经 PATH。
     monkeypatch.setattr("app.tools.shell.host_shells.os.path.isfile", lambda _path: True)
     monkeypatch.setattr("app.tools.shell.host_shells.os.access", lambda *_a, **_k: True)
-    shells = ShellResolver.available(system="Darwin", environ={"SHELL": "/bin/zsh"})
+    shells = available_session_shells(system="Darwin", environ={"SHELL": "/bin/zsh"})
     # 顺序即 shell 目录的声明顺序，与 execute_terminal 的 enum 一致；默认项单独标记。
     assert [s["kind"] for s in shells] == ["sh", "bash", "zsh", "pwsh"]
     assert [s["isDefault"] for s in shells] == [False, False, True, False]
     assert [s["integrationSupported"] for s in shells] == [False, True, True, True]
-    windows = ShellResolver.available(system="Windows", environ={})
+    windows = available_session_shells(system="Windows", environ={})
     assert [s["kind"] for s in windows] == ["pwsh"]
+
+
+def test_default_shell_outside_the_catalog_keeps_one_kind(monkeypatch) -> None:
+    """``$SHELL`` 指向清单外的 shell：清单里的默认项与按它新建的会话是同一个 ``kind``。"""
+
+    monkeypatch.setattr(
+        "app.tools.shell.host_shells.shutil.which",
+        lambda value: value if value == "/usr/local/bin/tcsh" else None,
+    )
+    environ = {"SHELL": "/usr/local/bin/tcsh"}
+    shells = available_session_shells(system="Darwin", environ=environ)
+    default = next(shell for shell in shells if shell["isDefault"])
+    assert default == {
+        "kind": "tcsh", "label": "tcsh", "isDefault": True, "integrationSupported": False,
+    }
+    assert resolve_session_shell("/usr/local/bin/tcsh", system="Darwin", environ=environ).kind == (
+        "tcsh"
+    )
+    # 指向已知 shell 的路径按该 shell 处理，集成随之可用。
+    monkeypatch.setattr(
+        "app.tools.shell.host_shells.shutil.which", lambda value: "/opt/homebrew/bin/bash"
+    )
+    assert resolve_session_shell("/opt/homebrew/bin/bash", system="Darwin", environ={}).kind == (
+        "bash"
+    )
+
+
+def test_user_default_shell_falls_back_to_the_account_login_shell(monkeypatch) -> None:
+    """``$SHELL`` 未设置时取账户数据库里的登录 shell（交互终端 auto 与登录环境解析共用）。"""
+    import pwd
+
+    from app.tools.shell.host_shells import user_default_shell
+
+    assert user_default_shell({"SHELL": " /bin/zsh "}) == "/bin/zsh"
+    monkeypatch.setattr(pwd, "getpwuid", lambda _uid: type("P", (), {"pw_shell": "/bin/fish"}))
+    assert user_default_shell({}) == "/bin/fish"
+    monkeypatch.setattr(pwd, "getpwuid", lambda _uid: type("P", (), {"pw_shell": ""}))
+    assert user_default_shell({}) == "/bin/sh"
 
 
 @pytest.fixture
 def tool_service(monkeypatch):
     service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
     monkeypatch.setattr(depends, "get_terminal_session_service", lambda: service)
-    for tool in ("terminal_list", "terminal_read", "terminal_write", "terminal_stop"):
+    # 只有等待期间轮询取消的两个工具读这个信号。
+    for tool in ("terminal_read", "terminal_stop"):
         monkeypatch.setattr(
             f"app.tools.tool_handler.terminal.{tool}.should_stop_call",
             lambda task_id, tool_call_id: False,
@@ -165,7 +207,7 @@ def _context(tmp_path: Path) -> Any:
 
 def _start_session(service: Any, workers: Any, tmp_path: Path) -> str:
     runtime = service.start(  # noqa: S604 - 显式 shell 取值，测试不启动真实 shell
-        task_id=1, workspace_root=str(tmp_path), shell="auto"
+        task_id=1, cwd=str(tmp_path), shell="auto"
     )
     workers[0].screen(["$ "], cursor=(0, 2))
     workers[0].shell("shell_prompt", cwd="/workspace")

@@ -37,7 +37,7 @@ async def test_subscription_overflow_sends_single_sentinel(monkeypatch) -> None:
         subscription.publish({"type": "output", "seq": index}, 1)
     events = [await asyncio.wait_for(subscription.get(), 1) for _ in range(3)]
     assert events[-1] == {"type": OVERFLOW_EVENT_TYPE}
-    assert subscription._queue.empty()  # noqa: SLF001 - 溢出后不再投递
+    assert subscription._queue.empty()
 
 
 def test_closed_loop_is_absorbed_at_subscription_boundary() -> None:
@@ -51,7 +51,7 @@ def test_closed_loop_is_absorbed_at_subscription_boundary() -> None:
 @pytest.mark.asyncio
 async def test_stream_attach_replays_then_streams_state_frames() -> None:
     buffer = TerminalStreamBuffer("s", 1024)
-    buffer.append("YQ==", 1)
+    buffer.append(b"a")
     attachment = buffer.attach(
         None, asyncio.get_running_loop(), status="running", rows=24, columns=80
     )
@@ -62,8 +62,7 @@ async def test_stream_attach_replays_then_streams_state_frames() -> None:
     assert event["type"] == "geometry" and event["rows"] == 30
     buffer.finish()
     assert await asyncio.wait_for(attachment.subscription.get(), 1) == {
-        **{key: attachment.attached[key] for key in ("protocol", "session_id", "generation")},
-        "type": "exit",
+        "protocol": "terminal-v2", "session_id": "s", "type": "exit",
     }
 
 

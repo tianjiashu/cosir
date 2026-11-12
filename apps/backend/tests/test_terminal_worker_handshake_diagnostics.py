@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import json
 import logging
@@ -18,6 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.config.constant import Constant
 from app.tools.terminal_runtime import worker_client as worker_module
 from app.tools.terminal_runtime.errors import (
     TerminalWorkerHandshakeError,
@@ -409,6 +411,25 @@ def test_event_handler_failure_is_logged_and_converges(monkeypatch, caplog) -> N
     assert any(
         record.getMessage() == "terminal_worker_event_handler_failed" for record in caplog.records
     )
+
+
+def test_output_frames_are_decoded_once_at_the_worker_boundary(monkeypatch) -> None:
+    """合法输出帧交出字节；不合法（非 base64、为空、超过块上限）是协议违约，按断开收敛、不再分发。"""
+
+    worker, events, disconnected = _start_and_collect(
+        monkeypatch, _frame({"type": "output", "data_base64": "eA=="})
+    )
+    assert disconnected.wait(2)
+    worker.close()
+    assert events[0] == {"type": "output", "data": b"x"}
+
+    oversize = base64.b64encode(b"x" * (Constant.Terminal.MAX_WORKER_OUTPUT_CHUNK_BYTES + 1))
+    for bad in ("not base64!", "", oversize.decode("ascii")):
+        frames = _frame({"type": "output", "data_base64": bad}) + _frame({"type": "exit"})
+        worker, events, disconnected = _start_and_collect(monkeypatch, frames)
+        assert disconnected.wait(2)
+        worker.close()
+        assert [event["type"] for event in events] == ["disconnected"]
 
 
 def test_input_queued_before_the_handshake_is_sent_in_order_after_it(monkeypatch) -> None:

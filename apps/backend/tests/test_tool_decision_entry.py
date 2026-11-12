@@ -10,10 +10,10 @@ import pytest
 from pydantic import BaseModel
 
 from app.assistant_transport.request import DecisionRequest
-from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
-from app.core.task_actor import SessionConflictError
+from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
 from app.core.workflow.message_queue.task_message import DecisionBody, TaskMessage
 from app.models.errors.input_errors import UserInputRejectedError
+from app.models.errors.task_command_errors import TaskCommandConflictError
 from app.service.conversation import tool_decision_service as module
 
 _TASK_ID = 3
@@ -54,7 +54,7 @@ def harness(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         module.service_depends, "get_tool_decision_service", lambda: module.ToolDecisionService()
     )
-    service = TransportAssistantService.__new__(TransportAssistantService)
+    service = AssistantTransportService.__new__(AssistantTransportService)
     service._tasks = SimpleNamespace(get_task=lambda _id: SimpleNamespace(id=_id))
     return SimpleNamespace(
         service=service,
@@ -106,7 +106,7 @@ async def test_call_no_longer_awaiting_conflicts(harness) -> None:
     """已决定、已被撤回移出上下文或根本不存在的调用，都以占位行不在等待来判定。"""
     harness.awaiting.clear()
 
-    with pytest.raises(SessionConflictError) as caught:
+    with pytest.raises(TaskCommandConflictError) as caught:
         await _decide(harness, decision="approve", data={"goal": "交付"})
 
     assert caught.value.code == "DECISION_NOT_AWAITED"
@@ -121,7 +121,7 @@ async def test_second_decision_while_the_first_is_queued_conflicts(harness) -> N
         )
     )
 
-    with pytest.raises(SessionConflictError) as caught:
+    with pytest.raises(TaskCommandConflictError) as caught:
         await _decide(harness, decision="reject")
 
     assert caught.value.code == "DECISION_ALREADY_SUBMITTED"

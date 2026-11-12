@@ -8,12 +8,13 @@ import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
+from app.api.assistant_transport_api import (
+    assistant_history_page,
+    assistant_transport_attach,
+    assistant_transport_state,
+)
 from app.api.tasks_api import get_task
 from app.app import app
-from app.assistant_transport.assistant_api import assistant_history_page, assistant_transport_state
-from app.assistant_transport.service.transport_assistant_service import (
-    TransportAssistantService,
-)
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.conversation_run_status import RunTransition
 from app.models.task_extra import TaskExtra
@@ -109,40 +110,24 @@ def test_attach_route_is_separate_from_business_resume() -> None:
     assert routes[0].methods == {"POST"}
 
 
-def _attach_service(state: dict[str, object]) -> TransportAssistantService:
-    class _SnapshotService:
-        def get_state(self, _task_id: int) -> dict[str, object]:
-            return state
+class _AttachService:
+    """只认 Task、返回 SSE 记录的替身：attach 路由只负责把记录包成长连接响应。"""
 
-    async def _stream_envelopes(*_args: object, **_kwargs: object):
-        yield "data: {}\n\n"
+    def attach(self, _task_id: int):
+        async def records():
+            yield "data: {}\n\n"
 
-    class _TaskService:
-        def get_task(self, _task_id: int) -> object:
-            return object()
-
-    service = TransportAssistantService.__new__(TransportAssistantService)
-    service._states = _SnapshotService()
-    service._tasks = _TaskService()
-    service._stream = SimpleNamespace(stream_envelopes=_stream_envelopes)
-    return service
+        return records()
 
 
-def test_attach_subscribes_task_current_run() -> None:
-    """attach 只按 Task 订阅，不需要也不接受 run_id。"""
+def test_attach_subscribes_by_task_as_an_event_stream() -> None:
+    """attach 只按 Task 订阅，不需要也不接受 run_id；响应是不缓存的 SSE 长连接。"""
 
-    result = _attach_service(_snapshot(7, "running")).attach(1)
+    response = asyncio.run(assistant_transport_attach(1, service=_AttachService()))
 
-    assert result.media_type == "text/event-stream"
-    assert result.headers["X-Cosir-Task-Id"] == "1"
-
-
-def test_attach_without_any_run_still_subscribes() -> None:
-    """长订阅跟随 Task：还没有 Run 时照常订阅，之后开出的 Run 经同一条订阅推送。"""
-
-    result = _attach_service(_snapshot()).attach(1)
-
-    assert result.media_type == "text/event-stream"
+    assert response.media_type == "text/event-stream"
+    assert response.headers["X-Cosir-Task-Id"] == "1"
+    assert response.headers["Cache-Control"] == "no-cache"
 
 
 @pytest.mark.parametrize(

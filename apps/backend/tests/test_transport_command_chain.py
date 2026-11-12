@@ -1,6 +1,6 @@
-"""TransportAssistantService 发送、取消、恢复链路的回归测试。
+"""AssistantTransportService 发送、取消、恢复链路的回归测试。
 
-真实的 ``TaskActor``、``cancellation_registry`` 与 ``TransportAssistantService``；外部队列、
+真实的 ``TaskActor``、``cancellation_registry`` 与 ``AssistantTransportService``；外部队列、
 Run 台账与驱动是替身。驱动替身按生产语义收敛取消：每次进入模型边界前先看 Task 取消信号，有信号就
 落定 cancelled、不取 mailbox（消息留在外部队列）。Task 取消信号由 actor 在执行收尾时取走（唯一
 清理点），驱动替身不碰它。
@@ -19,11 +19,12 @@ from typing import Any
 
 import pytest
 
-from app.assistant_transport.service import transport_assistant_service as service_module
-from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
+from app.assistant_transport.service import assistant_transport_service as service_module
+from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
 from app.core import task_actor as actor_module
 from app.core import task_execution as execution_module
 from app.core import task_recall as recall_module
+from app.core.events.event_sink import set_event_sink
 from app.core.task_actor import TaskActor
 from app.core.tool import placeholder_settlement as placeholder_module
 from app.core.tool.placeholder_settlement import USER_CANCELLED_HINT
@@ -39,8 +40,10 @@ from app.core.workflow.message_queue.task_message import (
 )
 from app.models.conversation_input import UserInputPresentation
 from app.models.enums.conversation_run_status import RunTransition
+from app.models.errors.task_command_errors import TaskCommandConflictError
 from app.models.task_extra import TaskExtra
 from app.task_runtime import task_runtime_space_registry as registry_module
+from tests.command_job_fakes import FakeCommandJob
 
 _TASK_ID = 41
 _CHILD_TASK_ID = 42
@@ -192,8 +195,8 @@ async def chain(monkeypatch):
             run_last_turn_withdrawn=lambda _task_id, run_id: run_id in chain_withdrawn
         ),
     )
-    # 推进前刷新排队投影；本文件不验证投影（见 test_task_actor_loop 的「先刷新再投递」）。
-    states = SimpleNamespace(refresh_queued_messages=lambda _task_id: None)
+    # 推进前交出「队列变了」；本文件不验证投影（见 test_task_actor_loop 的「先刷新再投递」）。
+    set_event_sink(lambda _event: None)  # 下一个用例由 conftest 的 autouse 夹具换回
     # 开新 Run 前 actor 查模型是否还在；本文件的模型总在（悬空 id 见 test_task_actor_loop）。
     models = SimpleNamespace(exists=lambda _model_config_id: True)
     for getter, fake in (
@@ -201,7 +204,6 @@ async def chain(monkeypatch):
         ("get_conversation_run_ledger", ledger),
         ("get_task_service", ledger),
         ("get_task_message_queue", queue),
-        ("get_conversation_task_state_service", states),
     ):
         monkeypatch.setattr(actor_module.service_depends, getter, lambda fake=fake: fake)
     actor = TaskActor(
@@ -242,22 +244,13 @@ async def chain(monkeypatch):
         "get_agent_team_coordinator",
         lambda: SimpleNamespace(cancel_for_parent_task=cancel_teams),
     )
-    service = TransportAssistantService.__new__(TransportAssistantService)
+    service = AssistantTransportService.__new__(AssistantTransportService)
     service._tasks = ledger
     service._inputs = SimpleNamespace(
-        prepare=lambda task_id,
-        command,
-        model_config_id,
-        reasoning_effort=None,
-        agent_id="main_agent",
-        *,
-        delivery="immediate": TaskMessage.of(
-            UserInputBody(
-                text=command.text,
-                launch=RunLaunch(agent_id=agent_id, model_config_id=model_config_id),
-                presentation=UserInputPresentation(text=command.text),
-            ),
-            delivery=delivery,
+        prepare=lambda _task_id, command, model_config_id, _reasoning_effort, agent_id: UserInputBody(
+            text=command.text,
+            launch=RunLaunch(agent_id=agent_id, model_config_id=model_config_id),
+            presentation=UserInputPresentation(text=command.text),
         )
     )
     actor.start()
@@ -364,10 +357,12 @@ async def test_queued_inputs_wait_after_cancel_and_a_new_send_runs_first(chain) 
 
 
 async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) -> None:
-    """挂起的 Run 没有执行者：工具调用都已闭合，标记了也没人取，返回 False。"""
+    """挂起的 Run 没有执行者：工具调用都已闭合，标记了也没人取，409 TOOL_CALL_NOT_CANCELLABLE。"""
     run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
-    assert chain.service.cancel_tool_call(_TASK_ID, "call-1") is False
+    with pytest.raises(TaskCommandConflictError) as rejected:
+        chain.service.cancel_tool_call(_TASK_ID, "call-1")
+    assert rejected.value.code == "TOOL_CALL_NOT_CANCELLABLE"
 
     # 挂起时用户发送只排队、不唤醒：仍没有执行者。
     await chain.service.send(_TASK_ID, _send_request("hello"))
@@ -379,13 +374,14 @@ async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) ->
         _TASK_ID,
         TaskMessage.of(
             BackgroundResultBody(
-                ended_at="2026-01-01T00:01:00+00:00", tool_name="probe", tool_result="done"
+                ended_at="2026-01-01T00:01:00+00:00", tool_call_id="call-probe",
+                tool_name="execute_terminal", tool_result="done",
             )
         ),
     )
     await _settle()
     assert chain.actor.driving
-    assert chain.service.cancel_tool_call(_TASK_ID, "call-1") is True
+    chain.service.cancel_tool_call(_TASK_ID, "call-1")
     await _finish(chain.ledger.current.id, "completed")
 
 
@@ -397,10 +393,8 @@ def _register_background_work(tool_call_id: str, mode: str, calls: list[str]) ->
         tool_call_id,
         task_id=_TASK_ID,
         run_id=None,
-        kind="terminal_command",
         label="terminal_command:t",
-        mode=mode,  # type: ignore[arg-type]
-        on_cancel=lambda _reason: calls.append("cancel"),
+        job=FakeCommandJob(lambda: calls.append("cancel")),
         detached=detached if mode == "foreground" else None,
     )
     return detached
@@ -420,13 +414,14 @@ async def test_cancel_background_work_while_idle_settles_now_and_tells_the_next_
     calls: list[str] = []
     _register_background_work("call-bg", "background", calls)
 
-    assert chain.service.cancel_tool_call(_TASK_ID, "call-bg") is True
+    chain.service.cancel_tool_call(_TASK_ID, "call-bg")
 
     assert calls == ["cancel"]
     assert settled == [(_TASK_ID, ["call-bg"], USER_CANCELLED_HINT)]
     [receipt] = chain.queue.pending_nowait(_TASK_ID)
     assert receipt.kind == "background_result" and not receipt.wakes(None)
-    assert chain.service.cancel_tool_call(_TASK_ID, "call-bg") is False
+    with pytest.raises(TaskCommandConflictError):
+        chain.service.cancel_tool_call(_TASK_ID, "call-bg")
 
 
 async def test_cancel_background_work_foreground_only_wakes_the_waiter(chain, monkeypatch) -> None:
@@ -438,21 +433,19 @@ async def test_cancel_background_work_foreground_only_wakes_the_waiter(chain, mo
     calls: list[str] = []
     _register_background_work("call-fg", "foreground", calls)
 
-    assert chain.service.cancel_tool_call(_TASK_ID, "call-fg") is True
+    chain.service.cancel_tool_call(_TASK_ID, "call-fg")
 
     assert calls == ["cancel"]
     assert chain.queue.pending_nowait(_TASK_ID) == []
 
 
 async def test_background_command_detaches_only_foreground_entries(chain) -> None:
-    from app.core.task_actor import SessionConflictError
-
     calls: list[str] = []
     detached = _register_background_work("call-fg", "foreground", calls)
     chain.service.background_tool_call(_TASK_ID, "call-fg")
     assert detached.is_set()
     for call_id in ("call-fg", "call-missing"):
-        with pytest.raises(SessionConflictError) as raised:
+        with pytest.raises(TaskCommandConflictError) as raised:
             chain.service.background_tool_call(_TASK_ID, call_id)
         assert raised.value.code == "TOOL_CALL_NOT_DETACHABLE"
 
@@ -726,7 +719,8 @@ async def test_background_result_after_stop_starts_a_run(chain) -> None:
         _TASK_ID,
         TaskMessage.of(
             BackgroundResultBody(
-                ended_at="2026-01-01T00:01:00+00:00", tool_name="probe", tool_result="done"
+                ended_at="2026-01-01T00:01:00+00:00", tool_call_id="call-probe",
+                tool_name="execute_terminal", tool_result="done",
             )
         ),
     )
@@ -806,7 +800,7 @@ async def test_withdraw_is_rejected_while_running_without_stopping_the_run(withd
     await _settle()
     old = withdraw.ledger.current
 
-    with pytest.raises(actor_module.SessionConflictError) as error:
+    with pytest.raises(actor_module.TaskCommandConflictError) as error:
         await withdraw.service.withdraw(_TASK_ID, 3)
 
     assert error.value.code == "RUN_NOT_STOPPED"
@@ -818,7 +812,7 @@ async def test_withdraw_is_rejected_while_running_without_stopping_the_run(withd
 async def test_withdraw_is_rejected_while_suspended(withdraw) -> None:
     old = _finished_run(withdraw, "suspended")
 
-    with pytest.raises(actor_module.SessionConflictError) as error:
+    with pytest.raises(actor_module.TaskCommandConflictError) as error:
         await withdraw.service.withdraw(_TASK_ID, 3)
 
     assert error.value.code == "RUN_NOT_STOPPED"
@@ -834,7 +828,7 @@ async def test_withdraw_is_rejected_while_the_executor_is_still_settling(withdra
     await _finish(old.id, "cancelled")
     assert old.status == "cancelled"
 
-    with pytest.raises(actor_module.SessionConflictError) as error:
+    with pytest.raises(actor_module.TaskCommandConflictError) as error:
         await withdraw.service.withdraw(_TASK_ID, 3)
     assert error.value.code == "RUN_NOT_STOPPED"
     assert withdraw.context.included() == [1, 2, 3, 4]
@@ -850,7 +844,7 @@ async def test_resume_is_refused_once_the_runs_last_turn_was_withdrawn(withdraw)
     old = _finished_run(withdraw, "cancelled")
     withdraw.withdrawn.add(old.id)
 
-    with pytest.raises(actor_module.SessionConflictError) as error:
+    with pytest.raises(actor_module.TaskCommandConflictError) as error:
         await withdraw.service.resume(_TASK_ID)
 
     assert error.value.code == "RUN_NOT_RESUMABLE"

@@ -19,8 +19,9 @@ from openai.types.chat import (
 )
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    pair_tool_parts,
+    rebuild_snapshot,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.agents.agent_profile import AgentProfile
@@ -364,9 +365,9 @@ def test_placeholder_belongs_to_the_run_that_requested_the_tool(env: SimpleNames
     assert placeholder.sequence > human_row.sequence
 
     # 5) 按 Run 分组配对仍成立：两个 Run 分组都能重建并通过快照校验。
-    rebuilt = ConversationTaskStateRebuilder.rebuild(env.task, [previous_run, current_run], rows)
+    rebuilt = rebuild_snapshot(env.task, [previous_run, current_run], rows, {})
     validate_snapshot(rebuilt)
-    tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
+    tool_parts = pair_tool_parts(rows, {})
     assert tool_parts["call-1"]["status"] == "cancelled"
 
 
@@ -399,11 +400,11 @@ def test_same_run_placeholder_metadata_backs_snapshot_rebuild(env: SimpleNamespa
     assert [row.message["role"] for row in rows] == [message["role"] for message in messages[1:]]
 
     # 该 metadata 的直接消费者：重建入口取 status 不再崩，且产出合法 wire 终态。
-    tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
+    tool_parts = pair_tool_parts(rows, {})
     assert tool_parts["call-1"]["status"] == "cancelled"
     assert tool_parts["call-1"]["status"] in _TOOL_STATUS_VALUES
 
-    rebuilt = ConversationTaskStateRebuilder.rebuild(env.task, [run], rows)
+    rebuilt = rebuild_snapshot(env.task, [run], rows, {})
     validate_snapshot(rebuilt)
 
 
@@ -693,9 +694,9 @@ def test_recover_orphaned_runs_cancels_run_and_closes_tool_calls(env: SimpleName
     assert placeholder.run_id == run.id
 
     # 冷读：Run 终态与工具 part 终态对齐，快照无需额外投影即可通过校验。
-    rebuilt = ConversationTaskStateRebuilder.rebuild(env.task, [run], rows)
+    rebuilt = rebuild_snapshot(env.task, [run], rows, {})
     validate_snapshot(rebuilt)
-    tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
+    tool_parts = pair_tool_parts(rows, {})
     assert {call_id: part["status"] for call_id, part in tool_parts.items()} == {
         "call-1": "completed",
         "call-2": "cancelled",

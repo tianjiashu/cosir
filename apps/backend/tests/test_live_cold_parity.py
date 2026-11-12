@@ -8,7 +8,7 @@ import asyncio
 
 import pytest
 
-from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
+from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
 from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
 from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
 from app.models.conversation_run_options import ConversationRunOptions
@@ -225,7 +225,7 @@ async def test_a_cancelled_run_keeps_its_pending_decision(backend_env, tmp_path,
     try:
         env.send()
         await env.parked()
-        await TransportAssistantService().cancel(env.task.id)
+        await AssistantTransportService().cancel(env.task.id)
         await env.until("cancelled")
         [part] = tool_parts(env.live())
         assert part["awaitingUser"] is True
@@ -269,7 +269,7 @@ async def test_resuming_a_cancelled_run_keeps_live_and_cold_in_step(backend_env,
     try:
         env.send()
         await env.parked()
-        await TransportAssistantService().cancel(env.task.id)
+        await AssistantTransportService().cancel(env.task.id)
         await env.until("cancelled")
         assert env.live()["activity"]["resumable"] is True
         env.assert_parity()

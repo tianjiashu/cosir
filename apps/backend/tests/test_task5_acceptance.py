@@ -8,18 +8,13 @@ from pathlib import Path
 import pytest
 from sqlalchemy import inspect, update
 
+from app.assistant_transport.projection.snapshot_rebuild import (
+    pair_tool_parts,
+)
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
 )
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
-)
-from app.assistant_transport.service.conversation_task_state_service import (
-    ConversationTaskStateService,
-)
-from app.assistant_transport.service.transport_stream_service import (
-    AssistantTransportStreamService,
-)
+from app.assistant_transport.stream.task_sse_stream import TaskSseStream
 from app.config import configuration
 from app.core.events import AssistantTextDeltaEvent
 from app.core.tool.tool_registry import ToolRegistry
@@ -36,6 +31,7 @@ from app.service.task.fork_source import ForkCut, ForkSource
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
 from app.storage.store_engines import APP_MODELS, initialize_app_schema
+from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 # 本组测试使用独立 canonical_store；只需呈现目录，不再创建第二套存储环境。
@@ -237,8 +233,8 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     # 消息身份与正文取自 context 的展示绑定，不从 Run 反推。
     assert state["messages"][0]["parts"][0]["text"] == f"user-{completed.id}"
     # 工具终态由 Run 分组配对产出（同一份 canonical 行同时驱动冷读快照与模型上下文）。
-    tool_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
-        store.contexts.get(store.task.id, include_in_context=False)
+    tool_parts = pair_tool_parts(
+        store.contexts.get(store.task.id, include_in_context=False), {}
     )
     assert {call_id: part["status"] for call_id, part in tool_parts.items()} == {
         "call-success": "completed",
@@ -297,7 +293,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
             raise RuntimeError("SSE failed after commit")
 
     monkeypatch.setattr(
-        "app.core.workflow.conversation_run_ledger.get_conversation_event_projector",
+        "app.service.depends.get_conversation_event_projector",
         lambda: FailingProjector(),
     )
     stats = ConversationRunUsageStats(**_USAGE)
@@ -313,7 +309,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
     assert persisted.status == "completed"
     assert persisted.final_output == "durable final summary"
     assert persisted.usage == _USAGE
-    ConversationTaskStateService.clear_process_state()
+    task_runtime_spaces.close()
     state = store.state.get_state(store.task.id)
     assert state["activity"]["status"] == "completed"
     assert state["messages"][0]["parts"][0]["text"] == "durable user"
@@ -333,9 +329,7 @@ async def test_sse_first_frame_and_projector_are_memory_only_and_disconnect_does
         run.id,
         {"role": "assistant", "content": "canonical", "reasoning_content": None},
     )
-    stream_service = AssistantTransportStreamService.__new__(AssistantTransportStreamService)
-    stream_service._snapshots = store.state
-    stream = stream_service.stream(store.task.id, lambda: False)
+    stream = TaskSseStream(store.state).frames(store.task.id)
     first = await anext(stream)
     assert first.state["messages"][1]["parts"][0]["text"] == "canonical"
     before_count = len(store.contexts.get(store.task.id, include_in_context=False))
@@ -412,12 +406,12 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     assert len(repaired) == 1
     assert repaired[0].run_id == run.id
     assert repaired[0].metadata == ToolMessageMetadata.model_validate({"status": "cancelled"})
-    ConversationTaskStateService.clear_process_state()
+    task_runtime_spaces.close()
     state = store.state.get_state(store.task.id)
     assert state["activity"]["status"] == "cancelled"
     # 工具终态由 Run 分组配对产出（占位行写入 wire 口径的 cancelled）。
-    repaired_parts = ConversationTaskStateRebuilder.build_pair_tool_part(
-        store.contexts.get(store.task.id, include_in_context=False)
+    repaired_parts = pair_tool_parts(
+        store.contexts.get(store.task.id, include_in_context=False), {}
     )
     assert {call_id: part["status"] for call_id, part in repaired_parts.items()} == {
         "call-interrupted": "cancelled"

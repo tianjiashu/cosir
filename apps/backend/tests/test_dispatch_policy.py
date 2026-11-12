@@ -9,6 +9,7 @@ import pytest
 
 from app.core.workflow.message_queue import dispatch_policy
 from app.core.workflow.message_queue.dispatch_policy import Deliver, StartRun, Stay, Wake
+from app.core.workflow.message_queue.message_bodies.notice import NoticeKind
 from app.core.workflow.message_queue.task_message import (
     AgentMessageBody,
     BackgroundResultBody,
@@ -48,10 +49,8 @@ def _user(
     return TaskMessage.of(body, delivery=delivery, message_id=message_id)
 
 
-def _notice(message_id: int) -> TaskMessage:
-    return TaskMessage.of(
-        NoticeBody(content="n", notice_kind="backend_restarted"), message_id=message_id
-    )
+def _notice(message_id: int, kind: NoticeKind = "catalog_change") -> TaskMessage:
+    return TaskMessage.of(NoticeBody(content="n", notice_kind=kind), message_id=message_id)
 
 
 def _decision(message_id: int) -> TaskMessage:
@@ -62,7 +61,8 @@ def _decision(message_id: int) -> TaskMessage:
 def _result(message_id: int) -> TaskMessage:
     return TaskMessage.of(
         BackgroundResultBody(
-            ended_at="2026-01-01T00:01:00+00:00", tool_name="probe", tool_result="done"
+            ended_at="2026-01-01T00:01:00+00:00", tool_call_id="call-probe",
+            tool_name="execute_terminal", tool_result="done",
         ),
         message_id=message_id,
     )
@@ -158,6 +158,15 @@ def test_no_launch_to_inherit_stays() -> None:
 def test_notices_alone_never_start_a_run(latest: ConversationRunRecord | None) -> None:
     action = _next(latest, False, [_notice(1)], [_notice(1)])
     assert action == Stay()
+
+
+@pytest.mark.parametrize("kind", ["derived_task_stopped", "backend_restarted"])
+def test_notices_that_end_a_wait_wake_only_an_active_run(kind: NoticeKind) -> None:
+    """「等着的东西没了」的通知：挂起的 Run 可能正等着它，唤醒；Task 空闲时不为它开新 Run。"""
+    notice = _notice(1, kind)
+    assert _next(_run("suspended"), False, [notice], [notice]) == Wake()
+    for latest in (None, _run("completed"), _run("cancelled")):
+        assert _next(latest, False, [notice], [notice]) == Stay()
 
 
 def test_only_new_messages_trigger_leftovers_do_not() -> None:

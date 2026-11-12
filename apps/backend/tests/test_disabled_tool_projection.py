@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    pair_tool_parts,
 )
 from app.models.conversation_task_context import (
     ConversationTaskContextRecord,
@@ -54,7 +54,7 @@ def test_rebuild_pairs_disabled_tool_closure_with_metadata(
         ),
     ]
 
-    parts = ConversationTaskStateRebuilder.build_pair_tool_part(rows)
+    parts = pair_tool_parts(rows, {})
 
     assert parts["disabled-1"]["status"] == "cancelled"
     assert parts["disabled-1"]["isError"] is False

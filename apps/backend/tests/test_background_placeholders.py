@@ -10,9 +10,8 @@ import pytest
 
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_state_snapshot import _validate_part
-from app.tools.tool_handler.terminal.command_job import CommandConclusion
-from app.core.tool.placeholder_settlement import INTERRUPTED_HINT, cancel_placeholders
 from app.core.tool.execute.tool_terminal_projection import terminal_event
+from app.core.tool.placeholder_settlement import INTERRUPTED_HINT, cancel_placeholders
 from app.core.tool.schemas import ToolObservation
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.task_message import BackgroundResultBody
@@ -20,6 +19,8 @@ from app.core.workflow.node_helper import tool_observation_projection as project
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
 from app.service import depends
+from app.tools.tool_handler.terminal.command_job import CommandConclusion
+from tests.command_job_fakes import FakeCommandJob
 
 _WORK = BackgroundWork(
     run_id=1, kind="terminal_command", label="make", started_at="2026-01-01T00:00:00+00:00"
@@ -205,7 +206,9 @@ def test_consumed_result_leaves_other_rows_alone(monkeypatch, metadata) -> None:
     )
     monkeypatch.setattr(projection_module, "emit", lambda _event: pytest.fail("emitted"))
 
-    body = BackgroundResultBody(tool_name="terminal_command", tool_result="{}", ended_at=_ENDED_AT)
+    body = BackgroundResultBody(
+        tool_call_id="call-x", tool_name="execute_terminal", tool_result="{}", ended_at=_ENDED_AT
+    )
     assert projection_module.settle_background_placeholder("call-x", body, step_id="step-2", session=object()) is None
 
     assert context.updates == []
@@ -213,18 +216,17 @@ def test_consumed_result_leaves_other_rows_alone(monkeypatch, metadata) -> None:
 
 def test_result_arriving_while_user_stopping_is_still_delivered(stored) -> None:
     """用户停止只打断当前驱动：停止信号在时后台工作完成，结论照常入队，占位不被撤销。"""
-    from app.tools.tool_handler.terminal.command_results import command_results
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
     )
+    from app.tools.tool_handler.terminal.command_results import command_results
 
     command_results.register(
         "call-bg",
         task_id=stored.task_id,
         run_id=None,
-        kind="terminal_command",
         label="terminal:sleep",
-        on_cancel=lambda _reason: None,
+        job=FakeCommandJob(),
     )
     cancellation_registry.request_cancel(stored.task_id, "user")
     try:
@@ -270,11 +272,11 @@ def test_real_parent_stop_persists_output_without_waking_agent(stored, tmp_path)
     import time
 
     from app.core.task_recall import TaskRecall
-    from app.tools.tool_handler.terminal.command_results import command_results
     from app.core.tool.schemas import ToolExecutionContext
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
     )
+    from app.tools.tool_handler.terminal.command_results import command_results
     from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
     from tests.terminal_test_support import terminal_worker_path
     if not terminal_worker_path().is_file():
@@ -293,7 +295,12 @@ def test_real_parent_stop_persists_output_without_waking_agent(stored, tmp_path)
             assert time.monotonic() < deadline
             time.sleep(0.01)
         cancellation_registry.request_cancel(stored.task_id, "parent")
-        asyncio.run(TaskRecall(stored.task_id).recall())
+        recall = TaskRecall(stored.task_id)
+
+        async def recall_and_settle() -> None:
+            await recall.settle(await recall.recall())
+
+        asyncio.run(recall_and_settle())
     finally:
         command_results.drop_task(stored.task_id)
         cancellation_registry.consume(stored.task_id)

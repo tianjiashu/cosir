@@ -9,10 +9,9 @@ from typing import Any
 
 import pytest
 
-from app.tools.tool_handler.terminal import command_results as background_module
-from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.terminal_runtime.command.running_command_registry import running_commands
+from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal.terminal_list import TerminalListTool
 from app.tools.tool_handler.terminal.terminal_read import TerminalReadTool
@@ -31,23 +30,23 @@ _TASK_ID = 41
 def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, dict[str, Any]]]:
     calls: list[tuple[str | None, str, dict[str, Any]]] = []
 
-    def deliver(task_id, *, tool_call_id, tool_name, result, placeholder_display_data=None) -> bool:
-        calls.append((tool_call_id, tool_name, {**result, "card": placeholder_display_data}))
+    def deliver(task_id, tool_call_id, conclusion, *, starts_run=True) -> bool:
+        calls.append(
+            (tool_call_id, "execute_terminal", {**conclusion.result, "card": conclusion.display_data})
+        )
         return True
 
-    def report_cancelled(
-        task_id: int,
-        tool_call_id: str,
-        kind: str,
-        result: dict[str, object],
-        hint: str,
-        display_data: dict[str, object] | None = None,
-    ) -> bool:
-        calls.append((tool_call_id, kind, {**result, "cancel_hint": hint, "card": display_data}))
+    def report_cancelled(task_id, tool_call_id, conclusion) -> bool:
+        calls.append((tool_call_id, "execute_terminal", {
+            **conclusion.result, "cancel_hint": conclusion.cancel_hint,
+            "card": conclusion.display_data,
+        }))
         return True
 
-    monkeypatch.setattr(background_module, "deliver_background_result", deliver)
-    monkeypatch.setattr(background_module, "report_cancelled_result", report_cancelled)
+    monkeypatch.setattr(CommandResultRegistry, "_enqueue_result", staticmethod(deliver))
+    monkeypatch.setattr(
+        CommandResultRegistry, "_enqueue_cancel_receipt", staticmethod(report_cancelled),
+    )
     yield calls
     # 收尾：撤销这个 Task 全部后台条目，并等作业线程把登记表条目清掉。
     command_results.drop_task(_TASK_ID)

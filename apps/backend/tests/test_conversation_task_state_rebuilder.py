@@ -5,8 +5,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    pair_tool_parts,
+    rebuild_snapshot,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
@@ -33,7 +34,7 @@ def _task(task_id: int = 7) -> TaskRecord:
 
 
 def test_rebuild_empty_task_returns_valid_empty_snapshot() -> None:
-    state = ConversationTaskStateRebuilder.rebuild(_task(), [], [])
+    state = rebuild_snapshot(_task(), [], [], {})
 
     assert state == {
         "title": "task",
@@ -44,6 +45,7 @@ def test_rebuild_empty_task_returns_valid_empty_snapshot() -> None:
         "background_tasks": [],
         "foreground_waits": [],
         "handoffs": [],
+            "queued_messages": [],
     }
 
 
@@ -65,7 +67,7 @@ def test_rebuild_activity_uses_latest_runs_frozen_context_window(window: int | N
         )
         for index, frozen in ((1, 128_000), (2, window))
     ]
-    state = ConversationTaskStateRebuilder.rebuild(task, runs, [])
+    state = rebuild_snapshot(task, runs, [], {})
     validate_snapshot(state)
     assert state["activity"] is not None
     # 当前 Run 还没写过行：没有可见回合，completed 也不可恢复。
@@ -74,7 +76,7 @@ def test_rebuild_activity_uses_latest_runs_frozen_context_window(window: int | N
 
 
 def test_rebuild_task_without_current_run_has_no_activity() -> None:
-    state = ConversationTaskStateRebuilder.rebuild(_task(), [], [])
+    state = rebuild_snapshot(_task(), [], [], {})
 
     assert state["activity"] is None
 
@@ -121,7 +123,7 @@ def test_rebuild_writes_outcome_only_on_terminal_runs_last_assistant_message() -
         )
     ]
 
-    state = ConversationTaskStateRebuilder.rebuild(task, runs, rows)
+    state = rebuild_snapshot(task, runs, rows, {})
 
     validate_snapshot(state)
     run_one = [m for m in state["messages"] if m["turn"] == 1]
@@ -165,6 +167,7 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
         "background_tasks": [],
         "foreground_waits": [],
         "handoffs": [],
+        "queued_messages": [],
     }
 
     with pytest.raises(ValueError, match="outcome status must be terminal"):
@@ -198,6 +201,7 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
         "background_tasks": [],
         "foreground_waits": [],
         "handoffs": [],
+        "queued_messages": [],
     }
 
     with pytest.raises(ValueError, match="only assistant messages carry an outcome"):
@@ -227,7 +231,7 @@ def test_rebuild_keeps_interrupted_output_stopped_even_when_run_is_active() -> N
         turn=1,
     )
 
-    state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
+    state = rebuild_snapshot(_task(), [run], [row], {})
 
     assert state["messages"][0]["parts"] == [
         {
@@ -264,7 +268,7 @@ def test_rebuild_keeps_interrupted_output_when_run_is_cancelled() -> None:
         turn=1,
     )
 
-    state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
+    state = rebuild_snapshot(_task(), [run], [row], {})
 
     assert state["messages"][0]["parts"] == [
         {
@@ -330,8 +334,8 @@ def test_rebuild_restores_child_task_locator_and_workspace_role_from_display_dat
         turn=1,
     )
 
-    tool_part = ConversationTaskStateRebuilder.build_pair_tool_part(
-        [row, result_row],
+    tool_part = pair_tool_parts(
+        [row, result_row], {},
     )["delegate-1"]
 
     assert tool_part["child_task_id"] == 22
@@ -362,7 +366,7 @@ def test_rebuild_restores_capsule_text_and_images_from_context_input() -> None:
         turn=1,
     )
 
-    state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
+    state = rebuild_snapshot(_task(), [run], [row], {})
 
     assert state["messages"][0]["parts"] == [
         {"type": "text", "text": text, "status": "completed"},
@@ -381,7 +385,7 @@ def test_rebuild_does_not_invent_user_message_from_run() -> None:
         updated_at=timestamp,
     )
 
-    state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [])
+    state = rebuild_snapshot(_task(), [run], [], {})
 
     assert state["messages"] == []
     validate_snapshot(state)
@@ -409,7 +413,7 @@ def test_reasoning_stays_in_context_observation_but_not_cold_conversation() -> N
         updated_at=timestamp.isoformat(),
         turn=1,
     )
-    state = ConversationTaskStateRebuilder.rebuild(_task(), [run], [row])
+    state = rebuild_snapshot(_task(), [run], [row], {})
     validate_snapshot(state)
     assert state["messages"][0]["parts"] == [
         {
@@ -450,7 +454,7 @@ def test_live_and_rebuilt_calls_share_definition_presentation(name, expected):
     run = ConversationRunRecord(
         id=1, task_id=7, status="running", created_at=_timestamp(), updated_at=_timestamp()
     )
-    state = ConversationTaskStateRebuilder.rebuild(task, [run], [], catalog)
+    state = rebuild_snapshot(task, [run], [], catalog)
     mutations = plan_tool_call_created(
         ToolCallCreatedEvent(task_id=7, run_id=1, turn=1, tool_call_id="call", tool_name=name),
         state,
@@ -476,7 +480,7 @@ def test_live_and_rebuilt_calls_share_definition_presentation(name, expected):
         },
         turn=1,
     )
-    rebuilt = ConversationTaskStateRebuilder.rebuild(task, [run], [row], catalog)
+    rebuilt = rebuild_snapshot(task, [run], [row], catalog)
     validate_snapshot(rebuilt)
     assert rebuilt["messages"][0]["parts"][0]["presentation"] == expected
     if name != "removed_tool":

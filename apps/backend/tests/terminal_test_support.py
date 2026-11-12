@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import base64
 import os
 import threading
 import time
@@ -74,7 +73,7 @@ class FakeWorker:
         self.callback(event)
 
     def output(self, data: bytes = b"x") -> None:
-        self.emit({"type": "output", "data_base64": base64.b64encode(data).decode("ascii")})
+        self.emit({"type": "output", "data": data})
 
     def screen(
         self,
@@ -137,24 +136,14 @@ def make_service(
         "app.tools.terminal_runtime.session.session_runtime.ProcessTerminalWorker", construct
     )
     monkeypatch.setattr(
-        "app.tools.terminal_runtime.session.session_service.ShellResolver.resolve",
+        "app.tools.terminal_runtime.session.session_service.resolve_session_shell",
         lambda shell, integration="auto", **_: _spec(shell, integration),
     )
-    capture_terminal_effects(monkeypatch, on_changed=on_changed)
-    return TerminalSessionService(), workers
+    return TerminalSessionService(on_sessions_changed=on_changed or ignore_session_changes), workers
 
 
-def capture_terminal_effects(
-    monkeypatch: Any,
-    *,
-    on_changed: Callable[[int], None] | None = None,
-) -> None:
-    """替换会话对应用层的副作用（snapshot 重投影）；会话本身不触达其他应用层动作。"""
-    from app.tools.terminal_runtime.session import session_runtime
-
-    monkeypatch.setattr(
-        session_runtime, "refresh_task_sessions", on_changed or (lambda _task: None)
-    )
+def ignore_session_changes(_task_id: int) -> None:
+    """会话变化的通知替身：测试不接 snapshot 投影时用。"""
 
 
 def _spec(shell: str, integration: str) -> Any:
@@ -168,7 +157,7 @@ def start(service: TerminalSessionService, tmp_path: Any, *, task_id: int = 1,
           shell: str = "auto") -> str:
     runtime = service.start(
         task_id=task_id,
-        workspace_root=str(tmp_path),
+        cwd=str(tmp_path),
         shell=shell,
     )
     return runtime.session_id

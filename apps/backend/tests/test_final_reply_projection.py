@@ -5,10 +5,9 @@ from datetime import UTC, datetime
 import pytest
 
 from app.assistant_transport.projection.event_projection import plan_event
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
+from app.assistant_transport.projection.snapshot_rebuild import (
+    rebuild_snapshot,
 )
-from app.assistant_transport.service.conversation_task_state_service import _apply_mutation
 from app.assistant_transport.state.conversation_state_snapshot import (
     empty_snapshot,
     validate_snapshot,
@@ -30,8 +29,8 @@ NOW = datetime(2026, 11, 7, tzinfo=UTC)
 
 
 def apply(state, event):
-    for mutation in plan_event(event, state):
-        _apply_mutation(state, mutation)
+    for mutation in plan_event(event, state, {}):
+        mutation.apply_to(state)
 
 
 @pytest.mark.parametrize(
@@ -92,7 +91,7 @@ def test_live_and_rebuild_agree(status, reason, content, expected):
         created_at=NOW,
         updated_at=NOW,
     )
-    cold = ConversationTaskStateRebuilder.rebuild(task, [run], rows)
+    cold = rebuild_snapshot(task, [run], rows, {})
     validate_snapshot(cold)
     for snapshot in (state, cold):
         marked = [
