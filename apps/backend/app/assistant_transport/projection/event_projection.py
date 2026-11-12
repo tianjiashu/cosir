@@ -52,7 +52,6 @@ _PLANNERS: dict[type, _Planner] = {
     RunResultUpdatedEvent: plan_run_result_updated,
     AssistantTextDeltaEvent: plan_assistant_text_delta,
     AssistantPartClosedEvent: plan_assistant_part_closed,
-    ToolCallCreatedEvent: plan_tool_call_created,
     ToolCallIntentEvent: plan_tool_call_intent,
     ToolCallStatusChangedEvent: plan_tool_call_status_changed,
     ToolCallRuntimeUpdateEvent: plan_tool_call_runtime_update,
@@ -63,11 +62,12 @@ _PLANNERS: dict[type, _Planner] = {
 def plan_event(
     event: WorkflowEvent,
     state: ConversationStateSnapshot,
-    presentations: Mapping[str, ToolPresentation] | None = None,
+    presentations: Mapping[str, ToolPresentation],
 ) -> Sequence[ConversationStateMutation]:
     """把一条已校验的事件投影为 snapshot mutations；不修改 ``state``。
 
-    ``WorkflowEvent`` 联合中的每个类型都必须在 ``_PLANNERS`` 注册，漏注册以 ``KeyError``
+    ``presentations`` 是当前注册表的工具呈现类别（``presentation_catalog``），只有建立工具调用时
+    用到，所以那一种事件单独分派；其余类型都必须在 ``_PLANNERS`` 注册，漏注册以 ``KeyError``
     暴露，不静默跳过。
     """
 

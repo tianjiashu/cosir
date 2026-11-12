@@ -2,7 +2,6 @@
 
 import copy
 from collections.abc import Mapping, Sequence
-from typing import cast
 
 from app.assistant_transport.projection.snapshot_navigation import (
     ensure_reply,
@@ -24,28 +23,22 @@ from app.core.tool.presentation import ToolPresentation
 from app.models.message_metadata import ToolMessageMetadata
 from app.utils.datetime_utils import to_text
 
-# 工具状态迁移白名单：投影层只放行领域侧已确认的迁移，其余（陈旧、重复投递）丢弃并留痕。
-# ``cancelled -> completed/failed`` 是「占位被真实结果覆盖」的合法迁移：
-# ``RuntimeMessageContextManager.add_message`` 可能按调用身份用真实结果覆盖此前的取消占位；
-# 若在此丢弃该迁移，数据库已是真实终态而 snapshot 会永久停在 ``cancelled``
-# （与 Run 状态白名单的 ``cancelled -> running`` 例外同源）。``completed`` / ``failed``
-# 仍不可逆，避免迟到事件把已结束的调用拉回 active。``running -> pending`` 是 HITL 工具首次调用
-# 返回等待占位（``ToolObservation.awaiting_decision``）：
-# 用户决定后执行完成，才经 ``pending`` 推到终态。
-_ALLOWED_TOOL_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
-    "pending": frozenset({"pending", "running", "completed", "failed", "cancelled"}),
-    "running": frozenset({"running", "pending", "completed", "failed", "cancelled"}),
+# 已终态的 part 只接受自迁移，以及「占位被真实结果覆盖」的 ``cancelled -> completed/failed``：
+# ``RuntimeMessageContextManager.add_message`` 可能按调用身份用真实结果覆盖此前的取消占位，若在此丢弃，
+# 数据库已是真实终态而 snapshot 会永久停在 ``cancelled``。``completed`` / ``failed`` 不可逆，迟到事件
+# 不会把已结束的调用拉回 active。非终态（``pending`` / ``running``）可去往任何状态：``running -> pending``
+# 是 HITL 工具首次调用返回等待占位（``ToolObservation.awaiting_decision``），用户决定后才推到终态。
+_TERMINAL_TOOL_ACCEPTS: dict[str, frozenset[str]] = {
     "cancelled": frozenset({"cancelled", "completed", "failed"}),
     "failed": frozenset({"failed"}),
     "completed": frozenset({"completed"}),
 }
-_TERMINAL_TOOL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 def plan_tool_call_created(
     event: ToolCallCreatedEvent,
     state: ConversationStateSnapshot,
-    presentations: Mapping[str, ToolPresentation] | None = None,
+    presentations: Mapping[str, ToolPresentation],
 ) -> Sequence[ConversationStateMutation]:
     """在这一回合回复的尾部建立 ``pending`` 的 tool-call part。
 
@@ -61,7 +54,7 @@ def plan_tool_call_created(
         "type": "tool-call",
         "toolCallId": event.tool_call_id,
         "toolName": event.tool_name,
-        "presentation": tool_presentation(event.tool_name, presentations or {}),
+        "presentation": tool_presentation(event.tool_name, presentations),
         "status": "pending",
         "error": None,
         # 刚创建的 ``pending`` 是「准备执行」不是「等你操作」；后者由结果投影按占位行判定。
@@ -87,13 +80,14 @@ def plan_tool_call_intent(
     state: ConversationStateSnapshot,
 ) -> Sequence[ConversationStateMutation]:
     """意图与参数来自模型输出本身，拒绝、取消、HITL 都不依赖 running 事件，且与冷重建同源。"""
-    base = find_tool(state, event.tool_call_id)
-    if base is None:
+    found = find_tool(state, event.tool_call_id)
+    if found is None:
         log.warning("tool_call_part_missing_for_intent", extra={
             "msg": "工具调用 part 缺失，跳过意图投影",
             "data": {"run_id": event.run_id, "tool_call_id": event.tool_call_id},
         })
         return []
+    base, _ = found
     return [
         ConversationStateMutation("set", (*base, "intent"), event.intent),
         ConversationStateMutation("set", (*base, "args"), copy.deepcopy(event.args)),
@@ -106,14 +100,11 @@ def plan_tool_call_status_changed(
 ) -> Sequence[ConversationStateMutation]:
     """把 tool-call part 迁到目标状态，并按需写入参数、错误与展示数据。
 
-    part 不存在、或已终态的 part 收到白名单外的迁移时，返回空列表并记 warning。
-
-    异常:
-        ValueError: 非终态 part 收到白名单外的目标状态（事件生产者与状态机不一致，需暴露）。
+    part 不存在、或已终态的 part 收到不接受的迁移时，返回空列表并记 warning。
     """
 
-    base = find_tool(state, event.tool_call_id)
-    if base is None:
+    found = find_tool(state, event.tool_call_id)
+    if found is None:
         # 状态事件不携带 toolName，缺少 part 时无法补建合法 part；此处只
         # 降级为「展示事实缺失」并继续后续投影，绝不让展示层缺口中断 Agent 执行。
         log.warning(
@@ -128,32 +119,25 @@ def plan_tool_call_status_changed(
             },
         )
         return []
-    _, message_index, _, part_index = base
-    part = cast(
-        ConversationStateToolCallPart,
-        state["messages"][cast(int, message_index)]["parts"][cast(int, part_index)],
-    )
-    current = str(part["status"])
-    allowed_targets = _ALLOWED_TOOL_STATUS_TRANSITIONS.get(current, frozenset())
-    if event.status not in allowed_targets:
-        if current in _TERMINAL_TOOL_STATUSES:
-            # 已终态的 part 只接受自迁移与「占位覆盖」白名单；其余是陈旧或重复投递的事件。
-            # 必须留痕：静默丢弃会让「DB 已是真实终态、snapshot 停在旧终态」无从排查。
-            log.warning(
-                "tool_call_status_transition_dropped",
-                extra={
-                    "msg": "工具状态迁移不在白名单内，已丢弃",
-                    "data": {
-                        "task_id": event.task_id,
-                        "run_id": event.run_id,
-                        "tool_call_id": event.tool_call_id,
-                        "from_status": current,
-                        "to_status": event.status,
-                    },
+    base, part = found
+    current = part["status"]
+    accepted = _TERMINAL_TOOL_ACCEPTS.get(current)
+    if accepted is not None and event.status not in accepted:
+        # 陈旧或重复投递的事件。必须留痕：静默丢弃会让「DB 已是真实终态、snapshot 停在旧终态」无从排查。
+        log.warning(
+            "tool_call_status_transition_dropped",
+            extra={
+                "msg": "已终态的工具调用收到不接受的迁移，已丢弃",
+                "data": {
+                    "task_id": event.task_id,
+                    "run_id": event.run_id,
+                    "tool_call_id": event.tool_call_id,
+                    "from_status": current,
+                    "to_status": event.status,
                 },
-            )
-            return []
-        raise ValueError(f"invalid tool transition {current} -> {event.status}")
+            },
+        )
+        return []
     fields = project_tool_result(
         ToolMessageMetadata(
             status=event.status,

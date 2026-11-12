@@ -1,15 +1,19 @@
 """Task 级命令的 wire schema：发送消息与 HITL 决定（撤回、取消等命令没有请求体）。
 
 命令只对 Task（路径中的 ``task_id``）或消息（路径中的 ``message_id``）寻址，不携带 run_id：Run
-身份由后端按 Task 的最新 Run 解析。wire 字段沿用 camelCase，进入 service 层前映射为领域对象。
+身份由后端按 Task 的最新 Run 解析。wire 字段沿用 camelCase；``SendMessageRequest.to_run_command``
+把消息正文映射为领域命令，发起配置字段由应用服务直接读取。
 """
 
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
-from app.assistant_transport.request.assistant_user_message import AssistantUserMessage
-from app.assistant_transport.request.part import AssistantImagePart, AssistantTextPart
+from app.assistant_transport.request.assistant_user_message import (
+    AssistantImagePart,
+    AssistantTextPart,
+    AssistantUserMessage,
+)
 from app.models import ConversationRunCommand
 from app.models.conversation_run_options import ReasoningEffort
 

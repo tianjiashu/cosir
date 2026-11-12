@@ -20,38 +20,32 @@ from app.assistant_transport.state.conversation_state_mutation import (
     SnapshotPath,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
-from app.assistant_transport.state.conversation_state_usage import ConversationStateUsage
 from app.config.logging.logger import log
 from app.core.events import RunInitializedEvent, RunResultUpdatedEvent, RunStatusChangedEvent
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
+from app.models.conversation_run_usage import ConversationRunUsage
 from app.models.enums.conversation_run_status import (
+    RESUMABLE_RUN_STATUSES,
     TERMINAL_RUN_STATUSES,
     ConversationRunStatus,
     RunTransition,
 )
 from app.utils.datetime_utils import from_text, to_text
 
-# Run 状态迁移白名单：投影层只放行领域侧已确认的迁移，其余（陈旧、重复投递）一律丢弃。
-# ``cancelled -> running`` 与 ``suspended -> running`` 是合法恢复 / 唤醒迁移，由
-# ``ConversationRunLedger`` 在数据库条件更新成功之后才发出；若在此丢弃，snapshot 会永久
-# 停在终态，后续 tool-call 创建事件随之被终态短路丢弃。``completed`` 不接受普通续跑，避免迟到
-# 事件把已结束的 Run 拉回 active。
-# 能恢复的状态就是恢复迁移的来源状态：同一事实只取自迁移表。
-_RESUMABLE_RUN_STATUSES = frozenset(status.value for status in RunTransition.RESUME.sources)
 
-_ALLOWED_RUN_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
-    "running": frozenset({"running", "suspended", "completed", "failed", "cancelled"}),
-    "suspended": frozenset({"suspended", "running", "cancelled"}),
-    "cancelled": frozenset({"cancelled", "running"}),
-    "failed": frozenset({"failed", "running"}),
-    "completed": frozenset({"completed"}),
-}
+def _accepts(current: str, target: str) -> bool:
+    """投影层只放行领域迁移表（``RunTransition``）声明过的迁移与自迁移，其余（陈旧事件）丢弃并留痕。
+
+    恢复、唤醒是合法的 ``→ running``：由 ``ConversationRunLedger`` 在条件更新成功之后才发出，若在此
+    丢弃，snapshot 会永久停在终态。``completed`` 之后没有迁移，迟到事件不会把它拉回 active。
+    """
+    return current == target or RunTransition.declared(current, target)
 
 
 def _merged_usage(
-    current: ConversationStateUsage | None,
+    current: ConversationRunUsage | None,
     usage_stats: ConversationRunUsageStats | None,
-) -> ConversationStateUsage | None:
+) -> ConversationRunUsage | None:
     """把新增模型用量并入已有用量；缺失字段和较小值不回退已有事实。没有变化时返回 ``None``。"""
 
     if usage_stats is None:
@@ -70,7 +64,7 @@ def _merged_usage(
         )
         for key in incoming
     }
-    return None if merged == current else cast(ConversationStateUsage, merged)
+    return None if merged == current else cast(ConversationRunUsage, merged)
 
 
 def _outcome_path(message_index: int) -> SnapshotPath:
@@ -90,8 +84,8 @@ def plan_run_initialized(
 ) -> Sequence[ConversationStateMutation]:
     """新 Run 成为当前活动：还没有可见回合、不可恢复。
 
-    重复投递由事件去重窗口吸收；快照在建 Run 提交后、投影前被懒重建时，重建出的活动与这里写入的
-    值相同，直接覆盖无妨。
+    按值覆盖，可重复投递；快照在建 Run 提交后、投影前被懒重建时，重建出的活动与这里写入的值相同，
+    直接覆盖无妨。
     """
 
     return [
@@ -132,7 +126,7 @@ def plan_run_status_changed(
         return []
     current_status = activity["status"]
     target = event.status.value
-    if target not in _ALLOWED_RUN_STATUS_TRANSITIONS.get(current_status, frozenset()):
+    if not _accepts(current_status, target):
         _log_status_dropped(event, current_status)
         return []
     usage = _merged_usage(activity["usage"], event.usage_stats)
@@ -142,7 +136,7 @@ def plan_run_status_changed(
         ConversationStateMutation("set", ("activity", "error"), event.error),
         # 刚停下的 Run 都还没有被撤回，可恢复与否只看状态；撤回后的重建按行再判一次。
         ConversationStateMutation(
-            "set", ("activity", "resumable"), target in _RESUMABLE_RUN_STATUSES
+            "set", ("activity", "resumable"), target in RESUMABLE_RUN_STATUSES
         ),
     ]
     if usage is not None:
@@ -181,11 +175,7 @@ def plan_run_status_changed(
             )
         )
         for part_index, part in enumerate(reply["parts"]):
-            if (
-                isinstance(part, dict)
-                and part.get("type") == "text"
-                and part.get("status") == "running"
-            ):
+            if part["type"] == "text" and part.get("status") == "running":
                 mutations.append(
                     ConversationStateMutation(
                         "set",

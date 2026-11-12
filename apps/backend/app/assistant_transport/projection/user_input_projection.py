@@ -115,7 +115,7 @@ def plan_input_consumed(
                 ),
             ),
         ]
-    queued = state.get("queued_messages", [])
+    queued = state["queued_messages"]
     parts, source = build_turn_input(event.presentation, event.source)
     return [
         *tracked,

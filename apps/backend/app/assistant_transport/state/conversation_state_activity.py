@@ -2,10 +2,10 @@
 
 from typing_extensions import TypedDict
 
-from app.assistant_transport.state.conversation_state_error import ConversationStateError
-from app.assistant_transport.state.conversation_state_usage import ConversationStateUsage
 from app.core.events.model_activity_event import ModelActivityPhase
 from app.models.conversation_run_options import ConversationRunOptions
+from app.models.conversation_run_record import ConversationRunError
+from app.models.conversation_run_usage import ConversationRunUsage
 
 
 class ModelActivity(TypedDict):
@@ -55,7 +55,7 @@ class ConversationStateActivity(TypedDict):
     resumable: bool
     startedAt: str
     endReason: str | None
-    error: ConversationStateError | None
-    usage: ConversationStateUsage | None
+    error: ConversationRunError | None
+    usage: ConversationRunUsage | None
     contextWindowTotal: int | None
     launch: ConversationRunLaunch

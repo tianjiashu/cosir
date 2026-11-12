@@ -4,13 +4,13 @@ from typing import Literal
 
 from typing_extensions import TypedDict
 
-from app.assistant_transport.state.conversation_state_error import ConversationStateError
 from app.assistant_transport.state.conversation_state_part import (
     ConversationStateMessageSource,
     ConversationStatePart,
 )
-from app.assistant_transport.state.conversation_state_usage import ConversationStateUsage
 from app.core.workflow.message_queue.task_message import Delivery
+from app.models.conversation_run_record import ConversationRunError
+from app.models.conversation_run_usage import ConversationRunUsage
 
 MessageRole = Literal["user", "assistant"]
 
@@ -26,8 +26,8 @@ class ConversationStateOutcome(TypedDict):
 
     status: str
     endReason: str | None
-    error: ConversationStateError | None
-    usage: ConversationStateUsage | None
+    error: ConversationRunError | None
+    usage: ConversationRunUsage | None
     contextWindowTotal: int | None
     durationMs: int
 

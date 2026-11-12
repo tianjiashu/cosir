@@ -19,7 +19,6 @@ from app.assistant_transport.state.conversation_state_background_task import (
     validate_background_work,
     validate_foreground_waits,
 )
-from app.assistant_transport.state.conversation_state_error import ConversationStateError
 from app.assistant_transport.state.conversation_state_handoff import (
     ConversationHandoff,
     validate_handoffs,
@@ -44,7 +43,6 @@ from app.assistant_transport.state.conversation_state_terminal_session import (
     ConversationTerminalSession,
     validate_terminal_sessions,
 )
-from app.assistant_transport.state.conversation_state_usage import ConversationStateUsage
 from app.assistant_transport.state.wire_shape import (
     as_shape,
     require_bool,
@@ -61,6 +59,8 @@ from app.config.constant import Constant
 from app.core.events.model_activity_event import ModelActivityPhase
 from app.core.tool.presentation import ToolPresentation
 from app.core.workflow.message_queue.task_message import Delivery
+from app.models.conversation_run_record import ConversationRunError
+from app.models.conversation_run_usage import ConversationRunUsage
 from app.models.enums.conversation_run_status import (
     TERMINAL_RUN_STATUSES,
     ConversationRunStatus,
@@ -107,7 +107,7 @@ class ConversationStateSnapshot(TypedDict):
     """
 
     fork: NotRequired[ConversationStateFork]
-    queued_messages: NotRequired[list[ConversationQueuedMessage]]
+    queued_messages: list[ConversationQueuedMessage]
     title: str
     messages: list[ConversationStateMessage]
     messageOffset: int
@@ -130,6 +130,7 @@ def empty_snapshot(title: str = "新对话") -> ConversationStateSnapshot:
         background_tasks=[],
         foreground_waits=[],
         handoffs=[],
+        queued_messages=[],
     )
 
 
@@ -142,7 +143,7 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
     require_int(snapshot["messageOffset"], "snapshot messageOffset", minimum=0)
     require_non_empty_str(snapshot["title"], "snapshot title")
     seen_message_ids: set[str] = set()
-    for queued_message in snapshot.get("queued_messages", []):
+    for queued_message in require_list(snapshot["queued_messages"], "snapshot queued_messages"):
         _validate_queued_message(queued_message, seen_message_ids)
     for message in require_list(snapshot["messages"], "snapshot messages"):
         _validate_message(message, seen_message_ids)
@@ -274,7 +275,7 @@ def _validate_launch(value: object) -> None:
 
 
 def _validate_usage(value: object) -> None:
-    usage = as_shape(value, ConversationStateUsage, "snapshot usage")
+    usage = as_shape(value, ConversationRunUsage, "snapshot usage")
     for field, amount in usage.items():
         require_int(amount, f"snapshot usage {field}", minimum=0, nullable=True)
 
@@ -282,7 +283,7 @@ def _validate_usage(value: object) -> None:
 def _validate_error(value: object) -> None:
     # 错误契约只允许 code + message。
     # 两者都必须是**非空白**字符串：空白文案会让前端渲染出没有内容的错误气泡。
-    error = as_shape(value, ConversationStateError, "snapshot error")
+    error = as_shape(value, ConversationRunError, "snapshot error")
     require_non_empty_str(error["code"], "snapshot error code")
     require_non_empty_str(error["message"], "snapshot error message")
 

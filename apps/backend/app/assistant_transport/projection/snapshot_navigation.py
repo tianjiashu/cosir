@@ -1,4 +1,4 @@
-"""事件投影共用的 snapshot 定位与消息骨架辅助（Task 视角，消息扁平排列）。"""
+"""实时投影与冷重建共用的 snapshot 定位与消息骨架辅助（Task 视角，消息扁平排列）。"""
 
 from collections.abc import Iterator
 from typing import Literal
@@ -11,6 +11,7 @@ from app.assistant_transport.state.conversation_state_mutation import (
 from app.assistant_transport.state.conversation_state_part import (
     ConversationStateMessageSource,
     ConversationStatePart,
+    ConversationStateToolCallPart,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.assistant_transport.state.message_identity import reply_id
@@ -108,14 +109,15 @@ def iter_parts(
 def find_tool(
     state: ConversationStateSnapshot,
     tool_call_id: str,
-) -> SnapshotPath | None:
-    """按 Task 内唯一 toolCallId 返回 tool-call part 的路径；不存在时返回 ``None``。"""
+) -> tuple[SnapshotPath, ConversationStateToolCallPart] | None:
+    """按 Task 内唯一的 toolCallId 返回 tool-call part 的 ``(路径, part)``；不存在时返回 ``None``。
 
-    for path, part in iter_parts(state):
-        if (
-            isinstance(part, dict)
-            and part.get("type") == "tool-call"
-            and part.get("toolCallId") == tool_call_id
-        ):
-            return path
+    从后往前找：运行期输出这类高频事件命中的几乎总是最近的调用，id 唯一所以结果与正向一样。
+    """
+
+    messages = state["messages"]
+    for message_index in range(len(messages) - 1, -1, -1):
+        for part_index, part in enumerate(messages[message_index]["parts"]):
+            if part["type"] == "tool-call" and part["toolCallId"] == tool_call_id:
+                return ("messages", message_index, "parts", part_index), part
     return None

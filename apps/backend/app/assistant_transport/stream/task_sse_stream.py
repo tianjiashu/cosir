@@ -1,57 +1,57 @@
-"""Assistant Transport 帧订阅与本地 SSE 编码（Task 级长订阅）。"""
+"""Task 级长订阅：帧订阅的连接生命周期与本地 SSE 编码。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from app.assistant_transport.service.conversation_task_state_service import (
-    ConversationTaskStateService,
-)
 from app.assistant_transport.state.snapshot_window import window_snapshot
-from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import SubscriberClosed
+from app.assistant_transport.stream.transport_frame import TransportFrame
 from app.config.logging.logger import log
+
+if TYPE_CHECKING:
+    from app.assistant_transport.service.conversation_task_state_service import (
+        ConversationTaskStateService,
+    )
 
 # SSE 注释行：客户端忽略，只用来让 WebKit 交付此前被扣住的数据。
 _IDLE_FLUSH = ": flush\n\n"
 
 
-class AssistantTransportStreamService:
-    """订阅单个 Task 的快照，并暴露项目自有的 JSON SSE 帧。
+class TaskSseStream:
+    """订阅单个 Task 的快照，并编码为项目自有的 JSON SSE 记录。
 
-    订阅跟随 Task，不绑定某个 Run：Task 还没有 Run 时照样推 full 帧并等待；Run 完成、失败、
-    取消或挂起都不结束连接，最新 Run 变化只体现在帧里的 ``activity``。连接只在客户端断开、
-    ``resync_required``（背压）或 Task 删除时结束。本 service 只负责连接生命周期与 wire 编码，
-    不启动、不恢复、不取消、不变更 Run。首个 full 帧由
-    ``ConversationTaskStateService.subscribe_with_snapshot`` 在其唯一锁下准备，因此 attach 不会在
-    注册与其首帧之间漏掉任何变更。
+    订阅跟随 Task，不绑定某个 Run：Task 还没有 Run 时照样推 full 帧并等待；Run 完成、失败、取消或
+    挂起都不结束连接，最新 Run 变化只体现在帧里的 ``activity``。连接只在客户端断开（协程被取消）、
+    ``resync_required``（背压）或 Task 删除（订阅随 ``release_deleted_task`` 关闭）时结束。这里只负责
+    连接生命周期与 wire 编码，不启动、不恢复、不取消、不变更 Run。首个 full 帧由
+    ``ConversationTaskStateService.subscribe_with_snapshot`` 在其唯一锁下准备，因此 attach 不会在注册与
+    首帧之间漏掉任何变更。
 
-    静默边界：每批帧发完、订阅队列安静下来时补发一个 SSE 注释行（前端只读 ``data:`` 记录，
-    会跳过它）。WebKit（原 Tauri 宿主在 macOS 上的 WebView；迁到 Electron 后待在 Chromium 下复测）会扣住流在静默前的最后一段数据，
-    要等后续字节到来才交给 JS；不补这一行，Run 结束、挂起等审批、长工具执行前的最后一批帧
-    都会卡住，直到下一轮数据或重连。这一行就是那个「后续字节」，不能删。
+    静默边界：每批帧发完、订阅队列安静下来时补发一个 SSE 注释行（前端只读 ``data:`` 记录，会跳过它）。
+    WebKit（原 Tauri 宿主在 macOS 上的 WebView；迁到 Electron 后待在 Chromium 下复测）会扣住流在静默
+    前的最后一段数据，要等后续字节到来才交给 JS；不补这一行，Run 结束、挂起等审批、长工具执行前的
+    最后一批帧都会卡住，直到后续数据或重连。这一行就是那个「后续字节」，不能删。
     """
 
-    def __init__(self) -> None:
-        self._snapshots = ConversationTaskStateService()
+    def __init__(self, states: ConversationTaskStateService) -> None:
+        self._states = states
 
-    async def stream(
-        self,
-        task_id: int,
-        is_cancelled: Callable[[], bool],
-        poll_interval: float = 0.05,
+    async def frames(
+        self, task_id: int, poll_interval: float = 0.05
     ) -> AsyncIterator[TransportFrame | None]:
         """先产出原子的 full 帧，随后持续产出 mutation / control 帧。
 
-        超时只用于检查客户端取消与 Task 删除；安静的模型、工具执行或空闲的 Task 都保持连接。
-        subscriber 超出其有界队列时产出 ``resync_required`` 帧并结束连接，客户端重新 attach
-        取得新的 full 帧。
-
+        超时只用于产出静默边界：安静的模型、工具执行或空闲的 Task 都保持连接。subscriber 超出其
+        有界队列时产出 ``resync_required`` 帧并结束连接，客户端重新 attach 取得新的 full 帧。
         ``None`` 是静默边界：自上次边界以来发过帧、且一次轮询内没有新帧时产出一次，持续空闲不重复；
-        它不是帧，由 ``stream_envelopes`` 编码为 SSE 注释行（原因见类 docstring）。
+        它不是帧，由 :meth:`sse_records` 编码为 SSE 注释行（原因见类 docstring）。
+
+        异常:
+            KeyError: Task 不存在或已删除（订阅时）。
         """
 
         unsubscribe: Callable[[], None] | None = None
@@ -64,26 +64,16 @@ class AssistantTransportStreamService:
             },
         )
         try:
-            subscriber, unsubscribe, first_frame = self._snapshots.subscribe_with_snapshot(task_id)
+            subscriber, unsubscribe, first_frame = self._states.subscribe_with_snapshot(task_id)
             yield first_frame
             # 首帧之后同样可能紧跟静默，从首帧起就需要一次边界。
             sent_since_idle = True
             while True:
-                if is_cancelled():
-                    log.info(
-                        "assistant_sse_client_cancelled",
-                        extra={
-                            "msg": "Assistant frame SSE 检测到客户端取消",
-                            "data": {"task_id": task_id},
-                        },
-                    )
-                    return
                 try:
                     frame = await asyncio.wait_for(subscriber.get(), poll_interval)
                 except SubscriberClosed:
                     return
                 except TimeoutError:
-                    # Task 删除时订阅随 ``release_deleted_task`` 关闭，由 SubscriberClosed 结束。
                     if sent_since_idle:
                         sent_since_idle = False
                         yield None
@@ -129,15 +119,13 @@ class AssistantTransportStreamService:
                 },
             )
 
-    async def stream_envelopes(
-        self, task_id: int, is_cancelled: Callable[[], bool]
-    ) -> AsyncIterator[str]:
+    async def sse_records(self, task_id: int) -> AsyncIterator[str]:
         """将帧编码为紧凑的 ``data: ...`` SSE 记录，静默边界编码为注释行。
 
         full 帧的 state 在这里按历史窗口裁剪：首帧、重新发布都只带最近一段消息。
         """
 
-        async for frame in self.stream(task_id, is_cancelled):
+        async for frame in self.frames(task_id):
             if frame is None:
                 yield _IDLE_FLUSH
                 continue
@@ -155,4 +143,4 @@ class AssistantTransportStreamService:
             yield f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
 
-__all__ = ["AssistantTransportStreamService"]
+__all__ = ["TaskSseStream"]

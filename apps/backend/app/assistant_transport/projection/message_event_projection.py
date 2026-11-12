@@ -21,8 +21,7 @@ def _running_text_index(
     for part_index in range(len(parts) - 1, -1, -1):
         part = parts[part_index]
         if (
-            isinstance(part, dict)
-            and part.get("type") == "text"
+            part["type"] == "text"
             and part.get("status") == "running"
             and part.get("sourceSequence") == source_sequence
         ):

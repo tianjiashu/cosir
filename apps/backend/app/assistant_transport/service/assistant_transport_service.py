@@ -5,54 +5,52 @@
 ``task_runtime_spaces.enqueue`` 入队（先确保 Task 的 actor 已拉起）；恢复与取消直接调用 actor。
 
 错误契约：只抛领域异常，HTTP 映射归 API 层——``KeyError``（Task 不存在，404）、
-``SessionConflictError``（状态冲突，409）、``UserInputRejectedError`` / ``ValueError``（输入或领域
-校验失败）。attach 是跟随 Task 的长订阅，不触发业务执行。
+``TaskCommandConflictError``（状态冲突，409）、``UserInputRejectedError`` / ``ValueError``（输入或领域
+校验失败）。每个命令先认 Task（``get_task``），「Task 不存在」不会被说成别的冲突。attach 是跟随 Task
+的长订阅，不触发业务执行。
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from collections.abc import AsyncIterator
 
-from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.assistant_transport.request import DecisionRequest, SendMessageRequest
-from app.assistant_transport.service.transport_stream_service import (
-    AssistantTransportStreamService,
-)
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.assistant_transport.state.snapshot_window import HistoryPage, window_snapshot
+from app.assistant_transport.stream.task_sse_stream import TaskSseStream
 from app.config.logging.logger import log
-from app.core.task_actor import SessionConflictError
-from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.workflow.message_queue.task_message import (
     Delivery,
     RunLaunch,
     TaskMessage,
     UserInputBody,
 )
+from app.models.errors.task_command_errors import TaskCommandConflictError
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.tools.tool_handler.terminal.command_results import command_results
 
 
-class TransportAssistantService:
-    """用户命令编排与订阅；SSE 编码与订阅生命周期委托 ``AssistantTransportStreamService``。"""
+class AssistantTransportService:
+    """用户命令编排与订阅；订阅的连接生命周期与 SSE 编码在 ``TaskSseStream``。"""
 
     def __init__(self) -> None:
-        self._stream = AssistantTransportStreamService()
         self._tasks = service_depends.get_task_service()
         self._queue = service_depends.get_task_message_queue()
         self._inputs = service_depends.get_user_input_service()
         self._states = service_depends.get_conversation_task_state_service()
+        self._stream = TaskSseStream(self._states)
 
     # ── 命令 ──────────────────────────────────────────────────────────────
 
     async def send(self, task_id: int, request: SendMessageRequest) -> None:
         """发送：Task 有活动 Run（含挂起）时排队（``next_run``），空闲时立即处理（``immediate``）。
 
-        排队消息在当前 Run 结束后一轮一条依次处理，用户可在队列里改为立即发送或删除；挂起时排队
+        排队消息在当前 Run 结束后每个 Run 一条依次处理，用户可在队列里改为立即发送或删除；挂起时排队
         不唤醒 Run。空闲时用 ``immediate``：取消后队列里可能还留着旧的排队消息，新发送的这条应先跑
         （见 ``dispatch_policy.next_input``）。判定阶段与入队在 Task 闸门内完成，actor 不会在两者
         之间开出或落定 Run；执行者自行结束不经闸门，此时排队的消息由刚结束的 Run 收尾时接续。
@@ -66,7 +64,7 @@ class TransportAssistantService:
             if current is None
             else None
         )
-        message = await asyncio.to_thread(
+        body = await asyncio.to_thread(
             self._inputs.prepare,
             task_id,
             request.to_run_command(),
@@ -82,7 +80,7 @@ class TransportAssistantService:
         async with space.async_operation():
             delivery: Delivery = "immediate" if await space.actor.phase() == "idle" else "next_run"
             await asyncio.to_thread(
-                task_runtime_spaces.enqueue, task_id, replace(message, delivery=delivery)
+                task_runtime_spaces.enqueue, task_id, TaskMessage.of(body, delivery=delivery)
             )
 
     async def send_queued_now(self, task_id: int, message_id: int) -> None:
@@ -93,7 +91,7 @@ class TransportAssistantService:
         原地更新唤不醒它。正文（含胶囊指针）、图片与发起配置原样沿用。
 
         异常:
-            SessionConflictError: ``MESSAGE_CONSUMED``（消息已不在队列中，或不是用户输入）。
+            TaskCommandConflictError: ``MESSAGE_CONSUMED``（消息已不在队列中，或不是用户输入）。
             KeyError: Task 不存在。
         """
         await asyncio.to_thread(self._send_queued_now, task_id, message_id)
@@ -119,7 +117,7 @@ class TransportAssistantService:
         """删除一条排队中的用户输入。
 
         异常:
-            SessionConflictError: ``MESSAGE_CONSUMED``（消息已不在队列中，或不是用户输入）。
+            TaskCommandConflictError: ``MESSAGE_CONSUMED``（消息已不在队列中，或不是用户输入）。
             KeyError: Task 不存在。
         """
         await asyncio.to_thread(self._delete_queued, task_id, message_id)
@@ -139,7 +137,7 @@ class TransportAssistantService:
         """在调用方事务内撤回一条排队中的用户输入；不是用户输入时抛错，事务回滚、行保留。"""
         queued = self._queue.withdraw(session, task_id, message_id)
         if queued is None or not isinstance(queued.body, UserInputBody):
-            raise SessionConflictError("MESSAGE_CONSUMED", "这条消息已不在队列中", retryable=False)
+            raise TaskCommandConflictError("MESSAGE_CONSUMED", "这条消息已不在队列中", retryable=False)
         return queued
 
     async def withdraw(self, task_id: int, message_id: int) -> None:
@@ -152,7 +150,7 @@ class TransportAssistantService:
         此时改 context 会与它交错；判定在 Task 闸门内，与 actor 的推进互斥。
 
         异常:
-            SessionConflictError: ``WITHDRAW_TARGET_STALE``（目标不是最新一条用户输入）、
+            TaskCommandConflictError: ``WITHDRAW_TARGET_STALE``（目标不是最新一条用户输入）、
                 ``RUN_NOT_STOPPED``（Task 仍在运行、挂起或执行者尚在收尾）。
             KeyError: Task 不存在。
         """
@@ -160,23 +158,21 @@ class TransportAssistantService:
         space = await asyncio.to_thread(task_runtime_spaces.get_or_create, task_id)
         async with space.async_operation():
             if await space.actor.phase() != "idle":
-                raise SessionConflictError("RUN_NOT_STOPPED", "当前运行尚未停止，请停止后再撤回")
+                raise TaskCommandConflictError("RUN_NOT_STOPPED", "当前运行尚未停止，请停止后再撤回")
             await asyncio.to_thread(
                 service_depends.get_turn_withdrawal_service().withdraw, task_id, message_id
             )
-        await asyncio.to_thread(self._republish, task_id)
-
-    def _republish(self, task_id: int) -> None:
-        """移出的行要从前端消失：从 canonical 记录重建并发布（同一临界区，不与投影交错）。"""
-        self._states.republish_from_canonical(task_id)
+        # 移出的行要从前端消失：按 canonical 记录重建并发布整份快照。
+        await asyncio.to_thread(self._states.republish_from_canonical, task_id)
 
     async def resume(self, task_id: int) -> None:
         """最新 Run 为 cancelled / failed 时从 prepare_input 续跑。
 
         异常:
-            SessionConflictError: ``RUN_NOT_RESUMABLE``。
+            TaskCommandConflictError: ``RUN_NOT_RESUMABLE``。
             KeyError: Task 不存在。
         """
+        await asyncio.to_thread(self._tasks.get_task, task_id)
         space = await asyncio.to_thread(task_runtime_spaces.get_or_create, task_id)
         await space.actor.resume()
 
@@ -190,6 +186,7 @@ class TransportAssistantService:
         异常:
             KeyError: Task 不存在。
         """
+        await asyncio.to_thread(self._tasks.get_task, task_id)
         space = await asyncio.to_thread(task_runtime_spaces.get_or_create, task_id)
         await space.actor.cancel("user")
 
@@ -204,13 +201,13 @@ class TransportAssistantService:
 
         异常:
             KeyError: Task 不存在。
-            SessionConflictError: ``TOOL_CALL_NOT_CANCELLABLE``（没有可取消的对象：调用已结束、
+            TaskCommandConflictError: ``TOOL_CALL_NOT_CANCELLABLE``（没有可取消的对象：调用已结束、
                 已标记过取消，或 Task 当前没有执行者）。
         """
         self._tasks.get_task(task_id)
         driving = task_runtime_spaces.get_or_create(task_id).actor.driving
         if not command_results.request_cancel(task_id, tool_call_id, driving=driving):
-            raise SessionConflictError(
+            raise TaskCommandConflictError(
                 "TOOL_CALL_NOT_CANCELLABLE", "这次工具调用已结束或已在取消", retryable=False
             )
 
@@ -219,12 +216,12 @@ class TransportAssistantService:
 
         异常:
             KeyError: Task 不存在。
-            SessionConflictError: ``TOOL_CALL_NOT_DETACHABLE``（没有这次调用的前台等待）。
+            TaskCommandConflictError: ``TOOL_CALL_NOT_DETACHABLE``（没有这次调用的前台等待）。
         """
         self._tasks.get_task(task_id)
         # 结论与转后台的先后由登记表在锁内裁决。
         if command_results.detach(task_id, tool_call_id) != "detached":
-            raise SessionConflictError(
+            raise TaskCommandConflictError(
                 "TOOL_CALL_NOT_DETACHABLE", "这次工具调用已结束或不能转到后台", retryable=False
             )
 
@@ -234,7 +231,7 @@ class TransportAssistantService:
 
         异常:
             KeyError: Task 不存在。
-            SessionConflictError: ``DECISION_NOT_AWAITED`` / ``DECISION_ALREADY_SUBMITTED``。
+            TaskCommandConflictError: ``DECISION_NOT_AWAITED`` / ``DECISION_ALREADY_SUBMITTED``。
             UserInputRejectedError: ``DECISION_DATA_INVALID``。
         """
         await asyncio.to_thread(self._tasks.get_task, task_id)
@@ -249,26 +246,19 @@ class TransportAssistantService:
 
     # ── 订阅与读取 ────────────────────────────────────────────────────────
 
-    def attach(self, task_id: int) -> StreamingResponse:
-        """订阅 Task：先推 full 帧（Task 还没有 Run 也推），之后持续推送，跟随最新 Run 的变化。
+    def attach(self, task_id: int) -> AsyncIterator[str]:
+        """订阅 Task 的 SSE 记录：先推 full 帧（Task 还没有 Run 也推），之后持续推送，跟随最新 Run 的变化。
 
         异常:
-            KeyError: Task 不存在。
+            KeyError: Task 不存在（在开始流之前同步抛出，API 层据此回 404）。
         """
         self._tasks.get_task(task_id)
-        response = StreamingResponse(
-            self._stream.stream_envelopes(task_id, lambda: False),
-            media_type="text/event-stream",
-        )
-        response.headers["Cache-Control"] = "no-cache"
-        response.headers["Connection"] = "keep-alive"
-        response.headers["X-Cosir-Task-Id"] = str(task_id)
-        return response
+        return self._stream.sse_records(task_id)
 
     def get_state(self, task_id: int) -> ConversationStateSnapshot:
         """读取 Task 的 canonical snapshot（按历史窗口只带最近一段消息）。
 
-        先校验 Task 存在：空 Task 与不存在的 Task 在投影层都表现为空消息列表，只能在这里区分。
+        先认 Task：取快照会为 Task 物化 space 并拉起 actor，不存在的 id 在这里就以 ``KeyError`` 结束。
 
         异常:
             KeyError: Task 不存在。

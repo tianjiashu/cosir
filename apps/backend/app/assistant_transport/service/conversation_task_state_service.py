@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from threading import RLock
-from typing import Any, ClassVar, cast
+from typing import cast
 
 from app.assistant_transport.projection.event_projection import plan_event
+from app.assistant_transport.projection.snapshot_rebuild import rebuild_snapshot
 from app.assistant_transport.projection.tool_presentation import presentation_catalog
 from app.assistant_transport.projection.user_input_projection import build_presentation_parts
-from app.assistant_transport.service.conversation_task_state_rebuilder import (
-    ConversationTaskStateRebuilder,
-)
 from app.assistant_transport.state.conversation_state_background_task import (
     ConversationBackgroundTask,
     project_background_tasks,
@@ -24,9 +22,7 @@ from app.assistant_transport.state.conversation_state_handoff import (
     project_handoff,
 )
 from app.assistant_transport.state.conversation_state_message import ConversationQueuedMessage
-from app.assistant_transport.state.conversation_state_mutation import (
-    ConversationStateMutation,
-)
+from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
     validate_snapshot,
@@ -41,65 +37,42 @@ from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
-from app.core.events import (
-    RunStatusChangedEvent,
-    ToolCallCreatedEvent,
-    ToolCallStatusChangedEvent,
-    WorkflowEvent,
-)
-from app.tools.tool_handler.terminal.command_results import command_results
+from app.core.events import RunStatusChangedEvent, ToolCallStatusChangedEvent, WorkflowEvent
 from app.core.workflow.message_queue.task_message import UserInputBody
 from app.models.enums.conversation_run_status import ConversationRunStatus
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.tools.tool_handler.terminal.command_results import command_results
+
+# 整表刷新的一个字段：从已物化的工作副本（看板要读其中的工具 part）算出最新值。
+_FieldProducer = Callable[[ConversationStateSnapshot], object]
 
 
 class ConversationTaskStateService:
-    """持有进程本地 Transport 状态，并按需从 canonical 记录懒重建。
+    """持有进程本地 Transport 状态，并按需从 canonical 记录懒重建；进程级单例（``depends``）。
 
-    工作副本是刻意易失的，挂载在 task 的 ``TaskRuntimeSpace`` 中：projector 变更与 subscriber 变化
-    都不写数据库行（展示数据不是事实源，子 Task 状态由应用级任务状态推送承载，不回写委派卡片）。
-    某个 task 的首次读取会加载一个 Task、其全部 Run 与全部 context 行，
-    再把纯 wire 状态构造委托给 ``ConversationTaskStateRebuilder``；排队消息与终端会话列表不在
-    canonical context 里，重建后分别从外部队列与 ``TerminalSessionService`` 整表填入。之后的读取
-    复用该 task 级的进程内内存快照，直到显式 rebuild 或进程重置。
+    工作副本是刻意易失的投影缓存，挂载在 Task 的 ``TaskRuntimeSpace`` 中：投影与订阅变化都不写数据库
+    （展示数据不是事实源，子 Task 状态由应用级任务状态推送承载，不回写委派卡片）。首次读取时读出
+    Task、它的全部 Run 与 context 行，交给 ``rebuild_snapshot`` 装配，再整表填入不在 context 里的
+    事实：外部队列的排队消息、终端会话（``TerminalSessionService``）、看板与前台等待（后台结果登记表
+    ``command_results``）以及进行中的交接（交接登记表）。之后复用这份工作副本，直到撤回重新发布、
+    无人订阅时卸载或进程重置。
 
-    参数:
-        task_source: Task 的 CRUD 类数据源；默认取进程依赖。
-        run_source: Run 的 CRUD 类数据源；默认取进程依赖。
-        context_source: Context 的 CRUD 类数据源；默认取进程依赖。
-
-    副作用:
-        ``get_state`` 可能读取三张 canonical SQLite 表，并只缓存一份内存副本。
-        ``apply_planned`` 与 ``publish_state`` 更新进程本地状态并通知 SSE subscriber。
-        不访问 Run 执行进度、工具 handler 或前端运行时状态；终端会话只通过
-        ``TerminalSessionService.task_runtimes`` 读取进程内事实，不回写工具卡片。
-
-    并发:
-        ``_lock``（类级 ``RLock``）是每个 ``TaskRuntimeSpace`` 快照工作副本的**唯一串行化点**：
-        懒重建、projector 变更、发布、subscriber 注册与删除清理全部经过它。因此 space 自身不
-        持有快照锁（见 ``app.task_runtime.task_runtime_space`` 模块 docstring）。直接访问 space
-        仅在单线程下合法（状态生命周期测试即如此）；多线程调用方必须自行串行化，推荐做法是改走
-        本 service 而非重新给 space 加锁。审查者不应把"缺少 per-space 锁"视为缺陷。
+    并发：``_lock`` 是每个 space 快照工作副本的**唯一串行化点**：懒重建、投影变更、发布、订阅注册与
+    删除清理全部经过它，因此 space 自身不持有快照锁（见 ``app.task_runtime.task_runtime_space``）。
+    「Task 已删除」由 space 登记表在取 space 时拒绝（``KeyError``），这里不再另判。
     """
 
-    _lock: ClassVar[RLock] = RLock()
-    _subscribers: ClassVar[dict[int, set[Subscriber]]] = {}
-
-    def __init__(
-        self,
-    ) -> None:
-        """绑定冷读所需的 canonical 记录数据源。"""
+    def __init__(self) -> None:
         from app.service import depends
 
         self._task_source = depends.get_task_crud()
         self._run_source = depends.get_conversation_run_crud()
         self._context_source = depends.get_conversation_task_context_crud()
+        self._lock = RLock()
+        self._subscribers: dict[int, set[Subscriber]] = {}
 
     def get_state(self, task_id: int) -> ConversationStateSnapshot:
-        """返回已校验的 task 级工作副本，首次访问时懒重建。
-
-        若 ``TaskRuntimeSpace`` 已持有快照则直接返回，不读 canonical 记录。数据库变更通过正常的
-        projector/更新路径可见；普通读取不会重建或合并第二份副本。
+        """返回已校验的完整快照（深拷贝），首次访问时懒重建。
 
         异常:
             KeyError: Task 不存在或在本进程内已被删除。
@@ -107,7 +80,6 @@ class ConversationTaskStateService:
         """
 
         with self._lock:
-            self._ensure_not_deleted(task_id)
             space = task_runtime_spaces.get_or_create(task_id)
             state = space.get_snapshot(lambda: self._rebuild(task_id))
             validate_snapshot(state)
@@ -125,41 +97,26 @@ class ConversationTaskStateService:
         """
 
         with self._lock:
-            self._ensure_not_deleted(task_id)
             space = task_runtime_spaces.get_or_create(task_id)
             state = space.get_working_snapshot(lambda: self._rebuild(task_id))
             return copy.deepcopy(history_page(state["messages"], end))
 
+    # ── 进程内与队列事实的整表刷新 ──────────────────────────────────────────
+
     def refresh_queued_messages(self, task_id: int) -> None:
-        """把排队投影整表同步为外部队列的现状，有变化时发一条 ``set`` mutation。
+        """把排队投影整表同步为外部队列的现状。
 
         排队投影只镜像队列表：入队、撤回（删除、立即发送）之后都调这里，不区分增删。消费投影不从
         这里取内容（事件自带展示绑定），所以确认删除与消费投影之间刷掉这一条也无妨。读队列放在锁内：
         与消费投影串行，先读后提交的旧结果会被随后的消费投影覆盖，不会把已并入的消息留成排队。
 
         不全量重建：流式输出的 context 可能领先于尚未发出的 Transport delta，重建会提前展示正文
-        再重复追加。snapshot 尚未物化时什么也不做，之后的懒重建自会读到队列；Task 已删除或 space
-        不存在时同样静默返回（规则同 :meth:`refresh_terminal_sessions`）。
-
-        这是命令提交之后、actor 推进之前的旁路：失败只记录，不能把已成功的命令报成 500，也不能让
-        actor 跳过这次推进。
+        再重复追加。这是命令提交之后、actor 推进之前的旁路：失败只记录，不能把已成功的命令报成
+        500，也不能让 actor 跳过这次推进。
         """
+
         try:
-            with self._lock:
-                if task_runtime_spaces.is_deleted(task_id):
-                    return
-                space = task_runtime_spaces.get(task_id)
-                if space is None or not space.has_snapshot():
-                    return
-                state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-                queued = self._queued_messages(task_id)
-                if queued == state.get("queued_messages", []):
-                    return
-                mutation = ConversationStateMutation("set", ("queued_messages",), queued)
-                _apply_mutation(state, mutation)
-                self._publish(
-                    TransportFrame(task_id=task_id, kind="mutation", mutations=(mutation,))
-                )
+            self._refresh(task_id, {"queued_messages": lambda _state: self._queued_messages(task_id)})
         except Exception as exc:
             log.exception(
                 "queued_projection_refresh_failed",
@@ -169,6 +126,57 @@ class ConversationTaskStateService:
                 },
                 exc_info=exc,
             )
+
+    def refresh_terminal_sessions(self, task_id: int) -> None:
+        """会话变化通知入口：由 ``TerminalSessionRuntime.notify_changed`` 经终端副作用执行器调用
+        （非 PTY 读线程、锁外），任意线程可调。条目由本进程终端服务按契约产出，校验统一在读取快照时。"""
+
+        self._refresh(task_id, {"terminal_sessions": lambda _state: self._terminal_sessions(task_id)})
+
+    def refresh_background_results(self, task_id: int) -> None:
+        """后台结果变化入口：看板与前台等待各自有变化时一并发出（同一帧）；由登记表的通知线程调用。"""
+
+        self._refresh(
+            task_id,
+            {
+                "background_tasks": lambda state: self._background_tasks(task_id, state),
+                "foreground_waits": lambda _state: command_results.foreground_calls(task_id),
+            },
+        )
+
+    def refresh_handoffs(self, task_id: int) -> None:
+        """交接变化入口：由交接登记表的通知线程调用。"""
+
+        self._refresh(task_id, {"handoffs": lambda _state: self._handoffs(task_id)})
+
+    def _refresh(self, task_id: int, producers: Mapping[str, _FieldProducer]) -> None:
+        """整表重读这几个顶层字段，有变化的各发一条 ``set`` mutation（同一帧）。
+
+        只更新已物化的快照：未物化时之后的懒重建自会读到最新值；Task 已删除或 space 不存在时静默
+        返回——删除收尾（关会话、撤后台工作）也会触发通知，此时已无人订阅。不用 ``get_or_create``，
+        否则一次迟到的通知会为已删除或从未打开的 Task 物化 space 与 actor。读事实放在锁内，并发
+        通知按序落定，不会以旧值覆盖新值。
+        """
+
+        with self._lock:
+            if task_runtime_spaces.is_deleted(task_id):
+                return
+            space = task_runtime_spaces.get(task_id)
+            if space is None or not space.has_snapshot():
+                return
+            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+            snapshot = cast(dict[str, object], state)
+            mutations = tuple(
+                ConversationStateMutation("set", (key,), value)
+                for key, produce in producers.items()
+                if (value := produce(state)) != snapshot[key]
+            )
+            if not mutations:
+                return
+            for mutation in mutations:
+                mutation.apply_to(state)
+            self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=mutations))
+
     @staticmethod
     def _queued_messages(task_id: int) -> list[ConversationQueuedMessage]:
         from app.service.depends import get_task_message_queue
@@ -184,79 +192,6 @@ class ConversationTaskStateService:
             for item in get_task_message_queue().pending_nowait(task_id)
             if item.project_to_transport and isinstance(item.body, UserInputBody)
         ]
-
-    def refresh_terminal_sessions(self, task_id: int) -> None:
-        """会话变化通知入口：整表重读该 Task 的终端会话，有变化时发一条 ``set`` mutation。
-
-        由 ``TerminalSessionRuntime.notify_changed`` 经终端副作用执行器调用（非 PTY 读线程、
-        锁外），任意线程可调。只更新已物化的快照：未物化时之后的懒重建自会读到最新列表；Task
-        已删除或 space 不存在时静默返回——删除收尾关闭会话会触发通知，此时已无人订阅。不用
-        ``get_or_create``，否则一次迟到的通知会为已删除或从未打开的 Task 物化 space 与 actor。
-        读服务放在锁内，并发通知按序落定，不会以旧列表覆盖新列表。条目由本进程终端服务按契约
-        产出，这里不重复校验；契约校验统一在 ``validate_snapshot``（读取快照时执行）。
-        """
-
-        with self._lock:
-            if task_runtime_spaces.is_deleted(task_id):
-                return
-            space = task_runtime_spaces.get(task_id)
-            if space is None or not space.has_snapshot():
-                return
-            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-            sessions = self._terminal_sessions(task_id)
-            if sessions == state["terminal_sessions"]:
-                return
-            mutation = ConversationStateMutation("set", ("terminal_sessions",), sessions)
-            _apply_mutation(state, mutation)
-            self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=(mutation,)))
-
-    def refresh_background_results(self, task_id: int) -> None:
-        """后台结果变化入口：整表重读看板与前台等待，各自有变化时发 ``set`` mutation（同一帧）。
-
-        由登记表的通知线程调用（锁外），规则同 :meth:`refresh_terminal_sessions`：只更新已物化的
-        快照，Task 已删除或 space 不存在时静默返回，不为迟到的通知物化 space。
-        """
-
-        with self._lock:
-            if task_runtime_spaces.is_deleted(task_id):
-                return
-            space = task_runtime_spaces.get(task_id)
-            if space is None or not space.has_snapshot():
-                return
-            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-            mutations = tuple(
-                ConversationStateMutation("set", (key,), value)
-                for key, value in (
-                    ("background_tasks", self._background_tasks(task_id, state)),
-                    ("foreground_waits", self._foreground_waits(task_id)),
-                )
-                if value != state[key]
-            )
-            if not mutations:
-                return
-            for mutation in mutations:
-                _apply_mutation(state, mutation)
-            self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=mutations))
-
-    def refresh_handoffs(self, task_id: int) -> None:
-        """交接变化入口：整表重读该 Task 的进行中交接，有变化时发一条 ``set`` mutation。
-
-        由交接登记表的通知线程调用（锁外），规则同 :meth:`refresh_terminal_sessions`。
-        """
-
-        with self._lock:
-            if task_runtime_spaces.is_deleted(task_id):
-                return
-            space = task_runtime_spaces.get(task_id)
-            if space is None or not space.has_snapshot():
-                return
-            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-            handoffs = self._handoffs(task_id)
-            if handoffs == state["handoffs"]:
-                return
-            mutation = ConversationStateMutation("set", ("handoffs",), handoffs)
-            _apply_mutation(state, mutation)
-            self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=(mutation,)))
 
     @staticmethod
     def _handoffs(task_id: int) -> list[ConversationHandoff]:
@@ -274,88 +209,45 @@ class ConversationTaskStateService:
         )
 
     @staticmethod
-    def _foreground_waits(task_id: int) -> list[str]:
-        from app.tools.tool_handler.terminal.command_results import command_results
-
-        return command_results.foreground_calls(task_id)
-
-    @staticmethod
     def _terminal_sessions(task_id: int) -> list[ConversationTerminalSession]:
         from app.service.depends import get_terminal_session_service
 
-        # 校验统一在 validate_snapshot。
         runtimes = get_terminal_session_service().task_runtimes(task_id)
         return [to_terminal_session(runtime.snapshot()) for runtime in runtimes]
 
-    def rebuild_state(self, task_id: int) -> ConversationStateSnapshot:
-        """丢弃进程内 working copy，并立即从 canonical 记录重建该 task 的快照。
-
-        与 ``get_state`` 的区别是**强制**丢弃现有副本（``get_state`` 见到已物化副本不会重建）。
-        唯一的调用方是撤回（经 :meth:`republish_from_canonical`）：撤回改了库里的上下文，副本必须
-        按 canonical 重来。撤回只在 Task 静止时进行，所以没有需要保留的瞬时模型活动。
-
-        参数:
-            task_id: 目标任务标识。
-
-        返回:
-            重建后并通过 ``validate_snapshot`` 校验的 task 快照（深拷贝）。
-
-        异常:
-            KeyError: Task 在本进程内已被删除或不存在。
-            ValueError: 重建结果不满足快照契约。
-            sqlalchemy.exc.SQLAlchemyError: canonical 数据源读取失败。
-
-        副作用:
-            先卸载该 task 的进程内快照副本，再读 canonical 三张表重建一份（终端会话列表取自
-            进程内服务）。本方法不通知 subscriber（调用方需自行 ``publish_state`` 让客户端收敛）。
-
-        并发:
-            全程持 ``_lock``，与投影、订阅注册与删除清理互斥。
-        """
-
-        with self._lock:
-            self._ensure_not_deleted(task_id)
-            space = task_runtime_spaces.get_or_create(task_id)
-            space.unload_snapshot()
-            space.get_working_snapshot(lambda: self._rebuild(task_id))
-            return self.get_state(task_id)
+    # ── 实时投影、发布与订阅 ────────────────────────────────────────────────
 
     def apply_planned(self, event: WorkflowEvent) -> TransportFrame:
-        """将实时 projector 计划应用到进程本地状态并通知 subscriber。
+        """将实时投影计划应用到工作副本并通知订阅者。
 
-        若不存在工作副本，canonical 冷读边界提供初始状态。planner 与变更在同一把锁下执行
-        （与 subscriber 注册相同），因此首个 SSE 帧不会与排队的变更发生竞争。
+        没有工作副本时由 canonical 冷读提供初始状态。规划与变更在同一把锁下执行（与订阅注册相同），
+        因此首个 SSE 帧不会与排队的变更交错。
+
+        异常:
+            KeyError: Task 不存在或在本进程内已被删除；事件引用的消息、part 或调用不存在。
+            ValueError: 事件不满足投影规则，或结构性变更后快照不满足契约。
         """
+
         task_id = event.task_id
         with self._lock:
-            self._ensure_not_deleted(task_id)
             space = task_runtime_spaces.get_or_create(task_id)
             state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-            presentations = (
-                presentation_catalog(get_tool_registry())
-                if isinstance(event, ToolCallCreatedEvent) else None
-            )
-            mutations = list(plan_event(event, state, presentations))
+            mutations = list(plan_event(event, state, presentation_catalog(get_tool_registry())))
             for mutation in mutations:
-                _apply_mutation(state, mutation)
+                mutation.apply_to(state)
             # 看板由工具 part 派生：只有带后台记录的事件会改变它（占位写入、并入、撤销、重启中断），
             # token 帧等其余事件不重算。
             if isinstance(event, ToolCallStatusChangedEvent) and event.background is not None:
                 background = self._background_tasks(task_id, state)
                 if background != state["background_tasks"]:
                     mutation = ConversationStateMutation("set", ("background_tasks",), background)
-                    _apply_mutation(state, mutation)
+                    mutation.apply_to(state)
                     mutations.append(mutation)
-            # 仅追加的 token 帧不会改变快照形状或任何生命周期不变量。
-            # ``_apply_mutation`` 中的 path/type 检查对这条热路径已足够；
-            # 结构性变更仍付出完整校验代价。
-            if _requires_full_snapshot_validation(mutations):
+            # 只追加正文的 token 帧不改变快照形状或任何生命周期不变量，``apply_to`` 的类型检查对这条
+            # 热路径已足够；结构性变更付出整份校验的代价。
+            if any(mutation.kind != "append-text" for mutation in mutations):
                 validate_snapshot(state)
-            change = TransportFrame(
-                task_id=task_id,
-                kind="mutation",
-                mutations=tuple(mutations),
-            )
+            change = TransportFrame(task_id=task_id, kind="mutation", mutations=tuple(mutations))
             if mutations:
                 self._publish(change)
             if isinstance(event, RunStatusChangedEvent):
@@ -388,62 +280,44 @@ class ConversationTaskStateService:
             },
         )
 
-    def publish_state(
-        self,
-        task_id: int,
-        state: ConversationStateSnapshot,
-        mutations: tuple[ConversationStateMutation, ...] | None = None,
-    ) -> TransportFrame:
-        """发布一个其 canonical 数据库事务已经提交的状态。
+    def republish_from_canonical(self, task_id: int) -> None:
+        """丢弃工作副本、按 canonical 重建并向订阅者发布整份快照。
 
-        ``validate`` 与深拷贝也在锁内：锁外拷贝与取锁之间到达的投影会被这份更旧的状态覆盖。
-        """
-
-        with self._lock:
-            self._ensure_not_deleted(task_id)
-            validate_snapshot(state)
-            change = TransportFrame(
-                task_id=task_id,
-                kind="full",
-                state=copy.deepcopy(state),
-                mutations=mutations or (),
-            )
-            self._publish(change)
-        return change
-
-    def republish_from_canonical(self, task_id: int) -> TransportFrame:
-        """丢弃进程内副本、按 canonical 重建并发布整份快照。
-
-        重建与发布必须在同一临界区：分两次取锁时，中间到达的投影会被这份更旧的 full 帧覆盖，
-        客户端随即丢掉那条已经发出去的增量。
+        唯一的调用方是撤回：撤回改了库里的上下文，副本必须按 canonical 重来；撤回只在 Task 静止时
+        进行，没有需要保留的瞬时模型活动。重建与发布在同一临界区：分两次取锁时，中间到达的投影会被
+        这份更旧的 full 帧覆盖，客户端随即丢掉那条已经发出去的增量。
 
         异常:
-            KeyError: Task 在本进程内已被删除或不存在。
+            KeyError: Task 不存在或在本进程内已被删除。
             ValueError: 重建结果不满足快照契约。
             sqlalchemy.exc.SQLAlchemyError: canonical 数据源读取失败。
         """
 
         with self._lock:
-            # RLock：``rebuild_state`` 与 ``publish_state`` 各自的可重入取锁落在同一临界区。
-            return self.publish_state(task_id, self.rebuild_state(task_id))
+            space = task_runtime_spaces.get_or_create(task_id)
+            space.unload_snapshot()
+            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+            validate_snapshot(state)
+            self._publish(
+                TransportFrame(task_id=task_id, kind="full", state=copy.deepcopy(state))
+            )
 
     def subscribe_with_snapshot(
         self, task_id: int
     ) -> tuple[Subscriber, Callable[[], None], TransportFrame]:
-        """在 ``_lock`` 下原子地挂载并准备首个 full 帧。"""
+        """在锁内原子地挂上订阅者并准备首个 full 帧。
+
+        异常:
+            KeyError: Task 不存在或在本进程内已被删除（订阅随即撤下）。
+        """
 
         loop = asyncio.get_running_loop()
         subscriber = Subscriber(loop)
         with self._lock:
-            self._ensure_not_deleted(task_id)
             self._subscribers.setdefault(task_id, set()).add(subscriber)
             try:
-                initial = self.get_state(task_id)
                 first_frame = TransportFrame(
-                    task_id=task_id,
-                    kind="full",
-                    state=initial,
-                    mutations=(),
+                    task_id=task_id, kind="full", state=self.get_state(task_id)
                 )
             except Exception:
                 self._subscribers[task_id].discard(subscriber)
@@ -469,8 +343,8 @@ class ConversationTaskStateService:
     def release_deleted_task(self, task_id: int) -> None:
         """Task 删除提交后关闭它的订阅、丢弃快照工作副本。
 
-        调用方先在 ``task_runtime_spaces.mark_deleted`` 记下删除：订阅与读取在本服务的锁内判定是否
-        已删除，先记删除再释放，就不会有新订阅在释放之后挂上来。
+        调用方先在 ``task_runtime_spaces.mark_deleted`` 记下删除：订阅与读取取 space 时就会被拒绝，先记
+        删除再释放，就不会有新订阅在释放之后挂上来。
         """
 
         with self._lock:
@@ -482,32 +356,20 @@ class ConversationTaskStateService:
             if space is not None:
                 space.unload_snapshot()
 
-    @classmethod
-    def clear_process_state(cls) -> None:
-        """丢弃所有易失的进程本地状态。
+    def close_subscribers(self) -> None:
+        """进程生命周期钩子：关闭全部订阅（``depends.reset_service_dependencies`` 在丢弃单例前调用）。"""
 
-        进程生命周期钩子，非持久化操作。清空 subscriber 队列并关闭 runtime space 登记表（连同删除
-        记录），使同一解释器中后续的存储重新初始化不会从上一次后端生命周期继承陈旧的副本。
-        """
-
-        with cls._lock:
+        with self._lock:
             subscribers = [
-                subscriber for group in cls._subscribers.values() for subscriber in group
+                subscriber for group in self._subscribers.values() for subscriber in group
             ]
-            cls._subscribers.clear()
+            self._subscribers.clear()
         for subscriber in subscribers:
             with suppress(RuntimeError):
                 subscriber.loop.call_soon_threadsafe(subscriber.close)
-        task_runtime_spaces.close()
-
-    def _ensure_not_deleted(self, task_id: int) -> None:
-        """进程本地删除清理后，拒绝读取或投影。"""
-
-        if task_runtime_spaces.is_deleted(task_id):
-            raise KeyError(task_id)
 
     def _rebuild(self, task_id: int) -> ConversationStateSnapshot:
-        """读取 canonical 记录，并以结构化日志调用纯状态重建器。"""
+        """读取 canonical 记录与进程内事实，装配完整快照（带结构化日志）。"""
 
         log.info(
             "state_rebuild_started",
@@ -517,19 +379,16 @@ class ConversationTaskStateService:
             },
         )
         try:
-            task = self._task_source.get(task_id)
-            runs = self._run_source.list_by_task(task_id)
-            context_rows = self._context_source.get(task_id, include_in_context=False)
-            state = ConversationTaskStateRebuilder.rebuild(
-                task,
-                runs,
-                context_rows,
+            state = rebuild_snapshot(
+                self._task_source.get(task_id),
+                self._run_source.list_by_task(task_id),
+                self._context_source.get(task_id, include_in_context=False),
                 presentation_catalog(get_tool_registry()),
             )
             state["queued_messages"] = self._queued_messages(task_id)
             state["terminal_sessions"] = self._terminal_sessions(task_id)
             state["background_tasks"] = self._background_tasks(task_id, state)
-            state["foreground_waits"] = self._foreground_waits(task_id)
+            state["foreground_waits"] = command_results.foreground_calls(task_id)
             state["handoffs"] = self._handoffs(task_id)
         except Exception as exc:
             log.exception(
@@ -560,12 +419,11 @@ class ConversationTaskStateService:
         return state
 
     def _publish(self, change: TransportFrame) -> None:
-        """存在 full 状态时安装该状态，并将帧入队给各 subscriber。"""
+        """full 帧先安装为工作副本，再把帧交给各订阅者；须持 ``_lock`` 调用。"""
 
         if change.state is not None:
             task_runtime_spaces.get_or_create(change.task_id).replace_snapshot(change.state)
-        subscribers = tuple(self._subscribers.get(change.task_id, set()))
-        for subscriber in subscribers:
+        for subscriber in tuple(self._subscribers.get(change.task_id, set())):
             try:
                 subscriber.loop.call_soon_threadsafe(subscriber.offer, change)
             except RuntimeError:
@@ -576,49 +434,6 @@ class ConversationTaskStateService:
                         "data": {"task_id": change.task_id},
                     },
                 )
-
-
-def _apply_mutation(state: ConversationStateSnapshot, mutation: ConversationStateMutation) -> None:
-    """将 Transport 的 set/append-text 变更应用到内存状态。"""
-
-    mutable_state = cast(dict[str, Any], state)
-    if not mutation.path:
-        if mutation.kind != "set" or not isinstance(mutation.value, dict):
-            raise ValueError("root mutation must be set with an object")
-        mutable_state.clear()
-        mutable_state.update(copy.deepcopy(cast(dict[str, Any], mutation.value)))
-        return
-    parent: Any = mutable_state
-    for key in mutation.path[:-1]:
-        parent = parent[key]
-    key = mutation.path[-1]
-    if mutation.kind == "set":
-        value = copy.deepcopy(mutation.value)
-        if isinstance(parent, list) and isinstance(key, int) and key == len(parent):
-            parent.append(value)
-        else:
-            parent[key] = value
-        return
-    if mutation.kind != "append-text" or not isinstance(mutation.value, str):
-        raise ValueError("append-text mutation must carry a string")
-    current = parent[key]
-    if not isinstance(current, str):
-        raise TypeError("append-text target must be a string")
-    parent[key] = current + mutation.value
-
-
-def _requires_full_snapshot_validation(
-    mutations: Sequence[ConversationStateMutation],
-) -> bool:
-    """返回一批变更是否会改变快照结构或生命周期形状。"""
-
-    return any(
-        mutation.kind != "append-text"
-        or not mutation.path
-        or not isinstance(mutation.value, str)
-        or not mutation.value
-        for mutation in mutations
-    )
 
 
 __all__ = ["ConversationTaskStateService"]

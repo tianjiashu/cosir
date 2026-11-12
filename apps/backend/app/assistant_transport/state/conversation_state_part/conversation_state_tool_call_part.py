@@ -42,8 +42,9 @@ class ConversationStateToolCallPart(TypedDict):
     error: NotRequired[str | None]
     # 图标、动词与调用行标题都由前端按 ``intent`` / ``toolName`` / ``args`` 查工具目录表得出，
     # part 不带展示外壳。
-    # 「等你操作」：占位行 ``pending`` 且不是后台占位（HITL 等决定、交接等交还）。只在
-    # ``project_tool_result`` 一处计算，每次结果投影都显式写，决定到达、重放后清回 ``False``。
+    # 「等你操作」：占位行 ``pending`` 且不是后台占位（HITL 等决定、交接等交还）。由
+    # ``project_tool_result`` 计算，每次结果投影都显式写，决定到达、重放后清回 ``False``；冷重建再按
+    # 行级规则（``awaits_user``：继承副本与撤回移出的调用不能决定）纠正一次。
     awaitingUser: NotRequired[bool]
     display_data: NotRequired[dict[str, object] | None]
     # 指向持久化 TeamRun，失败态也能读取节点进度与诊断。

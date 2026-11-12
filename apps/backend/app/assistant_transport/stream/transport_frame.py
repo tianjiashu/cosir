@@ -27,7 +27,7 @@ class TransportFrame:
 
     task_id: int
     kind: FrameKind
-    mutations: tuple[ConversationStateMutation, ...]
+    mutations: tuple[ConversationStateMutation, ...] = ()
     state: ConversationStateSnapshot | None = None
     resync_reason: str | None = None
 

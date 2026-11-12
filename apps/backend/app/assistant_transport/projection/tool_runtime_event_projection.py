@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import cast
 
 from app.assistant_transport.projection.snapshot_navigation import find_tool
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
@@ -29,8 +28,8 @@ def plan_tool_call_runtime_update(
     命令在 Run 挂起、结束甚至开了新 Run 之后仍在输出，Run 状态与命令是否还活着无关。
     """
 
-    base = find_tool(state, event.tool_call_id)
-    if base is None:
+    found = find_tool(state, event.tool_call_id)
+    if found is None:
         log.warning(
             "tool_runtime_update_part_missing",
             extra={
@@ -43,11 +42,7 @@ def plan_tool_call_runtime_update(
             },
         )
         return []
-    _, message_index, _, part_index = base
-    part = cast(
-        ConversationStateToolCallPart,
-        state["messages"][cast(int, message_index)]["parts"][cast(int, part_index)],
-    )
+    base, part = found
     status = part.get("status")
     # 命令还活着：前台调用是 ``running``，转到后台的是带 ``background`` 的 ``pending`` 占位。命令结束、
     # 取消或被撤销时 part 都会离开这两种状态，迟到的更新因此自然丢弃。

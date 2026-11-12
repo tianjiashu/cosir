@@ -1,3 +1,3 @@
-from app.assistant_transport.stream.transport_frame import FrameKind, TransportFrame
+from app.assistant_transport.stream.transport_frame import TransportFrame
 
-__all__ = ["FrameKind", "TransportFrame"]
+__all__ = ["TransportFrame"]
