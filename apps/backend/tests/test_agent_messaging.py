@@ -12,7 +12,7 @@ import pytest
 
 from tests.task_extra_fixtures import fork_extra
 from app.models.task_extra import TaskExtra
-from app.core.tool.background.background_registry import background_registry
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.tool.multi_agent import send_message
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.conversation_run_options import ConversationRunOptions
@@ -45,7 +45,7 @@ _TASKS = {
 def _clean_entries():
     yield
     for task_id in (_PARENT, _CHILD):
-        background_registry.drop_task(task_id)
+        command_results.drop_task(task_id)
 
 
 @pytest.fixture
@@ -112,14 +112,14 @@ def test_child_tells_its_parent_without_waiting(env, tmp_path) -> None:
     [prepared] = env.prepared
     assert prepared["source"].task_id == _CHILD
     assert (prepared["agent_id"], prepared["model_config_id"]) == ("main_agent", "test/m3")
-    assert not background_registry.live_background(_CHILD)
+    assert not command_results.live_background(_CHILD)
 
 
 def test_question_and_explicit_reply_are_two_ordinary_messages(env, tmp_path) -> None:
     for sender, target, message in [(_CHILD, _PARENT, "A or B?"), (_PARENT, _CHILD, "A")]:
         sent = _send(sender, target, message, tmp_path)
         assert sent.background is None and '"status":"delivered"' in sent.content
-        assert not background_registry.live_background(sender)
+        assert not command_results.live_background(sender)
     assert env.enqueued == [(_PARENT, "agent-message:A or B?"), (_CHILD, "agent-message:A")]
     assert not env.delivered
 

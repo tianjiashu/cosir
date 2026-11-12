@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.background import background_registry as background_module
-from app.core.tool.background.background_registry import background_registry
+from app.tools.tool_handler.terminal import command_results as background_module
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.terminal_runtime.command.running_command_registry import running_commands
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
@@ -50,7 +50,7 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
     monkeypatch.setattr(background_module, "report_cancelled_result", report_cancelled)
     yield calls
     # 收尾：撤销这个 Task 全部后台条目，并等作业线程把登记表条目清掉。
-    background_registry.drop_task(_TASK_ID)
+    command_results.drop_task(_TASK_ID)
     deadline = time.monotonic() + 10
     while running_commands.task_commands(_TASK_ID) and time.monotonic() < deadline:
         time.sleep(0.02)

@@ -37,12 +37,12 @@ export function userMessage(id: string, turn: number, text = "hello"): Transport
 
 /** Agent 消息：另一个 Agent 交来、开启回合的 user 消息，带发送方。 */
 export function agentMessage(id: string, turn: number, text = "请完成子任务", sourceTaskId = 9): TransportMessage {
-  return { id, role: "user", parts: [textPart(text)], turn, inherited: false, outcome: null, source: { taskId: sourceTaskId, name: "主任务" } };
+  return { id, role: "user", parts: [textPart(text)], turn, inherited: false, outcome: null, source: { taskId: sourceTaskId, teamRunId: null, name: "主任务", report: null } };
 }
 
 /** 回合途中到达的 Agent 消息。 */
 export function agentMessagePart(id: string, text = "追加要求"): TransportMessagePart {
-  return { type: "agent-message", id, text, source: { taskId: 9, name: "主任务" } };
+  return { type: "agent-message", id, text, source: { taskId: 9, teamRunId: null, name: "主任务", report: null } };
 }
 
 /** 回复；第二个参数是它所在的回合。 */

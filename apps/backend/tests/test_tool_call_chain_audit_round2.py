@@ -25,6 +25,7 @@ from app.core.context.runtime_message_context_manager import RuntimeMessageConte
 from app.core.events import (
     RunInitializedEvent,
     RunStatusChangedEvent,
+    TerminalCommandStartedData,
     TerminalOutputDeltaData,
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
@@ -164,6 +165,18 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
             run_id=_RUN_ID,
             tool_call_id=tool_call_id,
             seq=0,
+            data=TerminalCommandStartedData(
+                kind="terminal_command_started",
+                display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"},
+            ),
+        )
+    )
+    projector.process(
+        ToolCallRuntimeUpdateEvent(
+            task_id=_TASK_ID,
+            run_id=_RUN_ID,
+            tool_call_id=tool_call_id,
+            seq=0,
             data=TerminalOutputDeltaData(kind="terminal_output_delta", text="streamed"),
         )
     )
@@ -197,7 +210,12 @@ def test_p2_terminal_result_prefers_final_output() -> None:
     """
 
     state, projector = _seed_tool_part()
-    assert _tool_part(state)["display_data"] == {"kind": "terminal-result", "output": "streamed"}
+    assert _tool_part(state)["display_data"] == {
+        "kind": "terminal-result",
+        "command": "make",
+        "workdir": "/w",
+        "output": "streamed",
+    }
 
     projector.process(
         ToolCallStatusChangedEvent(

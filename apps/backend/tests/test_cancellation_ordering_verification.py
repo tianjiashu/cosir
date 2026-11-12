@@ -32,6 +32,7 @@ from app.assistant_transport.stream import TransportFrame
 from app.core.events import (
     RunInitializedEvent,
     RunStatusChangedEvent,
+    TerminalCommandStartedData,
     TerminalOutputDeltaData,
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
@@ -343,6 +344,18 @@ def test_real_cancel_projection_keeps_streamed_output(
     owner = _MemorySnapshotOwner(empty_snapshot())
     projector = ConversationEventProjector(owner)
     _seed_running_execute_terminal(projector, "call-t")
+    projector.process(
+        ToolCallRuntimeUpdateEvent(
+            task_id=_TASK_ID,
+            run_id=_RUN_ID,
+            tool_call_id="call-t",
+            seq=0,
+            data=TerminalCommandStartedData(
+                kind="terminal_command_started",
+                display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"},
+            ),
+        )
+    )
     streamed = "already streamed output\n"
     projector.process(
         ToolCallRuntimeUpdateEvent(

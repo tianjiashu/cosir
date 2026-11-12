@@ -1,6 +1,6 @@
 """后台结果登记表、结论投递与 ``wait_messages`` 判定。
 
-终端服务本身不参与：条目由执行单元登记（这里直接调用 ``background_registry``）。重启收尾见
+终端服务本身不参与：条目由执行单元登记（这里直接调用 ``command_results``）。重启收尾见
 ``test_recover_after_restart.py`` 与 ``test_background_placeholders.py``。
 """
 
@@ -14,26 +14,26 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.background import background_registry as background_module
-from app.core.tool.background.background_job import BackgroundConclusion
-from app.core.tool.background.background_registry import (
-    BackgroundRegistry,
-    background_registry,
-    deliver_background_result,
-)
 from app.core.tool.handler.wait_messages import WaitMessagesTool
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.message_queue.task_message import BackgroundResultBody
 from app.service import depends
+from app.tools.tool_handler.terminal import command_results as background_module
+from app.tools.tool_handler.terminal.command_job import CommandConclusion
+from app.tools.tool_handler.terminal.command_results import (
+    CommandResultRegistry,
+    command_results,
+    deliver_background_result,
+)
 from tests.live_cold_support import registered
 
 
 @pytest.fixture(autouse=True)
 def _clean_entries():
     yield
-    for task_id in {entry.task_id for entry in background_registry._entries.values()}:
-        background_registry.drop_task(task_id)
+    for task_id in {entry.task_id for entry in command_results._entries.values()}:
+        command_results.drop_task(task_id)
 
 
 # ── 登记表 ───────────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, str | None, st
 
 
 def _register(
-    registry: BackgroundRegistry, tool_call_id: str, task_id: int, label: str, on_cancel=None
+    registry: CommandResultRegistry, tool_call_id: str, task_id: int, label: str, on_cancel=None
 ) -> str:
     registry.register(
         tool_call_id,
@@ -73,11 +73,11 @@ def _register(
 
 
 def test_complete_is_pop_once_and_carries_the_call(delivered) -> None:
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     _register(registry, "call-a", 1, "terminal:a")
     assert registry.pending(1) == ["terminal:a"]
-    assert registry.complete(1, "call-a", BackgroundConclusion({})) is True
-    assert registry.complete(1, "call-a", BackgroundConclusion({})) is False
+    assert registry.complete(1, "call-a", CommandConclusion({})) is True
+    assert registry.complete(1, "call-a", CommandConclusion({})) is False
     assert registry.pending(1) == []
     assert delivered == [(1, "call-a", "terminal_command")]
 
@@ -92,7 +92,7 @@ def test_has_work_covers_the_whole_task_and_results_still_being_written(monkeypa
         return True
 
     monkeypatch.setattr(background_module, "deliver_background_result", slow_deliver)
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     for call_id, run_id in (("call-old", 1), ("call-new", 2)):
         registry.register(
             call_id, task_id=1, run_id=run_id, kind="terminal_command", label=call_id,
@@ -103,7 +103,7 @@ def test_has_work_covers_the_whole_task_and_results_still_being_written(monkeypa
 
     registry.withdraw(1, "call-new")
     worker = threading.Thread(
-        target=registry.complete, args=(1, "call-old", BackgroundConclusion({}))
+        target=registry.complete, args=(1, "call-old", CommandConclusion({}))
     )
     worker.start()
     assert entered.wait(5)
@@ -115,7 +115,7 @@ def test_has_work_covers_the_whole_task_and_results_still_being_written(monkeypa
 
 
 def test_duplicate_registration_is_rejected(delivered) -> None:
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     _register(registry, "call-a", 1, "a")
     with pytest.raises(ValueError):
         _register(registry, "call-a", 1, "b")
@@ -123,20 +123,20 @@ def test_duplicate_registration_is_rejected(delivered) -> None:
 
 
 def test_close_cancels_everything_and_blocks_later_delivery(delivered) -> None:
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     cancelled: list[str] = []
     first = _register(registry, "call-a", 1, "a", lambda: cancelled.append("a"))
     _register(registry, "call-b", 2, "b", lambda: cancelled.append("b"))
     registry.close()
     assert sorted(cancelled) == ["a", "b"]
-    assert registry.complete(1, first, BackgroundConclusion({})) is False
+    assert registry.complete(1, first, CommandConclusion({})) is False
     late = _register(registry, "call-late", 1, "late")
     assert registry.pending(1) == []
-    assert registry.complete(1, late, BackgroundConclusion({})) is False
+    assert registry.complete(1, late, CommandConclusion({})) is False
     assert delivered == []
     registry.open()
     reopened = _register(registry, "call-c", 1, "c")
-    assert registry.complete(1, reopened, BackgroundConclusion({})) is True
+    assert registry.complete(1, reopened, CommandConclusion({})) is True
 
 
 @pytest.mark.parametrize("user_cancel", [False, True], ids=["complete", "single_cancel"])
@@ -161,14 +161,14 @@ def test_close_waits_for_in_flight_delivery(
         "report_cancelled_result" if user_cancel else "deliver_background_result",
         slow_deliver,
     )
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     cancelled: list[str] = []
     _register(registry, "call-a", 1, "a", lambda: cancelled.append("a"))
 
     def deliver() -> bool:
         if user_cancel:
             return registry.request_cancel(1, "call-a", driving=False)
-        return registry.complete(1, "call-a", BackgroundConclusion({}))
+        return registry.complete(1, "call-a", CommandConclusion({}))
 
     def close() -> bool:
         closing_started.set()
@@ -180,7 +180,7 @@ def test_close_waits_for_in_flight_delivery(
         try:
             assert entered.wait(2)
             assert not registered(registry, 1, "call-a")
-            assert not registry.complete(1, "call-a", BackgroundConclusion({}))
+            assert not registry.complete(1, "call-a", CommandConclusion({}))
             assert not registry.request_cancel(1, "call-a", driving=False)
             closer = executor.submit(close)
             assert closing_started.wait(2)
@@ -198,7 +198,7 @@ def test_close_waits_for_in_flight_delivery(
 
 
 def test_drop_task_runs_every_callback_even_when_one_fails(delivered) -> None:
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     called: list[str] = []
 
     def boom() -> None:
@@ -210,20 +210,9 @@ def test_drop_task_runs_every_callback_even_when_one_fails(delivered) -> None:
     kept = _register(registry, "call-c", 2, "c", lambda: called.append("c"))
     registry.drop_task(1)
     assert sorted(called) == ["b", "boom"]
-    assert registry.complete(1, first, BackgroundConclusion({})) is False
-    assert registry.complete(1, second, BackgroundConclusion({})) is False
-    assert registry.complete(2, kept, BackgroundConclusion({})) is True
-
-
-def test_discard_removes_without_calling_cancel(delivered) -> None:
-    registry = BackgroundRegistry()
-    called: list[str] = []
-    _register(registry, "call-a", 1, "a", lambda: called.append("a"))
-    registry.discard(1, "call-a")
-    registry.discard(1, "call-missing")
-    assert registry.pending(1) == []
-    assert called == []
-    assert registry.complete(1, "call-a", BackgroundConclusion({})) is False
+    assert registry.complete(1, first, CommandConclusion({})) is False
+    assert registry.complete(1, second, CommandConclusion({})) is False
+    assert registry.complete(2, kept, CommandConclusion({})) is True
 
 
 # ── 结论投递 ─────────────────────────────────────────────────────────────
@@ -264,12 +253,12 @@ def test_deliver_enqueues_background_result(enqueued: list[tuple[int, Any]], mon
 
 def test_complete_while_stopping_leaves_entry_for_drop(delivered) -> None:
     """停止期间到达的结论不投递、不出队：条目留给收尾的 ``drop_task``，结局记为撤销。"""
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     cancelled: list[str] = []
     _register(registry, "call-a", 6, "a", lambda: cancelled.append("a"))
     cancellation_registry.request_cancel(6, "user")
     try:
-        assert registry.complete(1, "call-a", BackgroundConclusion({})) is False
+        assert registry.complete(1, "call-a", CommandConclusion({})) is False
         assert registry.pending(6) == ["a"]
         [dropped] = registry.drop_task(6)
     finally:
@@ -315,7 +304,7 @@ def test_wait_messages_errors_when_idle_and_suspends_on_pending_entry(tmp_path: 
     assert not idle.suspend
     assert "nothing to wait for" in idle.content
 
-    _register(background_registry, "call-1", task.id, "terminal_command:term_1")
+    _register(command_results, "call-1", task.id, "terminal_command:term_1")
     waiting = tool.execute(context)
     assert waiting.suspend
     assert "terminal_command:term_1" in waiting.content
@@ -324,14 +313,14 @@ def test_wait_messages_errors_when_idle_and_suspends_on_pending_entry(tmp_path: 
 def test_wait_messages_description_mentions_terminal_work() -> None:
     description = WaitMessagesTool().description
     assert "terminal" in description
-    assert "child agents" in description
+    assert "child agent" in description and "<agent_message" in description
 
 
 # ── 前台 / 后台、取消与看板 ─────────────────────────────────────────────
 
 
 def _register_foreground(
-    registry: BackgroundRegistry, tool_call_id: str, calls: list[str],
+    registry: CommandResultRegistry, tool_call_id: str, calls: list[str],
 ) -> threading.Event:
     detached = threading.Event()
     registry.register(
@@ -348,7 +337,7 @@ def _register_foreground(
 
 
 def test_foreground_settles_when_not_detached(delivered) -> None:
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     calls: list[str] = []
     _register_foreground(registry, "call-f", calls)
     assert registry.settle_foreground(1, "call-f") == "settled"
@@ -359,7 +348,7 @@ def test_foreground_settles_when_not_detached(delivered) -> None:
 
 
 def test_foreground_entries_only_surface_as_detachable_calls(delivered) -> None:
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     calls: list[str] = []
     _register_foreground(registry, "call-f", calls)
     _register(registry, "call-b", 1, "b")
@@ -370,12 +359,12 @@ def test_foreground_entries_only_surface_as_detachable_calls(delivered) -> None:
     registry.detach(1, "call-f")
     assert registry.foreground_calls(1) == []
     assert list(registry.live_background(1)) == ["call-f", "call-b"]
-    registry.complete(1, "call-f", BackgroundConclusion({}))
+    registry.complete(1, "call-f", CommandConclusion({}))
     assert list(registry.live_background(1)) == ["call-b"]
 
 
 def test_cancelled_foreground_entries_leave_no_history(delivered) -> None:
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     calls: list[str] = []
     _register_foreground(registry, "call-f", calls)
     assert registry.withdraw(1, "call-f")
@@ -383,19 +372,19 @@ def test_cancelled_foreground_entries_leave_no_history(delivered) -> None:
 
 
 def test_detach_wins_over_a_later_foreground_settle(delivered) -> None:
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     calls: list[str] = []
     detached = _register_foreground(registry, "call-f", calls)
     assert registry.detach(1, "call-f") == "detached"
     assert detached.is_set()
     # 等待线程随后结束：转后台已先到，结论必须改走后台回投。
     assert registry.settle_foreground(1, "call-f") == "detached"
-    assert registry.complete(1, "call-f", BackgroundConclusion({})) is True
+    assert registry.complete(1, "call-f", CommandConclusion({})) is True
     assert delivered == [(1, "call-f", "terminal_command")]
 
 
 def test_detach_only_applies_to_live_foreground_entries(delivered) -> None:
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     _register(registry, "call-b", 1, "b")
     assert registry.detach(1, "call-b") == "not_foreground"
     assert registry.detach(1, "call-missing") == "not_found"
@@ -406,7 +395,7 @@ def test_detach_only_applies_to_live_foreground_entries(delivered) -> None:
 
 
 def test_user_cancel_reports_the_mode_and_removes_live_work(delivered) -> None:
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     called: list[str] = []
     _register(registry, "call-b", 1, "b", lambda: called.append("b"))
     dropped = registry.withdraw(1, "call-b")
@@ -417,16 +406,16 @@ def test_user_cancel_reports_the_mode_and_removes_live_work(delivered) -> None:
 
 
 def test_live_background_excludes_finished_work(delivered) -> None:
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     for index in range(3):
         _register(registry, f"call-{index}", 1, f"l{index}")
-        registry.complete(1, f"call-{index}", BackgroundConclusion({}))
+        registry.complete(1, f"call-{index}", CommandConclusion({}))
     _register(registry, "call-live", 1, "live")
     assert list(registry.live_background(1)) == ["call-live"]
 
 
 def test_drop_task_reports_dropped_entries(delivered) -> None:
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     _register(registry, "call-b", 1, "b")
     calls: list[str] = []
     _register_foreground(registry, "call-f", calls)
@@ -437,7 +426,7 @@ def test_drop_task_reports_dropped_entries(delivered) -> None:
 def test_listener_is_notified_off_the_caller_thread(delivered) -> None:
     import threading
 
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     seen: list[tuple[int, str]] = []
     notified = threading.Event()
 
@@ -463,40 +452,22 @@ def test_foreground_waits_contract() -> None:
             validate_foreground_waits(invalid)
 
 
-def test_single_stop_before_registration_is_taken_over_until_the_receipt_commits():
+def test_single_stop_before_registration_is_taken_over_by_the_entry():
+    """登记前就被点名停止的调用：登记时接过工具级信号，作业立即收到停止，之后的重复停止被拒。"""
     from app.core.workflow.cancel.tool_call_cancellation_registry import (
         tool_call_cancellation_registry,
     )
 
-    registry = BackgroundRegistry()
+    registry = CommandResultRegistry()
     signals = []
     try:
         assert registry.request_cancel(3, "early", driving=True)
         registry.register(
-            "early", task_id=3, run_id=5, kind="agent_team", label="review",
-            on_cancel=signals.append, after_commit=lambda: signals.append("start"),
-            reports_user_stop=True,
+            "early", task_id=3, run_id=5, kind="terminal_command", label="build",
+            on_cancel=signals.append, reports_user_stop=True,
         )
         assert signals == ["user"]
         assert not registry.request_cancel(3, "early", driving=True)
-        registry.commit_start(3, "early")
-        registry.commit_start(3, "early")
-        assert signals == ["user", "start"]
     finally:
         tool_call_cancellation_registry.clear(3, "early")
         registry.close()
-
-
-def test_failed_run_withdraws_only_its_uncommitted_work():
-    registry = BackgroundRegistry()
-    signals = []
-    for call_id, run_id in [("staged", 5), ("started", 5), ("other-run", 6)]:
-        registry.register(
-            call_id, task_id=3, run_id=run_id, kind="agent_team", label="review",
-            on_cancel=signals.append, after_commit=lambda: None,
-        )
-    registry.commit_start(3, "started")
-    assert registry.withdraw_uncommitted(3, 5) == ["staged"]
-    assert signals == ["withdraw"]
-    assert set(registry.live_background(3)) == {"started", "other-run"}
-    registry.close()

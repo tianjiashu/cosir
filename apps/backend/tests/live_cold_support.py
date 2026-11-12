@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import update
 
 from app.config.configuration import get_tool_registry
-from app.core.tool.background.background_registry import BackgroundRegistry, background_registry
+from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolDefinition
@@ -189,7 +189,7 @@ class LiveColdEnv:
         )
         monkeypatch.setattr(task_title, "should_launch", lambda *_: False)
         spaces.bind_loop(asyncio.get_running_loop())
-        background_registry.open()
+        command_results.open()
         self.state = depends.get_conversation_task_state_service()
         _, self._unsubscribe, _ = self.state.subscribe_with_snapshot(self.task.id)
 
@@ -252,12 +252,12 @@ class LiveColdEnv:
 
     async def close(self) -> None:
         self._unsubscribe()
-        await asyncio.to_thread(background_registry.close)
+        await asyncio.to_thread(command_results.close)
         await spaces.aclose()
-        background_registry.open()
+        command_results.open()
 
 
-def registered(registry: BackgroundRegistry, task_id: int, tool_call_id: str) -> bool:
+def registered(registry: CommandResultRegistry, task_id: int, tool_call_id: str) -> bool:
     """这次调用是否有活条目（前台或后台）。"""
     live = [*registry.live_background(task_id), *registry.foreground_calls(task_id)]
     return tool_call_id in live

@@ -27,7 +27,7 @@ test.beforeEach(async ({ request }) => {
     { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] },
     [
       {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "execute_terminal", args: {}, status: "pending", background: { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
-      {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "call-fg", toolName: "execute_terminal", args: {}, status: "running" },
+      {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "call-fg", toolName: "execute_terminal", args: { command: "npm test" }, status: "running", startedAt: new Date(Date.now() - 12_000).toISOString(), display_data: { kind: "terminal-result", command: "npm test", workdir: "/work" } },
     ],
   ));
   await request.post(`${origin}/__test__/seed-background-tasks`, {
@@ -62,17 +62,27 @@ test("看板只列后台工作；前台等待在卡片上转到后台后才进�
   await page.locator('[data-background-task="call-bg"]').getByRole("button", { name: "停止" }).click();
   await expect(card).toContainText("2 已结束");
 
-  // 前台等待：只在工具卡片上「转到后台」；转走后才出现在看板，卡片不再提供转后台。
+  // 前台等待：行上只有标题与运行时长，去留操作在终端卡片头部；转走后才出现在看板，卡片不再提供转后台。
   await page.locator('[data-slot="activity-head"]').click();
-  const fgActions = page.locator('[data-foreground-wait="call-fg"]');
-  await fgActions.getByRole("button", { name: "转到后台" }).click();
+  const fgCall = page.locator('[data-slot="turn"] [data-tool-call-id="call-fg"]');
+  await expect(fgCall.locator('[data-slot="call-elapsed"]')).toHaveText(/^\d+秒$/);
+  await expect(fgCall.locator('[data-foreground-wait="call-fg"]')).toHaveCount(0);
+  await fgCall.locator('[data-slot="call-row"]').click();
+  const header = fgCall.locator('[data-slot="terminal-card-header"]');
+  await expect(fgCall.locator("[data-terminal-command]")).toHaveText("npm test");
+  await expect(fgCall).toContainText("等待输出…");
+  await expect(header.getByRole("button", { name: "停止终端命令" })).toBeVisible();
+  const fgActions = header.locator('[data-foreground-wait="call-fg"]');
+  await expect(fgActions).toHaveText("转到后台");
+  await fgCall.screenshot({ path: `${OUTPUT_DIR}/terminal-card-running.png` });
+  await fgActions.click();
   await expect(fgActions).toHaveCount(0);
   const fgRow = page.locator('[data-background-task="call-fg"]');
   await expect(fgRow.getByRole("button", { name: "停止" })).toBeVisible();
   await expect(page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ })).toBeVisible();
 });
 
-test("Team 批准后时间线只留一行，点行进入后台详情", async ({ page, request }) => {
+test("Team 批准后在时间线就地展开执行进度，停止按 TeamRun 发出", async ({ page, request }) => {
   const callId = "review-call";
   const preview = {
     kind: "agent-team-approval", team_run_id: 17, team_id: "review", name: "代码审查",
@@ -80,18 +90,17 @@ test("Team 批准后时间线只留一行，点行进入后台详情", async ({ 
     node_goals: { review: { goal: "检查改动", summary: "审查" } }, edges: [],
     nodes: [{ node_id: "review", name: "审查", role: "Reviewer", statuses: [{ name: "done", color: "#16A34A" }], max_steps: 5 }],
   };
-  const work = { kind: "agent_team" as const, label: preview.name, startedAt: new Date().toISOString(), endedAt: null };
   let approved = false;
   async function publish() {
-    await request.post(`${origin}/__test__/seed-background-tasks`, {
-      data: { taskId: TASK_ID, entries: approved ? [entry(callId, work)] : [], foregroundWaits: [] },
-    });
+    // 批准即开跑、调用当场完成：Team 是编排，不登记后台工作。
     await seedState(request, TASK_ID, completedState(1,
       { id: "user-1", parts: [{ type: "text", text: "审查改动" }] },
-      [{presentation: "standalone",  type: "tool-call", toolName: "agent_team", toolCallId: callId, args: { team_id: "review", goal: preview.goal }, status: "pending",
-        awaitingUser: !approved, display_data: preview, team_run_id: 17, ...(approved ? { background: work } : {}) }],
+      [{presentation: "standalone",  type: "tool-call", toolName: "agent_team", toolCallId: callId, args: { team_id: "review", goal: preview.goal },
+        status: approved ? "completed" : "pending", awaitingUser: !approved, display_data: preview, team_run_id: 17 }],
     ));
   }
+  let cancelled = false;
+  await page.route("**/agent-team/runs/17/cancel", async route => { cancelled = true; await route.fulfill({ json: { team_run_id: 17 } }); });
   await page.route("**/agent-team/runs/17", route => route.fulfill({ json: {
     id: 17, team_id: "review", goal: "审查改动", status: approved ? "running" : "pending",
     nodes: [], current_node_id: null, end_reason: null,
@@ -109,19 +118,14 @@ test("Team 批准后时间线只留一行，点行进入后台详情", async ({ 
   await page.getByRole("button", { name: "确认执行" }).click();
   await expect(page.getByRole("button", { name: "确认执行" })).toHaveCount(0);
   const timeline = page.locator(`[data-slot="turn"] [data-tool-call-id="${callId}"]`);
-  await expect(timeline.locator('[data-slot="call-title"]')).toHaveAttribute("data-thinking-active", "true");
+  await expect(timeline).toContainText("执行中");
   await expect(timeline.getByRole("region", { name: "Agent Team 执行进度" })).toHaveCount(0);
   await timeline.locator('[data-slot="call-row"]').click();
-  const row = page.locator(`[data-background-task="${callId}"]`);
-  await expect(row).toContainText("代码审查");
-  const progress = row.getByRole("region", { name: "Agent Team 执行进度" });
+  const progress = timeline.getByRole("region", { name: "Agent Team 执行进度" });
   await expect(progress).toBeVisible();
-  const trigger = row.locator("button[aria-expanded]");
-  await trigger.click();
-  await expect(progress).toBeHidden();
-  await trigger.focus(); await page.keyboard.press("Enter");
-  await expect(progress).toBeVisible();
+  await expect(page.locator(`[data-background-task="${callId}"]`)).toHaveCount(0);
   await page.screenshot({ path: `${OUTPUT_DIR}/team-running.png` });
-  await expect(row.getByRole("button", { name: "停止" })).toBeVisible();
+  await timeline.getByRole("button", { name: "停止" }).click();
+  await expect.poll(() => cancelled).toBe(true);
   await expect(page.getByRole("button", { name: "转到后台" })).toHaveCount(0);
 });

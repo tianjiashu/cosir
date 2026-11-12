@@ -23,6 +23,10 @@ test("窗口宽高与面板开关不重新执行会话和线程，也不重连�
   ]);
   state.title = "布局隔离";
   await seedState(request, 42, state);
+  // 侧栏只在有内容时出现；给一条已结束的后台工作，下面才测得到它在固定与浮层之间切换。
+  await request.post(`${origin}/__test__/seed-background-tasks`, { data: { taskId: 42, foregroundWaits: [], entries: [
+    { toolCallId: "call-done", kind: "terminal_command", label: "npm run lint", status: "completed", startedAt: "2026-01-01T00:00:00Z", endedAt: "2026-01-01T00:00:30Z" },
+  ] } });
   await page.goto("/");
   await expect(page.getByRole("treeitem").filter({ hasText: "布局隔离" })).toBeVisible();
   // 首次挂载任务前包装已有 memo 组件，只在测试浏览器中计数，不给生产代码增加探针接口。

@@ -254,7 +254,11 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
 def test_real_sqlite_malformed_metadata_fails_and_not_as_empty_state(
     canonical_store,
 ) -> None:
-    """Malformed durable metadata is an explicit cold-read failure."""
+    """Malformed durable metadata is an explicit cold-read failure.
+
+    写入非 JSON 文本已被 SQLite 拒绝（部分索引 ``idx_task_context_awaiting`` 的条件要解析
+    metadata），所以这里用形状不符的合法 JSON 模拟损坏。
+    """
 
     store = canonical_store
     run = _create_run(store, current=True)
@@ -268,11 +272,11 @@ def test_real_sqlite_malformed_metadata_fails_and_not_as_empty_state(
         session.execute(
             update(ConversationTaskContextModel)
             .where(ConversationTaskContextModel.id == ai_row.id)
-            .values(metadata_json="{not-json")
+            .values(metadata_json='{"not_a_field": 1}')
         )
 
-    # ``ConversationTaskContextRecord._from_model`` 用原生 ``json.loads`` 反序列化 metadata，
-    # 损坏的 JSON 以 ``json.JSONDecodeError``（``ValueError`` 子类）向冷读边界传播。
+    # ``ConversationTaskContextRecord._from_model`` 按角色严格校验 metadata，未知字段以
+    # ``ValidationError``（``ValueError`` 子类）向冷读边界传播。
     with pytest.raises(ValueError):
         store.state.get_state(store.task.id)
 

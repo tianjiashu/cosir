@@ -86,10 +86,10 @@ describe("estimateMessageHeight", () => {
 
   it("回答：标题按级别、列表项、表格行、代码行分别计高", () => {
     const base = estimateMessageHeight(assistant(text("一段话")));
-    expect(base).toBe(132);
-    expect(estimateMessageHeight(assistant(text("# 标题\n\n一段话")))).toBe(180);
-    expect(estimateMessageHeight(assistant(text("### 标题\n\n一段话")))).toBe(172);
-    expect(estimateMessageHeight(assistant(text("- 一\n- 二\n- 三")))).toBe(212);
+    expect(base).toBe(104);
+    expect(estimateMessageHeight(assistant(text("# 标题\n\n一段话")))).toBe(152);
+    expect(estimateMessageHeight(assistant(text("### 标题\n\n一段话")))).toBe(144);
+    expect(estimateMessageHeight(assistant(text("- 一\n- 二\n- 三")))).toBe(184);
     expect(estimateMessageHeight(assistant(text(table(6)))) - estimateMessageHeight(assistant(text(table(3))))).toBe(3 * 37);
     expect(estimateMessageHeight(assistant(text(code(15)))) - estimateMessageHeight(assistant(text(code(5))))).toBe(205);
   });

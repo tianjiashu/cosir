@@ -29,7 +29,6 @@ from terminal_test_support import (
 )
 
 from app.config.constant import Constant
-from app.core.tool.background.background_registry import background_registry
 from app.tools.terminal_runtime.errors import (
     TerminalIntegrationRequiredError,
     TerminalPrefillRejectedError,
@@ -41,13 +40,14 @@ from app.tools.terminal_runtime.errors import (
     TerminalWorkerUnavailableError,
 )
 from app.tools.terminal_runtime.observation.wait import TerminalWait
+from app.tools.tool_handler.terminal.command_results import command_results
 
 
 @pytest.fixture(autouse=True)
 def _drop_entries() -> Any:
     yield
     for task_id in range(1, 10):
-        background_registry.drop_task(task_id)
+        command_results.drop_task(task_id)
 
 
 def prefill(service: Any, session_id: str, command: str, *, task_id: int = 1) -> Any:
@@ -311,6 +311,30 @@ def test_read_command_returned_waits_for_running_command(monkeypatch, tmp_path: 
     thread.join(1)
     assert box["result"].wait_result["end_reason"] == "command_returned"
     assert "exit 2" in box["result"].text
+
+
+@pytest.mark.parametrize("ending", ["session_exit", "prompt_back"])
+def test_command_returned_only_counts_commands_that_really_ended(
+    monkeypatch, tmp_path: Path, ending: str
+) -> None:
+    """目的：等命令返回时，只有确知结束才算返回。潜在缺陷：会话在命令运行中结束时，命令只是跟丢，
+    却被报成 ``command_returned``，Agent 以为被打断的构建已经跑完。提示符回来（没收到返回事件）则确知
+    结束，照常算返回。"""
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
+    session_id = start(service, tmp_path)
+    workers[0].shell("command_started", command="npm run build")
+    thread, box = run_in_thread(lambda: read(
+        service, session_id, wait=TerminalWait(until="command_returned", timeout_ms=5000)))
+    time.sleep(0.05)
+    if ending == "session_exit":
+        workers[0].exit(0)
+    else:
+        workers[0].shell("shell_prompt", cwd=str(tmp_path))
+    thread.join(1)
+    expected = "session_ended" if ending == "session_exit" else "command_returned"
+    assert box["result"].wait_result["end_reason"] == expected
+    status = "tracking_ended" if ending == "session_exit" else "ended"
+    assert f"`npm run build` {status}" in box["result"].text
 
 
 # ---------------------------------------------------------------- Agent 填入

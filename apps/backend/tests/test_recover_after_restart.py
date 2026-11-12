@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from app.core.tool.multi_agent.agent_team.team_coordinator import RecoveredTeamRun
 from app.service import recover_service as recover_module
 from app.service.recover_service import RecoverService
 
@@ -26,7 +27,10 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
     )
     monkeypatch.setattr(
         "app.service.recover_service.service_depends.get_agent_team_coordinator",
-        lambda: SimpleNamespace(recover_after_restart=lambda: calls.append(("teams", None)) or [7]),
+        lambda: SimpleNamespace(
+            recover_after_restart=lambda: calls.append(("teams", None))
+            or [RecoveredTeamRun(parent_task_id=4, node_task_ids=[7])]
+        ),
     )
     monkeypatch.setattr(
         service, "cancel_orphaned_team_nodes", lambda ids: calls.append(("nodes", ids)) or []
@@ -34,7 +38,10 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(
         recover_module.service_depends,
         "get_task_service",
-        lambda: SimpleNamespace(list_task_ids_to_dispatch=lambda: dispatch),
+        lambda: SimpleNamespace(
+            list_task_ids_to_dispatch=lambda: dispatch,
+            get_task=lambda task_id: SimpleNamespace(id=task_id, deriver_id=lambda: None),
+        ),
     )
     monkeypatch.setattr(
         recover_module,
@@ -57,9 +64,10 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
     assert steps[:3] == ["runs", "teams", "nodes"]
     assert sorted(arg for name, arg in calls if name == "space") == [3, 5]
     assert steps[-2:] == ["interrupt", "notify"]
-    # 作废 TeamRun 的节点先取消；通知集合 = 被收敛的 Run 所属 Task ∪ 结算了占位的 Task。
+    # 作废 TeamRun 的节点先取消；通知集合 = 被收敛的 Run 所属 Task ∪ 被收敛 Team 的主 Task（Team 不汇报）
+    # ∪ 结算了占位的 Task。
     assert dict(calls)["nodes"] == [7]
-    assert dict(calls)["notify"] == {1, 2}
+    assert dict(calls)["notify"] == {1, 2, 4}
 
 
 def test_only_suspended_runs_of_orphaned_team_nodes_are_cancelled(monkeypatch) -> None:
@@ -90,7 +98,11 @@ def test_only_suspended_runs_of_orphaned_team_nodes_are_cancelled(monkeypatch) -
 def test_restart_withdraws_only_the_interrupted_teams_unconsumed_node_input(
     backend_env, tmp_path, monkeypatch
 ):
-    from app.core.workflow.message_queue.task_message import AgentMessageBody, RunLaunch, TaskMessage
+    from app.core.workflow.message_queue.task_message import (
+        AgentMessageBody,
+        RunLaunch,
+        TaskMessage,
+    )
     from app.models.conversation_input import MessageSource
     from app.service import depends
 
@@ -109,5 +121,7 @@ def test_restart_withdraws_only_the_interrupted_teams_unconsumed_node_input(
     })
     monkeypatch.setattr(coordinator._team_run_crud, "list_active", lambda: [row])
     monkeypatch.setattr(coordinator, "_cancel_if_active", lambda *_: row)
-    assert coordinator.recover_after_restart() == [node.id]
+    assert coordinator.recover_after_restart() == [
+        RecoveredTeamRun(parent_task_id=parent.id, node_task_ids=[node.id])
+    ]
     assert [message.body.source.task_id for message in queue.pending_nowait(node.id)] == [other.id]

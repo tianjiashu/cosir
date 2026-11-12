@@ -182,13 +182,16 @@ def monkeypatch(reset_runtime_singletons: None) -> Iterator[pytest.MonkeyPatch]:
 def reopen_background_registry() -> Iterator[None]:
     """lifespan 关闭会关闭进程级后台结果登记表（此后不再投递）；同进程后续用例需重新开放。"""
 
-    from app.core.tool.background.background_registry import background_registry
+    from app.core.tool.background_commands import set_background_commands
+    from app.tools.tool_handler.terminal.command_results import command_results
 
     # 先关再开：清掉上一个用例残留的活条目（同一 task_id 会被反复使用）。
-    background_registry.close()
-    background_registry.open()
+    command_results.close()
+    command_results.open()
+    # 不经 lifespan 的用例也会走到 core 的后台命令端口（静止判定、wait_messages、收回）。
+    set_background_commands(command_results)
     # lifespan 会注入看板监听方；同进程后续用例的 snapshot 不能被前一个用例的监听方改写。
-    background_registry.set_listener(None)
+    command_results.set_listener(None)
     yield
 
 

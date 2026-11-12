@@ -1,4 +1,7 @@
-"""真实审批、节点调度与结果回投；模型输出由测试提供。"""
+"""真实审批、节点调度与 Team 落定后的汇报；模型输出由测试提供。
+
+Team 是多 Agent 编排：批准即开跑，不登记后台工作；落定后以 TeamRun 为来源的 Agent 消息汇报给主 Task。
+"""
 
 import asyncio
 import json
@@ -9,7 +12,7 @@ import pytest
 from app.assistant_transport.request import DecisionRequest
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
 from app.core.task_actor import SessionConflictError
-from app.core.tool.background.background_registry import background_registry
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.workflow import workflow
 from app.core.workflow.branch import task_title
 from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody
@@ -20,6 +23,8 @@ from app.service import depends
 from app.service.configuration.agent_configuration import AgentConfiguration
 from app.service.configuration.agent_configuration_service import AgentConfigurationService
 from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
+from app.storage.queries.task_status_queries import TaskStatus, TaskStatusQueries
+from app.storage.store_engines import main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
 from tests.model_config_fixtures import create_model_config
 from tests.sdk_fixtures import sdk_completion, sdk_events
@@ -38,7 +43,8 @@ class ReviewModel:
 
     async def stream(self, messages):
         inputs = [str(m.get("content")) for m in messages if m["role"] == "user"]
-        if any("<agent_message " in text for text in inputs):
+        # 节点输入带子目标；主 Task 收到的 Team 汇报也是 Agent 消息，靠这一句区分。
+        if any("<agent_message " in text and "Current node subgoal" in text for text in inputs):
             self.node_started.set()
             await self.release.wait()
             frames = sdk_events([{"content": self.handoff}])
@@ -180,7 +186,7 @@ async def proposed_team(reviewer, tmp_path, monkeypatch):
         yield first, decision, model
     finally:
         model.release.set()
-        await asyncio.to_thread(background_registry.close)
+        await asyncio.to_thread(command_results.close)
         await depends.get_agent_team_coordinator().aclose()
         await spaces.aclose()
 
@@ -189,7 +195,7 @@ async def proposed_team(reviewer, tmp_path, monkeypatch):
     "ending",
     ["done", "failed", "user_stop", "task_stop", "parent_stop", "delete", "shutdown"],
 )
-async def test_approved_team_runs_in_background(proposed_team, ending):
+async def test_approved_team_reports_to_the_main_task(proposed_team, ending):
     first, decision, model = proposed_team
     service = TransportAssistantService()
     task_id = first.task_id
@@ -207,33 +213,30 @@ async def test_approved_team_runs_in_background(proposed_team, ending):
         await service.decide(task_id, CALL_ID, decision)
         await model.receipt_seen.wait()
         await model.node_started.wait()
-        # 后台工作属于 Task：批准的 Run 读到启动回执就答复并完成，Team 继续在后台跑。
+        # 批准的 Run 读到批准结果就答复并完成，Team 照常运行；它不是后台工作，看板上没有它。
         owner = await _parked(actor)
         assert owner.status == "completed"
         assert (owner.id != first.id) == (ending == "done")
+        row = coordinator._team_run_crud.get_by_tool_call(task_id, CALL_ID)
         if ending == "done":
             assert owner.model_config_id != first.model_config_id
-            row = coordinator._team_run_crud.get_by_tool_call(task_id, CALL_ID)
             assert row.state_json["node_runtime"]["a"]["model_config_id"] == first.model_config_id
-        rows = service.get_state(task_id)["background_tasks"]
-        assert [(r["kind"], r["label"], r["status"]) for r in rows] == [
-            ("agent_team", "Review", "running")
-        ]
+        assert service.get_state(task_id)["background_tasks"] == []
         with pytest.raises(SessionConflictError) as caught:
             await service.decide(task_id, CALL_ID, decision)
         assert caught.value.code == "DECISION_NOT_AWAITED"
         if ending == "user_stop":
-            assert await asyncio.to_thread(service.cancel_tool_call, task_id, CALL_ID)
+            assert coordinator.cancel_by_user(row.id)
         elif ending == "task_stop":
-            # 用户停止 Task 只打断当前驱动：Task 空闲时什么也不做，Team 照常跑完并开新 Run 收尾。
+            # 用户停止 Task 只打断当前驱动：Task 空闲时什么也不做，Team 照常跑完并汇报。
             await service.cancel(task_id)
         elif ending == "parent_stop":
-            # Run 已答复、Task 空闲，上游收回照样撤销它的后台工作。
+            # 上游收回主 Task：Team 一并停下，不汇报。
             await actor.cancel("parent")
         elif ending in {"delete", "shutdown"}:
             if ending == "shutdown":
                 # 模型一直不发下一帧，协调者仍应当退出。
-                await asyncio.to_thread(background_registry.close)
+                await asyncio.to_thread(command_results.close)
                 await coordinator.aclose()
             else:
                 operation = asyncio.create_task(
@@ -244,39 +247,39 @@ async def test_approved_team_runs_in_background(proposed_team, ending):
             assert not coordinator._active
             return
         model.release.set()
+        await asyncio.gather(*(task for _, task in coordinator._active.values()))
+        # 主 Task 只在 Team 落定、汇报处理完之后才算无事可做。
         assert await actor.wait_quiescent(5)
-        if ending == "parent_stop":
-            await asyncio.gather(*(task for _, task in coordinator._active.values()))
         runs = depends.get_conversation_run_crud().list_by_task(task_id)
-        # 结论到达时 Task 空闲，开出新 Run 收尾；停止（单停与整停）不开新 Run。
+        # 汇报到达时主 Task 空闲，开出新 Run 收尾；被停下（单停、收回）的 Team 不开新 Run。
         stopped = ending in {"user_stop", "parent_stop"}
         assert len(runs) == (4 if ending == "done" else 1 if stopped else 2)
-        current = depends.get_task_service().require_current_run(task_id)
         records = depends.get_conversation_task_context_crud().get(task_id)
-        results = [
+        reports = [
             r
             for r in records
             if isinstance(r.metadata, UserMessageMetadata)
-            and r.metadata.kind == "background_result"
+            and r.metadata.source is not None
+            and r.metadata.source.team_run_id == row.id
         ]
         [placeholder] = [r for r in records if r.message.get("tool_call_id") == CALL_ID]
         assert placeholder.run_id == first.id
-        assert placeholder.metadata.background.run_id == owner.id
+        assert placeholder.metadata.background is None
         assert placeholder.metadata.display_data["kind"] == "agent-team-approval"
-        state = service.get_state(task_id)["background_tasks"][0]
+        queued = [m.kind for m in depends.get_task_message_queue().pending_nowait(task_id)]
         if stopped:
-            # 空闲时停止没有 Run 可落定；单停的回执留在队列里，等下一次推进告诉 Agent。
-            assert current.status == "completed" and results == []
-            assert state["status"] == "cancelled"
-            queued = depends.get_task_message_queue().pending_nowait(task_id)
-            assert [m.kind for m in queued] == (["background_result"] if ending == "user_stop" else [])
+            assert reports == []
+            # 单停只留一条不唤醒的通知，等下一次推进告诉 Agent；收回什么也不留。
+            assert queued == (["system_notice"] if ending == "user_stop" else [])
         else:
-            assert current.status == "completed"
-            [result] = results
-            body = str(result.message["content"])
+            [report] = reports
             expected = {"done": "completed", "failed": "failed", "task_stop": "completed"}[ending]
-            assert f'"status": "{expected}"' in body and ".cosir/agent-team-runs/" in body
-            assert state["status"] == "completed"
+            assert report.metadata.source.report.status == expected
+            body = str(report.message["content"])
+            assert f'source_team_run_id="{row.id}"' in body and 'report="final"' in body
+            assert f'"status": "{expected}"' in body
+            assert ".cosir/agent-team-runs/" in body
+            assert queued == []
 
 
 async def test_approval_with_deleted_agent_fails_team_and_card(proposed_team, reviewer):
@@ -322,12 +325,68 @@ async def test_failed_node_input_does_not_start_another_run_after_restart(propos
         [failed] = runs.list_by_task(node_id)
         assert failed.status == "failed"
 
-        await asyncio.to_thread(background_registry.close)
+        await asyncio.to_thread(command_results.close)
         await coordinator.aclose()
         await spaces.aclose()
         agents.create(document)
         spaces.bind_loop(asyncio.get_running_loop())
-        background_registry.open()
+        command_results.open()
         depends.get_recover_service().recover_after_restart()
         assert await spaces.get_or_create(node_id).actor.wait_quiescent(5)
         assert [r.id for r in runs.list_by_task(node_id)] == [failed.id]
+
+
+async def test_withdrawing_the_proposal_turn_stops_the_running_team_silently(proposed_team):
+    """撤回提出方案的那一回合：运行中的 Team 停下、不汇报，主 Task 不会被它的结论再叫醒。"""
+    first, decision, model = proposed_team
+    service = TransportAssistantService()
+    task_id = first.task_id
+    actor = spaces.get(task_id).actor
+    coordinator = depends.get_agent_team_coordinator()
+    async with asyncio.timeout(12):
+        await service.decide(task_id, CALL_ID, decision)
+        await model.node_started.wait()
+        await _parked(actor)
+        target = depends.get_conversation_task_context_service().latest_user_input(task_id)
+        await service.withdraw(task_id, target.message_id)
+        model.release.set()
+        await asyncio.gather(*(task for _, task in coordinator._active.values()))
+        assert await actor.wait_quiescent(5)
+
+    row = coordinator._team_run_crud.get_by_tool_call(task_id, CALL_ID)
+    assert (row.status, row.end_reason) == ("cancelled", "cancelled")
+    assert len(depends.get_conversation_run_crud().list_by_task(task_id)) == 1
+    assert depends.get_task_message_queue().pending_nowait(task_id) == []
+
+
+@pytest.mark.parametrize("resolve", ["decide", "withdraw"])
+async def test_a_pending_proposal_awaits_the_user_whatever_the_run_does(proposed_team, resolve):
+    """「等你操作」与 Run 正交：提案 Run 被停下后方案仍在等你；作出决定或撤回那一回合后清零，
+    并经 Task 状态推送交给订阅者。"""
+    first, decision, model = proposed_team
+    service = TransportAssistantService()
+    task_id = first.task_id
+    actor = spaces.get(task_id).actor
+    reads = TaskStatusQueries(main_session_factory())
+    feed = depends.get_task_status_feed()
+    subscription = feed.subscribe(asyncio.get_running_loop())
+    try:
+        async with asyncio.timeout(12):
+            assert reads.status(task_id) == TaskStatus("suspended", 1)
+            await service.cancel(task_id)
+            assert (await _parked(actor)).status == "cancelled"
+            assert reads.status(task_id) == TaskStatus("cancelled", 1)
+
+            subscription.take()
+            if resolve == "decide":
+                await service.decide(task_id, CALL_ID, decision)
+                await model.node_started.wait()
+                await _parked(actor)
+            else:
+                target = depends.get_conversation_task_context_service().latest_user_input(task_id)
+                await service.withdraw(task_id, target.message_id)
+            await asyncio.sleep(0)
+            assert reads.status(task_id).awaiting_user_calls == 0
+            assert subscription.take()[task_id].awaiting_user_calls == 0
+    finally:
+        feed.unsubscribe(subscription)

@@ -7,7 +7,21 @@ import { installFakeDesktopHost } from "./fake-desktop-host";
 const longTitle = "检查工作区任务列表中的超长中文标题与EnglishIdentifierWithoutSpaces".repeat(3);
 const workspaceName = "cosir-用于验证长名称的本地工作区";
 
-async function seedSidebar(page: Page, request: APIRequestContext, theme: string) {
+/** 状态推送的整表帧：每个 Task 的执行状态与等你操作的调用数（缺省 0）。 */
+function statusFrame(statuses: Record<number, string | null>, awaiting: Record<number, number> = {}) {
+  const tasks = Object.fromEntries(Object.entries(statuses).map(([id, executionStatus]) => (
+    [id, { executionStatus, awaitingUserCalls: awaiting[Number(id)] ?? 0 }]
+  )));
+  return `${JSON.stringify({ type: "full", tasks })}\n`;
+}
+
+async function seedSidebar(
+  page: Page,
+  request: APIRequestContext,
+  theme: string,
+  statuses: Record<number, string | null> = { 100: null, 101: "suspended", 102: "running" },
+  awaiting: Record<number, number> = {},
+) {
   await page.addInitScript((value) => {
     localStorage.clear();
     localStorage.setItem("cosir.theme-preference", value);
@@ -24,9 +38,8 @@ async function seedSidebar(page: Page, request: APIRequestContext, theme: string
   ];
   await page.route(`${origin}/workspaces/7/tasks`, (route) => route.fulfill({ json: tasks }));
   // 状态点只读状态推送：一帧整表即可（流结束后客户端重连，再拿到同一张表）。
-  const statuses = { 100: null, 101: "suspended", 102: "running" };
   await page.route(`${origin}/task-status/stream`, (route) => route.fulfill({
-    contentType: "application/x-ndjson", body: `${JSON.stringify({ type: "full", statuses })}\n`,
+    contentType: "application/x-ndjson", body: statusFrame(statuses, awaiting),
   }));
   // 只读展示夹具按浏览器隔离，避免其他测试重置共享内存服务时影响任务切换。
   for (const task of tasks) {
@@ -57,7 +70,7 @@ for (const theme of ["light", "dark"]) {
     await expect(selected).toHaveAttribute("aria-current", "page");
     await expect(workspace).toHaveAttribute("aria-selected", "false");
     await expect(page.locator("html")).toHaveCSS("color-scheme", theme);
-    await expect(other.getByRole("img", { name: "等待中" })).toBeVisible();
+    await expect(other.getByRole("img", { name: "等待结果" })).toBeVisible();
     await expect(row(page, "分支任务").getByRole("img", { name: "运行中" })).toBeVisible();
 
     const title = selected.locator(".workspace-tree-title");
@@ -292,7 +305,13 @@ test("尾栏按时间实际宽度让位：默认宽度下短时间的行能放�
 });
 
 /** 工作区 7 下 `count` 个顶层任务，id 越大越新（侧栏按最近更新倒序，先显示 200+count-1）。 */
-async function seedManyTasks(page: Page, request: APIRequestContext, count: number, statuses: Record<number, string | null> = {}) {
+async function seedManyTasks(
+  page: Page,
+  request: APIRequestContext,
+  count: number,
+  statuses: Record<number, string | null> = {},
+  awaiting: Record<number, number> = {},
+) {
   await seedSidebar(page, request, "light");
   const many = Array.from({ length: count }, (_, index) => {
     const at = new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString();
@@ -300,7 +319,7 @@ async function seedManyTasks(page: Page, request: APIRequestContext, count: numb
   });
   await page.route(`${origin}/workspaces/7/tasks`, (route) => route.fulfill({ json: many }));
   await page.route(`${origin}/task-status/stream`, (route) => route.fulfill({
-    contentType: "application/x-ndjson", body: `${JSON.stringify({ type: "full", statuses })}\n`,
+    contentType: "application/x-ndjson", body: statusFrame(statuses, awaiting),
   }));
   for (const task of many) {
     await page.route(`${origin}/tasks/${task.task_id}`, (route) => route.fulfill({ json: task }));
@@ -334,6 +353,26 @@ test("运行中与打开过的任务留在可见范围内，离开后也不消�
   await page.getByRole("button", { name: "新对话", exact: true }).click();
   await expect(page).toHaveURL(`${WEB_ORIGIN}/`);
   await expect(row(page, "批量任务 2")).toBeVisible();
+});
+
+test("有事等你操作时状态位与行尾都写明，Run 已完成也不例外；页头两项并列", async ({ page, request }) => {
+  await seedSidebar(page, request, "light", { 100: null, 101: "completed", 102: "running" }, { 101: 2 });
+  await page.goto("/tasks/101");
+  const waiting = row(page, "核对运行状态");
+  await expect(waiting.getByRole("img", { name: "等你操作 · 2" })).toBeVisible();
+  await expect(waiting).toContainText("等你操作");
+  // 没有待决事项的行照旧：运行中是圆点，行尾是相对时间。
+  await expect(row(page, "分支任务").getByRole("img", { name: "运行中" })).toBeVisible();
+  const header = page.locator("header");
+  await expect(header.getByText("等你操作 · 2")).toBeVisible();
+  await expect(header.getByText("已完成")).toHaveCount(0);
+});
+
+test("有事等你操作的任务留在可见范围内，即使它的 Run 早已结束", async ({ page, request }) => {
+  await seedManyTasks(page, request, 12, { 201: "completed" }, { 201: 1 });
+  await page.goto("/");
+  await expect(row(page, "批量任务 1")).toBeVisible();
+  await expect(row(page, "批量任务 0")).toHaveCount(0);
 });
 
 test("区头：搜索打开命令面板，添加工作区后在新工作区开始新对话", async ({ page, request }) => {

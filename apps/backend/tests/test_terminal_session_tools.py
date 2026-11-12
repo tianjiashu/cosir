@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from terminal_test_support import ReadyWorker, make_service, wait_until
 
 from app.config.constant import Constant
-from app.core.tool.background.background_registry import background_registry
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL, TOOL_GROUP_TERMINAL_SESSION
@@ -147,7 +147,7 @@ def tool_service(monkeypatch):
             lambda task_id, tool_call_id: False,
         )
     yield service, workers
-    background_registry.drop_task(1)
+    command_results.drop_task(1)
     for command in running_commands.task_commands(1):
         running_commands.finish(1, command.terminal_id, None)
 

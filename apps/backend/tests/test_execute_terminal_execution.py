@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from app.core.tool.background import background_registry as background_module
-from app.core.tool.background.background_job import BackgroundJob
-from app.core.tool.background.background_registry import background_registry
+from app.tools.tool_handler.terminal import command_results as background_module
+from app.tools.tool_handler.terminal.command_job import CommandJob
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
@@ -62,7 +62,7 @@ def command(monkeypatch):
     command.stop()
     if command.thread is not None:
         command.join()
-    background_registry.drop_task(1)
+    command_results.drop_task(1)
     cancellation_registry.consume(1)
 
 
@@ -100,7 +100,7 @@ def _execute(tmp_path: Path, *, background=False, call_id="call-1", tool=None):
 
 def _wait_registered(call_id="call-1") -> None:
     deadline = time.monotonic() + 2
-    while not registered(background_registry, 1, call_id):
+    while not registered(command_results, 1, call_id):
         assert time.monotonic() < deadline, "not registered"
         time.sleep(0.01)
 
@@ -128,7 +128,7 @@ def test_foreground_returns_result_without_delivery(tmp_path, command, pool, del
     observation = result.result(timeout=2)
     assert observation.status == "success" and observation.background is None
     assert observation.content == "[exit_code=0]\ncall-1\n"
-    assert delivered == [] and not registered(background_registry, 1, "call-1")
+    assert delivered == [] and not registered(command_results, 1, "call-1")
 
 
 def test_background_returns_placeholder_and_delivers_later(tmp_path, command, delivered):
@@ -137,7 +137,7 @@ def test_background_returns_placeholder_and_delivers_later(tmp_path, command, de
     assert (observation.background.kind, observation.background.label) == (
         "terminal_command", "test command",
     )
-    assert background_registry.live_background(1) == {"call-1": observation.background}
+    assert command_results.live_background(1) == {"call-1": observation.background}
     command.release.set()
     command.join()
     assert len(delivered) == 1
@@ -149,7 +149,7 @@ def test_result_before_registration_is_not_lost(
     tmp_path, command, monkeypatch, delivered, background,
 ):
     # 让真实作业线程先结束，再把作业交给工具登记，确定性覆盖提前完成。
-    start = BackgroundJob.start_in_thread
+    start = CommandJob.start_in_thread
 
     def already_finished(*args, **kwargs):
         job = start(*args, **kwargs)
@@ -157,7 +157,7 @@ def test_result_before_registration_is_not_lost(
         return job
 
     command.release.set()
-    monkeypatch.setattr(BackgroundJob, "start_in_thread", already_finished)
+    monkeypatch.setattr(CommandJob, "start_in_thread", already_finished)
     observation = _execute(tmp_path, background=background)
     assert bool(observation.background) is background
     if background:
@@ -169,7 +169,7 @@ def test_result_before_registration_is_not_lost(
 def test_detach_keeps_running_and_delivers_once(tmp_path, command, pool, delivered):
     result = pool.submit(_execute, tmp_path)
     _wait_registered()
-    assert background_registry.detach(1, "call-1") == "detached"
+    assert command_results.detach(1, "call-1") == "detached"
     observation = result.result(timeout=2)
     assert observation.background is not None and not observation.suspend
     assert "the user moved" in observation.content
@@ -195,9 +195,9 @@ def test_detach_before_waiter_returns_keeps_placeholder(
     result = pool.submit(_execute, tmp_path)
     try:
         assert entered.wait(2)
-        assert background_registry.detach(1, "call-1") == "detached"
+        assert command_results.detach(1, "call-1") == "detached"
         if withdraw:
-            background_registry.withdraw(1, "call-1")
+            command_results.withdraw(1, "call-1")
         else:
             command.release.set()
         command.join()
@@ -231,7 +231,7 @@ def test_foreground_cancel_stops_command_and_waits_for_result(
     if stop_run:
         cancellation_registry.request_cancel(1, "user")
     else:
-        assert background_registry.request_cancel(1, "call-1", driving=False)
+        assert command_results.request_cancel(1, "call-1", driving=False)
     observation = result.result(timeout=2)
     assert command.stopped.is_set()
     assert observation.status == "cancelled" and observation.background is None
@@ -240,7 +240,7 @@ def test_foreground_cancel_stops_command_and_waits_for_result(
 
 def test_parent_stop_drops_background_result(tmp_path, command, delivered):
     _execute(tmp_path, background=True)
-    dropped = background_registry.drop_task(1)
+    dropped = command_results.drop_task(1)
     assert dropped["call-1"]["output"] == "call-1"
     command.join()
     assert command.stopped.is_set() and delivered == []
@@ -252,7 +252,7 @@ def test_same_tool_instance_keeps_overlapping_calls_independent(
     tool = ExecuteTerminalTool()
     first = pool.submit(_execute, tmp_path, tool=tool)
     _wait_registered()
-    assert background_registry.detach(1, "call-1") == "detached"
+    assert command_results.detach(1, "call-1") == "detached"
     assert first.result(timeout=2).background is not None
     second = _Command()
     monkeypatch.setattr(terminal_module, "LocalExecutionBackend", lambda: second)
@@ -261,7 +261,7 @@ def test_same_tool_instance_keeps_overlapping_calls_independent(
         _wait_registered("call-2")
         command.release.set()
         command.join()
-        assert not result.done() and registered(background_registry, 1, "call-2")
+        assert not result.done() and registered(command_results, 1, "call-2")
         assert len(delivered) == 1 and delivered[0][0] == "call-1"
         second.release.set()
         observation = result.result(timeout=2)
@@ -342,7 +342,7 @@ def test_model_text_fits_the_channel_once_whatever_the_ending(
             content = observation.content or ""
             assert ToolOutputBudget().apply(observation, context) is observation
     finally:
-        background_registry.drop_task(1)
+        command_results.drop_task(1)
 
     assert len(content) <= Constant.Tools.MAX_OUTPUT_CHARS
     assert content.startswith(result.end_marker())

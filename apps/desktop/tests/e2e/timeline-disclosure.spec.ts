@@ -88,7 +88,7 @@ test("A5/A10 running shimmer survives hidden process, is static for reduced moti
 const preview = { kind: "agent-team-approval", team_run_id: 17, team_id: "review", name: "代码检查", goal: "检查", start_node: "a", configuration: { team_id: "review" }, node_goals: { a: { goal: "检查实现", summary: "检查" } }, edges: [], nodes: [{ node_id: "a", name: "审查", role: "Reviewer", statuses: [{ name: "完成", color: "#888888" }], max_steps: 5 }] };
 const teamPart = () => toolCallPart("team", "agent_team", { presentation: "standalone", status: "pending", awaitingUser: true, team_run_id: 17, display_data: preview });
 
-test("A6/A7 pending draft survives disclosure and task switch; approved timeline opens existing background details", async ({ page, request }) => {
+test("A6/A7 pending draft survives disclosure and task switch; approved Team expands its execution card in place", async ({ page, request }) => {
   let teamStatus = "pending";
   await page.route("**/agent-team/runs/17", route => route.fulfill({ json: { id: 17, team_id: "review", goal: "检查", status: teamStatus, end_reason: null, current_node_id: null, nodes: [] } }));
   await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 43, title: "另一个任务" } });
@@ -115,14 +115,13 @@ test("A6/A7 pending draft survives disclosure and task switch; approved timeline
   expect(JSON.stringify(submitted)).toContain("用户修改过的目标");
   await expect(form.getByRole("button", { name: "正在提交…", exact: true }).last()).toBeDisabled();
   release();
-  const startedAt = new Date().toISOString();
-  await seedState(request, 42, state([{ ...teamPart(), awaitingUser: false, background: { kind: "agent_team", label: "代码检查", startedAt, endedAt: null } }]));
-  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { taskId: 42, entries: [{ toolCallId: "team", kind: "agent_team", label: "代码检查", status: "running", startedAt, endedAt: null }] } });
+  // 批准即开跑、调用当场完成：Team 是编排，不进后台看板，执行卡在时间线这一行就地展开。
+  await seedState(request, 42, state([{ ...teamPart(), status: "completed", awaitingUser: false }]));
   await expect(form).toBeHidden();
-  await expect(row.locator('[data-slot="call-title"]')).toHaveAttribute("data-thinking-active", "true");
-  await expect(row.getByRole("region", { name: "Agent Team 执行进度" })).toHaveCount(0);
-  await row.locator('[data-slot="call-row"]').click();
-  await expect(page.locator('[data-background-task="team"]').getByRole("region", { name: "Agent Team 执行进度" })).toBeVisible();
+  await expect(row).toContainText("执行中");
+  // 用户在审批前展开过这一行：显式选择优先，批准后执行卡直接就地可见。
+  await expect(row.getByRole("region", { name: "Agent Team 执行进度" })).toBeVisible();
+  await expect(page.locator('[data-background-task="team"]')).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath("team-background.png") });
 });
 
@@ -173,6 +172,8 @@ test("A10 a focused control unmounting with its tool never blocks automatic fold
   await seedState(request, 42, state([text("进展"), run("running")]));
   await page.goto("/tasks/42");
   await page.locator('[data-slot="activity-head"]').click();
+  // 去留操作在终端卡片头部：先展开这条调用。
+  await page.locator('[data-tool-call-id="term"] [data-slot="call-row"]').click();
   const button = page.getByRole("button", { name: "转到后台" });
   await button.focus();
   await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { taskId: 42, entries: [], foregroundWaits: [] } });

@@ -69,14 +69,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         state.prepared.append({"text": text, **kwargs})
         return "agent-message"
 
-    def run_child(execution_context, child_task_id, *, label, enqueue, placeholder):
-        enqueue()
-        observation = placeholder()
-        state.run_child = (child_task_id, label)
-        return observation
-
     monkeypatch.setattr(fork_module, "prepare_agent_message", prepare)
-    monkeypatch.setattr(fork_module, "run_child", run_child)
     monkeypatch.setattr(
         fork_module.task_runtime_spaces,
         "enqueue",
@@ -85,12 +78,14 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     return state
 
 
-def test_fork_keeps_the_parents_identity_and_waits_in_the_background(env, tmp_path) -> None:
+def test_fork_keeps_the_parents_identity_and_completes_once_assigned(env, tmp_path) -> None:
+    """分叉是编排：建好分叉、投递完交接与任务说明就完成，不登记后台等待（结论由派生汇报交回）。"""
     observation = fork_module.ForkTaskTool().execute(
         title="前端部分", message="只做前端", execution_context=_context(tmp_path)
     )
 
-    assert observation.status == "success"
+    assert observation.status == "success" and observation.background is None
+    assert '"status":"started"' in (observation.content or "")
     assert observation.display_data == {
         "kind": "fork-task-result", "title": "前端部分", "child_task_id": 41,
     }
@@ -111,7 +106,6 @@ def test_fork_keeps_the_parents_identity_and_waits_in_the_background(env, tmp_pa
     assert assignment == (41, "agent-message")
     assert handover_task == 41 and handover.body.notice_kind == "fork_handover"
     assert "task 41" in handover.body.content and "task 7" in handover.body.content
-    assert env.run_child == (41, "前端部分")
 
 
 def test_fork_conflicts_become_tool_errors(env, tmp_path) -> None:

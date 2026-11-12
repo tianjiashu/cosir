@@ -32,6 +32,7 @@ from app.assistant_transport.stream import TransportFrame
 from app.core.events import (
     RunInitializedEvent,
     RunStatusChangedEvent,
+    TerminalCommandStartedData,
     TerminalOutputDeltaData,
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
@@ -1014,6 +1015,18 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
     projector.process(
         ToolCallStatusChangedEvent(
             task_id=1, run_id=9, tool_call_id="call-t", status="running"
+        )
+    )
+    projector.process(
+        ToolCallRuntimeUpdateEvent(
+            task_id=1,
+            run_id=9,
+            tool_call_id="call-t",
+            seq=0,
+            data=TerminalCommandStartedData(
+                kind="terminal_command_started",
+                display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"},
+            ),
         )
     )
     streamed = "full live output\n" * 600  # 多 chunk，确保 seq 递增而非恒为 0

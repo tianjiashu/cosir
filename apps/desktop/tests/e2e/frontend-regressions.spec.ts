@@ -219,7 +219,7 @@ test("交替序列：运行中过程区展开、区头显示当前动作，命�
   await expect(running).toContainText("bun test tests/task.test.ts");
   await expect(running.locator('[data-terminal-mode="preview"]')).toBeVisible();
   await expect(running).toHaveAttribute("data-tool-status", "running");
-  // 复制按钮悬停才出现，触屏与键盘同样可用（见 `REVEAL_ON_HOVER_CLASS`）。
+  // 复制按钮悬停才出现，触屏与键盘同样可用（见 `REVEAL_ON_DISCLOSURE_HOVER`）。
   const copyCommand = running.getByRole("button", { name: "复制命令" });
   await expect(copyCommand).toBeVisible();
   await running.locator('[data-terminal-mode="preview"]').hover();
@@ -267,7 +267,7 @@ test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage foo
   await input.fill("usage-regression-first");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(contextMeter).toContainText("上下文 1%");
-  await expect(page.getByTestId("run-usage-display")).toContainText("本次用量 1.5k tokens");
+  await expect(page.getByTestId("run-usage-display")).toContainText("1.5k tokens");
   const cacheMissRow = page.locator("dt").filter({ hasText: "缓存未命中" }).locator("xpath=following-sibling::dd[1]");
   // 流结束后消息页脚仍会因 Reasoning 收起等布局收敛而位移，悬停可能落空，故重试直到浮层打开。
   await expect(async () => {
@@ -290,13 +290,21 @@ test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage foo
   await input.fill("usage-regression-second");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(contextMeter).toContainText("上下文 2%");
-  await expect(page.getByTestId("run-usage-display").last()).toContainText("本次用量 2.5k tokens");
+  await expect(page.getByTestId("run-usage-display").last()).toContainText("2.5k tokens");
   await expect(page.getByTestId("run-usage-display")).toHaveCount(2);
-  await expect(page.getByTestId("run-usage-display").first()).toContainText("本次用量 1.5k tokens");
+  await expect(page.getByTestId("run-usage-display").first()).toContainText("1.5k tokens");
+  // 脚注是次要操作：最后一条回复常显，之前的回复悬停这条消息才出现（只改透明度，不改行高）。
+  const footers = page.locator('[data-slot="turn-footer"]');
+  await page.mouse.move(5, 5);
+  await expect(footers.last()).toHaveCSS("opacity", "1");
+  await expect(footers.first()).toHaveCSS("opacity", "0");
+  await page.locator('[data-role="assistant"]').first().hover();
+  await expect(footers.first()).toHaveCSS("opacity", "1");
+  await expect(page.getByTestId("run-usage-display").first()).toHaveAttribute("aria-label", "本次用量 1.5k tokens");
   await page.reload();
   await expect(page.getByTestId("run-usage-display")).toHaveCount(2);
-  await expect(page.getByTestId("run-usage-display").first()).toContainText("本次用量 1.5k tokens");
-  await expect(page.getByTestId("run-usage-display").last()).toContainText("本次用量 2.5k tokens");
+  await expect(page.getByTestId("run-usage-display").first()).toContainText("1.5k tokens");
+  await expect(page.getByTestId("run-usage-display").last()).toContainText("2.5k tokens");
 });
 
 test("侧栏任务列表失败时不阻塞已确认 Task 的 Assistant", async ({ page, request }) => {

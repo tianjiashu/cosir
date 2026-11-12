@@ -15,16 +15,18 @@ for (const theme of ["light", "dark"]) test(`${theme}: user inline code has read
     const ctx = canvas.getContext("2d")!;
     const pixel = () => [...ctx.getImageData(0, 0, 1, 1).data].slice(0, 3);
     const style = getComputedStyle(code);
-    ctx.fillStyle = getComputedStyle(code.closest(".bg-foreground")!).backgroundColor;
+    ctx.fillStyle = getComputedStyle(code.closest('[data-slot="user-message-bubble"]')!).backgroundColor;
     ctx.fillRect(0, 0, 1, 1);
+    const bubble = pixel();
     ctx.fillStyle = style.backgroundColor; ctx.fillRect(0, 0, 1, 1);
     const background = pixel();
     ctx.fillStyle = style.color; ctx.fillRect(0, 0, 1, 1);
     const foreground = pixel();
     const luminance = (rgb: number[]) => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
     const a = luminance(background), b = luminance(foreground);
-    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    // 行内代码要在气泡上看得出底色，不能与气泡同色。
+    return { contrast: (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05), distinct: background.some((value, index) => value !== bubble[index]) };
   }));
-  contrasts.forEach(contrast => expect(contrast).toBeGreaterThan(4.5));
+  contrasts.forEach(({ contrast, distinct }) => { expect(contrast).toBeGreaterThan(4.5); expect(distinct).toBe(true); });
   await expect(page.locator('[data-role="user"] [data-slot="workspace-code-link"]')).toHaveCount(1);
 });

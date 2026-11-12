@@ -17,7 +17,7 @@ async def test_stop_waits_for_the_enqueued_node_then_cancels_it_once(
     current = None
     observed = asyncio.Event()
     asked = []
-    execution = module._TeamExecution(1)
+    execution = module._TeamExecution(1, "call-team")
     visit = AgentTeamNodeExecution(node_id="review", task_id=2, conversation_run_ids=[7])
 
     class Node:
@@ -47,14 +47,14 @@ async def test_stop_waits_for_the_enqueued_node_then_cancels_it_once(
     async with asyncio.timeout(3):
         await observed.wait()
         if stop_before_node_starts:
-            execution.request_stop(AgentTeamRunEndReason.CANCELLED, withdrawn=False)
+            execution.request_stop(AgentTeamRunEndReason.CANCELLED, silent=False)
         assert not asked
         observed.clear()
         current = SimpleNamespace(id=8)
         node.changed()
         if not stop_before_node_starts:
             await observed.wait()
-            execution.request_stop(AgentTeamRunEndReason.CANCELLED, withdrawn=False)
+            execution.request_stop(AgentTeamRunEndReason.CANCELLED, silent=False)
         assert await wait == 8
     assert visit.conversation_run_ids == [7, 8]
     assert asked == [(8, "parent")]

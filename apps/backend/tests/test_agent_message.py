@@ -96,7 +96,7 @@ def test_consumed_agent_message_projects_plain_text_with_its_source() -> None:
 
     user = mutations[0].value
     assert user["role"] == "user" and user["id"] == "11"
-    assert user["source"] == {"taskId": 4, "name": '主任务 "A"'}
+    assert user["source"] == {"taskId": 4, "teamRunId": None, "name": '主任务 "A"', "report": None}
     assert user["parts"] == [{"type": "text", "text": _CAPSULE_LOOKALIKE, "status": "completed"}]
 
 
@@ -149,12 +149,13 @@ def test_agent_message_arriving_mid_run_joins_the_current_reply() -> None:
         "type": "agent-message",
         "id": "11",
         "text": _CAPSULE_LOOKALIKE,
-        "source": {"taskId": 4, "name": '主任务 "A"'},
+        "source": {"taskId": 4, "teamRunId": None, "name": '主任务 "A"', "report": None},
     }
 
 
 def test_consuming_a_mid_run_agent_message_twice_changes_nothing() -> None:
-    part = {"type": "agent-message", "id": "11", "text": "x", "source": {"taskId": 4, "name": "A"}}
+    source = {"taskId": 4, "name": "A", "teamRunId": None, "report": None}
+    part = {"type": "agent-message", "id": "11", "text": "x", "source": source}
 
     assert plan_input_consumed(_consumed(), _reply_state([part])) == []  # type: ignore[arg-type]
 
@@ -193,7 +194,7 @@ def test_rebuild_projects_agent_messages_as_turns_with_source() -> None:
     state = ConversationTaskStateRebuilder.rebuild(task, [run], rows)
 
     user, reply = state["messages"]
-    assert user["source"] == {"taskId": 4, "name": '主任务 "A"'}
+    assert user["source"] == {"taskId": 4, "teamRunId": None, "name": '主任务 "A"', "report": None}
     assert user["parts"] == [{"type": "text", "text": _CAPSULE_LOOKALIKE, "status": "completed"}]
     assert (reply["id"], reply["source"]) == ("assistant-turn-1", None)
     validate_snapshot(state)
@@ -210,7 +211,7 @@ def test_snapshot_rejects_a_source_on_assistant_messages() -> None:
                 "turn": 1,
                 "inherited": False,
                 "outcome": None,
-                "source": {"taskId": 1, "name": "x"},
+                "source": {"taskId": 1, "name": "x", "teamRunId": None, "report": None},
             }
         ],
         "messageOffset": 0,

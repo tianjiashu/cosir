@@ -47,7 +47,9 @@ const test = base.extend<{ agent: Fixture }>({
         for (const response of fixture.connections.get(id) ?? []) response.write(frame(id, state));
         const after = state.activity?.status ?? null;
         if (after !== before) {
-          for (const response of fixture.statusConnections) response.write(`${JSON.stringify({ type: "changed", statuses: { [id]: after } })}\n`);
+          for (const response of fixture.statusConnections) {
+            response.write(`${JSON.stringify({ type: "changed", tasks: { [id]: { executionStatus: after, awaitingUserCalls: 0 } } })}\n`);
+          }
         }
       },
     };
@@ -61,8 +63,10 @@ const test = base.extend<{ agent: Fixture }>({
       if (req.url === "/task-status/stream") {
         if (fixture.refuseStatus) { res.writeHead(503); res.end(); return; }
         res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
-        const statuses = Object.fromEntries([...fixture.states].map(([id, state]) => [id, state.activity?.status ?? null]));
-        res.write(`${JSON.stringify({ type: "full", statuses })}\n`);
+        const tasks = Object.fromEntries([...fixture.states].map(([id, state]) => (
+          [id, { executionStatus: state.activity?.status ?? null, awaitingUserCalls: 0 }]
+        )));
+        res.write(`${JSON.stringify({ type: "full", tasks })}\n`);
         fixture.statusConnections.add(res);
         res.on("close", () => fixture.statusConnections.delete(res));
         return;
@@ -137,7 +141,7 @@ test("挂起继续订阅，SSE 状态变化刷新标签，后续新 Run 经同�
   agent.push(501, snapshot(1, "suspended", "等待确认内容"));
   await open(page, [501]);
   await expect.poll(() => agent.attaches.get(501)).toBe(1);
-  await expect(tab(page, 501)).toHaveAccessibleName("等待中 Agent501");
+  await expect(tab(page, 501)).toHaveAccessibleName("等待结果 Agent501");
   await tab(page, 501).focus();
   await page.screenshot({ path: testInfo.outputPath("agent-waiting.png") });
   const count = agent.snapshots.get(501);

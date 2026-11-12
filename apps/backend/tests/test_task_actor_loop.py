@@ -16,7 +16,7 @@ from app.core import task_actor as actor_module
 from app.core import task_execution as execution_module
 from app.core import task_recall
 from app.core.task_actor import SessionConflictError, TaskActor
-from app.core.tool.background.background_job import BackgroundConclusion
+from app.tools.tool_handler.terminal.command_job import CommandConclusion
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.message_queue.task_message import (
     BackgroundResultBody,
@@ -98,7 +98,7 @@ class _Ledger:
     def require_current_run(self, _task_id: int) -> SimpleNamespace | None:
         return self.current
 
-    def list_child_tasks(self, _task_id: int) -> list[SimpleNamespace]:
+    def list_derived_tasks(self, _task_id: int) -> list[SimpleNamespace]:
         return []
 
 
@@ -178,6 +178,8 @@ def harness(monkeypatch):
         ("get_conversation_task_state_service", states),
     ):
         monkeypatch.setattr(actor_module.service_depends, getter, lambda fake=fake: fake)
+    # 运行中的 TeamRun 读库：本文件不建 Team（Team 见 test_agent_team_background）。
+    monkeypatch.setattr(actor_module.derived_report, "_running_team_names", lambda _task_id: [])
     # 撤销时的占位结算写库；记下调用，不触达存储（占位结算见 test_background_placeholders）。
     settled: list[tuple[int, list[str]]] = []
     monkeypatch.setattr(
@@ -529,13 +531,13 @@ async def test_wait_quiescent_settles_on_a_cancelled_run_with_leftovers(harness)
 
 async def test_wait_quiescent_waits_for_the_tasks_background_work(harness) -> None:
     """后台工作属于 Task：Run 已完成、工作还在跑就不算静止；登记表变化经通知唤醒等待方。"""
-    from app.core.tool.background.background_registry import background_registry
+    from app.tools.tool_handler.terminal.command_results import command_results
 
     harness.actor.start()
     harness.queue.put(_user())
     await _settle()
     [run] = harness.ledger.created
-    background_registry.register(
+    command_results.register(
         "call-bg", task_id=_TASK_ID, run_id=run.id, kind="terminal_command", label="bg",
         on_cancel=lambda _reason: None,
     )
@@ -545,11 +547,11 @@ async def test_wait_quiescent_waits_for_the_tasks_background_work(harness) -> No
         await _settle()
         assert not waiting.done()
 
-        background_registry.withdraw(_TASK_ID, "call-bg")
+        command_results.withdraw(_TASK_ID, "call-bg")
         harness.actor.notify_state_changed()
         assert await waiting is True
     finally:
-        background_registry.drop_task(_TASK_ID)
+        command_results.drop_task(_TASK_ID)
         await harness.actor.abort()
 
 
@@ -747,12 +749,12 @@ async def test_stop_only_touches_materialized_spaces_and_aclose_aborts_all(regis
 
 async def test_recalling_a_suspended_run_drops_background_entries(harness) -> None:
     """上游收回即撤销本 Task 的后台等待：撤销回调被调用，之后的完成返回 False、不再投递。"""
-    from app.core.tool.background.background_registry import background_registry
+    from app.tools.tool_handler.terminal.command_results import command_results
 
     run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
     cancelled: list[str] = []
-    background_registry.register(
+    command_results.register(
         "call-t1",
         task_id=_TASK_ID,
         run_id=run.id,
@@ -760,7 +762,7 @@ async def test_recalling_a_suspended_run_drops_background_entries(harness) -> No
         label="terminal:t1",
         on_cancel=lambda _reason: cancelled.append("t1"),
     )
-    background_registry.register(
+    command_results.register(
         "call-x",
         task_id=_TASK_ID + 1,
         run_id=None,
@@ -774,21 +776,21 @@ async def test_recalling_a_suspended_run_drops_background_entries(harness) -> No
         assert cancelled == ["t1"]
         # 被撤销的后台条目随即把占位行推到 cancelled。
         assert harness.settled == [(_TASK_ID, ["call-t1"])]
-        assert background_registry.pending(_TASK_ID) == []
-        assert background_registry.complete(_TASK_ID, "call-t1", BackgroundConclusion({})) is False
+        assert command_results.pending(_TASK_ID) == []
+        assert command_results.complete(_TASK_ID, "call-t1", CommandConclusion({})) is False
         # 其他 Task 的等待不受影响。
-        assert set(background_registry.live_background(_TASK_ID + 1)) == {"call-x"}
+        assert set(command_results.live_background(_TASK_ID + 1)) == {"call-x"}
     finally:
-        background_registry.drop_task(_TASK_ID + 1)
-        assert background_registry.complete(_TASK_ID, "call-x", BackgroundConclusion({})) is False
+        command_results.drop_task(_TASK_ID + 1)
+        assert command_results.complete(_TASK_ID, "call-x", CommandConclusion({})) is False
 
 
 async def test_user_stop_keeps_background_work_in_every_phase(harness) -> None:
     """用户停止只打断当前驱动：挂起、运行中与空闲时停止都不撤销后台工作，挂起与运行中的 Run 照常取消。"""
-    from app.core.tool.background.background_registry import background_registry
+    from app.tools.tool_handler.terminal.command_results import command_results
 
     dropped: list[str] = []
-    background_registry.register(
+    command_results.register(
         "call-keep", task_id=_TASK_ID, run_id=None, kind="terminal_command", label="keep",
         on_cancel=dropped.append,
     )
@@ -808,15 +810,15 @@ async def test_user_stop_keeps_background_work_in_every_phase(harness) -> None:
         await harness.actor.cancel("user")
         assert dropped == []
         assert harness.settled == []
-        assert background_registry.pending(_TASK_ID) == ["keep"]
+        assert command_results.pending(_TASK_ID) == ["keep"]
     finally:
-        background_registry.drop_task(_TASK_ID)
+        command_results.drop_task(_TASK_ID)
         await harness.actor.abort()
 
 
 async def test_recalling_a_running_run_drops_work_after_the_signal(harness) -> None:
     """收回运行中的 Run：先打信号再撤销，信号在时这次驱动剩下的登记被拒收，不会留下后台工作。"""
-    from app.core.tool.background.background_registry import background_registry
+    from app.tools.tool_handler.terminal.command_results import command_results
 
     harness.actor.start()
     harness.queue.put(_user())
@@ -829,7 +831,7 @@ async def test_recalling_a_running_run_drops_work_after_the_signal(harness) -> N
         signalled_at_drop.append(execution_module.cancellation_registry.is_cancelled(_TASK_ID))
         dropped.append(run.id)
 
-    background_registry.register(
+    command_results.register(
         "call-t2",
         task_id=_TASK_ID,
         run_id=run.id,
@@ -841,26 +843,26 @@ async def test_recalling_a_running_run_drops_work_after_the_signal(harness) -> N
     assert dropped == [run.id]
     assert signalled_at_drop == [True]
     late: list[str] = []
-    background_registry.register(
+    command_results.register(
         "call-late", task_id=_TASK_ID, run_id=run.id, kind="terminal_command", label="late",
         on_cancel=late.append,
     )
     assert late == ["parent"]
-    assert not background_registry.has_work(_TASK_ID)
+    assert not command_results.has_work(_TASK_ID)
     await _finish(run.id, "cancelled")
     await harness.actor.abort()
 
 
 async def test_recalling_an_idle_task_drops_its_background_work(harness) -> None:
     """Run 已答复、Task 空闲：上游收回照样撤销后台工作，答复过的 Run 不改结局。"""
-    from app.core.tool.background.background_registry import background_registry
+    from app.tools.tool_handler.terminal.command_results import command_results
 
     harness.actor.start()
     harness.queue.put(_user())
     await _settle()
     [run] = harness.ledger.created
     dropped: list[str] = []
-    background_registry.register(
+    command_results.register(
         "call-idle", task_id=_TASK_ID, run_id=run.id, kind="terminal_command", label="idle",
         on_cancel=dropped.append,
     )
@@ -868,23 +870,23 @@ async def test_recalling_an_idle_task_drops_its_background_work(harness) -> None
         await _finish(run.id, "completed")
         await harness.actor.cancel("parent")
         assert dropped == ["parent"]
-        assert not background_registry.has_work(_TASK_ID)
+        assert not command_results.has_work(_TASK_ID)
         assert harness.settled == [(_TASK_ID, ["call-idle"])]
         assert run.status == "completed"
     finally:
-        background_registry.drop_task(_TASK_ID)
+        command_results.drop_task(_TASK_ID)
         await harness.actor.abort()
 
 
 async def test_completed_run_keeps_background_entries(harness) -> None:
     """完成或挂起不撤销：后台等待的结论稍后照常投递、开新 Run 或唤醒。"""
-    from app.core.tool.background.background_registry import background_registry
+    from app.tools.tool_handler.terminal.command_results import command_results
 
     harness.actor.start()
     harness.queue.put(_user())
     await _settle()
     [run] = harness.ledger.created
-    background_registry.register(
+    command_results.register(
         "call-t3",
         task_id=_TASK_ID,
         run_id=run.id,
@@ -893,6 +895,6 @@ async def test_completed_run_keeps_background_entries(harness) -> None:
         on_cancel=lambda _reason: None,
     )
     await _finish(run.id, "suspended")
-    assert background_registry.pending(_TASK_ID) == ["terminal:t3"]
-    background_registry.drop_task(_TASK_ID)
+    assert command_results.pending(_TASK_ID) == ["terminal:t3"]
+    command_results.drop_task(_TASK_ID)
     await harness.actor.abort()

@@ -6,13 +6,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
 // 服务端渲染读 zustand 的初始状态；任务状态推送的镜像换成可控的表。
 const taskStatuses = vi.hoisted(() => new Map<number, string | null>());
+const awaitingCalls = vi.hoisted(() => new Map<number, number>());
 vi.mock("@/lib/task-status/task-status-store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/task-status/task-status-store")>(),
   useTaskExecutionStatus: (taskId: number | null | undefined) => (taskId == null ? null : taskStatuses.get(taskId) ?? null),
+  useTaskAwaitingUserCalls: (taskId: number | null | undefined) => (taskId == null ? 0 : awaitingCalls.get(taskId) ?? 0),
+}));
+
+// 开合与前台等待同样读 store：换成可控的表（终端卡片在展开体里，去留操作看前台等待）。
+const surface = vi.hoisted(() => ({ open: new Set<string>(), waits: new Map<number, string[]>() }));
+vi.mock("@/lib/assistant/turn/disclosure-store", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/assistant/turn/disclosure-store")>(),
+  useDisclosure: (_taskId: number, key: string, defaultOpen: boolean) => [surface.open.has(key) || defaultOpen, () => undefined],
+}));
+vi.mock("@/lib/background-tasks/background-tasks-store", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/background-tasks/background-tasks-store")>(),
+  useForegroundWaits: (taskId: number | null) => (taskId === null ? [] : surface.waits.get(taskId) ?? []),
 }));
 
 import { CallRow } from "@/components/conversation/tools/call-row";
-import { useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
+import { callKey, useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
 import { createQueryClient } from "@/lib/query/query-client";
 import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 
@@ -41,8 +54,16 @@ function render(overrides: Partial<ToolArtifact> = {}, { toolName = "read_file",
 
 beforeEach(() => {
   useDisclosureStore.setState({ tasks: {} });
+  surface.open.clear();
+  surface.waits.clear();
   taskStatuses.clear();
+  awaitingCalls.clear();
 });
+
+/** 展开 `call-1` 的详情（终端卡片在展开体里）。 */
+function openCall(): void {
+  surface.open.add(callKey("call-1"));
+}
 
 describe("CallRow 标题与目标", () => {
   it("标题、目标与图标按工具目录从参数算出", () => {
@@ -188,10 +209,18 @@ describe("CallRow kind 视图", () => {
     expect(html).not.toContain("已完成");
   });
 
-  it.each([["failed", "运行失败"], ["cancelled", "已停止"], ["suspended", "等待中"]])("子任务 %s 时委派行报异常", (status, label) => {
+  it.each([["failed", "运行失败"], ["cancelled", "已停止"], ["suspended", "等待结果"]])("子任务 %s 时委派行报异常", (status, label) => {
     taskStatuses.set(501, status);
     const html = render({ childTaskId: 501, display_data: { kind: "delegation-result", title: "审查代码", child_task_id: 501 } });
     expect(html).toContain(label);
+  });
+
+  it("子任务有事等你操作时，不论它的 Run 怎样，调用行都写明等你操作", () => {
+    taskStatuses.set(501, "completed");
+    awaitingCalls.set(501, 1);
+    const html = render({ childTaskId: 501, display_data: { kind: "delegation-result", title: "审查代码", child_task_id: 501 } });
+    expect(html).toContain("等你操作");
+    expect(html).not.toContain("已完成");
   });
 
   it("工具自身取消时不再叠子任务状态", () => {
@@ -259,5 +288,62 @@ describe("CallRow kind 视图", () => {
     const html = render({presentation: "activity",  backendStatus: "running", display_data: { kind: "terminal-result", command: "make", output: "" } }, { interactive: false });
     expect(html).not.toContain("停止终端命令");
     expect(html).not.toContain("转到后台");
+  });
+});
+
+describe("CallRow 运行时长", () => {
+  const startedSecondsAgo = (seconds: number) => new Date(Date.now() - seconds * 1000).toISOString();
+
+  it("运行超过 3 秒才在标题后显示时长，所有工具一样", () => {
+    expect(render({ backendStatus: "running", startedAt: startedSecondsAgo(1) })).not.toContain('data-slot="call-elapsed"');
+    const html = render({ backendStatus: "running", startedAt: startedSecondsAgo(75) }, { toolName: "mcp", args: { action: "call", server_name: "jira", tool_name: "search" } });
+    expect(html).toMatch(/data-slot="call-elapsed"[^>]*>1分钟1[45]秒</);
+    expect(html.indexOf('data-slot="call-title"')).toBeLessThan(html.indexOf('data-slot="call-elapsed"'));
+  });
+
+  it("没有运行起点（结束、后台、冷重建）或继承记录不显示时长", () => {
+    expect(render({ backendStatus: "completed" })).not.toContain('data-slot="call-elapsed"');
+    expect(render({ backendStatus: "running", startedAt: startedSecondsAgo(30) }, { inherited: true })).not.toContain('data-slot="call-elapsed"');
+  });
+});
+
+describe("终端卡片", () => {
+  const running = { backendStatus: "running" as const, display_data: { kind: "terminal-result", command: "git pull origin main", workdir: "/w" } };
+
+  it("行上没有停止与转到后台：去留操作在卡片头部", () => {
+    surface.waits.set(7, ["call-1"]);
+    const collapsed = render(running, { toolName: "execute_terminal" });
+    expect(collapsed).not.toContain("停止终端命令");
+    expect(collapsed).not.toContain("转到后台");
+
+    openCall();
+    const html = render(running, { toolName: "execute_terminal" });
+    const header = html.slice(html.indexOf('data-slot="terminal-card-header"'), html.indexOf('data-terminal-command'));
+    expect(header).toContain("转到后台");
+    expect(header).toContain("停止终端命令");
+  });
+
+  it("还没有输出时命令已可见，输出区是占位", () => {
+    openCall();
+    const html = render(running, { toolName: "execute_terminal" });
+    expect(html).toMatch(/data-terminal-command="true"[^>]*>git pull origin main</);
+    expect(html).toContain("等待输出…");
+  });
+
+  it("不在前台等待表里时只有停止；结束后头部换成状态、操作消失", () => {
+    openCall();
+    const live = render(running, { toolName: "execute_terminal" });
+    expect(live).not.toContain("转到后台");
+    expect(live).toContain("停止终端命令");
+    const done = render({ display_data: { ...running.display_data, output: "Already up to date.\n", end: "exited", exit_code: 0 } }, { toolName: "execute_terminal" });
+    expect(done).not.toContain("停止终端命令");
+    expect(done).toContain("已结束");
+  });
+
+  it("Task 停止中收起操作，头部说正在停止", () => {
+    openCall();
+    const html = render(running, { toolName: "execute_terminal", taskCancelling: true });
+    expect(html).not.toContain("停止终端命令");
+    expect(html).toContain("正在停止…");
   });
 });

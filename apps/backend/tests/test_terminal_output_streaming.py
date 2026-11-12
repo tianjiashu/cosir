@@ -28,6 +28,7 @@ from app.config.constant import Constant
 from app.core.events import (
     RunInitializedEvent,
     RunStatusChangedEvent,
+    TerminalCommandStartedData,
     TerminalOutputDeltaData,
     ToolCallCreatedEvent,
     ToolCallRuntimeUpdateEvent,
@@ -65,6 +66,20 @@ def _terminal_output_update(
         data=TerminalOutputDeltaData(
             kind="terminal_output_delta",
             text=text,
+        ),
+    )
+
+
+def _terminal_started_update() -> ToolCallRuntimeUpdateEvent:
+    """命令拉起时的初始展示（命令与工作目录），先于任何输出块。"""
+    return ToolCallRuntimeUpdateEvent(
+        task_id=7,
+        run_id=9,
+        tool_call_id="call-1",
+        seq=0,
+        data=TerminalCommandStartedData(
+            kind="terminal_command_started",
+            display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"},
         ),
     )
 
@@ -430,6 +445,7 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
         )
     )
 
+    projector.process(_terminal_started_update())
     projector.process(_terminal_output_update(1, "new"))
     projector.process(_terminal_output_update(0, "stale"))
     projector.process(_terminal_output_update(2, "tail"))
@@ -437,6 +453,8 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
     part = state["messages"][1]["parts"][0]
     assert part["display_data"] == {
         "kind": "terminal-result",
+        "command": "make",
+        "workdir": "/w",
         "output": "newtail",
     }
     assert part["terminal_output_seq"] == 2
@@ -463,11 +481,10 @@ def test_runtime_update_trims_terminal_output_window(monkeypatch: pytest.MonkeyP
         )
     )
     projector.process(
-        ToolCallStatusChangedEvent(
-            task_id=7, run_id=9, tool_call_id="call-1", status="running"
-        )
+        ToolCallStatusChangedEvent(task_id=7, run_id=9, tool_call_id="call-1", status="running")
     )
 
+    projector.process(_terminal_started_update())
     projector.process(_terminal_output_update(1, "a\n" * 20))
     projector.process(_terminal_output_update(2, "b\n" * 20))
 
@@ -498,6 +515,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
     projector.process(
         ToolCallStatusChangedEvent(task_id=7, run_id=9, tool_call_id="call-1", status="running")
     )
+    projector.process(_terminal_started_update())
     projector.process(_terminal_output_update(0, "before "))
     # 用户把前台等待转到后台：占位 pending + background，展示数据不带输出，已流出的输出保留。
     projector.process(
@@ -607,6 +625,7 @@ def test_final_terminal_status_uses_authoritative_output_including_unstreamed_ta
         )
     )
 
+    projector.process(_terminal_started_update())
     streamed_output = "full live output " * 2_000
     for seq, start in enumerate(range(0, len(streamed_output), 4096)):
         projector.process(_terminal_output_update(seq, streamed_output[start : start + 4096]))
@@ -695,6 +714,7 @@ def _streamed_terminal_projector() -> (
             status="running",
         )
     )
+    projector.process(_terminal_started_update())
     streamed_output = "streamed line\n" * 600
     for seq, start in enumerate(range(0, len(streamed_output), 4096)):
         projector.process(_terminal_output_update(seq, streamed_output[start : start + 4096]))
@@ -769,3 +789,165 @@ def test_terminal_replay_is_idempotent_for_streamed_part(
     assert part["display_data"]["output"] == (
         observation.display_data["output"] if expected_status == "completed" else streamed_output
     )
+
+
+@pytest.mark.asyncio
+async def test_output_channel_publishes_started_display_before_any_output() -> None:
+    """启动展示与输出块走同一个事件循环队列：先 ``start`` 的初始展示必然先于输出块到达。"""
+    loop = asyncio.get_running_loop()
+    events: list[ToolCallRuntimeUpdateEvent] = []
+    channel = LiveOutputChannel.open(
+        ToolExecutionContext(
+            call_intent="test",
+            step_id="step-1",
+            task_id=7,
+            workspace_id=1,
+            workspace_root=Path("."),
+            run_id=9,
+            event_loop=loop,
+            event_sink=events.append,
+            tool_call_id="call-1",
+        ),
+    )
+    assert isinstance(channel, LiveOutputChannel)
+    display = {"kind": "terminal-result", "command": "make", "workdir": "/w"}
+
+    def run_command() -> None:
+        channel.start(display)
+        channel.emit("first")
+        channel.finish()
+
+    await asyncio.to_thread(run_command)
+    await asyncio.sleep(0.2)
+
+    assert isinstance(events[0].data, TerminalCommandStartedData)
+    assert events[0].data.display_data == display
+    assert [
+        event.data.text for event in events[1:] if isinstance(event.data, TerminalOutputDeltaData)
+    ] == ["first"]
+
+
+def _running_terminal_projector() -> tuple[ConversationStateSnapshot, ConversationEventProjector]:
+    """建一个刚进入 running、还没有任何输出的 ``execute_terminal`` part。"""
+    state = empty_snapshot()
+    projector = ConversationEventProjector(_MemorySnapshotOwner(state))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
+    projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
+    projector.process(
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            task_id=7,
+            run_id=9,
+            status="running",
+        )
+    )
+    projector.process(
+        ToolCallCreatedEvent(
+            task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
+        )
+    )
+    projector.process(
+        ToolCallStatusChangedEvent(
+            task_id=7,
+            run_id=9,
+            tool_call_id="call-1",
+            status="running",
+            occurred_at=datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
+        )
+    )
+    return state, projector
+
+
+def test_running_projection_records_start_time_from_the_event() -> None:
+    state, _ = _running_terminal_projector()
+
+    part = state["messages"][1]["parts"][0]
+    assert part["startedAt"] == "2026-01-01T00:00:02+00:00"
+
+
+def test_started_update_makes_a_card_without_any_output() -> None:
+    """没有输出的命令从启动起就有可展开的 terminal-result（命令与工作目录）；重复投递不覆盖。"""
+    state, projector = _running_terminal_projector()
+
+    projector.process(_terminal_started_update())
+    part = state["messages"][1]["parts"][0]
+    assert part["display_data"] == {"kind": "terminal-result", "command": "make", "workdir": "/w"}
+
+    projector.process(_terminal_output_update(0, "out"))
+    projector.process(_terminal_started_update())
+    assert state["messages"][1]["parts"][0]["display_data"]["output"] == "out"
+
+
+def test_cancelling_a_command_without_output_keeps_its_command() -> None:
+    """取消观察不带成功态展示：没有输出的命令也保留启动时的命令行，卡片不会退化成空行。"""
+    state, projector = _running_terminal_projector()
+    projector.process(_terminal_started_update())
+
+    projector.process(
+        terminal_event(
+            ToolObservation(
+                tool_name="execute_terminal",
+                status="cancelled",
+                display_data={"status_hint": "已取消"},
+            ),
+            task_id=7,
+            run_id=9,
+            step_id="step-1",
+            tool_call_id="call-1",
+        )
+    )
+
+    part = state["messages"][1]["parts"][0]
+    assert part["status"] == "cancelled"
+    assert part["display_data"]["kind"] == "terminal-result"
+    assert part["display_data"]["command"] == "make"
+
+
+def test_output_without_a_started_display_is_dropped() -> None:
+    """初始展示只会因发布失败而缺失：输出块不再顺手建展示，丢弃并留痕。"""
+    state, projector = _running_terminal_projector()
+
+    projector.process(_terminal_output_update(0, "orphan"))
+
+    part = state["messages"][1]["parts"][0]
+    assert part.get("display_data") is None
+    assert "terminal_output_seq" not in part
+
+
+def test_duplicate_running_event_keeps_the_original_start_time() -> None:
+    state, projector = _running_terminal_projector()
+
+    projector.process(
+        ToolCallStatusChangedEvent(
+            task_id=7,
+            run_id=9,
+            tool_call_id="call-1",
+            status="running",
+            occurred_at=datetime(2026, 1, 1, 0, 5, 0, tzinfo=UTC),
+        )
+    )
+
+    assert state["messages"][1]["parts"][0]["startedAt"] == "2026-01-01T00:00:02+00:00"
+
+
+def test_leaving_running_clears_the_start_time() -> None:
+    """``startedAt`` 只表达「正在运行」：结束后清空，与没有运行中调用的冷重建一致。"""
+    state, projector = _running_terminal_projector()
+    projector.process(_terminal_started_update())
+
+    projector.process(
+        ToolCallStatusChangedEvent(
+            task_id=7,
+            run_id=9,
+            tool_call_id="call-1",
+            status="completed",
+            display_data={
+                "kind": "terminal-result",
+                "command": "make",
+                "workdir": "/w",
+                "output": "",
+            },
+        )
+    )
+
+    assert state["messages"][1]["parts"][0]["startedAt"] is None

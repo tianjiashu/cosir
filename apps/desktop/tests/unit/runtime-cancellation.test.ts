@@ -55,8 +55,8 @@ describe("跨界面的请求生命周期", () => {
 
   it("全局 Task 终态能收尾卡片已卸载的子 Task 停止", () => {
     const request = beginCommand(1, "task")!;
-    reconcileTaskStatuses({ 1: "completed" });
-    reconcileTaskStatuses({ 1: "running" });
+    reconcileTaskStatuses({ 1: { executionStatus: "completed", awaitingUserCalls: 0 } });
+    reconcileTaskStatuses({ 1: { executionStatus: "running", awaitingUserCalls: 0 } });
     finishCommand(1, "task", request, "accepted");
     expect(current()?.task).toBeUndefined();
   });
@@ -82,7 +82,7 @@ describe("跨界面的请求生命周期", () => {
     const stop = beginCommand(1, "task")!;
     finishCommand(1, "task", stop, "accepted");
     expect(current()?.task?.phase).toBe("syncing");
-    reconcileTaskStatuses({ 1: "completed" });
+    reconcileTaskStatuses({ 1: { executionStatus: "completed", awaitingUserCalls: 0 } });
     expect(current()?.task).toBeUndefined();
   });
 });

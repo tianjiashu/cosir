@@ -186,7 +186,7 @@ async def test_completed_team_does_not_store_node_output_as_end_reason(monkeypat
         )
 
     coordinator, captured = _driven_coordinator(monkeypatch, run_node)
-    await coordinator._drive(_TEAM_RUN, coordinator_module._TeamExecution(1))
+    await coordinator._drive(_TEAM_RUN, coordinator_module._TeamExecution(1, "call-team"))
 
     target, kwargs = captured["updates"][-1]
     assert target == AgentTeamRunStatus.COMPLETED.value
@@ -205,7 +205,7 @@ async def test_dispatch_failure_after_enqueue_stops_the_node_task(monkeypatch) -
         raise RuntimeError("节点输入没有启动新 Run")
 
     coordinator, captured = _driven_coordinator(monkeypatch, run_node)
-    await coordinator._drive(_TEAM_RUN, coordinator_module._TeamExecution(1))
+    await coordinator._drive(_TEAM_RUN, coordinator_module._TeamExecution(1, "call-team"))
 
     target, kwargs = captured["updates"][-1]
     assert target == AgentTeamRunStatus.FAILED.value

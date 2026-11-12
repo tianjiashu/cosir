@@ -1002,11 +1002,12 @@ def test_first_output_of_run_without_user_input_creates_leading_reply(
     assert reply["parts"][1]["toolCallId"] == "call-9"
 
 
-def test_run_events_publish_the_task_execution_status(
+def test_run_and_tool_status_events_publish_the_task_status(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """侧栏等处的状态推送只在 Run 开始与状态迁移时触发，其余事件（如流式正文）不读库。"""
+    """侧栏等处的状态推送只在 Run 开始、Run 状态迁移与工具调用状态迁移时触发（后者改变「等你操作」，
+    且 Run 外的占位结算只发它）；其余事件（如流式正文、调用创建）不读库。"""
     from app.assistant_transport.service import conversation_event_projector as projector_module
 
     published: list[int] = []
@@ -1019,6 +1020,16 @@ def test_run_events_publish_the_task_execution_status(
     _init_run(event_projector)
     _append_user_input(event_projector)
     event_projector.process(
+        ToolCallCreatedEvent(
+            task_id=1, run_id=1, turn=1, tool_call_id="call-hitl", tool_name="agent_team"
+        )
+    )
+    event_projector.process(
+        ToolCallStatusChangedEvent(
+            task_id=1, run_id=1, tool_call_id="call-hitl", status="pending"
+        )
+    )
+    event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
             task_id=1,
@@ -1027,7 +1038,7 @@ def test_run_events_publish_the_task_execution_status(
         )
     )
 
-    assert published == [1, 1]
+    assert published == [1, 1, 1]
 
 
 def test_terminal_duration_is_derived_from_required_committed_time(projector) -> None:

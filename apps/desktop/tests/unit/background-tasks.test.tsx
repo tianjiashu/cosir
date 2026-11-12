@@ -19,8 +19,7 @@ vi.mock("@/lib/assistant/turn/disclosure-store", async (importOriginal) => ({
 
 import { ForegroundWaitAction } from "@/components/conversation/tools/foreground-wait-action";
 import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
-import { BackgroundTasksActions, BackgroundTasksBody, BackgroundTasksSummary } from "@/components/conversation-aside/background-tasks-card";
-import { formatElapsed } from "@/components/conversation-aside/background-task-row";
+import { BackgroundTasksActions, BackgroundTasksBody, BackgroundTasksSummary, useBackgroundTasksHasContent } from "@/components/conversation-aside/background-tasks-card";
 import type { BackgroundTaskEntry, TransportBackgroundWork, TransportToolCallPart } from "@/lib/assistant/contract";
 import { toToolCallPart } from "@/lib/assistant/transport-message-converter";
 import { parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/transport/snapshot-validation";
@@ -134,9 +133,9 @@ describe("ForegroundWaitAction", () => {
 });
 
 describe("后台任务卡", () => {
-  it("卡片始终存在：没有条目时摘要为「无」、正文为空状态；运行中在前、已结束收成「N 已结束」", () => {
-    expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("无");
-    expect(renderToStaticMarkup(<BackgroundTasksBody taskId={1} />)).toContain("没有后台任务");
+  it("这个 Task 有过后台工作才算有内容；运行中在前、已结束收成「N 已结束」", () => {
+    const HasContent = ({ taskId }: { taskId: number }) => <>{String(useBackgroundTasksHasContent(taskId))}</>;
+    expect(renderToStaticMarkup(<HasContent taskId={1} />)).toBe("false");
     board.entries.set(1, [
       entry("run", { label: "cd /work && make" }),
       entry("done", { status: "completed", endedAt: "2026-10-28T08:00:42+00:00" }),
@@ -148,6 +147,8 @@ describe("后台任务卡", () => {
     expect(html).not.toContain("terminal_command:done");
     board.entries.set(1, [entry("done", { status: "completed", endedAt: "2026-10-28T08:00:42+00:00" })]);
     expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("1 已结束");
+    // 全部结束后仍算有内容：一个 Task 里侧栏只出现一次，不随条目结束来回闪。
+    expect(renderToStaticMarkup(<HasContent taskId={1} />)).toBe("true");
   });
 
   // 目的：工作结束、占位还没落定时条目留在进行中；潜在缺陷：被算进「已结束」或继续计时、露出停止按钮。
@@ -169,11 +170,8 @@ describe("后台任务卡", () => {
     expect(renderToStaticMarkup(<BackgroundTasksActions taskId={1} />)).toContain("全部停止");
   });
 
-  it("运行数与耗时格式", () => {
+  it("运行数", () => {
     expect(countRunning([entry("a"), entry("b", { status: "cancelled" })])).toBe(1);
-    expect(formatElapsed(0, 42_000)).toBe("42s");
-    expect(formatElapsed(0, 125_000)).toBe("2m 5s");
-    expect(formatElapsed(0, 3_720_000)).toBe("1h 2m");
   });
 
   it("离开 Task 置空、删除 Task 丢弃桶", () => {

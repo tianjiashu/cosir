@@ -567,13 +567,11 @@ def _decide(monkeypatch, runs: _DecisionRuns, decision: str, data=None):
 
     started: list[int] = []
 
-    def start(row, run_id, _loop):
-        from app.models.message_metadata import BackgroundWork
+    def start(row, _loop):
         started.append(row.id)
-        return BackgroundWork(kind="agent_team", label="Quality", run_id=run_id, started_at="now")
 
     monkeypatch.setattr(
-        tool_module, "get_agent_team_coordinator", lambda: SimpleNamespace(prepare_background=start)
+        tool_module, "get_agent_team_coordinator", lambda: SimpleNamespace(start_approved=start)
     )
     tool = _bare_tool()
     tool.agent_team_run_approval = runs
@@ -601,17 +599,16 @@ _APPROVED_PLAN = {
 }
 
 
-def test_approval_confirms_final_inputs_and_returns_background_receipt(
-    monkeypatch,
-) -> None:
+def test_approval_confirms_final_inputs_and_starts_the_team(monkeypatch) -> None:
+    """批准即开跑：Team 是编排，不登记后台工作；结论之后以 TeamRun 来源的汇报交回。"""
     runs = _DecisionRuns()
 
     observation, started = _decide(monkeypatch, runs, "approve", _APPROVED_PLAN)
 
     assert observation.status == "success"
-    assert observation.background.kind == "agent_team"
+    assert observation.background is None
     assert observation.suspend is False
-    assert "<background_result>" in observation.content
+    assert 'source_team_run_id="101"' in observation.content
     [confirmed] = runs.confirmed
     assert confirmed.model_dump() == _APPROVED_PLAN
     assert started == [101]

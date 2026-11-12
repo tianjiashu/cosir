@@ -56,7 +56,7 @@ const telemetry = {
 function resetTestState() {
   testGeneration += 1;
   lastPublishedStatus.clear();
-  for (const res of statusSubscribers) writeStatusFrame(res, { type: "full", statuses: {} });
+  for (const res of statusSubscribers) writeStatusFrame(res, { type: "full", tasks: {} });
   tasks.clear();
   states.clear();
   for (const set of subscribers.values()) for (const res of set) res.end();
@@ -421,21 +421,29 @@ function commit(taskId, state) {
   publishTaskStatus(taskId);
 }
 
-/** 模拟后端 `/task-status/stream` 的订阅者；与后端一样，Task 的执行状态取当前活动的状态。 */
+/**
+ * 模拟后端 `/task-status/stream` 的订阅者。与后端一样：执行状态取当前活动的状态；等你操作的调用数
+ * 数快照里 `awaitingUser` 的工具 part（后端数等待占位行，与 Run 状态无关）。
+ */
 const statusSubscribers = new Set();
 const executionStatus = (taskId) => states.get(taskId)?.activity?.status ?? null;
+const awaitingUserCalls = (taskId) => (states.get(taskId)?.messages ?? [])
+  .flatMap((message) => message.parts ?? [])
+  .filter((part) => part.type === "tool-call" && part.awaitingUser).length;
+const taskStatus = (taskId) => ({ executionStatus: executionStatus(taskId), awaitingUserCalls: awaitingUserCalls(taskId) });
 
 function writeStatusFrame(res, frame) {
   res.write(`${JSON.stringify(frame)}\n`);
 }
 
-/** 只在状态真的变了时推送，与后端「Run 开始或状态迁移才发布」一致。 */
+/** 只在状态真的变了时推送，与后端「Run 或工具调用状态迁移才发布」一致。 */
 const lastPublishedStatus = new Map();
 function publishTaskStatus(taskId) {
-  const status = executionStatus(taskId);
-  if (lastPublishedStatus.has(taskId) && lastPublishedStatus.get(taskId) === status) return;
-  lastPublishedStatus.set(taskId, status);
-  for (const res of statusSubscribers) writeStatusFrame(res, { type: "changed", statuses: { [taskId]: status } });
+  const status = taskStatus(taskId);
+  const key = JSON.stringify(status);
+  if (lastPublishedStatus.get(taskId) === key) return;
+  lastPublishedStatus.set(taskId, key);
+  for (const res of statusSubscribers) writeStatusFrame(res, { type: "changed", tasks: { [taskId]: status } });
 }
 
 function wait(milliseconds) {
@@ -790,9 +798,9 @@ const server = createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/task-status/stream") {
     res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
-    const statuses = Object.fromEntries([...states.keys()].map((taskId) => [taskId, executionStatus(taskId)]));
-    for (const [taskId, status] of Object.entries(statuses)) lastPublishedStatus.set(Number(taskId), status);
-    writeStatusFrame(res, { type: "full", statuses });
+    const statuses = Object.fromEntries([...states.keys()].map((taskId) => [taskId, taskStatus(taskId)]));
+    for (const [taskId, status] of Object.entries(statuses)) lastPublishedStatus.set(Number(taskId), JSON.stringify(status));
+    writeStatusFrame(res, { type: "full", tasks: statuses });
     statusSubscribers.add(res);
     const heartbeat = setInterval(() => writeStatusFrame(res, { type: "heartbeat" }), 2000);
     res.on("close", () => {

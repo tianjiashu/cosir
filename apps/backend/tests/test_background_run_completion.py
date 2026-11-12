@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.assistant_transport.service.transport_assistant_service import TransportAssistantService
-from app.core.tool.background.background_registry import background_registry
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.workflow import workflow
 from app.core.workflow.branch import task_title
 from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody
@@ -23,7 +23,7 @@ from tests.sdk_fixtures import sdk_events
 
 @pytest.mark.parametrize(
     "last",
-    ["command", "delegate", "fork", "cancel", "restart", "queued_restart", "delegate_restart"],
+    ["command", "cancel", "restart", "queued_restart"],
 )
 async def test_background_results_reopen_the_task_after_its_run_answered(backend_env, tmp_path, monkeypatch, last):
     model = create_model_config(
@@ -39,7 +39,6 @@ async def test_background_results_reopen_the_task_after_its_run_answered(backend
     workspace = depends.get_workspace_service().create_workspace("ws", str(tmp_path))
     task = depends.get_workspace_service().create_task(workspace.id, "parent")
     gates = {name: threading.Event() for name in ("A", "B")}
-    child_gate = asyncio.Event()
     saw_first = asyncio.Event()
     parent_inputs = []
 
@@ -66,52 +65,33 @@ async def test_background_results_reopen_the_task_after_its_run_answered(backend
     class Model:
         async def stream(self, messages):
             inputs = [str(m.get("content")) for m in messages if m["role"] == "user"]
-            if any("<agent_message " in text and "child-report" in text for text in inputs):
-                await child_gate.wait()
-                frames = sdk_events([{"content": "child finished"}])
+            results = [text for text in inputs if "<background_result time=" in text]
+            parent_inputs.append(results)
+            if results:
+                saw_first.set()
+            if len(parent_inputs) == 1:
+
+                def cmd(label):
+                    return "execute_terminal", {
+                        "intent": label,
+                        "command": label,
+                        "background": True,
+                    }
+
+                calls = [
+                    {
+                        "index": i,
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": name, "arguments": json.dumps(args)},
+                    }
+                    for i, (call_id, (name, args)) in enumerate(
+                        [("bg-A", cmd("A")), ("bg-B", cmd("B"))]
+                    )
+                ]
+                frames = sdk_events([{"tool_calls": calls}], finish_reason="tool_calls")
             else:
-                results = [text for text in inputs if "<background_result time=" in text]
-                parent_inputs.append(results)
-                if results:
-                    saw_first.set()
-                if len(parent_inputs) == 1:
-
-                    def cmd(label):
-                        return "execute_terminal", {
-                            "intent": label,
-                            "command": label,
-                            "background": True,
-                        }
-
-                    second = {
-                        "delegate": (
-                            "delegate_task",
-                            {
-                                "intent": "review",
-                                "child_agent_id": "general-assistant",
-                                "agent_name": "review",
-                                "message": "child-report",
-                            },
-                        ),
-                        "fork": (
-                            "fork_task",
-                            {"intent": "fork", "title": "review", "message": "child-report"},
-                        ),
-                    }.get("delegate" if last == "delegate_restart" else last, cmd("B"))
-                    calls = [
-                        {
-                            "index": i,
-                            "id": call_id,
-                            "type": "function",
-                            "function": {"name": name, "arguments": json.dumps(args)},
-                        }
-                        for i, (call_id, (name, args)) in enumerate(
-                            [("bg-A", cmd("A")), ("bg-B", second)]
-                        )
-                    ]
-                    frames = sdk_events([{"tool_calls": calls}], finish_reason="tool_calls")
-                else:
-                    frames = sdk_events([{"content": f"answer with {len(results)} results"}])
+                frames = sdk_events([{"content": f"answer with {len(results)} results"}])
             for frame in frames:
                 yield frame
 
@@ -137,7 +117,7 @@ async def test_background_results_reopen_the_task_after_its_run_answered(backend
     )
     monkeypatch.setattr(task_title, "should_launch", lambda *_: False)
     spaces.bind_loop(asyncio.get_running_loop())
-    background_registry.open()
+    command_results.open()
     try:
         spaces.enqueue(
             task.id,
@@ -153,28 +133,28 @@ async def test_background_results_reopen_the_task_after_its_run_answered(backend
         # 后台工作属于 Task：Run 不等它们，先答复并完成。
         first = await parked(actor)
         assert (first.status, first.final_output) == ("completed", "answer with 0 results")
-        assert set(background_registry.live_background(task.id)) == {"bg-A", "bg-B"}
+        assert set(command_results.live_background(task.id)) == {"bg-A", "bg-B"}
         gates["A"].set()
         await asyncio.wait_for(saw_first.wait(), 8)
         # 结论到达时 Task 已空闲：开出新 Run 收尾，另一项工作仍在后台。
         second = await parked(actor)
         assert second.id != first.id
         assert (second.status, second.final_output) == ("completed", "answer with 1 results")
-        assert set(background_registry.live_background(task.id)) == {"bg-B"}
-        if last in {"restart", "queued_restart", "delegate_restart"}:
+        assert set(command_results.live_background(task.id)) == {"bg-B"}
+        if last in {"restart", "queued_restart"}:
             if last == "queued_restart":
                 # 结果已落队列，但调度器没来得及处理就退出。
-                from app.core.tool.background.background_job import BackgroundConclusion
+                from app.tools.tool_handler.terminal.command_job import CommandConclusion
 
                 await actor.abort()
-                assert background_registry.complete(
-                    task.id, "bg-B", BackgroundConclusion({"output": "already queued"})
+                assert command_results.complete(
+                    task.id, "bg-B", CommandConclusion({"output": "already queued"})
                 )
 
-            await asyncio.to_thread(background_registry.close)
+            await asyncio.to_thread(command_results.close)
             await spaces.aclose()
             spaces.bind_loop(asyncio.get_running_loop())
-            background_registry.open()
+            command_results.open()
             depends.get_recover_service().recover_after_restart()
             # 只有带可推进消息的 Task 会被恢复物化；重启后空闲的 Task 在这里按需物化。
             actor = spaces.get_or_create(task.id).actor
@@ -182,8 +162,6 @@ async def test_background_results_reopen_the_task_after_its_run_answered(backend
             assert await asyncio.to_thread(
                 TransportAssistantService().cancel_tool_call, task.id, "bg-B"
             )
-        elif last in {"delegate", "fork"}:
-            child_gate.set()
         else:
             gates["B"].set()
         assert await actor.wait_quiescent(8)
@@ -205,7 +183,7 @@ async def test_background_results_reopen_the_task_after_its_run_answered(backend
             if r.message["role"] == "assistant" and not r.message.get("tool_calls")
         ]
         pending = depends.get_task_message_queue().pending_nowait(task.id)
-        if last in {"restart", "delegate_restart", "cancel"}:
+        if last in {"restart", "cancel"}:
             # 重启只收敛（占位推「已中断」、留一条通知）；单停只落定卡片、回执留给下一次推进。都不开新 Run。
             assert [(r.status, r.final_output) for r in runs] == [
                 ("completed", "answer with 0 results"),
@@ -231,9 +209,8 @@ async def test_background_results_reopen_the_task_after_its_run_answered(backend
             assert final_answers == [r.final_output for r in runs]
             assert pending == []
     finally:
-        child_gate.set()
         for gate in gates.values():
             gate.set()
-        await asyncio.to_thread(background_registry.close)
+        await asyncio.to_thread(command_results.close)
         await spaces.aclose()
-        background_registry.open()
+        command_results.open()

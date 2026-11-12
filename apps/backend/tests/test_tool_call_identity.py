@@ -6,7 +6,7 @@
 
 import asyncio
 
-from app.core.tool.background.background_registry import background_registry
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.tool.handoff.handoff_registry import HandoffLease, HandoffRegistry
 from app.service import depends
 from app.service.conversation.tool_decision_service import ToolDecisionService
@@ -184,8 +184,8 @@ async def test_same_id_in_two_tasks_runs_independently(backend_env, tmp_path, mo
         env.send("另一个", task_id=other.id)
         await asyncio.sleep(0.1)
         await env.parked(other.id)
-        assert list(background_registry.live_background(env.task.id)) == ["call_0"]
-        assert list(background_registry.live_background(other.id)) == ["call_0"]
+        assert list(command_results.live_background(env.task.id)) == ["call_0"]
+        assert list(command_results.live_background(other.id)) == ["call_0"]
     finally:
         commands.release()
         await env.close()

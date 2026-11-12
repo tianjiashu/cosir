@@ -25,8 +25,8 @@ from app.core import task_actor as actor_module
 from app.core import task_execution as execution_module
 from app.core import task_recall as recall_module
 from app.core.task_actor import TaskActor
-from app.core.tool.background import cancel_placeholders as placeholder_module
-from app.core.tool.background.cancel_placeholders import USER_CANCELLED_HINT
+from app.core.tool import placeholder_settlement as placeholder_module
+from app.core.tool.placeholder_settlement import USER_CANCELLED_HINT
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
@@ -117,7 +117,7 @@ class _Ledger:
     def require_current_run(self, _task_id: int) -> SimpleNamespace | None:
         return self.current
 
-    def list_child_tasks(self, _task_id: int) -> list:
+    def list_derived_tasks(self, _task_id: int) -> list:
         return []
 
     def get_task(self, task_id: int) -> SimpleNamespace:
@@ -390,10 +390,10 @@ async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) ->
 
 
 def _register_background_work(tool_call_id: str, mode: str, calls: list[str]) -> threading.Event:
-    from app.core.tool.background.background_registry import background_registry
+    from app.tools.tool_handler.terminal.command_results import command_results
 
     detached = threading.Event()
-    background_registry.register(
+    command_results.register(
         tool_call_id,
         task_id=_TASK_ID,
         run_id=None,
@@ -585,7 +585,7 @@ async def test_signal_is_cleared_when_the_cancelled_execution_finishes(chain) ->
 
 @pytest.mark.parametrize("phase", ["running", "suspended", "idle"])
 async def test_user_stop_leaves_teams_and_children_alone(chain, phase) -> None:
-    chain.ledger.list_child_tasks = lambda _task_id: [SimpleNamespace(id=_CHILD_TASK_ID)]
+    chain.ledger.list_derived_tasks = lambda _task_id: [SimpleNamespace(id=_CHILD_TASK_ID)]
     if phase == "running":
         await chain.service.send(_TASK_ID, _send_request("first"))
         await _settle()
@@ -605,7 +605,7 @@ async def test_user_stop_leaves_teams_and_children_alone(chain, phase) -> None:
 
 @pytest.mark.parametrize("phase", ["running", "suspended", "idle"])
 async def test_parent_stop_recalls_teams_and_children_at_once(chain, phase) -> None:
-    chain.ledger.list_child_tasks = lambda _task_id: [SimpleNamespace(id=_CHILD_TASK_ID)]
+    chain.ledger.list_derived_tasks = lambda _task_id: [SimpleNamespace(id=_CHILD_TASK_ID)]
     if phase == "running":
         await chain.service.send(_TASK_ID, _send_request("first"))
         await _settle()
@@ -636,7 +636,7 @@ def _fail_settling(monkeypatch) -> None:
 async def test_placeholder_settle_failure_does_not_block_running_cancel(chain, monkeypatch) -> None:
     """收回时占位结算写库失败只记录：信号照常取走、执行照常注销，Task 不会卡在停止中。"""
     _fail_settling(monkeypatch)
-    chain.ledger.list_child_tasks = lambda _task_id: []
+    chain.ledger.list_derived_tasks = lambda _task_id: []
     await chain.service.send(_TASK_ID, _send_request("first"))
     await _settle()
     run = chain.ledger.current
@@ -654,7 +654,7 @@ async def test_placeholder_settle_failure_does_not_block_suspended_cancel(
     chain, monkeypatch
 ) -> None:
     _fail_settling(monkeypatch)
-    chain.ledger.list_child_tasks = lambda _task_id: []
+    chain.ledger.list_derived_tasks = lambda _task_id: []
     run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
     _register_background_work("call-bg", "background", [])

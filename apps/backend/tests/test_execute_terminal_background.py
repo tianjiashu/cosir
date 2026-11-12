@@ -14,8 +14,8 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.background import background_registry as background_module
-from app.core.tool.background.background_registry import background_registry
+from app.tools.tool_handler.terminal import command_results as background_module
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.terminal_runtime.command.command_output import CommandOutput as _CommandOutput
 from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
@@ -41,7 +41,7 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
 
     monkeypatch.setattr(background_module, "deliver_background_result", deliver)
     yield calls
-    background_registry.drop_task(_TASK_ID)
+    command_results.drop_task(_TASK_ID)
 
 
 def _context(tmp_path: Path, tool_call_id: str) -> ToolExecutionContext:
@@ -69,7 +69,7 @@ def test_foreground_command_returns_its_result_without_registering(tmp_path, del
     )
     assert observation.status == "success" and not observation.background
     assert observation.content.startswith("[exit_code=0]") and "hello" in observation.content
-    assert not registered(background_registry, _TASK_ID, "call-fg")
+    assert not registered(command_results, _TASK_ID, "call-fg")
     assert delivered == []
 
 
@@ -116,8 +116,8 @@ def test_detached_foreground_command_keeps_running_without_suspending(tmp_path, 
         )
     )
     thread.start()
-    _wait_for(lambda: registered(background_registry, _TASK_ID, "call-detach"))
-    assert background_registry.detach(_TASK_ID, "call-detach") == "detached"
+    _wait_for(lambda: registered(command_results, _TASK_ID, "call-detach"))
+    assert command_results.detach(_TASK_ID, "call-detach") == "detached"
     thread.join(2)
     observation = box["observation"]
     assert observation.background and not observation.suspend
@@ -133,7 +133,7 @@ def test_cancelling_a_background_command_kills_its_process_tree(tmp_path, delive
         background=True,
         execution_context=_context(tmp_path, "call-cancel"),
     )
-    dropped = background_registry.withdraw(_TASK_ID, "call-cancel")
+    dropped = command_results.withdraw(_TASK_ID, "call-cancel")
     assert dropped
     time.sleep(2.5)
     # 进程树被杀：命令没有跑完；撤销后的结论被登记表丢弃，不回投。
@@ -187,7 +187,7 @@ def test_parent_stop_retains_real_output_without_delivery(tmp_path, delivered) -
     _wait_for(marker.exists)
     cancellation_registry.request_cancel(_TASK_ID, "user")
     try:
-        displays = background_registry.drop_task(_TASK_ID)
+        displays = command_results.drop_task(_TASK_ID)
     finally:
         cancellation_registry.consume(_TASK_ID)
     assert "已收集" in displays["call-parent-stop"]["output"]
@@ -214,7 +214,7 @@ def test_foreground_cancel_retains_real_output(tmp_path) -> None:
             execution_context=_context(tmp_path, "call-cancel-output"),
         )
         _wait_for(marker.exists)
-        assert background_registry.request_cancel(
+        assert command_results.request_cancel(
             _TASK_ID, "call-cancel-output", driving=False
         )
         observation = result.result(timeout=5)

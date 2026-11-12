@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { elapsedSince, formatDuration } from "@/lib/assistant/turn/run-duration";
+import { elapsedSince, formatDuration } from "@/lib/format/duration";
 
 describe("formatDuration", () => {
   it("秒、分秒、时分三档；不足 1 秒与负值按 0秒", () => {

@@ -484,7 +484,7 @@ def test_pending_history_is_inert_and_source_deletion_does_not_remove_it(fork_st
 def background_placeholder(s, run, call_id, status):
     call(s, run, call_id)
     work = BackgroundWork(
-        kind="child_agent", run_id=run.id, label="work", started_at="2026-01-01T00:00:00Z"
+        kind="terminal_command", run_id=run.id, label="work", started_at="2026-01-01T00:00:00Z"
     )
     append(
         s,

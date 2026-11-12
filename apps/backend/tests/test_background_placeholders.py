@@ -10,8 +10,8 @@ import pytest
 
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_state_snapshot import _validate_part
-from app.core.tool.background.background_job import BackgroundConclusion
-from app.core.tool.background.cancel_placeholders import INTERRUPTED_HINT, cancel_placeholders
+from app.tools.tool_handler.terminal.command_job import CommandConclusion
+from app.core.tool.placeholder_settlement import INTERRUPTED_HINT, cancel_placeholders
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolObservation
 from app.core.workflow.execution_state.tool_batch import ToolBatch
@@ -213,12 +213,12 @@ def test_consumed_result_leaves_other_rows_alone(monkeypatch, metadata) -> None:
 
 def test_result_arriving_while_user_stopping_is_still_delivered(stored) -> None:
     """用户停止只打断当前驱动：停止信号在时后台工作完成，结论照常入队，占位不被撤销。"""
-    from app.core.tool.background.background_registry import background_registry
+    from app.tools.tool_handler.terminal.command_results import command_results
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
     )
 
-    background_registry.register(
+    command_results.register(
         "call-bg",
         task_id=stored.task_id,
         run_id=None,
@@ -228,12 +228,12 @@ def test_result_arriving_while_user_stopping_is_still_delivered(stored) -> None:
     )
     cancellation_registry.request_cancel(stored.task_id, "user")
     try:
-        assert background_registry.complete(
-            stored.task_id, "call-bg", BackgroundConclusion({"exit_code": 0})
+        assert command_results.complete(
+            stored.task_id, "call-bg", CommandConclusion({"exit_code": 0})
         ) is True
     finally:
         cancellation_registry.consume(stored.task_id)
-        background_registry.drop_task(stored.task_id)
+        command_results.drop_task(stored.task_id)
 
     assert _metadata(stored, "call-bg").status == "pending"
     queued = depends.get_task_message_queue().pending_nowait(stored.task_id)
@@ -270,7 +270,7 @@ def test_real_parent_stop_persists_output_without_waking_agent(stored, tmp_path)
     import time
 
     from app.core.task_recall import TaskRecall
-    from app.core.tool.background.background_registry import background_registry
+    from app.tools.tool_handler.terminal.command_results import command_results
     from app.core.tool.schemas import ToolExecutionContext
     from app.core.workflow.cancel.conversation_run_cancellation_registry import (
         cancellation_registry,
@@ -295,7 +295,7 @@ def test_real_parent_stop_persists_output_without_waking_agent(stored, tmp_path)
         cancellation_registry.request_cancel(stored.task_id, "parent")
         asyncio.run(TaskRecall(stored.task_id).recall())
     finally:
-        background_registry.drop_task(stored.task_id)
+        command_results.drop_task(stored.task_id)
         cancellation_registry.consume(stored.task_id)
     # 从 SQLite 重新读取，走实时和冷重建共用的投影器，而不是断言进程内缓存。
     fields = project_tool_result(_metadata(stored, "call-bg"))

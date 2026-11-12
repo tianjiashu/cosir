@@ -15,8 +15,8 @@ from app.assistant_transport.state.conversation_state_background_task import (
     validate_background_tasks,
 )
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.tool.background.cancel_placeholders import cancel_placeholders
-from app.core.tool.background.background_registry import background_registry
+from app.core.tool.placeholder_settlement import cancel_placeholders
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
 from app.service import depends
@@ -145,7 +145,7 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
     )
     service = ConversationTaskStateService()
     assert service.get_state(task.id)["background_tasks"] == []
-    work = background_registry.register(
+    work = command_results.register(
         "call-bg",
         task_id=task.id,
         run_id=run.id,
@@ -183,7 +183,7 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
         == service.rebuild_state(task.id)["background_tasks"]
     )
 
-    background_registry.withdraw(task.id, "call-bg")
+    command_results.withdraw(task.id, "call-bg")
     service.refresh_background_results(task.id)
     assert service.get_state(task.id)["background_tasks"][0]["status"] == "settling"
     monkeypatch.setattr(
