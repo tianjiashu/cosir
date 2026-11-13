@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SubscriptionRecovery } from "@/components/conversation-runtime/runtime/subscription-recovery";
+import { SubscriptionRecovery } from "@/lib/assistant/transport/subscription-recovery";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn(async () => undefined) }));
 
@@ -8,7 +8,7 @@ function setup() {
   const attach = vi.fn(async () => undefined);
   const backend = { available: true, generation: 1 };
   const setIssue = vi.fn();
-  const recovery = new SubscriptionRecovery({ taskId: 7, traceId: "t", attach: () => attach, backend: () => backend, setIssue });
+  const recovery = new SubscriptionRecovery({ taskId: 7, traceId: "t", attach: () => void attach(), backend: () => backend, setIssue });
   recovery.setActive(true);
   return { attach, backend, setIssue, recovery };
 }

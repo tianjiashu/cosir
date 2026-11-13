@@ -1,6 +1,5 @@
-import type { TransportState } from "../../lib/assistant/contract";
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { seedState } from "./transport-fixtures";
+import { readState, seedState } from "./transport-fixtures";
 import { API_ORIGIN } from "./e2e-env";
 
 async function expectViewportCoverage(page: Page, surface: Locator) {
@@ -107,7 +106,7 @@ test("消息图片放大避开消息裁剪，关闭后恢复焦点与滚动", as
   }));
   await request.post(`${API_ORIGIN}/__test__/seed-mermaid`);
   // 改写 seeded state 并交回模拟后端：state 读取与 attach 首帧共用同一份事实。
-  const snapshot = await (await request.get(`${API_ORIGIN}/tasks/42/assistant/state`)).json() as TransportState;
+  const snapshot = await readState(request, 42);
   snapshot.messages.find((message) => message.role === "user")!.parts = [{
     type: "image", image: `cosir-attachment://${"a".repeat(64)}`,
   }];

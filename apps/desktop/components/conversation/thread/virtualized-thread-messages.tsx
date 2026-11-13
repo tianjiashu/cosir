@@ -25,14 +25,14 @@ type VirtualizedThreadMessagesProps = {
 /**
  * 按消息 id 定位的对话虚拟列表；不负责消息内容状态维护。
  * 排队消息不在消息流里（由输入框上方的队列区渲染），这里滤掉。
- * 运行中始终保留末尾两条消息（本轮用户输入与正在输出的回复）挂载，避免流式增长时被移出可见区后丢失测量。
+ * 运行中始终保留末尾两条消息（最新回合的用户输入与正在输出的回复）挂载，避免流式增长时被移出可见区后丢失测量。
  *
  * 屏幕外消息只由这里跳过，消息根节点不能再叠加 `content-visibility`：视口外但在 overscan 内的行会被
  * 浏览器按占位高度布局，虚拟列表量到假高度，行接近视口时再按真实高度修正一次 scrollTop，卸载后
  * 重新挂载又回到占位高度，于是每经过一次修正一次。行高的初始值依次取本 Task 记下的实测值
  * （`message-height-cache`）与按内容的估计（`estimateMessageHeight`），实测值以 TanStack 测量为准。
  *
- * 列表只含已加载的一段历史；往上翻页、插入后保持视口与「定位到工具卡片」见 `useThreadHistoryPaging`。
+ * 列表只含已加载的一段历史；往上翻页与插入后保持视口见 `useThreadHistoryPaging`。
  */
 export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = memo(function VirtualizedThreadMessages({
   taskId,

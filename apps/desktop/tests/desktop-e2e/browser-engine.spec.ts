@@ -644,7 +644,15 @@ test("follows the panel size at full scale once it settles and clicks accurately
   expect(clicked.title, JSON.stringify(clicked)).toBe("far clicked");
   const shot = await call("screenshot", { taskId: 33, fullPage: false });
   const size = await app.evaluate(({ nativeImage }, image) => nativeImage.createFromDataURL(image).getSize(), (shot as unknown as { value: { image: string } }).value.image);
-  expect(size).toEqual({ width: 640, height: 400 });
+  // 截图是可视视口、不含常驻滚动条：/far 在 640×400 下两向都滚动，系统显示经典滚动条时（macOS「自动」且接了鼠标、
+  // Windows）每边少 15px。按页面自己报告的可视区域比，与系统滚动条设置无关；倍率或缩放出错时仍对不上。
+  const visible = await app.evaluate((_electron, tabId) => {
+    type Harness = { host: { tabs: Map<string, { tab: { view: Electron.WebContentsView } }> } };
+    return (globalThis as unknown as { browserHarness: Harness }).browserHarness.host.tabs.get(tabId)!.tab.view.webContents.executeJavaScript(
+      "({ width: document.documentElement.clientWidth, height: document.documentElement.clientHeight })",
+    );
+  }, tabId);
+  expect(size).toEqual(visible);
   await app.evaluate((_electron, tabId) => {
     (globalThis as unknown as { browserHarness: { host: { place(tabId: string, rect: unknown): void } } }).browserHarness.host.place(tabId, null);
   }, tabId);

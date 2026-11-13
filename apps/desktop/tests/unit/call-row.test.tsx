@@ -199,7 +199,7 @@ describe("CallRow kind 视图", () => {
     </MemoryRouter>,
   );
 
-  it.each(["running", "pending", "completed", null])("子任务 %s 时委派行不说状态，且不读展示数据", (status) => {
+  it.each(["running", "completed", null])("子任务 %s 时委派行不说状态，且不读展示数据", (status) => {
     taskStatuses.set(501, status);
     const html = render({
       childTaskId: 501,

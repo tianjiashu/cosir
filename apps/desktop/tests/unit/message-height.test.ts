@@ -146,6 +146,13 @@ describe("message height cache", () => {
     expect(rememberedMessageHeight(1, 600, "m2")).toBeUndefined();
   });
 
+  it("没有记录时直接返回，不比较内容", () => {
+    const stringify = vi.spyOn(JSON, "stringify");
+    expect(rememberedMessageHeight(1, 720, "unmeasured", assistant(text("正文")))).toBeUndefined();
+    expect(stringify).not.toHaveBeenCalled();
+    stringify.mockRestore();
+  });
+
   it("equal snapshots retain measurements, changed content and disclosure invalidate only their own row", () => {
     const first = assistant(text("最初正文"));
     rememberMessageHeight(1, 720, "a", 200, first);

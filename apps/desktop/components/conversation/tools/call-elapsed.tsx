@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
+
 import { useElapsedSince } from "@/hooks/use-elapsed-since";
-import { formatDuration } from "@/lib/format/duration";
+import { elapsedSince, formatDuration } from "@/lib/format/duration";
 
 /** 短于这个时长不显示：几百毫秒就结束的调用不该冒出时长，只有「跑了一阵」才值得说。 */
 const SHOW_AFTER_MS = 3_000;
@@ -10,8 +12,21 @@ const SHOW_AFTER_MS = 3_000;
  * 照搬「不足门槛不显示」会让操作永远不出现。
  */
 export function useCallRanAWhile(startedAt: string | undefined): boolean {
-  const elapsed = useElapsedSince(startedAt, startedAt !== undefined);
-  return startedAt === undefined || elapsed === null || elapsed >= SHOW_AFTER_MS;
+  const [crossed, setCrossed] = useState(() => untilThreshold(startedAt, Date.now()) === 0);
+  useEffect(() => {
+    // 只关心跨过门槛的那一刻：到点翻一次，之后不再计时（时长本身由 CallElapsed 显示）。
+    const wait = untilThreshold(startedAt, Date.now());
+    setCrossed(wait === 0);
+    if (wait === 0) return;
+    const timer = setTimeout(() => setCrossed(true), wait);
+    return () => clearTimeout(timer);
+  }, [startedAt]);
+  return crossed;
+}
+
+function untilThreshold(startedAt: string | undefined, now: number): number {
+  const elapsed = elapsedSince(startedAt, now);
+  return elapsed === null ? 0 : Math.max(0, SHOW_AFTER_MS - elapsed);
 }
 
 /**

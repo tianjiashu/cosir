@@ -1,4 +1,3 @@
-import type { ToolCalls } from "../tools/tool-call-index";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import {
   useExternalStoreRuntime,
@@ -6,135 +5,63 @@ import {
   type ExternalStoreAdapter,
 } from "@assistant-ui/react";
 import type { ReadonlyJSONValue } from "assistant-stream/utils";
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 
-import type { TransportRunStatus, TransportState } from "@/lib/assistant/contract";
-import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import {
   convertFrameStoreItem,
-  TransportFrameStore,
   type FrameStoreItem,
+  type TransportFrameStore,
 } from "@/lib/assistant/transport/transport-frame-store";
 import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
-import { reconcileCommands, releaseCommandObservation } from "../command-request-store";
-import { TaskTransportSession, type TransportDisconnect } from "@/lib/assistant/transport/task-transport-session";
-import type { TraceId } from "@/lib/logging/trace-id";
-
-export type { TransportDisconnect } from "@/lib/assistant/transport/task-transport-session";
+import type { TaskTransportConnection } from "@/lib/assistant/transport/task-transport-connection";
+import { getBackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
 
 export type TaskAssistantTransportOptions = {
-  initialState: TransportState;
   adapters?: ExternalStoreAdapter<FrameStoreItem>["adapters"];
-  /** 长订阅的链路 id；基地址由 http client 按当前后端实例解析，后端换实例经 `connectionKey` 重开。 */
-  traceId: TraceId;
   /**
    * 提交一条用户消息。宿主负责请求体组装；后端处理完这次命令才返回，被拒时抛错（乐观消息随即
    * 收回），输出经长订阅到达；乐观消息保留到 snapshot 里出现对应消息才清除。只读 runtime 不提供。
    */
   submitMessage?: (command: UserAddMessageCommand) => Promise<void>;
-  /** 长订阅建立（attach 2xx）。 */
-  onResponse?: (response: Response) => void;
-  /** 一轮输出结束：当前活动从活动态进入终态（含重连 full 帧补发）；挂起不算。 */
-  onActivitySettled?: (status: TransportRunStatus) => void;
-  /**
-   * 长订阅意外结束：长订阅只在客户端主动关闭、背压重同步或 Task 删除时结束，任何其他结束
-   * （EOF、网络错误、attach 非 2xx）都应由宿主进入有限重连。主动关闭不回调。
-   */
-  onDisconnect?: (disconnect: TransportDisconnect) => void;
   /** 命令提交被拒或未能发出（HTTP 非 2xx、网络失败、附件失效）；乐观消息已先行收回。 */
   onError?: (error: Error, commands: readonly UserAddMessageCommand[]) => Promise<void> | void;
-  /**
-   * 订阅身份：为 null 时不订阅（本机后端不可用）；非 null 时挂载即打开 Task 长订阅，值变化（后端
-   * 换了实例）即重开。卸载或变为 null 时关闭。意外断开后的重连不归这里，由宿主经返回的 `open` 发起。
-   */
-  connectionKey: string | null;
   readonly?: boolean;
-  onStateCommit?: (state: TransportState, toolCalls: ToolCalls) => void;
-  performanceProbe?: AssistantPerformanceProbe | null;
 };
 
 /**
- * 为单个 task 的 frame store 创建 assistant-ui external adapter。
+ * 把一个已就绪（收到首帧）的 Task 连接交给 assistant-ui：store 快照作为 external store，发送经连接提交。
  *
- * frame store 是唯一的流式投影持有者，长订阅与命令提交由 `TaskTransportSession` 承担；本 hook
- * 只做 React 装配：把 store 快照交给 assistant-ui、把活动跳变转给宿主回调。它不创建
- * 业务持久化状态。
+ * 订阅、重连与 store 的创建都归 `TaskTransportConnection`（外壳持有），这里只做 React 装配，所以 runtime
+ * 挂载时一定已有完整状态，渲染出错重挂也不丢数据。不创建业务持久化状态，也不创建额外线程列表（直接用
+ * external-store runtime，避免远程 thread-list 的异步绑定阶段）。
  */
-function useTaskAssistantTransportAdapter(
-  taskId: number,
-  options: TaskAssistantTransportOptions,
+export function useTaskAssistantTransportRuntime(
+  connection: TaskTransportConnection,
+  store: TransportFrameStore,
+  options: TaskAssistantTransportOptions = {},
 ) {
-  const store = useMemo(() => new TransportFrameStore(options.initialState, {
-    performanceProbe: options.performanceProbe ?? undefined,
-  }), [options.initialState, options.performanceProbe, taskId]);
   const view = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
   const optionsRef = useRef(options);
   optionsRef.current = options;
-  const session = useMemo(() => new TaskTransportSession(store, taskId, () => {
-    const current = optionsRef.current;
-    return {
-      traceId: current.traceId,
-      submitMessage: current.submitMessage,
-      onResponse: current.onResponse,
-      onDisconnect: current.onDisconnect,
-      onSubmitError: current.onError,
-    };
-  }), [store, taskId]);
-
-  // 在 canonical publication 同步派生；乐观命令通知不重复对账，活动回调看到本次状态。
-  useEffect(() => {
-    let committed: TransportState | undefined;
-    const commit = () => {
-      const current = store.getSnapshot();
-      if (committed === current.state) return;
-      committed = current.state;
-      reconcileCommands(taskId, current.state.activity);
-      optionsRef.current.onStateCommit?.(current.state, current.toolCalls);
-    };
-    const unsubscribe = store.subscribe(commit);
-    commit();
-    return () => {
-      unsubscribe();
-      releaseCommandObservation(taskId);
-    };
-  }, [store, taskId]);
-
-  useEffect(() => store.subscribeActivity((transition) => {
-    const probe = optionsRef.current.performanceProbe;
-    if (transition.kind === "started") {
-      probe?.beginStream();
-      return;
-    }
-    probe?.finishStream({
-      activityTurn: store.getSnapshot().state.activity?.turn ?? null,
-      activityStatus: transition.status,
-    });
-    optionsRef.current.onActivitySettled?.(transition.status);
-  }), [store]);
-
-  // 订阅归 runtime 所有：有订阅身份就打开，身份变化或卸载时关闭旧连接再按新身份打开。
-  const { connectionKey } = options;
-  useEffect(() => {
-    if (connectionKey === null) return;
-    void session.start();
-    return () => session.close();
-  }, [connectionKey, session]);
-  // 宿主重连打开的连接同样随 session 释放（connectionKey 为 null 期间也可能有）。
-  useEffect(() => () => session.close(), [session]);
 
   // 气泡里没有编辑框：编辑是撤回后放回主输入框再发送，提交只有新消息这一条路。
   const onNew = useCallback((message: AppendMessage) => {
     const command = toAddMessageCommand(message);
     const current = optionsRef.current;
-    // 后端暂停时 UI 仍存活，AUI 已清空提交草稿；在当前 UI 入口恢复并提示。
-    // 这不是关闭会话的迟到回调，也不发送 HTTP。附件上传后提交也走此入口。
-    if (current.connectionKey === null) {
+    // 后端暂停时 UI 仍存活，AUI 已清空提交草稿；在当前 UI 入口恢复并提示，不发送 HTTP。
+    // 附件上传后提交也走此入口。
+    if (!getBackendRuntimeSnapshot().available) {
       return current.onError?.(new UserFacingError("本机后端暂不可用，请稍后重试"), [command]);
     }
-    return session.submit(command);
-  }, [session]);
+    const send = current.submitMessage;
+    if (!send) throw new Error("只读 Transport runtime 不接受消息提交");
+    return connection.submit(command, {
+      send,
+      onError: (error, commands) => optionsRef.current.onError?.(error, commands),
+    });
+  }, [connection]);
   // 重新拉取即重开长订阅：attach 首帧就是完整 canonical state。
-  const onRefetchThread = useCallback(() => session.open(), [session]);
+  const onRefetchThread = useCallback(() => connection.open(), [connection]);
 
   const adapter = useMemo<ExternalStoreAdapter<FrameStoreItem>>(() => {
     const base = {
@@ -145,33 +72,15 @@ function useTaskAssistantTransportAdapter(
       state: view.state as unknown as ReadonlyJSONValue,
       ...(options.readonly ? {} : { onNew }),
       onRefetchThread,
-      onLoadExternalState: (state: unknown) => {
-        if (isTransportStateLike(state)) store.importState(state);
-      },
       convertMessage: convertFrameStoreItem,
       adapters: options.adapters,
     };
     // 库类型把 onNew 建模为 writable runtime 的必填项；readonly runtime 有意在运行时省略，
     // 使 Assistant UI 不暴露写入处理器。
     return base as unknown as ExternalStoreAdapter<FrameStoreItem>;
-  }, [onNew, onRefetchThread, options.adapters, options.readonly, store, view]);
+  }, [onNew, onRefetchThread, options.adapters, options.readonly, view]);
 
-  return { adapter, open: session.open, loadEarlierHistory: session.loadEarlierHistory };
-}
-
-/**
- * 创建 task 级 Transport runtime；只读与否由 `options.readonly` 决定（只读时不挂 onNew 等写入入口）。
- *
- * task 导航和持久化身份由 Workbench 负责，本 runtime 只拥有当前 task 的
- * TransportFrameStore；因此直接使用 external-store runtime，避免引入远程
- * thread-list 的异步绑定阶段。该函数不创建额外线程列表，也不写入后端事实。
- */
-export function useTaskAssistantTransportRuntime(
-  taskId: number,
-  options: TaskAssistantTransportOptions,
-) {
-  const { adapter, open, loadEarlierHistory } = useTaskAssistantTransportAdapter(taskId, options);
-  return { runtime: useExternalStoreRuntime(adapter), open, loadEarlierHistory };
+  return { runtime: useExternalStoreRuntime(adapter), loadEarlierHistory: connection.loadEarlierHistory };
 }
 
 export function toAddMessageCommand(message: AppendMessage): UserAddMessageCommand {
@@ -209,8 +118,4 @@ export function toAddMessageCommand(message: AppendMessage): UserAddMessageComma
     type: "add-message",
     message: { role: "user", parts },
   };
-}
-
-function isTransportStateLike(value: unknown): value is TransportState {
-  return typeof value === "object" && value !== null && Array.isArray((value as TransportState).messages);
 }

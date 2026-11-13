@@ -105,7 +105,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
       <LinkTaskContext.Provider value={taskId}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
         {/*
-          顶部锚点固定本轮用户消息，答案在其下方增长，流式 token 不会持续把滚动位置重新
+          顶部锚点固定最新回合的用户消息，答案在其下方增长，流式 token 不会持续把滚动位置重新
           钉回底部。这里显式关闭 autoScroll，因为该模式默认值为 false；中途追踪底部会
           换取稳定视口。屏幕外消息只由虚拟列表跳过（见 VirtualizedThreadMessages）。
           视口不能加 CSS scroll-smooth：虚拟列表重新测量行高时会程序化修正 scrollTop，

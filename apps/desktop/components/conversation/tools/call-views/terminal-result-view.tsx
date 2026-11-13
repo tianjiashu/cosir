@@ -127,7 +127,7 @@ function TerminalResultBody({ data, context }: { data: Record<string, unknown>; 
   const directoryName = workdir?.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) || workdir;
   // 在工作区根目录跑命令是常态，只有换了目录才值得说。
   const showWorkdir = workdir !== undefined && workdir.replace(/[\\/]+$/, "") !== links.workspaceRoot?.replace(/[\\/]+$/, "");
-  const parsed = useParsedOutput(output);
+  const { tail, readText } = useParsedOutput(output);
   const [commandOpen, setCommandOpen] = useDisclosure(taskId, `terminal-command:${toolCallId}`, false);
   const [, setReaderOpen] = useDisclosure(taskId, `terminal-reader:${toolCallId}`, false);
   const commandElement = useRef<HTMLPreElement>(null);
@@ -145,11 +145,11 @@ function TerminalResultBody({ data, context }: { data: Record<string, unknown>; 
       {output ? <div className="relative">
         <OmittedOutputNotice omittedLines={omittedLines(data)} logPath={outputLogPath(data)} links={{ workspaceRoot: links.workspaceRoot, open: links.open }} />
         <div className={cn("bg-card absolute top-0 right-0 flex gap-1", REVEAL_ON_DISCLOSURE_HOVER)}>
-          <CopyIconButton label="复制输出" size="xs" getText={() => parsed?.text ?? ""} logEvent="terminal_output_copy_failed" logData={{ taskId, toolCallId }} />
+          <CopyIconButton label="复制输出" size="xs" getText={readText} logEvent="terminal_output_copy_failed" logData={{ taskId, toolCallId }} />
           <TooltipIconButton tooltip="查看输出" className="size-6" onClick={() => setReaderOpen(true)}><Maximize2Icon aria-hidden="true" /></TooltipIconButton>
         </div>
-        {parsed && parsed.hiddenLines > 0 && <p className="text-muted-foreground">还有 {parsed.hiddenLines} 行</p>}
-        {parsed && <TerminalOutputPreview lines={parsed.lines} />}
+        {tail && tail.hiddenLines > 0 && <p className="text-muted-foreground">还有 {tail.hiddenLines} 行</p>}
+        {tail && <TerminalOutputPreview lines={tail.lines} />}
       </div> : !live && <p className="text-muted-foreground">无输出</p>}
       {showWorkdir && <p className="text-muted-foreground truncate text-2xs" title={workdir}>
         启动目录：{directoryTarget

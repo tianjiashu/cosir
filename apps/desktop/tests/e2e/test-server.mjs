@@ -662,7 +662,7 @@ function handleCancel(res, taskId) {
 /** Task 长订阅：先推 full 帧，之后持续推送；没有 Run 也保持连接，只在客户端断开时结束。 */
 function handleAttach(res, taskId) {
   if (!states.has(taskId)) {
-    jsonResponse(res, 404, { detail: { error: { code: "TASK_NOT_FOUND", message: "任务不存在", retryable: false } } });
+    jsonResponse(res, 404, { detail: "task not found" });
     return;
   }
   res.writeHead(200, {
@@ -896,6 +896,16 @@ const server = createServer(async (req, res) => {
     res.end(lastStreamBody);
     return;
   }
+  if (req.method === "GET" && url.pathname === "/__test__/state") {
+    // 测试读取模拟后端此刻的 canonical state（即 attach 首帧会带的那份）；真实后端没有单独的读取接口。
+    const taskId = Number(url.searchParams.get("taskId"));
+    if (!states.has(taskId)) {
+      jsonResponse(res, 404, { detail: "task not found" });
+      return;
+    }
+    jsonResponse(res, 200, wireState(taskId));
+    return;
+  }
   if (req.method === "GET" && url.pathname === "/__test__/telemetry") {
     jsonResponse(res, 200, telemetry);
     return;
@@ -927,7 +937,7 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (req.method === "POST" && url.pathname === "/__test__/seed-state") {
-    // 直接落定某个 Task 的 canonical state：state 读取与 attach 首帧共用这一份事实。
+    // 直接落定某个 Task 的 canonical state：attach 首帧与 `__test__/state` 读的是这一份事实。
     const body = await readJson(req);
     executors.delete(Number(body.taskId));
     if (body.hold) executors.set(Number(body.taskId), { cancelled: false, drop: false });
@@ -1192,15 +1202,6 @@ const server = createServer(async (req, res) => {
       return;
     }
     jsonResponse(res, 200, { ...task, task_type: task.task_type ?? "user" });
-    return;
-  }
-  if (req.method === "GET" && url.pathname.startsWith("/tasks/") && url.pathname.endsWith("/assistant/state")) {
-    const taskId = Number(url.pathname.split("/")[2]);
-    if (!states.has(taskId)) {
-      jsonResponse(res, 404, { detail: "task not found" });
-      return;
-    }
-    jsonResponse(res, 200, wireState(taskId));
     return;
   }
   const historyRoute = url.pathname.match(/^\/tasks\/(\d+)\/assistant\/messages$/);

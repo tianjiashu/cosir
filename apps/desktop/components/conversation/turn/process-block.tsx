@@ -2,7 +2,7 @@ import { memo, useRef } from "react";
 import { useScrollLock } from "@assistant-ui/react";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { activityKey, useDisclosure } from "@/lib/assistant/turn/disclosure-store";
-import { describeProcessProblems, type ActivityGroup, type CallItem } from "@/lib/assistant/turn/turn-layout";
+import { describeCallProblems, type ActivityGroup, type CallItem } from "@/lib/assistant/turn/turn-layout";
 import type { ActivityFeedback } from "@/lib/assistant/turn/current-activity";
 import { ActivityStatus } from "./thinking-label";
 
@@ -18,7 +18,7 @@ export const ProcessBlock = memo(function ProcessBlock({ taskId, messageId, grou
   // 种类多时只列最多的三类，否则标题折成好几行，失败提示被挤走。
   const verbs = [...summary.verbCounts].sort((left, right) => right.count - left.count);
   const counts = verbs.slice(0, 3).map(({ label, count }) => `${label} ${count} 次`).join(" · ") + (verbs.length > 3 ? ` 等 ${verbs.length} 类` : "");
-  const problems = describeProcessProblems(summary);
+  const problems = describeCallProblems(summary);
   return (
     <div ref={ref}
       data-slot="activity-group" className="flex min-w-0 flex-col gap-1">

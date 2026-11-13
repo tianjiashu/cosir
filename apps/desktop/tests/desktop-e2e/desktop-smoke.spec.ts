@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 
 import { backendBaseUrl, backendPython, launchDesktop, repositoryRoot } from "./desktop-app";
+import { attachFirstFrame } from "./attach-first-frame";
 
 test("starts the host, reaches the workspace shell and isolates its data under the given home", async () => {
   const { app, page, home } = await launchDesktop();
@@ -80,7 +81,7 @@ test("quitting stops the backend process tree", async () => {
   }, { timeout: 10_000 }).toBe("stopped");
 });
 
-test("opens and reloads a conversation through the real snapshot HTTP route", async () => {
+test("opens and reloads a conversation through the real attach first frame", async () => {
   const { app, page, home } = await launchDesktop();
   try {
     await expect(page.getByRole("navigation", { name: "工作区任务列表" })).toBeVisible({ timeout: 120_000 });
@@ -99,9 +100,7 @@ test("opens and reloads a conversation through the real snapshot HTTP route", as
     });
     expect(taskResponse.status).toBe(200);
     const task = await taskResponse.json() as { task_id: number };
-    const response = await fetch(`${base}/tasks/${task.task_id}/assistant/state`);
-    expect(response.status).toBe(200);
-    expect((await response.json() as { messages: unknown[] }).messages).toEqual([]);
+    expect((await attachFirstFrame(base, task.task_id)).messages).toEqual([]);
     expect((await fetch(`${base}/tasks/${task.task_id}/assistant/messages?end=0`)).status).toBe(200);
     await page.reload();
     await page.getByText("快照序列化回归", { exact: true }).click();
@@ -131,10 +130,8 @@ test("A9 real Python HTTP and Electron: final reply derives from stored response
       expect(response.status).toBe(200);
       const { task_id } = await response.json() as { task_id: number };
       execFileSync(backendPython, [path.join(repositoryRoot, "apps/backend/tests/fixtures/seed_timeline.py"), String(task_id), reason], { cwd: path.join(repositoryRoot, "apps/backend"), env: { ...process.env, CODING_AGENT_DATA_DIR: home } });
-      const snapshotResponse = await fetch(`${base}/tasks/${task_id}/assistant/state`);
-      expect(snapshotResponse.status).toBe(200);
-      const snapshot = await snapshotResponse.json() as { messages: Array<{ parts: Array<{ finalReply?: boolean; text?: string }> }> };
-      expect(snapshot.messages.flatMap(m => m.parts).filter(p => p.finalReply).map(p => p.text)).toEqual(reason === "stop" ? ["真实后端结论"] : []);
+      const snapshot = await attachFirstFrame(base, task_id);
+      expect(snapshot.messages.flatMap(m => m.parts).flatMap(p => (p.type === "text" && p.finalReply ? [p.text] : []))).toEqual(reason === "stop" ? ["真实后端结论"] : []);
       await page.reload();
       await page.getByRole("treeitem").filter({ hasText: `真实-${reason}` }).last().click();
       await expect(page.getByText("真实后端结论", { exact: true })).toBeVisible();
@@ -168,10 +165,8 @@ test("H7 real Electron: pure completed replies omit headings in both themes and 
       expect(response.status).toBe(200);
       const { task_id } = await response.json() as { task_id: number };
       execFileSync(backendPython, [path.join(repositoryRoot, "apps/backend/tests/fixtures/seed_timeline.py"), String(task_id), "stop", mode], { cwd: path.join(repositoryRoot, "apps/backend"), env: { ...process.env, CODING_AGENT_DATA_DIR: home } });
-      const snapshotResponse = await fetch(`${base}/tasks/${task_id}/assistant/state`);
-      expect(snapshotResponse.status).toBe(200);
-      const snapshot = await snapshotResponse.json() as { messages: Array<{ outcome: { durationMs: number } | null; parts: Array<{ finalReply?: boolean; text?: string }> }> };
-      expect(snapshot.messages.flatMap(m => m.parts).filter(p => p.finalReply).map(p => p.text)).toEqual(["真实后端结论"]);
+      const snapshot = await attachFirstFrame(base, task_id);
+      expect(snapshot.messages.flatMap(m => m.parts).flatMap(p => (p.type === "text" && p.finalReply ? [p.text] : []))).toEqual(["真实后端结论"]);
       expect(typeof snapshot.messages.at(-1)!.outcome!.durationMs).toBe("number");
       await page.reload();
       await page.getByRole("treeitem").filter({ hasText: `标题-${mode}` }).last().click();
@@ -259,7 +254,7 @@ test("I10 real Electron: unified intent travels through real tools, background w
     await expect(feedback).toContainText("正在思考");
     tool(0, "native-read", "read_file", { intent: "核对样例文件内容", path: "sample.txt", offset: 1, limit: 500 });
     await expect.poll(() => requests.length).toBe(2);
-    const state = async () => (await (await fetch(`${base}/tasks/${task_id}/assistant/state`)).json()) as import("../../lib/assistant/contract").TransportState;
+    const state = async () => await attachFirstFrame(base, task_id);
     await expect.poll(async () => (await state()).messages.flatMap(m => m.parts).find(p => p.type === "tool-call" && p.toolCallId === "native-read")).toMatchObject({ intent: "核对样例文件内容", status: "completed" });
     delta(1, { content: "文件核对完成，现在执行终端检查。" });
     // Force text flush before the next tool interval.
@@ -351,7 +346,7 @@ test("fork context: reply boundary, presentation, restart and source deletion", 
       const response = await fetch(`${base}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       expect(response.status, await response.clone().text()).toBe(200); return response.json();
     };
-    const state = async (id: number) => (await (await fetch(`${base}/tasks/${id}/assistant/state`)).json()) as import("../../lib/assistant/contract").TransportState;
+    const state = async (id: number) => await attachFirstFrame(base, id);
     const replacement = (await post("/configuration/model-connections", { name: "目录默认模型", base_url: `http://127.0.0.1:${address.port}/v1`, api_key: "local-test-only", models: [{ model_name: "decoy-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true }] }) as { models: { config_id: string; connection_id: string; model_name: string }[] }).models[0]!;
     const config = (await post("/configuration/model-connections", { name: "本机分叉验收", base_url: `http://127.0.0.1:${address.port}/v1`, api_key: "local-test-only", models: [{ model_name: "fork-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true }] }) as { models: { config_id: string; connection_id: string; model_name: string }[] }).models[0]!;
     const root = path.join(home, "fork-workspace"); fs.mkdirSync(root);
@@ -376,7 +371,8 @@ test("fork context: reply boundary, presentation, restart and source deletion", 
     expect(childRequest.tools).toEqual(requests.find(body => JSON.stringify(body.messages).includes("PARENT_ONLY_B"))!.tools);
     const [handover, assignment] = childRequest.messages.slice(-2).map(m => JSON.stringify(m.content));
     expect(handover).toContain(`You are task ${child.task_id}, a fork of task ${task_id}`);
-    expect(handover).toMatch(/disabled for this round[^.]*fork_task/);
+    // 分叉 Task 不能再分叉：工具准入通知按来源说明这是 Task 级禁用。
+    expect(handover).toContain("for this task: fork_task");
     expect(assignment).toContain("CHILD_SCOPE_C");
     const childState = await state(child.task_id);
     expect(childState.fork?.taskType).toBe("agent_fork");

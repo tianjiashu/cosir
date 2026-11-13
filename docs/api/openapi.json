@@ -971,22 +971,18 @@
         }
       }
     },
-    "/model-configs": {
+    "/configuration/model-connections": {
       "get": {
-        "summary": "List Model Configs",
-        "description": "返回启用和停用的模型连接配置摘要。",
-        "operationId": "list_model_configs_model_configs_get",
+        "summary": "Read Model Config File",
+        "description": "返回文件路径与全部连接（含还没有模型的连接）；文件写坏时 400 并指出出错位置。",
+        "operationId": "read_model_config_file_configuration_model_connections_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/ModelConfigResponse"
-                  },
-                  "type": "array",
-                  "title": "Response List Model Configs Model Configs Get"
+                  "$ref": "#/components/schemas/ModelConfigFileResponse"
                 }
               }
             }
@@ -994,14 +990,14 @@
         }
       },
       "post": {
-        "summary": "Create Model Config",
-        "description": "创建模型连接配置。",
-        "operationId": "create_model_config_model_configs_post",
+        "summary": "Create Model Connection",
+        "description": "新建连接与它的首批模型，返回写入后的连接（含各模型 id）。",
+        "operationId": "create_model_connection_configuration_model_connections_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ModelConfigCreateRequest"
+                "$ref": "#/components/schemas/ModelConnectionCreateRequest"
               }
             }
           },
@@ -1013,7 +1009,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ModelConfigResponse"
+                  "$ref": "#/components/schemas/ModelConnectionResponse"
                 }
               }
             }
@@ -1031,16 +1027,16 @@
         }
       }
     },
-    "/model-configs/discover": {
+    "/configuration/model-connections/discover": {
       "post": {
-        "summary": "Discover Model Configs",
+        "summary": "Discover Models",
         "description": "发现远端模型 ID；远端失败时返回空列表而不打断配置表单。",
-        "operationId": "discover_model_configs_model_configs_discover_post",
+        "operationId": "discover_models_configuration_model_connections_discover_post",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ModelConfigDiscoveryRequest"
+                "$ref": "#/components/schemas/ModelDiscoveryRequest"
               }
             }
           },
@@ -1052,7 +1048,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ModelConfigDiscoveryResponse"
+                  "$ref": "#/components/schemas/ModelDiscoveryResponse"
                 }
               }
             }
@@ -1070,19 +1066,216 @@
         }
       }
     },
-    "/model-configs/{config_id}": {
+    "/configuration/model-connections/test": {
+      "post": {
+        "summary": "Test Draft Model",
+        "description": "对一个尚未保存的「连接 + 模型」执行一次真实 OpenAI 兼容请求。",
+        "operationId": "test_draft_model_configuration_model_connections_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelConfigTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {},
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "type": "object",
+                  "title": "Response Test Draft Model Configuration Model Connections Test Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/model-connections/{connection_id}": {
       "put": {
-        "summary": "Update Model Config",
-        "description": "更新模型连接配置的显式字段。",
-        "operationId": "update_model_config_model_configs__config_id__put",
+        "summary": "Update Model Connection",
+        "description": "更新连接的显式字段（不传 ``api_key`` 即保留原 Key）。",
+        "operationId": "update_model_connection_configuration_model_connections__connection_id__put",
         "parameters": [
           {
-            "name": "config_id",
+            "name": "connection_id",
             "in": "path",
             "required": true,
             "schema": {
-              "type": "integer",
-              "title": "Config Id"
+              "type": "string",
+              "title": "Connection Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelConnectionUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelConnectionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Model Connection",
+        "description": "幂等删除连接及其全部模型。",
+        "operationId": "delete_model_connection_configuration_model_connections__connection_id__delete",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Model Connection Configuration Model Connections  Connection Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/model-connections/{connection_id}/models": {
+      "post": {
+        "summary": "Add Models",
+        "description": "给已有连接追加一批模型，返回写入后的连接。",
+        "operationId": "add_models_configuration_model_connections__connection_id__models_post",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelConfigsAddRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelConnectionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/configuration/model-connections/{connection_id}/models/{model_name}": {
+      "put": {
+        "summary": "Update Model",
+        "description": "更新模型的上下文窗口或能力声明。",
+        "operationId": "update_model_configuration_model_connections__connection_id__models__model_name__put",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "model_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Model Name"
             }
           }
         ],
@@ -1120,17 +1313,26 @@
         }
       },
       "delete": {
-        "summary": "Delete Model Config",
-        "description": "幂等删除模型连接配置。",
-        "operationId": "delete_model_config_model_configs__config_id__delete",
+        "summary": "Delete Model",
+        "description": "幂等删除一个模型。",
+        "operationId": "delete_model_configuration_model_connections__connection_id__models__model_name__delete",
         "parameters": [
           {
-            "name": "config_id",
+            "name": "connection_id",
             "in": "path",
             "required": true,
             "schema": {
-              "type": "integer",
-              "title": "Config Id"
+              "type": "string",
+              "title": "Connection Id"
+            }
+          },
+          {
+            "name": "model_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Model Name"
             }
           }
         ],
@@ -1142,55 +1344,7 @@
                 "schema": {
                   "type": "object",
                   "additionalProperties": true,
-                  "title": "Response Delete Model Config Model Configs  Config Id  Delete"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/model-configs/test": {
-      "post": {
-        "summary": "Test Draft Model Config",
-        "description": "对完整但尚未保存的表单配置执行一次真实 OpenAI 兼容请求。",
-        "operationId": "test_draft_model_config_model_configs_test_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ModelConfigTestRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "anyOf": [
-                      {},
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "type": "object",
-                  "title": "Response Test Draft Model Config Model Configs Test Post"
+                  "title": "Response Delete Model Configuration Model Connections  Connection Id  Models  Model Name  Delete"
                 }
               }
             }
@@ -3324,10 +3478,54 @@
         }
       }
     },
+    "/agent-team/runs/{run_id}/cancel": {
+      "post": {
+        "summary": "Cancel Agent Team Run",
+        "description": "用户单独停止一个运行中的 Agent Team；只表示停止已被接受，终态以 TeamRun 状态为准。\n\nTeam 是编排实体，按 TeamRun 停止，不经工具调用取消：节点与档案收尾后，主 Task 得到一条停止\n通知，只唤醒它挂起的 Run、不开新 Run（见 ``derived_report``）。\n\n异常:\n    HTTPException: TeamRun 不在运行中（已落定、仍待确认或不存在）时 409。",
+        "operationId": "cancel_agent_team_run_agent_team_runs__run_id__cancel_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "title": "Response Cancel Agent Team Run Agent Team Runs  Run Id  Cancel Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/tasks/{task_id}/messages": {
       "post": {
         "summary": "Send Message",
-        "description": "发送消息：有活动 Run（含挂起）时排队，当前 Run 结束后一轮一条依次处理；空闲时立即处理。",
+        "description": "发送消息：有活动 Run（含挂起）时排队，当前 Run 结束后每个 Run 一条依次处理；空闲时立即处理。",
         "operationId": "send_message_tasks__task_id__messages_post",
         "parameters": [
           {
@@ -3646,46 +3844,6 @@
         }
       }
     },
-    "/tasks/{task_id}/assistant/state": {
-      "get": {
-        "summary": "Assistant Transport State",
-        "description": "返回某任务的首屏历史 state（服务端权威对话视图）；任务不存在时 404。\n\n冷读时 state service 从 canonical Task、Run 与 Context 记录重建；不修改 Run、Context 或执行器。",
-        "operationId": "assistant_transport_state_tasks__task_id__assistant_state_get",
-        "parameters": [
-          {
-            "name": "task_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "title": "Task Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConversationStateSnapshot"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/tasks/{task_id}/assistant/messages": {
       "get": {
         "summary": "Assistant History Page",
@@ -3824,7 +3982,7 @@
     "/tasks/{task_id}/tool-calls/{tool_call_id}/cancel": {
       "post": {
         "summary": "Cancel Tool Call",
-        "description": "取消一次工具调用，Run 与 Agent 继续执行。\n\n登记了后台结果的调用（前台等待或后台工作）撤销登记，不要求 Run 在执行；其余只给 Task 当前\n执行中的调用打工具级取消信号。本端点只表示取消已被接受；工具调用终态以 canonical snapshot\n为准。\n\n异常:\n    HTTPException: 没有可取消的对象（Task 当前没有执行、调用已结束或已标记过取消）时 409。",
+        "description": "取消一次工具调用，Run 与 Agent 继续执行。\n\n登记了后台结果的调用（前台等待或后台工作）撤销登记，不要求 Run 在执行；其余只给 Task 当前\n执行中的调用打工具级取消信号。成功只表示取消已被接受，工具调用终态以 snapshot 为准；\n409 ``TOOL_CALL_NOT_CANCELLABLE``：调用已结束、已标记过取消，或 Task 当前没有执行者。",
         "operationId": "cancel_tool_call_tasks__task_id__tool_calls__tool_call_id__cancel_post",
         "parameters": [
           {
@@ -3904,7 +4062,7 @@
           "model_config_id": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "string"
               },
               {
                 "type": "null"
@@ -3962,7 +4120,7 @@
           "model_config_id": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "string"
               },
               {
                 "type": "null"
@@ -4452,7 +4610,7 @@
           "image"
         ],
         "title": "AssistantImagePart",
-        "description": "校验用户消息中的 project-owned 图片 locator。"
+        "description": "图片 part：只收项目自有的附件定位符（由上传接口发布）。"
       },
       "AssistantTextPart": {
         "properties": {
@@ -4472,21 +4630,10 @@
           "text"
         ],
         "title": "AssistantTextPart",
-        "description": "校验 Assistant UI 用户消息中的文本 part。"
+        "description": "文本 part；首尾空白去掉，空白文本在这里拒绝（空输入的唯一校验点）。"
       },
       "AssistantUserMessage": {
         "properties": {
-          "id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Id"
-          },
           "role": {
             "type": "string",
             "const": "user",
@@ -4811,72 +4958,11 @@
         "title": "ContextTurnRunResponse",
         "description": "所选回合所属 Run 的状态事实；属于整个 Run，同一 Run 的其他回合看到的是同一份。\n\n不带 Run 号：诊断按回合进入，排查日志时用 Task id 与这里的起止时间收窄范围。"
       },
-      "ConversationBackgroundTask": {
-        "properties": {
-          "toolCallId": {
-            "type": "string",
-            "title": "Toolcallid"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "terminal_command",
-              "child_agent",
-              "agent_team"
-            ],
-            "title": "Kind"
-          },
-          "label": {
-            "type": "string",
-            "title": "Label"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "running",
-              "settling",
-              "completed",
-              "cancelled"
-            ],
-            "title": "Status"
-          },
-          "startedAt": {
-            "type": "string",
-            "title": "Startedat"
-          },
-          "endedAt": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Endedat"
-          }
-        },
-        "type": "object",
-        "required": [
-          "toolCallId",
-          "kind",
-          "label",
-          "status",
-          "startedAt",
-          "endedAt"
-        ],
-        "title": "ConversationBackgroundTask",
-        "description": "一条后台工作；进行中（运行、收尾）的在前，按开始先后；之后是最近结束的若干条。"
-      },
       "ConversationBackgroundWork": {
         "properties": {
           "kind": {
             "type": "string",
-            "enum": [
-              "terminal_command",
-              "child_agent",
-              "agent_team"
-            ],
+            "const": "terminal_command",
             "title": "Kind"
           },
           "label": {
@@ -4909,97 +4995,28 @@
         "title": "ConversationBackgroundWork",
         "description": "后台占位上的工作记录（``BackgroundWork`` 的 wire 形状）。卡片只看它在不在；看板从工作副本里\n的这些记录投影，所以它们随 part 进入快照，看板不另外查库。"
       },
-      "ConversationHandoff": {
+      "ConversationRunError": {
         "properties": {
-          "toolCallId": {
+          "code": {
             "type": "string",
-            "title": "Toolcallid"
+            "title": "Code"
           },
-          "toolName": {
+          "message": {
             "type": "string",
-            "title": "Toolname"
-          },
-          "surface": {
-            "type": "string",
-            "enum": [
-              "terminal",
-              "browser"
-            ],
-            "title": "Surface"
-          },
-          "resourceId": {
-            "type": "string",
-            "title": "Resourceid"
-          },
-          "reason": {
-            "type": "string",
-            "title": "Reason"
+            "title": "Message"
           }
         },
         "type": "object",
         "required": [
-          "toolCallId",
-          "toolName",
-          "surface",
-          "resourceId",
-          "reason"
+          "code",
+          "message"
         ],
-        "title": "ConversationHandoff",
-        "description": "一次进行中的交接，按登记先后排列。"
+        "title": "ConversationRunError",
+        "description": "Run 失败后持久化并投影给 UI 的错误契约。\n\n``code`` 是内部稳定失败类别；``message`` 默认来自受控文案目录，模型 HTTP 错误时可以\n直接承载响应体中的 ``message`` 字段供 UI 展示。完整响应体和请求内容不进入此契约。"
       },
-      "ConversationQueuedMessage": {
+      "ConversationRunUsage": {
         "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "role": {
-            "type": "string",
-            "const": "user",
-            "title": "Role"
-          },
-          "parts": {
-            "items": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/ConversationStateTextPart"
-                },
-                {
-                  "$ref": "#/components/schemas/ConversationStateImagePart"
-                },
-                {
-                  "$ref": "#/components/schemas/ConversationStateToolCallPart"
-                },
-                {
-                  "$ref": "#/components/schemas/ConversationStateAgentMessagePart"
-                }
-              ]
-            },
-            "type": "array",
-            "title": "Parts"
-          },
-          "delivery": {
-            "type": "string",
-            "enum": [
-              "immediate",
-              "next_run"
-            ],
-            "title": "Delivery"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "role",
-          "parts",
-          "delivery"
-        ],
-        "title": "ConversationQueuedMessage",
-        "description": "尚未被模型边界消费、需投影的排队消息；还没有回合。\n\n``delivery`` 只供前端区分「下个模型边界并入」与「交给下一个 Run」，事实仍在外部队列。"
-      },
-      "ConversationRunLaunch": {
-        "properties": {
-          "modelConfigId": {
+          "input_tokens": {
             "anyOf": [
               {
                 "type": "integer"
@@ -5008,53 +5025,9 @@
                 "type": "null"
               }
             ],
-            "title": "Modelconfigid"
+            "title": "Input Tokens"
           },
-          "reasoningEffort": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reasoningeffort"
-          },
-          "disabledToolGroups": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Disabledtoolgroups"
-          }
-        },
-        "type": "object",
-        "required": [
-          "modelConfigId",
-          "reasoningEffort",
-          "disabledToolGroups"
-        ],
-        "title": "ConversationRunLaunch",
-        "description": "Run 冻结的发起配置；前端据此锁定运行期配置控件（运行期配置锁定）。\n\n``modelConfigId`` 在模型配置被删除后为 ``None``。"
-      },
-      "ConversationStateActivity": {
-        "properties": {
-          "modelActivity": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ModelActivity"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "turn": {
+          "output_tokens": {
             "anyOf": [
               {
                 "type": "integer"
@@ -5063,48 +5036,9 @@
                 "type": "null"
               }
             ],
-            "title": "Turn"
+            "title": "Output Tokens"
           },
-          "resumable": {
-            "type": "boolean",
-            "title": "Resumable"
-          },
-          "startedAt": {
-            "type": "string",
-            "title": "Startedat"
-          },
-          "endReason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Endreason"
-          },
-          "error": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ConversationStateError"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "usage": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ConversationStateUsage"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "contextWindowTotal": {
+          "total_tokens": {
             "anyOf": [
               {
                 "type": "integer"
@@ -5113,27 +5047,53 @@
                 "type": "null"
               }
             ],
-            "title": "Contextwindowtotal"
+            "title": "Total Tokens"
           },
-          "launch": {
-            "$ref": "#/components/schemas/ConversationRunLaunch"
+          "cache_hit_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit Tokens"
+          },
+          "cache_miss_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Miss Tokens"
+          },
+          "reasoning_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Tokens"
           }
         },
         "type": "object",
         "required": [
-          "modelActivity",
-          "status",
-          "turn",
-          "resumable",
-          "startedAt",
-          "endReason",
-          "error",
-          "usage",
-          "contextWindowTotal",
-          "launch"
+          "input_tokens",
+          "output_tokens",
+          "total_tokens",
+          "cache_hit_tokens",
+          "cache_miss_tokens",
+          "reasoning_tokens"
         ],
-        "title": "ConversationStateActivity",
-        "description": "Task 当前活动：最新 Run 的状态摘要，对话界面判断运行中、停止、恢复、配置锁定与用量都只读它。\n\n是最新 Run 的投影而不是第二套状态机：事实源仍是 ``ConversationRunModel.status``。Run 身份不上\nwire：``turn`` 是这个 Run 最后一个可见回合（还没有可见回合时为 ``None``），结局写到这一回合的\n回复上，前端据此认出「当前回复」；``resumable`` 是后端的恢复判定（cancelled / failed 且最后一个\n回合没被撤回），前端不另推断。投影保证：所有 Run 事件都在这个 Run 仍是当前活动时同步发出，所以\n事件不必再按 Run 号路由。\n``error`` 只在 Run 进入失败 / 取消终态时携带 ``code`` + UI ``message``。``startedAt`` 是 Run\n记录的创建时间（ISO 8601），前端据此做运行中的本地计时；终态耗时在 ``outcome.durationMs``。"
+        "title": "ConversationRunUsage",
+        "description": "一次 Run 的 provider token 用量；缺失明细保留为 None。"
       },
       "ConversationStateAgentMessagePart": {
         "properties": {
@@ -5162,57 +5122,7 @@
           "source"
         ],
         "title": "ConversationStateAgentMessagePart",
-        "description": "回合途中到达的 Agent 消息：是当前回复过程里的一段，不开新回合。\n\n只有作为 Run 第一条输入的 Agent 消息才开回合，那时它是带 ``source`` 的 user 消息。两种形态\n表达的事实不同（开启回合 / 途中到达），展示上共用同一行。``id`` 是入队消息 id，与 user\n消息同一编码，消费投影据它去重。"
-      },
-      "ConversationStateError": {
-        "properties": {
-          "code": {
-            "type": "string",
-            "title": "Code"
-          },
-          "message": {
-            "type": "string",
-            "title": "Message"
-          }
-        },
-        "type": "object",
-        "required": [
-          "code",
-          "message"
-        ],
-        "title": "ConversationStateError",
-        "description": "面向 UI 的 Run 错误结构。\n\n``code`` 是内部稳定类别；``message`` 可以是模型 HTTP 响应体直接提供的消息。Transport\n只承载这两个字段，不透传完整响应体。"
-      },
-      "ConversationStateFork": {
-        "properties": {
-          "sourceTaskId": {
-            "type": "integer",
-            "title": "Sourcetaskid"
-          },
-          "sourceTitle": {
-            "type": "string",
-            "title": "Sourcetitle"
-          },
-          "taskType": {
-            "type": "string",
-            "enum": [
-              "user_fork",
-              "agent_fork"
-            ],
-            "title": "Tasktype"
-          },
-          "initialLaunch": {
-            "$ref": "#/components/schemas/ConversationRunLaunch"
-          }
-        },
-        "type": "object",
-        "required": [
-          "sourceTaskId",
-          "sourceTitle",
-          "taskType",
-          "initialLaunch"
-        ],
-        "title": "ConversationStateFork"
+        "description": "回合途中到达的 Agent 消息：是当前回复过程里的一段，不开新回合。\n\n在这个 Run 还没有可见内容时到达的 Agent 消息才开回合（规则只在\n``RuntimeMessageContextManager._opens_turn``），那时它是带 ``source`` 的 user 消息。两种形态\n表达的事实不同（开启回合 / 途中到达），展示上共用同一行。``id`` 是入队消息 id，与 user\n消息同一编码，消费投影据它去重。"
       },
       "ConversationStateImagePart": {
         "properties": {
@@ -5313,21 +5223,51 @@
       "ConversationStateMessageSource": {
         "properties": {
           "taskId": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Taskid"
+          },
+          "teamRunId": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Teamrunid"
           },
           "name": {
             "type": "string",
             "title": "Name"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationStateReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
         "required": [
           "taskId",
-          "name"
+          "teamRunId",
+          "name",
+          "report"
         ],
         "title": "ConversationStateMessageSource",
-        "description": "Agent 消息的发送方：前端据 ``taskId`` 跳到来源 Task，``name`` 是发送时的显示名。"
+        "description": "Agent 消息的发送方：``taskId`` 与 ``teamRunId`` 恰好一个非空（Agent Team 的汇报来自 TeamRun），前端\n据 ``taskId`` 跳到来源 Task；``name`` 是发送时的显示名；``report`` 非空时这条消息是来源的汇报（见\n领域 ``MessageSource``）。"
       },
       "ConversationStateOutcome": {
         "properties": {
@@ -5349,7 +5289,7 @@
           "error": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ConversationStateError"
+                "$ref": "#/components/schemas/ConversationRunError"
               },
               {
                 "type": "null"
@@ -5359,7 +5299,7 @@
           "usage": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ConversationStateUsage"
+                "$ref": "#/components/schemas/ConversationRunUsage"
               },
               {
                 "type": "null"
@@ -5394,85 +5334,28 @@
         "title": "ConversationStateOutcome",
         "description": "Run 的结局：Run 进入终态时写到它最后一个可见回合的回复上，属于整个 Run、不拆到回合。\n\n前端看不到 Run，靠它显示历史回复的「已取消 / 失败 / 用量」；Run 被恢复时清空。\n``contextWindowTotal`` 是该 Run 冻结的窗口上限，与 ``usage`` 同属一个 Run：上下文占用的\n「已用 / 上限」必须同源，两个 Run 之间换了模型也不会拿新窗口配旧用量。``durationMs`` 是 Run\n创建到终态的毫秒数，只从 Run 记录的时间戳推导（投影器不读墙钟），终态耗时必填。"
       },
-      "ConversationStateSnapshot": {
+      "ConversationStateReport": {
         "properties": {
-          "fork": {
-            "$ref": "#/components/schemas/ConversationStateFork"
-          },
-          "queued_messages": {
-            "items": {
-              "$ref": "#/components/schemas/ConversationQueuedMessage"
-            },
-            "type": "array",
-            "title": "Queued Messages"
-          },
-          "title": {
+          "status": {
             "type": "string",
-            "title": "Title"
+            "enum": [
+              "completed",
+              "failed"
+            ],
+            "title": "Status"
           },
-          "messages": {
-            "items": {
-              "$ref": "#/components/schemas/ConversationStateMessage"
-            },
-            "type": "array",
-            "title": "Messages"
-          },
-          "messageOffset": {
-            "type": "integer",
-            "title": "Messageoffset"
-          },
-          "activity": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ConversationStateActivity"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "terminal_sessions": {
-            "items": {
-              "$ref": "#/components/schemas/ConversationTerminalSession"
-            },
-            "type": "array",
-            "title": "Terminal Sessions"
-          },
-          "background_tasks": {
-            "items": {
-              "$ref": "#/components/schemas/ConversationBackgroundTask"
-            },
-            "type": "array",
-            "title": "Background Tasks"
-          },
-          "foreground_waits": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Foreground Waits"
-          },
-          "handoffs": {
-            "items": {
-              "$ref": "#/components/schemas/ConversationHandoff"
-            },
-            "type": "array",
-            "title": "Handoffs"
+          "intermediate": {
+            "type": "boolean",
+            "title": "Intermediate"
           }
         },
         "type": "object",
         "required": [
-          "title",
-          "messages",
-          "messageOffset",
-          "activity",
-          "terminal_sessions",
-          "background_tasks",
-          "foreground_waits",
-          "handoffs"
+          "status",
+          "intermediate"
         ],
-        "title": "ConversationStateSnapshot",
-        "description": "一个 Task 的完整 Transport state。\n\n对话界面只看 Task：``title`` 投影自 ``tasks.title``（事实源在 Task 表，snapshot 只是让\n打开中的页面实时收到标题变化），``messages`` 按回合扁平排列（每个回合：开启它的输入 +\n一条回复），``activity`` 是最新 Run 的状态摘要。Run 身份不进 wire，历史回复的结局由消\n息上的 ``outcome`` 承载。命令被拒不进 snapshot，由命令的 HTTP 响应同步返回。\n``terminal_sessions`` 是本 Task 终端会话的进程内事实（不持久化），投影规则见\n``ConversationTaskStateService.refresh_terminal_sessions``。\n``background_tasks`` 的历史来自持久化占位，活状态来自后台结果登记表；\n``foreground_waits``（可转到后台的前台等待）是进程内事实，\n二者见 ``refresh_background_results``。\n``handoffs``（进行中的交接）也是进程内事实，见 ``refresh_handoffs``。\n\n``messageOffset`` 是 ``messages`` 之前还有多少条消息没带上；\n后端工作副本始终是完整历史（恒为 0），\n只有发给前端的完整快照按窗口裁剪（见 ``snapshot_window``）。增量路径里的消息下标始终是完整\n历史里的位置；位置只在完整快照处才会变（投影只在末尾追加或原位替换消息），前端据此换算。"
+        "title": "ConversationStateReport",
+        "description": "派生 Task 的汇报：它的 Run 以什么结局落定，以及这是不是中间结果（之后还会再汇报）。"
       },
       "ConversationStateTextPart": {
         "properties": {
@@ -5607,6 +5490,17 @@
             "type": "string",
             "title": "Agent Role"
           },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Startedat"
+          },
           "terminal_output_seq": {
             "type": "integer",
             "title": "Terminal Output Seq"
@@ -5622,177 +5516,6 @@
         ],
         "title": "ConversationStateToolCallPart",
         "description": "工具调用及其生命周期的 UI part。\n\n描述一次工具调用从待执行到完成/失败/取消的完整生命周期，并携带参数\n与可能的错误信息。status 取值受限为 ToolCallEventStatus（见\n``app.models.enums.tool_call_status``）的五个枚举。"
-      },
-      "ConversationStateUsage": {
-        "properties": {
-          "input_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Input Tokens"
-          },
-          "output_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Output Tokens"
-          },
-          "total_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Total Tokens"
-          },
-          "cache_hit_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cache Hit Tokens"
-          },
-          "cache_miss_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cache Miss Tokens"
-          },
-          "reasoning_tokens": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reasoning Tokens"
-          }
-        },
-        "type": "object",
-        "required": [
-          "input_tokens",
-          "output_tokens",
-          "total_tokens",
-          "cache_hit_tokens",
-          "cache_miss_tokens",
-          "reasoning_tokens"
-        ],
-        "title": "ConversationStateUsage",
-        "description": "一次 run 当前累计的模型 token 用量；cache miss 缺少 provider 明细时为 null。"
-      },
-      "ConversationTerminalSession": {
-        "properties": {
-          "sessionId": {
-            "type": "string",
-            "title": "Sessionid"
-          },
-          "label": {
-            "type": "string",
-            "title": "Label"
-          },
-          "shellKind": {
-            "type": "string",
-            "title": "Shellkind"
-          },
-          "createdBy": {
-            "type": "string",
-            "enum": [
-              "agent",
-              "user"
-            ],
-            "title": "Createdby"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "starting",
-              "running",
-              "exited",
-              "closed",
-              "failed"
-            ],
-            "title": "Status"
-          },
-          "endReason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Endreason"
-          },
-          "exitCode": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Exitcode"
-          },
-          "integration": {
-            "type": "string",
-            "enum": [
-              "starting",
-              "ready",
-              "unavailable",
-              "off"
-            ],
-            "title": "Integration"
-          },
-          "commandRunning": {
-            "type": "boolean",
-            "title": "Commandrunning"
-          },
-          "createdAt": {
-            "type": "string",
-            "title": "Createdat"
-          }
-        },
-        "type": "object",
-        "required": [
-          "sessionId",
-          "label",
-          "shellKind",
-          "createdBy",
-          "status",
-          "endReason",
-          "exitCode",
-          "integration",
-          "commandRunning",
-          "createdAt"
-        ],
-        "title": "ConversationTerminalSession",
-        "description": "一个终端会话的摘要；活跃会话在前、按创建时间排序，已结束会话只保留最近若干个。"
       },
       "CreateTaskRequest": {
         "properties": {
@@ -6421,12 +6144,13 @@
             "title": "Replymessageid"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
           "replyMessageId"
         ],
         "title": "ForkTaskRequest",
-        "description": "校验手动分叉请求：``replyMessageId`` 是对话界面里一条回复的 wire 消息 id。"
+        "description": "校验手动分叉请求：``replyMessageId`` 是对话界面里一条回复的 wire 消息 id，只收这一个字段。\n\n不合法时走框架默认的 422（前端只从回复脚注发出合法 id，这条路实际走不到）。"
       },
       "GlobalInstructionResponse": {
         "properties": {
@@ -6863,45 +6587,8 @@
         "title": "MainAgentPromptUpdateRequest",
         "description": "校验主 Agent prompt 更新请求的字段形状。"
       },
-      "ModelActivity": {
+      "ModelConfigFieldsRequest": {
         "properties": {
-          "stepId": {
-            "type": "string",
-            "title": "Stepid"
-          },
-          "phase": {
-            "type": "string",
-            "enum": [
-              "waiting",
-              "reasoning",
-              "responding",
-              "tool_call"
-            ],
-            "title": "Phase"
-          }
-        },
-        "type": "object",
-        "required": [
-          "stepId",
-          "phase"
-        ],
-        "title": "ModelActivity",
-        "description": "当前模型步的瞬时输出阶段；不持久化、不参与调度。"
-      },
-      "ModelConfigCreateRequest": {
-        "properties": {
-          "config_name": {
-            "type": "string",
-            "title": "Config Name"
-          },
-          "base_url": {
-            "type": "string",
-            "title": "Base Url"
-          },
-          "api_key": {
-            "type": "string",
-            "title": "Api Key"
-          },
           "model_name": {
             "type": "string",
             "title": "Model Name"
@@ -6925,77 +6612,47 @@
             "type": "boolean",
             "title": "Supports Image",
             "default": false
-          },
-          "sort_order": {
-            "type": "integer",
-            "title": "Sort Order",
-            "default": 0
           }
         },
         "type": "object",
         "required": [
-          "config_name",
-          "base_url",
-          "api_key",
           "model_name",
           "context_window_k"
         ],
-        "title": "ModelConfigCreateRequest",
-        "description": "校验创建模型连接配置所需的完整表单字段。"
+        "title": "ModelConfigFieldsRequest",
+        "description": "校验并清洗一个模型的字段；连接字段由外层请求另给。"
       },
-      "ModelConfigDiscoveryRequest": {
+      "ModelConfigFileResponse": {
         "properties": {
-          "base_url": {
+          "path": {
             "type": "string",
-            "title": "Base Url"
+            "title": "Path"
           },
-          "api_key": {
-            "type": "string",
-            "title": "Api Key"
-          }
-        },
-        "type": "object",
-        "required": [
-          "base_url",
-          "api_key"
-        ],
-        "title": "ModelConfigDiscoveryRequest",
-        "description": "校验请求远端模型目录所需的连接字段。\n\n本模型只负责清洗 Base URL 和 API Key，不负责发起网络请求、保存配置或判断模型能力。\nBase URL 的路径会被保留，服务层在其后追加 ``/models``。"
-      },
-      "ModelConfigDiscoveryResponse": {
-        "properties": {
-          "models": {
+          "connections": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/ModelConnectionResponse"
             },
             "type": "array",
-            "title": "Models"
+            "title": "Connections"
           }
         },
         "type": "object",
         "required": [
-          "models"
+          "path",
+          "connections"
         ],
-        "title": "ModelConfigDiscoveryResponse",
-        "description": "返回可用于模型名称下拉列表的模型 ID。\n\n响应只保留标准模型对象的 ``id``，不把供应商的完整响应、能力猜测或错误正文透传给前端。\n请求失败时由服务层返回空列表，前端可继续使用手动输入。"
+        "title": "ModelConfigFileResponse",
+        "description": "整个模型配置文件：文件路径（设置页展示，供用户直接编辑）与全部连接。"
       },
       "ModelConfigResponse": {
         "properties": {
           "config_id": {
-            "type": "integer",
+            "type": "string",
             "title": "Config Id"
           },
-          "config_name": {
+          "connection_id": {
             "type": "string",
-            "title": "Config Name"
-          },
-          "base_url": {
-            "type": "string",
-            "title": "Base Url"
-          },
-          "api_key": {
-            "type": "string",
-            "title": "Api Key"
+            "title": "Connection Id"
           },
           "model_name": {
             "type": "string",
@@ -7005,73 +6662,34 @@
             "type": "integer",
             "title": "Context Window K"
           },
-          "api_key_configured": {
-            "type": "boolean",
-            "title": "Api Key Configured"
-          },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
-          },
-          "sort_order": {
-            "type": "integer",
-            "title": "Sort Order"
-          },
-          "created_at": {
-            "type": "string",
-            "title": "Created At"
-          },
-          "updated_at": {
-            "type": "string",
-            "title": "Updated At"
-          },
           "supports_thinking": {
             "type": "boolean",
-            "title": "Supports Thinking",
-            "default": false
-          },
-          "supports_image": {
-            "type": "boolean",
-            "title": "Supports Image",
-            "default": false
+            "title": "Supports Thinking"
           },
           "supports_reasoning_effort": {
             "type": "boolean",
-            "title": "Supports Reasoning Effort",
-            "default": false
+            "title": "Supports Reasoning Effort"
+          },
+          "supports_image": {
+            "type": "boolean",
+            "title": "Supports Image"
           }
         },
         "type": "object",
         "required": [
           "config_id",
-          "config_name",
-          "base_url",
-          "api_key",
+          "connection_id",
           "model_name",
           "context_window_k",
-          "api_key_configured",
-          "enabled",
-          "sort_order",
-          "created_at",
-          "updated_at"
+          "supports_thinking",
+          "supports_reasoning_effort",
+          "supports_image"
         ],
         "title": "ModelConfigResponse",
-        "description": "返回本机模型配置及编辑所需的 API Key。\n\n该响应只在本机桌面应用的 HTTP 边界内使用。API Key 不进入日志、事件或\n``ModelConfigRecord.to_dict``；前端收到后默认以密码态展示，仅用于配置编辑。"
+        "description": "连接下的一个模型；``config_id`` 是 Run、Agent 配置引用它用的「连接 id/模型名」。"
       },
       "ModelConfigTestRequest": {
         "properties": {
-          "config_name": {
-            "type": "string",
-            "title": "Config Name"
-          },
-          "base_url": {
-            "type": "string",
-            "title": "Base Url"
-          },
-          "api_key": {
-            "type": "string",
-            "title": "Api Key"
-          },
           "model_name": {
             "type": "string",
             "title": "Model Name"
@@ -7095,65 +6713,28 @@
             "type": "boolean",
             "title": "Supports Image",
             "default": false
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key"
           }
         },
         "type": "object",
         "required": [
-          "config_name",
-          "base_url",
-          "api_key",
           "model_name",
-          "context_window_k"
+          "context_window_k",
+          "base_url",
+          "api_key"
         ],
         "title": "ModelConfigTestRequest",
-        "description": "承载完整表单的一次不落库 OpenAI 兼容连接测试请求。\n\n连接测试不写入数据库，但仍要求提交与保存相同的完整字段，确保前端只能在表单完整\n时发起测试，并让测试使用与最终保存一致的上下文窗口和能力声明。"
+        "description": "一个模型的字段加上它要走的连接地址与 Key；不落库。\n\n能力声明会改变请求参数，所以测试要带上与保存时相同的能力，测的是「这个模型按这组能力」。"
       },
       "ModelConfigUpdateRequest": {
         "properties": {
-          "config_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Config Name"
-          },
-          "base_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Base Url"
-          },
-          "api_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Api Key"
-          },
-          "model_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Model Name"
-          },
           "context_window_k": {
             "anyOf": [
               {
@@ -7198,33 +6779,175 @@
               }
             ],
             "title": "Supports Image"
-          },
-          "enabled": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Enabled"
-          },
-          "sort_order": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Sort Order"
           }
         },
         "type": "object",
         "title": "ModelConfigUpdateRequest",
-        "description": "只覆盖显式传入的模型连接配置字段。"
+        "description": "只覆盖显式传入的上下文窗口与能力声明；模型名不可改，换模型就新增再删除。"
+      },
+      "ModelConfigsAddRequest": {
+        "properties": {
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelConfigFieldsRequest"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Models"
+          }
+        },
+        "type": "object",
+        "required": [
+          "models"
+        ],
+        "title": "ModelConfigsAddRequest",
+        "description": "一批要追加的模型；已在该连接下的模型名由存储唯一约束拒绝（409）。"
+      },
+      "ModelConnectionCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelConfigFieldsRequest"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Models"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "base_url",
+          "api_key",
+          "models"
+        ],
+        "title": "ModelConnectionCreateRequest",
+        "description": "至少带一个模型：没有模型的连接在选择器里什么也不提供，新建时不允许。"
+      },
+      "ModelConnectionResponse": {
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "title": "Connection Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelConfigResponse"
+            },
+            "type": "array",
+            "title": "Models"
+          }
+        },
+        "type": "object",
+        "required": [
+          "connection_id",
+          "name",
+          "base_url",
+          "api_key",
+          "models"
+        ],
+        "title": "ModelConnectionResponse",
+        "description": "一个连接及其下模型（按文件顺序）；模型选择目录与配置管理都只读这一份。\n\n返回 API Key 供本机编辑表单回显（前端默认密码态）；Key 不进入日志、事件或领域摘要。"
+      },
+      "ModelConnectionUpdateRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          }
+        },
+        "type": "object",
+        "title": "ModelConnectionUpdateRequest",
+        "description": "只覆盖显式传入的连接字段；不传 ``api_key`` 表示保留原 Key。"
+      },
+      "ModelDiscoveryRequest": {
+        "properties": {
+          "base_url": {
+            "type": "string",
+            "title": "Base Url"
+          },
+          "api_key": {
+            "type": "string",
+            "title": "Api Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_url",
+          "api_key"
+        ],
+        "title": "ModelDiscoveryRequest",
+        "description": "请求远端模型目录所需的连接字段；Base URL 的路径会被保留，服务层在其后追加 ``/models``。"
+      },
+      "ModelDiscoveryResponse": {
+        "properties": {
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Models"
+          }
+        },
+        "type": "object",
+        "required": [
+          "models"
+        ],
+        "title": "ModelDiscoveryResponse",
+        "description": "返回可用于模型名称下拉列表的模型 ID。\n\n响应只保留标准模型对象的 ``id``，不把供应商的完整响应、能力猜测或错误正文透传给前端。\n请求失败时由服务层返回空列表，前端可继续使用手动输入。"
       },
       "SaveAgentTeamConfigurationRequest": {
         "properties": {
@@ -7283,8 +7006,8 @@
             "$ref": "#/components/schemas/AssistantUserMessage"
           },
           "modelConfigId": {
-            "type": "integer",
-            "minimum": 1.0,
+            "type": "string",
+            "minLength": 1,
             "title": "Modelconfigid"
           },
           "reasoningEffort": {
@@ -7510,7 +7233,7 @@
           "updated_at"
         ],
         "title": "TaskResponse",
-        "description": "校验并序列化任务状态响应。\n\nTask 不绑定 Agent：本响应不含 agent_id，Agent 身份固化在各 Run 上。不下发 ``current_run_id``\n（后端的当前 Run 指针，对话界面的 Run 身份只在 snapshot 里供诊断），也不下发执行状态：\n界面的 Task 状态只来自 ``GET /task-status/stream``，不在这里留第二个读取口。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    title: 任务标题。\n    task_type: 任务类型，取值见 ``models.task_kind.TASK_KINDS``：``\"user\"`` 为用户创建，\n        ``\"user_fork\"`` / ``\"agent_fork\"`` 区分分叉发起方，``\"agent_task\"`` 为委派子任务，\n        ``\"team_node_task\"`` 为 Team 节点。\n    parent_task_id: 父任务标识，委派子任务与 Team 节点有值。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化任务状态响应。\n\nTask 不绑定 Agent：本响应不含 agent_id，Agent 身份固化在各 Run 上。不下发 ``current_run_id``\n（后端的当前 Run 指针，对话界面的 Run 身份只在 snapshot 里供诊断），也不下发执行状态：\n界面的 Task 状态只来自 ``GET /task-feed/stream``，不在这里留第二个读取口。\n\n参数:\n    task_id: 任务标识。\n    workspace_id: 所属工作区标识。\n    title: 任务标题。\n    task_type: 任务类型，取值见 ``models.task_kind.TASK_KINDS``：``\"user\"`` 为用户创建，\n        ``\"user_fork\"`` / ``\"agent_fork\"`` 区分分叉发起方，``\"agent_task\"`` 为委派子任务，\n        ``\"team_node_task\"`` 为 Team 节点。\n    parent_task_id: 父任务标识，委派子任务与 Team 节点有值。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "TaskResponseExtra": {
         "properties": {

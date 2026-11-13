@@ -1,5 +1,5 @@
 type AssistantPerformanceReport = {
-  /** 本次计时对应的那一轮活动（Run 身份只供诊断）及其结束状态。 */
+  /** 本次计时对应的那次运行（Run 身份只供诊断）及其结束状态。 */
   activityTurn: number | null;
   activityStatus: string | null;
   frameCount: number;
@@ -48,7 +48,7 @@ type ReactCommitMeasurement = {
   actualDurationMs: number;
 };
 
-/** 一轮活动结束时的诊断信息：一次计时从活动进入活动态开始，到它进入终态结束。 */
+/** 一次运行结束时的诊断信息：一次计时从活动进入活动态开始，到它进入终态结束。 */
 type StreamStatus = {
   activityTurn: number | null;
   activityStatus: string | null;

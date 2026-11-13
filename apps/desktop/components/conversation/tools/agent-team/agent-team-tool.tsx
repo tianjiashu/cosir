@@ -74,7 +74,7 @@ function AwaitingReviewStatus({ label = AWAITING_REVIEW_LABEL, className }: { la
 }
 
 /**
- * 独立调用卡里的审批表单：TeamRun `pending` 时可编辑、可提交；决定提交后后端确定性执行——批准后在后台运行 Team，落定时按原调用交付结论；驳回即落定。
+ * 独立调用卡里的审批表单：TeamRun `pending` 时可编辑、可提交；决定提交后后端确定性执行——批准后 Coordinator 接手调度、调用当场完成，Team 落定时以 Agent 消息向主 Task 汇报（不登记后台工作）；驳回即落定。
  * 表单没有自己的外壳（调用卡已是带边框的容器）。
  */
 export function AgentTeamApproval({ artifact, taskId, toolCallId, interactive = true }: ArtifactCardProps) {
@@ -109,7 +109,7 @@ export function AgentTeamApproval({ artifact, taskId, toolCallId, interactive = 
 
   if (!preview) return null;
 
-  /** 提交决定；后端重放 `agent_team` 调用执行它（批准即登记后台 Team），失败只影响本卡片的提示状态。 */
+  /** 提交决定；后端重放 `agent_team` 调用执行它（批准即交给 Coordinator 开跑），失败只影响本卡片的提示状态。 */
   const submitDecision = async (decision: ToolDecision) => {
     setState("idle");
     setMessage("");

@@ -58,15 +58,14 @@ export function BackgroundTasksActions({ taskId }: { taskId: number }) {
 }
 
 /**
- * 进行中（运行、收尾）的条目逐行列出，已结束的收成一行「N 已结束」，点开展开；有运行中的条目时每秒刷新
- * 耗时，否则不起计时器（收尾中的条目不计时）。
+ * 进行中（运行、收尾）的条目逐行列出，已结束的收成一行「N 已结束」，点开展开。耗时由各行自己的计时叶子
+ * 刷新（只有运行中的行起计时器），列表本身不随时钟重渲染。
  */
 export function BackgroundTasksBody({ taskId }: { taskId: number }) {
   const entries = useBackgroundTasks(taskId);
   const [showEnded, setShowEnded] = useState(false);
   const active = entries.filter((entry) => entry.status === "running" || entry.status === "settling");
   const ended = entries.filter((entry) => entry.status === "completed" || entry.status === "cancelled");
-  const now = useNow(countRunning(entries) > 0);
   // 定位目标在折叠的「已结束」里时先展开列表，行挂载后才接得住定位。
   const revealEnded = useConversationAsideStore((state) => state.revealCall?.taskId === taskId && ended.some((entry) => entry.toolCallId === state.revealCall?.callId));
   useEffect(() => { if (revealEnded) setShowEnded(true); }, [revealEnded]);
@@ -75,7 +74,7 @@ export function BackgroundTasksBody({ taskId }: { taskId: number }) {
     <>
       <ul className="flex flex-col gap-0.5">
         {active.map((entry) => (
-          <BackgroundTaskRow key={entry.toolCallId} taskId={taskId} entry={entry} now={now} />
+          <BackgroundTaskRow key={entry.toolCallId} taskId={taskId} entry={entry} />
         ))}
       </ul>
       {ended.length > 0 && (
@@ -92,7 +91,7 @@ export function BackgroundTasksBody({ taskId }: { taskId: number }) {
           {showEnded && (
             <ul className="flex flex-col gap-0.5">
               {ended.map((entry) => (
-                <BackgroundTaskRow key={entry.toolCallId} taskId={taskId} entry={entry} now={now} />
+                <BackgroundTaskRow key={entry.toolCallId} taskId={taskId} entry={entry} />
               ))}
             </ul>
           )}
@@ -100,15 +99,4 @@ export function BackgroundTasksBody({ taskId }: { taskId: number }) {
       )}
     </>
   );
-}
-
-function useNow(ticking: boolean): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!ticking) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [ticking]);
-  return now;
 }

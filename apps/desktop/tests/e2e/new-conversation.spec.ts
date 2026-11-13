@@ -142,7 +142,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   expect(logs.filter((entry) => entry.event === "assistant_runtime_unmounted")).toHaveLength(0);
   // Task 页面只建立一条长订阅：两轮输出都经它到达，命令返回不再重新 attach；运行期间订阅
   // 若被断开再重连，会多出一条已建立的订阅。
-  expect(logs.filter((entry) => entry.event === "assistant_transport_subscription_opened")).toHaveLength(1);
+  expect(await openedSubscriptionCount(page)).toBe(1);
   expect(logs.filter((entry) => entry.event === "assistant_transport_subscription_closed")).toHaveLength(0);
   const settled = logs.filter((entry) => entry.event === "assistant_activity_settled");
   expect(settled.length).toBeGreaterThanOrEqual(1);
@@ -221,10 +221,6 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   });
 
   const assistantRequests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
-  const assistantStateRequests: string[] = [];
-  page.on("request", (request) => {
-    if (request.url().endsWith("/assistant/state")) assistantStateRequests.push(request.url());
-  });
   page.on("response", (response) => {
     if (!isTaskCommand(response.url())) return;
     assistantRequests.push({
@@ -237,7 +233,6 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await page.goto("/tasks/102");
   await expect(page.getByLabel("消息输入")).toBeVisible();
   await expect.poll(() => openedSubscriptionCount(page)).toBe(1);
-  const stateReadsBeforeCancel = assistantStateRequests.length;
   await page.getByLabel("消息输入").fill("cancel-me");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("stream", { exact: true })).toBeVisible();
@@ -248,8 +243,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await page.getByRole("button", { name: "停止" }).click();
   await expect((await cancelResponse).status()).toBe(202);
   await expect(page.getByRole("button", { name: "继续运行" })).toBeVisible();
-  // 停止是 Task 命令：不关闭订阅、不轮询 state，终态经同一条长订阅到达。
-  expect(assistantStateRequests.length).toBe(stateReadsBeforeCancel);
+  // 停止是 Task 命令：不关闭订阅，终态经同一条长订阅到达。
   expect(await openedSubscriptionCount(page)).toBe(1);
   expect(assistantRequests).toHaveLength(1);
 

@@ -16,14 +16,15 @@ export function useRuntimeDiagnostics(context: RuntimeSessionContext): void {
       unmountLogTimerRef.current = null;
     }
 
+    const mounted = context.store.getSnapshot().state;
     void frontendLog("INFO", "assistant_runtime_mounted", "Assistant runtime 已挂载", {
       traceId: context.traceId,
       data: {
         taskId: context.taskId,
         workspaceId: context.workspaceId ?? null,
-        initialMessageCount: transportMessageCount(context.initialState),
-        initialActivityTurn: context.initialState.activity?.turn ?? null,
-        initialActivityStatus: context.initialState.activity?.status ?? null,
+        initialMessageCount: transportMessageCount(mounted),
+        initialActivityTurn: mounted.activity?.turn ?? null,
+        initialActivityStatus: mounted.activity?.status ?? null,
       },
     });
 
@@ -34,13 +35,14 @@ export function useRuntimeDiagnostics(context: RuntimeSessionContext): void {
       unmountLogTimerRef.current = window.setTimeout(() => {
         unmountLogTimerRef.current = null;
         if (mountedRef.current) return;
+        const last = context.store.getSnapshot().state;
         void frontendLog("WARNING", "assistant_runtime_unmounted", "Assistant runtime 生命周期已清理", {
           traceId: context.traceId,
           data: {
             taskId: context.taskId,
             workspaceId: context.workspaceId ?? null,
-            lastActivityTurn: context.latestStateRef.current.activity?.turn ?? null,
-            lastActivityStatus: context.latestStateRef.current.activity?.status ?? null,
+            lastActivityTurn: last.activity?.turn ?? null,
+            lastActivityStatus: last.activity?.status ?? null,
           },
         });
       }, 0);

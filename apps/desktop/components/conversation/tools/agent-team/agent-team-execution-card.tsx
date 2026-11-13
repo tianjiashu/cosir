@@ -13,14 +13,14 @@ import { queryKeys } from "@/lib/query/query-keys";
 import { useWorkbenchActions } from "@/lib/workbench/workbench-context";
 import { SURFACE_CARD_CLASS } from "@/components/conversation/turn/turn-tokens";
 import { cn } from "@/lib/utils";
-import { readAgentTeamRunDisplay } from "./agent-team-display";
 import type { ArtifactCardProps } from "../artifact-card-props";
 import type { AgentTeamRunDisplay } from "./agent-team-display";
 import { AgentTeamExecutionPipeline } from "./agent-team-execution-pipeline";
 import { ToolStopButton, useStopRequest } from "../tool-stop-button";
 
 type AgentTeamExecutionCardProps = ArtifactCardProps & {
-  displayOverride?: AgentTeamRunDisplay;
+  /** 来自审批方案的展示数据（批准后的执行卡没有自己的展示 `kind`，按 `team_run_id` 读取 TeamRun）。 */
+  display: AgentTeamRunDisplay;
 };
 
 const RUN_STATUS_LABELS: Record<string, string> = {
@@ -62,12 +62,12 @@ const POLL_INTERVAL_MS = 1_000;
 const MAX_POLL_RETRIES = 4;
 const MAX_RETRY_DELAY_MS = 16_000;
 
-function isActiveRun(status: AgentTeamRun["status"] | undefined): boolean {
-  return status === "pending" || status === "running";
-}
-
 /**
- * 轮询 TeamRun 投影，直到它进入终态。
+ * 运行中轮询 TeamRun 投影（节点进度随时在变），离开运行即停；每次挂载都读一次。
+ *
+ * 待确认（pending）不轮询：它只会被用户的决定、撤回这一回合（卡片随之卸载）或删除 Task 改变。决定被接受后
+ * snapshot 里这次调用不再等你，同一行从审批表单换成执行卡——换卡就是状态变了的时刻，所以挂载时总是读一次
+ * （不受全局 staleTime 限制）；不能只靠提交后的那次刷新：表单卸载时它会随观察者一起被取消。
  *
  * 失败策略：单次读取失败按指数退避重试有限次；4xx（含 404：TeamRun 已不存在）是确定性结果，
  * 不重试。重试耗尽后查询进入 error 态，refetchInterval 随之停止——不能只看缓存里的旧
@@ -78,8 +78,9 @@ export function useAgentTeamRunPolling(teamRunId: number | undefined) {
     queryKey: queryKeys.agentTeamRun(teamRunId ?? 0),
     queryFn: ({ signal }) => getAgentTeamRun(teamRunId as number, { signal }),
     enabled: teamRunId !== undefined,
+    refetchOnMount: "always",
     refetchInterval: (current) => (
-      current.state.status !== "error" && isActiveRun(current.state.data?.status) ? POLL_INTERVAL_MS : false
+      current.state.status !== "error" && current.state.data?.status === "running" ? POLL_INTERVAL_MS : false
     ),
     retry: (failureCount, error) => {
       if (error instanceof HttpError && error.status >= 400 && error.status < 500) return false;
@@ -104,13 +105,9 @@ export function useAgentTeamRunPolling(teamRunId: number | undefined) {
 }
 
 export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
-  const { taskId, toolCallId, artifact, interactive = false, taskCancelling = false } = props;
-  const display = props.displayOverride ?? readAgentTeamRunDisplay(artifact.display_data)
-    ?? (artifact.team_run_id !== undefined
-      ? { teamRunId: artifact.team_run_id, teamId: "", goal: "" }
-      : null);
+  const { taskId, toolCallId, display, interactive = false, taskCancelling = false } = props;
   const actions = useWorkbenchActions();
-  const runQuery = useAgentTeamRunPolling(display?.teamRunId);
+  const runQuery = useAgentTeamRunPolling(display.teamRunId);
   const run = runQuery.data ?? null;
   const canStop = canStopTeamRun(run, interactive, taskCancelling);
   // 停止槽位是调用级的、不对账（见 command-request-store）：HTTP 只确认取消信号已发出，「停止中」
@@ -120,13 +117,12 @@ export function AgentTeamExecutionCard(props: AgentTeamExecutionCardProps) {
   const requestStop = () => {
     if (!canStop) return;
     void frontendLog("INFO", "agent_team_cancel_requested", "用户请求单独停止 Agent Team", {
-      data: { taskId, toolCallId, teamRunId: display?.teamRunId },
+      data: { taskId, toolCallId, teamRunId: display.teamRunId },
     });
     // Team 是编排实体：按 TeamRun 停止；节点与档案收尾后 TeamRun 落定，主 Task 得到一条停止通知。
-    void cancellation.stop(() => cancelAgentTeamRun(taskId, toolCallId, display!.teamRunId));
+    void cancellation.stop(() => cancelAgentTeamRun(taskId, toolCallId, display.teamRunId));
   };
 
-  if (!display) return null;
   return (
     <AgentTeamExecutionContent
       display={display}

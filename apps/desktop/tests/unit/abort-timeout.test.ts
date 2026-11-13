@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createTimeoutAbort, isCancelledAbort, isTimeoutAbort } from "@/lib/async/abort-timeout";
+import { createTimeoutAbort } from "@/lib/async/abort-timeout";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 
 describe("createTimeoutAbort", () => {
@@ -12,8 +12,7 @@ describe("createTimeoutAbort", () => {
     vi.advanceTimersByTime(100);
 
     expect(signal.aborted).toBe(true);
-    expect(isTimeoutAbort(signal)).toBe(true);
-    expect(isCancelledAbort(signal)).toBe(false);
+    expect((signal.reason as DOMException).name).toBe("TimeoutError");
     expect(userErrorMessage(signal.reason, "fallback")).toContain("超时");
   });
 
@@ -22,8 +21,7 @@ describe("createTimeoutAbort", () => {
     controller.abort();
     clear();
 
-    expect(isTimeoutAbort(signal)).toBe(false);
-    expect(isCancelledAbort(signal)).toBe(true);
+    expect((signal.reason as DOMException).name).toBe("AbortError");
     expect(userErrorMessage(signal.reason, "fallback")).toBe("请求已取消");
   });
 

@@ -24,7 +24,6 @@ function snapshot(turn: number | null, status = "completed", text = "阅读内�
 type Snapshot = ReturnType<typeof snapshot>;
 type Fixture = {
   states: Map<number, Snapshot>;
-  snapshots: Map<number, number>;
   /** 真正建立的订阅数：开发模式 StrictMode 挂载后立即中止的那次不算。 */
   attaches: Map<number, number>;
   connections: Map<number, Set<ServerResponse>>;
@@ -38,7 +37,7 @@ const test = base.extend<{ agent: Fixture }>({
   agent: async ({ page }, use) => {
     const fixture: Fixture = {
       states: new Map([[100, snapshot(null)], [501, snapshot(1, "running")], [502, snapshot(2, "completed")]]),
-      snapshots: new Map(), attaches: new Map(), connections: new Map(), statusConnections: new Set(),
+      attaches: new Map(), connections: new Map(), statusConnections: new Set(),
       dropStreams: false, refuseStatus: false,
       push(id, state) {
         const before = fixture.states.get(id)?.activity?.status ?? null;
@@ -100,11 +99,6 @@ const test = base.extend<{ agent: Fixture }>({
       return route.fulfill({ json: task(id) });
     });
     await page.route(`${origin}/task-feed/stream`, route => route.continue({ url: `http://127.0.0.1:${address.port}/task-feed/stream` }));
-    await page.route(`${origin}/tasks/*/assistant/state`, route => {
-      const id = Number(route.request().url().split("/")[4]);
-      fixture.snapshots.set(id, (fixture.snapshots.get(id) ?? 0) + 1);
-      return route.fulfill({ json: fixture.states.get(id) });
-    });
     await page.route(`${origin}/tasks/*/assistant/attach`, route => route.continue({ url: route.request().url().replace(origin, `http://127.0.0.1:${address.port}`) }));
     await page.goto("/tasks/100");
     await expect(page.getByRole("button", { name: "浏览工作区文件" })).toBeVisible();
@@ -124,8 +118,7 @@ const tab = (page: Page, id: number) => page.getByRole("tab", { name: new RegExp
 test("非激活标签跟随状态推送，收起再展开仍是最新，关闭不取消 Run", async ({ page, agent }) => {
   await open(page, [501, 502]);
   await expect(tab(page, 501)).toHaveAccessibleName("运行中 Agent501");
-  // 非激活标签只读状态推送，不读快照、不订阅对话。
-  expect(agent.snapshots.get(501)).toBeUndefined();
+  // 非激活标签只读状态推送，不订阅对话。
   expect(agent.attaches.get(501)).toBeUndefined();
   agent.push(501, snapshot(1, "failed"));
   await expect(tab(page, 501)).toHaveAccessibleName("运行失败 Agent501");
@@ -144,15 +137,12 @@ test("挂起继续订阅，SSE 状态变化刷新标签，后续新 Run 经同�
   await expect(tab(page, 501)).toHaveAccessibleName("等待结果 Agent501");
   await tab(page, 501).focus();
   await page.screenshot({ path: testInfo.outputPath("agent-waiting.png") });
-  const count = agent.snapshots.get(501);
   agent.push(501, snapshot(1, "running", "正在继续执行"));
   await expect(tab(page, 501)).toHaveAccessibleName("运行中 Agent501");
   await expect(page.getByText("正在继续执行", { exact: true })).toBeVisible();
-  expect(agent.snapshots.get(501)).toBe(count);
   agent.push(501, snapshot(1, "completed", "第一轮完成"));
   await expect(tab(page, 501)).toHaveAccessibleName("已完成 Agent501");
   await expect(page.getByText("第一轮完成", { exact: true })).toBeVisible();
-  expect(agent.snapshots.get(501)).toBe(count);
   agent.push(501, snapshot(4, "running", "新轮次内容"));
   await expect(page.getByText("新轮次内容", { exact: true })).toBeVisible();
   expect(agent.attaches.get(501)).toBe(1);
@@ -181,24 +171,20 @@ test("状态推送断开时标签保留上次状态并标为未同步，重连�
   await expect(tab(page, 501)).toHaveAccessibleName("已完成 Agent501", { timeout: 10_000 });
 });
 
-test("意外 EOF 与主对话同一套有限重连，只重开订阅不重读 snapshot，手动重试恢复完整预算", async ({ page, agent }) => {
+test("意外 EOF 与主对话同一套有限重连，首帧原地对齐，手动重试恢复完整预算", async ({ page, agent }) => {
   agent.dropStreams = true;
   await open(page, [501]);
   // 主 Task 页同样常驻订阅并会因断流给出自己的提示；这里只看工作台阅读页。
   const workbench = page.getByLabel("工作台", { exact: true });
   const exhausted = workbench.getByText("本机后端连接多次中断，请重新同步恢复对话。", { exact: true });
   await expect(workbench.getByText("阅读内容", { exact: true })).toBeVisible();
-  // 首屏读取次数（开发模式 StrictMode 会让首屏 effect 多跑一次）；之后的重连不再读 snapshot。
-  const initialReads = agent.snapshots.get(501);
   await expect(exhausted).toBeVisible();
   // 首次订阅 + 5 次重连后停止；断流期间已显示的内容保留。
   expect(agent.attaches.get(501)).toBe(6);
-  expect(agent.snapshots.get(501)).toBe(initialReads);
   await expect(workbench.getByText("阅读内容", { exact: true })).toBeVisible();
   await page.waitForTimeout(3_300);
   expect(agent.attaches.get(501)).toBe(6);
   await workbench.getByRole("button", { name: "重新同步", exact: true }).click();
   await expect.poll(() => agent.attaches.get(501)).toBe(12);
   await expect(exhausted).toBeVisible();
-  expect(agent.snapshots.get(501)).toBe(initialReads);
 });

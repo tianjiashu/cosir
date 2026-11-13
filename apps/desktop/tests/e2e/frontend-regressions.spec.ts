@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import type { TransportState } from "../../lib/assistant/contract";
-import { seedState } from "./transport-fixtures";
+import { readState, seedState } from "./transport-fixtures";
 import { API_ORIGIN, OUTPUT_DIR } from "./e2e-env";
 
 const emptyState = (): TransportState => ({ title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [] });
@@ -114,7 +114,7 @@ test("工具运行中保持单行，完成拿到展示数据后才可展开且�
   // 无 display_data 的执行期不展开空详情，也不渲染「未找到匹配」之类的伪结果。
   await expect(assistant.getByText("未找到匹配", { exact: true })).toHaveCount(0);
   // Fork belongs to inputs now; use canonical activity to wait for the terminal outcome.
-  await expect.poll(async () => (await (await request.get(`${API_ORIGIN}/tasks/42/assistant/state`)).json()).activity.status).toBe("completed");
+  await expect.poll(async () => (await readState(request, 42)).activity?.status).toBe("completed");
   const toolRow = assistant.locator('button[data-slot="call-row"]');
   await expect(toolRow).toBeVisible({ timeout: 3_000 });
   // 命中行拆成可点开的「路径:行号」与高亮正文两部分。

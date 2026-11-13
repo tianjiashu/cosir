@@ -28,7 +28,7 @@ export type AgentTeamPreviewDisplay = {
   configuration: Record<string, unknown>;
 };
 
-/** 已批准后的运行态展示（同一张卡从「待确认」翻到「运行中」，没有可编辑草稿）。 */
+/** 执行卡用到的那部分方案展示（审批方案的子集：批准后同一行从审批表单翻到执行卡，没有可编辑草稿）。 */
 export type AgentTeamRunDisplay = {
   teamRunId: number;
   teamId: string;
@@ -123,16 +123,6 @@ export function readAgentTeamPreviewDisplay(value: unknown): AgentTeamPreviewDis
     edges,
     configuration,
   };
-}
-
-/** 读取「用户已批准、Team 已启动」的运行态展示。 */
-export function readAgentTeamRunDisplay(value: unknown): AgentTeamRunDisplay | null {
-  const data = asRecord(value);
-  if (data.kind !== "agent-team-execution") return null;
-  const teamRunId = positiveInteger(data.team_run_id);
-  const teamId = text(data.team_id);
-  if (teamRunId === undefined || !teamId) return null;
-  return { teamRunId, teamId, goal: text(data.goal) ?? "" };
 }
 
 /** 严格读取 Team 配置候选展示数据。 */

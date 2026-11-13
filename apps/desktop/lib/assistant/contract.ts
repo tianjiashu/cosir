@@ -162,7 +162,7 @@ export type TransportRunLaunch = {
 };
 
 /**
- * 一轮回复的结局：Run 到终态时由后端写在该 Run 最后一条助手消息上，Run 被恢复时清空。
+ * Run 的结局：Run 到终态时由后端写在该 Run 最后一条助手消息上（属于整个 Run），Run 被恢复时清空。
  * 历史回复的「已取消 / 失败 / 用量」与 fork 入口都只读它，不回查 Run。
  */
 export type TransportOutcome = {
@@ -205,7 +205,7 @@ export type TransportMessage = {
   /** Run 的结局，只挂在它最后一个可见回合的回复上（Run 终态后非空）；user 消息恒为 null。 */
   outcome: TransportOutcome | null;
   /**
-   * 仅 Agent 消息（另一个 Agent 交来、开启一轮的 user 消息：委派、追加消息、Team 节点输入）非空。
+   * 仅 Agent 消息（另一个 Agent 交来、开启回合的 user 消息：委派、追加消息、Team 节点输入）非空。
    * 它不是用户说的话：另行渲染、不可编辑，也不认领用户的乐观发送。
    */
   source: TransportMessageSource | null;
@@ -249,7 +249,7 @@ export function isActiveRunStatus(status: string | null | undefined): boolean {
 }
 
 /**
- * 排队用户输入的并入时机，由后端决定：`next_run` 是活动 Run 期间发送的排队消息（Run 结束后一轮一条
+ * 排队用户输入的并入时机，由后端决定：`next_run` 是活动 Run 期间发送的排队消息（Run 结束后每个 Run 一条
  * 处理）；`immediate` 是空闲时发送或被「立即发送」的消息，在下个模型边界并入或马上开新 Run。
  */
 export type InputDelivery = "immediate" | "next_run";
@@ -334,7 +334,7 @@ export type TransportHistoryPage = {
 
 export type TransportState = {
   fork?: { sourceTaskId: number; sourceTitle: string; taskType: "user_fork" | "agent_fork"; initialLaunch: TransportRunLaunch };
-  /** Task 标题，投影自后端 `tasks.title`；变化时由宿主刷新侧栏目录。 */
+  /** Task 标题，投影自后端 `tasks.title`；侧栏目录不读它，经 Task 推送的目录失效重读。 */
   title: string;
   /** 扁平消息列表，按 context 序号排列；只含已加载的一段（最近窗口加上往上翻已取到的页）。 */
   messages: TransportMessage[];

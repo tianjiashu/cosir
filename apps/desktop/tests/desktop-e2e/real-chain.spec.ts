@@ -5,6 +5,7 @@ import { expect, test, type ElectronApplication, type Page } from "@playwright/t
 
 import type { TransportState } from "../../lib/assistant/contract";
 import { backendBaseUrl, launchDesktop } from "./desktop-app";
+import { attachFirstFrame } from "./attach-first-frame";
 
 /**
  * 只替换模型输出，Electron、HTTP/SSE、Python、SQLite 与 OpenAI SDK 都是真实的：这几条路径的缺陷
@@ -85,7 +86,7 @@ class Env {
   }
 
   async state(task: number): Promise<TransportState> {
-    return await (await fetch(`${this.base}/tasks/${task}/assistant/state`)).json() as TransportState;
+    return await attachFirstFrame(this.base, task);
   }
 
   /** 命令返回时新 Run 可能还没出现，所以等这一轮的回复，而不是等状态落到终态。 */

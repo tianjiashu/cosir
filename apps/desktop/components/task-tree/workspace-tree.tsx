@@ -22,13 +22,22 @@ type WorkspaceTreeProps = {
 
 const ROW_HEIGHT = 32;
 /** 这些执行状态的任务必须留在侧栏可见范围内；有事等你操作的任务无论 Run 处于什么状态都必须可见。 */
-const MUST_SHOW_STATUSES = new Set(["pending", "running", "suspended"]);
+const MUST_SHOW_STATUSES = new Set(["running", "suspended"]);
 
-function mustShowTaskIds(tasks: Readonly<Record<number, TaskStatus>>, activeTaskId: number | null): Set<number> {
-  const ids = new Set<number>();
+/**
+ * 状态表里「必须可见」的 Task id，拼成稳定的字符串供订阅：状态推送每帧都会来，侧栏只在这个集合真的变了
+ * 时才重建模型，别的 Task 的工具状态变化不牵动整棵树。
+ */
+function mustShowKey(tasks: Readonly<Record<number, TaskStatus>>): string {
+  const ids: number[] = [];
   for (const [taskId, { executionStatus, awaitingUserCalls }] of Object.entries(tasks)) {
-    if (awaitingUserCalls > 0 || (executionStatus !== null && MUST_SHOW_STATUSES.has(executionStatus))) ids.add(Number(taskId));
+    if (awaitingUserCalls > 0 || (executionStatus !== null && MUST_SHOW_STATUSES.has(executionStatus))) ids.push(Number(taskId));
   }
+  return ids.sort((left, right) => left - right).join(",");
+}
+
+function mustShowTaskIds(key: string, activeTaskId: number | null): Set<number> {
+  const ids = new Set(key ? key.split(",").map(Number) : []);
   if (activeTaskId !== null) ids.add(activeTaskId);
   return ids;
 }
@@ -44,12 +53,12 @@ export function WorkspaceTree({
   renderWorkspaceActions,
   renderTaskActions,
 }: WorkspaceTreeProps) {
-  const taskStatuses = useTaskStatusStore((state) => state.tasks);
+  const mustShow = useTaskStatusStore((state) => mustShowKey(state.tasks));
   // 水位线是界面状态（不持久化、卸载即重置）：只升不降，收起工作区或点「收起」时回到默认。
   const [watermarks, setWatermarks] = useState<ReadonlyMap<number, number>>(() => new Map());
   const { nodes: model, watermarks: resolvedWatermarks } = useMemo(
-    () => buildWorkspaceTreeModel(workspaces, pinnedTaskIds, { watermarks, mustShowTaskIds: mustShowTaskIds(taskStatuses, activeTaskId) }),
-    [activeTaskId, pinnedTaskIds, taskStatuses, watermarks, workspaces],
+    () => buildWorkspaceTreeModel(workspaces, pinnedTaskIds, { watermarks, mustShowTaskIds: mustShowTaskIds(mustShow, activeTaskId) }),
+    [activeTaskId, pinnedTaskIds, mustShow, watermarks, workspaces],
   );
   // 必须可见的任务推高了水位线时记下来，它停止运行或不再打开后仍留在原位。
   useLayoutEffect(() => {

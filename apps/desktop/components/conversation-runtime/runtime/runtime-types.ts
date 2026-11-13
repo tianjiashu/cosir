@@ -1,34 +1,32 @@
-import type { MutableRefObject } from "react";
-
-import type { TransportState } from "@/lib/assistant/contract";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
-import type { TransportIssue } from "@/components/conversation-runtime/transport-status";
-import type { BackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
+import type { TaskTransportConnection } from "@/lib/assistant/transport/task-transport-connection";
+import type { TransportFrameStore } from "@/lib/assistant/transport/transport-frame-store";
+import type { TraceId } from "@/lib/logging/trace-id";
 
+/** runtime 只在连接收到首帧后挂载：`store` 一定存在且已有完整状态。 */
 export type AssistantRuntimeProps = {
   taskId: number;
   workspaceId: number;
   workspaceRoot?: string;
-  initialState: TransportState;
+  connection: TaskTransportConnection;
+  store: TransportFrameStore;
+  traceId: TraceId;
+  performanceProbe: AssistantPerformanceProbe | null;
   /** 正在分叉的回复 id。 */
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
 };
 
+/**
+ * 会话内各用例共用的事实：Task 身份、链路 id、连接与它的 store。当前状态一律读 `store.getSnapshot().state`
+ * （canonical 的唯一副本），不另存镜像。
+ */
 export type RuntimeSessionContext = {
   taskId: number;
   workspaceId: number;
   workspaceRoot?: string;
-  initialState: TransportState;
-  /**
-   * 当前后端实例的最新快照，由会话在每次渲染时写入。计时器与异步回调读取它判断
-   * 后端是否仍可用；后端变化的边沿只由 useBackendTransitions 检测一次。
-   */
-  backendRef: MutableRefObject<BackendRuntimeSnapshot>;
-  traceId: string;
+  traceId: TraceId;
   performanceProbe: AssistantPerformanceProbe | null;
-  setIssue: (issue: TransportIssue | null) => void;
-  latestStateRef: MutableRefObject<TransportState>;
-  /** 打开（或替换）Task 长订阅；runtime 挂载前为 null。 */
-  attachTransportRef: MutableRefObject<(() => Promise<void>) | null>;
+  connection: TaskTransportConnection;
+  store: TransportFrameStore;
 };

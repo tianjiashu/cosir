@@ -62,7 +62,7 @@ function OpenFork({ childTaskId, title }: { childTaskId: number; title: string; 
  */
 function ChildStopAction({ childTaskId, title, context }: { childTaskId: number; title: string; context: CallViewContext; }) {
   const status = useTaskExecutionStatus(childTaskId);
-  const active = status === "pending" || status === "running" || status === "suspended";
+  const active = status === "running" || status === "suspended";
   const cancellation = useStopRequest(childTaskId, "task");
   if (!active || !context.interactive || context.taskCancelling) return null;
   const stop = () => {

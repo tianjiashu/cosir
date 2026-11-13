@@ -1,15 +1,25 @@
-import { ErrorState } from "@/components/ui/state-panel";
-import { useAssistantInitialState } from "@/components/conversation-runtime/use-assistant-initial-state";
+import { useMemo, useState } from "react";
+
 import { AssistantRuntime } from "@/components/conversation-runtime/assistant-runtime";
 import { ThreadSkeleton } from "@/components/conversation-runtime/thread-skeleton";
-import { useState } from "react";
+import { TransportStatus } from "@/components/conversation-runtime/transport-status";
+import { ErrorState } from "@/components/ui/state-panel";
+import { createAssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
+import type { TransportState } from "@/lib/assistant/contract";
+import type { ToolCalls } from "@/lib/assistant/tools/tool-call-index";
+import { useTaskTransportConnection } from "@/lib/assistant/transport/use-task-transport-connection";
+import { useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
+import { useHandoffStore } from "@/lib/handoff/handoff-store";
+import { frontendLog } from "@/lib/logging/frontend-log";
+import { newTraceId } from "@/lib/logging/trace-id";
+import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 
 /**
- * 对话页入口：先拉取服务端首屏 state，就绪后再挂载 runtime。
+ * 对话页外壳：持有这个 Task 的连接，按连接的生命周期渲染——首帧到达前是骨架，Task 已不存在时说明，
+ * 就绪后挂载 runtime。连接问题（断流、重连耗尽、后端恢复中）在顶部横幅呈现，首帧前后同一来源。
  *
- * runtime 只在首次创建时捕获一次 `initialState`，之后的变化不再生效，所以必须先取后挂。
- * taskId 变化时 hook 先返回 null，旧 runtime 在新快照就绪前被卸载；这使 task 切换成为
- * 明确的页面生命周期，而不是依赖 key 重置活动请求。
+ * 首屏不另读快照：连接打开订阅，首帧就是完整状态（见 `TaskTransportConnection`）。runtime 渲染出错只重挂
+ * runtime 子树，连接与 store 不受影响。`TaskPage` 按 taskId 重挂，所以一个外壳只服务一个 Task。
  */
 export const Assistant = ({
   taskId,
@@ -24,30 +34,61 @@ export const Assistant = ({
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
 }) => {
-  // AppLayout may finish its task-list refresh after the snapshot request.
-  // Freeze the workspace identity for this task session so that a late parent
-  // refresh cannot replace the Assistant UI transport while a run is active.
+  // AppLayout may finish its task-list refresh later; freeze the workspace identity for this task session
+  // so a late parent refresh cannot replace the Assistant UI transport while a run is active.
   const [sessionWorkspaceId] = useState(workspaceId);
-  const { initialState, error, retry } = useAssistantInitialState(taskId);
+  const [traceId] = useState(() => newTraceId());
+  const performanceProbe = useMemo(() => {
+    if (!import.meta.env.DEV) return null;
+    return createAssistantPerformanceProbe({
+      onReport: (report) => {
+        void frontendLog("INFO", "assistant_render_performance_report", "Assistant 开发期渲染性能报告已采集", {
+          traceId,
+          data: { taskId, ...report },
+        });
+      },
+    });
+  }, [taskId, traceId]);
+  const { connection, status, issue } = useTaskTransportConnection({
+    taskId,
+    traceId,
+    surface: "conversation",
+    performanceProbe,
+    onStateCommit: (state: TransportState, toolCalls: ToolCalls) => {
+      // 终端会话、后台工作与交接是 snapshot 投影；镜像给 runtime 之外的页头按钮、终端工作台与浏览器面板。
+      useTerminalWorkbenchStore.getState().syncSessions(taskId, state.terminal_sessions);
+      useBackgroundTasksStore.getState().sync(taskId, { ...state, toolCalls });
+      useHandoffStore.getState().sync(taskId, state.handoffs);
+    },
+  });
 
-  if (error) {
+  if (status.kind === "missing") {
     return (
       <div className="flex h-full min-h-0 items-center justify-center p-6">
-        <ErrorState className="w-full max-w-md" message={error} onRetry={retry} />
+        <ErrorState className="w-full max-w-md" message="这个任务已不存在" />
       </div>
     );
   }
-
-  if (!initialState) return <ThreadSkeleton />;
-
   return (
-    <AssistantRuntime
-      taskId={taskId}
-      workspaceId={sessionWorkspaceId}
-      workspaceRoot={workspaceRoot}
-      initialState={initialState}
-      forkingMessageId={forkingMessageId}
-      onForkMessage={onForkMessage}
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      <TransportStatus issue={issue} onRetry={connection.resync} />
+      <div className="min-h-0 flex-1">
+        {status.kind === "ready"
+          ? (
+            <AssistantRuntime
+              taskId={taskId}
+              workspaceId={sessionWorkspaceId}
+              workspaceRoot={workspaceRoot}
+              connection={connection}
+              store={status.store}
+              traceId={traceId}
+              performanceProbe={performanceProbe}
+              forkingMessageId={forkingMessageId}
+              onForkMessage={onForkMessage}
+            />
+          )
+          : <ThreadSkeleton />}
+      </div>
+    </div>
   );
 };

@@ -117,7 +117,7 @@ export function TaskPage({
       <ErrorState className="w-full max-w-md" message={error} onRetry={() => setRetryToken((value) => value + 1)} />
     </div>
   );
-  // 与 Assistant 拉取首屏快照阶段共用同一骨架，两段加载在视觉上连续。
+  // 与 Assistant 等订阅首帧的阶段共用同一骨架，两段加载在视觉上连续。
   if (!loadedTask || loadedTask.task_id !== taskId) return <ThreadSkeleton />;
 
   return (

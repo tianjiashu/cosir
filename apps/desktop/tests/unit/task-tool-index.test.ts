@@ -46,7 +46,7 @@ describe("shared loaded-window tool index", () => {
     expect(store.getSnapshot().toolCalls.get("c")?.status).toBe("completed");
     expect(before.get("c")).toBe(original);
     expect(before.get("c")?.status).toBe("running");
-    store.importState(transportState({ messages: [assistantMessage("new", 2, [toolCallPart("other", "read_file")])] }));
+    store.applyFrame({ task_id: 6, kind: "full", mutations: [], state: transportState({ messages: [assistantMessage("new", 2, [toolCallPart("other", "read_file")])] }) });
     expect([...store.getSnapshot().toolCalls.keys()]).toEqual(["other"]);
   });
 
@@ -58,9 +58,9 @@ describe("shared loaded-window tool index", () => {
     expect(store.getSnapshot().toolCalls.size).toBe(0);
     expect(store.completeHistoryFetch(fetch, { messageOffset: 0, messages: [assistantMessage("old", 1, [toolCallPart("old-call", "read_file")])] })).toBe(true);
     expect(store.getSnapshot().toolCalls.get("old-call")?.status).toBe("cancelled");
-    store.importState(transportState({ messageOffset: 1, messages: [recent] }));
+    store.applyFrame({ task_id: 6, kind: "full", mutations: [], state: transportState({ messageOffset: 1, messages: [recent] }) });
     const stale = store.beginHistoryFetch()!;
-    store.importState(transportState());
+    store.applyFrame({ task_id: 6, kind: "full", mutations: [], state: transportState() });
     expect(store.completeHistoryFetch(stale, { messageOffset: 0, messages: [assistantMessage("old", 1, [toolCallPart("old-call", "read_file")])] })).toBe(false);
     expect(store.getSnapshot().toolCalls.size).toBe(0);
   });

@@ -10,9 +10,8 @@ test.beforeEach(async ({ request }) => {
 });
 
 /** 子 Agent 只读阅读页已建立的订阅（501 审查代码、502 检查测试），口径见 `openedSubscriptionCount`。 */
-const WORKBENCH_SUBSCRIPTION = "workbench_agent_subscription_opened";
-const reviewerSubscriptions = (page: Page) => openedSubscriptionCount(page, { event: WORKBENCH_SUBSCRIPTION, taskId: 501 });
-const testerSubscriptions = (page: Page) => openedSubscriptionCount(page, { event: WORKBENCH_SUBSCRIPTION, taskId: 502 });
+const reviewerSubscriptions = (page: Page) => openedSubscriptionCount(page, { surface: "workbench", taskId: 501 });
+const testerSubscriptions = (page: Page) => openedSubscriptionCount(page, { surface: "workbench", taskId: 502 });
 
 test("只读子 Agent 的两类配置草稿可阅读但不能打开编辑器", async ({ page, request }) => {
   const configuration = {

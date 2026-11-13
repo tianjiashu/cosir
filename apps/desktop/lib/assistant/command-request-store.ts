@@ -40,7 +40,7 @@ export function commandPending(request: CommandRequest | undefined): boolean {
 }
 export function reconcileTaskStatuses(tasks: Readonly<Record<number, TaskStatus>>): void {
   for (const [id, { executionStatus }] of Object.entries(tasks)) {
-    if (executionStatus !== null && !["pending", "running", "suspended"].includes(executionStatus)) settleCommand(Number(id), "task");
+    if (executionStatus !== null && !["running", "suspended"].includes(executionStatus)) settleCommand(Number(id), "task");
   }
 }
 /**

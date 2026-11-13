@@ -213,7 +213,7 @@ describe("assistant transport converter", () => {
       child_task_id: 22,
     }));
 
-    expect(pending).toMatchObject({ type: "tool-call", argsText: '{\n  "command": "npm test"\n}', artifact: {presentation: "activity",  backendStatus: "pending" } });
+    expect(pending).toMatchObject({ type: "tool-call", argsText: '{"command":"npm test"}', artifact: {presentation: "activity",  backendStatus: "pending" } });
     expect(running).toMatchObject({ artifact: {presentation: "activity",  backendStatus: "running" } });
     expect(completed).toMatchObject({ isError: false, artifact: {presentation: "activity",  backendStatus: "completed", display_data: { kind: "terminal-result" } } });
     expect(failed).toMatchObject({ isError: true, artifact: {presentation: "activity",  backendStatus: "failed", errorCode: "DENIED" } });

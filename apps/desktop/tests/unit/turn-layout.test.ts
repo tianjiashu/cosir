@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { TransportMessagePart, TransportToolCallPart } from "@/lib/assistant/contract";
-import { aggregateChanges, describeProcessProblems, projectTurn, visibleTurnBlock } from "@/lib/assistant/turn/turn-layout";
+import { aggregateChanges, describeCallProblems, projectTurn, visibleTurnBlock, type ActivityGroup, type TurnLayout } from "@/lib/assistant/turn/turn-layout";
+
+/** 第一个工具组的摘要：失败、取消与按动词计数只在组上汇总。 */
+const firstGroupSummary = (layout: TurnLayout) => (layout.blocks.find((block) => block.kind === "activity") as ActivityGroup).summary;
 import { agentMessagePart, outcome, toolCallPart } from "./transport-fixtures";
 const text = (value: string, finalReply = false): TransportMessagePart => ({ type: "text", text: value, finalReply });
 const call = (id: string, overrides: Partial<TransportToolCallPart> = {}) => toolCallPart(id, "read_file", { status: "completed", ...overrides });
@@ -61,8 +64,8 @@ describe("stable conversation projection", () => {
     const after = projectTurn([{ ...wait, status: "failed" }, call("read")], "suspended");
     expect(before.blocks[0]).toMatchObject({ key: "interval:0", calls: [{ part: { toolCallId: "read" } }] });
     expect(after.blocks[0]).toMatchObject({ key: "interval:0" });
-    expect(after.process.verbCounts).toEqual([{ label: "读取文件", count: 1 }]);
-    expect(after.process.failedCount).toBe(1);
+    expect(firstGroupSummary(after).verbCounts).toEqual([{ label: "读取文件", count: 1 }]);
+    expect(firstGroupSummary(after).failedCount).toBe(1);
     expect(projectTurn([wait], "suspended").process.items).toEqual([]);
   });
   it("body and reasoning delimit tool groups; background/decision facts stay independent", () => {
@@ -80,13 +83,13 @@ describe("stable conversation projection", () => {
       call("web", { display_data: { kind: "web-extract-urls", partial: true } }),
       call("mcp", { display_data: { kind: "mcp-tool-result", action: "list", servers: [{ error: "offline" }] } }),
     ], "settled");
-    expect(layout.process.failedCount).toBe(0);
-    expect(describeProcessProblems(layout.process)).toBeNull();
-    expect(layout.process.verbCounts).toEqual([{ label: "读取文件", count: 5 }]);
+    expect(firstGroupSummary(layout).failedCount).toBe(0);
+    expect(describeCallProblems(firstGroupSummary(layout))).toBeNull();
+    expect(firstGroupSummary(layout).verbCounts).toEqual([{ label: "读取文件", count: 5 }]);
   });
   it("unknown tools remain visible and do not acquire invented result semantics", () => {
     const layout = projectTurn([call("future", { toolName: "future_tool", status: "completed", display_data: { kind: "future-result" } })], "settled");
-    expect(layout.process.verbCounts).toEqual([{ label: "future_tool", count: 1 }]);
+    expect(firstGroupSummary(layout).verbCounts).toEqual([{ label: "future_tool", count: 1 }]);
   });
   it("keeps every file operation in order, including deletion then recreation", () => {
     const change = (id: string, status: string, insertions: number) => call(id, { display_data: { kind: "file-changes", changes: [{ path: "a", status, insertions }] } });
@@ -110,10 +113,10 @@ it("reuses unchanged tool groups and file aggregation across prose versions, but
   const streamed = projectTurn([change, { type: "text", text: "ab" }], "running", null, first);
   expect(streamed.blocks[0]).toBe(first.blocks[0]);
   expect(streamed.artifacts[0]).toBe(first.artifacts[0]);
-  expect(streamed.process.verbCounts).toBe(first.process.verbCounts);
+  expect(firstGroupSummary(streamed)).toBe(firstGroupSummary(first));
   const failed = projectTurn([{ ...change, status: "failed" }, { type: "text", text: "ab" }], "settled", null, streamed);
   expect(failed.blocks[0]).not.toBe(first.blocks[0]);
-  expect(failed.process.failedCount).toBe(1);
+  expect(firstGroupSummary(failed).failedCount).toBe(1);
   const updated = projectTurn([{ ...change, display_data: { kind: "file-changes", changes: [{ path: "b.ts", status: "added" }] } }], "settled", null, failed);
   expect(updated.artifacts[0]).toMatchObject({ files: [{ path: "b.ts" }] });
 });

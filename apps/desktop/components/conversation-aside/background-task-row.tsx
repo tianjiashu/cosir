@@ -16,6 +16,7 @@ import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 import { cancelToolCall } from "@/lib/assistant/task-commands";
 import { notify } from "@/lib/notify";
 import { useBackgroundTaskPart } from "@/lib/background-tasks/background-tasks-store";
+import { useElapsedSince } from "@/hooks/use-elapsed-since";
 import { formatDuration } from "@/lib/format/duration";
 
 /** 新增后台结果种类时补一项（种类的事实源是后端 `BackgroundKind`）。 */
@@ -35,16 +36,13 @@ const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
  * 对话里的占位还没落定）不计时、不能停止，只标「收尾中」，等 snapshot 回推完成或取消。
  * 操作只发命令，结果等 snapshot 回推。
  */
-export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entry: BackgroundTaskEntry; now: number }) {
+export function BackgroundTaskRow({ taskId, entry }: { taskId: number; entry: BackgroundTaskEntry }) {
   const request = useCommandRequest(taskId, stopTarget(entry.toolCallId));
   const busy = commandPending(request);
   const part = useBackgroundTaskPart(taskId, entry.toolCallId);
   const running = entry.status === "running";
   const [expanded, setExpanded] = useDisclosure(taskId, callKey(entry.toolCallId), false);
   const Icon = KIND_ICONS[entry.kind];
-  const elapsed = entry.status === "settling"
-    ? null
-    : formatDuration((entry.endedAt === null ? now : Date.parse(entry.endedAt)) - Date.parse(entry.startedAt));
   const requested = useConversationAsideStore((state) => state.revealCall);
   const ref = useRef<HTMLLIElement>(null);
   useEffect(() => {
@@ -81,7 +79,7 @@ export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entr
         )}
         {(view?.meta || view?.status) && <span className="text-muted-foreground shrink-0 text-xs">{view.meta}{view.status}</span>}
         {view?.actions}
-        {elapsed !== null && <span className="text-muted-foreground shrink-0 text-xs tabular-nums">{elapsed}</span>}
+        <BackgroundElapsed entry={entry} />
         {entry.status === "settling" ? (
           <span className="text-muted-foreground shrink-0 text-xs">收尾中</span>
         ) : running ? (
@@ -119,4 +117,17 @@ function backgroundCallView(taskId: number, part: TransportToolCallPart, workSta
   if (converted.type !== "tool-call") return null;
   const artifact = readToolArtifact(converted.artifact);
   return resolveCallView({ taskId, toolCallId: part.toolCallId, artifact, args: part.args ?? {}, interactive: false, taskCancelling: false, surface: "details", workStatus });
+}
+
+/**
+ * 条目耗时：运行中每秒刷新，已结束的取冻结的起止时间，收尾中不计时。计时只在这个叶子里，
+ * 时钟走动不重渲染整行（展开的终端详情随行重建的代价不小）。
+ */
+function BackgroundElapsed({ entry }: { entry: BackgroundTaskEntry }) {
+  const ticking = entry.status === "running" && entry.endedAt === null;
+  const live = useElapsedSince(entry.startedAt, ticking);
+  if (entry.status === "settling") return null;
+  const elapsed = entry.endedAt === null ? live : Date.parse(entry.endedAt) - Date.parse(entry.startedAt);
+  if (elapsed === null) return null;
+  return <span className="text-muted-foreground shrink-0 text-xs tabular-nums">{formatDuration(elapsed)}</span>;
 }

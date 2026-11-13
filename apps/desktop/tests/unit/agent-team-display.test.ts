@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   readAgentTeamPreviewDisplay,
-  readAgentTeamRunDisplay,
 } from "@/components/conversation/tools/agent-team/agent-team-display";
 
 /** 构造后端预览展示数据（字段名以后端实际下发的契约为准）。 */
@@ -47,20 +46,4 @@ describe("agent team 审批卡展示解析", () => {
     });
   });
 
-  it("区分运行态展示：已批准后不再有可编辑草稿", () => {
-    const running = {
-      kind: "agent-team-execution",
-      team_run_id: 17,
-      team_id: "code-quality",
-      goal: "交付报告",
-    };
-
-    expect(readAgentTeamRunDisplay(running)).toEqual({
-      teamRunId: 17,
-      teamId: "code-quality",
-      goal: "交付报告",
-    });
-    expect(readAgentTeamPreviewDisplay(running)).toBeNull();
-    expect(readAgentTeamRunDisplay(previewDisplayData())).toBeNull();
-  });
 });

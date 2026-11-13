@@ -1,5 +1,4 @@
-import type { TransportState } from "../../lib/assistant/contract";
-import { seedState } from "./transport-fixtures";
+import { readState, seedState } from "./transport-fixtures";
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
@@ -641,7 +640,7 @@ test("真实后端：文件地址与文件名查找分离，候选定位和字�
   await request.post(`${REAL_BACKEND}/__test__/files/link-fixture`);
   await routeFilesToRealBackend(page);
   await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
-  const state = await (await request.get(`${API_ORIGIN}/tasks/42/assistant/state`)).json() as TransportState;
+  const state = await readState(request, 42);
   state.messages[1].parts = [{ type: "text", status: "completed", text:
     "确定地址 [API.md](docs/brand/API.md)，根文件 [root](API.md)。未知位置 `API.md:2`。文档 [guide](docs/brand/guide.md)。缺失 [gone](docs/brand/gone.md#L2)。[slow](slow.md) [slow-again](slow-again.md)。" }];
   await seedState(request, 42, state);

@@ -1,20 +1,15 @@
-import type { ToolCalls } from "@/lib/assistant/tools/tool-call-index";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { memo } from "react";
 
 import { AssistantThreadSurface } from "@/components/conversation-runtime/runtime/assistant-thread-surface";
 import { useRuntimeTransport } from "@/components/conversation-runtime/runtime/use-runtime-transport";
-import type { RuntimeRecovery } from "@/components/conversation-runtime/runtime/use-runtime-recovery";
 import type { RuntimeSessionContext } from "@/components/conversation-runtime/runtime/runtime-types";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
-import type { TransportState } from "@/lib/assistant/contract";
 import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 import { TransportHistoryContext } from "@/lib/assistant/transport/transport-history-context";
 
 type AssistantRuntimeTransportHostProps = {
   context: RuntimeSessionContext;
-  recovery: RuntimeRecovery;
-  commitTransportState: (state: TransportState, toolCalls: ToolCalls) => void;
   toolGroups: ToolGroupCatalog[];
   selectedToolGroups: string[];
   onSelectedToolGroupsChange: (groups: string[]) => void;
@@ -35,8 +30,6 @@ type AssistantRuntimeTransportHostProps = {
  */
 export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTransportHost({
   context,
-  recovery,
-  commitTransportState,
   toolGroups,
   selectedToolGroups,
   onSelectedToolGroupsChange,
@@ -48,12 +41,7 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
   cancelling,
   performanceProbe,
 }: AssistantRuntimeTransportHostProps) {
-  const { runtime, loadEarlierHistory } = useRuntimeTransport(
-    context,
-    recovery,
-    commitTransportState,
-    selectedToolGroups,
-  );
+  const { runtime, loadEarlierHistory } = useRuntimeTransport(context, selectedToolGroups);
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>

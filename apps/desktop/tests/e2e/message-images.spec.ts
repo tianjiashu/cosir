@@ -1,6 +1,5 @@
-import type { TransportState } from "../../lib/assistant/contract";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { seedState } from "./transport-fixtures";
+import { readState, seedState } from "./transport-fixtures";
 import { API_ORIGIN as api } from "./e2e-env";
 
 
@@ -13,7 +12,7 @@ async function openWithUserImages(page: Page, request: APIRequestContext, count:
     body: svg,
   }));
   await request.post(`${api}/__test__/seed-mermaid`);
-  const snapshot = await (await request.get(`${api}/tasks/42/assistant/state`)).json() as TransportState;
+  const snapshot = await readState(request, 42);
   snapshot.messages.find((message) => message.role === "user")!.parts = Array.from({ length: count }, (_, index) => ({
     type: "image" as const, image: `cosir-attachment://${index.toString(16).padStart(64, "0")}`,
   }));

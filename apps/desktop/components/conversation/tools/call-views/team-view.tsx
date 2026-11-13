@@ -29,7 +29,7 @@ export const teamView: CallView = (data, context) => {
     // 待批时展开审批表单；批准后就地展开执行卡（Team 是编排，不在后台看板上）。
     detail: {
       defaultOpen: context.artifact.awaitingUser,
-      render: () => context.artifact.awaitingUser ? <AgentTeamApproval {...context} /> : <AgentTeamExecutionCard {...context} displayOverride={preview} />,
+      render: () => context.artifact.awaitingUser ? <AgentTeamApproval {...context} /> : <AgentTeamExecutionCard {...context} display={preview} />,
     },
   };
 };

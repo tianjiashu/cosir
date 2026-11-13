@@ -1,4 +1,6 @@
 import type { ThreadMessage } from "@assistant-ui/react";
+import { dequal } from "dequal";
+
 /**
  * 对话虚拟列表按消息 id 记下的实测行高，跨虚拟列表挂载保留（切到别的 Task 再回来、TaskPage 重建）。
  *
@@ -32,8 +34,9 @@ export function rememberMessageHeight(taskId: number, width: number, messageId: 
 export function rememberedMessageHeight(taskId: number, width: number | null, messageId: string, message?: ThreadMessage): number | undefined {
   const heights = heightsByTask.get(taskId);
   const entry = heights && (width === null || heights.width === width) ? heights.sizes.get(messageId) : undefined;
-  if (entry?.message !== message && contentKey(entry?.message) !== contentKey(message)) return undefined;
-  return entry?.size;
+  if (!entry) return undefined;
+  if (entry.message !== message && !sameRenderedContent(entry.message, message)) return undefined;
+  return entry.size;
 }
 
 export function forgetMessageHeights(taskIds: readonly number[]): void {
@@ -52,14 +55,19 @@ export function forgetDisclosureHeight(taskId: number, key: string): void {
   }
 }
 
-const contentKeys = new WeakMap<ThreadMessage, string>();
-/** Equal snapshots recreated after navigation may reuse a measurement; changed content never may. */
-function contentKey(message: ThreadMessage | undefined): string | undefined {
-  if (!message) return undefined;
-  let key = contentKeys.get(message);
-  if (key === undefined) {
-    key = JSON.stringify([message.content, message.status, message.metadata?.custom]);
-    contentKeys.set(message, key);
-  }
-  return key;
+/**
+ * 回到 Task 时重建出的消息是新对象，内容没变就可沿用实测值；内容变了一律不沿用。逐字段深比较，不序列化：
+ * `turnLayout` 由正文与 `custom` 里的结局、当前活动推导，不参与比较（它反复引用同一批 part，比较它要把
+ * 同样的内容走好几遍）；只差在推导结果上的偏差由挂载后的实测纠正。
+ */
+function sameRenderedContent(previous: ThreadMessage | undefined, next: ThreadMessage | undefined): boolean {
+  if (!previous || !next) return false;
+  return dequal(previous.status, next.status) && dequal(previous.content, next.content)
+    && dequal(withoutLayout(previous), withoutLayout(next));
+}
+
+function withoutLayout(message: ThreadMessage): Record<string, unknown> {
+  const rest = { ...(message.metadata?.custom ?? {}) } as Record<string, unknown>;
+  delete rest.turnLayout;
+  return rest;
 }

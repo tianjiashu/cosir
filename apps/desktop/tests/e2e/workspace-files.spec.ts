@@ -1,6 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { TransportState } from "../../lib/assistant/contract";
-import { seedState } from "./transport-fixtures";
+import { readState, seedState } from "./transport-fixtures";
 import { API_ORIGIN } from "./e2e-env";
 
 const entry = (path: string, kind = "file") => ({
@@ -582,7 +581,7 @@ test("文件菜单开关不锁定主对话，长消息滚动位置和节点保�
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockFiles(page);
   await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
-  const state = await (await request.get(`${API_ORIGIN}/tasks/42/assistant/state`)).json() as TransportState;
+  const state = await readState(request, 42);
   state.messages[1].parts = Array.from({ length: 45 }, (_, i) => [
     { type: "text" as const, text: `分析第 ${i} 次输出`, status: "completed" as const },
     { type: "text" as const, text: `第 ${i} 次读取终端输出。继续观察命令的执行过程，检查输出和状态是否符合预期。`, status: "completed" as const },
@@ -631,7 +630,7 @@ test("文件菜单开关不锁定主对话，长消息滚动位置和节点保�
 test("对话正文的文件链接在文件面板打开并定位到行，外部链接先确认", async ({ page, request }) => {
   await mockFiles(page);
   await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
-  const state = await (await request.get(`${API_ORIGIN}/tasks/42/assistant/state`)).json() as TransportState;
+  const state = await readState(request, 42);
   state.messages[1].parts = [{
     type: "text" as const,
     text: "见 [greet 定义](main.py#L2-L3)，参考 [文档](https://example.com/docs)，危险 [链接](javascript:alert(1))。",
@@ -669,7 +668,7 @@ test("链接指向不存在的文件：不留坏标签，提到的文件名改�
     return route.fallback();
   });
   await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
-  const state = await (await request.get(`${API_ORIGIN}/tasks/42/assistant/state`)).json() as TransportState;
+  const state = await readState(request, 42);
   state.messages[1].parts = [{
     type: "text" as const,
     text: "会话核心在 `task.ts`，入口见 [main](main.py)，旧文件 [gone](src/gone.ts)。",

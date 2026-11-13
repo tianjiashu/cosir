@@ -17,7 +17,6 @@ type Presentation = { label: string; tone: BadgeTone; active: boolean };
 
 const EXECUTION_PRESENTATION: Record<string, Presentation> = {
   completed: { label: "已完成", tone: "success", active: false },
-  pending: { label: "排队中", tone: "info", active: true },
   running: { label: "运行中", tone: "info", active: true },
   suspended: { label: "等待结果", tone: "neutral", active: false },
   failed: { label: "运行失败", tone: "destructive", active: false },

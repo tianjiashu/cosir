@@ -305,6 +305,27 @@ describe("TransportFrameStore", () => {
 
 });
 
+describe("完整快照的结构共享", () => {
+  it("内容没变的消息与顶层字段沿用旧对象，变了的换新；投影随之复用", () => {
+    const initial = transportState({ messages: [userMessage("u1", 1), assistantMessage("a1", 1), userMessage("u2", 2)] });
+    const store = new TransportFrameStore(initial);
+    const before = store.getSnapshot();
+    // 重连拿到的完整快照：对象全新，只有最后一条内容变了。
+    const reparsed = structuredClone(initial);
+    reparsed.messages[2] = userMessage("u2", 2, "edited");
+    store.applyFrame(full(reparsed));
+    const after = store.getSnapshot();
+
+    expect(after.state.messages[0]).toBe(initial.messages[0]);
+    expect(after.state.messages[1]).toBe(initial.messages[1]);
+    expect(after.state.messages[2]).not.toBe(initial.messages[2]);
+    expect(after.state.terminal_sessions).toBe(initial.terminal_sessions);
+    expect(after.items[0]).toBe(before.items[0]);
+    expect(after.items[1]).toBe(before.items[1]);
+    expect(after.items[2]).not.toBe(before.items[2]);
+  });
+});
+
 describe("TransportFrameStore 一轮结束（D2）", () => {
   it("首次构造只记基线，不触发 settled", () => {
     const store = new TransportFrameStore(transportState({ activity: activity(1, "completed") }));
@@ -343,13 +364,6 @@ describe("TransportFrameStore 一轮结束（D2）", () => {
     store.applyFrame(full(transportState({ activity: activity(1, "failed") })));
     store.applyFrame(full(transportState({ activity: activity(1, "failed") })));
     expect(transitions).toEqual([{ kind: "settled", status: "failed" }]);
-  });
-
-  it("importState 与 full 帧同一语义", () => {
-    const store = new TransportFrameStore(running([]));
-    const transitions = recordTransitions(store);
-    store.importState(transportState({ activity: activity(1, "completed") }));
-    expect(transitions).toEqual([{ kind: "settled", status: "completed" }]);
   });
 
   it("从无活动进入活动态触发 started", () => {

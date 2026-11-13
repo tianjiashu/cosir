@@ -24,10 +24,10 @@ export type CallItem = { kind: "call"; index: number; part: TransportToolCallPar
 export type AgentItem = { kind: "agent"; index: number; part: TransportAgentMessagePart };
 export type ProcessItem = NarrationItem | CallItem | StandaloneItem | AgentItem;
 export type VerbCount = { label: string; count: number };
-export type ActivityGroup = { kind: "activity"; key: string; index: number; calls: CallItem[]; summary: ProcessLayout };
+export type ActivityGroup = { kind: "activity"; key: string; index: number; calls: CallItem[]; summary: CallSummary };
 export type TurnBlock = NarrationItem | StandaloneItem | AgentItem | ActivityGroup;
-export type ProcessLayout = {
-  items: ProcessItem[];
+/** 工具组摘要：按动词计数与失败、取消数。只在组上有，回合过程不另做汇总。 */
+export type CallSummary = {
   verbCounts: VerbCount[];
   failedCount: number;
   cancelledCount: number;
@@ -47,7 +47,8 @@ export type TurnLayout = {
   /** Compact introduction before prose/tools. Derived presentation only, not a model execution phase. */
   intro: "waiting" | null;
   blocks: TurnBlock[];
-  process: ProcessLayout;
+  /** 过程里的全部条目（标题据此判断能否展开）。 */
+  process: { items: ProcessItem[] };
   attention: AttentionItem[];
   artifacts: ArtifactCard[];
   answer: AnswerItem[];
@@ -67,15 +68,15 @@ export function visibleCall(part: TransportToolCallPart): boolean {
  * 工具组摘要里的生命周期问题。结果信号（非零退出、部分成功等）只留在调用行：`grep` 无匹配、探测可选
  * 目录都会非零退出，Agent 读到结果后自行处理，汇总上浮只会把常态写成异常；Run 的结局由回合标题表达。
  */
-export function describeProcessProblems(process: ProcessLayout): string | null {
+export function describeCallProblems(summary: CallSummary): string | null {
   return [
-    process.failedCount ? `${process.failedCount} 个失败` : null,
-    process.cancelledCount ? `${process.cancelledCount} 个取消` : null,
+    summary.failedCount ? `${summary.failedCount} 个失败` : null,
+    summary.cancelledCount ? `${summary.cancelledCount} 个取消` : null,
   ].filter(Boolean).join(" · ") || null;
 }
 
 /** Summaries count calls, not files/steps. Control calls can expose errors without pretending to be work. */
-export function summarizeCalls(calls: readonly CallItem[]): ProcessLayout {
+export function summarizeCalls(calls: readonly CallItem[]): CallSummary {
   const verbs = new Map<string, number>();
   let failedCount = 0, cancelledCount = 0;
   for (const { part } of calls) {
@@ -83,9 +84,7 @@ export function summarizeCalls(calls: readonly CallItem[]): ProcessLayout {
     if (part.status === "failed") failedCount++;
     else if (part.status === "cancelled") cancelledCount++;
   }
-  return { items: [...calls],
-    verbCounts: [...verbs].map(([label, count]) => ({ label, count })),
-    failedCount, cancelledCount };
+  return { verbCounts: [...verbs].map(([label, count]) => ({ label, count })), failedCount, cancelledCount };
 }
 
 /**
@@ -159,15 +158,11 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
       && changes.every((call, i) => old.callIndexes[i] === call.index && previous?.parts[call.index] === call.part);
     artifacts.unshift(unchanged ? old : aggregateChanges(changes));
   }
-  // standalone 在 process.items 内是 standalone 槽位，同样参加过程计数。
-  const previousCalls = previous?.process.items.filter(item => item.kind === "call" || item.kind === "standalone");
-  const sameCalls = previousCalls?.length === calls.length && calls.every((call, i) => call.index === previousCalls[i].index && call.part === previousCalls[i].part);
-  const summary = sameCalls && previous ? previous.process : summarizeCalls(calls);
   // Any tool (including a hidden wait) ends the first-output introduction. A later silent model
   // request is not observable here, so it must not be inferred from the absence of visible cards.
   const intro = phase === "running" && !outcome && parts.every((part) => part.type === "text" && !part.text.trim())
     ? "waiting" : null;
-  return { parts, phase, current, intro, blocks, process: { ...summary, items }, attention, artifacts: previous?.artifacts.length === artifacts.length && artifacts.every((card, i) => card === previous.artifacts[i]) ? previous.artifacts : artifacts, answer, hasFinalReply,
+  return { parts, phase, current, intro, blocks, process: { items }, attention, artifacts: previous?.artifacts.length === artifacts.length && artifacts.every((card, i) => card === previous.artifacts[i]) ? previous.artifacts : artifacts, answer, hasFinalReply,
     defaultProcessOpen: !hasFinalReply };
 }
 

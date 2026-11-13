@@ -8,7 +8,7 @@ import {
   canStopTeamRun,
 } from "@/components/conversation/tools/agent-team/agent-team-execution-card";
 import type { AgentTeamRun } from "@/lib/api/agent-teams";
-import { stopTarget, useCommandRequests } from "@/lib/assistant/command-request-store";
+import { stopTarget, useCommandRequests, type CommandRequest, type CommandTarget } from "@/lib/assistant/command-request-store";
 import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 import { createQueryClient } from "@/lib/query/query-client";
 import { queryKeys } from "@/lib/query/query-keys";
@@ -78,13 +78,13 @@ describe("停止后 TeamRun 落定", () => {
   function renderSettledCard(error: string | null) {
     const client = createQueryClient();
     client.setQueryData(queryKeys.agentTeamRun(17), teamRun("cancelled", "cancelled"));
-    useCommandRequests.setState({
-      tasks: { 1: { [stopTarget("call-team")]: { token: {}, phase: "syncing", error } } },
-    });
+    const bucket: Partial<Record<CommandTarget, CommandRequest>> = {};
+    bucket[stopTarget("call-team")] = { token: {}, phase: "syncing", error };
+    useCommandRequests.setState({ tasks: { 1: bucket } });
     const artifact = { team_run_id: 17, display_data: null } as unknown as ToolArtifact;
     return renderToStaticMarkup(
       <QueryClientProvider client={client}>
-        <AgentTeamExecutionCard taskId={1} toolCallId="call-team" artifact={artifact} interactive />
+        <AgentTeamExecutionCard taskId={1} toolCallId="call-team" artifact={artifact} display={{ teamRunId: 17, teamId: "quality", goal: "" }} interactive />
       </QueryClientProvider>,
     );
   }

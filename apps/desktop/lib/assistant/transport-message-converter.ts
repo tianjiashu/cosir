@@ -193,7 +193,8 @@ function convertToolCallPart(part: TransportToolCallPart): ThreadMessage["conten
     toolCallId: part.toolCallId,
     toolName: part.toolName,
     args: args as ReadonlyJSONObject,
-    argsText: JSON.stringify(args, null, 2),
+    // assistant-ui 的类型要求这个字段，界面不读它：不缩进，省掉每次转换时的美化开销。
+    argsText: JSON.stringify(args),
     artifact,
   };
 

@@ -4,6 +4,7 @@ import { HttpError } from "@/lib/http/http-error";
 import { resumeTask } from "@/lib/assistant/task-commands";
 import type { RuntimeSessionContext } from "@/components/conversation-runtime/runtime/runtime-types";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
+import { getBackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 
 export type BusinessResumeController = {
@@ -22,7 +23,7 @@ export function useBusinessResume(context: RuntimeSessionContext): BusinessResum
 
   const resumeBusinessRun = useCallback(() => {
     if (inFlightRef.current) return inFlightRef.current;
-    if (!context.backendRef.current.available) {
+    if (!getBackendRuntimeSnapshot().available) {
       return Promise.reject(new UserFacingError("本机后端当前不可用，无法继续运行"));
     }
     const request = (async () => {

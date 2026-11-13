@@ -1,6 +1,7 @@
 import { ToolCallIndex, type ToolCalls } from "../tools/tool-call-index";
 import { projectTurn, turnPhaseOf, type TurnLayout } from "../turn/turn-layout";
 import type { ThreadMessage } from "@assistant-ui/react";
+import { dequal } from "dequal";
 
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import {
@@ -46,8 +47,8 @@ export type FrameStoreItem =
   | { kind: "pending"; command: UserAddMessageCommand };
 
 /**
- * 当前活动的状态跳变。`started`：从非活动进入活动态（一轮开始）；`settled`：从活动态进入终态
- * （一轮结束）。挂起仍是活动态，不产生事件；首次构造只记基线，不产生事件。
+ * 当前活动的状态跳变。`started`：从非活动进入活动态（这次运行开始）；`settled`：从活动态进入终态
+ * （这次运行结束）。挂起仍是活动态，不产生事件；首次构造只记基线，不产生事件。
  */
 export type ActivityTransition = {
   kind: "started" | "settled";
@@ -136,7 +137,7 @@ export function parseTransportFrame(value: unknown): TransportFrameEnvelope {
  * 下一动画帧统一通知订阅者，结构变化和活动状态变化则立即通知，保证 active row 不会被同一帧内
  * 的多个 token 重复提交。
  *
- * 「一轮输出结束」只由这里判定：每次 state 变化后比较 `activity.status`，活动态（运行中 / 挂起）
+ * 「这次运行结束」只由这里判定：每次 state 变化后比较 `activity.status`，活动态（运行中 / 挂起）
  * 进入终态时向活动监听者发一次 `settled`。连接断开是另一件事，由 transport hook 处理，这里不感知。
  *
  * 历史窗口：`state.messages` 只含已加载的一段，`messageOffset` 是它前面还没加载的条数。增量路径里的
@@ -144,6 +145,27 @@ export function parseTransportFrame(value: unknown): TransportFrameEnvelope {
  * 那一页加载时后端会给出它当时的内容。翻页请求在途时这些增量先缓存，页到达后回放落在页内的，
  * 免得页内容恰好在请求期间更新而丢失。位置只在完整快照处才会变：完整快照替换窗口、作废在途翻页。
  */
+/**
+ * 完整快照与上一份状态的结构共享：内容没变的消息（按 id）与顶层字段沿用旧对象。
+ *
+ * full 帧（订阅首帧、重连、撤回、背压重同步）里的对象都是刚解析出来的，下游的投影、转换、行高与
+ * React 的缓存全按对象身份命中；不共享的话，一次重连就让整列表重新投影、重新渲染。比较一次远比
+ * 重建便宜。状态更新一律写时复制（不就地改对象），所以沿用旧对象是安全的。
+ */
+function shareUnchanged(previous: TransportState, next: TransportState): TransportState {
+  const previousMessages = new Map(previous.messages.map((message) => [message.id, message]));
+  const messages = next.messages.map((message) => {
+    const old = previousMessages.get(message.id);
+    return old !== undefined && dequal(old, message) ? old : message;
+  });
+  const shared: Record<string, unknown> = { ...next, messages };
+  const before = previous as unknown as Record<string, unknown>;
+  for (const key of Object.keys(shared)) {
+    if (key !== "messages" && key in before && dequal(before[key], shared[key])) shared[key] = before[key];
+  }
+  return shared as TransportState;
+}
+
 export class TransportFrameStore {
   private readonly toolIndex = new ToolCallIndex();
   private state: TransportState;
@@ -292,12 +314,6 @@ export class TransportFrameStore {
     this.publish(null, "pending");
   }
 
-  /** 导入一份完整 state（与 full 帧同一语义：活动跳变照常判定、乐观命令按出现的消息收敛）。 */
-  public importState(state: TransportState): void {
-    this.resyncRequired = false;
-    this.replaceState(state);
-  }
-
   /**
    * 立即执行已排队的流式提交。
    *
@@ -317,7 +333,7 @@ export class TransportFrameStore {
     // 完整快照重新划定窗口：已加载的旧页随之丢弃，在途翻页按代次作废。
     this.historyGeneration += 1;
     this.historyFetch = null;
-    this.state = state;
+    this.state = shareUnchanged(previous, state);
     this.rebuildAllItems();
     this.reconcilePending(previous);
     this.publish();

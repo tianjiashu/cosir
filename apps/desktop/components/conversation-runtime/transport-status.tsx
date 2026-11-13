@@ -1,12 +1,8 @@
 import { WifiOffIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import type { TransportIssue } from "@/lib/assistant/transport/subscription-recovery";
 
-export type TransportIssue = {
-  message: string;
-  /** 该连接问题是否可以由用户点击“重新同步”恢复；与 Agent 的工具 retryable 无关。 */
-  canResync: boolean;
-};
 
 export function TransportStatus({ issue, onRetry }: {
   issue: TransportIssue | null;

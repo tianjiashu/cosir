@@ -1,19 +1,34 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ansiColor, xtermCardTheme } from "@/components/terminal/xterm-appearance";
+import { frontendLog } from "@/lib/logging/frontend-log";
 import { useThemeState } from "@/lib/theme/theme-preference";
 
-import { parseTerminalOutput, type OutputRun, type ParsedOutput } from "./text";
+import { TerminalOutputParser } from "./output-parser";
+import type { OutputRun, OutputTail } from "./text";
 
-/** 解析是异步的：新结果到达前继续显示上一版，流式输出不闪空。 */
-export function useParsedOutput(output: string): ParsedOutput | null {
-  const [parsed, setParsed] = useState<ParsedOutput | null>(null);
+/**
+ * 卡片预览的解析结果：末尾几行与按需读取的全文。解析器随卡片挂载常驻、增量写入（见 `TerminalOutputParser`）；
+ * 解析是异步的，新结果到达前继续显示上一版，流式输出不闪空。
+ */
+export function useParsedOutput(output: string): { tail: OutputTail | null; readText: () => string } {
+  const parser = useRef<TerminalOutputParser | null>(null);
+  const [tail, setTail] = useState<OutputTail | null>(null);
   useEffect(() => {
-    let current = true;
-    void parseTerminalOutput(output).then((next) => { if (current) setParsed(next); });
-    return () => { current = false; };
+    const current = new TerminalOutputParser(setTail, (error) => {
+      void frontendLog("WARNING", "terminal_preview_parse_failed", "终端输出预览解析失败", { error });
+    });
+    parser.current = current;
+    return () => {
+      current.dispose();
+      parser.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    parser.current?.update(output);
   }, [output]);
-  return parsed;
+  const readText = useCallback(() => parser.current?.text() ?? "", []);
+  return { tail, readText };
 }
 
 /** 卡片里的输出摘要：末尾几行带颜色的文字，完整输出与可点的链接在阅读器。 */

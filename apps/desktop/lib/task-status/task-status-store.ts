@@ -1,3 +1,4 @@
+import { dequal } from "dequal";
 import { create } from "zustand";
 
 /**
@@ -12,7 +13,7 @@ export type TaskStatus = { executionStatus: string | null; awaitingUserCalls: nu
  *
  * 唯一的写入方是 Task 推送连接（`useTaskFeed`）：整表帧替换、变化帧合并。不在别处写入，
  * 也不从任务目录接口或对话 snapshot 补值——混用会让同一状态有两个来源。`connected` 为 false 时
- * 保留上次的值，由显示方标出「未同步」。
+ * 保留上次的值；目前只有工作台标签据此标出「未同步」，侧栏、命令面板与页头照常显示上次的值。
  */
 type TaskStatusState = {
   tasks: Readonly<Record<number, TaskStatus>>;
@@ -25,8 +26,12 @@ type TaskStatusState = {
 export const useTaskStatusStore = create<TaskStatusState>()((set) => ({
   tasks: {},
   connected: false,
-  replaceAll: (tasks) => set({ tasks }),
-  merge: (changes) => set((state) => ({ tasks: { ...state.tasks, ...changes } })),
+  // 值相同的帧（周期整表对账、状态没变的变化帧）不换引用：订阅整表的显示方不必白白重渲染。
+  replaceAll: (tasks) => set((state) => (dequal(state.tasks, tasks) ? state : { tasks })),
+  merge: (changes) => set((state) => {
+    const changed = Object.entries(changes).filter(([taskId, status]) => !dequal(state.tasks[Number(taskId)], status));
+    return changed.length === 0 ? state : { tasks: { ...state.tasks, ...Object.fromEntries(changed) } };
+  }),
   setConnected: (connected) => set((state) => (state.connected === connected ? state : { connected })),
 }));
 

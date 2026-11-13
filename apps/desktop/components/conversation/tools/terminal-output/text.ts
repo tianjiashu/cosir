@@ -1,21 +1,17 @@
-import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { Terminal, type IBuffer, type IBufferCell, type IBufferLine } from "@xterm/xterm";
+import type { IBuffer, IBufferCell, IBufferLine } from "@xterm/xterm";
 
 /** 回滚区行数；缓冲到达「视口行数 + 它」即开始丢最早的行。预览与阅读器用同一容量，「还有 N 行」才与阅读器一致。 */
 export const SCROLLBACK_ROWS = 5000;
-const PREVIEW_LINES = 8;
-/** 解析用的列宽：只决定折行，折行在下面接回逻辑行，显示时由 CSS 按容器重新换行。 */
-const PARSE_COLS = 240;
+/** 预览显示的末尾行数。 */
+export const PREVIEW_LINES = 8;
 
 /** `color` 是 ANSI 色号或 `#rrggbb`，null 为默认前景；色号到颜色的换算留到渲染时，主题切换不用重新解析。 */
 export type OutputRun = { text: string; color: number | string | null; bold: boolean; dim: boolean };
-export type ParsedOutput = {
+export type OutputTail = {
   /** 末尾几行，每行是同样式的文字片段。 */
   lines: OutputRun[][];
   /** 预览之外还有多少行。 */
   hiddenLines: number;
-  /** 全部已保留输出的纯文本，复制用。 */
-  text: string;
 };
 
 /**
@@ -71,7 +67,8 @@ function trimLineEnd(runs: OutputRun[]): OutputRun[] {
   return runs;
 }
 
-function tailLines(buffer: IBuffer): Pick<ParsedOutput, "lines" | "hiddenLines"> {
+/** 已渲染输出末尾的几条逻辑行（折行接回），带颜色与粗细。 */
+export function tailLines(buffer: IBuffer): OutputTail {
   const starts: number[] = [];
   const end = lastContentRow(buffer);
   for (let i = 0; i <= end; i++) if (!buffer.getLine(i)?.isWrapped) starts.push(i);
@@ -84,22 +81,4 @@ function tailLines(buffer: IBuffer): Pick<ParsedOutput, "lines" | "hiddenLines">
     return trimLineEnd(runs);
   });
   return { lines, hiddenLines: starts.length - shown.length };
-}
-
-/**
- * 用一个不挂到页面的 xterm 解析命令输出：`\r` 进度帧、光标移动、清行这些控制序列的语义与阅读器完全一致，
- * 再从 buffer 读出带颜色的文字。不进 DOM，所以没有格子排版带来的中文字距、行尾裁切与光标空行。
- */
-export function parseTerminalOutput(output: string): Promise<ParsedOutput> {
-  return new Promise((resolve) => {
-    const terminal = new Terminal({ allowProposedApi: true, convertEol: true, cols: PARSE_COLS, rows: PREVIEW_LINES, scrollback: SCROLLBACK_ROWS });
-    terminal.loadAddon(new Unicode11Addon());
-    terminal.unicode.activeVersion = "11";
-    terminal.write(output, () => {
-      const buffer = terminal.buffer.active;
-      const parsed = { ...tailLines(buffer), text: bufferText(buffer) };
-      terminal.dispose();
-      resolve(parsed);
-    });
-  });
 }

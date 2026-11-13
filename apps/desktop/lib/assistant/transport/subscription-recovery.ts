@@ -1,5 +1,11 @@
 import { frontendLog } from "@/lib/logging/frontend-log";
-import type { TransportIssue } from "@/components/conversation-runtime/transport-status";
+
+/** 订阅连接的问题提示（横幅）；由连接对象产出，界面只负责呈现。 */
+export type TransportIssue = {
+  message: string;
+  /** 该连接问题是否可以由用户点击“重新同步”恢复；与 Agent 的工具 retryable 无关。 */
+  canResync: boolean;
+};
 
 /** 订阅为什么要重开：意外断开（EOF / 网络 / attach 被拒）计入预算；背压重同步不计。 */
 export type ReconnectReason = "disconnected" | "resync_required";
@@ -7,8 +13,8 @@ export type ReconnectReason = "disconnected" | "resync_required";
 export type SubscriptionRecoveryDeps = {
   taskId: number;
   traceId: string;
-  /** 打开（或替换）Task 长订阅；runtime 尚未就绪时为 null。 */
-  attach: () => (() => Promise<void>) | null;
+  /** 打开（或替换）Task 长订阅。 */
+  attach: () => void;
   backend: () => { available: boolean; generation: number };
   setIssue: (issue: TransportIssue | null) => void;
 };
@@ -25,7 +31,8 @@ const RECONNECT_DELAYS_MS = [0, 250, 500, 1_000, 2_000] as const;
 const RECOVERY_FEEDBACK_DELAY_MS = 350;
 
 /**
- * 订阅恢复编排（主对话与 Workbench 阅读页共用）：断流重连、背压重同步、手动重新同步与后端恢复都走这里。
+ * 订阅恢复编排（由 `TaskTransportConnection` 持有，主对话与 Workbench 阅读页因此共用）：断流重连、背压重同步、
+ * 手动重新同步与后端恢复都走这里。
  *
  * 订阅跟随 Task、首帧总是完整 canonical state，所以恢复只需重开订阅，不另读 snapshot、不判断
  * Run 状态；业务执行是否继续与订阅无关。计时期间后端换了实例时旧计时器作废，交给后端恢复入口
@@ -114,8 +121,8 @@ export class SubscriptionRecovery {
   };
 
   /**
-   * 后端恢复或换了实例：清零预算并提示正在同步，但不在这里重开——订阅身份跟随后端实例，runtime
-   * 已按新身份自行打开；这里再开一次只会把刚建立的连接替换掉。
+   * 后端恢复或换了实例：清零预算并提示正在同步，但不在这里重开——重开由连接在同一次后端跳变里
+   * 自己做（`TaskTransportConnection` 跟随后端实例），这里再开一次只会把刚建立的连接替换掉。
    */
   public restored = (issue: TransportIssue | null): void => {
     this.resetBudget();
@@ -124,7 +131,7 @@ export class SubscriptionRecovery {
 
   private attachNow(): void {
     if (this.disposed || !this.deps.backend().available) return;
-    void this.deps.attach()?.();
+    this.deps.attach();
   }
 
   private clearTimers(): void {

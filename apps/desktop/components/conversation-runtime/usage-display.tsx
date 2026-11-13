@@ -244,7 +244,7 @@ export function TaskContextUsage(): ReactElement {
 }
 
 /**
- * 一轮回复的用量。数据由消息自身携带：历史回复取 `outcome.usage`，当前活动的最后一条回复取
+ * 回复所属 Run 的用量（用量属于整个 Run，挂在它最后一条回复上）。数据由消息自身携带：历史回复取 `outcome.usage`，当前活动的最后一条回复取
  * `activity.usage`（见 frame store 的消息渲染上下文），不回查 Task 级 state。
  */
 export function RunUsageDisplay({ usage, running, visible }: {

@@ -173,7 +173,8 @@ test("渲染错误恢复重建视口后侧栏恢复，尺寸更新不重绘整�
   await expect(page.getByRole("heading", { name: "对话界面渲染失败" })).toBeVisible();
   await page.evaluate(() => { (window as unknown as { railThreadProbe: { fail: boolean } }).railThreadProbe.fail = false; });
   await Promise.all([
-    page.waitForResponse(`${origin}/tasks/${nextTaskId}/assistant/state`),
+    // 重试重挂 runtime 并请连接重新同步：重开订阅，首帧带回完整状态。
+    page.waitForResponse(`${origin}/tasks/${nextTaskId}/assistant/attach`),
     page.getByRole("button", { name: "重试", exact: true }).click(),
   ]);
   await expect(card(page).getByText("1 已结束", { exact: true })).toBeInViewport({ ratio: 1 });

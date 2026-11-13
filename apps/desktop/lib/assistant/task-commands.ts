@@ -61,7 +61,7 @@ async function postTaskCommand(
 }
 
 /**
- * 发送消息。并入时机由后端决定：Task 有活动 Run（含挂起）时排队，Run 结束后一轮一条依次处理；
+ * 发送消息。并入时机由后端决定：Task 有活动 Run（含挂起）时排队，Run 结束后每个 Run 一条依次处理；
  * 空闲时立即处理。排队状态经 snapshot 的 `queued_messages` 投影。
  */
 export function sendTaskMessage(
@@ -209,7 +209,7 @@ export function cancelToolCall(taskId: number, toolCallId: string): Promise<stri
 
 /**
  * 单独停止一个运行中的 Agent Team：Team 是编排实体，按 TeamRun 停止，不经工具调用取消。与提出它的那次调用
- * 共用「停止中」槽位，审批卡上的停止按钮据此显示进行中；409（已落定）视为无需再停。
+ * 共用「停止中」槽位，执行卡上的停止按钮据此显示进行中；409（已落定）视为无需再停。
  */
 export function cancelAgentTeamRun(taskId: number, toolCallId: string, teamRunId: number): Promise<string | null> {
   return postCallCommand(taskId, toolCallId, stopTarget(toolCallId), "cancel", "停止请求", `/agent-team/runs/${encodeURIComponent(teamRunId)}/cancel`);
