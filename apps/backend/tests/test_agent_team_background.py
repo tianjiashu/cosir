@@ -368,7 +368,7 @@ async def test_a_pending_proposal_awaits_the_user_whatever_the_run_does(proposed
     task_id = first.task_id
     actor = spaces.get(task_id).actor
     reads = TaskStatusQueries(main_session_factory())
-    feed = depends.get_task_status_feed()
+    feed = depends.get_task_feed()
     subscription = feed.subscribe(asyncio.get_running_loop())
     try:
         async with asyncio.timeout(12):
@@ -387,6 +387,6 @@ async def test_a_pending_proposal_awaits_the_user_whatever_the_run_does(proposed
                 await service.withdraw(task_id, target.message_id)
             await asyncio.sleep(0)
             assert reads.status(task_id).awaiting_user_calls == 0
-            assert subscription.take()[task_id].awaiting_user_calls == 0
+            assert subscription.take().statuses[task_id].awaiting_user_calls == 0
     finally:
         feed.unsubscribe(subscription)

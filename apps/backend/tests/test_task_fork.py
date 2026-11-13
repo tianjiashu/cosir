@@ -319,6 +319,20 @@ def test_agent_forks_from_the_previous_reply_excluding_the_current_turn(fork_sto
     assert s.runs.list_by_task(child.id) == []
 
 
+def test_agent_fork_publishes_the_catalog_change_after_commit(fork_store, monkeypatch):
+    """Agent 分叉在父 Run 运行中建出，侧栏只能经目录失效推送得知。"""
+    from app.service import depends
+
+    published = []
+    feed = type("Feed", (), {"publish_catalog": staticmethod(lambda *args: published.append(args))})()
+    monkeypatch.setattr(depends, "get_task_feed", lambda: feed)
+    s = fork_store
+    run = append_run(s, "running")
+    call(s, run)
+    child = agent_fork(s, run)
+    assert published == [(child.workspace_id, child.task_type)]
+
+
 def test_agent_in_a_run_without_input_keeps_the_previous_reply(fork_store):
     """没有输入的回合从 Run 开头算起：上一条回复已经结束，不能跟着更早的输入一起丢掉。"""
     s = fork_store

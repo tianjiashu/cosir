@@ -836,15 +836,21 @@ def test_run_and_tool_status_events_publish_the_task_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """侧栏等处的状态推送只在 Run 开始、Run 状态迁移与工具调用状态迁移时触发（后者改变「等你操作」，
-    且 Run 外的占位结算只发它）；其余事件（如流式正文、调用创建）不读库。"""
+    且 Run 外的占位结算只发它）；Run 开始另推目录失效（排序时间变了）；其余事件（如流式正文、调用
+    创建）不读库。"""
     from app.assistant_transport.service import conversation_event_projector as projector_module
 
     published: list[int] = []
-    monkeypatch.setattr(
-        projector_module,
-        "get_task_status_feed",
-        lambda: type("Feed", (), {"publish": staticmethod(published.append)})(),
-    )
+    catalog: list[int] = []
+    feed = type(
+        "Feed",
+        (),
+        {
+            "publish_status": staticmethod(published.append),
+            "publish_task_catalog": staticmethod(catalog.append),
+        },
+    )()
+    monkeypatch.setattr(projector_module, "get_task_feed", lambda: feed)
     event_projector, _ = projector
     _init_run(event_projector)
     _append_user_input(event_projector)
@@ -868,6 +874,7 @@ def test_run_and_tool_status_events_publish_the_task_status(
     )
 
     assert published == [1, 1, 1]
+    assert catalog == [1]
 
 
 def test_terminal_duration_is_derived_from_required_committed_time(projector) -> None:
