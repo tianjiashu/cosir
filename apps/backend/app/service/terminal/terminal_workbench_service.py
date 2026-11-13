@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.config.logging.logger import log
 from app.models.task_kind import USER_FACING_TASK_TYPES
 from app.service.depends import (
@@ -17,6 +19,7 @@ from app.service.depends import (
     get_terminal_session_service,
     get_workspace_service,
 )
+from app.tools.terminal_runtime.errors import TerminalError
 
 
 class TerminalWorkbenchTaskTypeError(Exception):
@@ -35,7 +38,8 @@ class TerminalWorkbenchService:
         异常:
             KeyError: Task 或其工作区不存在。
             TerminalWorkbenchTaskTypeError: Task 不是 ``user`` / ``fork``。
-            TerminalError: 终端服务拒绝（shell 不可用、容量、状态、worker 不可用）。
+            TerminalError: 工作区目录已不存在，或终端服务拒绝（shell 不可用、容量、状态、worker
+                不可用）。
         """
         task = get_task_service().get_task(task_id)
         # 只有侧栏对话有终端工作台，与终端工具只给侧栏对话同一条规则（``models.task_kind``）。
@@ -44,9 +48,13 @@ class TerminalWorkbenchService:
                 f"task type {task.task_type} does not support terminal workbench"
             )
         workspace = get_workspace_service().get_workspace(task.workspace_id)
+        # 会话从工作区根启动；目录可能已被移走，这里给出明确错误而不是让 worker 启动失败。
+        root = Path(workspace.root_path).resolve()
+        if not root.is_dir():
+            raise TerminalError(f"invalid terminal cwd: {workspace.root_path}")
         runtime = get_terminal_session_service().start(
             task_id=task_id,
-            workspace_root=workspace.root_path,
+            cwd=str(root),
             shell=shell,
         )
         session_id = runtime.session_id

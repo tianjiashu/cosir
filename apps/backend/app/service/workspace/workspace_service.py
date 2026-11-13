@@ -72,7 +72,7 @@ class WorkspaceService:
                 注意 ``name`` 为空白不会抛错，新建分支会回退为根目录名。
 
         副作用:
-            新建分支：向 ``workspaces`` 表插入一行记录。
+            新建分支：向 ``workspaces`` 表插入一行记录，之后推送工作区列表失效。
             复用分支：不写入任何记录、保留既有名称。
             两个分支都会确保根目录下的 ``.cosir`` 元数据区存在（见 ``_init_cosir_metadata``，
             目录已存在则幂等跳过，失败降级不阻断创建）。
@@ -99,6 +99,7 @@ class WorkspaceService:
             normalized_path,
         )
         self._init_cosir_metadata(name, normalized_path)
+        service_depends.get_task_feed().publish_workspaces()
         return record
 
     def _find_by_path(self, normalized_path: str) -> WorkspaceRecord | None:
@@ -260,13 +261,13 @@ class WorkspaceService:
             sqlalchemy.exc.SQLAlchemyError: 如果 task 创建失败。
 
         副作用:
-            向主库写入一个 task；不会启动 ConversationRun。
+            向主库写入一个 task，提交后推送该工作区的目录失效；不会启动 ConversationRun。
         """
 
         try:
             with workspace_operations.operation(workspace_id, timeout=10):
                 self._workspace.get(workspace_id)
-                return self._task_service.create_task(
+                task = self._task_service.create_task(
                     workspace_id,
                     title,
                     creation_command_id=creation_command_id,
@@ -274,6 +275,8 @@ class WorkspaceService:
                 )
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc
+        service_depends.get_task_feed().publish_catalog(task.workspace_id, task.task_type)
+        return task
 
     async def delete_workspace_tree(self, workspace_id: int) -> None:
         """删除 workspace 的用户用例：先在锁外停下其下全部 Task 的 actor，再删除记录。
@@ -313,7 +316,7 @@ class WorkspaceService:
         副作用:
             删除工作区下全部 task 树（task / turn / run / trace / delegation / context）及其
             运行期引用；并删除 ``workspaces`` 表记录（旧 Runtime
-            事件体系已删除，不再参与级联删除）；提交后卸载该根路径在 Agent profile 与
+            事件体系已删除，不再参与级联删除）；提交后推送工作区列表失效，并卸载该根路径在 Agent profile 与
             Agent Team 配置注册表中的作用域缓存（见 :meth:`_drop_workspace_config_scopes`）。
         """
 
@@ -354,6 +357,7 @@ class WorkspaceService:
                 self._drop_workspace_config_scopes(workspace_record.root_path)
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc
+        service_depends.get_task_feed().publish_workspaces()
         log.info(
             "workspace_deleted",
             extra={"msg": "workspace deleted", "data": {"workspace_id": workspace_id}},

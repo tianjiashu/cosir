@@ -60,12 +60,12 @@ class AgentTeamRunTool(HandlerBase):
         "node's handoff output, never other nodes' conversations or earlier history, so each "
         "node's goal must be workable on its own. The ending node's output is the Team's final "
         "result. This tool submits a plan for the user to review and edit, then pauses you until "
-        "the user decides; the decision arrives as a <user_decision> message. If approved, this "
-        "call starts the Team in the background. Continue independent work or use wait_messages. "
-        "Its <background_result> reports the final status and the path of the saved run history, "
-        "which you read in pages "
-        "when you need the details. It cannot create or edit Team configurations; if the Team "
-        "does not exist, ask the user to create it first."
+        "the user decides; the decision arrives as a <user_decision> message. If approved, the "
+        "Team starts running. Continue independent work or use wait_messages. When it finishes it "
+        "reports to you with an <agent_message report=...> carrying the final status and the path "
+        "of the saved run history, which you read in pages when you need the details. It cannot "
+        "create or edit Team configurations; if the Team does not exist, ask the user to create "
+        "it first."
     )
     args_model = AgentTeamArgs
     group = TOOL_GROUP_AGENT_TEAM
@@ -258,17 +258,16 @@ class AgentTeamRunTool(HandlerBase):
                 "data": {"team_run_id": row.id, "task_id": execution_context.task_id},
             },
         )
-        work = get_agent_team_coordinator().prepare_background(
-            confirmed, execution_context.run_id,
-            cast(asyncio.AbstractEventLoop, execution_context.event_loop),
+        get_agent_team_coordinator().start_approved(
+            confirmed, cast(asyncio.AbstractEventLoop, execution_context.event_loop)
         )
         observation = tool_success(
             self.name,
-            f"Team run {row.id} was approved and will run in the background. Its conclusion "
-            "will arrive as a <background_result> for this call.",
+            f"Team run {row.id} was approved and is running. When it finishes, it reports to you "
+            f'with an <agent_message source_team_run_id="{row.id}" report=...>; wait for it with '
+            "wait_messages if you need the result before going on.",
         )
         observation.team_run_id = row.id
-        observation.background = work
         return observation
 
     def _already_resolved(self, team_run_id: int, status: str) -> ToolObservation:

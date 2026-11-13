@@ -75,10 +75,12 @@ class TaskMessage:
     project_to_transport: bool = True
 
     def wakes(self, run_id: int | None) -> bool:
-        """可否唤醒指定 Run；None 表示可否凭此消息新建 Run。"""
-        if isinstance(self.body, BackgroundResultBody) and not self.body.starts_run:
-            return run_id is not None
-        return type(self.body).WAKES
+        """可否推进指定的活动 Run（驱动中不挂起、挂起中唤醒）；None 表示可否凭此消息新建 Run。
+
+        只读消息体声明的唤醒范围（``wake_scope``），信封不认识任何具体类型。
+        """
+        scope = self.body.wake_scope()
+        return scope == "new_or_active" or (scope == "active" and run_id is not None)
 
     @classmethod
     def of(

@@ -24,13 +24,13 @@ from app.assistant_transport.state.conversation_state_handoff import (
     ConversationHandoff,
     validate_handoffs,
 )
-from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_message import (
     ConversationQueuedMessage,
     ConversationStateMessage,
     ConversationStateOutcome,
     MessageRole,
 )
+from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_part import (
     ConversationStateAgentMessagePart,
     ConversationStateImagePart,

@@ -16,12 +16,12 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.context.tool_call_closure import ContextProtocolError
 from app.core.events import ToolCallStatusChangedEvent
+from app.core.events.event_sink import event_sink
 from app.core.llm_provider.model_failure import (
     classify_model_failure,
     extract_model_response_message,
 )
-from app.core.tool.background.background_registry import background_registry
-from app.core.tool.background.cancel_placeholders import INTERRUPTED_HINT, cancel_placeholders
+from app.core.tool.placeholder_settlement import INTERRUPTED_HINT, cancel_placeholders
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
@@ -29,7 +29,6 @@ from app.models import ConversationRunRecord
 from app.models.conversation_run_failure import run_failure_message
 from app.models.enums.conversation_run_status import RunTransition
 from app.service.depends import (
-    get_conversation_event_projector,
     get_conversation_run_ledger,
     get_conversation_task_context_service,
 )
@@ -72,10 +71,6 @@ class RunDriver:
             await self._workflow.run(rc)
 
         except Exception as exc:
-            # 即使失败本身落库出错，未提交的工作也不能继续等待启动。
-            withdrawn = background_registry.withdraw_uncommitted(run.task_id, run.id)
-            if withdrawn:
-                await asyncio.to_thread(cancel_placeholders, run.task_id, withdrawn, "启动失败")
             if self._settle_failure(run, exc):
                 await asyncio.to_thread(self._close_tool_calls, run)
         finally:
@@ -148,9 +143,9 @@ class RunDriver:
                     "data": {"task_id": run.task_id, "run_id": run.id, **error.log_data()},
                 },
             )
-        projector = get_conversation_event_projector()
+        sink = event_sink()
         for tool_call_id in repaired:
-            projector.process(
+            sink(
                 ToolCallStatusChangedEvent(
                     task_id=run.task_id,
                     run_id=run.id,

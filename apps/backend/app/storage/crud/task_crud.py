@@ -346,22 +346,28 @@ class TaskCrud:
                 raise KeyError(task_id)
         return self.get(task_id)
 
-    def update_title(self, task_id: int, title: str) -> None:
-        """改写 Task 标题；刻意不刷新 ``updated_at``：侧栏按它排序，改名不该让对话换位置。
+    def update_title(self, task_id: int, title: str) -> bool:
+        """改写 Task 标题，返回是否真的变了；刻意不刷新 ``updated_at``：侧栏按它排序，改名不该让对话换位置。
+
+        标题与原值相同时不写库（标题支线常生成与兜底标题相同的结果），调用方据返回值决定要不要通知。
 
         异常:
             KeyError: Task 不存在（含已被删除）。
         """
 
         with self._session_factory.begin() as session:
+            current = session.scalar(select(TaskModel.title).where(TaskModel.id == task_id))
+            if current is None:
+                raise KeyError(task_id)
+            if current == title:
+                return False
             # 显式把 updated_at 写回原值：基类的 onupdate 对 Core update 同样生效。
-            result = session.execute(
+            session.execute(
                 update(TaskModel)
                 .where(TaskModel.id == task_id)
                 .values(title=title, updated_at=TaskModel.updated_at)
             )
-            if not result.rowcount:
-                raise KeyError(task_id)
+            return True
 
     def list_by_workspace(self, workspace_id: int) -> list[TaskRecord]:
         """侧栏对话（``USER_FACING_TASK_TYPES``），按更新时间倒序；委派子任务与 Team 节点不在

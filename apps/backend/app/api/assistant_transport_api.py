@@ -1,10 +1,10 @@
-"""Assistant Transport API：Task 级命令、订阅与 snapshot 读取。
+"""Assistant Transport API：Task 级命令、长订阅与历史分页。
 
 命令只对 Task（或消息）寻址，不携带 run_id。本模块只做 HTTP 形状与错误映射，用例编排全部在
 ``AssistantTransportService``，wire schema 在 ``assistant_transport.request`` / ``state``。用户命令
 等后端处理完这次命令再返回：输入问题 400、Task 不存在 404、状态冲突 409，成功 200 且响应体为
 ``{}``；只有取消是纯投递（202），是否停下以 snapshot 的 ``activity`` 为准。Run 输出与状态只经
-snapshot 交给前端。attach 是跟随 Task 的长订阅，不触发业务执行。
+snapshot 交给前端。attach 是跟随 Task 的长订阅，首帧即完整 snapshot（前端不另读），不触发业务执行。
 """
 
 import asyncio
@@ -18,7 +18,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from app.app import app
 from app.assistant_transport.request import DecisionRequest, SendMessageRequest
 from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
-from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.assistant_transport.state.snapshot_window import HistoryPage
 from app.config.logging.logger import log
 from app.models.errors.input_errors import UserInputRejectedError
@@ -199,35 +198,6 @@ async def assistant_transport_attach(
             "X-Cosir-Task-Id": str(task_id),
         },
     )
-
-
-@app.get("/tasks/{task_id}/assistant/state")
-async def assistant_transport_state(
-    task_id: int,
-    service: AssistantTransportService = Depends(get_assistant_transport_service),
-) -> ConversationStateSnapshot:
-    """返回某任务的首屏历史 state（服务端权威对话视图）；任务不存在时 404。
-
-    冷读时 state service 从 canonical Task、Run 与 Context 记录重建；不修改 Run、Context 或执行器。
-    """
-
-    with _task_addressed():
-        state = service.get_state(task_id)
-    activity = state["activity"]
-    log.info(
-        "assistant_snapshot_read",
-        extra={
-            "msg": "读取 Assistant 历史快照",
-            "data": {
-                "task_id": task_id,
-                "activity_status": activity["status"] if activity is not None else None,
-                "activity_turn": activity["turn"] if activity is not None else None,
-                "message_count": len(state["messages"]),
-                "message_offset": state["messageOffset"],
-            },
-        },
-    )
-    return state
 
 
 @app.get("/tasks/{task_id}/assistant/messages")

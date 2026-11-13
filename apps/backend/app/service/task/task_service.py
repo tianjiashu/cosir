@@ -17,6 +17,7 @@ from sqlalchemy.orm.session import Session
 from app.config.logging.logger import log
 from app.core.workflow.message_queue.message_bodies import ADVANCING_KINDS
 from app.models import ConversationRunRecord, TaskRecord
+from app.models.enums.conversation_run_status import ACTIVE_RUN_STATUSES
 from app.models.errors.deletion_errors import (
     DeletionBusyError,
     ProvisionalTaskCleanupConflictError,
@@ -128,9 +129,22 @@ class TaskService:
             )
         return {*pending, *suspended}
 
-    def list_child_tasks(self, task_id: int) -> list[TaskRecord]:
-        """返回由该任务直接委派的子任务（不含 Agent Team 节点任务）。"""
-        return self._task.list_by_parent_task(task_id)
+    def list_derived_tasks(self, task_id: int) -> list[TaskRecord]:
+        """返回该 Task 直接派生的 Task：委派的子 Agent 与 Agent fork（``deriver_id()`` 指向它的）。
+
+        Team 节点不在其中：它们归 Coordinator 编排，主 Task 经 TeamRun 管它们。fork 不挂所有权子树，
+        发起方记在 ``extra.fork``，所以按工作区读出 Agent fork 再过滤。
+
+        异常:
+            KeyError: Task 不存在。
+        """
+        task = self._task.get(task_id)
+        forks = [
+            fork
+            for fork in self._task.list_by_workspace_and_type(task.workspace_id, TaskType.AGENT_FORK)
+            if fork.deriver_id() == task_id
+        ]
+        return [*self._task.list_by_parent_task(task_id), *forks]
 
     def require_current_run(self, task_id: int) -> ConversationRunRecord | None:
         """返回存在的任务的当前 Run（Task 的 ``current_run_id`` 指针）；任务尚无 Run 时返回 ``None``。
@@ -156,7 +170,7 @@ class TaskService:
             task_id: 任务标识。
 
         返回:
-            对应的 ``TaskRecord``；执行状态不在这里，见 ``TaskStatusFeed``。
+            对应的 ``TaskRecord``；执行状态不在这里，见 ``TaskFeed``。
 
         异常:
             KeyError: 如果指定任务不存在。
@@ -168,12 +182,13 @@ class TaskService:
         return self._task.get(task_id)
 
     def update_title(self, task_id: int, title: str) -> None:
-        """写入 Task 标题；不进 Task 闸门：单列覆盖，与 Run 调度、删除没有需要互斥的不变量。
+        """写入 Task 标题，真的变了才推送目录失效；不进 Task 闸门：单列覆盖，与 Run 调度、删除没有需要互斥的不变量。
 
         异常:
             KeyError: Task 不存在（含已被删除）。
         """
-        self._task.update_title(task_id, title)
+        if self._task.update_title(task_id, title):
+            service_depends.get_task_feed().publish_task_catalog(task_id)
 
     async def fork_task(
         self,
@@ -243,6 +258,7 @@ class TaskService:
             title=title,
             task_type=TaskType.AGENT_FORK,
             depth=derivation_depth,
+            deriving_call_id=tool_call_id,
         )
 
     def _fork(
@@ -253,11 +269,13 @@ class TaskService:
         title: str | None,
         task_type: TaskType,
         depth: int,
+        deriving_call_id: str | None = None,
     ) -> TaskRecord:
         """两种分叉共用的编排：工作区闸门内一个写事务里定切点、建目标 Task、复制切点之前的历史。
 
         ``cut`` 在来源上取切点与初始配置，两种分叉只在这里不同。切点在写事务内算：点击到提交之间
-        并入的新输入不会切错位置。``title`` 为 ``None`` 时按来源标题编号。
+        并入的新输入不会切错位置。``title`` 为 ``None`` 时按来源标题编号。提交后推送目录失效：
+        Agent 分叉在父 Run 运行中建出，侧栏只能经推送得知。
 
         异常:
             TaskForkConflictError: 来源不能分叉，或工作区有其他结构性操作（``WORKSPACE_BUSY``）。
@@ -290,7 +308,7 @@ class TaskService:
                         source_title=source.title,
                         tree_parent_task_id=source.id,
                         initial_launch=fork_cut.launch,
-                    )),
+                    ), deriving_call_id=deriving_call_id),
                     # 工具列表是请求前缀的一部分，改了就接不上源的缓存；派生限制由运行期准入执行。
                     tool_schemas=deepcopy(source.tool_schemas),
                     session=session,
@@ -314,6 +332,7 @@ class TaskService:
                 },
             },
         )
+        service_depends.get_task_feed().publish_catalog(target.workspace_id, target.task_type)
         return target
 
     def list_tasks_for_workspace(self, workspace_id: int) -> list[TaskRecord]:
@@ -345,23 +364,44 @@ class TaskService:
         ``with_forks`` 为真时把全部 fork 后代（含 fork 的 fork）当作额外的根一并停止和删除。fork 后代
         只在开头收集一次，删除的就是停下的这批：停止之后才 fork 出来的照常改挂，不会删掉没停下的 Task。
 
+        删除提交后，仍在活动的派生 Task 的派生方（没有一起被删的）各得一条停止通知（见
+        ``derived_report.report_deleted``）：派生方可能正挂起等它，没有通知就一直挂着。活动与否在
+        每轮停止之前读，停下之后就都不活动了。
+
         异常:
             KeyError: Task 不存在。
             DeletionBusyError: workspace 正被其他结构性操作占用。
         """
+        from app.core.tool.multi_agent import derived_report
 
         fork_ids = (
             await asyncio.to_thread(self.collect_fork_descendant_ids, task_id)
             if with_forks
             else frozenset()
         )
+        active_derived: dict[int, TaskRecord] = {}
+
         def collect() -> set[int]:
             task_ids: set[int] = set()
             for root_id in (task_id, *fork_ids):
                 task_ids |= self.collect_task_tree_ids(root_id)
+            for task in self._active_derived(task_ids - active_derived.keys()):
+                active_derived[task.id] = task
             return task_ids
 
-        return await self.stop_then_delete(collect, lambda: self.delete_task(task_id, fork_ids))
+        deleted = await self.stop_then_delete(collect, lambda: self.delete_task(task_id, fork_ids))
+        await asyncio.to_thread(derived_report.report_deleted, active_derived.values(), deleted)
+        return deleted
+
+    def _active_derived(self, task_ids: set[int]) -> list[TaskRecord]:
+        """其中有派生方、最新 Run 仍在活动（运行中或挂起）的 Task。"""
+        found: list[TaskRecord] = []
+        for task_id in task_ids:
+            task = self.get_task(task_id)
+            current = self.require_current_run(task_id)
+            if task.deriver_id() is not None and current is not None and current.status in ACTIVE_RUN_STATUSES:
+                found.append(task)
+        return found
 
     async def stop_then_delete(
         self, collect: Callable[[], set[int]], delete: Callable[[], _T]
@@ -434,7 +474,7 @@ class TaskService:
 
         副作用:
             从 ``conversation_task_contexts`` / ``conversation_runs`` / ``tasks`` 表删除该任务树
-            相关数据；并提交后清理已删任务遗留的
+            相关数据；提交后推送目录失效、清理已删任务遗留的
             运行期缓存并卸载进程内 runtime space。
         """
 
@@ -444,6 +484,7 @@ class TaskService:
                 deleted = self._delete_task_locked(task_id, fork_ids)
         except TimeoutError as exc:
             raise DeletionBusyError("task", task_id) from exc
+        service_depends.get_task_feed().publish_catalog(task.workspace_id, task.task_type)
         log.info(
             "task_deleted",
             extra={
@@ -491,6 +532,7 @@ class TaskService:
                     self._delete_task_after_operations(task_id)
         except TimeoutError as exc:
             raise DeletionBusyError("task", task_id) from exc
+        service_depends.get_task_feed().publish_catalog(task.workspace_id, task.task_type)
         log.info(
             "provisional_task_cleaned",
             extra={
@@ -604,10 +646,11 @@ class TaskService:
 
         后台结果归 Task、比 Run 活得久，必须在这里撤销而不是指望删除前的停止：停止只在有执行者时
         撤销，空闲（Run 已完成、后台命令还在跑）或挂起（等后台结论）的 Task 没有执行者。撤销会
-        终止后台命令；占位行已随删除消失，不结算。
+        终止后台命令，但不等它们退出（执行后端限时收尾）：占位行已随删除消失，不结算，这里还持着
+        workspace 闸门。
         """
-        from app.core.tool.background.background_registry import background_registry
         from app.core.tool.handoff.handoff_registry import handoff_registry
+        from app.tools.tool_handler.terminal.command_results import command_results
 
         service_depends.get_terminal_session_service().delete_task_sessions(task_ids)
         # 浏览器标签页归宿主所有：发后即忘的通知，宿主未连接时标签页也已不在（链路记日志）。
@@ -615,7 +658,7 @@ class TaskService:
             "browser.dropTasks", {"task_ids": sorted(task_ids)}
         )
         for task_id in task_ids:
-            background_registry.drop_task(task_id)
+            command_results.drop_task(task_id)
             handoff_registry.drop_task(task_id)
         self._unload_deleted_task_spaces(set(task_ids))
 

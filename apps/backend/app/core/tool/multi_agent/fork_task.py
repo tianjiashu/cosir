@@ -1,17 +1,16 @@
-"""fork_task 工具：把当前对话复制成一条侧栏可见的分叉对话，交给它一份子任务，结论回投给自己。
+"""fork_task 工具：把当前对话复制成一条侧栏可见的分叉对话，交给它一份子任务，当场完成。
 
 与 ``delegate_task`` 的分工：委派换一个子 Agent 身份、只带任务说明；fork 不换身份，带着到上一条回复为止的
 上下文去做。两者共用派生的其余部分：派生深度（``core.tool.derivation.child_depth``）、以 Agent 消息
-投递任务说明、以父调用的 ``tool_call_id`` 登记后台等待（``child_run_job.run_child``），父 Agent 用
-``wait_messages`` 等结论。
+投递任务说明、Run 落定时由编排向本 Task 汇报（``derived_report``），父 Agent 用 ``wait_messages``
+等汇报。用户在分叉里直接对话开出的 Run 不汇报。
 
 继承的历史是第一人称的，分叉自己分不清哪些事归它：曾把来源没做完的请求接过去，并自认是父会话。
 所以任务说明前先投一条交接通知，写清身份与任务归属；通知不进请求前缀，不影响缓存。
 
 分叉是侧栏对话（``task_type="agent_fork"``，来源记在 ``extra.fork``），不挂在
-所有权子树上：删除父对话时按用户 fork 的规则改挂，而不是一起删掉。父 Task 被上游收回时，登记表
-撤销条目，撤销回调以 ``parent`` 原因停下它还在等的分叉（用户停止父 Task 不停分叉）；结论已回投、
-不再被等的分叉不受影响，用户可以接着聊。
+所有权子树上：删除父对话时按用户 fork 的规则改挂，而不是一起删掉。父 Task 被上游收回时，分叉按
+派生关系一并收回（``TaskRecall``）；用户停止父 Task 不停分叉。
 """
 
 import json
@@ -20,7 +19,6 @@ from typing import Any, ClassVar, cast
 from app.config.logging.logger import log
 from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.args.fork_task_args import ForkTaskArgs
-from app.core.tool.multi_agent.child_agent.child_run_job import run_child
 from app.core.tool.multi_agent.derivation import child_depth
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
@@ -43,14 +41,15 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 _HANDOVER_NOTICE = (
     "You are task {fork_id}, a fork of task {source_id}. The conversation above was copied from "
     "that task as background: requests in it belong to that task, even where they read as your "
-    "own work, so do not pick them up. Your only job is the assignment in the next message. Your "
-    "final reply goes to task {source_id} automatically, so do not send it with send_message. If "
-    "the user later talks to you here, follow the user."
+    "own work, so do not pick them up. Your only job is the assignment in the next message. Each "
+    "time you finish working on it, your final reply is reported to task {source_id} "
+    "automatically, so do not send it with send_message. If the user later talks to you here, "
+    "follow the user; what you do for the user is not reported."
 )
 
 
 class ForkTaskTool(HandlerBase):
-    """把当前对话分叉出去执行一份子任务；一律后台，结论稍后以 ``background_result`` 回投。"""
+    """把当前对话分叉出去执行一份子任务；投递任务说明后当场完成，结论由编排汇报。"""
 
     name: str = TOOL_FORK_TASK
     description: str = (
@@ -60,8 +59,9 @@ class ForkTaskTool(HandlerBase):
         "excluded. Supply a complete new assignment with goal, constraints, necessary new facts and expected deliverable. Use it to split a task into parts that each need this context; "
         "use delegate_task instead when a specialised child agent should do a self-contained "
         "task. The fork does not see anything said here after it starts, and the user can open "
-        "and talk to it. It always runs in the background: wait for its conclusion with "
-        "wait_messages, or keep doing work that does not overlap."
+        "and talk to it. The call returns once the fork is created; the fork reports to you "
+        "automatically with an <agent_message report=...> each time it finishes a run of your "
+        "assignment, so wait for it with wait_messages, or keep doing work that does not overlap."
     )
     args_model: type[ForkTaskArgs] = ForkTaskArgs
     timeout_seconds: ClassVar[float] = 300.0
@@ -77,20 +77,13 @@ class ForkTaskTool(HandlerBase):
         message: str,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-        """复制当前对话、投递子任务并登记等待，返回标 ``background`` 的已提交占位。
+        """复制当前对话、投递交接通知与任务说明，返回已启动的观察。
 
-        失败路径都收口为工具错误观察：源 Task 正被删除等结构性操作占用、父事件循环不可用；
+        失败路径都收口为工具错误观察：源 Task 正被删除等结构性操作占用时提示重试或自己做；
         其余异常记录 ``fork_task_exception`` 后返回通用错误，不向上抛。
         """
         if cancellation_registry.is_cancelled(execution_context.task_id):
             return tool_cancelled(tool_name=self.name)
-        loop = execution_context.event_loop
-        if loop is None or loop.is_closed():
-            return tool_error(
-                self.name,
-                "The parent runtime event loop is unavailable, so the fork cannot be started; "
-                "retry from a normal turn.",
-            )
         try:
             parent_task = self._task_service.get_task(execution_context.task_id)
             # 分叉不换身份：模型、推理强度与关掉的工具组都沿用发起它的这个 Run（它正在运行，
@@ -105,35 +98,28 @@ class ForkTaskTool(HandlerBase):
                 derivation_depth=child_depth(parent_task, "fork"),
             )
 
-            def enqueue() -> None:
-                assignment = prepare_agent_message(
-                    message,
-                    source=MessageSource(task_id=parent_task.id, name=parent_task.title),
-                    agent_id=launch.agent_id,
-                    model_config_id=launch.model_config_id,
-                    reasoning_effort=launch.options.reasoning_effort,
-                    disabled_tool_groups=launch.options.disabled_tool_groups,
-                )
-                # 通知先入队：不唤醒、不开 Run，随任务说明开出的第一个 Run 写在它前面。
-                handover = _HANDOVER_NOTICE.format(fork_id=fork.id, source_id=parent_task.id)
-                task_runtime_spaces.enqueue(
-                    fork.id, TaskMessage.of(NoticeBody(content=handover, notice_kind="fork_handover"))
-                )
-                task_runtime_spaces.enqueue(fork.id, assignment)
-
-            def placeholder() -> ToolObservation:
-                return tool_success(
-                    tool_name=self.name,
-                    content=json.dumps(
-                        {"status": "submitted", "fork_task_id": fork.id, "title": title},
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ),
-                    display_data=self._fork_display_data(title=title, child_task_id=fork.id),
-                )
-
-            return run_child(
-                execution_context, fork.id, label=title, enqueue=enqueue, placeholder=placeholder
+            assignment = prepare_agent_message(
+                message,
+                source=MessageSource(task_id=parent_task.id, name=parent_task.title),
+                agent_id=launch.agent_id,
+                model_config_id=launch.model_config_id,
+                reasoning_effort=launch.options.reasoning_effort,
+                disabled_tool_groups=launch.options.disabled_tool_groups,
+            )
+            # 通知先入队：不唤醒、不开 Run，随任务说明开出的第一个 Run 写在它前面。
+            handover = _HANDOVER_NOTICE.format(fork_id=fork.id, source_id=parent_task.id)
+            task_runtime_spaces.enqueue(
+                fork.id, TaskMessage.of(NoticeBody(content=handover, notice_kind="fork_handover"))
+            )
+            task_runtime_spaces.enqueue(fork.id, assignment)
+            return tool_success(
+                tool_name=self.name,
+                content=json.dumps(
+                    {"status": "started", "fork_task_id": fork.id, "title": title},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                display_data=self._fork_display_data(title=title, child_task_id=fork.id),
             )
         except TaskForkConflictError as exc:
             log.warning(

@@ -4,7 +4,7 @@ from collections.abc import Iterable
 
 from app.config.logging.logger import log
 from app.core.context.tool_call_closure import ContextProtocolError
-from app.core.tool.background.cancel_placeholders import INTERRUPTED_HINT, cancel_placeholders
+from app.core.tool.placeholder_settlement import INTERRUPTED_HINT, cancel_placeholders
 from app.core.workflow.message_queue.message_bodies import NoticeBody
 from app.core.workflow.message_queue.task_message import BackgroundResultBody, TaskMessage
 from app.models import (
@@ -19,8 +19,9 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 # 重启后告诉 Agent 发生了什么：后台工作与终端会话都不跨重启。
 INTERRUPTED_NOTICE = (
     "The backend restarted. All interactive terminal sessions you opened before are gone, "
-    "background commands were stopped, delegated waits were cancelled, and unfinished tool "
-    "calls were interrupted. Re-run what you still need."
+    "background commands were stopped, delegated child agents, forks and Agent Teams that were "
+    "still working were stopped and will not report, and unfinished tool calls were interrupted. "
+    "Re-run what you still need."
 )
 
 
@@ -44,7 +45,7 @@ class RecoverService:
     def recover_after_restart(self) -> None:
         """重启恢复的唯一入口。
 
-        调用方须已 ``task_runtime_spaces.bind_loop`` 并打开 ``background_registry``：本入口会
+        调用方须已 ``task_runtime_spaces.bind_loop`` 并打开 ``command_results``：本入口会
         物化 space（拉起 actor）。
 
         顺序即契约：
@@ -53,20 +54,28 @@ class RecoverService:
            不能被之后的结论唤醒后独自继续）：之后查出的待调度 Task 以收敛后的 Run 状态为准。
         2. 为外部队列有待处理消息或当前 Run 挂起的 Task 物化 space（随之拉起 actor），让重启前
            已到达的消息照常处理、挂起的 Run 照常等唤醒。
-        3. 把重启前还在等结果的占位推到「已中断」，再给受影响的 Task 各投一条重启通知：通知不
-           ``WAKES``，不唤醒、不推进任何 Run，只随它们下次驱动并入上下文。
+        3. 把重启前还在等结果的占位推到「已中断」，再给受影响的 Task 各投一条重启通知：它只唤醒
+           挂起的 Run（在 ``wait_messages`` 上等的工作已经没了，不叫醒就一直挂着），不开新 Run，
+           空闲的 Task 随下次驱动并入。
         """
 
         # coordinator 消费已装配的工具系统，且与 service 层互相引用，惰性导入。
         recovered_runs = self.recover_orphaned_runs()
-        orphan_node_task_ids = service_depends.get_agent_team_coordinator().recover_after_restart()
-        cancelled_node_run_ids = self.cancel_orphaned_team_nodes(orphan_node_task_ids)
+        recovered_teams = service_depends.get_agent_team_coordinator().recover_after_restart()
+        cancelled_node_run_ids = self.cancel_orphaned_team_nodes(
+            [task_id for team in recovered_teams for task_id in team.node_task_ids]
+        )
         dispatch_task_ids = service_depends.get_task_service().list_task_ids_to_dispatch()
         for task_id in dispatch_task_ids:
             task_runtime_spaces.get_or_create(task_id)
-        interrupted_task_ids = {
-            run.task_id for run in recovered_runs
-        } | self.interrupt_placeholders(dispatch_task_ids)
+        recovered_task_ids = {run.task_id for run in recovered_runs}
+        interrupted_task_ids = (
+            recovered_task_ids
+            | self._derivers_of(recovered_task_ids)
+            # 被收敛的 Team 不汇报：主 Task 只能从重启通知得知。
+            | {team.parent_task_id for team in recovered_teams}
+            | self.interrupt_placeholders(dispatch_task_ids)
+        )
         self.notify_interrupted(interrupted_task_ids)
         log.info(
             "backend_restart_recovered",
@@ -80,6 +89,25 @@ class RecoverService:
                 },
             },
         )
+
+    @staticmethod
+    def _derivers_of(task_ids: Iterable[int]) -> set[int]:
+        """被中断的派生 Task 的派生方：重启收敛不经 actor 的落定点、不汇报，派生方只能从通知得知。
+
+        fork 不随来源删除，来源可能已不在：跳过。
+        """
+        tasks = service_depends.get_task_service()
+        derivers: set[int] = set()
+        for task_id in task_ids:
+            deriver_id = tasks.get_task(task_id).deriver_id()
+            if deriver_id is None:
+                continue
+            try:
+                tasks.get_task(deriver_id)
+            except KeyError:
+                continue
+            derivers.add(deriver_id)
+        return derivers
 
     def interrupt_placeholders(self, task_ids: Iterable[int]) -> frozenset[int]:
         """把重启前还在等结果的占位推到「已中断」，返回受影响的 Task。
@@ -95,16 +123,15 @@ class RecoverService:
             (task_id, body.tool_call_id)
             for task_id in task_ids
             for message in queue.pending_nowait(task_id)
-            if isinstance(body := message.body, BackgroundResultBody) and body.tool_call_id is not None
+            if isinstance(body := message.body, BackgroundResultBody)
         )
         return cancel_placeholders(None, None, INTERRUPTED_HINT, exclude=queued)
 
     def notify_interrupted(self, task_ids: Iterable[int]) -> None:
         """给被中断的 Task 各投一条重启通知，等它们下次驱动时并入。
 
-        直接写外部队列而不经 ``task_runtime_spaces.enqueue``：不为一条不推进的通知物化 space、拉起
-        常驻 actor。通知不 ``WAKES``，``dispatch_policy`` 因此不唤醒挂起的 Run、也不开新 Run，启动
-        调度同样不把它算作待处理消息。
+        直接写外部队列而不经 ``task_runtime_spaces.enqueue``：通知不开新 Run，不为它给空闲 Task
+        物化 space、拉起常驻 actor；当前 Run 挂起的 Task 已在第 2 步拉起 actor，入队即被它读到并唤醒。
         """
 
         queue = service_depends.get_task_message_queue()

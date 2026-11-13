@@ -16,7 +16,7 @@ Run 停止不结束交接：等待中的决定按 HITL 契约在 Run 停止后�
 
 事实边界：进程内协调状态，不持久化、不跨重启、重启后不重建——等待中的决定照常保留，工具卡片上的
 交还入口仍在，重放时资源已不在由工具如实报告。变化经单线程通知执行器在锁外回调监听方（lifespan
-注入 snapshot 投影），理由同 ``background_registry``：登记常发生在资源锁内，而投影可能反过来读资源。
+注入 snapshot 投影），理由同 ``command_results``。
 """
 
 from __future__ import annotations

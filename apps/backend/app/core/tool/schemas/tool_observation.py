@@ -57,10 +57,10 @@ class ToolObservation:
             协议上它就是这次调用的最终结果，用户决定后的执行结果另行追加为消息、不覆盖它；投影为
             非终态 ``pending``，执行完成后只更新展示状态。
         background: 非 ``None`` 即本观察是后台占位（结论稍后以 ``background_result`` 回投，
-            见 ``core/tool/background``）。与 HITL 占位一样投影为 ``pending``，
+            见 ``tools/tool_handler/terminal/command_results``）。与 HITL 占位一样投影为 ``pending``，
             结论并入或撤销时只更新占位行的展示状态；原样持久化为占位行 metadata 的 ``background``，
             卡片据此显示「后台执行中」，
-            看板据此列出这项工作。开始时间由 ``BackgroundRegistry.register`` 登记时确定。
+            看板据此列出这项工作。开始时间由 ``CommandResultRegistry.register`` 登记时确定。
         images: 工具产出给模型看的图片（工作区附件的相对路径，见
             ``AttachmentService.save_image``）。
             tool 消息只能是文本，图片由 observe 节点在整批 tool 消息之后以一条 ``tool_image`` user

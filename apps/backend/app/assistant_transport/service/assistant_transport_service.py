@@ -1,4 +1,4 @@
-"""Assistant Transport 的应用服务：用户命令编排、Task 长订阅与 snapshot 读取。
+"""Assistant Transport 的应用服务：用户命令编排、Task 长订阅与历史分页。
 
 本层把 wire 请求翻译成入队与命令，自己不做调度：是否新建、唤醒 Run、何时交接都由 Task 的
 :class:`~app.core.task_actor.TaskActor` 监听外部队列后判定。消息一律经
@@ -18,7 +18,6 @@ from collections.abc import AsyncIterator
 from sqlalchemy.orm import Session
 
 from app.assistant_transport.request import DecisionRequest, SendMessageRequest
-from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.assistant_transport.state.snapshot_window import HistoryPage
 from app.assistant_transport.stream.task_sse_stream import TaskSseStream
 from app.config.logging.logger import log
@@ -244,7 +243,7 @@ class AssistantTransportService:
             data=request.data,
         )
 
-    # ── 订阅与读取 ────────────────────────────────────────────────────────
+    # ── 订阅与历史分页 ────────────────────────────────────────────────────────
 
     def attach(self, task_id: int) -> AsyncIterator[str]:
         """订阅 Task 的 SSE 记录：先推 full 帧（Task 还没有 Run 也推），之后持续推送，跟随最新 Run 的变化。
@@ -254,17 +253,6 @@ class AssistantTransportService:
         """
         self._tasks.get_task(task_id)
         return self._stream.sse_records(task_id)
-
-    def get_state(self, task_id: int) -> ConversationStateSnapshot:
-        """读取 Task 的 canonical snapshot（按历史窗口只带最近一段消息）。
-
-        先认 Task：取快照会为 Task 物化 space 并拉起 actor，不存在的 id 在这里就以 ``KeyError`` 结束。
-
-        异常:
-            KeyError: Task 不存在。
-        """
-        self._tasks.get_task(task_id)
-        return self._states.get_state(task_id)
 
     def get_history_page(self, task_id: int, end: int) -> HistoryPage:
         """完整历史中位置 ``end`` 之前的一页（前端往上翻时取）。

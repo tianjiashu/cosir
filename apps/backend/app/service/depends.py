@@ -16,16 +16,15 @@ from app.config.logging.logger import log
 if TYPE_CHECKING:
     from functools import _lru_cache_wrapper
 
+    from app.assistant_transport.service.assistant_transport_service import (
+        AssistantTransportService,
+    )
     from app.assistant_transport.service.conversation_event_projector import (
         ConversationEventProjector,
     )
     from app.assistant_transport.service.conversation_task_state_service import (
         ConversationTaskStateService,
     )
-    from app.assistant_transport.service.transport_assistant_service import (
-        TransportAssistantService,
-    )
-    from app.assistant_transport.service.user_input_service import UserInputService
     from app.core.tool.multi_agent.agent_team.team_coordinator import AgentTeamCoordinator
     from app.core.workflow.conversation_run_ledger import ConversationRunLedger
     from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
@@ -38,7 +37,8 @@ if TYPE_CHECKING:
     from app.service.model_config.model_discovery_service import ModelDiscoveryService
     from app.service.recover_service import RecoverService
     from app.service.task.task_service import TaskService
-    from app.service.task_status.task_status_feed import TaskStatusFeed
+    from app.service.task_feed.task_feed import TaskFeed
+    from app.service.user_input.user_input_service import UserInputService
     from app.service.workspace.workspace_service import WorkspaceService
     from app.service.workspace_files.file_watch import WorkspaceFileWatcher
     from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
@@ -88,7 +88,7 @@ def close_service_dependencies() -> None:
     """关闭进程内运行时单例（含终端服务与 MCP 连接池）、清空 service 依赖缓存并关闭 SQLite 引擎。
 
     终端服务与 MCP 连接池只在这里经 ``reset_service_dependencies`` 关闭一次；lifespan 必须先关闭
-    ``background_registry``，再调用本函数。
+    ``command_results``，再调用本函数。
     """
 
     from app.storage.store_engines import close_storage
@@ -175,11 +175,16 @@ def get_workspace_crud() -> WorkspaceCrud:
 
 @_process_singleton
 def get_terminal_session_service() -> TerminalSessionService:
-    """返回进程级 terminal session service 单例。"""
+    """返回进程级 terminal session service 单例；会话条目的变化接到 Transport snapshot 重投影。"""
 
     from app.tools.terminal_runtime.session.session_service import TerminalSessionService
 
-    return TerminalSessionService()
+    # 通知时才取状态服务：两个单例互不在构造期依赖。
+    return TerminalSessionService(
+        on_sessions_changed=lambda task_id: (
+            get_conversation_task_state_service().refresh_terminal_sessions(task_id)
+        )
+    )
 
 
 @_process_singleton
@@ -262,11 +267,11 @@ def get_workspace_files_service() -> WorkspaceFilesService:
 
 
 @_process_singleton
-def get_task_status_feed() -> TaskStatusFeed:
-    """进程级 Task 执行状态推送；Run 事件经 projector 触发发布。"""
-    from app.service.task_status.task_status_feed import TaskStatusFeed
+def get_task_feed() -> TaskFeed:
+    """进程级 Task 推送（状态与目录失效）；状态与 Run 开始经 projector 发布，目录写入方提交后发布。"""
+    from app.service.task_feed.task_feed import TaskFeed
 
-    return TaskStatusFeed()
+    return TaskFeed()
 
 
 @_process_singleton
@@ -326,13 +331,13 @@ def get_conversation_task_context_crud() -> ConversationTaskContextCrud:
 
 
 @_process_singleton
-def get_transport_assistant_service() -> TransportAssistantService:
-    """返回进程级 Assistant Transport snapshot 订阅 service 单例。"""
-    from app.assistant_transport.service.transport_assistant_service import (
-        TransportAssistantService,
+def get_assistant_transport_service() -> AssistantTransportService:
+    """返回进程级 Assistant Transport 应用服务（用户命令编排、Task 长订阅与 snapshot 读取）。"""
+    from app.assistant_transport.service.assistant_transport_service import (
+        AssistantTransportService,
     )
 
-    return TransportAssistantService()
+    return AssistantTransportService()
 
 
 @_process_singleton
@@ -381,7 +386,7 @@ def get_task_message_queue() -> TaskMessageQueue:
 def get_user_input_service() -> UserInputService:
     """返回进程级用户输入解析服务单例（无进程内状态）。"""
 
-    from app.assistant_transport.service.user_input_service import UserInputService
+    from app.service.user_input.user_input_service import UserInputService
 
     return UserInputService()
 
@@ -422,9 +427,7 @@ def reset_service_dependencies() -> None:
         storage 路径后应调用。
     """
 
-    from app.assistant_transport.service.conversation_task_state_service import (
-        ConversationTaskStateService,
-    )
+    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
     if get_workspace_file_watcher.cache_info().currsize:
         get_workspace_file_watcher().close()
@@ -433,7 +436,10 @@ def reset_service_dependencies() -> None:
         get_workspace_files_service().close()
     get_workspace_files_service.cache_clear()
     _shutdown_cached_runtime_before_reset()
-    ConversationTaskStateService.clear_process_state()
+    # 订阅与快照工作副本都是易失的进程状态：同一解释器里重新初始化存储后不得继承上一次的副本。
+    if get_conversation_task_state_service.cache_info().currsize:
+        get_conversation_task_state_service().close_subscribers()
+    task_runtime_spaces.close()
     for singleton in _SINGLETONS:
         singleton.cache_clear()
 

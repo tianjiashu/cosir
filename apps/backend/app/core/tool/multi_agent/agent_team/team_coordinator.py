@@ -12,9 +12,7 @@ from typing import Any, cast
 from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
-from app.core.tool.background.background_job import BackgroundConclusion
-from app.core.tool.background.background_registry import DropReason, background_registry
-from app.core.tool.background.cancel_placeholders import USER_CANCELLED_HINT
+from app.core.tool.multi_agent import derived_report
 from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.agent_team.agent_team_result import team_result_payload
 from app.core.tool.multi_agent.agent_team.agent_team_run_archive_service import (
@@ -34,7 +32,6 @@ from app.models.conversation_input import MessageSource
 from app.models.enums.agent_team_run_end_reason import AgentTeamRunEndReason
 from app.models.enums.agent_team_run_status import AgentTeamRunStatus
 from app.models.enums.conversation_run_status import ConversationRunStatus
-from app.models.message_metadata import BackgroundWork
 from app.models.task_extra import TaskExtra, TaskNodeConfig
 from app.models.task_kind import TaskType
 from app.service.depends import (
@@ -97,30 +94,45 @@ def _budget_reminder(remaining_rounds: int, max_rounds: int) -> str | None:
     return None
 
 
-@dataclass
-class _TeamExecution:
-    """仅由后端事件循环操作的执行句柄。待提交的启动、停止请求与节点等待共用一个生命周期。"""
+@dataclass(frozen=True)
+class RecoveredTeamRun:
+    """重启时被收敛的一次 TeamRun：主 Task 要得到重启通知，节点 Task 的挂起 Run 要取消。"""
 
     parent_task_id: int
-    ready: asyncio.Event = field(default_factory=asyncio.Event)
+    node_task_ids: list[int]
+
+
+@dataclass
+class _TeamExecution:
+    """仅由后端事件循环操作的执行句柄：停止请求与节点等待共用一个生命周期。"""
+
+    parent_task_id: int
+    # 提出方案的那次 ``agent_team`` 调用：撤回那一回合时据它找到这个 Team。
+    tool_call_id: str
     stop_reason: AgentTeamRunEndReason | None = None
+    # 落定后不向主 Task 汇报：上游收回、撤回、删除与关闭停下的 Team 已没人要它的结论。
+    silent: bool = False
     changed: asyncio.Future[None] = field(
         default_factory=lambda: asyncio.get_running_loop().create_future()
     )
     node_task_id: int | None = None
 
-    def request_stop(self, reason: AgentTeamRunEndReason, *, withdrawn: bool) -> None:
+    def request_stop(self, reason: AgentTeamRunEndReason, *, silent: bool) -> None:
         self.stop_reason = self.stop_reason or reason
+        # 先被用户单停、随后又被收回或关闭：以「不汇报」为准。
+        self.silent = self.silent or silent
         # 唤醒在等节点变化的执行，包括先单停、随后又关闭后端的情况。
         self.changed.set_result(None)
         self.changed = asyncio.get_running_loop().create_future()
-        # 已撤销的调用无需等回执。单独停止仍要先持久化回执，才能回投取消档案。
-        if withdrawn:
-            self.ready.set()
 
 
 class AgentTeamCoordinator:
-    """持有已批准 Team 的执行任务，按节点串行推进；TeamRun 保存执行状态，登记表负责交付。"""
+    """持有已批准 Team 的执行任务，按节点串行推进；TeamRun 保存执行状态，落定时由它向主 Task 汇报。
+
+    Team 是多 Agent 编排，不是后台执行的工具：批准即开跑，不登记后台结果、不等启动回执；结论在
+    :meth:`_execute` 的唯一收尾处经 ``derived_report.report_team_settled`` 交给主 Task。进程内只按
+    ``team_run_id`` 记执行任务（``_active``），停止都经 :meth:`_TeamExecution.request_stop`。
+    """
 
     def __init__(self) -> None:
 
@@ -132,42 +144,30 @@ class AgentTeamCoordinator:
         self._ledger = get_conversation_run_ledger()
         self._run_archive_service = AgentTeamRunArchiveService()
 
-        self._active: dict[tuple[int, str], tuple[_TeamExecution, asyncio.Task[None]]] = {}
+        self._active: dict[int, tuple[_TeamExecution, asyncio.Task[None]]] = {}
+        # 执行任务所在的事件循环（首次接手时记下）；工作线程里的撤回经它投递停止请求。
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._closing = False
 
-    async def _stage(self, row: AgentTeamRunModel, run_id: int) -> BackgroundWork:
-        """在后端事件循环登记已批准的作业，回执提交后才允许它调度节点。"""
+    async def _start(self, row: AgentTeamRunModel) -> None:
+        """在后端事件循环接手已批准的 TeamRun 并开始调度节点。"""
         if self._closing:
             raise RuntimeError("backend is shutting down")
-        execution = _TeamExecution(row.parent_task_id)
-        loop = asyncio.get_running_loop()
-
-        def cancel(reason: DropReason) -> None:
-            end_reason = {
-                "user": AgentTeamRunEndReason.CANCELLED,
-                "withdraw": AgentTeamRunEndReason.CANCELLED,
-                "parent": AgentTeamRunEndReason.PARENT_CANCELLED,
-                "shutdown": AgentTeamRunEndReason.RUNTIME_RESTARTED,
-            }[reason]
-            loop.call_soon_threadsafe(
-                lambda: execution.request_stop(end_reason, withdrawn=reason != "user")
-            )
-
-        work = background_registry.register(
-            row.tool_call_id, task_id=row.parent_task_id, run_id=run_id, kind="agent_team",
-            label=row.configuration_snapshot_json["name"], on_cancel=cancel,
-            after_commit=execution.ready.set, reports_user_stop=True,
+        execution = _TeamExecution(row.parent_task_id, row.tool_call_id)
+        self._loop = asyncio.get_running_loop()
+        task = self._loop.create_task(
+            self._execute(row, execution), name=f"agent-team-{row.id}"
         )
-        task = loop.create_task(self._execute(row, execution), name=f"agent-team-{row.id}")
-        self._active[row.parent_task_id, row.tool_call_id] = execution, task
-        return work
+        self._active[row.id] = execution, task
 
-    def prepare_background(
-        self, row: AgentTeamRunModel, run_id: int, loop: asyncio.AbstractEventLoop
-    ) -> BackgroundWork:
-        """工具线程只等事件循环接手作业。登记失败就收敛已确认的 TeamRun。"""
+    def start_approved(self, row: AgentTeamRunModel, loop: asyncio.AbstractEventLoop) -> None:
+        """工具线程只等事件循环接手。接手失败就收敛已确认的 TeamRun。
+
+        批准即开跑，不等批准结果写进主 Task 的上下文：结论按 Task 汇报，主 Agent 即使没看到批准回执
+        （批准所在的 Run 随后失败），也会从汇报里得知 Team 的结局。
+        """
         try:
-            return asyncio.run_coroutine_threadsafe(self._stage(row, run_id), loop).result()
+            asyncio.run_coroutine_threadsafe(self._start(row), loop).result()
         except Exception:
             self._team_run_crud.update_status_if_in(
                 row.id, AgentTeamRunStatus.FAILED.value, (AgentTeamRunStatus.RUNNING.value,),
@@ -177,34 +177,36 @@ class AgentTeamCoordinator:
             raise
 
     async def _execute(self, row: AgentTeamRunModel, execution: _TeamExecution) -> None:
-        """完成节点收尾及档案写入后，尝试一次交付；被撤销的登记自动丢弃迟到结论。"""
+        """完成节点收尾及档案写入后，向主 Task 汇报一次：Team 落定的唯一收尾处。
+
+        被收回、撤回、删除或关闭停下的不汇报（``execution.silent``）；收尾本身失败时按失败汇报，
+        主 Agent 不会一直等下去。汇报失败只记录。
+        """
         try:
-            await execution.ready.wait()
             final = await self._drive(row, execution)
             payload = await asyncio.to_thread(team_result_payload, final)
-            user_stopped = final.end_reason == AgentTeamRunEndReason.CANCELLED.value
-            if user_stopped:
-                payload["hint"] = (
-                    "Review completed nodes in the archive. "
-                    "Do not resubmit without asking the user."
-                )
-            conclusion = BackgroundConclusion(
-                payload, cancel_hint=USER_CANCELLED_HINT if user_stopped else None,
-            )
         except Exception as exc:
-            log.exception("agent_team_background_failed", extra={
-                "msg": "Team 后台执行收尾失败",
+            log.exception("agent_team_execution_failed", extra={
+                "msg": "Team 执行收尾失败",
                 "data": {"team_run_id": row.id, "tool_call_id": row.tool_call_id},
             })
-            conclusion = BackgroundConclusion({
-                "team_run_id": row.id, "status": "failed", "error": str(exc),
-            })
+            final = await asyncio.to_thread(self._team_run_crud.get_by_id, row.id)
+            payload = {"team_run_id": row.id, "status": "failed", "error": str(exc)}
         try:
-            await asyncio.to_thread(
-                background_registry.complete, row.parent_task_id, row.tool_call_id, conclusion
-            )
+            if not execution.silent:
+                await asyncio.to_thread(
+                    derived_report.report_team_settled,
+                    final,
+                    payload,
+                    stopped_by_user=final.end_reason == AgentTeamRunEndReason.CANCELLED.value,
+                )
+        except Exception:
+            log.exception("agent_team_report_failed", extra={
+                "msg": "Team 落定后向主 Task 汇报失败",
+                "data": {"team_run_id": row.id, "parent_task_id": row.parent_task_id},
+            })
         finally:
-            self._active.pop((row.parent_task_id, row.tool_call_id), None)
+            self._active.pop(row.id, None)
 
     async def _drive(
         self, team_run: AgentTeamRunModel, execution: _TeamExecution,
@@ -501,7 +503,8 @@ class AgentTeamCoordinator:
             changed = actor.state_changed
             control = execution.changed
             if actor.stopped.is_set():
-                execution.request_stop(AgentTeamRunEndReason.CANCELLED, withdrawn=True)
+                # 节点的调度器停了只会是删除：没人要这个 Team 的结论。
+                execution.request_stop(AgentTeamRunEndReason.CANCELLED, silent=True)
                 return None
             current = await asyncio.to_thread(self._task_service.require_current_run, node.task_id)
             if current is not None and current.id not in known:
@@ -535,22 +538,21 @@ class AgentTeamCoordinator:
     async def drain_for_deletion(self, task_ids: set[int]) -> None:
         """删除闸门外停止受影响的协调任务并等到收尾，之后才能删除节点和档案。"""
         waiting = []
-        for (owner, call_id), (execution, task) in self._active.items():
+        for execution, task in self._active.values():
             if execution.parent_task_id in task_ids:
-                background_registry.withdraw(owner, call_id, reason="parent")
-                execution.request_stop(AgentTeamRunEndReason.PARENT_CANCELLED, withdrawn=True)
+                execution.request_stop(AgentTeamRunEndReason.PARENT_CANCELLED, silent=True)
                 waiting.append(task)
             elif execution.node_task_id in task_ids:
-                execution.request_stop(AgentTeamRunEndReason.CANCELLED, withdrawn=True)
+                execution.request_stop(AgentTeamRunEndReason.CANCELLED, silent=True)
                 waiting.append(task)
         if waiting:
             await asyncio.gather(*waiting)
 
     async def aclose(self) -> None:
-        """登记表已关闭，停止并等到全部执行退出，再关闭 actor 与服务依赖。"""
+        """停止并等到全部执行退出（不汇报），再关闭 actor 与服务依赖。"""
         self._closing = True
         for execution, _ in self._active.values():
-            execution.request_stop(AgentTeamRunEndReason.RUNTIME_RESTARTED, withdrawn=True)
+            execution.request_stop(AgentTeamRunEndReason.RUNTIME_RESTARTED, silent=True)
         await asyncio.gather(*(task for _, task in self._active.values()))
 
     def _resolve_node_tool_schemas(self, allowed_tools: list[str]) -> list[dict[str, object]]:
@@ -651,21 +653,51 @@ class AgentTeamCoordinator:
 
         return self._cancel_where(involved, AgentTeamRunEndReason.CANCELLED)
 
-    def withdraw_pending_for_calls(self, parent_task_id: int, tool_call_ids: set[str]) -> int:
-        """撤回回合时放弃这一回合提出、仍待确认的方案，返回收敛的数量。
+    def withdraw_for_calls(self, parent_task_id: int, tool_call_ids: frozenset[str]) -> frozenset[int]:
+        """撤回回合时放弃这一回合提出的方案：待确认的直接收敛，运行中的停下且不汇报；返回涉及的
+        TeamRun id（调用方据此删掉已入队、还没并入的汇报）。
 
-        待确认的方案没有后台登记，撤回后的卡片已移出上下文、决定入口也找不到它，不在这里收敛就会
-        一直停在 ``pending``。已批准运行中的 Team 经后台登记的撤销回调停下
-        （``background_registry``），这里只碰 ``pending``。自建写事务，调用方须在自己的写事务之外调用。
+        撤回后的卡片已移出上下文、决定入口也找不到它，待确认的不在这里收敛就会一直停在 ``pending``。
+        工作线程里调用：运行中的停止经事件循环投递，只发起、不等。自建写事务，调用方须在自己的写事务
+        之外调用。
         """
         if not tool_call_ids:
-            return 0
-        return self._cancel_where(
+            return frozenset()
+        self._cancel_where(
             lambda row: row.parent_task_id == parent_task_id
             and row.tool_call_id in tool_call_ids
             and row.status == AgentTeamRunStatus.PENDING.value,
             AgentTeamRunEndReason.CANCELLED,
         )
+        running = {
+            team_run_id: execution
+            for team_run_id, (execution, _) in list(self._active.items())
+            if execution.parent_task_id == parent_task_id and execution.tool_call_id in tool_call_ids
+        }
+        if running and self._loop is not None:
+            for execution in running.values():
+                self._loop.call_soon_threadsafe(
+                    lambda execution=execution: execution.request_stop(
+                        AgentTeamRunEndReason.CANCELLED, silent=True
+                    )
+                )
+        return frozenset(
+            row.id
+            for row in self._team_run_crud.list_by_parent_task(parent_task_id)
+            if row.tool_call_id in tool_call_ids
+        )
+
+    def cancel_by_user(self, team_run_id: int) -> bool:
+        """用户单独停止一个运行中的 Team：节点与档案收尾后，主 Task 只得到一条停止通知（只唤醒它
+        挂起的 Run）。
+
+        只在事件循环线程调用（HTTP 入口）。没有这个运行中的 Team（已落定或不存在）时返回 ``False``。
+        """
+        active = self._active.get(team_run_id)
+        if active is None:
+            return False
+        active[0].request_stop(AgentTeamRunEndReason.CANCELLED, silent=False)
+        return True
 
     async def cancel_for_parent_task(self, parent_task_id: int) -> None:
         """取消主 Agent Task 的全部活动 Team：待确认方案与运行中的 Team。
@@ -681,10 +713,10 @@ class AgentTeamCoordinator:
         即使确认与停止同时发生也不会再开始节点。
         """
         tracked = set()
-        for (_, call_id), (execution, _) in self._active.items():
+        for execution, _ in self._active.values():
             if execution.parent_task_id == parent_task_id:
-                tracked.add(call_id)
-                execution.request_stop(AgentTeamRunEndReason.PARENT_CANCELLED, withdrawn=True)
+                tracked.add(execution.tool_call_id)
+                execution.request_stop(AgentTeamRunEndReason.PARENT_CANCELLED, silent=True)
         await asyncio.to_thread(
             self._cancel_where,
             lambda row: row.parent_task_id == parent_task_id and row.tool_call_id not in tracked,
@@ -707,16 +739,16 @@ class AgentTeamCoordinator:
                 cancelled += 1
         return cancelled
 
-    def recover_after_restart(self) -> list[int]:
-        """把后端重启遗留的运行中 Team 收敛为 cancelled，不自动重放；返回这些 TeamRun 的节点
-        Task id。
+    def recover_after_restart(self) -> list[RecoveredTeamRun]:
+        """把后端重启遗留的运行中 Team 收敛为 cancelled，不自动重放、不汇报；返回被收敛的 TeamRun
+        （主 Task 要得到重启通知，节点 Task 要处理挂起的 Run）。
 
         待确认（pending）的 TeamRun 保留：它挂在仍处于等待态的主 Run 上，重启后用户照常批准、
         驳回或取消；收敛它会让仍可点击的审批卡片必然失败。节点 Task 交给 ``RecoverService``：挂起的
         节点 Run 再也没有 Coordinator 等它，要先取消，免得被重启结论或终端唤醒后独自继续。
         """
 
-        node_task_ids: list[int] = []
+        recovered: list[RecoveredTeamRun] = []
         queue = get_task_message_queue()
         for row in self._team_run_crud.list_active():
             state = AgentTeamRunState.model_validate(row.state_json)
@@ -733,5 +765,5 @@ class AgentTeamCoordinator:
                         ):
                             queue.withdraw(session, node_id, cast(int, message.id))
             if self._cancel_if_active(row.id, AgentTeamRunEndReason.RUNTIME_RESTARTED) is not None:
-                node_task_ids.extend(nodes)
-        return node_task_ids
+                recovered.append(RecoveredTeamRun(row.parent_task_id, nodes))
+        return recovered

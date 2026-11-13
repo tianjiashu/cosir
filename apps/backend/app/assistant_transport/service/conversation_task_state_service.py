@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from threading import RLock
 from typing import cast
@@ -41,6 +41,7 @@ from app.config.logging.logger import log
 from app.core.events import RunStatusChangedEvent, ToolCallStatusChangedEvent, WorkflowEvent
 from app.core.workflow.message_queue.task_message import UserInputBody
 from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.tools.tool_handler.terminal.command_results import command_results
 
@@ -183,7 +184,7 @@ class ConversationTaskStateService:
                 return
             for mutation in mutations:
                 mutation.apply_to(state)
-            validate_mutated(state, mutations)
+            self._validate_or_discard(space, state, mutations)
             self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=mutations))
 
     @staticmethod
@@ -252,7 +253,7 @@ class ConversationTaskStateService:
                     mutation = ConversationStateMutation("set", ("background_tasks",), background)
                     mutation.apply_to(state)
                     mutations.append(mutation)
-            validate_mutated(state, mutations)
+            self._validate_or_discard(space, state, mutations)
             change = TransportFrame(task_id=task_id, kind="mutation", mutations=tuple(mutations))
             if mutations:
                 self._publish(change)
@@ -374,6 +375,24 @@ class ConversationTaskStateService:
         for subscriber in subscribers:
             with suppress(RuntimeError):
                 subscriber.loop.call_soon_threadsafe(subscriber.close)
+
+    @staticmethod
+    def _validate_or_discard(
+        space: TaskRuntimeSpace,
+        state: ConversationStateSnapshot,
+        mutations: Sequence[ConversationStateMutation],
+    ) -> None:
+        """变更已写进工作副本后的契约检查；须持 ``_lock`` 调用。
+
+        违约时丢弃工作副本再抛出：读取不再校验，留着它会把违约内容发给之后的读取方；丢弃后下次
+        读取或事件到达时按 canonical 重建（重建结果在物化时整份校验）。违约的变更不发布。
+        """
+
+        try:
+            validate_mutated(state, mutations)
+        except ValueError:
+            space.unload_snapshot()
+            raise
 
     def _materialize(self, task_id: int) -> ConversationStateSnapshot:
         """工作副本的加载函数：重建并整份校验一次；之后由 ``validate_mutated`` 守住每次变更。"""

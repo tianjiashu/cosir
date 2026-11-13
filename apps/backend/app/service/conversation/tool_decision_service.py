@@ -1,6 +1,6 @@
 """HITL 决定入队：对一次等待用户决定的工具调用提交决定的唯一入口。
 
-调用方是用户经 HTTP 决定入口（``TransportAssistantService.decide``）：校验与入队放在 service 层，
+调用方是用户经 HTTP 决定入口（``AssistantTransportService.decide``）：校验与入队放在 service 层，
 而不是只属于 HTTP 用户路径的 Transport 编排里——工具层不依赖 ``assistant_transport``。
 """
 
@@ -12,10 +12,10 @@ from pydantic import ValidationError
 
 from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
-from app.core.task_actor import SessionConflictError
 from app.core.tool.schemas import ToolDefinition
 from app.core.workflow.message_queue.task_message import DecisionBody, TaskMessage
 from app.models.errors.input_errors import UserInputRejectedError
+from app.models.errors.task_command_errors import TaskCommandConflictError
 from app.service import depends as service_depends
 from app.storage.store_engines import main_session_factory
 from app.storage.write_transaction import begin_immediate
@@ -45,7 +45,7 @@ class ToolDecisionService:
         「确认决定 + 占位推到 running」的事务互斥，两次读取看到的是同一时刻的事实。
 
         异常:
-            SessionConflictError: ``DECISION_NOT_AWAITED`` / ``DECISION_ALREADY_SUBMITTED``。
+            TaskCommandConflictError: ``DECISION_NOT_AWAITED`` / ``DECISION_ALREADY_SUBMITTED``。
             UserInputRejectedError: ``DECISION_DATA_INVALID``。
             KeyError: Task 不存在（入队时）。
         """
@@ -54,12 +54,12 @@ class ToolDecisionService:
         with begin_immediate(main_session_factory()) as session:
             tool_name = context.awaiting_decision_tool(task_id, tool_call_id, session=session)
             if tool_name is None:
-                raise SessionConflictError("DECISION_NOT_AWAITED", "该操作已不在等待决定，请刷新后重试")
+                raise TaskCommandConflictError("DECISION_NOT_AWAITED", "该操作已不在等待决定，请刷新后重试")
             if any(
                     isinstance(message.body, DecisionBody) and message.body.tool_call_id == tool_call_id
                     for message in queue.pending_nowait(task_id, session=session)
             ):
-                raise SessionConflictError("DECISION_ALREADY_SUBMITTED", "该决定已提交，正在处理")
+                raise TaskCommandConflictError("DECISION_ALREADY_SUBMITTED", "该决定已提交，正在处理")
             # 等待占位只会由已注册的 HITL 工具写入，定义必然存在。
             definition = cast(ToolDefinition, get_tool_registry().get_tool_definition(tool_name))
             payload = None

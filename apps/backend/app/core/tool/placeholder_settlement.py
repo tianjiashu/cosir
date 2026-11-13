@@ -15,6 +15,7 @@ from typing import cast
 
 from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
+from app.core.events.event_sink import event_sink
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import ToolMessageMetadata
 from app.service import depends as service_depends
@@ -52,7 +53,7 @@ def cancel_placeholders(
     )
     from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
-    projector = service_depends.get_conversation_event_projector()
+    sink = event_sink()
     for record in settled:
         tool_call_id = str(record.message.get("tool_call_id"))
         space = task_runtime_spaces.get(record.task_id)
@@ -60,7 +61,7 @@ def cancel_placeholders(
             continue
         metadata = cast(ToolMessageMetadata, record.metadata)
         try:
-            projector.process(
+            sink(
                 ToolCallStatusChangedEvent(
                     task_id=record.task_id,
                     run_id=record.run_id,

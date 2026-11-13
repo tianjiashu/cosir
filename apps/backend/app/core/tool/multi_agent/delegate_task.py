@@ -1,11 +1,9 @@
-"""delegate_task 工具 handler：把一次委派请求落地为 child Task/Run 并启动 child workflow。
+"""delegate_task 工具 handler：把一次委派落地为一个子 Agent Task，投递任务说明后当场完成。
 
-职责：解析 child Agent profile、建立 child Task，经 ``task_runtime_spaces.enqueue`` 投递首条输入（由
-child Task 的调度 actor 新开并启动 child Run），返回「已提交」观察（携带 child locator）。
-
-不负责：child workflow 的实际运行与完成观测（结论由调度层以消息回投，父侧用 ``wait_messages``
-挂起等待，或 ``task_status`` 查询）；参数校验与准入门禁（``ToolAccessGate``）；委派展示数据构造
-（``DelegateTaskTool._delegation_display_data``）。
+委派是多 Agent 编排，不是后台执行的工具：调用在建好子 Task、投递完任务说明时就完成了，之后的进展
+属于子 Task 自己。它的每个 Run 落定时由编排把结论以 Agent 消息汇报给本 Task
+（``core.tool.multi_agent.derived_report``）；父侧用 ``wait_messages`` 挂起等待，或 ``task_status``
+查询。参数校验与准入门禁归 ``ToolAccessGate``。
 """
 import copy
 import json
@@ -18,7 +16,6 @@ from app.core.agents.agent_profile import (
 )
 from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
-from app.core.tool.multi_agent.child_agent.child_run_job import run_child
 from app.core.tool.multi_agent.derivation import child_depth
 from app.core.tool.multi_agent.task_tool_scope import tools_for_task
 from app.core.tool.results.tool_cancelled import tool_cancelled
@@ -34,6 +31,7 @@ from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
 from app.models.conversation_input import MessageSource
+from app.models.task_extra import TaskExtra
 from app.models.task_kind import TaskType
 from app.service.depends import (
     get_conversation_run_ledger,
@@ -43,12 +41,7 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 
 class DelegateTaskTool(HandlerBase):
-    """把一次 delegate_task 调用落地为已启动的 child Task/Run。
-
-    职责：解析 child profile、创建 child Task 并经调度入口启动 Run，全程以
-    ``ToolObservation`` 返回结果。不等待 child 执行结束——子 Task 的每次 Run 到终态，由它的 actor 以
-    ``background_result`` 消息回投父 Task，父侧用 ``wait_messages`` 挂起等待或 ``task_status`` 查询。
-    """
+    """把一次 delegate_task 调用落地为已启动的子 Agent Task；不等子 Task 执行（结论见模块说明）。"""
 
     name: str = TOOL_DELEGATE_TASK
     # HandlerBase 要求提供类级描述；描述与工具集、workspace 候选无关（子 Agent 目录由系统提示词
@@ -56,10 +49,11 @@ class DelegateTaskTool(HandlerBase):
     description: str = (
         "Delegate a focused subtask to a child agent. It runs its own loop with only your "
         "message as input — it cannot see this conversation — so the message must be a "
-        "self-contained task contract, and the child returns only a final summary. "
-        "Delegation always runs in the background: after creating the child, "
-        "wait for it with wait_messages or continue other non-interfering work. A failed "
-        "delegation "
+        "self-contained task contract. The call returns as soon as the child task is created; "
+        "the child then reports to you automatically with an <agent_message report=...> each "
+        "time it finishes a run, so wait for it with wait_messages or continue other "
+        "non-interfering work. To give it more instructions later, use send_message to its task. "
+        "A failed delegation "
         "is terminal — adjust the contract or ask the user rather than retrying identical "
         "arguments. Keep inputs within the stated length limits; an oversized call is "
         "rejected as a tool error, so trim or split the task."
@@ -95,9 +89,7 @@ class DelegateTaskTool(HandlerBase):
             message: str,
             execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-        """委派一个自由文本子任务给指定 child Agent，并返回启动结果观察。
-
-        一律后台：立即返回占位，子 Run 的结论稍后回投（见 ``child_run_job.run_child``）。
+        """委派一个自由文本子任务给指定 child Agent，投递任务说明后返回已启动的观察。
 
         参数:
             child_agent_id: 要运行的 child agent profile 标识。
@@ -106,9 +98,8 @@ class DelegateTaskTool(HandlerBase):
             execution_context: 父工具执行边界，提供工作区根与父事件循环。
 
         返回:
-            child 启动成功时返回携带稳定 locator 的 success 观察；run 已取消、child 无法解析、
-            父事件循环不可用或启动失败时返回确定性的
-            error/cancelled 观察。
+            child 启动成功时返回携带稳定 locator 的 success 观察；run 已取消、child 无法解析或
+            启动失败时返回确定性的 error/cancelled 观察。
 
         异常:
             无。参数校验由 ``ToolAccessGate`` 在准入门禁层统一完成（单一收口），本方法信任已
@@ -116,8 +107,8 @@ class DelegateTaskTool(HandlerBase):
             ``delegate_task_exception`` 日志，不向上抛异常。
 
         副作用:
-            创建 child Task，并在父 Run 的事件循环上经调度入口新开 running Run 并启动（不等待
-            child 执行结束）；写日志。
+            创建 child Task（记下派生它的这次调用），经调度入口投递任务说明，由子 Task 的 actor
+            开出 Run（不等待 child 执行结束）；写日志。
         """
 
         if cancellation_registry.is_cancelled(execution_context.task_id):
@@ -155,14 +146,6 @@ class DelegateTaskTool(HandlerBase):
                 f"before retrying.",
             )
 
-        loop = execution_context.event_loop
-        if loop is None or loop.is_closed():
-            return tool_error(
-                self.name,
-                "The parent runtime event loop is unavailable, so the child run "
-                "cannot be started; retry from a normal turn.",
-            )
-
         try:
             from app.config.configuration import get_tool_registry
 
@@ -179,6 +162,7 @@ class DelegateTaskTool(HandlerBase):
                 title=agent_name,
                 task_type=TaskType.AGENT_TASK,
                 parent_task_id=execution_context.task_id,
+                extra=TaskExtra(deriving_call_id=execution_context.tool_call_id),
                 tool_schemas=[
                     copy.deepcopy(definition.to_model_tool_definition())
                     for definition in child_final_task_tools
@@ -191,46 +175,35 @@ class DelegateTaskTool(HandlerBase):
                                 else None)
             child_agent_model_config_id = child_agent_profile.model_config_id
             model_config_id = child_agent_model_config_id or parent_run.model_config_id
-            def enqueue() -> None:
-                # 子 Task 的 actor 新开 Run；结论由 ``run_child`` 等子 Task 落定后读取。任务说明是
-                # 父 Agent 说的话，以 Agent 消息投递：子 Agent 不会把它读成用户的请求。
-                task_runtime_spaces.enqueue(
-                    child_task.id,
-                    prepare_agent_message(
-                        message,
-                        source=MessageSource(task_id=parent_task.id, name=parent_task.title),
-                        agent_id=child_agent_id,
-                        model_config_id=model_config_id,
-                        reasoning_effort=reasoning_effort,
-                    ),
-                )
-
-            def placeholder() -> ToolObservation:
-                return tool_success(
-                    tool_name=self.name,
-                    content=json.dumps(
-                        {
-                            "status": "submitted",
-                            "child_task_id": child_task.id,
-                            "child_agent_id": child_agent_id,
-                            "agent_name": agent_name,
-                        },
-                        separators=(",", ":"),
-                    ),
-                    display_data=self._delegation_display_data(
-                        title=agent_name,
-                        child_agent_id=child_agent_id,
-                        child_task_id=child_task.id,
-                        role=child_agent_profile.role,
-                    ),
-                )
-
-            return run_child(
-                execution_context,
+            # 子 Task 的 actor 新开 Run。任务说明是父 Agent 说的话，以 Agent 消息投递：子 Agent 不会
+            # 把它读成用户的请求。
+            task_runtime_spaces.enqueue(
                 child_task.id,
-                label=agent_name,
-                enqueue=enqueue,
-                placeholder=placeholder,
+                prepare_agent_message(
+                    message,
+                    source=MessageSource(task_id=parent_task.id, name=parent_task.title),
+                    agent_id=child_agent_id,
+                    model_config_id=model_config_id,
+                    reasoning_effort=reasoning_effort,
+                ),
+            )
+            return tool_success(
+                tool_name=self.name,
+                content=json.dumps(
+                    {
+                        "status": "started",
+                        "child_task_id": child_task.id,
+                        "child_agent_id": child_agent_id,
+                        "agent_name": agent_name,
+                    },
+                    separators=(",", ":"),
+                ),
+                display_data=self._delegation_display_data(
+                    title=agent_name,
+                    child_agent_id=child_agent_id,
+                    child_task_id=child_task.id,
+                    role=child_agent_profile.role,
+                ),
             )
 
         except Exception as e:
@@ -291,7 +264,7 @@ class DelegateTaskTool(HandlerBase):
 
         返回:
             使用进程内线程执行、同一回复内多个委派可工具级并行的 delegate_task 工具定义；
-            工具观察仅确认 child Run 已注册，不等待 child workflow 完成。
+            工具观察仅确认 child Task 已建好、任务说明已投递，不等待 child workflow 完成。
 
         异常:
             无。

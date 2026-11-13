@@ -38,9 +38,10 @@ class SendMessageTool(HandlerBase):
     name: str = TOOL_SEND_MESSAGE
     description: str = (
         "Send a message to another task in this workspace using its task_id. The message is "
-        "delivered once; sending does not wait for or automatically return a reply. "
-        "Reply explicitly with send_message to the source_task_id of an <agent_message>. "
-        "Team nodes are scheduled by their coordinator."
+        "delivered once and sending does not wait. A task you derived (a delegated child agent or "
+        "a fork) reports back to you automatically when it finishes the run your message starts; "
+        "other tasks do not, so reply explicitly with send_message to the source_task_id of an "
+        "<agent_message> that is not a report. Team nodes are scheduled by their coordinator."
     )
     args_model: type[SendMessageArgs] = SendMessageArgs
     timeout_seconds: ClassVar[float] = 30.0

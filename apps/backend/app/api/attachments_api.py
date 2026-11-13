@@ -64,4 +64,10 @@ async def get_attachment_content(workspace_id: int, asset_id: str) -> FileRespon
         _raise_attachment_error(exc)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
-    return FileResponse(path, media_type=content_type, headers={"Cache-Control": "no-store"})
+    # 附件按内容寻址（asset id 是内容的 sha256）、发布后不再改写：浏览器可以一直缓存。端口随后端实例
+    # 变化，缓存键随之隔离，不会跨实例串用。
+    return FileResponse(
+        path,
+        media_type=content_type,
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
+    )
