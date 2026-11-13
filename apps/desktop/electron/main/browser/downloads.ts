@@ -98,6 +98,11 @@ export class BrowserDownloads {
     return this.entries.find(({ download }) => download.id === downloadId)?.download.path;
   }
 
+  /** 还有下载记录的 Task（链路连上时对账回收用，见 `BrowserHost.taskIds`）。 */
+  taskIds(): number[] {
+    return this.entries.map(({ download }) => download.taskId);
+  }
+
   /** Task 删除：取消它未完成的下载并忘掉它的全部记录。 */
   dropTasks(taskIds: readonly number[]): void {
     this.remove((download) => taskIds.includes(download.taskId));

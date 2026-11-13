@@ -42,7 +42,10 @@ BROWSER_ERRORS: dict[str, tuple[str, str]] = {
         "tasks to close tabs.",
         "标签已满",
     ),
-    "NAVIGATION_BLOCKED": ("Only http and https pages can be opened.", "地址被拦截"),
+    "NAVIGATION_BLOCKED": (
+        "Only web pages (http, https) and local files can be opened.",
+        "地址被拦截",
+    ),
     "NAVIGATION_FAILED": (
         "Check the address; retry only if the failure looks temporary.",
         "页面加载失败",

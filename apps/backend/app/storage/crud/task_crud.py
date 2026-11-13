@@ -383,6 +383,12 @@ class TaskCrud:
         with self._session_factory() as session:
             return [TaskRecord.from_model(row) for row in session.scalars(stmt).all()]
 
+    def list_existing_ids(self, task_ids: set[int]) -> set[int]:
+        """``task_ids`` 中仍存在的那些（只查 ``id`` 列，打开一次只读 session）。"""
+        stmt = select(TaskModel.id).where(TaskModel.id.in_(task_ids))
+        with self._session_factory() as session:
+            return set(session.scalars(stmt).all())
+
     def list_ids_by_workspace(self, workspace_id: int, session: Session | None = None) -> list[int]:
         """仅返回某工作区下全部 task 的整数 id 列表。
 

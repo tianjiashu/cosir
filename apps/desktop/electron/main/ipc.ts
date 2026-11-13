@@ -3,8 +3,8 @@ import { BrowserWindow, dialog, ipcMain, nativeTheme, type IpcMainInvokeEvent } 
 
 import type { BackendSupervisor } from "./backend/supervisor";
 import type { BrowserHost } from "./browser/browser-host";
-import { httpUrl, tabContextOf } from "./browser/params";
-import { addressToUrl } from "./browser/web-url";
+import { tabContextOf } from "./browser/params";
+import { pageUrl } from "./browser/page-url";
 import { BROWSER_USER_WORDING, type BrowserErrorCode } from "./browser/errors";
 import { appendJsonLine, logDesktopEvent } from "./desktop-log";
 import { HostMethodError } from "./host-link/method-registry";
@@ -66,15 +66,11 @@ export function registerHostIpc(supervisor: BackendSupervisor, browser: BrowserH
   handle(HOST_CHANNEL.browserRevealDownload, (_event, downloadId) => browser.revealDownload(parseDownloadId(downloadId)));
 }
 
-/** 地址栏输入：没写协议的补全（`addressToUrl`）；协议只允许 http(s)（与 Agent 走同一条校验）。 */
+/** 地址栏输入：与 Agent 打开同一条规则（`pageUrl`），被拒的浏览器错误码由 `failureMessage` 换成用户说法。 */
 function parseNavigationUrl(value: unknown): string {
-  if (typeof value !== "string" || !value.trim()) throw new HostUserError("网址不能为空");
-  if (value.length > 4096) throw new HostUserError("网址太长");
-  try {
-    return httpUrl(addressToUrl(value.trim()));
-  } catch {
-    throw new HostUserError("只能打开 http 或 https 网址");
-  }
+  if (typeof value !== "string" || !value.trim()) throw new HostUserError("地址不能为空");
+  if (value.length > 4096) throw new HostUserError("地址太长");
+  return pageUrl(value);
 }
 
 /** 标签、下载、弹窗的 id 只用来查宿主的登记，认不认识由宿主判断（查不到就是不在）；这里只确认类型。 */

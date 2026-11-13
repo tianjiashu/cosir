@@ -43,7 +43,9 @@ export function useMarkdownLinkComponents(
           {...props}
           href={href}
           data-streamdown="link"
-          title={target.kind === "workspace" ? `在文件面板打开 ${target.path || "."}` : target.kind === "web" ? target.url : undefined}
+          title={target.kind === "workspace" ? `在文件面板打开 ${target.path || "."}`
+            : target.kind === "page" ? `在内置浏览器打开 ${target.path}`
+              : target.kind === "web" ? target.url : undefined}
           className={cn(LINK_CLASS, className)}
           onClick={(event) => {
             event.preventDefault();

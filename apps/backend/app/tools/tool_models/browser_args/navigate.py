@@ -27,7 +27,10 @@ class BrowserNavigateArgs(BaseModel):
     url: str | None = Field(
         default=None,
         max_length=4096,
-        description="Absolute http(s) URL to open. Leave null when using action.",
+        description=(
+            "http(s) URL, absolute local file path or file:// URL to open. Leave null when "
+            "using action."
+        ),
     )
     action: Literal["back", "forward", "reload"] | None = Field(
         default=None,

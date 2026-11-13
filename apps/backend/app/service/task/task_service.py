@@ -428,6 +428,10 @@ class TaskService:
             self._task_register.restart_stopped(stopped)
             raise
 
+    def existing_task_ids(self, task_ids: set[int]) -> set[int]:
+        """``task_ids`` 中仍存在的 Task；id 自增不复用、删除不可逆，「已不存在」一经成立就不会变。"""
+        return self._task.list_existing_ids(task_ids)
+
     def collect_fork_descendant_ids(self, task_id: int) -> frozenset[int]:
         """返回从 ``task_id`` fork 出的全部后代（fork 的 fork 也算），不含自身。
 
@@ -653,7 +657,8 @@ class TaskService:
         from app.tools.tool_handler.terminal.command_results import command_results
 
         service_depends.get_terminal_session_service().delete_task_sessions(task_ids)
-        # 浏览器标签页归宿主所有：发后即忘的通知，宿主未连接时标签页也已不在（链路记日志）。
+        # 浏览器标签页归宿主所有：发后即忘的通知；宿主断线重连期间或后端崩溃时会丢，由链路连上时的
+        # 对账补回收（``service/browser/tab_reclaim``）。
         service_depends.get_host_link().notify(
             "browser.dropTasks", {"task_ids": sorted(task_ids)}
         )

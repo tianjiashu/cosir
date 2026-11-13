@@ -436,10 +436,7 @@ function ModelSelectorList({
   return (
     <CommandList
       data-slot="model-selector-list"
-      className={cn(
-        "[-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-        className,
-      )}
+      className={className}
       {...props}
     >
       {children ?? (

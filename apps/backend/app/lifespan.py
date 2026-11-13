@@ -43,6 +43,7 @@ from app.core.agents.agent_profile_config import (
 from app.core.events.event_sink import set_event_sink
 from app.core.tool.background_commands import set_background_commands
 from app.core.tool.handoff.handoff_registry import handoff_registry
+from app.service.browser.tab_reclaim import schedule_tab_reclaim
 from app.service.configuration.agent_team_configuration_registry import (
     AgentTeamConfigurationRegistry,
     set_agent_team_registry,
@@ -62,6 +63,7 @@ from app.service.depends import (
     get_agent_team_coordinator,
     get_conversation_event_projector,
     get_conversation_task_state_service,
+    get_host_link,
     get_recover_service,
     initialize_service_dependencies,
 )
@@ -220,6 +222,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         lambda task_id: get_conversation_task_state_service().refresh_handoffs(task_id)
     )
     get_recover_service().recover_after_restart()
+    # 宿主随后端 ready 连上链路；每次连上对账一次，补回收丢了删除通知的 Task 的浏览器标签。
+    get_host_link().set_on_connected(schedule_tab_reclaim)
 
     _mark_boot_ready()
     try:
@@ -233,6 +237,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             await get_agent_team_coordinator().aclose()
             command_results.set_listener(None)
             handoff_registry.set_listener(None)
+            get_host_link().set_on_connected(None)
             handoff_registry.close()
             await task_runtime_spaces.aclose()
             await asyncio.to_thread(close_service_dependencies)

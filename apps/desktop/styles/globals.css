@@ -368,6 +368,18 @@ body > :not(#root) > * {
   * {
     @apply border-border outline-ring/50;
   }
+  /*
+   * 全局滚动条：细滑块、透明底槽，鼠标所在的滚动区加深。只用标准属性，保留系统「显示滚动条」偏好——
+   * 悬浮滚动条下仍不占宽度，经典滚动条（macOS「始终」/接鼠标、Windows）去掉灰底槽与边框线，
+   * 不再与相邻卡片边框叠成双线。颜色由前景色推出，深浅色自动跟随。放在 base 层，`no-scrollbar` 等工具类可覆盖。
+   */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent) transparent;
+  }
+  *:hover {
+    scrollbar-color: color-mix(in oklch, var(--foreground) 32%, transparent) transparent;
+  }
   body {
     @apply bg-background text-foreground;
   }

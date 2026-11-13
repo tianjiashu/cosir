@@ -2,7 +2,7 @@ import type { HostMethodRegistry } from "../host-link/method-registry";
 import type { BrowserHost } from "./browser-host";
 import { withinDeadline, type BrowserMethod } from "./deadlines";
 import { parseAct, parseDropTasks, parseEvaluate, parseLogs, parseNavigate, parseScreenshot, parseSnapshot, parseTabs } from "./params";
-import { actWire, evaluateWire, logsWire, pageWire, screenshotWire, tabsWire } from "./wire";
+import { actWire, evaluateWire, logsWire, pageWire, screenshotWire, tabsWire, taskIdsWire } from "./wire";
 
 /**
  * 把内置浏览器注册成宿主工具链路的方法：入参经 `params.ts` 校验成请求，交给 `BrowserHost`，结果经 `wire.ts`
@@ -15,7 +15,8 @@ import { actWire, evaluateWire, logsWire, pageWire, screenshotWire, tabsWire } f
  * - `browser.tabs`：列出 / 切换 / 关闭本 Task 的标签。
  * - `browser.logs`：读 console 或网络日志（按序号游标）。
  * - `browser.evaluate`：在页面里执行 JS 表达式。
- * - `browser.dropTasks`：通知，Task 删除提交后回收它的全部标签。
+ * - `browser.taskIds`：持有标签或下载的 Task id；后端在链路连上时据此对账，补回收丢掉删除通知的 Task。
+ * - `browser.dropTasks`：通知，Task 删除提交后（或对账发现已删除时）回收它的全部标签与下载。
  */
 export function registerBrowserMethods(methods: HostMethodRegistry, browser: BrowserHost): void {
   /** 请求类方法都在时限内执行（见 `deadlines.ts`）；通知不回结果，不设时限。 */
@@ -29,6 +30,7 @@ export function registerBrowserMethods(methods: HostMethodRegistry, browser: Bro
   request("browser.tabs", async (params) => tabsWire(browser.manageTabs(parseTabs(params))));
   request("browser.logs", async (params, signal) => logsWire(await browser.logs(parseLogs(params), signal)));
   request("browser.evaluate", async (params, signal) => evaluateWire(await browser.evaluate(parseEvaluate(params), signal)));
+  request("browser.taskIds", async () => taskIdsWire(browser.taskIds()));
   methods.register("browser.dropTasks", async (params) => {
     browser.dropTasks(parseDropTasks(params));
   });

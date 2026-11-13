@@ -12,8 +12,8 @@ import { notify } from "@/lib/notify";
 export type LinkSource = "message" | "document" | "terminal" | "tool" | "configuration";
 
 /**
- * 链接所属的 Task。对话线程、终端会话属于某个 Task，本机地址据此在该 Task 的内置浏览器打开；
- * 没有 Task 的界面（文件面板、配置页）不提供，本机地址交给系统浏览器。
+ * 链接所属的 Task。对话线程、终端会话属于某个 Task，本机与局域网地址、本机网页文件据此在该 Task 的内置浏览器打开；
+ * 没有 Task 的界面（文件面板、配置页）不提供：本机地址交给系统浏览器，本机网页文件退回文件面板。
  */
 export const LinkTaskContext = createContext<number | null>(null);
 
@@ -31,7 +31,8 @@ export type LinkOpener = {
  *
  * - 页内锚点 → 在链接所在的那篇 Markdown 里滚动到目标（脚注来回跳转）。
  * - 工作区路径 → 文件面板（带行号时选中并居中）；目录在文件树里展开。
- * - 本机地址且有所属 Task、运行在桌面宿主里 → 该 Task 的内置浏览器（Agent 也看得到，便于一起验证）。
+ * - 本机与局域网地址、本机网页文件，且有所属 Task、运行在桌面宿主里 → 该 Task 的内置浏览器（Agent 也看得到，
+ *   便于一起验证）。打不开内置浏览器时本机网页文件退回文件面板（工作区外的在 `resolve` 里就不可点）。
  * - 其余网页与邮件地址 → 先确认，再经 `window.open` 交给宿主用系统浏览器打开（宿主另有协议白名单）；
  *   本机地址不确认。链接来自模型输出或工作区文件，都不可信，所以外部地址一律在这一处确认。
  */
@@ -46,9 +47,11 @@ export function useOpenLink(source: LinkSource, taskId?: number | null): LinkOpe
       void frontendLog("INFO", "link_opened", "打开链接", {
         data: { source, kind: target.kind, ...data },
       });
+    // 能在内置浏览器打开的 Task：有所属 Task 且运行在桌面宿主里（浏览器开发模式没有宿主）。
+    const browserTask = owner !== null && desktopHost ? owner : null;
     const openWeb = async (url: string, local: boolean) => {
-      if (local && owner !== null && desktopHost) {
-        await openUserTab(owner, url);
+      if (local && browserTask !== null) {
+        await openUserTab(browserTask, url);
         return "browser";
       }
       if (!local && !(await requestConfirmation({ title: "打开外部链接？", description: url, confirmLabel: "打开" }))) {
@@ -59,7 +62,10 @@ export function useOpenLink(source: LinkSource, taskId?: number | null): LinkOpe
     };
     return {
       workspaceRoot,
-      resolve: (href, documentDir) => resolveLink(href, { workspaceRoot, documentDir }),
+      resolve: (href, documentDir) => {
+        const target = resolveLink(href, { workspaceRoot, documentDir });
+        return target?.kind === "page" && browserTask === null ? target.workspace : target;
+      },
       open: (target, origin) => {
         if (target.kind === "anchor") {
           const markdownRoot = origin?.closest(".aui-md");
@@ -82,6 +88,14 @@ export function useOpenLink(source: LinkSource, taskId?: number | null): LinkOpe
           files!.openFile(target.path, { lines: target.lines }).then(
             (outcome) => log(target, { ...data, outcome }),
             (error: unknown) => notify.error("无法打开文件", { error }),
+          );
+          return;
+        }
+        if (target.kind === "page") {
+          // `resolve` 已把打不开内置浏览器时的本机网页换成文件面板退路，到这里一定有 browserTask。
+          openUserTab(browserTask!, target.url).then(
+            () => log(target, { path: target.path, via: "browser" }),
+            (error: unknown) => notify.error("无法打开网页", { error }),
           );
           return;
         }

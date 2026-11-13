@@ -1,3 +1,5 @@
+import { isLocalNetworkHost } from "@/electron/shared/local-network-host";
+
 /** 行范围，1 起算、闭区间。 */
 export type LineRange = { start: number; end: number };
 
@@ -7,15 +9,22 @@ export type WorkspaceLink = { kind: "workspace"; path: string; directory: boolea
 export type FilenameSearch = { kind: "filename-search"; query: string; lines?: LineRange };
 
 /**
- * 网页或邮件地址。`local` 表示本机开发服务（localhost / 回环地址）；`publicHost` 是公网主机名，
- * 只有它才可以对外取站点图标，本机、内网与邮件地址为 null。
+ * 网页或邮件地址。`local` 表示本机或局域网主机（`isLocalNetworkHost`，开发服务、局域网设备）；`publicHost` 是
+ * 公网主机名，只有它才可以对外取站点图标，本机、局域网与邮件地址为 null。
  */
 export type WebLink = { kind: "web"; url: string; local: boolean; publicHost: string | null };
+
+/**
+ * 本机网页文件（`.html` / `.htm`，不带行号）：要看的是渲染结果，在所属 Task 的内置浏览器打开。`url` 是 file 地址、
+ * `path` 是本机绝对路径；`workspace` 是文件在工作区内时的文件面板退路（打不开内置浏览器的界面用它），工作区外为 null。
+ * 带行号说明要看的是代码，仍是工作区路径。
+ */
+type PageLink = { kind: "page"; url: string; path: string; workspace: WorkspaceLink | null };
 
 /** 同一篇 Markdown 里的位置（脚注引用与返回、标题锚点）；`id` 是已解码的目标元素 id。 */
 export type AnchorLink = { kind: "anchor"; id: string };
 
-export type LinkTarget = WorkspaceLink | WebLink | AnchorLink | FilenameSearch;
+export type LinkTarget = WorkspaceLink | WebLink | PageLink | AnchorLink | FilenameSearch;
 
 /**
  * 解析基准。`workspaceRoot` 为 null 时（配置页等没有工作区的界面）只认网页链接；`documentDir` 只在
@@ -27,6 +36,7 @@ const WINDOWS_DRIVE = /^[A-Za-z]:[\\/]/;
 const SCHEME = /^[a-z][a-z\d+.-]*:/i;
 const LINE_FRAGMENT = /^L([1-9]\d*)(?:-L?([1-9]\d*))?$/;
 const LINE_SUFFIX = /:([1-9]\d*)(?::\d+)?$/;
+const PAGE_FILE = /\.html?$/i;
 
 /**
  * 把链接地址换算成可打开的目标；所有界面（对话正文、文件面板 Markdown、终端、工具卡片）共用这一套规则。
@@ -34,6 +44,7 @@ const LINE_SUFFIX = /:([1-9]\d*)(?::\d+)?$/;
  * - 网页只认 http(s) 与 mailto；其余协议、协议相对地址返回 null，调用方渲染为纯文本。
  * - `#…` 是同一篇 Markdown 里的位置（脚注等），在原文里滚动过去，不离开页面。
  * - 工作区路径：相对路径、工作区内绝对路径；越出工作区返回 null。
+ * - 本机网页文件（`.html` / `.htm` 且不带行号）：工作区内外的绝对路径都认，见 `PageLink`。
  * - 行号：规范写法是片段 `#L42` / `#L42-L60`（GitHub、VS Code 同款，也是提示词约定的写法）；同时容忍
  *   模型与编译器习惯的 `:42` / `:42:7` 后缀（列号不用）。以 `/` 结尾的是目录。
  *
@@ -57,7 +68,19 @@ export function resolveLink(href: string, base: LinkBase): LinkTarget | null {
   }
   if (SCHEME.test(location) && !WINDOWS_DRIVE.test(location)) return null;
 
-  return workspaceTarget(decodePath(location), base, lines);
+  const path = decodePath(location);
+  const workspace = workspaceTarget(path, base, lines);
+  if (lines || !PAGE_FILE.test(path)) return workspace;
+  const absolute = workspace ? `${base.workspaceRoot!.replace(/[\\/]+$/, "")}/${workspace.path}` : isAbsolute(path) ? path : null;
+  return absolute ? { kind: "page", url: fileUrl(absolute), path: absolute, workspace } : null;
+}
+
+/** 本机绝对路径 → file 地址；`pathname` 赋值负责百分号编码（空格、中文、`#`、`?`），Windows 盘符补前导 `/`。 */
+function fileUrl(absolute: string): string {
+  const url = new URL("file:///");
+  const path = absolute.replace(/\\/g, "/");
+  url.pathname = path.startsWith("/") ? path : `/${path}`;
+  return url.href;
 }
 
 /** 原始路径按字面处理，仅识别 :行[:列] 后缀，不进行 URL 解码。 */
@@ -170,8 +193,6 @@ function decodePath(path: string): string {
   }
 }
 
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
-
 function webLink(url: string): WebLink | null {
   let parsed: URL;
   try {
@@ -180,21 +201,6 @@ function webLink(url: string): WebLink | null {
     return null;
   }
   if (parsed.protocol === "mailto:") return { kind: "web", url, local: false, publicHost: null };
-  const host = parsed.hostname.toLowerCase();
-  const local = LOCAL_HOSTS.has(host) || host.endsWith(".localhost");
-  return { kind: "web", url, local, publicHost: local || isPrivateHost(host) ? null : host };
-}
-
-/** 内网主机：IP 字面量按保留网段判断；域名里只有不带点的单名与 `.local` 能确定不在公网。 */
-function isPrivateHost(host: string): boolean {
-  if (host.startsWith("[")) return /^\[(?:f[cd]|fe[89ab])/.test(host);
-  const octets = host.split(".").map(Number);
-  if (octets.length === 4 && octets.every((part) => Number.isInteger(part))) {
-    const [first, second] = octets;
-    return first === 0 || first === 10 || first === 127 || (first === 169 && second === 254)
-      || (first === 172 && second >= 16 && second <= 31)
-      || (first === 192 && second === 168)
-      || (first === 100 && second >= 64 && second <= 127);
-  }
-  return !host.includes(".") || host.endsWith(".local");
+  const local = isLocalNetworkHost(parsed.hostname);
+  return { kind: "web", url, local, publicHost: local ? null : parsed.hostname.toLowerCase() };
 }

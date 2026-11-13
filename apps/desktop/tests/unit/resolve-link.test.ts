@@ -47,11 +47,12 @@ describe("resolveLink", () => {
     expect(resolveLink("cosir-notes/a.md", repo)).toMatchObject({ path: "cosir-notes/a.md" });
   });
 
-  it("classifies web links and marks local development servers", () => {
+  it("classifies web links and marks local and LAN servers", () => {
     expect(resolveLink("https://example.com/a", repo)).toEqual({ kind: "web", url: "https://example.com/a", local: false, publicHost: "example.com" });
     expect(resolveLink("http://localhost:5173/", repo)).toMatchObject({ local: true });
     expect(resolveLink("http://127.0.0.1:8000", { workspaceRoot: null })).toMatchObject({ local: true });
     expect(resolveLink("http://app.localhost", repo)).toMatchObject({ local: true });
+    expect(resolveLink("http://192.168.1.5:5173", repo)).toMatchObject({ local: true, publicHost: null });
     expect(resolveLink("mailto:a@b.c", repo)).toMatchObject({ kind: "web", local: false });
   });
 
@@ -70,7 +71,7 @@ describe("resolveLink", () => {
   });
 
   it("rejects other protocols, anchors and paths outside the workspace", () => {
-    for (const href of ["javascript:alert(1)", "file:///etc/passwd", "vscode://x", "#", "//cdn.example.com/a.js", "../outside.ts", "/etc/passwd"]) {
+    for (const href of ["javascript:alert(1)", "file:///etc/passwd", "file:///tmp/a.html", "vscode://x", "#", "//cdn.example.com/a.js", "../outside.ts", "/etc/passwd"]) {
       expect(resolveLink(href, repo)).toBeNull();
     }
   });
@@ -94,6 +95,19 @@ describe("resolveLink", () => {
     expect(resolveLink("/repo/src/a.ts", doc)).toMatchObject({ path: "src/a.ts" });
     expect(resolveLink("../../../x.md", doc)).toBeNull();
     expect(resolveLink("b.md", { workspaceRoot: "/repo", documentDir: "" })).toMatchObject({ path: "b.md" });
+  });
+
+  // 目的：Agent 说「生成了 report.html」时点一下就能看到渲染结果，工作区内外都可以；潜在缺陷：只能看源码，或工作区外点不了。
+  it("opens local HTML files as pages, keeping line-numbered links as code", () => {
+    expect(resolveLink("out/report.html", repo)).toEqual({
+      kind: "page",
+      url: "file:///repo/out/report.html",
+      path: "/repo/out/report.html",
+      workspace: { kind: "workspace", path: "out/report.html", directory: false },
+    });
+    expect(resolveLink("/Users/x/测试/a.HTM", repo)).toMatchObject({ kind: "page", url: "file:///Users/x/%E6%B5%8B%E8%AF%95/a.HTM", workspace: null });
+    expect(resolveLink("C:\\site\\index.html", { workspaceRoot: "C:\\repo" })).toMatchObject({ kind: "page", url: "file:///C:/site/index.html" });
+    expect(resolveLink("out/report.html#L3", repo)).toMatchObject({ kind: "workspace", path: "out/report.html" });
   });
 
   it("accepts Windows drive paths inside the workspace", () => {

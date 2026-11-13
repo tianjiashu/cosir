@@ -3,7 +3,7 @@ import path from "node:path";
 import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
 
 import { browserError } from "./errors";
-import { isWebProtocol } from "./web-url";
+import { pageUrl } from "./page-url";
 import toolArgsSchemas from "./contract/tool-args.schema.json";
 import type { BrowserNavigation, BrowserTabContext } from "../../shared/host-contract";
 import type { EmulationRequest } from "./tab-emulation";
@@ -18,8 +18,8 @@ import type { ConsoleLevel, LogQuery } from "./tab-log";
  * `contract/tool-args.schema.json`——后端照 `model_dump()` 原样发送，每个字段都在，未填的可选字段为 null（后端守卫
  * 测试保证导出文件是最新的，见 `tests/test_browser_contract_guard.py`）。这里按它校验形状、枚举与上限，不再手写第二
  * 份，也不补缺省值；null 只在映射成请求类型时转成「未给」。跨字段规则（url 与 action 二选一等）只在后端，宿主信任
- * 后端已经校验过。手写的只有宿主自己的键（Task、上限、下载目录）与语义检查（地址协议报 `NAVIGATION_BLOCKED`，
- * 模型可据此换地址，而不是当作调用写错）。
+ * 后端已经校验过。手写的只有宿主自己的键（Task、上限、下载目录）与语义检查（打开的地址经 `pageUrl`，
+ * 与地址栏同一条规则）。
  */
 
 /** 后端每个请求都带、不属于工具参数的键。 */
@@ -78,7 +78,7 @@ export type ActRequest = TabRequest & { actions: PageAction[] };
 export function parseNavigate(params: unknown): NavigateRequest {
   const { request, args } = toolRequest("browser_navigate", params);
   const target: BrowserNavigation = args.url !== null
-    ? { url: httpUrl(args.url) }
+    ? { url: pageUrl(args.url as string) }
     : { action: args.action as "back" | "forward" | "reload" };
   const viewport = args.viewport as { width: number; height: number; mobile: boolean } | "auto" | null;
   const scheme = args.color_scheme as "light" | "dark" | "auto" | null;
@@ -130,20 +130,6 @@ export function parseDropTasks(params: unknown): number[] {
   const value = object(params);
   if (!Array.isArray(value.task_ids)) throw invalid("task_ids must be an array");
   return value.task_ids.map(taskId);
-}
-
-/** 要打开的地址（长度等形状由调用方的边界校验过）：先要求是合法的绝对地址（INVALID_PARAMS），再按 `isWebProtocol` 判定（NAVIGATION_BLOCKED）。 */
-export function httpUrl(value: unknown): string {
-  let url: URL;
-  try {
-    url = new URL(String(value));
-  } catch {
-    throw invalid(`not a valid absolute URL: ${String(value).slice(0, 200)}`);
-  }
-  if (!isWebProtocol(url.protocol)) {
-    throw browserError("NAVIGATION_BLOCKED", `only http and https pages can be opened (got ${url.protocol})`);
-  }
-  return url.href;
 }
 
 /** 拆出宿主自己的键并校验，其余按工具的 schema 校验（每个字段都在，可选字段可能为 null）。 */
