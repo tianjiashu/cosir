@@ -3,15 +3,14 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId, type TraceId } from "@/lib/logging/trace-id";
 
 /**
- * 每会话一条的可写终端通道（WS `terminal-v2`，契约见 apps/backend/app/tools/terminal_runtime/interaction_contract.md「交互通道」）。
+ * 每会话一条的可写终端通道（WS `terminal-v2`，契约见 apps/backend/app/tools/terminal_runtime/session/interaction_contract.md「交互通道」）。
  *
  * 职责：首帧 attach、按 output seq 续传、断线退避重连、resync 时通知调用方清屏、发送 input /
  * resize。它不持有 xterm；用户输入只在会话已结束或背压时被拒（收到 `input_rejected`）；会话列表与生命周期事实在 Transport snapshot，这里的 `exit` 只用于停止重连
  * 与禁用输入。断线只表示订阅中断，不会关闭会话。
  *
- * 帧里的 `generation` 在会话内固定（后端每个会话运行时生成一次），后端重启后旧会话不会以新
- * generation 重现，而是 attach 时直接得到 `code` 为 `TERMINAL_SESSION_NOT_FOUND` 的 `protocol_error`，
- * 因此这里不跟踪 generation；会话不存在归为 `expired`：停止重连、平静提示，等 snapshot 把它移出列表。
+ * 会话不跨后端重启：重启后旧会话在 attach 时直接得到 `code` 为 `TERMINAL_SESSION_NOT_FOUND` 的
+ * `protocol_error`，归为 `expired`：停止重连、平静提示，等 snapshot 把它移出列表。
  */
 
 type TerminalServerFrame =

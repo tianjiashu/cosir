@@ -11,6 +11,11 @@ export type WorkspaceWithTasks = WorkspaceTreeSource;
 /**
  * 侧栏工作区 / 任务目录与「当前任务、当前工作区」选择状态的唯一 owner。
  *
+ * 何时重读只由后端决定：目录的写入方提交后经 Task 推送发出失效（`useTaskFeed`），工作区列表变了走
+ * `load`、某个工作区的侧栏 Task 变了走 `refreshWorkspaceTasks`；此外只有挂载时的首次加载与推送重连
+ * 后的整体重读。不按页面事件（标题变化、运行结束、卡片挂载）推断，也不在用户操作后自行重读——那样
+ * 同一个变化有两条触发路径，后台 Task 的变化还会漏掉。
+ *
  * 刻意不用 TanStack Query：目录由全量加载与按工作区的定向刷新组合而成，二者用代号互相
  * 作废（全量加载期间到达的定向刷新排队、全量完成后补发），并且路由 task 可能先于侧栏
  * 列表被 GET /tasks/:id 确认。这些时序约束是侧栏特有的，留在这里集中维护。
@@ -225,14 +230,6 @@ export function useWorkspaceCatalog(routeTaskId: number | null, workspaceConfigu
     for (const workspaceId of pendingWorkspaceIds) void refreshWorkspaceTasks(workspaceId);
   }, [refreshWorkspaceTasks, status]);
 
-  // 侧栏里还没有这个 Task 就刷新它所在的工作区目录（Agent fork 在父 Run 运行中建出，见
-  // ``TaskListingContext``）；已在目录里时什么都不做，所以重复调用只会刷新一次。
-  const ensureTaskListed = useCallback((taskId: number) => {
-    if (activeTaskWorkspaceId === null) return;
-    if (workspaces.some((workspace) => workspace.tasks.some((task) => task.task_id === taskId))) return;
-    void refreshWorkspaceTasks(activeTaskWorkspaceId);
-  }, [activeTaskWorkspaceId, refreshWorkspaceTasks, workspaces]);
-
   const handleTaskLoaded = useCallback((task: WorkspaceTask) => {
     if (task.task_id !== routeTaskId) return;
     setRouteTask(task);
@@ -256,7 +253,6 @@ export function useWorkspaceCatalog(routeTaskId: number | null, workspaceConfigu
     error,
     load,
     refreshWorkspaceTasks,
-    ensureTaskListed,
     selectedWorkspaceId,
     selectedWorkspace,
     selectWorkspace,

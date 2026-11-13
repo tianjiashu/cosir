@@ -90,6 +90,8 @@ export type TransportToolCallPart = {
   child_task_id?: number;
   /** Current AgentProfile.role resolved by the backend. */
   agent_role?: string;
+  /** 进入 running 的时刻（ISO 8601，取自后端状态事件），其余时候为 null；调用行据此本地计时运行时长。 */
+  startedAt?: string | null;
   /** execute_terminal 流式输出的去重序号，后端投影内部使用；前端只接受、不消费。 */
   terminal_output_seq?: number;
 };
@@ -174,10 +176,21 @@ export type TransportOutcome = {
   durationMs: number;
 };
 
-/** Agent 消息的发送方：`taskId` 用于跳到来源 Task，`name` 是发送时的显示名快照。 */
+/** 派生 Task 的汇报：它的 Run 以什么结局落定；`intermediate` 表示它还有工作在跑、之后还会再汇报。 */
+export type TransportAgentReport = {
+  status: "completed" | "failed";
+  intermediate: boolean;
+};
+
+/**
+ * Agent 消息的发送方：`taskId` 与 `teamRunId` 恰好一个非空（Agent Team 不是 Task，它的汇报来自 TeamRun）。
+ * `taskId` 用于跳到来源 Task，`name` 是发送时的显示名快照；`report` 非空即这条是它的汇报。
+ */
 export type TransportMessageSource = {
-  taskId: number;
+  taskId: number | null;
+  teamRunId: number | null;
   name: string;
+  report: TransportAgentReport | null;
 };
 
 /** 单条 Transport 消息：Task 级扁平消息列表中的 canonical 消息。 */
@@ -273,7 +286,7 @@ export type TerminalSessionEntry = {
 
 /** 工具 part 上的后台工作记录（后端 `BackgroundWork`）。 */
 export type TransportBackgroundWork = {
-  kind: "terminal_command" | "child_agent" | "agent_team";
+  kind: "terminal_command";
   label: string;
   startedAt: string;
   /** 结论到达、被撤销或被重启中断的时刻；还在等结论时为 null。 */

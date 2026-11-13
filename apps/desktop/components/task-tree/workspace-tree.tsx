@@ -1,10 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Tree, type NodeApi, type TreeApi } from "react-arborist";
 
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { useElementSize } from "@/hooks/use-element-size";
 import type { WorkspaceTask } from "@/lib/api/workspaces";
-import { useTaskStatusStore } from "@/lib/task-status/task-status-store";
+import { type TaskStatus, useTaskStatusStore } from "@/lib/task-status/task-status-store";
 import { buildWorkspaceTreeModel, TASK_PAGE_SIZE, taskTreeNodeId, workspaceTreeNodeId, type TaskSidebarNode, type WorkspaceSidebarNode, type WorkspaceTreeSource } from "./workspace-tree-model";
 import { WorkspaceTreeActionsContext, WorkspaceTreeNode, WorkspaceTreeRow } from "./workspace-tree-row";
 import "./workspace-tree.css";
@@ -22,15 +21,13 @@ type WorkspaceTreeProps = {
 };
 
 const ROW_HEIGHT = 32;
-/** 悬停卡片的出现延迟；同一 Provider 内移到相邻行时立即切换，不再等待。 */
-const HOVER_CARD_DELAY_MS = 500;
-/** 这些状态的任务必须留在侧栏可见范围内（`suspended` 可能在等用户操作）。 */
+/** 这些执行状态的任务必须留在侧栏可见范围内；有事等你操作的任务无论 Run 处于什么状态都必须可见。 */
 const MUST_SHOW_STATUSES = new Set(["pending", "running", "suspended"]);
 
-function mustShowTaskIds(statuses: Readonly<Record<number, string | null>>, activeTaskId: number | null): Set<number> {
+function mustShowTaskIds(tasks: Readonly<Record<number, TaskStatus>>, activeTaskId: number | null): Set<number> {
   const ids = new Set<number>();
-  for (const [taskId, status] of Object.entries(statuses)) {
-    if (status !== null && MUST_SHOW_STATUSES.has(status)) ids.add(Number(taskId));
+  for (const [taskId, { executionStatus, awaitingUserCalls }] of Object.entries(tasks)) {
+    if (awaitingUserCalls > 0 || (executionStatus !== null && MUST_SHOW_STATUSES.has(executionStatus))) ids.add(Number(taskId));
   }
   if (activeTaskId !== null) ids.add(activeTaskId);
   return ids;
@@ -47,12 +44,12 @@ export function WorkspaceTree({
   renderWorkspaceActions,
   renderTaskActions,
 }: WorkspaceTreeProps) {
-  const statuses = useTaskStatusStore((state) => state.statuses);
+  const taskStatuses = useTaskStatusStore((state) => state.tasks);
   // 水位线是界面状态（不持久化、卸载即重置）：只升不降，收起工作区或点「收起」时回到默认。
   const [watermarks, setWatermarks] = useState<ReadonlyMap<number, number>>(() => new Map());
   const { nodes: model, watermarks: resolvedWatermarks } = useMemo(
-    () => buildWorkspaceTreeModel(workspaces, pinnedTaskIds, { watermarks, mustShowTaskIds: mustShowTaskIds(statuses, activeTaskId) }),
-    [activeTaskId, pinnedTaskIds, statuses, watermarks, workspaces],
+    () => buildWorkspaceTreeModel(workspaces, pinnedTaskIds, { watermarks, mustShowTaskIds: mustShowTaskIds(taskStatuses, activeTaskId) }),
+    [activeTaskId, pinnedTaskIds, taskStatuses, watermarks, workspaces],
   );
   // 必须可见的任务推高了水位线时记下来，它停止运行或不再打开后仍留在原位。
   useLayoutEffect(() => {
@@ -114,7 +111,6 @@ export function WorkspaceTree({
   return (
     <div ref={containerRef} className="h-full min-h-0 min-w-0">
       {treeHeight > 0 && model.length > 0 && (
-        <TooltipProvider delay={HOVER_CARD_DELAY_MS}>
         <WorkspaceTreeActionsContext.Provider value={{ renderWorkspaceActions, renderTaskActions }}>
           <Tree<WorkspaceSidebarNode>
             ref={treeRef}
@@ -148,7 +144,6 @@ export function WorkspaceTree({
             {WorkspaceTreeNode}
           </Tree>
         </WorkspaceTreeActionsContext.Provider>
-        </TooltipProvider>
       )}
     </div>
   );

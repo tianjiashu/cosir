@@ -422,8 +422,9 @@ function commit(taskId, state) {
 }
 
 /**
- * 模拟后端 `/task-status/stream` 的订阅者。与后端一样：执行状态取当前活动的状态；等你操作的调用数
- * 数快照里 `awaitingUser` 的工具 part（后端数等待占位行，与 Run 状态无关）。
+ * 模拟后端 `/task-feed/stream` 的订阅者。与后端一样：执行状态取当前活动的状态；等你操作的调用数
+ * 数快照里 `awaitingUser` 的工具 part（后端数等待占位行，与 Run 状态无关）；目录的写入（建删 Task）
+ * 提交后推送目录失效，前端只据此重读目录。
  */
 const statusSubscribers = new Set();
 const executionStatus = (taskId) => states.get(taskId)?.activity?.status ?? null;
@@ -444,6 +445,12 @@ function publishTaskStatus(taskId) {
   if (lastPublishedStatus.get(taskId) === key) return;
   lastPublishedStatus.set(taskId, key);
   for (const res of statusSubscribers) writeStatusFrame(res, { type: "changed", tasks: { [taskId]: status } });
+}
+
+/** 目录失效：`workspaces` 为 true 表示工作区列表变了，否则是这个工作区的侧栏 Task 变了。 */
+function publishCatalog({ workspaces: workspacesChanged = false, workspaceIds = [WORKSPACE_ID] } = {}) {
+  const frame = { type: "catalog", workspaces: workspacesChanged, workspaceIds: workspacesChanged ? [] : workspaceIds };
+  for (const res of statusSubscribers) writeStatusFrame(res, frame);
 }
 
 function wait(milliseconds) {
@@ -796,7 +803,7 @@ const server = createServer(async (req, res) => {
 
   const url = new URL(req.url ?? "/", `http://${HOST}:${PORT}`);
 
-  if (req.method === "GET" && url.pathname === "/task-status/stream") {
+  if (req.method === "GET" && url.pathname === "/task-feed/stream") {
     res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
     const statuses = Object.fromEntries([...states.keys()].map((taskId) => [taskId, taskStatus(taskId)]));
     for (const [taskId, status] of Object.entries(statuses)) lastPublishedStatus.set(Number(taskId), JSON.stringify(status));
@@ -838,6 +845,7 @@ const server = createServer(async (req, res) => {
     });
     states.set(TASK_ID, emptyState());
     publishTaskStatus(TASK_ID);
+    publishCatalog();
     jsonResponse(res, 200, tasks.get(TASK_ID));
     return;
   }
@@ -849,6 +857,7 @@ const server = createServer(async (req, res) => {
     // Task 删除结束它的长订阅。
     for (const subscriber of subscribers.get(taskId) ?? []) subscriber.end();
     subscribers.delete(taskId);
+    publishCatalog();
     jsonResponse(res, 200, { task_id: taskId, deleted: true, deleted_task_ids: [taskId] });
     return;
   }
@@ -906,7 +915,15 @@ const server = createServer(async (req, res) => {
     });
     states.set(taskId, emptyState());
     publishTaskStatus(taskId);
+    publishCatalog();
     jsonResponse(res, 200, { task_id: taskId });
+    return;
+  }
+  // 测试路由替身（page.route）伪造了目录写入时，由用例补上后端在提交后会发出的目录失效。
+  if (req.method === "POST" && url.pathname === "/__test__/publish-catalog") {
+    const body = await readJson(req);
+    publishCatalog({ workspaces: body.workspaces === true, workspaceIds: Array.isArray(body.workspaceIds) ? body.workspaceIds : undefined });
+    jsonResponse(res, 200, { ok: true });
     return;
   }
   if (req.method === "POST" && url.pathname === "/__test__/seed-state") {

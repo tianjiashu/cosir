@@ -2,7 +2,7 @@ import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
 import { projectTurnHeading, type TurnHeadingPresentation } from "@/lib/assistant/turn/turn-heading";
 import type { TransportOutcome } from "@/lib/assistant/contract";
 import type { TurnLayout } from "@/lib/assistant/turn/turn-layout";
-import { useElapsedSince } from "@/lib/assistant/turn/run-duration";
+import { useElapsedSince } from "@/hooks/use-elapsed-since";
 import { cn } from "@/lib/utils";
 
 /** 计时只更新标题子树；正文、工具与产物不订阅墙钟。终态继续使用后端冻结的耗时。 */

@@ -17,7 +17,10 @@ export function useStopRequest(taskId: number, target: CommandTarget) {
   return { pending: commandPending(request), error: request?.error ?? null, stop };
 }
 
-/** 卡片表头的纯图标停止按钮；文案只在 aria-label / title 中，给命令或标题留出宽度。 */
+/**
+ * 卡片里的纯图标停止按钮（实心方块，不会被看成复选框）；文案只在 aria-label / title 中，给命令或标题留出宽度。
+ * 红色只落在悬停时的图标上、底色保持中性：停止是会中断的操作，提醒即可，不制造紧张。
+ */
 export function ToolStopButton({ label, pending, onClick, className }: {
   /** 停止对象的可读描述，如「终端命令」「子 Agent：审查代码」。 */
   label: string;
@@ -37,7 +40,7 @@ export function ToolStopButton({ label, pending, onClick, className }: {
         event.stopPropagation();
         onClick();
       }}
-      className={cn("text-muted-foreground hover:bg-destructive/10 hover:text-destructive", className)}
+      className={cn("text-muted-foreground hover:text-destructive", className)}
     >
       {pending
         ? <LoaderCircleIcon className="size-3.5 animate-spin" aria-hidden="true" />

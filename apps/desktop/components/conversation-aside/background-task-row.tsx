@@ -1,6 +1,6 @@
 import { commandPending, stopTarget, useCommandRequest } from "@/lib/assistant/command-request-store";
 import { useEffect, useRef } from "react";
-import { BotIcon, CircleMinusIcon, SquareIcon, SquareTerminalIcon, UsersIcon, XCircleIcon, type LucideIcon } from "lucide-react";
+import { CircleMinusIcon, SquareIcon, SquareTerminalIcon, XCircleIcon, type LucideIcon } from "lucide-react";
 
 import { useConversationAsideStore } from "@/lib/conversation-aside/conversation-aside-store";
 import { resolveCallView } from "@/components/conversation/tools/call-view-registry";
@@ -16,12 +16,11 @@ import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 import { cancelToolCall } from "@/lib/assistant/task-commands";
 import { notify } from "@/lib/notify";
 import { useBackgroundTaskPart } from "@/lib/background-tasks/background-tasks-store";
+import { formatDuration } from "@/lib/format/duration";
 
 /** 新增后台结果种类时补一项（种类的事实源是后端 `BackgroundKind`）。 */
 const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
   terminal_command: SquareTerminalIcon,
-  child_agent: BotIcon,
-  agent_team: UsersIcon,
 };
 
 /**
@@ -45,7 +44,7 @@ export function BackgroundTaskRow({ taskId, entry, now }: { taskId: number; entr
   const Icon = KIND_ICONS[entry.kind];
   const elapsed = entry.status === "settling"
     ? null
-    : formatElapsed(Date.parse(entry.startedAt), entry.endedAt === null ? now : Date.parse(entry.endedAt));
+    : formatDuration((entry.endedAt === null ? now : Date.parse(entry.endedAt)) - Date.parse(entry.startedAt));
   const requested = useConversationAsideStore((state) => state.revealCall);
   const ref = useRef<HTMLLIElement>(null);
   useEffect(() => {
@@ -120,13 +119,4 @@ function backgroundCallView(taskId: number, part: TransportToolCallPart, workSta
   if (converted.type !== "tool-call") return null;
   const artifact = readToolArtifact(converted.artifact);
   return resolveCallView({ taskId, toolCallId: part.toolCallId, artifact, args: part.args ?? {}, interactive: false, taskCancelling: false, surface: "details", workStatus });
-}
-
-/** 耗时：不足一分钟显示秒，之后显示「分 秒」「时 分」。 */
-export function formatElapsed(startedAt: number, endedAt: number): string {
-  const seconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }

@@ -13,7 +13,6 @@ export type AssistantRuntimeProps = {
   /** 正在分叉的回复 id。 */
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
-  onTaskStateChanged?: () => void;
 };
 
 export type RuntimeSessionContext = {
@@ -29,7 +28,6 @@ export type RuntimeSessionContext = {
   traceId: string;
   performanceProbe: AssistantPerformanceProbe | null;
   setIssue: (issue: TransportIssue | null) => void;
-  onTaskStateChanged?: () => void;
   latestStateRef: MutableRefObject<TransportState>;
   /** 打开（或替换）Task 长订阅；runtime 挂载前为 null。 */
   attachTransportRef: MutableRefObject<(() => Promise<void>) | null>;

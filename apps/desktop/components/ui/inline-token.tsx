@@ -39,7 +39,6 @@ export function InlineToken({
         data-inline-token="true"
         data-tone={tone}
         contentEditable={false}
-        delay={500}
       >
         {open ? (
           <button

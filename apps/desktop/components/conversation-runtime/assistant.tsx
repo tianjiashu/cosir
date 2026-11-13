@@ -17,14 +17,12 @@ export const Assistant = ({
   workspaceRoot,
   forkingMessageId,
   onForkMessage,
-  onTaskStateChanged,
 }: {
   taskId: number;
   workspaceId: number;
   workspaceRoot?: string;
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
-  onTaskStateChanged?: () => void;
 }) => {
   // AppLayout may finish its task-list refresh after the snapshot request.
   // Freeze the workspace identity for this task session so that a late parent
@@ -50,7 +48,6 @@ export const Assistant = ({
       initialState={initialState}
       forkingMessageId={forkingMessageId}
       onForkMessage={onForkMessage}
-      onTaskStateChanged={onTaskStateChanged}
     />
   );
 };

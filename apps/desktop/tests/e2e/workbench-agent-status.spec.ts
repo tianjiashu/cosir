@@ -60,7 +60,7 @@ const test = base.extend<{ agent: Fixture }>({
       res.setHeader("Access-Control-Allow-Origin", req.headers.origin ?? "*");
       res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Trace-Id");
       if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
-      if (req.url === "/task-status/stream") {
+      if (req.url === "/task-feed/stream") {
         if (fixture.refuseStatus) { res.writeHead(503); res.end(); return; }
         res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
         const tasks = Object.fromEntries([...fixture.states].map(([id, state]) => (
@@ -99,7 +99,7 @@ const test = base.extend<{ agent: Fixture }>({
       const id = Number(route.request().url().split("/").at(-1));
       return route.fulfill({ json: task(id) });
     });
-    await page.route(`${origin}/task-status/stream`, route => route.continue({ url: `http://127.0.0.1:${address.port}/task-status/stream` }));
+    await page.route(`${origin}/task-feed/stream`, route => route.continue({ url: `http://127.0.0.1:${address.port}/task-feed/stream` }));
     await page.route(`${origin}/tasks/*/assistant/state`, route => {
       const id = Number(route.request().url().split("/")[4]);
       fixture.snapshots.set(id, (fixture.snapshots.get(id) ?? 0) + 1);

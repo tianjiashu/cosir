@@ -17,7 +17,7 @@ import { ThinkingLabel } from "../turn/thinking-label";
 import { CallStatus } from "./call-status-badge";
 import { detailsLiveInRail, type CallViewContext } from "./call-view";
 import { resolveCallView } from "./call-view-registry";
-import { ForegroundWaitAction } from "./foreground-wait-action";
+import { CallElapsed } from "./call-elapsed";
 import { ToolIcon } from "./tool-icons";
 
 export type CallRowProps = {
@@ -40,8 +40,8 @@ const ROW_CLASS = "flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-
 const CLICKABLE_ROW_CLASS = "hover:bg-muted cursor-pointer";
 
 /**
- * 统一调用行：图标 · 标题（意图） · 目标 · 元信息 · 状态位，所有工具调用从排队到终态都是这一行，只有内容在变。
- * 行只说「在做什么」和「出了问题」：运行中标题扫光（`projectCallStatus`），成功不说话，异常按工具失败、取消、
+ * 统一调用行：图标 · 标题（意图） · 运行时长 · 目标 · 元信息 · 状态位，所有工具调用从排队到终态都是这一行，只有内容在变。
+ * 行只说「在做什么」和「出了问题」：运行中标题扫光（`projectCallStatus`），跑过 3 秒标题后出现时长，成功不说话，异常按工具失败、取消、
  * 等你操作、实体异常（视图的 `status`）的优先级出现在元信息。
  *
  * 元信息与展开体由 kind 视图注册表按 `display_data.kind` 给出（没有 kind 时只有标题与状态）；已有结构化部分
@@ -91,6 +91,7 @@ function CallRowContent({ taskId, toolCallId, toolName, args, artifact, interact
     <>
       <ToolIcon name={toolIconName(toolName)} className="text-muted-foreground size-3.5" aria-hidden="true" />
       <ThinkingLabel data-slot="call-title" active={feedback.animated && !inherited} className="min-w-0 truncate" title={title}>{title}</ThinkingLabel>
+      {!inherited && <CallElapsed startedAt={artifact.startedAt} />}
       <span data-slot="call-target" className="text-muted-foreground min-w-0 truncate font-mono text-xs" title={target ?? undefined}>
         {resolved?.target ?? target}
       </span>
@@ -152,7 +153,6 @@ function CallRowContent({ taskId, toolCallId, toolName, args, artifact, interact
         </Collapsible>
       ) : line}
       {resolved?.overlay}
-      {interactive && <ForegroundWaitAction taskId={taskId} toolCallId={toolCallId} />}
     </div>
   );
 }

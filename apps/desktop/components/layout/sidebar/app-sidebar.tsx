@@ -100,7 +100,8 @@ export function AppSidebar({
             {addingWorkspace ? <Loader2Icon className="animate-spin" /> : <FolderPlusIcon />}
           </TooltipIconButton>
         </div>
-        {status === "loading" && <LoadingState size="compact" label="正在加载工作区…" className="px-2" />}
+        {/* 目录随推送在后台重读：已有内容时照常显示、不插入加载行（插入会把树往下推，悬停与焦点随之丢失）。 */}
+        {status === "loading" && workspaces.length === 0 && <LoadingState size="compact" label="正在加载工作区…" className="px-2" />}
         {status === "error" && <ErrorState className="mx-2 text-xs" message={error} onRetry={() => void load()} />}
         {status === "ready" && workspaces.length === 0 && <EmptyState size="compact" title="暂无工作区" description="点击上方的添加按钮，选择一个本机目录作为工作区。" className="px-2" />}
         {workspaces.length > 0 && (

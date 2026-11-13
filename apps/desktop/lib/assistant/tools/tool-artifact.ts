@@ -21,6 +21,8 @@ export type ToolArtifact = {
   agent_role?: string;
   /** 后台结果的后台占位（投影自 part `background`，结算后保留）：所有工具共用的「在后台」事实。 */
   background: boolean;
+  /** 运行起点（投影自 part `startedAt`，只在 running 期间有值），只服务运行时长的本地计时。 */
+  startedAt?: string;
 };
 
 /**

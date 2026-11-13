@@ -4,8 +4,18 @@ import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * 全应用唯一的提示打开延迟。不能为 0：面板开合、页头变窄会把别的按钮挪到静止的指针下面，零延迟时它的提示
+ * 立刻弹出、盖住旁边的控件（提示可悬停，往下移也不消失）。只有指针真的停住才该出现提示。
+ */
+const TOOLTIP_DELAY_MS = 500
+
+/**
+ * 全应用只在根部挂一个（`App`），各组件不自己包：同一个 Provider 下，一个提示出现后相邻的提示立即出现
+ * （Base UI 的分组），扫一排图标依旧顺手；各自包一层会让分组失效，延迟也会各写各的。
+ */
 function TooltipProvider({
-  delay = 0,
+  delay = TOOLTIP_DELAY_MS,
   ...props
 }: TooltipPrimitive.Provider.Props) {
   return (

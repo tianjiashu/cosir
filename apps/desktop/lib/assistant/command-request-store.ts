@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { TransportActivity } from "./contract";
+import type { TaskStatus } from "@/lib/task-status/task-status-store";
 
 /** 一种操作一个槽位：同一调用的停止、转后台和决定是三件事，互不占用，后端的并发裁决不靠前端串行。 */
 export type CommandTarget = "task" | `stop:${string}` | `background:${string}` | `decision:${string}`;
@@ -16,7 +17,8 @@ type Requests = Record<number, Partial<Record<CommandTarget, CommandRequest>>>;
  * 只有 Task 停止需要对账：它的按钮一直在，要知道何时不再显示「停止中」。前端看不到 Run，对账只看
  * 当前活动是否离开活动态；增量帧里停下与新 Run 开出总在不同帧，只有订阅断开重连拿到的完整快照会把
  * 二者并在一起，所以订阅断开时转为「待确认」（见 {@link markTaskRequestsUnsynced}）。工具调用级的按钮
- * 只在目标存活时渲染（canonical 决定），所以它们的条目不用对账，调用 id 不复用，残留条目也不可见。
+ * 只在目标存活时渲染（存活由目标自身的事实决定：调用的 canonical、TeamRun 的轮询），所以它们的条目
+ * 不用对账，调用 id 不复用，残留条目也不可见；按钮与失败提示的渲染条件里不能带槽位状态。
  */
 export const useCommandRequests = create<{ tasks: Requests }>(() => ({ tasks: {} }));
 const observed = new Map<number, TransportActivity | null>();
@@ -36,9 +38,9 @@ export function useCommandRequest(taskId: number, target: CommandTarget): Comman
 export function commandPending(request: CommandRequest | undefined): boolean {
   return !!request && request.error === null;
 }
-export function reconcileTaskStatuses(statuses: Readonly<Record<number, string | null>>): void {
-  for (const [id, status] of Object.entries(statuses)) {
-    if (status !== null && !["pending", "running", "suspended"].includes(status)) settleCommand(Number(id), "task");
+export function reconcileTaskStatuses(tasks: Readonly<Record<number, TaskStatus>>): void {
+  for (const [id, { executionStatus }] of Object.entries(tasks)) {
+    if (executionStatus !== null && !["pending", "running", "suspended"].includes(executionStatus)) settleCommand(Number(id), "task");
   }
 }
 /**

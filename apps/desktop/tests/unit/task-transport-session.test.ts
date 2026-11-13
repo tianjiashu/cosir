@@ -109,6 +109,36 @@ describe("TaskTransportSession 长订阅（D4）", () => {
     expect(onDisconnect).toHaveBeenCalledTimes(1);
   });
 
+  it("处理帧出错：中止这条仍然健康的连接再上报，重连不会留下旧连接", async () => {
+    const onDisconnect = vi.fn();
+    const { fetchImpl, session } = setup({ onDisconnect });
+    const stream = controllableStream();
+    fetchImpl.mockResolvedValueOnce(stream.response);
+    const opened = session.start();
+    await flush();
+    stream.push({ task_id: 7, kind: "bogus", mutations: [] });
+    await opened;
+
+    const signal = fetchImpl.mock.calls[0][1]?.signal;
+    expect(signal?.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+    expect(onDisconnect.mock.calls[0][0].error).toBeInstanceOf(Error);
+    expect(session.isOpen).toBe(false);
+  });
+
+  it("onResponse 抛错同样中止连接", async () => {
+    const onDisconnect = vi.fn();
+    const { fetchImpl, session } = setup({
+      onDisconnect,
+      onResponse: () => { throw new Error("response hook failed"); },
+    });
+    fetchImpl.mockResolvedValueOnce(controllableStream().response);
+    await session.start();
+
+    expect(fetchImpl.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(onDisconnect).toHaveBeenCalledTimes(1);
+  });
+
   it("命令 202 不决定是否 attach：订阅已开着就不重开，断着才立即补上", async () => {
     const submitMessage = vi.fn(async () => undefined);
     const { fetchImpl, session } = setup({ submitMessage });

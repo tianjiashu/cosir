@@ -1,11 +1,17 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  AgentTeamExecutionCard,
   AgentTeamExecutionContent,
   canStopTeamRun,
 } from "@/components/conversation/tools/agent-team/agent-team-execution-card";
 import type { AgentTeamRun } from "@/lib/api/agent-teams";
+import { stopTarget, useCommandRequests } from "@/lib/assistant/command-request-store";
+import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
+import { createQueryClient } from "@/lib/query/query-client";
+import { queryKeys } from "@/lib/query/query-keys";
 
 function teamRun(status: AgentTeamRun["status"], endReason: string | null = null): AgentTeamRun {
   return {
@@ -39,10 +45,10 @@ describe("单独停止 Agent Team", () => {
   });
 
   it("可停止时在表头渲染停止按钮，停止中显示进行态", () => {
-    const idle = renderCard(teamRun("running"), { canStop: true, onStop: () => undefined });
+    const idle = renderCard(teamRun("running"), { stop: { pending: false, error: null, onStop: () => undefined } });
     expect(idle).toContain('aria-label="停止Agent Team"');
 
-    const stopping = renderCard(teamRun("running"), { canStop: true, stopping: true, onStop: () => undefined });
+    const stopping = renderCard(teamRun("running"), { stop: { pending: true, error: null, onStop: () => undefined } });
     expect(stopping).toContain('aria-label="正在停止Agent Team"');
     expect(stopping).toContain("disabled");
   });
@@ -53,7 +59,7 @@ describe("单独停止 Agent Team", () => {
 
   it("停止请求失败时在卡片内提示原因", () => {
     const html = renderCard(teamRun("running"), {
-      canStop: true, stopError: "网络异常", onStop: () => undefined,
+      stop: { pending: false, error: "网络异常", onStop: () => undefined },
     });
     expect(html).toContain("停止 Agent Team 失败：网络异常");
   });
@@ -62,5 +68,34 @@ describe("单独停止 Agent Team", () => {
     expect(renderCard(teamRun("cancelled", "cancelled"))).toContain("已停止");
     expect(renderCard(teamRun("cancelled", "parent_cancelled"))).toContain("随对话停止");
     expect(renderCard(teamRun("cancelled", "runtime_restarted"))).toContain("已取消");
+  });
+});
+
+describe("停止后 TeamRun 落定", () => {
+  afterEach(() => useCommandRequests.setState({ tasks: {} }));
+
+  /** 停止槽位是调用级的、受理后一直留着（不对账）：卡片只在 TeamRun 运行中渲染停止入口，残留才不可见。 */
+  function renderSettledCard(error: string | null) {
+    const client = createQueryClient();
+    client.setQueryData(queryKeys.agentTeamRun(17), teamRun("cancelled", "cancelled"));
+    useCommandRequests.setState({
+      tasks: { 1: { [stopTarget("call-team")]: { token: {}, phase: "syncing", error } } },
+    });
+    const artifact = { team_run_id: 17, display_data: null } as unknown as ToolArtifact;
+    return renderToStaticMarkup(
+      <QueryClientProvider client={client}>
+        <AgentTeamExecutionCard taskId={1} toolCallId="call-team" artifact={artifact} interactive />
+      </QueryClientProvider>,
+    );
+  }
+
+  it("停止已受理：不再显示「正在停止」", () => {
+    const html = renderSettledCard(null);
+    expect(html).toContain("已停止");
+    expect(html).not.toContain("停止Agent Team");
+  });
+
+  it("停止结果未知：Team 落定后不再留着失败提示", () => {
+    expect(renderSettledCard("网络异常")).not.toContain("停止 Agent Team 失败");
   });
 });

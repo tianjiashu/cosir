@@ -73,7 +73,7 @@ test("窗口宽高与面板开关不重新执行会话和线程，也不重连�
   expect(await openedSubscriptionCount(page, { taskId: 42 })).toBe(1);
 });
 
-test("跨工作区切换后，状态通知刷新当前目录，Fork 使用当前任务和消息", async ({ page, request }) => {
+test("跨工作区切换后，目录失效推送只重读对应工作区，Fork 使用当前任务和消息", async ({ page, request }) => {
   const task = (id: number, workspaceId: number) => ({
     task_id: id, workspace_id: workspaceId, title: `任务${id}`, task_type: "user",
     created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
@@ -91,14 +91,12 @@ test("跨工作区切换后，状态通知刷新当前目录，Fork 使用当前
     refreshed.push(id);
     return route.fulfill({ json: id === 7 ? [first] : forkCreated ? [current, forked] : [current] });
   });
-  const states = new Map<number, ReturnType<typeof completedState>>();
   for (const item of [first, current, forked]) {
     await page.route(`${origin}/tasks/${item.task_id}`, route => route.fulfill({ json: item }));
     const state = completedState(1, { id: `${item.task_id}`, parts: [{ type: "text", text: item.title }] }, [
       { type: "text", text: `回复${item.task_id}`, status: "completed", finalReply: true },
     ]);
     state.title = item.title;
-    states.set(item.task_id, state);
     await seedState(request, item.task_id, state);
   }
   await page.goto("/tasks/42");
@@ -107,10 +105,9 @@ test("跨工作区切换后，状态通知刷新当前目录，Fork 使用当前
   await expect(page.getByText("回复43", { exact: true })).toBeVisible();
   await expect.poll(() => openedSubscriptionCount(page, { taskId: 43 })).toBe(1);
   refreshed.length = 0;
+  // 后端写入标题后推送工作区 8 的目录失效：侧栏只重读这个工作区，不按页面上的 snapshot 标题推断。
   current.title = "当前任务的新标题";
-  const state = states.get(43)!;
-  state.title = current.title;
-  await seedState(request, 43, state);
+  await request.post(`${origin}/__test__/publish-catalog`, { data: { workspaceIds: [8] } });
   await expect(page.getByRole("treeitem").filter({ hasText: current.title })).toBeVisible();
   expect(refreshed).toEqual([8]);
 

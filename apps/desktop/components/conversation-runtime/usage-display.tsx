@@ -261,18 +261,20 @@ export function RunUsageDisplay({ usage, running, visible }: {
   const reasoning = usage?.reasoning_tokens ?? null;
 
   if (!visible) return null;
-  const label = usage !== null && total !== null
-    ? `本次用量 ${formatTokenCount(total)} tokens`
-    : running ? "用量统计中…" : "本次用量 —";
+  // 脚注一行里只写数量，「本次用量」留给读屏标签与弹层标题。
+  const text = usage !== null && total !== null
+    ? `${formatTokenCount(total)} tokens`
+    : running ? "用量统计中…" : "用量 —";
+  const label = usage !== null && total !== null ? `本次用量 ${text}` : text;
   const displayCount = (value: number | null): string => value === null ? "—" : formatTokenCount(value);
 
   return (
     <Popover>
       <PopoverTrigger
         openOnHover
-        render={<button type="button" data-testid="run-usage-display" className="text-muted-foreground hover:text-foreground mt-1 rounded px-1 text-xs transition-colors" aria-label={label} />}
+        render={<button type="button" data-testid="run-usage-display" className="text-muted-foreground hover:text-foreground ml-1 rounded px-1 text-xs transition-colors" aria-label={label} />}
       >
-        {label}
+        {text}
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64">
         <PopoverHeader>

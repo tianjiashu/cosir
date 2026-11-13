@@ -1,5 +1,5 @@
 import type { TransportOutcome } from "../contract";
-import { formatDuration } from "./run-duration";
+import { formatDuration } from "@/lib/format/duration";
 import type { TurnLayout } from "./turn-layout";
 
 /** 28px content + 8px bottom padding + 1px divider; shared with the virtual row estimate. */

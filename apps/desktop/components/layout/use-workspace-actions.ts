@@ -29,8 +29,8 @@ export type DeleteTarget =
 /**
  * 工作区 / 任务的用户动作：开始对话、从文件夹添加工作区、分叉、删除。
  *
- * 只编排「请求 → 刷新目录 → 导航 → 反馈」，目录状态由 useWorkspaceCatalog 持有；
- * 失败统一经 notify / 确认框呈现，并写结构化日志。
+ * 只编排「请求 → 导航 → 反馈」：目录不在这里重读，写入提交后由后端推送失效（见 useWorkspaceCatalog），
+ * 和后台 Task 引起的变化走同一条路。失败统一经 notify / 确认框呈现，并写结构化日志。
  */
 export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: number | null) {
   const navigate = useNavigate();
@@ -44,16 +44,15 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
   const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
   const addPending = useRef(false);
   const [addingWorkspace, setAddingWorkspace] = useState(false);
-  const { load, selectWorkspace, selectedWorkspaceId, workspaces } = catalog;
+  const { selectWorkspace, selectedWorkspaceId, workspaces } = catalog;
 
   const startConversation = useCallback((conversation: StartedConversation) => {
     navigate(`/tasks/${conversation.task_id}`);
-    void load();
-  }, [load, navigate]);
+  }, [navigate]);
 
   /**
-   * 从文件夹添加工作区（侧栏区头与新对话页选择器共用）：系统目录选择 → 创建 → 等目录刷新 →
-   * 选中新工作区并来到新对话页。用户取消目录选择不算失败；返回是否真的添加了一个。
+   * 从文件夹添加工作区（侧栏区头与新对话页选择器共用）：系统目录选择 → 创建 → 选中新工作区并来到
+   * 新对话页（它随推送进入目录）。用户取消目录选择不算失败；返回是否真的添加了一个。
    * 进行中的再次调用直接忽略，两处入口据 `addingWorkspace` 显示忙碌。
    */
   const addWorkspaceFromFolder = useCallback(async (): Promise<boolean> => {
@@ -66,7 +65,6 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
       if (picked === null) return false;
       const name = picked.split(/[\\/]/).filter(Boolean).at(-1) ?? "新工作区";
       const workspace = await createWorkspace({ name, root_path: picked });
-      await load();
       selectWorkspace(workspace.workspace_id);
       if (location.pathname !== "/") navigate("/");
       void frontendLog("INFO", "workspace_created_from_folder", "已从文件夹添加工作区", {
@@ -81,7 +79,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
       addPending.current = false;
       setAddingWorkspace(false);
     }
-  }, [load, location.pathname, navigate, selectWorkspace]);
+  }, [location.pathname, navigate, selectWorkspace]);
 
   // 请求绑定发起时的 Task 和路由；用户切页后迟到的响应只更新目录，不抢回页面。
   const executeFork = useCallback(async function executeFork(
@@ -92,8 +90,6 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     setForkingMessageId(messageId);
     try {
       const target = await forkTask(sourceTaskId, messageId);
-      // 创建已成功，目录刷新由 catalog 自行处理错误，不应影响成功反馈或触发重复创建。
-      void load();
       if (currentLocationKey.current === originLocationKey) {
         navigate(`/tasks/${target.task_id}`);
       } else {
@@ -123,7 +119,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
       forkPending.current = false;
       setForkingMessageId(null);
     }
-  }, [load, navigate]);
+  }, [navigate]);
 
   const forkMessage = useCallback(async (messageId: string) => {
     if (focusedTaskId === null) return;
@@ -199,8 +195,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
       navigate("/");
     }
     notify.success(target.kind === "workspace" ? "工作区已删除" : deletedWithForks ? `已删除 ${forkCount + 1} 个任务` : "任务已删除");
-    await load();
-  }, [focusedTaskId, load, navigate, selectWorkspace, selectedWorkspaceId, workspaces]);
+  }, [focusedTaskId, navigate, selectWorkspace, selectedWorkspaceId, workspaces]);
 
   return { startConversation, addWorkspaceFromFolder, addingWorkspace, forkMessage, forkingMessageId, requestDelete };
 }

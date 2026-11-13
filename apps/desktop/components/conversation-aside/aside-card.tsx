@@ -4,6 +4,7 @@ import { GripVerticalIcon } from "lucide-react";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
+import { REVEAL_ON_DISCLOSURE_HOVER } from "@/components/ui/reveal-on-hover";
 import { useConversationAsideStore, type AsideCardId } from "@/lib/conversation-aside/conversation-aside-store";
 import { cn } from "@/lib/utils";
 
@@ -16,10 +17,12 @@ import { CONVERSATION_ASIDE_CARDS } from "./aside-card-registry";
  * 键盘排序由 dnd-kit 提供（空格拿起、方向键移动、空格放下）。折叠状态是全局偏好，见 `useConversationAsideStore`。
  */
 export function AsideCard({ id, taskId }: { id: AsideCardId; taskId: number }) {
-  const { title, Summary, Actions, Body } = CONVERSATION_ASIDE_CARDS[id];
+  const { title, useHasContent, Summary, Actions, Body } = CONVERSATION_ASIDE_CARDS[id];
+  const hasContent = useHasContent(taskId);
   const collapsed = useConversationAsideStore((state) => state.collapsed[id] ?? false);
   const setCollapsed = useConversationAsideStore((state) => state.setCollapsed);
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id });
+  if (!hasContent) return null;
 
   return (
     <section
@@ -41,7 +44,7 @@ export function AsideCard({ id, taskId }: { id: AsideCardId; taskId: number }) {
             ref={setActivatorNodeRef}
             type="button"
             aria-label={`拖动排序：${title}`}
-            className="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 -mr-1 flex size-6 shrink-0 cursor-grab items-center justify-center rounded-sm opacity-0 outline-none group-hover/disclosure:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 active:cursor-grabbing"
+            className={cn("text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 -mr-1 flex size-6 shrink-0 cursor-grab items-center justify-center rounded-sm outline-none focus-visible:ring-2 active:cursor-grabbing", REVEAL_ON_DISCLOSURE_HOVER)}
             {...attributes}
             {...listeners}
           >

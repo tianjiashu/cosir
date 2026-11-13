@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { ConfirmHost } from "@/components/confirm/confirm-host";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { createQueryClient } from "@/lib/query/query-client";
 import { useBackendQuerySync } from "@/lib/query/use-backend-query-sync";
@@ -90,17 +91,19 @@ function BackendQuerySync() {
 }
 
 /**
- * 应用根：全局只挂载一次的宿主——页面级查询缓存、toast、确认框。
+ * 应用根：全局只挂载一次的宿主——页面级查询缓存、提示的延迟与分组、toast、确认框。
  * 它们在启动门禁之外，启动失败页与主界面共用同一套通知与确认通道。
  */
 export function App() {
   const [queryClient] = useState(createQueryClient);
   return (
     <QueryClientProvider client={queryClient}>
-      <BackendQuerySync />
-      <DesktopApp />
-      <ConfirmHost />
-      <Toaster />
+      <TooltipProvider>
+        <BackendQuerySync />
+        <DesktopApp />
+        <ConfirmHost />
+        <Toaster />
+      </TooltipProvider>
     </QueryClientProvider>
   );
 }

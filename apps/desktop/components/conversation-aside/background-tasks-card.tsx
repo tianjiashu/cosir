@@ -14,16 +14,21 @@ import { BackgroundTaskRow } from "./background-task-row";
 
 /**
  * 「后台任务」卡（会话侧栏）。条目只读 snapshot `background_tasks`（后端从持久化占位与活登记投影）。
- * 卡片始终存在，折叠时只剩摘要；折叠、拖拽由侧栏的卡片外壳负责，这里只给摘要与正文。
+ * 这个 Task 有过后台工作（含已结束的）才算有内容，所以一个 Task 里它只出现一次、不来回闪；没有时
+ * 卡片不渲染。折叠、拖拽由侧栏的卡片外壳负责，这里只给内容判定、摘要与正文。
  */
 
-/** 折叠时标题行右侧的一句话：有运行中的报运行数，其次是收尾中，再次报已结束数，都没有则为「无」。 */
+export function useBackgroundTasksHasContent(taskId: number | null): boolean {
+  return useBackgroundTasks(taskId).length > 0;
+}
+
+/** 折叠时标题行右侧的一句话：有运行中的报运行数，其次是收尾中，否则报已结束数。 */
 export function BackgroundTasksSummary({ taskId }: { taskId: number }) {
   const entries = useBackgroundTasks(taskId);
   const running = countRunning(entries);
   if (running > 0) return <>{running} 个运行中</>;
   if (entries.some((entry) => entry.status === "settling")) return <>收尾中</>;
-  return <>{entries.length > 0 ? `${entries.length} 已结束` : "无"}</>;
+  return <>{entries.length} 已结束</>;
 }
 
 /**
@@ -65,7 +70,6 @@ export function BackgroundTasksBody({ taskId }: { taskId: number }) {
   // 定位目标在折叠的「已结束」里时先展开列表，行挂载后才接得住定位。
   const revealEnded = useConversationAsideStore((state) => state.revealCall?.taskId === taskId && ended.some((entry) => entry.toolCallId === state.revealCall?.callId));
   useEffect(() => { if (revealEnded) setShowEnded(true); }, [revealEnded]);
-  if (entries.length === 0) return <p className="text-muted-foreground px-1 py-1 text-xs">没有后台任务</p>;
 
   return (
     <>

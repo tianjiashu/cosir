@@ -6,6 +6,8 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS } from "@/lib/keyboard/shortcuts";
 import { selectConversationAsideVisible, useConversationAsideStore } from "@/lib/conversation-aside/conversation-aside-store";
 
+import { useConversationAsideHasContent } from "./aside-card-registry";
+
 /**
  * 会话侧栏在 AppLayout 里的接线：页头按钮、快捷键与侧栏本身共用这一份开关。
  *
@@ -15,11 +17,14 @@ import { selectConversationAsideVisible, useConversationAsideStore } from "@/lib
  * - `close` 用于侧栏内部的关闭（浮层 Esc、崩溃兜底的离开按钮）：焦点原本在即将卸载的侧栏里，
  *   不交还就会落到 body，所以关闭后把焦点交给挂了 `buttonRef` 的页头按钮。
  * - `runningCount` 是页头角标：当前 Task 运行中的后台工作数；有新条目时不自动打开侧栏。
+ * - `hasContent`：没有任何卡片有内容时，侧栏与页头按钮都不出现、快捷键停用（侧栏自己按同一判定不渲染）。
+ *   开关偏好不变：用户收起过，有了内容也保持收起，只亮页头角标。
  */
 export function useConversationAside(taskId: number | null) {
   const visible = useConversationAsideStore(selectConversationAsideVisible);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const runningCount = countRunning(useBackgroundTasks(taskId));
+  const hasContent = useConversationAsideHasContent(taskId);
 
   const setVisible = useCallback((next: boolean) => {
     useConversationAsideStore.getState().setVisible(next);
@@ -30,7 +35,7 @@ export function useConversationAside(taskId: number | null) {
     setVisible(false);
     buttonRef.current?.focus();
   }, [setVisible]);
-  useHotkeys(APP_SHORTCUTS.toggleConversationAside.keys, toggle, { ...APP_HOTKEY_OPTIONS, enabled: taskId !== null }, [toggle]);
+  useHotkeys(APP_SHORTCUTS.toggleConversationAside.keys, toggle, { ...APP_HOTKEY_OPTIONS, enabled: taskId !== null && hasContent }, [toggle]);
 
-  return { visible, runningCount, buttonRef, toggle, close };
+  return { visible, runningCount, hasContent, buttonRef, toggle, close };
 }

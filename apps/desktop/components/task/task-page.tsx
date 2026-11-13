@@ -20,7 +20,6 @@ type TaskSessionProps = {
   forkingMessageId?: string | null;
   onForkMessage?: (messageId: string) => void;
   onTaskLoaded?: (task: WorkspaceTask) => void;
-  onTaskStateChanged?: () => void;
 };
 
 /**
@@ -36,7 +35,6 @@ export function TaskPage({
   forkingMessageId,
   onForkMessage,
   onTaskLoaded,
-  onTaskStateChanged,
 }: TaskSessionProps) {
   const initialTaskId = initialTask?.task_id ?? null;
   const [loadedTask, setLoadedTask] = useState<WorkspaceTask | null>(
@@ -145,7 +143,6 @@ export function TaskPage({
           workspaceRoot={workspaceRoot}
           forkingMessageId={forkingMessageId}
           onForkMessage={onForkMessage}
-          onTaskStateChanged={onTaskStateChanged}
         />
       </div>
     </TaskWorkspaceLayout>

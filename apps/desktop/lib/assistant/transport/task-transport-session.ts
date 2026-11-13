@@ -31,8 +31,10 @@ type StreamHandle = { controller: AbortController };
  *
  * 订阅由 start 启用、close 释放/暂停；open 只重连仍启用的会话。
  * 订阅跟随 Task：没有 Run 时也保持连接，Run 结束不断开，只在 `close`、被新的 `open` 替换、
- * 或意外结束（交给宿主重连）时停止。旧连接用被替换的 AbortController 与句柄身份隔离，不引入
- * 协议版本字段。命令只投递：结果一律经订阅到达，提交成功后订阅若断着（重连间隙）就立即补上。
+ * 或意外结束（流结束或处理帧出错，交给宿主重连）时停止。旧连接用句柄身份隔离，不引入协议版本字段。
+ * 句柄的结束只有 `end` 一处：中止它的请求（底层连接随之关闭，abort 幂等，流已读完时什么也不做）。
+ * 任何一条结束路径都经它，所以不再是当前的句柄一定已被中止——处理帧出错后若只丢掉引用、不中止，
+ * 那条健康的连接会一直挂着，几次重连就占满浏览器对本机后端的 6 条连接。命令只投递：结果一律经订阅到达，提交成功后订阅若断着（重连间隙）就立即补上。
  * frame store 是唯一的投影持有者，这里只把帧交给它。
  */
 export class TaskTransportSession {
@@ -89,8 +91,12 @@ export class TaskTransportSession {
   }
 
   private disconnect(): void {
-    this.active?.controller.abort();
-    this.active = null;
+    if (this.active) this.end(this.active);
+  }
+
+  private end(handle: StreamHandle): void {
+    handle.controller.abort();
+    if (this.active === handle) this.active = null;
   }
 
   /** 打开（或替换）Task 长订阅：先收到 full 帧，之后持续接收增量；不携带请求体、不触发业务执行。 */
@@ -99,6 +105,7 @@ export class TaskTransportSession {
     this.disconnect();
     const handle: StreamHandle = { controller: new AbortController() };
     this.active = handle;
+    let failure: Error | null = null;
     try {
       // 非 2xx 由 requestOk 解析为结构化 HttpError（响应体原文不进入错误消息，界面经
       // userErrorMessage 只展示后端给出的可读原因）。
@@ -111,14 +118,16 @@ export class TaskTransportSession {
       if (this.active !== handle) return;
       this.callbacks().onResponse?.(response);
       await this.readSse(response, handle);
-      if (this.active !== handle) return;
-      this.active = null;
-      this.callbacks().onDisconnect?.({ error: null, resync: this.store.getSnapshot().resyncRequired });
     } catch (error) {
-      if (handle.controller.signal.aborted || this.active !== handle) return;
-      this.active = null;
-      this.callbacks().onDisconnect?.({ error: error instanceof Error ? error : new Error(String(error)), resync: false });
+      failure = error instanceof Error ? error : new Error(String(error));
     }
+    // 被 close 或新的 open 替换时，句柄已由替换方结束，这里不回调。
+    const replaced = this.active !== handle;
+    this.end(handle);
+    if (replaced) return;
+    this.callbacks().onDisconnect?.(failure
+      ? { error: failure, resync: false }
+      : { error: null, resync: this.store.getSnapshot().resyncRequired });
   };
 
   /**

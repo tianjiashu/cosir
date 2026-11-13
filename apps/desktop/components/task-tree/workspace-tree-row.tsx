@@ -5,15 +5,15 @@ import type { NodeApi, NodeRendererProps, RowRendererProps } from "react-arboris
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/format/relative-time";
 import { cn } from "@/lib/utils";
-import { TaskRunStatusDot } from "./task-run-status";
+import { AWAITING_USER_LABEL, TaskStatusMarker } from "@/components/task-status/task-status-indicator";
 import { TASK_PAGE_SIZE, type TaskSidebarNode, type WorkspaceSidebarNode, type WorkspaceTreeSource } from "./workspace-tree-model";
-import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
+import { useTaskAwaitingUserCalls } from "@/lib/task-status/task-status-store";
 
 /**
  * 当前项由路由与工作区选择决定；树的键盘焦点不构成第二份导航状态。
  *
  * 工作区与任务行整行是悬停卡片的触发区（键盘聚焦同样弹出），卡片内容见 `RowHoverCard`；
- * 延迟与相邻行之间的即时切换由 WorkspaceTree 外层的 TooltipProvider 统一设定。
+ * 延迟与相邻行之间的即时切换来自应用根部唯一的 TooltipProvider（`App`）。
  */
 export function WorkspaceTreeRow({ node, innerRef, attrs, children }: RowRendererProps<WorkspaceSidebarNode>) {
   const item = node.data;
@@ -206,13 +206,14 @@ function branchGuides(node: NodeApi<WorkspaceSidebarNode>): BranchGuide[] {
 
 function WorkspaceTaskRow({ node, style, item, actions }: Pick<NodeRendererProps<WorkspaceSidebarNode>, "node" | "style"> & { item: TaskSidebarNode; actions: ReactNode }) {
   const task = item.task;
-  const status = useTaskExecutionStatus(task.task_id);
+  const awaitingUser = useTaskAwaitingUserCalls(task.task_id) > 0;
   const nested = node.level > ROOT_TASK_LEVEL;
   // 嵌套行的 Fork 身份由层级表达；源任务已不在列表中、被提为顶层的 Fork 仍保留图标。Agent 用
   // `fork_task` 分出的对话无论在哪一层都标 Bot：它不是用户自己开的分支。
   const agentFork = task.task_type === "agent_fork";
   const showForkIcon = task.task_type === "user_fork" && !nested;
-  const showMarkerIcon = showForkIcon || agentFork;
+  // 有事等你操作时暂停图标独占标记位（「等你操作优先」），身份图标让位，行尾同时写明。
+  const showMarkerIcon = (showForkIcon || agentFork) && !awaitingUser;
   // 覆盖 react-arborist 按层级等距算出的 paddingLeft，只收紧 Fork 层。
   const paddingLeft = ROOT_TASK_INDENT + (node.level - ROOT_TASK_LEVEL) * FORK_INDENT;
   return (
@@ -222,9 +223,9 @@ function WorkspaceTaskRow({ node, style, item, actions }: Pick<NodeRendererProps
         <span key={index} className="workspace-tree-guide" data-guide={guide} style={{ left: ROOT_TASK_INDENT + index * FORK_INDENT + TASK_MARKER_WIDTH + TASK_MARKER_GAP - 4 }} aria-hidden="true" />
       ))}
       <span className="workspace-tree-task-marker" style={{ flexBasis: TASK_MARKER_WIDTH }} data-nested={nested || undefined}>
-        {showForkIcon && <GitForkIcon className="size-3.5 text-muted-foreground" aria-label="Fork 任务" />}
-        {agentFork && <BotIcon className="size-3.5 text-muted-foreground" aria-label="Agent 分出的对话" />}
-        <TaskRunStatusDot status={status} className={showMarkerIcon ? "absolute -top-0.5 right-0 size-1.5" : undefined} />
+        {showMarkerIcon && showForkIcon && <GitForkIcon className="size-3.5 text-muted-foreground" aria-label="Fork 任务" />}
+        {showMarkerIcon && agentFork && <BotIcon className="size-3.5 text-muted-foreground" aria-label="Agent 分出的对话" />}
+        <TaskStatusMarker taskId={task.task_id} dotClassName={showMarkerIcon ? "absolute -top-0.5 right-0 size-1.5" : undefined} />
       </span>
       <span className="flex min-w-0 flex-1 items-center gap-1">
         <span className="workspace-tree-title min-w-0 truncate">{task.full_title}</span>
@@ -244,7 +245,9 @@ function WorkspaceTaskRow({ node, style, item, actions }: Pick<NodeRendererProps
       </span>
       {/* 元信息与操作叠在同一尾栏格内，宽度取较宽者；操作显示时隐藏时间，标题不跳动。 */}
       <div className="workspace-tree-task-tail">
-        <time className="workspace-tree-time whitespace-nowrap text-2xs tabular-nums text-muted-foreground" dateTime={task.updated_at}>{formatRelativeTime(task.updated_at)}</time>
+        {awaitingUser
+          ? <span className="workspace-tree-time whitespace-nowrap text-2xs text-info">{AWAITING_USER_LABEL}</span>
+          : <time className="workspace-tree-time whitespace-nowrap text-2xs tabular-nums text-muted-foreground" dateTime={task.updated_at}>{formatRelativeTime(task.updated_at)}</time>}
         <div className="workspace-tree-actions" onClick={(event) => event.stopPropagation()}>{actions}</div>
       </div>
     </div>

@@ -34,7 +34,7 @@ test.beforeEach(async ({ request }) => {
   await request.post(`${origin}/__test__/seed-task`, { data: { taskId: 9, title: "主任务" } });
 });
 
-test("Agent 分出的对话：行出现时侧栏补上它，「打开」跳到它的对话", async ({ page, request }) => {
+test("Agent 分出的对话：经目录失效推送进侧栏，「打开」跳到它的对话", async ({ page, request }) => {
   await page.goto("/tasks/9");
   const sidebar = page.getByRole("navigation", { name: "工作区任务列表" });
   await expect(sidebar.getByText("主任务")).toBeVisible();
@@ -56,6 +56,18 @@ test("Agent 分出的对话：行出现时侧栏补上它，「打开」跳到�
   await row.hover();
   await row.getByRole("button", { name: "打开分叉对话：前端部分" }).click();
   await expect(page).toHaveURL(/\/tasks\/41$/);
+});
+
+test("分叉已被删除：调用行留在时间线上，不反复重读目录", async ({ page, request }) => {
+  let catalogReads = 0;
+  page.on("request", (sent) => { if (sent.method() === "GET" && /\/workspaces\/7\/tasks$/.test(sent.url())) catalogReads++; });
+  // 父对话里有 fork 行，但它指向的 Task 41 不存在（已被用户删除）。
+  await seedState(request, 9, parentState);
+  await page.goto("/tasks/9");
+  await expect(page.locator('[data-tool-call-id="call-fork"]')).toBeAttached();
+  const afterLoad = catalogReads;
+  await page.waitForTimeout(1500);
+  expect(catalogReads - afterLoad).toBe(0);
 });
 
 test("手动分叉的历史可读、截图可查看，但不操作来源任务", async ({ page, request }) => {

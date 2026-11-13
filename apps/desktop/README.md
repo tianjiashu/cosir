@@ -58,3 +58,5 @@ npm run test:e2e:desktop  # Playwright driving the real Electron host and backen
 (`test-results/slot-0`), and fails if a port is already taken. To run several
 suites at once, give each a different slot: `COSIR_E2E_SLOT=1 npm run test:e2e`
 shifts every port by 1 and uses `test-results/slot-1` (see `tests/e2e/e2e-env.ts`).
+Each Vite port gets its own dependency cache (`node_modules/.vite/port-<port>`); caches idle for
+7 days whose port is not listening are reclaimed on the next dev-server start.

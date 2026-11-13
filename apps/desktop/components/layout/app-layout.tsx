@@ -27,7 +27,7 @@ import { useWorkspaceCatalog, type WorkspaceCatalog } from "@/components/layout/
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { findSettingsTab, SYSTEM_SETTINGS_TABS, WORKSPACE_SETTINGS_TABS } from "@/components/settings/settings-tabs";
 import { TaskPage } from "@/components/task/task-page";
-import { TaskRunStatusBadge } from "@/components/task-tree/task-run-status";
+import { TaskStatusBadges } from "@/components/task-status/task-status-indicator";
 import { StatusDot } from "@/components/ui/status-dot";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -45,11 +45,9 @@ import {
   useTerminalWorkbenchStore,
 } from "@/lib/terminal/terminal-workbench-store";
 import { WorkbenchProvider } from "@/lib/workbench/workbench-context";
-import { TaskListingContext } from "@/components/layout/task-listing-context";
 import { SIDEBAR_WIDTH, useLayoutPreferences } from "@/lib/layout/preferences";
 import { cn } from "@/lib/utils";
-import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
-import { useTaskStatusStream } from "@/lib/task-status/use-task-status-stream";
+import { useTaskFeed } from "@/lib/task-feed/use-task-feed";
 
 /** 路由表上每个子路由通过 handle 声明自己属于哪个区域（见 src/router.tsx）。 */
 export type RouteHandle = { section: SidebarSection; files?: boolean };
@@ -103,8 +101,8 @@ export function AppLayout() {
   const focusedTaskId = section === "conversation" ? routeTaskId : keptTaskId;
 
   const catalog = useWorkspaceCatalog(focusedTaskId, workspaceConfigurationId);
-  useTaskStatusStream();
-  const activeTaskStatus = useTaskExecutionStatus(catalog.activeTask?.task_id);
+  useTaskFeed({ onWorkspacesChanged: catalog.load, onWorkspaceTasksChanged: catalog.refreshWorkspaceTasks });
+  const activeTaskId = catalog.activeTask?.task_id;
   useUnsavedRouteGuard();
   // 工作台显示聚焦任务所在工作区的桶（无任务时为选中工作区）；归属尚在加载时暂不显示，不销毁任何内容。
   const workbenchWorkspace = catalog.workspaces.find((workspace) => workspace.workspace_id === catalog.activeTaskWorkspaceId);
@@ -112,12 +110,6 @@ export function AppLayout() {
   // 快捷键先于导航函数注册，经 ref 调用最新的实现。
   const startNewConversationRef = useRef<(workspaceId?: number) => void>(() => undefined);
   const actions = useWorkspaceActions(catalog, focusedTaskId);
-  // 会话事件只随业务依赖变化：布局更新不能以新回调身份穿透 runtime 的渲染隔离。
-  // Fork 直接使用 actions 已稳定的动作；目录通知只绑定当前任务的工作区。
-  const { activeTaskWorkspaceId, refreshWorkspaceTasks } = catalog;
-  const handleTaskStateChanged = useCallback(() => {
-    if (activeTaskWorkspaceId !== null) void refreshWorkspaceTasks(activeTaskWorkspaceId);
-  }, [activeTaskWorkspaceId, refreshWorkspaceTasks]);
 
   // ---- 侧栏：宽屏停靠（可收起并记住），窄屏抽屉 ----
   const narrow = useMediaQuery(NARROW_VIEWPORT_QUERY);
@@ -245,7 +237,7 @@ export function AppLayout() {
   // 引用跳转与工作台共用同一个工作区来源：文件标签总是打开到当前显示的那个工作台桶里。
   return (
     <ReferenceBridgeProvider workspaceRoot={workbenchWorkspace?.root_path ?? ""} workspaceName={workbenchWorkspace?.name ?? "工作区"} target={filesVisible ? (routeTaskId ? `task:${routeTaskId}` : `new:${catalog.selectedWorkspaceId}`) : null} workspaceId={workbenchWorkspaceId}>
-    <WorkbenchProvider workspaceId={workbenchWorkspaceId}><TaskListingContext.Provider value={catalog.ensureTaskListed}>
+    <WorkbenchProvider workspaceId={workbenchWorkspaceId}>
       {/* 根是下沉的窗口底色，侧栏直接铺在上面；主区与停靠卡片在 bg-background 上，二者靠明度差分隔，不画线。 */}
       <div className="bg-canvas relative flex h-dvh min-h-0 overflow-hidden">
         <BackendStatusBanner />
@@ -299,7 +291,7 @@ export function AppLayout() {
           <PageHeader
             leading={sidebarOpen ? undefined : sidebarControls}
             crumbs={crumbs}
-            status={showTaskLayer ? <TaskRunStatusBadge status={activeTaskStatus} /> : undefined}
+            status={showTaskLayer && activeTaskId != null ? <TaskStatusBadges taskId={activeTaskId} /> : undefined}
             actions={(
               <>
                 {conversationTaskId !== null && (
@@ -339,7 +331,7 @@ export function AppLayout() {
                     <FolderIcon />
                   </TooltipIconButton>
                 )}
-                {conversationTaskId !== null && (
+                {conversationTaskId !== null && rail.hasContent && (
                   <TooltipIconButton
                     ref={rail.buttonRef}
                     tooltip={withShortcut([rail.visible ? "收起会话侧栏" : "打开会话侧栏", rail.runningCount > 0 && `${rail.runningCount} 个后台任务运行中`].filter(Boolean).join(" · "), "toggleConversationAside")}
@@ -383,7 +375,6 @@ export function AppLayout() {
                   forkingMessageId={actions.forkingMessageId}
                   onForkMessage={actions.forkMessage}
                   onTaskLoaded={catalog.handleTaskLoaded}
-                  onTaskStateChanged={handleTaskStateChanged}
                 /></ReferenceTargetScope.Provider>
                 </ConversationAsideContext.Provider>
               </div>
@@ -436,6 +427,6 @@ export function AppLayout() {
         onNavigate={navigate}
         onRestartBackend={canRestartBackendRuntime() ? () => confirmBackendRestart("command_palette") : undefined}
       />
-    </TaskListingContext.Provider></WorkbenchProvider></ReferenceBridgeProvider>
+    </WorkbenchProvider></ReferenceBridgeProvider>
   );
 }

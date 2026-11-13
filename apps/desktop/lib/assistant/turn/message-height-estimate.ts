@@ -97,7 +97,8 @@ function agentRowHeight(id: string, text: string, taskId?: number): number {
 // 同源，见 `turn-layout.ts`）：过程默认按 outcome 折叠、运行中保留正文及活动摘要；等待卡与产物卡常显；正文按
 // Markdown 逐块计。正文与脚注常量按 Chromium 的对话列宽实测校准，
 // 区卡常量仍是按设计稿（§5.9）取的预估值。
-const ASSISTANT_CHROME = 52;
+// 脚注是一行操作条（实测 24px）；悬停显示只改透明度，始终占位。
+const ASSISTANT_CHROME = 24;
 const ZONE_GAP = 16;
 const PROCESS_HEADER = 33;
 const PROCESS_ITEM = 28;

@@ -5,12 +5,15 @@ import { readAgentTeamPreviewDisplay } from "../agent-team/agent-team-display";
 import type { CallView } from "../call-view";
 import { DetailSurface } from "./detail-parts";
 
-/** TeamRun 自身的异常（失败、驳回、停止）：工具 `completed` 只表示结论已交付；执行中由标题扫光表达。 */
-function TeamProblem({ id }: { id: number; }) {
+/**
+ * TeamRun 自身的状态：批准后调用当场完成，`completed` 只表示 Team 已开跑，Team 做得怎样只有这里知道
+ * （结论另以汇报消息到达）。执行中与失败、驳回、停止都说；完成不说话。
+ */
+function TeamStatus({ id }: { id: number; }) {
   const query = useAgentTeamRunPolling(id);
   if (query.isError) return <span>状态同步失败</span>;
   const run = query.data;
-  if (run?.status !== "failed" && run?.status !== "cancelled") return null;
+  if (run?.status !== "running" && run?.status !== "failed" && run?.status !== "cancelled") return null;
   return <span className={cn(run.status === "failed" && "text-destructive")}>{runStatusLabel(run)}</span>;
 }
 
@@ -22,10 +25,11 @@ export const teamView: CallView = (data, context) => {
     detail: { render: () => <DetailSurface className="text-muted-foreground whitespace-pre-wrap break-words">{preview.goal}</DetailSurface> },
   };
   return {
-    status: <TeamProblem id={preview.teamRunId} />,
-    detail: context.artifact.awaitingUser || context.surface === "details" ? {
-      defaultOpen: true,
+    status: <TeamStatus id={preview.teamRunId} />,
+    // 待批时展开审批表单；批准后就地展开执行卡（Team 是编排，不在后台看板上）。
+    detail: {
+      defaultOpen: context.artifact.awaitingUser,
       render: () => context.artifact.awaitingUser ? <AgentTeamApproval {...context} /> : <AgentTeamExecutionCard {...context} displayOverride={preview} />,
-    } : undefined,
+    },
   };
 };

@@ -187,7 +187,7 @@ function validatePart(value: unknown, path: string): void {
     return;
   }
   if (type !== "tool-call") throw new TransportSnapshotValidationError(`${path}.type`, "已知消息 part 类型");
-  const allowed = ["type", "toolCallId", "toolName", "presentation", "status", "args", "intent", "error", "errorCode", "awaitingUser", "display_data", "team_run_id", "background", "isError", "child_task_id", "agent_role", "terminal_output_seq"];
+  const allowed = ["type", "toolCallId", "toolName", "presentation", "status", "args", "intent", "error", "errorCode", "awaitingUser", "display_data", "team_run_id", "background", "isError", "child_task_id", "agent_role", "startedAt", "terminal_output_seq"];
   if (Object.keys(part).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
   requireString(part.toolCallId, `${path}.toolCallId`);
   requireString(part.toolName, `${path}.toolName`);
@@ -208,6 +208,7 @@ function validatePart(value: unknown, path: string): void {
   if (hasOwn(part, "team_run_id") && (!Number.isInteger(part.team_run_id) || (part.team_run_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.team_run_id`, "正整数");
   if (hasOwn(part, "background")) validateBackgroundWork(part.background, `${path}.background`);
   if (hasOwn(part, "agent_role") && (typeof part.agent_role !== "string" || !part.agent_role.trim())) throw new TransportSnapshotValidationError(`${path}.agent_role`, "非空字符串");
+  if (hasOwn(part, "startedAt") && part.startedAt !== null && (typeof part.startedAt !== "string" || !part.startedAt)) throw new TransportSnapshotValidationError(`${path}.startedAt`, "非空字符串或 null");
   if (hasOwn(part, "terminal_output_seq") && (!Number.isInteger(part.terminal_output_seq) || (part.terminal_output_seq as number) < 0)) throw new TransportSnapshotValidationError(`${path}.terminal_output_seq`, "非负整数");
 }
 
@@ -279,7 +280,7 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   requireString(session.createdAt, `${path}.createdAt`);
 }
 
-const BACKGROUND_TASK_KINDS = ["terminal_command", "child_agent", "agent_team"] as const;
+const BACKGROUND_TASK_KINDS = ["terminal_command"] as const;
 const BACKGROUND_TASK_STATUSES = ["running", "settling", "completed", "cancelled"] as const;
 
 function validateBackgroundWork(value: unknown, path: string): void {
@@ -341,11 +342,17 @@ function validateMessage(rawMessage: unknown, messagePath: string, ids: Set<stri
 
 function validateSource(value: unknown, path: string): void {
   const source = requireRecord(value, path);
-  requireExactKeys(source, ["taskId", "name"], path);
-  if (requireNullableNonNegativeInteger(source.taskId, `${path}.taskId`) === null) {
-    throw new TransportSnapshotValidationError(`${path}.taskId`, "非负整数");
-  }
+  requireExactKeys(source, ["taskId", "teamRunId", "name", "report"], path);
+  const taskId = requireNullableNonNegativeInteger(source.taskId, `${path}.taskId`);
+  const teamRunId = requireNullableNonNegativeInteger(source.teamRunId, `${path}.teamRunId`);
+  if ((taskId === null) === (teamRunId === null)) throw new TransportSnapshotValidationError(path, "taskId 与 teamRunId 恰好一个非空");
   requireString(source.name, `${path}.name`);
+  if (source.report !== null) {
+    const report = requireRecord(source.report, `${path}.report`);
+    requireExactKeys(report, ["status", "intermediate"], `${path}.report`);
+    if (report.status !== "completed" && report.status !== "failed") throw new TransportSnapshotValidationError(`${path}.report.status`, "completed 或 failed");
+    if (typeof report.intermediate !== "boolean") throw new TransportSnapshotValidationError(`${path}.report.intermediate`, "布尔值");
+  }
 }
 
 /**

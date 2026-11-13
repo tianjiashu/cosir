@@ -1,13 +1,11 @@
-import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { taskRunStatusPresentation } from "@/components/task-tree/task-run-status";
+import { AWAITING_USER_LABEL, executionStatusPresentation } from "@/components/task-status/task-status-indicator";
 import { cancelTask } from "@/lib/assistant/task-commands";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
+import { useTaskAwaitingUserCalls, useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
 import { cn } from "@/lib/utils";
 import { useWorkbenchActions } from "@/lib/workbench/workbench-context";
-import { useEnsureTaskListed } from "@/components/layout/task-listing-context";
 import { useOpenTask } from "@/components/links/use-open-task";
 import { CallOpenButton } from "../call-open-button";
 import type { CallView, CallViewContext } from "../call-view";
@@ -16,26 +14,17 @@ import { readAgentTaskResultDisplay, readDelegationDisplay, readForkDisplay, typ
 import { ToolStopButton, useStopRequest } from "../tool-stop-button";
 
 /**
- * 子任务自身的异常（失败、已停止、等待中）：工具 `completed` 只表示结论已交付，子任务是否成功只有这里知道。
+ * 子任务自身的异常（失败、已停止、等待结果）或在等你操作：派生调用当场完成，`completed` 只表示子任务已建好、任务说明已投递，
+ * 子任务做得怎样只有这里知道（结论另以汇报消息到达）。
  * 运行中由调用行标题的扫光表达，完成是常态，都不说话。读任务状态推送而不是展示数据：展示数据是调用那一刻
  * 的快照，子 Run 之后还会变；推送还没到（null）时不显示，不猜。
  */
 function ChildTaskProblem({ childTaskId }: { childTaskId: number | undefined; }) {
-  const presentation = taskRunStatusPresentation(useTaskExecutionStatus(childTaskId));
+  const presentation = executionStatusPresentation(useTaskExecutionStatus(childTaskId));
+  const awaitingUser = useTaskAwaitingUserCalls(childTaskId) > 0;
+  if (awaitingUser) return <span className="text-info">{AWAITING_USER_LABEL}</span>;
   if (!presentation || presentation.active) return null;
   return <span className={cn(presentation.tone === "destructive" && "text-destructive")}>{presentation.label}</span>;
-}
-
-/**
- * 分叉卡片的状态节点。卡片出现时侧栏目录里可能还没有它（Agent 在父 Run 运行中建出），在这里补刷一次：
- * 时间线的后台行不挂操作，状态是行上唯一常驻的节点。
- */
-function ForkStatus({ childTaskId }: { childTaskId: number; }) {
-  const ensureTaskListed = useEnsureTaskListed();
-  useEffect(() => {
-    ensureTaskListed?.(childTaskId);
-  }, [childTaskId, ensureTaskListed]);
-  return <ChildTaskProblem childTaskId={childTaskId} />;
 }
 
 /** 在工作台打开子 Agent。 */
@@ -68,8 +57,8 @@ function OpenFork({ childTaskId, title }: { childTaskId: number; title: string; 
 }
 
 /**
- * 状态查询行的停止：委派与分叉的停止在后台卡片上（`cancelToolCall`），已结束的条目没有停止，子任务被
- * 消息重新唤醒后只有这里能单独停它。停止信号只投递，终态经任务状态推送到达，不乐观改状态。
+ * 停止派生出的子任务：委派、分叉与状态查询行共用。按 Task 停止（用户停止只打断它当前的运行），子任务
+ * 活动时才出现；停止信号只投递，终态经任务状态推送到达，不乐观改状态。
  */
 function ChildStopAction({ childTaskId, title, context }: { childTaskId: number; title: string; context: CallViewContext; }) {
   const status = useTaskExecutionStatus(childTaskId);
@@ -113,9 +102,18 @@ export const delegationView: CallView = (data, context) => {
   return {
     detail: typeof context.args.message === "string" ? { render: () => <DetailSurface className="text-muted-foreground whitespace-pre-wrap break-words">{context.args.message as string}</DetailSurface> } : undefined,
     status: context.inherited ? null : <ChildTaskProblem childTaskId={childTaskIdOf(context, display.childTaskId)} />,
-    actions: context.inherited ? null : <OpenChildAgent childTaskId={childTaskIdOf(context, display.childTaskId)} title={rowTitle(context, display.title)} />,
+    actions: context.inherited ? null : <DelegationActions childTaskId={childTaskIdOf(context, display.childTaskId)} title={rowTitle(context, display.title)} context={context} />,
   };
 };
+
+function DelegationActions({ childTaskId, title, context }: { childTaskId: number | undefined; title: string; context: CallViewContext; }) {
+  return (
+    <>
+      <OpenChildAgent childTaskId={childTaskId} title={title} />
+      {childTaskId !== undefined && <ChildStopAction childTaskId={childTaskId} title={title} context={context} />}
+    </>
+  );
+}
 
 /** 打开对方（按 Task 类型跳路由或进工作台）；只有状态查询可以停止所管理的子任务。 */
 function AgentTaskActions({ display, context }: { display: AgentTaskResultDisplay; context: CallViewContext; }) {
@@ -156,7 +154,12 @@ export const forkTaskView: CallView = (data, context) => {
   const childTaskId = childTaskIdOf(context, display.childTaskId)!;
   return {
     detail: typeof context.args.message === "string" ? { render: () => <DetailSurface className="text-muted-foreground whitespace-pre-wrap break-words">{context.args.message as string}</DetailSurface> } : undefined,
-    status: context.inherited ? null : <ForkStatus childTaskId={childTaskId} />,
-    actions: context.inherited ? null : <OpenFork childTaskId={childTaskId} title={display.title} />,
+    status: context.inherited ? null : <ChildTaskProblem childTaskId={childTaskId} />,
+    actions: context.inherited ? null : (
+      <>
+        <OpenFork childTaskId={childTaskId} title={display.title} />
+        <ChildStopAction childTaskId={childTaskId} title={display.title} context={context} />
+      </>
+    ),
   };
 };

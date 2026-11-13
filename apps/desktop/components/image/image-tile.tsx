@@ -73,7 +73,7 @@ function ImageTileImpl({ src, alt, size = "regular", title, state = "ready", err
   if (!title && !errorMessage) return tile;
   return (
     <Tooltip>
-      <TooltipTrigger render={tile} delay={500} />
+      <TooltipTrigger render={tile} />
       <TooltipContent side="top" className="break-all">
         {title}
         {errorMessage && <p>{errorMessage}</p>}

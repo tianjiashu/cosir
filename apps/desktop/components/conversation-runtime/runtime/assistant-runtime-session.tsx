@@ -42,7 +42,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   registerResync,
   forkingMessageId,
   onForkMessage,
-  onTaskStateChanged,
 }: RuntimeSessionProps) {
   const backendRuntime = useBackendRuntime();
   const { available: backendRuntimeAvailable } = backendRuntime;
@@ -79,12 +78,6 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   const sessionInitialState = initialStateRef.current;
   const latestStateRef = useRef(sessionInitialState);
   const attachTransportRef = useRef<(() => Promise<void>) | null>(null);
-  const onTaskStateChangedRef = useRef(onTaskStateChanged);
-  onTaskStateChangedRef.current = onTaskStateChanged;
-
-  const notifyTaskStateChanged = useCallback(() => {
-    onTaskStateChangedRef.current?.();
-  }, []);
 
   const context = useMemo<RuntimeSessionContext>(() => ({
     taskId,
@@ -95,11 +88,9 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     traceId,
     performanceProbe,
     setIssue,
-    onTaskStateChanged: notifyTaskStateChanged,
     latestStateRef,
     attachTransportRef,
   }), [
-    notifyTaskStateChanged,
     performanceProbe,
     sessionInitialState,
     setIssue,
@@ -137,15 +128,12 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
   }, [recovery.resync, registerResync]);
 
   const commitTransportState = useCallback((state: typeof sessionInitialState, toolCalls: ToolCalls) => {
-    const previousTitle = latestStateRef.current.title;
     latestStateRef.current = state;
     // 终端会话列表是 snapshot 投影；镜像给页头按钮与终端工作台（它们在 Assistant runtime 之外）。
     useTerminalWorkbenchStore.getState().syncSessions(taskId, state.terminal_sessions);
     useBackgroundTasksStore.getState().sync(taskId, { ...state, toolCalls });
     useHandoffStore.getState().sync(taskId, state.handoffs);
-    // 标题事实在后端 tasks.title；snapshot 只负责通知打开中的页面，侧栏目录按既有刷新路径重读。
-    if (state.title !== previousTitle) notifyTaskStateChanged();
-  }, [notifyTaskStateChanged, taskId]);
+  }, [taskId]);
   return (
     <AssistantRuntimeTransportHost
       context={context}

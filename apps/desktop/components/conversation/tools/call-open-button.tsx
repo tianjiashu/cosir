@@ -1,7 +1,7 @@
 import { ArrowUpRightIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { REVEAL_ON_HOVER_CLASS } from "@/components/ui/disclosure-chevron";
+import { REVEAL_ON_DISCLOSURE_HOVER } from "@/components/ui/reveal-on-hover";
 import { cn } from "@/lib/utils";
 
 /**
@@ -18,7 +18,7 @@ export function CallOpenButton({ label, onClick }: {
       type="button"
       variant="ghost"
       size="xs"
-      className={cn("text-muted-foreground hover:text-foreground shrink-0", REVEAL_ON_HOVER_CLASS)}
+      className={cn("text-muted-foreground hover:text-foreground shrink-0", REVEAL_ON_DISCLOSURE_HOVER)}
       onClick={onClick}
       aria-label={label}
     >

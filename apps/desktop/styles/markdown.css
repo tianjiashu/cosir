@@ -263,15 +263,3 @@
   font-size: var(--text-chat);
   line-height: var(--text-chat--line-height);
 }
-.aui-thread-root [data-role="user"] .bg-foreground .aui-md {
-  color: inherit;
-}
-.aui-thread-root [data-role="user"] .bg-foreground .aui-md a {
-  color: inherit;
-  text-decoration: underline;
-}
-
-/* 用户气泡反转正文颜色；行内代码的底色也必须随局部前景色变化。 */
-.aui-thread-root [data-role="user"] .bg-foreground .aui-md {
-  --inline-code-background: color-mix(in oklab, currentColor 15%, transparent);
-}

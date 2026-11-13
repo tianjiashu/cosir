@@ -175,14 +175,21 @@ export async function cancelTask(taskId: number): Promise<CancelTaskResult> {
  * 409 表示已没有可操作的对象（调用已结束、已转走），对界面都意味着无需再做，算不上失败。调用成功
  * 不代表工具已经结束，结局经 snapshot 到达。
  */
-async function postCallCommand(taskId: number, toolCallId: string, target: CommandTarget, path: "cancel" | "background", action: string): Promise<string | null> {
+async function postCallCommand(
+  taskId: number,
+  toolCallId: string,
+  target: CommandTarget,
+  path: "cancel" | "background",
+  action: string,
+  url = `/tasks/${taskId}/tool-calls/${encodeURIComponent(toolCallId)}/${path}`,
+): Promise<string | null> {
   const request = beginCommand(taskId, target);
   if (!request) return null;
   const traceId = newTraceId();
   void frontendLog("INFO", "assistant_tool_call_command_requested", "用户对工具调用发起命令", { traceId, data: { taskId, toolCallId, action: path } });
   let failure: string | null = null;
   try {
-    await requestOk(`/tasks/${taskId}/tool-calls/${encodeURIComponent(toolCallId)}/${path}`, { method: "POST", traceId, timeoutMs: IDEMPOTENT_COMMAND_TIMEOUT_MS });
+    await requestOk(url, { method: "POST", traceId, timeoutMs: IDEMPOTENT_COMMAND_TIMEOUT_MS });
     finishCommand(taskId, target, request, "accepted");
   } catch (error) {
     if (isConflict(error)) finishCommand(taskId, target, request, "rejected");
@@ -198,6 +205,14 @@ async function postCallCommand(taskId: number, toolCallId: string, target: Comma
 /** 取消一次工具调用：登记了后台结果的调用不要求 Run 在执行，其余只命中 Task 当前执行中的调用。 */
 export function cancelToolCall(taskId: number, toolCallId: string): Promise<string | null> {
   return postCallCommand(taskId, toolCallId, stopTarget(toolCallId), "cancel", "停止请求");
+}
+
+/**
+ * 单独停止一个运行中的 Agent Team：Team 是编排实体，按 TeamRun 停止，不经工具调用取消。与提出它的那次调用
+ * 共用「停止中」槽位，审批卡上的停止按钮据此显示进行中；409（已落定）视为无需再停。
+ */
+export function cancelAgentTeamRun(taskId: number, toolCallId: string, teamRunId: number): Promise<string | null> {
+  return postCallCommand(taskId, toolCallId, stopTarget(toolCallId), "cancel", "停止请求", `/agent-team/runs/${encodeURIComponent(teamRunId)}/cancel`);
 }
 
 /** 把一次前台等待转到后台：工具立即以「已转后台」占位闭合，结论稍后回投。 */

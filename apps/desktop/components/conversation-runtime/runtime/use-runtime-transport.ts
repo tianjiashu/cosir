@@ -77,7 +77,6 @@ export function useRuntimeTransport(
         messageCount: transportMessageCount(context.latestStateRef.current),
       },
     });
-    context.onTaskStateChanged?.();
   }, [context]);
 
   const handleDisconnect = useCallback(({ error, resync }: TransportDisconnect) => {

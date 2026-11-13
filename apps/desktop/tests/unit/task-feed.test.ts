@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { useTaskStatusStore } from "@/lib/task-status/task-status-store";
-import { parseStatusFrame } from "@/lib/task-status/use-task-status-stream";
+import { parseTaskFeedFrame } from "@/lib/task-feed/use-task-feed";
 
-describe("task status stream frames", () => {
+describe("task feed frames", () => {
   it("整表与变化帧把 Task id 键解析成数字，执行状态可为 null，等你操作是调用数", () => {
-    expect(parseStatusFrame({
+    expect(parseTaskFeedFrame({
       type: "full",
       tasks: {
         "7": { executionStatus: "running", awaitingUserCalls: 0 },
@@ -15,17 +15,27 @@ describe("task status stream frames", () => {
       type: "full",
       tasks: { 7: { executionStatus: "running", awaitingUserCalls: 0 }, 8: { executionStatus: null, awaitingUserCalls: 2 } },
     });
-    expect(parseStatusFrame({ type: "heartbeat" })).toEqual({ type: "heartbeat" });
+    expect(parseTaskFeedFrame({ type: "heartbeat" })).toEqual({ type: "heartbeat" });
   });
 
   it("拒绝未知帧、旧帧形状、非法 id、非字符串状态与非法调用数", () => {
     const entry = { executionStatus: "running", awaitingUserCalls: 0 };
-    expect(() => parseStatusFrame({ type: "other" })).toThrow();
-    expect(() => parseStatusFrame({ type: "changed", statuses: { "1": "running" } })).toThrow();
-    expect(() => parseStatusFrame({ type: "changed", tasks: { abc: entry } })).toThrow();
-    expect(() => parseStatusFrame({ type: "changed", tasks: { "1": { ...entry, executionStatus: 3 } } })).toThrow();
-    expect(() => parseStatusFrame({ type: "changed", tasks: { "1": { ...entry, awaitingUserCalls: -1 } } })).toThrow();
-    expect(() => parseStatusFrame({ type: "changed", tasks: { "1": { executionStatus: "running" } } })).toThrow();
+    expect(() => parseTaskFeedFrame({ type: "other" })).toThrow();
+    expect(() => parseTaskFeedFrame({ type: "changed", statuses: { "1": "running" } })).toThrow();
+    expect(() => parseTaskFeedFrame({ type: "changed", tasks: { abc: entry } })).toThrow();
+    expect(() => parseTaskFeedFrame({ type: "changed", tasks: { "1": { ...entry, executionStatus: 3 } } })).toThrow();
+    expect(() => parseTaskFeedFrame({ type: "changed", tasks: { "1": { ...entry, awaitingUserCalls: -1 } } })).toThrow();
+    expect(() => parseTaskFeedFrame({ type: "changed", tasks: { "1": { executionStatus: "running" } } })).toThrow();
+  });
+
+  it("目录失效帧带工作区列表开关与工作区 id", () => {
+    expect(parseTaskFeedFrame({ type: "catalog", workspaces: false, workspaceIds: [3, 4] }))
+      .toEqual({ type: "catalog", workspaces: false, workspaceIds: [3, 4] });
+    expect(parseTaskFeedFrame({ type: "catalog", workspaces: true, workspaceIds: [] }))
+      .toEqual({ type: "catalog", workspaces: true, workspaceIds: [] });
+    expect(() => parseTaskFeedFrame({ type: "catalog", workspaceIds: [3] })).toThrow();
+    expect(() => parseTaskFeedFrame({ type: "catalog", workspaces: false, workspaceIds: ["3"] })).toThrow();
+    expect(() => parseTaskFeedFrame({ type: "catalog", workspaces: false, workspaceIds: [0] })).toThrow();
   });
 });
 

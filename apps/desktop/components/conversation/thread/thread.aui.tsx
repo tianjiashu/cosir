@@ -47,6 +47,7 @@ import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-perfor
 import { UserMessageContent, useHasUserMessageContent } from "@/components/conversation/thread/user-message-content";
 import { UserMessageImages } from "@/components/conversation/thread/user-message-images";
 import { UserMessageBubble } from "@/components/conversation/thread/user-message-bubble";
+import { REVEAL_ON_MESSAGE_HOVER } from "@/components/ui/reveal-on-hover";
 import {
   ComposerSendButton,
   ComposerAttachments,
@@ -444,7 +445,7 @@ const UserMessageView: FC = () => {
   return (
     <MessagePrimitive.Root
       data-role="user"
-      className="group flex flex-col items-end px-2"
+      className="group/message flex flex-col items-end px-2"
     >
       <div className="flex max-w-[85%] flex-col items-end gap-2">
         <UserMessageImages />
@@ -471,7 +472,7 @@ const UserMessageView: FC = () => {
       </div>
       <div className="mt-1 h-6 shrink-0">
         {pending ? <span role="status" className="text-muted-foreground text-xs leading-6">正在发送</span> : <ActionBarPrimitive.Root
-          className="flex h-6 gap-1 opacity-0 transition-opacity pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+          className={cn("flex h-6 gap-1 transition-opacity", REVEAL_ON_MESSAGE_HOVER)}
         >
           {canWithdraw && <WithdrawMessageButton />}
           <ActionBarPrimitive.Copy render={<TooltipIconButton tooltip="复制" aria-label="复制" size="sm" />}>
@@ -601,7 +602,7 @@ const QueuedMessageView: FC = () => {
 const AssistantMessage: FC = () => {
   const { cancelling = false, taskId, readonly = false } = useThreadContext();
   return (
-    <MessagePrimitive.Root data-role="assistant" className="relative -mb-6 px-2 pb-6">
+    <MessagePrimitive.Root data-role="assistant" className="group/message relative -mb-6 px-2 pb-6">
       <div className="text-foreground wrap-break-word">
         <Turn taskId={taskId} readonly={readonly} cancelling={cancelling} footerAction={<ForkReplyAction />} />
       </div>

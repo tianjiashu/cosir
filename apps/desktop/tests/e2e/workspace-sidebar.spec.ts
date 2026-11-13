@@ -38,7 +38,7 @@ async function seedSidebar(
   ];
   await page.route(`${origin}/workspaces/7/tasks`, (route) => route.fulfill({ json: tasks }));
   // 状态点只读状态推送：一帧整表即可（流结束后客户端重连，再拿到同一张表）。
-  await page.route(`${origin}/task-status/stream`, (route) => route.fulfill({
+  await page.route(`${origin}/task-feed/stream`, (route) => route.fulfill({
     contentType: "application/x-ndjson", body: statusFrame(statuses, awaiting),
   }));
   // 只读展示夹具按浏览器隔离，避免其他测试重置共享内存服务时影响任务切换。
@@ -318,7 +318,7 @@ async function seedManyTasks(
     return { task_id: 200 + index, workspace_id: 7, title: `批量任务 ${index}`, task_type: "user", created_at: at, updated_at: at };
   });
   await page.route(`${origin}/workspaces/7/tasks`, (route) => route.fulfill({ json: many }));
-  await page.route(`${origin}/task-status/stream`, (route) => route.fulfill({
+  await page.route(`${origin}/task-feed/stream`, (route) => route.fulfill({
     contentType: "application/x-ndjson", body: statusFrame(statuses, awaiting),
   }));
   for (const task of many) {

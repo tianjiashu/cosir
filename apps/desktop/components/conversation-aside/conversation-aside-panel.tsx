@@ -18,7 +18,7 @@ import { CONVERSATION_ASIDE_WIDTH, conversationAsidePlacement } from "@/lib/conv
 import { useConversationAsideStore, type AsideCardId } from "@/lib/conversation-aside/conversation-aside-store";
 import { cn } from "@/lib/utils";
 
-import { CONVERSATION_ASIDE_CARDS } from "./aside-card-registry";
+import { CONVERSATION_ASIDE_CARDS, useConversationAsideHasContent } from "./aside-card-registry";
 import { AsideCard } from "./aside-card";
 
 const MODIFIERS = [restrictToVerticalAxis, restrictToParentElement];
@@ -34,7 +34,7 @@ const ANNOUNCEMENTS: Announcements = {
 const FLOATING_MAX_HEIGHT_RATIO = 0.6;
 
 /**
- * 会话侧栏：当前对话 Task 的状态摘要卡片栈（目前只有「后台任务」）。它是对话画布上的附注，不是窗格：
+ * 会话侧栏：当前对话 Task 的状态摘要卡片栈（目前只有「后台任务」），任何卡片都没有内容时不渲染。它是对话画布上的附注，不是窗格：
  * AppLayout 经 `ConversationAsideContext` 把它交给线程视口，放在与内容列同一个网格里、粘在顶部
  * （见 `conversation-aside.tsx`），所以滚动条在视口最外侧，底部终端也不必给它让宽度。
  *
@@ -50,6 +50,7 @@ export function ConversationAsidePanel({ taskId, viewport, onClose }: { taskId: 
   const floating = placement === "floating";
   const visible = useConversationAsideStore((state) => (floating ? state.floatOpen : state.open));
   const setFloating = useConversationAsideStore((state) => state.setFloating);
+  const hasContent = useConversationAsideHasContent(taskId);
   const order = useConversationAsideStore((state) => state.order);
   const setOrder = useConversationAsideStore((state) => state.setOrder);
   const [dragging, setDragging] = useState(false);
@@ -73,7 +74,8 @@ export function ConversationAsidePanel({ taskId, viewport, onClose }: { taskId: 
     onClose();
   };
 
-  if (!visible) return null;
+  // 没有任何内容时不占列也不浮起：宽屏不留一整列「没有东西」，内容出现时侧栏随之出现（对话列因此平移一次）。
+  if (!visible || !hasContent) return null;
   return (
     <aside
       aria-label="会话侧栏"

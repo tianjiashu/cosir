@@ -1,11 +1,11 @@
-import { BotIcon, CheckIcon, CircleAlertIcon, CircleHelpIcon, ClockIcon, LoaderCircleIcon, SquareIcon, UnplugIcon } from "lucide-react";
-import { taskRunStatusPresentation } from "@/components/task-tree/task-run-status";
-import { useTaskExecutionStatus, useTaskStatusConnected } from "@/lib/task-status/task-status-store";
+import { BotIcon, CheckIcon, CircleAlertIcon, ClockIcon, HourglassIcon, LoaderCircleIcon, PauseIcon, SquareIcon, UnplugIcon } from "lucide-react";
+import { AWAITING_USER_LABEL, executionStatusPresentation } from "@/components/task-status/task-status-indicator";
+import { useTaskAwaitingUserCalls, useTaskExecutionStatus, useTaskStatusConnected } from "@/lib/task-status/task-status-store";
 
 const STATUS_ICONS = {
   pending: ClockIcon,
   running: LoaderCircleIcon,
-  suspended: CircleHelpIcon,
+  suspended: HourglassIcon,
   completed: CheckIcon,
   failed: CircleAlertIcon,
   cancelled: SquareIcon,
@@ -21,13 +21,16 @@ const TONE_CLASS = {
  */
 export function WorkbenchAgentTabStatus({ taskId, expanded = false }: { taskId: number; expanded?: boolean }) {
   const status = useTaskExecutionStatus(taskId);
+  const awaitingUser = useTaskAwaitingUserCalls(taskId) > 0;
   const connected = useTaskStatusConnected();
-  const presentation = taskRunStatusPresentation(status, true);
-  const knownLabel = presentation?.label ?? "尚未运行";
-  const label = connected ? knownLabel : `状态未同步${status ? `，上次为${knownLabel}` : ""}`;
+  const presentation = executionStatusPresentation(status, true);
+  // 等你操作优先于执行状态（与侧栏同一规则）。
+  const knownLabel = awaitingUser ? AWAITING_USER_LABEL : presentation?.label ?? "尚未运行";
+  const label = connected ? knownLabel : `状态未同步${status || awaitingUser ? `，上次为${knownLabel}` : ""}`;
   if (expanded) return <span> · {label}</span>;
-  const Icon = !connected ? UnplugIcon : STATUS_ICONS[status as keyof typeof STATUS_ICONS] ?? BotIcon;
+  const Icon = !connected ? UnplugIcon : awaitingUser ? PauseIcon : STATUS_ICONS[status as keyof typeof STATUS_ICONS] ?? BotIcon;
+  const tone = !connected ? "text-muted-foreground" : awaitingUser ? TONE_CLASS.info : presentation ? TONE_CLASS[presentation.tone] : "";
   return <span role="img" aria-label={label} className="inline-flex shrink-0">
-    <Icon aria-hidden="true" className={`size-3.5 ${!connected ? "text-muted-foreground" : presentation ? TONE_CLASS[presentation.tone] : ""}`} />
+    <Icon aria-hidden="true" className={`size-3.5 ${tone}`} />
   </span>;
 }
