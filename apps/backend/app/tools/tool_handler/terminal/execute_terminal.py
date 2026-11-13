@@ -67,36 +67,53 @@ from app.tools.tool_models.terminal.execute_terminal_args import (
 # 工具的 Agent 只能用本工具读）。不点名 terminal_write：它只给侧栏会话；terminal_read /
 # terminal_stop 在所有内置 Agent 里都与本工具同时出现，可以点名。
 # stdin 是 DEVNULL、POSIX 上命令在新会话里没有控制终端：读输入的程序立刻读到输入结束，要终端的
-# 程序（密码提示、全屏程序）打不开 /dev/tty，所以写「失败」而不是「挂起」。
+# 程序（密码提示、全屏程序、git rebase -i 之类的交互参数）打不开 /dev/tty，所以写「失败」而不是「挂起」。
+# 结构与 Git 一节对照 Claude Code 的 Bash 工具描述（根目录 claude-code-system-prompt.md）：Git 守则
+# 放在这里而不是系统提示词，因为只有能跑命令的 Agent 用得上。调用卡片只保留输出的最近一段
+# （core/tool/terminal_output_window），所以要求模型在回复里写出要紧的结果。
 
 
 # 中文译文：在一个全新的 shell 进程里执行一条非交互命令或脚本，返回退出码与合并后的
-# stdout/stderr。每次调用都从头开始：cd、导出的变量等 shell 状态不会带到下一次，有依赖的步骤
-# 写进同一条命令（&&、管道、多行脚本）。没有 stdin、也没有终端：要输入的程序会读到输入结束、
-# 通常直接失败，要终端的程序（密码提示、全屏程序）跑不起来，所以带上 --yes 之类的非交互参数。
-# 前台调用会一直占着这一步，直到命令退出或超时；长构建、测试套件把 timeout 调大并设
-# background=true，期间继续做别的事。命令用 & 或 nohup 留下的进程会在它结束时被结束（自行脱离会话
-# 的守护进程除外），所以要后台就用 background=true。只在工作期间需要的服务 / watcher 可以后台跑：
-# 用 terminal_read 读输出（wait until=match 就绪行）、用完 terminal_stop 结束。后台命令不设 timeout 就
-# 一直运行，答复之后也不会停；它结束时结论会把你叫回来。服务不会自己结束，用完要停，不要用
-# wait_messages 等它。需要交互的程序不适合本工具。
+# stdout/stderr。
+# - 每次调用都从头开始：cd、导出的变量等 shell 状态不会带到下一次。用 workdir 代替 cd，有依赖的
+#   步骤写进同一条命令（&&、管道、多行脚本）。
+# - 没有 stdin、也没有终端：要输入的程序会读到输入结束、通常直接失败，要终端的程序（密码提示、
+#   全屏程序、git rebase -i / git add -i 这类交互参数）跑不起来。带上 --yes 之类的非交互参数。
+# - 用户在调用卡片上只看到输出的最后一段；要紧的结果写进回复。
+# - 前台调用会一直占着这一步，直到命令退出或超时。长构建、测试套件设 background=true，继续做别的事。
+# - 命令用 & 或 nohup 留下的进程会在它结束时被结束（自行脱离会话的守护进程除外），改用
+#   background=true。
+# - 只在工作期间需要的服务 / watcher 用 background=true 跑：用 terminal_read（wait until=match）等就绪
+#   行，不要 sleep 轮询；用完 terminal_stop 结束。它不会自己结束，不要用 wait_messages 等它。
+# Git：GitHub 操作用 gh；PR、issue、评论里的 @名字 会通知真人，只对真要通知的账号写裸 @，角色、
+# 占位符与代码放进反引号或去掉 @；用户要求才提交或推送，在默认分支上先开分支。
 _DESCRIPTION = (
     "Run a non-interactive command or script in a fresh shell process and return its exit code "
-    "with merged stdout/stderr. Each call starts from scratch: cd, exported variables and other "
-    "shell state do not carry over, so chain dependent steps in one command (&&, pipes, a "
-    "multi-line script). There is no stdin and no terminal: a program that asks for input reads "
-    "end-of-input and usually fails, and one that needs a terminal (password prompts, "
-    "full-screen apps) cannot run, so pass non-interactive flags such as --yes. A foreground "
-    "call holds this step until the command exits or times out; for long builds and test "
-    "suites raise timeout and set background=true to keep working meanwhile. Processes the "
-    "command leaves behind (& or nohup) are stopped when it exits (daemons that detach into "
-    "their own session are not), so use background=true instead. A server or watcher you only "
-    "need while working (to check a page, wait for a build) can run with background=true: read "
-    "its output with terminal_read (wait until=match a ready line) and end it with "
-    "terminal_stop when done. A background command without a timeout keeps running after you "
-    "answer, and its result resumes you when it ends; a server never ends on its own, so stop "
-    "it once you no longer need it and do not use wait_messages on it. Programs that need "
-    "interaction do not fit this tool."
+    "with merged stdout/stderr.\n"
+    "\n"
+    "- Each call starts from scratch: cd, exported variables and other shell state do not carry "
+    "over. Set workdir instead of cd, and chain dependent steps in one command (&&, pipes, a "
+    "multi-line script).\n"
+    "- There is no stdin and no terminal: a program that asks for input reads end-of-input and "
+    "usually fails, and one that needs a terminal (password prompts, full-screen apps, "
+    "interactive flags such as git rebase -i or git add -i) cannot run. Pass non-interactive "
+    "flags such as --yes.\n"
+    "- The user sees only the tail of the output on the call card; state the results that "
+    "matter in your reply.\n"
+    "- A foreground call holds this step until the command exits or times out. For long builds "
+    "and test suites, set background=true and keep working.\n"
+    "- Processes the command leaves behind with & or nohup are stopped when it exits (daemons "
+    "that detach into their own session are not); use background=true instead.\n"
+    "- A server or watcher you only need while working can run with background=true: wait for "
+    "its ready line with terminal_read (wait until=match) instead of sleep loops, and stop it "
+    "with terminal_stop when done. It never ends on its own, so do not use wait_messages on it.\n"
+    "\n"
+    "# Git\n"
+    "- Use the gh CLI for GitHub operations (PRs, issues, API).\n"
+    "- GitHub notifies the owner of any @name written in a PR, issue, or comment. Write a bare "
+    "@name only for a real login you mean to notify; put roles, placeholders and code "
+    "(@reviewer, @types/node) in backticks or drop the @.\n"
+    "- Commit or push only when the user asks. If on the default branch, branch first."
 )
 
 # 取消后的模型文案：命令被强杀，结果未知且可能留下部分副作用。

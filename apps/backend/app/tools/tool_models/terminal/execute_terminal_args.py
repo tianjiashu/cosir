@@ -41,11 +41,12 @@ ExecuteTerminalShell = WindowsExecuteTerminalShell | MacExecuteTerminalShell
 DEFAULT_COMMAND_TIMEOUT_S = 300.0
 MAX_COMMAND_TIMEOUT_S = 3600.0
 
+# 后台命令「答复后照常运行、结论回来叫醒模型」只在这里说一次，工具描述不复述。
 _BACKGROUND_DESCRIPTION = (
-    "true returns immediately with a terminal_id and delivers the result later as a "
-    "<background_result> message; terminal_read reads its output meanwhile. false or null waits "
-    "here until the command ends. Use wait_messages to wait for background work that will "
-    "finish on its own."
+    "true returns immediately with a terminal_id; the command keeps running after you answer, "
+    "and its result arrives later as a <background_result> message that resumes you. "
+    "terminal_read reads its output meanwhile. false or null waits here until the command ends. "
+    "Use wait_messages only for background work that will finish on its own."
 )
 
 # 只写语义与取值范围；「长会话调大并转后台」是选用决策，在工具描述里说一次。

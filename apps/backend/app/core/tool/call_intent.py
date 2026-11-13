@@ -11,9 +11,12 @@ _INTENT_SCHEMA = {
     "type": "string",
     "minLength": 1,
     "maxLength": MAX_INTENT_LENGTH,
+    # 调用行标题直接展示这句，用户多半看不到参数；写法对照 Claude Code Bash 的 description 说明。
     "description": (
-        "A short sentence in the user's language describing the purpose of this call. "
-        "Describe what you intend to do and why; do not claim progress, success or a result."
+        "A short sentence in the user's language that says what this call does and why, in "
+        "plain words the user understands without seeing the arguments: do not echo command "
+        "text, flags or file paths, and keep it brief for simple calls. Do not claim progress, "
+        "success or a result."
     ),
 }
 
