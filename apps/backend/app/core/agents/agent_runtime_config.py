@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from app.config.configuration import get_agent_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.agents.model_settings import ModelSettings
 from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
 from app.models import ConversationRunRecord
@@ -27,7 +26,7 @@ class AgentRuntimeConfig:
 
     只在 Run 装配时经 :meth:`resolve` 构造一次，此后不再回看 ``AgentProfile``、``ModelSettings``
     或模型配置 ID：身份与执行资源取值即定，``model`` 是已解析完整的模型（连接、能力与偏好）。
-    运行期消费方（模型构建、系统提示词、步数与输出契约、Agent Team 准备）只读这里的字段。
+    运行期消费方（模型构建、系统提示词、步数与输出契约）只读这里的字段。
 
     不含工具面：Task 能用哪些工具是 Task 创建时固化的事实（``TaskRuntimeSpace.task_tool_names``），
     定义里的 ``allowed_tools`` 只是固化时的输入，配置之后再改也不影响已有 Task。
@@ -45,19 +44,15 @@ class AgentRuntimeConfig:
     def for_run(cls, run: ConversationRunRecord) -> AgentRuntimeConfig:
         """合成本次 Run 独占的配置；注册表单例不被修改。
 
-        Task 与工作区由 Run 反查：调用方手里只需要 Run 这一条事实（驱动、委派、Team 审批走同一条
-        路径，不必各自先读一遍 Task / workspace）。定义只由持久化事实推导：按 Run 的 Agent 身份从
-        注册表解析（主 Agent 用系统作用域，其余用 Run 所属工作区）。Team 节点 Task 的字段刻意
-        分路：身份与步数（``agent_id`` / ``agent_type`` / ``max_steps``）取注册表，执行资源（角色、
-        提示词、输出契约、模型偏好）取 ``extra`` 里确认时冻结的节点快照，保证节点行为与用户确认时
-        预览的一致。连接与能力字段只由本 Run 的 ``model_config_id`` 物化——``api_key`` 不落盘，
-        快照里残留的连接字段经 ``ModelSettings.from_dict`` 忽略。
+        Task 与工作区由 Run 反查：调用方手里只需要 Run 这一条事实（驱动与委派走同一条路径，不必各自
+        先读一遍 Task / workspace）。定义只由持久化事实推导：按 Run 的 Agent 身份从注册表解析（主
+        Agent 用系统作用域，其余用 Run 所属工作区）。连接与能力字段只由本 Run 的 ``model_config_id``
+        物化。
 
         异常:
             RuntimeError: 注册表解析不到该 Agent，或 Run 未记录模型配置。
             KeyError: Run 指向的 Task / 工作区已不存在，或 ``model_config_id`` 指向的模型已不在。
             ModelConfigFileError: 模型配置文件无效。
-            pydantic.ValidationError: 节点快照或其输出契约不合法。
         """
 
         task = get_task_service().get_task(run.task_id)
@@ -75,25 +70,7 @@ class AgentRuntimeConfig:
         if run.model_config_id is None:
             raise RuntimeError(f"run {run.id} has no model config")
         model_config = get_model_config_service().get_config(run.model_config_id)
-        node = task.extra.team_node
-        if node is None:
-            return cls.resolve(
-                definition, model_config, reasoning_effort=run.options.reasoning_effort
-            )
-        # Task 只保存节点执行配置；身份和模型由本 Run 决定。
-        return cls(
-            agent_id=definition.agent_id,
-            agent_type=definition.agent_type,
-            max_steps=definition.max_steps,
-            role=node.role,
-            system_prompt=node.system_prompt,
-            structured_output=StructuredOutputSpec.model_validate(node.structured_output),
-            model=resolve_model(
-                model_config,
-                ModelSettings.from_dict(node.model_settings),
-                reasoning_effort=run.options.reasoning_effort,
-            ),
-        )
+        return cls.resolve(definition, model_config, reasoning_effort=run.options.reasoning_effort)
 
     @classmethod
     def resolve(

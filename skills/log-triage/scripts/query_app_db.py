@@ -2,7 +2,7 @@
 """本地业务数据库排查 CLI（log-triage skill 内置）。
 
 单一职责：CLI 表现层——解析参数、把子命令分发给对应查询模块、把结果渲染为文本或 JSON。
-脚本以只读方式直连 ``storage/app.sqlite3``，不启动 FastAPI / 桌面宿主 / LangGraph，也不导入
+脚本以只读方式直连 ``storage/app.sqlite3``，不启动 FastAPI / 桌面宿主，也不导入
 ``app.*``，因此可在服务未启动、启动失败或 UI 打不开时使用。
 
 职责边界：
@@ -27,8 +27,6 @@ from typing import Any
 import triage_paths as paths
 from appdb_agent_facts import (
     list_child_tasks,
-    list_model_configs,
-    recent_agent_team_runs,
     recent_runs,
     recent_tasks,
     recent_workspaces,
@@ -86,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_options(runs)
     _add_limit(runs)
     runs.add_argument("--task-id", type=int, default=None)
-    runs.add_argument("--status", default="", help="pending/running/completed/failed/cancelled。")
+    runs.add_argument("--status", default="", help="running/suspended/completed/failed/cancelled。")
     runs.add_argument("--contains", default="", help="按输入/终态原因/最终回复/错误模糊搜索。")
 
     run = subparsers.add_parser("run", help="查看单次运行的排障快照。")
@@ -99,21 +97,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_limit(task)
     task.add_argument("task_id", type=int)
 
-    agent_team_runs = subparsers.add_parser(
-        "agent-team-runs", help="列出 Agent Team 运行（一次 Team 执行意图）。"
-    )
-    _add_common_options(agent_team_runs)
-    _add_limit(agent_team_runs)
-    agent_team_runs.add_argument("--parent-task-id", type=int, default=None)
-    agent_team_runs.add_argument("--parent-run-id", type=int, default=None)
-
     messages = subparsers.add_parser("messages", help="按顺序回放会话上下文消息。")
     _add_common_options(messages)
     _add_limit(messages)
     messages.add_argument("task_id", type=int)
     messages.add_argument("--run-id", type=int, default=None)
     messages.add_argument("--order", choices=_ORDERS, default="asc")
-    messages.add_argument("--exclude-streaming", action="store_true", help="排除流式草稿行。")
+    messages.add_argument(
+        "--in-context-only", action="store_true", help="只看进模型上下文的行（排除流式/中断回复与撤回的回合）。"
+    )
 
     tools = subparsers.add_parser("tools", help="汇总工具调用与结果的配对结局。")
     _add_common_options(tools)
@@ -121,20 +113,14 @@ def build_parser() -> argparse.ArgumentParser:
     tools.add_argument("task_id", type=int)
     tools.add_argument("--run-id", type=int, default=None)
     tools.add_argument("--contains", default="", help="按工具名/参数/结果模糊搜索。")
-    tools.add_argument("--failures-only", action="store_true", help="只显示失败调用。")
+    tools.add_argument("--failures-only", action="store_true", help="只显示 failed 的调用。")
 
     child_tasks = subparsers.add_parser("child-tasks", help="列出委派产生的子任务。")
     _add_common_options(child_tasks)
     _add_limit(child_tasks)
     child_tasks.add_argument("--parent-task-id", type=int, default=None)
 
-    model_configs = subparsers.add_parser(
-        "model-configs", help="列出模型连接配置（不含明文 Key）。"
-    )
-    _add_common_options(model_configs)
-    _add_limit(model_configs)
-
-    stuck = subparsers.add_parser("stuck", help="体检未收敛的 run / task / 流式草稿。")
+    stuck = subparsers.add_parser("stuck", help="体检未收敛的 run / task / 工具占位与排队消息。")
     _add_common_options(stuck)
     _add_limit(stuck)
 
@@ -243,19 +229,13 @@ def dispatch(connection: sqlite3.Connection, args: argparse.Namespace) -> Any:
         ),
         "run": lambda: run_snapshot(connection, run_id=args.run_id, limit=limit),
         "task": lambda: task_snapshot(connection, task_id=args.task_id, limit=limit),
-        "agent-team-runs": lambda: recent_agent_team_runs(
-            connection,
-            limit=limit,
-            parent_task_id=args.parent_task_id,
-            parent_run_id=args.parent_run_id,
-        ),
         "messages": lambda: list_messages(
             connection,
             task_id=args.task_id,
             run_id=args.run_id,
             limit=limit,
             order=args.order,
-            include_streaming=not args.exclude_streaming,
+            in_context_only=args.in_context_only,
         ),
         "tools": lambda: summarize_tool_calls(
             connection,
@@ -268,7 +248,6 @@ def dispatch(connection: sqlite3.Connection, args: argparse.Namespace) -> Any:
         "child-tasks": lambda: list_child_tasks(
             connection, limit=limit, parent_task_id=args.parent_task_id
         ),
-        "model-configs": lambda: list_model_configs(connection, limit=limit),
         "stuck": lambda: find_unsettled(connection, limit=limit),
     }
     handler = handlers.get(args.command)

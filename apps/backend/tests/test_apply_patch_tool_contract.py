@@ -98,8 +98,7 @@ def test_patch_count_rule_is_stated_only_in_the_parameter_description() -> None:
         assert leaked not in APPLY_PATCH_DESCRIPTION, leaked
 
 
-# ``backend_env``（conftest）按生产装配顺序准备主库与 Agent Team 注册表；
-# 工具注册表装配期依赖二者。
+# ``backend_env``（conftest）按生产装配顺序准备主库与工具注册表。
 @pytest.mark.usefixtures("backend_env")
 def test_handlers_inherit_base_and_new_tools_are_registered() -> None:
     assert all(

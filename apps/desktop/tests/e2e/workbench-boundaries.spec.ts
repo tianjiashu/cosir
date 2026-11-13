@@ -28,23 +28,16 @@ async function fixture(page: Page, request: APIRequestContext) {
 }
 
 /** 只装配前端草稿夹具，不发起模型运行或配置写入；交互仍经过真实布局、路由和确认框。 */
-async function seedDrafts(page: Page, team = false) {
+async function seedDrafts(page: Page) {
   await expect(page.getByRole("button", { name: "浏览工作区文件" })).toBeVisible();
-  await page.evaluate(async (withTeam) => {
+  await page.evaluate(async () => {
     const modulePath = "/lib/workbench/workbench-store.ts";
     const { useWorkbenchStore } = await import(modulePath);
-    const store = useWorkbenchStore.getState();
-    if (withTeam) store.openAgentTeamConfigurationDraft(7, {
-      taskId: 100, toolCallId: "team",
-      draft: { team_id: "team", name: "未保存Team", description: "", max_runs: 8,
-        start_node_id: "review", nodes: [{ node_id: "review", name: "审查", agent_id: "reviewer", statuses: [{ name: "done", color: "#16a34a" }] }],
-        transitions: [{ from_node_id: "review", status: "done", target_node_id: "END" }], scope: "workspace" },
-    });
-    store.openAgentConfigurationDraft(7, {
+    useWorkbenchStore.getState().openAgentConfigurationDraft(7, {
       taskId: 100, toolCallId: "draft",
       draft: { agent_id: "未保存Agent", role: "审查", description: "保留这份编辑", system_prompt: "检查代码" },
     });
-  }, team);
+  });
   await expect(page.getByRole("tab", { name: /未保存Agent/ })).toBeVisible();
 }
 
@@ -112,12 +105,12 @@ test("窗口和侧栏变化限制实际宽度，End 和鼠标拖动均保留主�
 
 test("收起入口保留编辑；切到其他工作区的任务不确认、不丢草稿，切回原样恢复", async ({ page }) => {
   await page.goto("/tasks/100");
-  await seedDrafts(page, true);
+  await seedDrafts(page);
   await page.getByRole("textbox", { name: "描述", exact: true }).fill("新的草稿内容");
   await page.getByRole("button", { name: "收起工作台", exact: true }).click();
   await expect(page.getByRole("complementary", { name: "工作台" })).toHaveCount(0);
   await expect(switchDialog(page)).toHaveCount(0);
-  await page.getByRole("button", { name: /工作台，2 个标签，点击打开/ }).click();
+  await page.getByRole("button", { name: /工作台，1 个标签，点击打开/ }).click();
   await expect(page.getByRole("textbox", { name: "描述", exact: true })).toHaveValue("新的草稿内容");
 
   await taskRow(page, 200).click();
@@ -128,9 +121,9 @@ test("收起入口保留编辑；切到其他工作区的任务不确认、不�
 
   await taskRow(page, 100).click();
   await expect(page).toHaveURL(/\/tasks\/100$/);
-  await expect(page.getByRole("tab", { name: /未保存Team/ })).toBeVisible();
+  await expect(page.getByRole("tab", { name: /未保存Agent/ })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "描述", exact: true })).toHaveValue("新的草稿内容");
-  expect(await state(page)).toEqual({ tabs: { 7: ["agent-team-config-draft:100:team", "agent-config-draft:100:draft"] }, panel: "workbench" });
+  expect(await state(page)).toEqual({ tabs: { 7: ["agent-config-draft:100:draft"] }, panel: "workbench" });
 });
 
 test("同工作区任务和配置页保活草稿，真正关闭仍确认", async ({ page }) => {
@@ -185,29 +178,21 @@ test("切换工作台快捷键收起与展开当前工作区的工作台", async
   await expect(page.getByRole("complementary", { name: "工作台" })).toBeVisible();
 });
 
-test("Agent 与未激活 Team 标签直接反映草稿未保存状态", async ({ page }) => {
+test("Agent 草稿标签直接反映草稿未保存状态", async ({ page }) => {
   await page.goto("/tasks/100");
-  await seedDrafts(page, true);
+  await seedDrafts(page);
   const agent = page.getByRole("tab", { name: /未保存Agent/ });
-  const team = page.getByRole("tab", { name: /未保存Team/ });
   await expect(agent.locator(".sr-only")).toHaveText("未保存");
-  await expect(team.locator(".sr-only")).toHaveText("未保存");
-  await expect(team).toHaveAttribute("aria-selected", "false");
   await page.evaluate(async () => {
     const modulePath = "/lib/workbench/workbench-store.ts";
     const tabs = (await import(modulePath)).useWorkbenchStore.getState().sessions[7].tabs;
-    const agent = tabs.find((tab: {kind: string}) => tab.kind === "agent-configuration-draft");
-    const team = tabs.find((tab: {kind: string}) => tab.kind === "agent-team-configuration-draft");
-    agent.session.store.setState({ dirty: false });
-    team.session.store.setState({ dirty: false });
+    tabs.find((tab: {kind: string}) => tab.kind === "agent-configuration-draft").session.store.setState({ dirty: false });
   });
   await expect(agent.locator(".sr-only")).toHaveCount(0);
-  await expect(team.locator(".sr-only")).toHaveCount(0);
   await page.evaluate(async () => {
     const modulePath = "/lib/workbench/workbench-store.ts";
     const tabs = (await import(modulePath)).useWorkbenchStore.getState().sessions[7].tabs;
-    tabs.find((tab: {kind: string}) => tab.kind === "agent-team-configuration-draft").session.updateConfiguration({ description: "新的后台编辑" });
+    tabs.find((tab: {kind: string}) => tab.kind === "agent-configuration-draft").session.setField("description", "新的后台编辑");
   });
-  await expect(team.locator(".sr-only")).toHaveText("未保存");
-  await expect(team).toHaveAttribute("aria-selected", "false");
+  await expect(agent.locator(".sr-only")).toHaveText("未保存");
 });

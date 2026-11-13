@@ -1,6 +1,6 @@
 """HITL 决定入队在真实主库上的判定：执行中的调用不再等待，并发提交只入队一条。
 
-校验与载荷规则见 ``test_tool_decision_entry.py``；这里只测依赖事务的那部分事实。
+校验规则见 ``test_tool_decision_entry.py``；这里只测依赖事务的那部分事实。
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ _CALL_ID = "call-hitl"
 
 
 @pytest.fixture
-def awaiting(tmp_path: Path, isolated_storage, monkeypatch: pytest.MonkeyPatch):
+def awaiting(tmp_path: Path, isolated_storage):
     workspace = depends.get_workspace_crud().create("ws", str(tmp_path))
     task = depends.get_task_crud().create(workspace.id, "task")
     run = depends.get_conversation_run_crud().create(task.id, "suspended")
@@ -53,11 +53,6 @@ def awaiting(tmp_path: Path, isolated_storage, monkeypatch: pytest.MonkeyPatch):
         turn=1,
     )
     crud.create(placeholder)
-    monkeypatch.setattr(
-        module,
-        "get_tool_registry",
-        lambda: SimpleNamespace(get_tool_definition=lambda _name: SimpleNamespace(decision_model=None)),
-    )
     return SimpleNamespace(task_id=task.id, crud=crud, placeholder=placeholder)
 
 

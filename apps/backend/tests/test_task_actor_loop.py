@@ -183,8 +183,6 @@ def harness(monkeypatch):
         ("get_task_message_queue", queue),
     ):
         monkeypatch.setattr(actor_module.service_depends, getter, lambda fake=fake: fake)
-    # 运行中的 TeamRun 读库：本文件不建 Team（Team 见 test_agent_team_background）。
-    monkeypatch.setattr(actor_module.derived_report, "_running_team_names", lambda _task_id: [])
     # 撤销时的占位结算写库；记下调用，不触达存储（占位结算见 test_background_placeholders）。
     settled: list[tuple[int, list[str]]] = []
     monkeypatch.setattr(
@@ -409,22 +407,6 @@ async def test_stop_waits_for_the_execution_then_stops_the_loop(harness, monkeyp
     assert len(harness.ledger.created) == 1
 
 
-async def test_stop_still_wakes_state_waiters_when_the_execution_settles(harness) -> None:
-    """删除前停止走「不接续」的早退分支，也必须发状态通知：否则 ``wait_quiescent`` 只能等到超时。"""
-    harness.actor.start()
-    harness.queue.put(_user())
-    await _settle()
-    [run] = harness.ledger.created
-    changed = harness.actor.state_changed
-
-    stopping = asyncio.create_task(harness.actor.stop())
-    await _settle()
-    await _finish(run.id, "cancelled")
-    await asyncio.wait_for(stopping, 1)
-
-    assert changed.is_set()
-
-
 async def test_queued_projection_is_refreshed_before_a_running_delivery(harness) -> None:
     """运行中到达的消息先进排队投影再进 mailbox：消费投影只搬移排队条目，缺了就丢消息。"""
     harness.actor.start()
@@ -460,150 +442,15 @@ async def test_phase_turns_idle_after_the_run_completes(harness) -> None:
     await harness.actor.abort()
 
 
-async def test_wait_quiescent_is_false_while_a_new_input_waits_for_its_run(harness) -> None:
-    """投递之后、新 Run 开出来之前 Task 是静止的，但还有事要做：按静止等会读到上一次的 Run。"""
-    harness.actor.start()
-    harness.queue.put(_user("first"))
-    await _settle()
-    [first] = harness.ledger.created
-    await _finish(first.id, "completed")
-    assert await harness.actor.wait_quiescent(0.01) is True
-
-    harness.queue.put(_user("second"))
-    assert await harness.actor.phase() == "idle"
-    assert await harness.actor.wait_quiescent(0) is False
-
-    await _settle()
-    second = harness.ledger.created[-1]
-    assert second.id != first.id
-    await _finish(second.id, "completed")
-    assert await harness.actor.wait_quiescent(1) is True
-    await harness.actor.abort()
-
-
-async def test_wait_quiescent_is_false_in_the_gap_between_wake_and_registering_the_executor(
-    harness,
-) -> None:
-    """唤醒先把 Run 写成 running 再登记执行者，闸门外读到这个空档时不能当作静止。"""
-    harness.actor.start()
-    harness.queue.put(_user("first"))
-    await _settle()
-    [run] = harness.ledger.created
-    await _finish(run.id, "completed")
-    run.status = "running"
-    assert not harness.actor.driving
-    assert await harness.actor.wait_quiescent(0) is False
-    run.status = "completed"
-    await harness.actor.abort()
-
-
-async def test_wait_quiescent_waits_for_the_continuation_after_completion(harness) -> None:
-    """Run 完成后接续剩余消息：落定的是接续出的 Run，结论覆盖了运行中排到下一轮的输入。"""
-    harness.actor.start()
-    harness.queue.put(_user("first"))
-    await _settle()
-    [first] = harness.ledger.created
-    harness.queue.put(_user("later"), delivery="next_run")
-    await _settle()
-
-    waiting = asyncio.create_task(harness.actor.wait_quiescent(1))
-    await _finish(first.id, "completed")
-    assert not waiting.done()
-
-    second = harness.ledger.created[-1]
-    assert second.id != first.id
-    await _finish(second.id, "completed")
-    assert await waiting is True
-    await harness.actor.abort()
-
-
-async def test_wait_quiescent_settles_on_a_cancelled_run_with_leftovers(harness) -> None:
-    """取消不自动接续：停止前排着的消息留在队列里，Task 已无事可做，等的人读到取消结论。"""
-    harness.actor.start()
-    harness.queue.put(_user("first"))
-    await _settle()
-    [run] = harness.ledger.created
-    harness.queue.put(_user("later"), delivery="next_run")
-    await _settle()
-
-    await harness.actor.cancel()
-    await _finish(run.id, "cancelled")
-
-    assert await harness.actor.wait_quiescent(1) is True
-    assert len(harness.ledger.created) == 1
-    await harness.actor.abort()
-
-
-async def test_wait_quiescent_waits_for_the_tasks_background_work(harness) -> None:
-    """后台工作属于 Task：Run 已完成、工作还在跑就不算静止；登记表变化经通知唤醒等待方。"""
-    from app.tools.tool_handler.terminal.command_results import command_results
-
-    harness.actor.start()
-    harness.queue.put(_user())
-    await _settle()
-    [run] = harness.ledger.created
-    command_results.register(
-        "call-bg", task_id=_TASK_ID, run_id=run.id, label="bg",
-        job=FakeCommandJob(),
-    )
-    try:
-        await _finish(run.id, "completed")
-        waiting = asyncio.create_task(harness.actor.wait_quiescent(1))
-        await _settle()
-        assert not waiting.done()
-
-        command_results.withdraw_calls(_TASK_ID, ["call-bg"])
-        harness.actor.notify_state_changed()
-        assert await waiting is True
-    finally:
-        command_results.drop_task(_TASK_ID)
-        await harness.actor.abort()
-
-
-def test_background_changes_wake_quiescence_waiters_before_the_board(monkeypatch) -> None:
-    """登记表监听方先唤醒静止等待方再刷新看板：看板投影失败不能拖住委派与 Team 节点。"""
-    from app import lifespan as lifespan_module
-
-    calls: list[tuple[str, int]] = []
-    actor = SimpleNamespace(notify_state_changed=lambda: calls.append(("actor", 7)))
-    monkeypatch.setattr(
-        lifespan_module.task_runtime_spaces, "get", lambda task_id: SimpleNamespace(actor=actor)
-    )
-    monkeypatch.setattr(
-        lifespan_module,
-        "get_conversation_task_state_service",
-        lambda: SimpleNamespace(
-            refresh_background_results=lambda task_id: calls.append(("board", task_id))
-        ),
-    )
-    lifespan_module._on_background_changed(7)
-    assert calls == [("actor", 7), ("board", 7)]
-
-
-async def test_wait_quiescent_ignores_a_lone_system_notice(harness) -> None:
-    """系统通知不推进，留在队列里也不算有事可做。"""
-    harness.actor.start()
-    harness.queue.put(_user())
-    await _settle()
-    [run] = harness.ledger.created
-    await _finish(run.id, "completed")
-    harness.queue.put(_notice(), delivery="next_run")
-    await _settle()
-
-    assert await harness.actor.wait_quiescent(0.01) is True
-    await harness.actor.abort()
-
-
 # ---------------------------------------------------------------------------
 # 调度器失败：读队列失败不重试，落成明确、可观察的停止态
 # ---------------------------------------------------------------------------
 
 
 async def test_queue_read_failure_halts_the_loop_instead_of_killing_it_silently(harness) -> None:
-    """读队列失败（坏行/库不可用）记录后进入停止态并唤醒等待方；之后不再调度任何 Run。"""
+    """读队列失败（坏行/库不可用）记录后进入停止态；之后不再调度任何 Run。"""
     actor = harness.actor
     healthy_pending = harness.queue.pending
-    changed = actor.state_changed
 
     async def broken(_task_id: int, _after_id: int = 0) -> list[TaskMessage]:
         raise ValueError("bad row")
@@ -613,38 +460,11 @@ async def test_queue_read_failure_halts_the_loop_instead_of_killing_it_silently(
     await _settle()
 
     assert actor.stopped.is_set()
-    assert changed.is_set()
     # 停止态不自动恢复：队列恢复可用、再来一条消息，也不会开出 Run。
     harness.queue.pending = healthy_pending
     harness.queue.put(_user())
     await _settle()
     assert harness.ledger.created == []
-
-
-async def test_wait_quiescent_returns_false_after_the_loop_stopped(harness) -> None:
-    """调度器停下后队列里留着的可推进消息永远不会被处理：等待方立即得到 False，不永久挂起。"""
-    harness.actor.start()
-    await _settle()
-    await harness.actor.stop()
-
-    harness.queue.put(_user())
-    assert await asyncio.wait_for(harness.actor.wait_quiescent(), 1) is False
-
-
-async def test_advance_failure_does_not_report_quiescent(harness) -> None:
-    """推进失败不算「已处理」：否则等待方会把上一条 Run 的结论当成这次的。"""
-    run = harness.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
-    run.status = "cancelled"
-    harness.ledger.created.clear()
-    harness.ledger.fail_create = True
-    harness.actor.start()
-
-    harness.queue.put(_user())
-    await _settle()
-
-    # 消息还留在队列里、Run 也没开出来：Task 仍有事要做，不能报告静止。
-    assert await harness.actor.wait_quiescent(0) is False
-    await harness.actor.abort()
 
 
 async def test_drive_failure_still_releases_the_execution_and_takes_the_signal(harness) -> None:

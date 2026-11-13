@@ -12,7 +12,7 @@ const snapshot: TransportState = {
   messages: [
     {
       id: "11", role: "user", turn: 1, inherited: false, outcome: null,
-      source: { taskId: 9, teamRunId: null, name: "主任务", report: null },
+      source: { taskId: 9, name: "主任务", report: null },
       parts: [{ type: "text", text: "请检查登录流程", status: "completed" }],
     },
     {
@@ -42,7 +42,7 @@ test("途中来信不切开回复：只有一个标题和脚注，展开过程�
         id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, source: null,
         parts: [
           { type: "text", text: "先看入口", status: "completed" },
-          { type: "agent-message", id: "11", text: "顺便看注册", source: { taskId: 9, teamRunId: null, name: "主任务", report: null } },
+          { type: "agent-message", id: "11", text: "顺便看注册", source: { taskId: 9, name: "主任务", report: null } },
           { type: "text", text: "都检查完了", status: "completed", finalReply: true },
         ],
         outcome: snapshot.messages[1].outcome,

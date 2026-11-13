@@ -22,6 +22,7 @@ import os
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import Future
 from typing import Any
 
@@ -166,6 +167,16 @@ class HostLink:
         self._token = os.environ.get(HOST_TOKEN_ENV, "")
         self._lock = threading.Lock()
         self._connection: _HostConnection | None = None
+        self._on_connected: Callable[[], None] | None = None
+
+    def set_on_connected(self, listener: Callable[[], None] | None) -> None:
+        """注入「连上一条新连接」的监听方（lifespan 装配，``None`` 解除）。
+
+        在连接所在事件循环上、开始读应答之前同步回调，只应排出后台任务：它若要经链路发请求，应答要靠
+        :meth:`serve` 读回。链路本身不认识任何能力，连上后要对账的能力（浏览器标签回收）经这里接入。
+        """
+
+        self._on_connected = listener
 
     def accepts(self, token: object) -> bool:
         return (
@@ -194,6 +205,8 @@ class HostLink:
             # 旧连接的 pending 表与 WebSocket 属于它自己的事件循环，收尾必须投回那里执行；
             # 不等它完成，新连接立即可用。
             asyncio.run_coroutine_threadsafe(replaced.retire(), replaced.loop)
+        if self._on_connected is not None:
+            self._on_connected()
         try:
             while True:
                 connection.resolve(await websocket.receive_json())

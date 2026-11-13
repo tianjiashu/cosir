@@ -68,6 +68,10 @@ export function tabsWire(tabs: TaskTab[]) {
   return tabs.map((tab) => ({ tab_id: tab.tabId, title: tab.title, url: tab.url, current: tab.current, created_by: tab.createdBy, operation: tab.operation }));
 }
 
+export function taskIdsWire(taskIds: number[]) {
+  return { task_ids: taskIds };
+}
+
 function dialogWire(dialog: BrowserDialog | null) {
   return dialog && { id: dialog.id, type: dialog.type, message: dialog.message, default_text: dialog.defaultText };
 }

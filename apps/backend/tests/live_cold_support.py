@@ -5,7 +5,6 @@
 """
 
 import asyncio
-import contextlib
 import copy
 import json
 import threading
@@ -232,14 +231,12 @@ class LiveColdEnv:
         async with asyncio.timeout(8):
             while True:
                 actor = spaces.get(target).actor
-                changed = actor.state_changed
                 run = await asyncio.to_thread(
                     depends.get_task_service().require_current_run, target
                 )
                 if run is not None and matches(run) and not actor.driving:
                     return run
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(changed.wait(), 0.05)
+                await asyncio.sleep(0.02)
 
     def live(self) -> dict[str, Any]:
         return copy.deepcopy(self.state.get_state(self.task.id))

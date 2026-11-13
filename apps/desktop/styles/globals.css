@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "@xyflow/react/dist/style.css";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "tw-shimmer";
@@ -322,51 +321,21 @@ body > :not(#root) > * {
   @apply outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50;
 }
 
-/*
- * xyflow 画布：把库内置的底色、Controls、连线标签映射到 token，深浅色由
- * ReactFlow 的 colorMode 在其根节点加 .dark 后随 token 一起切换。底色透明以透出
- * 外层 bg-background（库的深色默认 #141414 与应用底色不符）。
- */
-.react-flow {
-  --xy-background-color: transparent;
-  --xy-controls-button-background-color: var(--card);
-  --xy-controls-button-background-color-hover: var(--muted);
-  --xy-controls-button-color: var(--foreground);
-  --xy-controls-button-color-hover: var(--foreground);
-  --xy-controls-button-border-color: var(--border);
-  --xy-edge-label-background-color: var(--card);
-  --xy-edge-label-color: var(--foreground);
-}
-
-@keyframes agent-team-entry-highlight {
-  0%,
-  45% {
-    background-color: color-mix(in oklab, var(--info) 8%, var(--card));
-    border-color: color-mix(in oklab, var(--info) 38%, var(--border));
-    box-shadow: 0 0 0 2px color-mix(in oklab, var(--info) 12%, transparent);
-  }
-  100% {
-    background-color: transparent;
-    border-color: var(--border);
-    box-shadow: 0 0 0 0 transparent;
-  }
-}
-
-.agent-team-entry-highlight {
-  animation: agent-team-entry-highlight 1.3s ease-out both;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .agent-team-entry-highlight {
-    animation: none;
-    outline: 2px solid color-mix(in oklab, var(--info) 38%, var(--border));
-    outline-offset: 2px;
-  }
-}
-
 @layer base {
   * {
     @apply border-border outline-ring/50;
+  }
+  /*
+   * 全局滚动条：细滑块、透明底槽，鼠标所在的滚动区加深。只用标准属性，保留系统「显示滚动条」偏好——
+   * 悬浮滚动条下仍不占宽度，经典滚动条（macOS「始终」/接鼠标、Windows）去掉灰底槽与边框线，
+   * 不再与相邻卡片边框叠成双线。颜色由前景色推出，深浅色自动跟随。放在 base 层，`no-scrollbar` 等工具类可覆盖。
+   */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklch, var(--foreground) 18%, transparent) transparent;
+  }
+  *:hover {
+    scrollbar-color: color-mix(in oklch, var(--foreground) 32%, transparent) transparent;
   }
   body {
     @apply bg-background text-foreground;

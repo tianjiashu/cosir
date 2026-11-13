@@ -20,7 +20,6 @@ from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import main_agent
 from app.core.context import system_prompt_builder as spb
 from app.core.tool.schemas.tool_names import TOOL_MCP, TOOL_SKILL
-from app.service.configuration import agent_team_configuration_registry as team_registry
 from app.service.configuration import mcp_configuration
 from app.utils.path import system_cosir as paths
 
@@ -228,12 +227,6 @@ def test_build_orders_tool_layer_between_agent_and_global(
         "get_agent_registry",
         lambda: _registry_with(_child_profile()),
     )
-
-    class EmptyTeamRegistry:
-        def team_summary(self, workspace_root: str) -> str:
-            return ""
-
-    monkeypatch.setattr(team_registry, "get_agent_team_registry", lambda: EmptyTeamRegistry())
 
     main = main_agent(system_prompt="主 Agent 协议")
     prompt = spb.SystemPromptBuilder.build(main, str(workspace), main.allowed_tools)

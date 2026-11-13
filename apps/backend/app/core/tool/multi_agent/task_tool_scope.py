@@ -9,7 +9,7 @@ schema 才能命中源的缓存（工具列表是请求前缀的一部分），�
 ``RuntimeContext.for_run`` 按 :func:`banned_derivation_tools` 拒绝，并经工具准入通知提前告知模型。
 
 Task 类型与深度创建后不变；``AGENT_MAX_DERIVATION_DEPTH`` 每次现读，所以改上限对分叉的下一次 Run
-即时生效，对 schema 已固化的 Task（委派子 Task、Team 节点）无效——那些工具的声明在创建时就去掉了。
+即时生效，对 schema 已固化的 Task（委派子 Task）无效——那些工具的声明在创建时就去掉了。
 """
 
 import copy

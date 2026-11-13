@@ -51,7 +51,7 @@ class TaskStatusQueries:
         return TaskStatus(row.status, awaiting[1] if awaiting else 0)
 
     def list_statuses(self) -> dict[int, TaskStatus]:
-        """全部 Task（含委派子任务与 Team 节点）的状态，供状态推送的整表帧与周期对账。"""
+        """全部 Task（含委派子任务）的状态，供状态推送的整表帧与周期对账。"""
         with self._session_factory() as session:
             executions = session.execute(self._EXECUTION).tuples().all()
             awaiting = dict(session.execute(self._AWAITING).tuples().all())

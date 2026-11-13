@@ -1,14 +1,14 @@
-"""能力目录变更的运行时通知：子 Agent、Agent Team、Skill、MCP 服务四种目录共用。
+"""能力目录变更的运行时通知：子 Agent、Skill、MCP 服务三种目录共用。
 
-这四种目录在 Task 首次装配时写进系统提示词并固化（``SystemPromptBuilder._build_tool_catalog``），
+这三种目录在 Task 首次装配时写进系统提示词并固化（``SystemPromptBuilder._build_tool_catalog``），
 之后配置再变也不改写提示词；已在本进程装配过、并且固化了对应工具的 Task 改为收到一条 Task 级
 通知，下一次推进时写入上下文。本模块不读写配置，由各配置服务在写入成功后发布。
 
 通知只带目录本来就给模型看的字段（名称与描述），不带系统提示词、模型配置、连接参数或凭据；
 描述按 JSON 字面量编码，用户输入里的换行不会破坏通知结构。
 
-作用域：``scope`` 为 ``None`` 表示系统级变更，命中所有工作区；否则只命中该工作区。Team、Skill、
-MCP 的 workspace 同名项覆盖系统项，所以系统级条目变了、而某个工作区有同名覆盖时，那个工作区
+作用域：``scope`` 为 ``None`` 表示系统级变更，命中所有工作区；否则只命中该工作区。Skill、MCP 的
+workspace 同名项覆盖系统项，所以系统级条目变了、而某个工作区有同名覆盖时，那个工作区
 看到的目录没变，不能通知它——由发布方经 ``shadowed_in(工作区根, 条目名)`` 回答「这个工作区是否
 覆盖了它」。
 """
@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Literal
 
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileType
-from app.core.tool.schemas.tool_names import TOOL_AGENT_TEAM, TOOL_DELEGATE_TASK, TOOL_MCP, TOOL_SKILL
+from app.core.tool.schemas.tool_names import TOOL_DELEGATE_TASK, TOOL_MCP, TOOL_SKILL
 from app.core.workflow.message_queue.message_bodies.rendering import escape_tag
 from app.core.workflow.message_queue.task_message import NoticeBody
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
@@ -31,19 +31,17 @@ from app.utils.workspace_scope import normalize_scope_path
 if TYPE_CHECKING:
     from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 
-CatalogName = Literal["agents", "agent_teams", "skills", "mcp_servers"]
+CatalogName = Literal["agents", "skills", "mcp_servers"]
 CatalogChangeAction = Literal["added", "updated", "removed"]
 
 # 目录 → 让 Task 看得到这份目录的工具：没固化这个工具的 Task 提示词里本来就没有这份目录。
 _CATALOG_TOOLS: dict[CatalogName, str] = {
     "agents": TOOL_DELEGATE_TASK,
-    "agent_teams": TOOL_AGENT_TEAM,
     "skills": TOOL_SKILL,
     "mcp_servers": TOOL_MCP,
 }
 _CATALOG_LABELS: dict[CatalogName, str] = {
     "agents": "可委派子 Agent",
-    "agent_teams": "Agent Team",
     "skills": "Skill",
     "mcp_servers": "MCP 服务",
 }

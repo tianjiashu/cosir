@@ -4,7 +4,7 @@ import type { CosirHost } from "@/electron/shared/host-contract";
 
 /**
  * 宿主控制面的失败消息由宿主保证是给用户看的中文（`electron/main/ipc.ts`）；渲染侧唯一出口把它转成用户可见错误。
- * 潜在缺陷：宿主写的原因（「只能打开 http 或 https 网址」「标签页数量已达上限」）到界面上全变成「请稍后重试」。
+ * 潜在缺陷：宿主写的原因（「只能打开网页或本机文件」「标签页数量已达上限」）到界面上全变成「请稍后重试」。
  */
 
 async function load(host: Partial<CosirHost>) {

@@ -122,11 +122,6 @@ def _running_state(part: dict) -> dict:
             status="failed", error="执行失败", display_data={"status_hint": "失败"}
         ),
         ToolMessageMetadata(status="cancelled", error="已取消"),
-        ToolMessageMetadata(
-            status="running",
-            display_data={"kind": "agent-team-approval", "team_run_id": 5},
-            team_run_id=5,
-        ),
     ],
 )
 def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch):
@@ -169,7 +164,6 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
         status=metadata.status,
         error=metadata.error,
         display_data=metadata.display_data,
-        team_run_id=metadata.team_run_id,
     )
     for mutation in plan_event(event, state, {}):
         initial[mutation.path[-1]] = mutation.value

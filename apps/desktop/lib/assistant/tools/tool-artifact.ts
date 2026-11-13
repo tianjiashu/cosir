@@ -14,7 +14,6 @@ export type ToolArtifact = {
   /** 是否在等用户决定；投影自 part `awaitingUser`，不从 `pending` 推断。 */
   awaitingUser: boolean;
   display_data: TransportToolDisplayData | null;
-  team_run_id?: number;
   error: string | null;
   errorCode: string | null;
   childTaskId?: number;

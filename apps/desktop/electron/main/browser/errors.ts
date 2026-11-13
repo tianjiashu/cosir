@@ -48,7 +48,7 @@ export const BROWSER_USER_WORDING: Record<BrowserErrorCode, string> = {
   UNAVAILABLE: "内置浏览器不可用",
   TAB_NOT_FOUND: "标签页已关闭",
   TAB_LIMIT: "标签页数量已达上限，请先关掉一些",
-  NAVIGATION_BLOCKED: "只能打开 http 或 https 网址",
+  NAVIGATION_BLOCKED: "只能打开网页或本机文件",
   NAVIGATION_FAILED: "页面加载失败",
   PAGE_CRASHED: "页面已崩溃，请刷新",
   PAGE_UNRESPONSIVE: "页面没有响应",

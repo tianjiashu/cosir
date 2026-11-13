@@ -92,11 +92,11 @@ export type EnvironmentGroup = {
   fields: EnvironmentField[];
 };
 
-/** 子 Agent 与 Team 配置的作用域：系统级，或某个工作区自己的。 */
+/** 子 Agent 配置的作用域：系统级，或某个工作区自己的。 */
 export type ConfigurationScope = "system" | "workspace";
 
 /**
- * 子 Agent 与 Team 配置的拥有者统一以 `workspaceId` 表达（null 为系统级，与查询键同一约定）；
+ * 子 Agent 配置的拥有者统一以 `workspaceId` 表达（null 为系统级，与查询键同一约定）；
  * 路径、请求体里的作用域名都由它推出，调用方不再另传一份。
  */
 export function configurationScope(workspaceId: number | null): ConfigurationScope {

@@ -25,7 +25,7 @@ import { abortable } from "./abortable";
 import { budgetSignal, deadlineMs, withinDeadline } from "./deadlines";
 import type { Outline } from "./snapshot/outline";
 import { changesView, snapshotView, type SnapshotView } from "./snapshot/views";
-import { isWebProtocol, urlProtocol } from "./web-url";
+import { isPageUrl } from "./page-url";
 
 /** 页面类结果（页面、动作、日志、执行 JS、截图）共用的页头：标签、地址、加载、主文档状态码与生效的模拟。线上形状见 `wire.ts`。 */
 export type PageHead = { tabId: string; url: string; title: string; loading: boolean; status: number | null; emulation: Emulation };
@@ -75,7 +75,7 @@ type TabEntry = { tab: BrowserTab; ready: Promise<void>; controller: AbortContro
  * （`window.open` / `target=_blank`，保留 opener，弹窗式登录才能把结果传回来源页）。注销只有一条路 `close`：
  * 宿主关闭、Task 删除，以及页面自己 `window.close()`（`gone`）。
  *
- * 跨标签的事在这里判断：分区级事件（下载、权限）按来源网页交给所属标签或 Task（实现 `BrowserSessionEvents`）；
+ * 跨标签的事在这里判断：分区级事件（下载）按来源网页交给所属 Task（实现 `BrowserSessionEvents`）；
  * JS 弹窗停住的是整个渲染进程，「页面为什么停着」按进程判断（`pausedBy`），弹窗打开时同进程标签在途的
  * CDP 一起失败。
  *
@@ -85,6 +85,7 @@ type TabEntry = { tab: BrowserTab; ready: Promise<void>; controller: AbortContro
  * 摆放：同一时刻至多一个视图挂在主窗口上（浏览器面板只渲染激活标签）。挂上新视图时摘下旧的；摘下的视图
  * 恢复视口大小继续在后台工作。挂哪个、挂到哪由这里决定（`place` / `detach` 是唯一入口），渲染进程只上报「我想把
  * 哪个标签放在哪里」；占位矩形交给标签的设备模拟，视图在其中怎么等比摆放归它（`TabEmulation.viewBounds`）。
+ * 上报属于渲染进程当时那份文档，文档被换掉时由这里自行作废（`followRenderer`），不靠渲染进程撤销。
  */
 export class BrowserHost implements BrowserSessionEvents {
   private readonly tabs = new Map<string, TabEntry>();
@@ -97,6 +98,8 @@ export class BrowserHost implements BrowserSessionEvents {
   private closed = false;
   private readonly listeners = new Set<(state: BrowserState) => void>();
   private attached: BrowserTab | null = null;
+  /** 已绑定文档生命周期的主窗口页面（`followRenderer`），同一个只绑一次。 */
+  private followed: WebContents | null = null;
   /**
    * 最近一次请求带来的上限（事实源是后端配置，每个请求都带）。页面自己开出的窗口没有请求可带上限，只能用它：
    * 弹窗多由 act 的点击触发，那次 act 请求刚刷新过它。
@@ -215,6 +218,14 @@ export class BrowserHost implements BrowserSessionEvents {
     });
   }
 
+  /**
+   * 持有资源（标签含初始化中的、下载记录）的 Task。删除通知是发后即忘的，链路断开或后端崩溃时会丢；后端在链路
+   * 每次连上时取这份清单与库对账，已删除的再补一次 `dropTasks`。
+   */
+  taskIds(): number[] {
+    return [...new Set([...[...this.tabs.values()].map(({ tab }) => tab.taskId), ...this.downloads.taskIds()])].sort((a, b) => a - b);
+  }
+
   /** Task 删除提交后回收已就绪和初始化中的标签，取消它未完成的下载。 */
   dropTasks(taskIds: readonly number[]): void {
     for (const taskId of taskIds) {
@@ -246,10 +257,6 @@ export class BrowserHost implements BrowserSessionEvents {
     this.downloads.accept(item, { taskId: tab.taskId, tabId: tab.tabId, directory: tab.downloadDir });
   }
 
-  permissionDenied(source: WebContents, permission: string): void {
-    this.byContents(source)?.tab.log.note(`the site asked for the "${permission}" permission; it was denied (site permissions are not available)`);
-  }
-
   // ---------------------------------------------------------------------------
   // 用户侧（渲染进程 IPC）：用户能看到并操作全部 Task 的标签页，所以按 tabId 寻址、不校验 Task。
   // ---------------------------------------------------------------------------
@@ -268,7 +275,8 @@ export class BrowserHost implements BrowserSessionEvents {
 
   /**
    * 把标签挂到主窗口的给定矩形（视图在其中按视口等比摆放）；`null` 摘下。只由主窗口里的面板调用，窗口必然在。
-   * 摘下已关闭的标签什么也不做（关闭时已摘下；面板卸载时总会再摘一次）。
+   * 摘下已关闭的标签什么也不做（关闭时已摘下）。面板卸载时会摘下，但整页刷新与渲染进程崩溃不执行卸载，
+   * 那两种情况由 `followRenderer` 摘下。
    */
   place(tabId: string, placement: BrowserPlacement | null): void {
     if (!placement || placement.width < 1 || placement.height < 1) {
@@ -278,6 +286,7 @@ export class BrowserHost implements BrowserSessionEvents {
     }
     const { tab } = this.require(tabId);
     const window = this.window()!;
+    this.followRenderer(window.webContents);
     if (this.attached !== tab) {
       this.detach();
       window.contentView.addChildView(tab.view);
@@ -419,7 +428,7 @@ export class BrowserHost implements BrowserSessionEvents {
   }
 
   /**
-   * 页面要开新窗口（`setWindowOpenHandler`，必须同步答复）：非网页地址或到上限就拒绝并告诉来源标签；否则把
+   * 页面要开新窗口（`setWindowOpenHandler`，必须同步答复）：打不开的地址（`isPageUrl`）或到上限就拒绝并告诉来源标签；否则把
    * Chromium 建好的 webContents 收养成同 Task 的新标签（保留 opener）。开出的标签不抢当前标签（Agent 的
    * 默认目标不变），面板据 `openerId` 跟过去；来源标签关闭时它不跟着关（`outlivesOpener`）。
    */
@@ -429,7 +438,7 @@ export class BrowserHost implements BrowserSessionEvents {
       logDesktopEvent("INFO", "browser", "browser_popup_dropped", { task_id: opener.taskId, reason: why });
       return { action: "deny" };
     };
-    if (!isWebProtocol(urlProtocol(url))) return refuse("it was blocked (not an http(s) address)");
+    if (!isPageUrl(url)) return refuse("it was blocked (not a web page or local file)");
     try {
       // 有标签就一定有过带上限的请求（新开标签的两条路都先 `track`）。
       this.assertCapacity(opener.taskId, this.latestLimits!);
@@ -643,6 +652,31 @@ export class BrowserHost implements BrowserSessionEvents {
     this.attached = null;
     this.window()?.contentView.removeChildView(tab.view);
     tab.hide();
+  }
+
+  /**
+   * 摆放随上报它的文档作废：新文档提交（`did-navigate`；前端路由是页内导航，走 `did-navigate-in-page`，不在此列）
+   * 或渲染进程退出时摘下，新文档需要时再上报。不用 `did-start-navigation`：被拦下的站外导航也会开始，
+   * 那时旧文档还在、面板还开着。窗口销毁时视图随窗口消失，只清登记并恢复视口；否则重建的窗口里同一个标签
+   * 会因「已挂上」被跳过。
+   */
+  private followRenderer(contents: WebContents): void {
+    if (this.followed === contents) return;
+    this.followed = contents;
+    const release = (reason: string) => {
+      const tab = this.attached;
+      if (!tab) return;
+      logDesktopEvent("INFO", "browser", "browser_placement_released", { tab_id: tab.tabId, reason });
+      this.detach();
+    };
+    contents.on("did-navigate", () => release("renderer_document_replaced"));
+    contents.on("render-process-gone", () => release("renderer_process_gone"));
+    contents.once("destroyed", () => {
+      if (this.followed === contents) this.followed = null;
+      const tab = this.attached;
+      this.attached = null;
+      tab?.hide();
+    });
   }
 
   private close(tabId: string): void {

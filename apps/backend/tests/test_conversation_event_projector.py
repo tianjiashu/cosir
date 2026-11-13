@@ -856,7 +856,7 @@ def test_run_and_tool_status_events_publish_the_task_status(
     _append_user_input(event_projector)
     event_projector.process(
         ToolCallCreatedEvent(
-            task_id=1, run_id=1, turn=1, tool_call_id="call-hitl", tool_name="agent_team"
+            task_id=1, run_id=1, turn=1, tool_call_id="call-hitl", tool_name="browser_handoff"
         )
     )
     event_projector.process(

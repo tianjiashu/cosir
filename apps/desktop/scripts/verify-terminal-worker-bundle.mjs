@@ -53,7 +53,10 @@ function waitForWorker() {
     let buffer = Buffer.alloc(0);
     let settled = false;
     let exitSeen = false;
-    const timeout = setTimeout(() => finish(new Error("Terminal Worker bundle smoke test 超时")), 10000);
+    // worker 的失败原因（如首帧解析失败）只写 stderr，必须带进错误里，否则 CI 只剩 `events=[]`。
+    let stderr = "";
+    const failure = (message) => new Error(`${message} events=${JSON.stringify(events)} stderr=${JSON.stringify(stderr)}`);
+    const timeout = setTimeout(() => finish(failure("Terminal Worker bundle smoke test 超时")), 10000);
 
     const finish = (error) => {
       if (settled) return;
@@ -70,12 +73,14 @@ function waitForWorker() {
     child.on("error", (error) => finish(error));
     child.on("close", (code) => {
       if (!events.some((event) => event.type === "exit")) {
-        finish(new Error(`Terminal Worker 提前退出，code=${code} events=${JSON.stringify(events)}`));
+        finish(failure(`Terminal Worker 提前退出，code=${code}`));
       } else {
         finish();
       }
     });
-    child.stderr.on("data", () => {});
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
     child.stdout.on("data", (chunk) => {
       buffer = Buffer.concat([buffer, chunk]);
       while (buffer.length >= 4) {
@@ -94,7 +99,7 @@ function waitForWorker() {
 
     const spec = shellSpec();
     child.stdin.write(frame({
-      type: "start",
+      type: "start_session",
       shell: spec.shell,
       shell_kind: process.platform === "win32" ? "cmd" : path.basename(spec.shell[0]),
       cwd: repositoryRoot,

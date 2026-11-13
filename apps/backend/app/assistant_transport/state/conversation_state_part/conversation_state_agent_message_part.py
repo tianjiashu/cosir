@@ -13,12 +13,10 @@ class ConversationStateReport(TypedDict):
 
 
 class ConversationStateMessageSource(TypedDict):
-    """Agent 消息的发送方：``taskId`` 与 ``teamRunId`` 恰好一个非空（Agent Team 的汇报来自 TeamRun），前端
-    据 ``taskId`` 跳到来源 Task；``name`` 是发送时的显示名；``report`` 非空时这条消息是来源的汇报（见
-    领域 ``MessageSource``）。"""
+    """Agent 消息的发送方：前端据 ``taskId`` 跳到来源 Task；``name`` 是发送时的显示名；``report``
+    非空时这条消息是来源的汇报（见领域 ``MessageSource``）。"""
 
-    taskId: int | None
-    teamRunId: int | None
+    taskId: int
     name: str
     report: ConversationStateReport | None
 

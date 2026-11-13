@@ -436,7 +436,6 @@ def test_reasoning_stays_in_context_observation_but_not_cold_conversation() -> N
         ("wait_messages", "quiet"),
         ("delegate_task", "standalone"),
         ("fork_task", "standalone"),
-        ("agent_team", "standalone"),
         ("read_file", "activity"),
         ("removed_tool", "activity"),
     ],

@@ -32,19 +32,20 @@ const IMAGE_FILE = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|tiff?|webp)$/i;
  * 对象，不显示图标。
  */
 export function LinkTargetIcon({ target, className }: { target: LinkTarget; className?: string }) {
-  if (target.kind !== "workspace" && target.kind !== "web") return null;
+  if (target.kind === "anchor" || target.kind === "filename-search") return null;
   return (
     <span className={cn(ICON_CLASS, className)} aria-hidden="true">
       {target.kind === "web"
         ? <WebIcon target={target} />
-        : target.directory ? <FolderIcon /> : IMAGE_FILE.test(target.path) ? <ImageIcon /> : <FileIcon />}
+        : target.kind === "page" ? <FileIcon />
+          : target.directory ? <FolderIcon /> : IMAGE_FILE.test(target.path) ? <ImageIcon /> : <FileIcon />}
     </span>
   );
 }
 
-/** 网址的图标（工具结果、浏览器标签）；解析不出网页地址时（空白页、其他协议）用通用图标。 */
+/** 网址的图标（工具结果、浏览器标签）：本机文件用文件图标；解析不出网页地址时（空白页、其他协议）用通用图标。 */
 export function WebPageIcon({ url, className }: { url: string; className?: string }) {
   const target = resolveLink(url, { workspaceRoot: null });
   if (target?.kind === "web") return <LinkTargetIcon target={target} className={className} />;
-  return <span className={cn(ICON_CLASS, className)} aria-hidden="true"><GlobeIcon /></span>;
+  return <span className={cn(ICON_CLASS, className)} aria-hidden="true">{url.startsWith("file:") ? <FileIcon /> : <GlobeIcon />}</span>;
 }

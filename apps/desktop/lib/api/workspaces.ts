@@ -1,5 +1,5 @@
 /** Wire values of backend TaskType; unknown task kinds are not a supported contract. */
-export type TaskType = "user" | "user_fork" | "agent_fork" | "agent_task" | "team_node_task";
+export type TaskType = "user" | "user_fork" | "agent_fork" | "agent_task";
 
 import { postJson, requestJson } from "@/lib/http/client";
 
@@ -47,7 +47,7 @@ export type DeleteTaskOptions = {
   withForks?: boolean;
 };
 
-/** 返回实际删除的全部 Task id（含委派子 Agent、Team 节点与一并删除的 fork）。 */
+/** 返回实际删除的全部 Task id（含委派子 Agent 与一并删除的 fork）。 */
 export const deleteTask = (taskId: number, options: DeleteTaskOptions = {}) => {
   const query = new URLSearchParams();
   if (options.creationCommandId) query.set("creationCommandId", options.creationCommandId);

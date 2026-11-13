@@ -14,8 +14,8 @@
     完整规则：不强制 containment，解析前后各拦一次设备路径。
 - ``blocked_device_reason`` 返回空串表示允许。
 - ``resolve_within_workspace`` 同时拒绝落在 workspace ``.cosir`` 保留子树内的路径
-  （``.cosir`` 是只读保留区），没有放行开关。后端自行拼出的内部落盘路径（Agent Team 运行档案、
-  工具产物）不经本解析器，越界防护由 ``atomic_write_text`` 的 ``containment_root`` 承担。
+  （``.cosir`` 是只读保留区），没有放行开关。后端自行拼出的内部落盘路径（工具产物）不经本解析器，
+  越界防护由 ``atomic_write_text`` 的 ``containment_root`` 承担。
 """
 
 from pathlib import Path

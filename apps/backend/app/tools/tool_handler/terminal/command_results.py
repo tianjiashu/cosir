@@ -1,18 +1,18 @@
 """终端命令的结果登记：一次 ``execute_terminal`` 调用登记一条，结论作为工具结果返回或稍后以
 ``background_result`` 回投。
 
-真正需要「调用闭合后工作继续、结论稍后回投」的只有终端命令（派生 Task 与 Agent Team 是多 Agent
-编排，结论由 ``derived_report`` 汇报），所以这张表归终端工具层。条目以 ``tool_call_id`` 为键，每条
+真正需要「调用闭合后工作继续、结论稍后回投」的只有终端命令（派生 Task 是多 Agent 编排，结论由
+``derived_report`` 汇报），所以这张表归终端工具层。条目以 ``tool_call_id`` 为键，每条
 恰好产出一个结论；登记表只记录「结论回投给谁、谁在等、撤销时停哪个作业」，不持有命令本身的执行状态——
 命令的进程与运行中观察归 ``terminal_runtime``（``running_commands``，进程退出即移除），登记表活到结论
 交付完，两者生命周期不同、各管一段。
 
 归属：后台工作属于 Task，不属于登记它的 Run——Run 可以先结束，结论稍后到达时照常唤醒或开出新 Run；
-``wait_messages`` 等的是整个 Task 的后台工作，Task「无事可做」（``TaskActor.wait_quiescent``）也要等
-它们全部交付。用户停止 Task 不碰它们（只打断当前驱动）；上游收回、删除与关闭撤销 Task 的全部条目。
+``wait_messages`` 等的是整个 Task 的后台工作。用户停止 Task 不碰它们（只打断当前驱动）；上游收回、
+删除与关闭撤销 Task 的全部条目。
 
-core 里有三处要问它（静止判定、``wait_messages``、收回时撤销），依赖方向只允许 ``app.tools → core``，
-所以 core 经端口 ``core.tool.background_commands`` 问，lifespan 把这张表注入进去。
+core 里有几处要问它（汇报是否为中间结果、``wait_messages``、收回时撤销），依赖方向只允许
+``app.tools → core``，所以 core 经端口 ``core.tool.background_commands`` 问，lifespan 把这张表注入进去。
 
 事实边界：进程内协调状态，不持久化、不跨重启、重启后不重建；重启收尾见 ``RecoverService``。
 

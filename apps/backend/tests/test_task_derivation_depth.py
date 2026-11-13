@@ -15,15 +15,13 @@ from app.storage.crud.workspace_crud import WorkspaceCrud
 from tests.task_extra_fixtures import fork_extra
 
 
-def test_team_nodes_share_the_main_task_depth_and_other_derivations_go_one_deeper() -> None:
+def test_derivations_go_one_deeper() -> None:
     parent = SimpleNamespace(derivation_depth=1)
     assert child_depth(parent, "delegate") == 2  # type: ignore[arg-type]
     assert child_depth(parent, "fork") == 2  # type: ignore[arg-type]
-    assert child_depth(parent, "team") == 1  # type: ignore[arg-type]
     assert {kind: (rule.tool, rule.creates) for kind, rule in DERIVATIONS.items()} == {
         "delegate": ("delegate_task", "agent_task"),
         "fork": ("fork_task", "agent_fork"),
-        "team": ("agent_team", "team_node_task"),
     }
 
 
@@ -49,7 +47,7 @@ def test_depth_limit_is_configurable_with_bounds() -> None:
 def test_only_tasks_this_agent_derived_answer_to_it() -> None:
     """``send_message`` / ``status`` 只能寻址自己委派或 Agent fork 出的 Task。
 
-    不能绕过 Coordinator 找节点，也不能寻址用户手动 fork 的对话。
+    不能寻址用户手动 fork 的对话。
     """
     from datetime import UTC, datetime
 
@@ -66,8 +64,6 @@ def test_only_tasks_this_agent_derived_answer_to_it() -> None:
     child = task("agent_task", parent=1)
     agent_fork = task("agent_fork", fork=fork_extra(1))
     user_fork = task("user_fork", fork=fork_extra(1))
-    node = task("team_node_task", parent=1)
     assert child.derived_by(1) and not child.derived_by(2)
     assert agent_fork.derived_by(1) and not agent_fork.derived_by(2)
     assert not user_fork.derived_by(1)
-    assert not node.derived_by(1)

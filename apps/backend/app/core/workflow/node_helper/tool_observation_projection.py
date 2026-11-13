@@ -48,7 +48,6 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
                 status=status,
                 display_data=event.display_data,
                 error=event.error,
-                team_run_id=event.team_run_id,
                 background=observation.background,
             ),
         )
@@ -99,7 +98,7 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
             call_id,
             ToolMessageMetadata(
                 status=event.status, display_data=event.display_data, error=event.error,
-                team_run_id=event.team_run_id, background=observation.background,
+                background=observation.background,
             ),
             session=session,
         )
@@ -116,9 +115,7 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
     )
     # 卡片按实际写入的 metadata 渲染：结果没带展示数据时沿用了占位的。
     emit(
-        event.model_copy(
-            update={"display_data": written.display_data, "team_run_id": written.team_run_id}
-        )
+        event.model_copy(update={"display_data": written.display_data})
     )
 
 
@@ -149,7 +146,6 @@ def settle_background_placeholder(
         status=written.status,
         error=written.error,
         display_data=written.display_data,
-        team_run_id=written.team_run_id,
         background=written.background,
     )
 

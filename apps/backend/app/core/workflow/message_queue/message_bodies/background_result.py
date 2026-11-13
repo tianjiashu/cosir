@@ -1,4 +1,4 @@
-"""后台工作的结论消息：后台终端命令（派生 Task 与 Agent Team 的结论走 Agent 消息汇报）。"""
+"""后台工作的结论消息：后台终端命令（派生 Task 的结论走 Agent 消息汇报）。"""
 
 from typing import ClassVar, Literal
 

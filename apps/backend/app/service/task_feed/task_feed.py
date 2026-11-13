@@ -134,7 +134,7 @@ class TaskFeed:
     def publish_catalog(self, workspace_id: int, task_type: TaskType) -> None:
         """一个 Task 的目录行变了（建、删、改标题、开新 Run 刷新排序时间）。
 
-        只有侧栏对话（``USER_FACING_TASK_TYPES``）进目录：委派子 Agent 与 Team 节点的变化不引起
+        只有侧栏对话（``USER_FACING_TASK_TYPES``）进目录：委派子 Agent 的变化不引起
         目录重读。规则只在这一处，写入方不各自判断。
         """
         if task_type not in USER_FACING_TASK_TYPES:

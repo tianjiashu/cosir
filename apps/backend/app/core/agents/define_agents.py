@@ -3,7 +3,6 @@
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.model_settings import ModelSettings
 from app.core.tool.schemas.tool_names import (
-    TOOL_AGENT_TEAM,
     TOOL_APPLY_PATCH,
     TOOL_BROWSER_ACT,
     TOOL_BROWSER_EVALUATE,
@@ -22,7 +21,6 @@ from app.core.tool.schemas.tool_names import (
     TOOL_MCP,
     TOOL_MOVE_FILE,
     TOOL_PROPOSE_AGENT_CONFIGURATION,
-    TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
     TOOL_READ_FILE,
     TOOL_READ_IMAGE,
     TOOL_REPLACE,
@@ -52,7 +50,7 @@ from app.core.tool.schemas.tool_names import (
 # 「看起来更好」。
 #
 # 正文**不得**出现工具可用性（「你没有某工具」「你必须永不委派」之类）：同一 profile 在不同场景下的
-# 工具面并不相同——能不能再委派取决于派生深度，委派子 Agent 与 Team 节点拿到的工具还要按
+# 工具面并不相同——能不能再委派取决于派生深度，委派子 Agent 拿到的工具还要按
 # Task 类型规则过滤（``models.task_kind``）——写死任一侧都必然在另一侧变成假话，且工具事实
 # 本就由 ``<tool_layer>`` / ``<runtime_context>`` 声明。要约束行为就写成行为要求
 # （「不得改动工作区」「不要绕过缺口」），不要写成能力断言。
@@ -79,9 +77,9 @@ You handle exactly one focused task delegated by the parent agent.
 #
 # 与通用子 Agent 同构：身份与角色、操作系统、工作区边界、可用工具集合、用户语言都由
 # ``<runtime_context>`` / ``<tool_layer>`` 层声明，此处不重复。本常量只补该 profile 专属的
-# 「只做调查取证、不动工作区」行为协议；同样**不写工具可用性**（同一 profile 在委派与 Team
-# 节点两种场景下工具面不同），因此写的是「不得以任何方式改动工作区」这类行为要求，而不是
-# 「你没有写类工具」这类能力断言——后者既可能在 Team 场景下失真，也会诱导模型去终端里绕。
+# 「只做调查取证、不动工作区」行为协议；同样**不写工具可用性**（工具面随派生深度与 Task 类型
+# 规则变化），因此写的是「不得以任何方式改动工作区」这类行为要求，而不是「你没有写类工具」这类
+# 能力断言——后者可能失真，也会诱导模型去终端里绕。
 _ONLY_READ_CHILD_AGENT_SYSTEM_PROMPT = """\
 You handle exactly one read-only investigation task delegated by the parent agent.
 
@@ -155,9 +153,7 @@ def main_agent(*, system_prompt: str = "", max_steps: int = 300) -> AgentProfile
             TOOL_SEND_MESSAGE,
             TOOL_TASK_STATUS,
             TOOL_WAIT_MESSAGES,
-            TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
             TOOL_PROPOSE_AGENT_CONFIGURATION,
-            TOOL_AGENT_TEAM,
             TOOL_MCP,
             TOOL_SKILL,
         ],
@@ -172,8 +168,8 @@ def general_child_agent() -> AgentProfile:
     """构建由代码维护的通用委派子 Agent（进程启动时注册的默认 CHILD）。
 
     该 profile 由代码维护、不从 JSON 加载（可被同名 JSON 覆盖）。工具面覆盖读写文件、搜索、
-    终端、网页与内置浏览器，并**声明**了委派 / 父子通信工具：无论作为委派子 Agent 还是 Team 节点，
-    Task 创建时都按类型规则过滤（``models.task_kind``），委派的层数由派生深度上限决定。
+    终端、网页与内置浏览器，并**声明**了委派 / 父子通信工具：Task 创建时按类型规则过滤
+    （``models.task_kind``），委派的层数由派生深度上限决定。
     可交互终端不在工具面内；内置浏览器开放除交接（``browser_handoff``，需要用户在界面上交还）以外的工具。
     ``description`` 面向主 Agent 说明何时该选它，``system_prompt`` 面向子 Agent
     强调「按指令做、不越界」。
@@ -197,8 +193,7 @@ def general_child_agent() -> AgentProfile:
         role="通用Agent",
         # 面向主 Agent 的选择说明：它出现在系统提示词的子 Agent 目录里，是主 Agent 决定「委派给
         # 谁」的依据。此处**只写什么时候该选它**，不写能力断言（「能读写」「不会再委派」之类）：
-        # 同一 profile 在不同场景下工具面并不相同（``delegate_task`` 子 Agent vs Agent Team
-        # 节点），且这份目录本身也会被 Team 节点读到，写死任一侧都会在另一侧变成假话。
+        # 同一 profile 的工具面随派生深度与 Task 类型规则变化，写死能力会在另一种情形下变成假话。
         description=(
             "General-purpose child agent for a bounded task that does not fit a more specialized "
             "agent. Choose it for focused implementation, investigation, or analysis work whose "
@@ -270,8 +265,7 @@ def only_read_child_agent() -> AgentProfile:
         agent_id="only_read_child_agent",
         role="只读Agent",
         # 面向主 Agent 的选择说明：同样只写「什么时候该选它」，不写能力断言——理由与通用子
-        # Agent 相同（同一 profile 在委派与 Team 节点两种场景下工具面不同，且这份目录会被
-        # Team 节点读到）；工具面事实由 ``allowed_tools`` 与该 profile 的 docstring 承载。
+        # Agent 相同；工具面事实由 ``allowed_tools`` 与该 profile 的 docstring 承载。
         description=(
             "Read-only investigation child agent. Choose it when the delegated task is to inspect "
             "the workspace and report findings rather than to change it: reading and searching "

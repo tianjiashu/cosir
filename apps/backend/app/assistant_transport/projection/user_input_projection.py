@@ -59,7 +59,6 @@ def wire_source(source: MessageSource) -> ConversationStateMessageSource:
     report = source.report
     return {
         "taskId": source.task_id,
-        "teamRunId": source.team_run_id,
         "name": source.name,
         "report": None
         if report is None

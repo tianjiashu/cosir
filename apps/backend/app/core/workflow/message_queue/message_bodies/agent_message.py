@@ -1,6 +1,6 @@
 """Agent 消息：另一个 Agent 交给本 Task 的输入。
 
-委派、追加消息、Team 节点输入、下级中途发来的消息，以及派生 Task 的汇报（来源带 ``report``）。
+委派、追加消息、下级中途发来的消息，以及派生 Task 的汇报（来源带 ``report``）。
 """
 
 from typing import ClassVar
@@ -30,13 +30,12 @@ class AgentMessageBody(EnqueuedMessageBody):
     KIND: ClassVar[TaskMessageKind] = "agent_message"
     TAG: ClassVar[str] = "agent_message"
     PROMPT_GUIDE: ClassVar[str | None] = (
-        "a message from another agent, named by from and source_task_id (or source_team_run_id "
-        "for an Agent Team). When it carries report=..., it is the report of work you started: "
-        "a task you derived (a delegated child agent or a fork) or an approved Agent Team. "
+        "a message from another agent, named by from and source_task_id. When it carries "
+        "report=..., it is the report of a task you derived (a delegated child agent or a fork). "
         "status says how its run ended, report=\"intermediate\" means it still has work running "
-        "and will report again, report=\"final\" means it has nothing left running. Derived tasks and "
-        "teams report to you automatically, so do not ask them to reply; for other messages, "
-        "reply explicitly with send_message to source_task_id if needed."
+        "and will report again, report=\"final\" means it has nothing left running. Derived tasks "
+        "report to you automatically, so do not ask them to reply; for other messages, reply "
+        "explicitly with send_message to source_task_id if needed."
     )
     PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = True
@@ -56,13 +55,8 @@ class AgentMessageBody(EnqueuedMessageBody):
                 f' status="{report.status}"'
             )
         )
-        origin = (
-            f'source_task_id="{self.source.task_id}"'
-            if self.source.task_id is not None
-            else f'source_team_run_id="{self.source.team_run_id}"'
-        )
         content = (
-            f'<{self.TAG} time="{render_time()}" {origin} '
+            f'<{self.TAG} time="{render_time()}" source_task_id="{self.source.task_id}" '
             f'from="{sender}"{attributes}>\n{escape_tag(self.text, self.TAG)}\n</{self.TAG}>'
         )
         return (

@@ -143,7 +143,6 @@ def plan_tool_call_status_changed(
             status=event.status,
             error=event.error,
             display_data=event.display_data,
-            team_run_id=event.team_run_id,
             background=event.background,
         )
     )

@@ -1,8 +1,7 @@
 """core 对「Agent 自己在后台跑的终端命令」的端口：依赖倒置，core 不导入 ``app.tools``。
 
 后台命令是终端工具的事（结论路由与撤销归 ``app.tools.tool_handler.terminal.command_results``），但 core
-有三处需要知道它们：Task 是否还有没了结的下游工作（``derived_report.has_open_work``，静止判定与汇报的
-「中间结果」）、``wait_messages`` 还能等什么、上游收回时撤销它们（``TaskRecall``）。core 只经这里问，
+有三处需要知道它们：Task 是否还有没了结的下游工作（``derived_report.has_open_work``，汇报的「中间结果」）、``wait_messages`` 还能等什么、上游收回时撤销它们（``TaskRecall``）。core 只经这里问，
 实现由 lifespan 装配时注入（测试由 conftest 注入），未注入就调用属于装配缺陷，直接报错，不静默降级。
 """
 

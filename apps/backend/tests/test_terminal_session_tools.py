@@ -45,7 +45,7 @@ def test_exactly_four_terminal_tools_are_built() -> None:
     assert list(definitions) == [
         "terminal_list", "terminal_read", "terminal_write", "terminal_stop",
     ]
-    # 只有写入需要用户界面（用户终端），其余三个对子 Agent 与 Team 节点也开放。
+    # 只有写入需要用户界面（用户终端），其余三个对子 Agent 也开放。
     assert definitions["terminal_write"].requires_user_surface is True
     assert all(
         not definition.requires_user_surface

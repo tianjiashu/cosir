@@ -1,13 +1,12 @@
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 
-import { useWorkbenchStore, type AgentDraftInput, type TeamDraftInput } from "./workbench-store";
+import { useWorkbenchStore, type AgentDraftInput } from "./workbench-store";
 
 type WorkbenchContextValue = {
   /** 工作台当前显示的工作区；工具卡片据此决定能否打开标签，以及打开到哪个工作区的桶。 */
   workspaceId: number;
   openAgent: (input: { taskId: number; title: string }) => void;
   openAgentConfigurationDraft: (input: AgentDraftInput) => void;
-  openAgentTeamConfigurationDraft: (input: TeamDraftInput) => void;
 };
 
 const WorkbenchContext = createContext<WorkbenchContextValue | null>(null);
@@ -24,7 +23,6 @@ export function WorkbenchProvider({ workspaceId, children }: { workspaceId: numb
       workspaceId,
       openAgent: (input) => store.openAgent(workspaceId, input),
       openAgentConfigurationDraft: (input) => store.openAgentConfigurationDraft(workspaceId, input),
-      openAgentTeamConfigurationDraft: (input) => store.openAgentTeamConfigurationDraft(workspaceId, input),
     };
   }, [workspaceId]);
   return <WorkbenchContext.Provider value={value}>{children}</WorkbenchContext.Provider>;

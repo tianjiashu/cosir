@@ -79,15 +79,9 @@ def test_invalid_reasoning_effort_is_rejected(effort: object) -> None:
 
 def test_decision_carries_no_tool_specific_address() -> None:
     """调用由路径里的 tool_call_id 寻址，请求体只有决定本身。"""
-    decision = DecisionRequest.model_validate(
-        {"decision": "reject", "feedback": "换个分工", "data": {"goal": "ok"}}
-    )
+    decision = DecisionRequest.model_validate({"decision": "reject", "feedback": "换个分工"})
 
-    assert (decision.decision, decision.feedback, decision.data) == (
-        "reject",
-        "换个分工",
-        {"goal": "ok"},
-    )
+    assert (decision.decision, decision.feedback) == ("reject", "换个分工")
 
 
 @pytest.mark.parametrize(
@@ -95,7 +89,7 @@ def test_decision_carries_no_tool_specific_address() -> None:
     [
         {"decision": "force_reject"},
         {"decision": "abort"},
-        {"teamRunId": 17, "decision": "approve"},
+        {"decision": "approve", "data": {"goal": "ok"}},
     ],
 )
 def test_decision_rejects_unknown_shapes(payload: dict[str, object]) -> None:

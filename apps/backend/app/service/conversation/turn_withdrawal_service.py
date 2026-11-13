@@ -6,10 +6,9 @@
 - 保留：更早发起的调用在这一回合才并入的结果（它们回答的是之前的调用）；
 - 重新投递：这一回合途中并入的 Task 级通知（排队投递、只投一次，见 ``NoticeKind``）；推导出的
   回合级与 Run 级通知不入队，撤回后由下一次驱动重新推导；
-- 撤销：这一回合发起、仍在进行的后台作业，交接，这一回合提出的 Agent Team 方案（待确认的收敛，运行中
-  的停下且不汇报）；这一回合派生的 Task（委派、Agent fork，按 ``TaskExtra.deriving_call_id`` 找）以
-  ``parent`` 原因收回；
-- 删除：队列里属于这些调用的结论与决定，以及这一回合派生的 Task 与 Team 已经交来、还没并入的汇报；
+- 撤销：这一回合发起、仍在进行的后台作业与交接；这一回合派生的 Task（委派、Agent fork，按
+  ``TaskExtra.deriving_call_id`` 找）以 ``parent`` 原因收回；
+- 删除：队列里属于这些调用的结论与决定，以及这一回合派生的 Task 已经交来、还没并入的汇报；
 - 不处理：已经发生的外部事实——文件改动、终端会话、浏览器标签、派生 Task 已经做完的事、已发出的
   消息（见 AGENTS.md 待办）。
 
@@ -57,9 +56,8 @@ class TurnWithdrawalService:
         顺序有讲究：
 
         1. 先在写事务之外撤销进程内与自带事务的副产物——后台作业（等这个 Task 的在途投递写完，见
-           ``command_results.withdraw_calls``）、交接、这一回合的 Team 与派生 Task。它们必须在移出
-           提交之前完成（登记出队是投递的唯一门槛，被收回的 Team 与 Task 不再汇报），又不能放进写事务：
-           在途投递与 Team 收敛都要写库。
+           ``command_results.withdraw_calls``）、交接、这一回合派生的 Task。它们必须在移出提交之前
+           完成（登记出队是投递的唯一门槛，被收回的 Task 不再汇报），又不能放进写事务：在途投递要写库。
         2. 再在一个 ``BEGIN IMMEDIATE`` 写事务里复查目标、移出行、删除队列里回答被撤回调用的行、
            重新投递 Task 级通知，同一事务提交。
 
@@ -77,9 +75,6 @@ class TurnWithdrawalService:
         command_results.withdraw_calls(task_id, plan.calls)
         handoff_registry.drop(task_id, plan.calls)
         recalled = self._recall_derived(task_id, plan.calls)
-        withdrawn_teams = service_depends.get_agent_team_coordinator().withdraw_for_calls(
-            task_id, plan.calls
-        )
         queue = service_depends.get_task_message_queue()
         with begin_immediate(main_session_factory()) as session:
             self._require_target(task_id, message_id, session=session)
@@ -88,7 +83,7 @@ class TurnWithdrawalService:
                 session,
                 task_id,
                 lambda message: self._answers_withdrawn_call(message, plan.calls)
-                or self._reports_from(message, recalled, withdrawn_teams),
+                or self._reports_from(message, recalled),
             )
             # 撤回只在 Task 静止时接受，没有活动 Run 可唤醒：直接写外部队列、不经 actor，随下一次推进并入。
             for notice in plan.redeliver:
@@ -102,7 +97,7 @@ class TurnWithdrawalService:
                     ),
                     session=session,
                 )
-        # 移出行不发工具事件：被撤回的等待占位（Team 方案、交接）要另外让 Task 状态推送重读一次。
+        # 移出行不发工具事件：被撤回的等待占位（交接）要另外让 Task 状态推送重读一次。
         service_depends.get_task_feed().publish_status(task_id)
         log.info(
             "turn_withdrawn",
@@ -114,7 +109,6 @@ class TurnWithdrawalService:
                     "from_turn": target.turn,
                     "excluded_rows": len(plan.excluded_row_ids),
                     "withdrawn_calls": sorted(plan.calls),
-                    "withdrawn_teams": sorted(withdrawn_teams),
                     "recalled_derived_tasks": sorted(recalled),
                     "removed_queue_messages": [message.kind for message in removed],
                     "redelivered_notices": [notice.notice_kind for notice in plan.redeliver],
@@ -151,14 +145,12 @@ class TurnWithdrawalService:
         return frozenset(task.id for task in derived)
 
     @staticmethod
-    def _reports_from(
-        message: TaskMessage, task_ids: frozenset[int], team_run_ids: frozenset[int]
-    ) -> bool:
-        """队列里来自这些派生 Task 或 TeamRun 的汇报。"""
+    def _reports_from(message: TaskMessage, task_ids: frozenset[int]) -> bool:
+        """队列里来自这些派生 Task 的汇报。"""
         body = message.body
         if not isinstance(body, AgentMessageBody) or body.source.report is None:
             return False
-        return body.source.task_id in task_ids or body.source.team_run_id in team_run_ids
+        return body.source.task_id in task_ids
 
     def _answers_withdrawn_call(self, message: TaskMessage, calls: frozenset[str]) -> bool:
         """队列里回答被撤回调用的行：这些调用的结论与决定。队列里的通知都是 Task 级，照常保留。"""

@@ -123,12 +123,11 @@ def test_question_and_explicit_reply_are_two_ordinary_messages(env, tmp_path) ->
     assert not env.delivered
 
 
-def test_peers_can_send_but_team_self_and_other_workspace_are_refused(env, tmp_path, monkeypatch) -> None:
-    for task in (_task(21, task_type="team_node_task", parent_task_id=_PARENT),
-                 _task(22), _task(23, workspace_id=2)):
+def test_peers_can_send_but_self_and_other_workspace_are_refused(env, tmp_path, monkeypatch) -> None:
+    for task in (_task(22), _task(23, workspace_id=2)):
         monkeypatch.setitem(_TASKS, task.id, task)
     assert _send(22, _CHILD, "news", tmp_path).status == "success"
-    for sender, target in ((21, _PARENT), (_PARENT, 21), (_PARENT, _PARENT), (_PARENT, 23)):
+    for sender, target in ((_PARENT, _PARENT), (_PARENT, 23)):
         assert _send(sender, target, "hi", tmp_path).status == "error"
     assert env.enqueued == [(_CHILD, "agent-message:news")]
 
@@ -162,7 +161,6 @@ def test_target_without_first_run_inherits_its_queued_launch(env, tmp_path, monk
         ({"task_type": "agent_task", "parent_task_id": 7}, 7),
         ({"task_type": "agent_fork", "extra": fork_extra(7)}, 7),
         ({"task_type": "user_fork", "extra": fork_extra(7)}, None),
-        ({"task_type": "team_node_task", "parent_task_id": 7}, None),
         ({"task_type": "user"}, None),
     ],
 )

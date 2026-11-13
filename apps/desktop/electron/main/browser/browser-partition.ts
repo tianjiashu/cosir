@@ -32,30 +32,30 @@ export function browserPageWebPreferences(): WebPreferences {
   };
 }
 
-/** 分区级事件按来源网页找到所属标签与 Task 处理；由 `BrowserHost` 实现（它持有全部标签与下载登记）。 */
+/** 分区级事件按来源网页找到所属 Task 处理；由 `BrowserHost` 实现（它持有全部标签与下载登记）。 */
 export type BrowserSessionEvents = {
   download(source: WebContents, item: DownloadItem): void;
-  permissionDenied(source: WebContents, permission: string): void;
 };
 
 /**
  * 分区级设置，宿主就绪后调用一次：
- * - UA 去掉 `Electron/x`：带它的 UA 会被不少网站当成异常客户端（拒绝登录、降级页面）。
- * - 站点权限（摄像头、定位、通知……）一律拒绝，v1 不开放；拒绝后告诉所属标签。
+ * - 站点权限（剪贴板、全屏、通知、定位、摄像头、麦克风、录屏……）一律授权：先能用，询问与限制留给统一的安全设计
+ *   （AGENTS.md 待办「安全与权限」）。权限检查走 Electron 默认（授权）；请求只在这里落日志，便于排查谁用了什么。
  * - 下载登记到来源标签所属的 Task，落盘到标签创建时定下的下载目录（`downloads.ts`）。
  */
 export function configureBrowserSession(events: BrowserSessionEvents): void {
   const browserSession = session.fromPartition(BROWSER_PARTITION);
   browserSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    logDesktopEvent("INFO", "browser", "browser_permission_denied", { permission });
-    events.permissionDenied(webContents, permission);
-    callback(false);
+    logDesktopEvent("INFO", "browser", "browser_permission_granted", { permission, url: webContents.getURL().slice(0, 200) });
+    callback(true);
   });
-  browserSession.setPermissionCheckHandler(() => false);
   browserSession.on("will-download", (_event, item, webContents) => events.download(webContents, item));
 }
 
-/** 在任何 WebContents 创建前设置唯一默认 UA；popup 的首个请求也从这里取。 */
+/**
+ * 在任何 WebContents 创建前设置唯一默认 UA；popup 的首个请求也从这里取。去掉 `Electron/x`：带它的 UA 会被不少网站
+ * 当成异常客户端（拒绝登录、降级页面）。
+ */
 export function configureBrowserUserAgent(): void {
   app.userAgentFallback = app.userAgentFallback.replace(/ Electron\/\S+/, "");
 }

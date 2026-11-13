@@ -1,3 +1,4 @@
+import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 
 import type { BrowserDialog, BrowserDialogAnswer } from "@/electron/shared/host-contract";
@@ -9,7 +10,7 @@ import type { BrowserTab } from "@/electron/main/browser/browser-tab";
 import type { SendOptions } from "@/electron/main/browser/cdp-session";
 vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
 import { parseAct, parseDropTasks, parseNavigate, parseSnapshot, type PageAction } from "@/electron/main/browser/params";
-import { addressToUrl } from "@/electron/main/browser/web-url";
+import { addressToUrl, isPageUrl, pageUrl } from "@/electron/main/browser/page-url";
 import { describeTarget } from "@/electron/main/browser/input/targets";
 import { RefRegistry } from "@/electron/main/browser/ref-registry";
 import type { AXNode, SnapshotDocument } from "@/electron/main/browser/snapshot/document";
@@ -65,11 +66,14 @@ describe("params", () => {
     expect(parseDropTasks({ task_ids: [1, 2] })).toEqual([1, 2]);
   });
 
-  // 目的：Agent 只能打开网页；潜在缺陷：经浏览器读本机文件或执行 javascript: 地址。
-  it("blocks non-http schemes and rejects malformed params", () => {
-    expect(codeOf(() => parseNavigate(navigate({ url: "file:///etc/passwd" })))).toBe("NAVIGATION_BLOCKED");
+  // 目的：Agent 能打开网页与本机文件、写法与地址栏一致；潜在缺陷：生成的 HTML 打不开，或执行 javascript: 地址。
+  it("opens web pages and local files, blocks other schemes and rejects malformed params", () => {
+    expect(parseNavigate(navigate({ url: "file:///tmp/a.html" })).target).toEqual({ url: "file:///tmp/a.html" });
+    expect(parseNavigate(navigate({ url: "/tmp/a b.html" })).target).toEqual({ url: "file:///tmp/a%20b.html" });
+    expect(parseNavigate(navigate({ url: "example.com" })).target).toEqual({ url: "https://example.com/" });
     expect(codeOf(() => parseNavigate(navigate({ url: "javascript:alert(1)" })))).toBe("NAVIGATION_BLOCKED");
-    expect(codeOf(() => parseNavigate(navigate({ url: "not a url" })))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseNavigate(navigate({ url: "vscode://open" })))).toBe("NAVIGATION_BLOCKED");
+    expect(codeOf(() => parseNavigate(navigate({ url: "https://exa mple.com" })))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseNavigate(navigate({ action: "home" })))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", tab: "../t1" })))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", limits: { per_task: 0, total: 1 } })))).toBe("INVALID_PARAMS");
@@ -753,10 +757,12 @@ describe("describeTarget", () => {
 });
 
 describe("addressToUrl", () => {
-  // 目的：地址栏里打本机开发服务的地址能打开；潜在缺陷：`localhost:3000` 被当成名为 `localhost:` 的协议拦下，或补成
-  // https 连不上只开 http 的开发服务。
-  it("adds http for local hosts, https elsewhere, and keeps written schemes", () => {
+  // 目的：地址栏里打本机开发服务、局域网设备的地址能打开；潜在缺陷：`localhost:3000` 被当成名为 `localhost:` 的协议
+  // 拦下，或补成 https 连不上只开 http 的服务。
+  it("adds http for local network hosts, https elsewhere, and keeps written schemes", () => {
     expect(addressToUrl("localhost:3000/app")).toBe("http://localhost:3000/app");
+    expect(addressToUrl("192.168.1.5:5173")).toBe("http://192.168.1.5:5173");
+    expect(addressToUrl("printer.local")).toBe("http://printer.local");
     expect(addressToUrl("127.0.0.1:8080")).toBe("http://127.0.0.1:8080");
     expect(addressToUrl("[::1]:5173")).toBe("http://[::1]:5173");
     expect(addressToUrl("example.com/a?b=1")).toBe("https://example.com/a?b=1");
@@ -765,6 +771,22 @@ describe("addressToUrl", () => {
     // 写了别的协议的照原样交给协议校验去拦。
     expect(addressToUrl("file:///etc/passwd")).toBe("file:///etc/passwd");
     expect(addressToUrl("javascript:alert(1)")).toBe("javascript:alert(1)");
+  });
+
+  // 目的：地址栏里粘贴本机路径能打开；潜在缺陷：`/Users/x/测试.html` 被补成 `https:///Users/…`，主机名变成 `users`。
+  it("turns absolute local paths into file URLs", () => {
+    expect(addressToUrl("/Users/x/测试 结果/a.html")).toBe("file:///Users/x/%E6%B5%8B%E8%AF%95%20%E7%BB%93%E6%9E%9C/a.html");
+    expect(addressToUrl("~/a.html")).toBe(`file://${os.homedir()}/a.html`);
+  });
+});
+
+describe("isPageUrl / pageUrl", () => {
+  // 目的：页面自身的跳转与弹窗也能在本机页面之间进行；潜在缺陷：本机 HTML 里的相对链接被当成非网页拦下，或放进拉起
+  // 别的应用的地址。
+  it("accepts web pages and local files only", () => {
+    for (const url of ["https://a.b/", "http://localhost:3000", "file:///tmp/b.html"]) expect(isPageUrl(url)).toBe(true);
+    for (const url of ["javascript:alert(1)", "chrome://settings", "mailto:a@b.c", "vscode://x", "not a url"]) expect(isPageUrl(url)).toBe(false);
+    expect(codeOf(() => pageUrl("chrome://settings"))).toBe("NAVIGATION_BLOCKED");
   });
 });
 

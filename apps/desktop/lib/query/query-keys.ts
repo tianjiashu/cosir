@@ -14,9 +14,6 @@ export const queryKeys = {
   fileText: (id: number, path: string, version: string, encoding: string, offset: number, tail: boolean, before?: number) => ["cosir", "files", id, "text", path, version, encoding, offset, tail, before] as const,
   fileResource: (id: number, path: string, version: string) => ["cosir", "files", id, "resource", path, version] as const,
   agents: (workspaceId: number | null) => ["cosir", "agents", workspaceId ?? "system"] as const,
-  agentTeams: (workspaceId: number | null) => ["cosir", "agent-teams", workspaceId ?? "system"] as const,
-  agentTeamGraphIssues: (graph: string) => ["cosir", "agent-team-graph-issues", graph] as const,
-  agentTeamRun: (teamRunId: number) => ["cosir", "agent-team-run", teamRunId] as const,
   instruction: (kind: "global" | "main-agent-prompt" | "workspace", workspaceId?: number) =>
     ["cosir", "instruction", kind, workspaceId ?? null] as const,
   environment: () => ["cosir", "environment"] as const,

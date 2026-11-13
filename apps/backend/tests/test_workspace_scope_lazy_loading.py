@@ -1,16 +1,14 @@
 """workspace 作用域配置「首次访问即装载」契约测试。
 
-背景：曾经只在进程启动时遍历一次已登记 workspace 装载 ``.cosir/agents`` 与
-``.cosir/agent-teams``，导致**启动之后才创建的 workspace** 在整个进程周期内解析不到自己的
-子 Agent / Team（真实故障：启动后新建 workspace，Team 草稿引用的 child Agent 被判为不可用）。
+背景：曾经只在进程启动时遍历一次已登记 workspace 装载 ``.cosir/agents``，导致**启动之后才
+创建的 workspace** 在整个进程周期内解析不到自己的子 Agent。
 
 本文件覆盖改造后的契约：
 
 1. 运行期新增 workspace 目录与 JSON 后，无需重启后端即可首次访问装载到；
 2. 每个作用域只装载一次（重复读取不重复读盘，并发首访只装载一次）；
 3. 装载只合并不替换：system 作用域的内置 profile 不会被 workspace 装载清掉；
-4. 删除 workspace 后 ``drop_scope`` 清掉已装载标记，同路径重建能读到新内容；
-5. workspace 可见 Team 配置合并 system 继承项。
+4. 删除 workspace 后 ``drop_scope`` 清掉已装载标记，同路径重建能读到新内容。
 """
 
 from __future__ import annotations
@@ -29,12 +27,6 @@ from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.service.configuration.agent_configuration import AgentConfiguration
 from app.service.configuration.agent_configuration_service import AgentConfigurationService
-from app.service.configuration.agent_team_configuration_registry import (
-    AgentTeamConfigurationRegistry,
-)
-from app.service.configuration.agent_team_configuration_source import (
-    AgentTeamConfigurationScopeSource,
-)
 
 _JOIN_TIMEOUT = 10.0
 
@@ -72,48 +64,6 @@ def _file_agent_profile(agent_id: str, *, role: str) -> AgentProfile:
         system_prompt="probe",
 
     )
-
-
-def _team_document(team_id: str, scope: str) -> dict[str, object]:
-    """返回一份最小合法 Team 配置文档。"""
-
-    return {
-        "team_id": team_id,
-        "name": f"Team {team_id}",
-        "description": "Lazy loading probe team",
-        "scope": scope,
-        "start_node_id": "develop",
-        "nodes": [
-            {
-                "node_id": "develop",
-                "name": "开发",
-                "agent_id": "general-assistant",
-                "statuses": [{"name": "done", "color": "#16A34A"}, {"name": "blocked", "color": "#DC2626"}],
-            },
-            {
-                "node_id": "review",
-                "name": "审查",
-                "agent_id": "general-assistant",
-                "statuses": [{"name": "passed", "color": "#16A34A"}, {"name": "needs_changes", "color": "#F59E0B"}],
-            },
-        ],
-        "transitions": [
-            {"from_node_id": "develop", "status": "done", "target_node_id": "review"},
-            {"from_node_id": "develop", "status": "blocked", "target_node_id": "END"},
-            {"from_node_id": "review", "status": "passed", "target_node_id": "END"},
-            {"from_node_id": "review", "status": "needs_changes", "target_node_id": "develop"},
-        ],
-    }
-
-
-def _write_team(workspace: Path, team_id: str, *, scope: str = "workspace") -> Path:
-    """在 workspace 的 ``.cosir/agent-teams`` 下写入一份 Team 配置。"""
-
-    directory = workspace / ".cosir" / "agent-teams"
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{team_id}.json"
-    path.write_text(json.dumps(_team_document(team_id, scope)), encoding="utf-8")
-    return path
 
 
 def test_workspace_created_after_startup_resolves_without_restart(tmp_path: Path) -> None:
@@ -292,56 +242,6 @@ def test_drop_scope_rereads_directory_after_recreate(tmp_path: Path) -> None:
     assert registry.resolve(workspace, "first-agent") is None
 
 
-def test_team_configurations_load_lazily_and_inherit_system(tmp_path: Path) -> None:
-    """Team 配置同样按需装载：workspace 独有可见，system 继承项在 workspace 可见性内。"""
-
-    system_directory = tmp_path / "system-agent-teams"
-    system_directory.mkdir()
-    (system_directory / "system-team.json").write_text(
-        json.dumps(_team_document("system-team", "system")),
-        encoding="utf-8",
-    )
-    registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
-    workspace = tmp_path / "workspace"
-    _write_team(workspace, "workspace-team")
-
-    visible = {configuration.team_id for configuration in registry.list_visible(workspace)}
-
-    assert {"workspace-team", "system-team"} <= visible
-    # 独立列举不混入继承项，供配置中心区分本地文件与继承配置。
-    owned = registry.list_scope("workspace", workspace_root=workspace)
-    assert [item.team_id for item in owned] == ["workspace-team"]
-
-
-def test_team_source_logs_only_when_scope_path_is_broken(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Team 装载：目录不存在不记日志（正常无配置），路径不是目录必须留痕。"""
-
-    registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
-    missing_workspace = tmp_path / "missing-workspace"
-
-    with caplog.at_level(logging.WARNING):
-        assert registry.list_visible(missing_workspace) == []
-    assert not [
-        record
-        for record in caplog.records
-        if record.message == "team_configuration_scope_load_failed"
-    ], "目录不存在属正常无配置，不应产生告警噪音"
-
-    broken_workspace = tmp_path / "broken-workspace"
-    (broken_workspace / ".cosir").mkdir(parents=True)
-    (broken_workspace / ".cosir" / "agent-teams").write_text("", encoding="utf-8")
-
-    with caplog.at_level(logging.WARNING):
-        assert registry.list_visible(broken_workspace) == []
-
-    assert any(
-        record.message == "team_configuration_scope_load_failed" for record in caplog.records
-    ), "配置路径不是目录必须留痕，否则该作用域会永远为空且无线索"
-
-
 def test_scope_with_file_as_cosir_parent_logs_and_degrades(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -353,14 +253,10 @@ def test_scope_with_file_as_cosir_parent_logs_and_degrades(
     (workspace / ".cosir").write_text("", encoding="utf-8")
 
     profile_registry = AgentProfileRegistry(AgentProfileScopeSource())
-    team_registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
     with caplog.at_level(logging.WARNING):
         assert profile_registry.resolve(workspace, "any-agent") is None
-        assert team_registry.list_visible(workspace) == []
 
-    events = {record.message for record in caplog.records}
-    assert "agent_profile_scope_load_failed" in events
-    assert "team_configuration_scope_load_failed" in events
+    assert "agent_profile_scope_load_failed" in {record.message for record in caplog.records}
 
 
 def test_creating_agent_does_not_report_false_duplicate(
@@ -400,20 +296,6 @@ def test_creating_agent_does_not_report_false_duplicate(
     ], "刚写入的配置文件不应在首次读取时被读回并报成重复"
 
 
-def test_team_scope_uses_same_key_normalization_as_agent_scope(tmp_path: Path) -> None:
-    """两类注册表对同一 workspace 路径得出同一作用域键，系统哨兵也同源。"""
-
-    workspace = str(tmp_path / "workspace")
-
-    assert AgentTeamConfigurationRegistry.normalize_scope(
-        "workspace", workspace
-    ) == AgentProfileRegistry.normalize_workspace(workspace)
-    assert (
-        AgentTeamConfigurationRegistry.normalize_scope("system")
-        == AgentProfileRegistry.SYSTEM_WORKSPACE
-    )
-
-
 def test_sources_map_scopes_to_their_fixed_directories(tmp_path: Path) -> None:
     """目录映射按 `.cosir` 约定落到对应子目录，system 与 workspace 不互相串位。"""
 
@@ -421,9 +303,6 @@ def test_sources_map_scopes_to_their_fixed_directories(tmp_path: Path) -> None:
 
     assert AgentProfileScopeSource().directory(str(workspace)) == (
         workspace / ".cosir" / "agents"
-    )
-    assert AgentTeamConfigurationScopeSource().directory(str(workspace)) == (
-        workspace / ".cosir" / "agent-teams"
     )
     assert AgentProfileScopeSource().directory(
         AgentProfileRegistry.SYSTEM_WORKSPACE

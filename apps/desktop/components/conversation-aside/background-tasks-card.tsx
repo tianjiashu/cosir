@@ -34,8 +34,7 @@ export function BackgroundTasksSummary({ taskId }: { taskId: number }) {
 /**
  * 标题行的「全部停止」：对每条运行中的条目发一次单停（`cancelToolCall`），与逐行停止是同一个命令、同一个
  * 「停止中」槽位，后端没有批量命令。用户停止 Task 不动后台工作，这里是一次停掉它们的入口；每条停止的
- * 回执照常交给 Agent（不开新 Run），它因此知道哪些工作被停了。只停点下那一刻看到的条目；待批准的 Team
- * 方案不是后台工作，不在其中。
+ * 回执照常交给 Agent（不开新 Run），它因此知道哪些工作被停了。只停点下那一刻看到的条目。
  */
 export function BackgroundTasksActions({ taskId }: { taskId: number }) {
   const running = useBackgroundTasks(taskId).filter((entry) => entry.status === "running");

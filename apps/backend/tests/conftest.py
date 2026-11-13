@@ -25,21 +25,11 @@ from app.assistant_transport.service.conversation_task_state_service import (
 )
 from app.config import configuration
 from app.config.configuration import build_agent_registry
-from app.core.agents import agent_profile_config, agent_profile_source
+from app.core.agents import agent_profile_source
 from app.core.context.context_store import ContextStore
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.tool_registry import ToolRegistry
-from app.service.configuration import (
-    agent_team_configuration_registry as agent_team_registry_module,
-)
-from app.service.configuration import agent_team_configuration_source as configuration_scope_source
 from app.service.configuration import extension_scope, mcp_tested_servers
-from app.service.configuration.agent_team_configuration_registry import (
-    AgentTeamConfigurationRegistry,
-)
-from app.service.configuration.agent_team_configuration_source import (
-    AgentTeamConfigurationScopeSource,
-)
 from app.service.conversation.conversation_task_context_service import (
     ConversationTaskContextService,
 )
@@ -215,10 +205,10 @@ def reset_handoff_registry() -> Iterator[None]:
 def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """把系统作用域的配置文件目录隔离到用例临时目录。
 
-    为什么需要：Agent profile 与 Agent Team 注册表现在按作用域**懒装载**，任何一次读取都会去
-    访问该作用域的配置目录。若系统作用域仍指向开发者本机的 ``~/.cosir/agents`` 与
-    ``~/.cosir/agent-teams``，用例结果会随本机已放置的自定义配置漂移（典型失败形态是「索引里
-    多出别人的 profile」）。workspace 作用域天然落在用例自己的临时 workspace 下，无需隔离。
+    为什么需要：Agent profile 注册表按作用域**懒装载**，任何一次读取都会去访问该作用域的配置
+    目录。若系统作用域仍指向开发者本机的 ``~/.cosir/agents``，用例结果会随本机已放置的自定义
+    配置漂移（典型失败形态是「索引里多出别人的 profile」）。workspace 作用域天然落在用例自己的
+    临时 workspace 下，无需隔离。
 
     参数:
         tmp_path: pytest 提供的用例级临时目录。
@@ -231,21 +221,15 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         无。
 
     副作用:
-        改写两个配置来源模块内 ``system_agent_config_dir`` / ``system_agent_team_config_dir``
-        的引用，以及 Skill / MCP 作用域、测试记录与模型配置服务里的系统级路径函数；不触碰真实的路径模块，也不创建目录。需要验证真实目录推导的用例可再自行覆盖。
+        改写 Agent 配置来源模块内 ``system_agent_config_dir`` 的引用，以及 Skill / MCP 作用域、
+        测试记录与模型配置服务里的系统级路径函数；不触碰真实的路径模块，也不创建目录。需要验证
+        真实目录推导的用例可再自行覆盖。
     """
 
     system_agents = tmp_path / "system-agents"
-    system_teams = tmp_path / "system-agent-teams"
-    # 需要覆盖三处已导入符号：Agent 侧的装载、配置中心写入与目录 provisioning 都经
-    # ``agent_profile_source`` 取值；Team 侧的装载与写入经 ``configuration_scope_source``；
-    # Team 目录 provisioning 直接调用路径函数（``agent_profile_config``）。三处都覆盖，
-    # 用例内的读、写与 provisioning 才会指向同一目录，且不触碰开发者本机的 ``~/.cosir``。
+    # Agent 侧的装载、配置中心写入与目录 provisioning 都经 ``agent_profile_source`` 取值，覆盖这一处
+    # 用例内的读、写与 provisioning 就指向同一目录，且不触碰开发者本机的 ``~/.cosir``。
     monkeypatch.setattr(agent_profile_source, "system_agent_config_dir", lambda: system_agents)
-    monkeypatch.setattr(
-        configuration_scope_source, "system_agent_team_config_dir", lambda: system_teams
-    )
-    monkeypatch.setattr(agent_profile_config, "system_agent_team_config_dir", lambda: system_teams)
     # Skill / MCP 的系统级目录与本机测试记录同样隔离：两者每次调用都现读文件，不隔离就会读到
     # 开发者本机 ``~/.cosir`` 里装的 Skill 与 MCP 服务。用例往 ``tmp_path / "system-cosir"`` 下写即可。
     system_cosir_root = tmp_path / "system-cosir"
@@ -343,12 +327,6 @@ def install_process_singletons(monkeypatch: pytest.MonkeyPatch) -> Callable[[], 
 
     def install() -> None:
         monkeypatch.setattr(configuration, "_AGENT_REGISTRY", build_agent_registry())
-        # 工具系统会构造 Agent Team 工具，先按生产装配顺序提供注册表。
-        monkeypatch.setattr(
-            agent_team_registry_module,
-            "_REGISTRY",
-            AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource()),
-        )
         tool_registry = build_tool_registry()
         monkeypatch.setattr(configuration, "_TOOL_REGISTRY", tool_registry)
         monkeypatch.setattr(configuration, "_TOOL_EXECUTOR", ToolExecutor(registry=tool_registry))

@@ -1,6 +1,6 @@
 """用户对等待决定的工具调用（HITL）作出的决定。"""
 
-from typing import Any, ClassVar, Literal
+from typing import ClassVar, Literal
 
 from openai.types.chat import ChatCompletionUserMessageParam
 
@@ -21,9 +21,6 @@ class DecisionBody(EnqueuedMessageBody):
     context 里的原调用取，不随消息保存）——驳回同样要落定工具自己的事实，也只有执行结果能让等待
     占位收尾；``reply`` 类工具的决定作为消息交给模型。一轮只处理一条需要执行的决定，且先于其他
     消息处理。用户主动作出的决定可以唤醒挂起的 Run，也能在 Run 已完成、取消或失败后开出新 Run。
-
-    ``data`` 是工具自定义的决定载荷（如 Agent Team 批准时编辑过的方案），形状由工具在入队边界
-    校验、执行时消费；不进模型正文。
     """
 
     KIND: ClassVar[TaskMessageKind] = "user_decision"
@@ -39,11 +36,6 @@ class DecisionBody(EnqueuedMessageBody):
     tool_name: str
     decision: Literal["approve", "reject"]
     feedback: str | None = None
-    data: dict[str, Any] | None = None
-
-    @property
-    def approved(self) -> bool:
-        return self.decision == "approve"
 
     def render(self) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
         fb = ""

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, fields
 from typing import Any, Literal, get_args, get_origin, get_type_hints
 
 from app.models.conversation_run_options import ReasoningEffort
@@ -77,20 +77,6 @@ class ModelSettings:
 
         return cls(stream=True, reasoning_effort="high")
 
-    def with_defaults(self, fallback: ModelSettings | None) -> ModelSettings:
-        """返回新对象：本对象未设置（``None``）的偏好项由 ``fallback`` 补齐，已设置的不被覆盖。"""
-
-        if fallback is None:
-            return replace(self)
-        return replace(
-            self,
-            **{
-                name: getattr(fallback, name)
-                for name in _preference_fields()
-                if getattr(self, name) is None and getattr(fallback, name) is not None
-            },
-        )
-
     def to_dict(self) -> dict[str, Any]:
         """序列化非空偏好项。"""
         return {
@@ -98,12 +84,6 @@ class ModelSettings:
             for name in _preference_fields()
             if getattr(self, name) is not None
         }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> ModelSettings:
-        """从内部字典构造偏好项，忽略非偏好字段（如旧快照里残留的连接字段）。"""
-
-        return cls(**{name: data[name] for name in _preference_fields() if name in data})
 
     @classmethod
     def from_json(cls, values: Mapping[str, Any] | None) -> ModelSettings:

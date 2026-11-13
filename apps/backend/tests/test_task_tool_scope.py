@@ -6,15 +6,10 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from app.config.configuration import get_tool_registry
 from app.config.settings import Settings
-from app.core.tool.multi_agent.agent_team.agent_team_preparation_service import (
-    materialize_node_tools,
-)
 from app.core.tool.multi_agent.derivation import DERIVATIONS
 from app.core.tool.multi_agent.task_tool_scope import banned_derivation_tools, tools_for_task
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
@@ -22,13 +17,8 @@ from app.models.task_kind import TASK_KINDS, USER_FACING_TASK_TYPES, TaskType
 
 pytestmark = pytest.mark.usefixtures("backend_env")
 
-# 只能给用户能操作的对话：需要用户作答的 HITL / 交接、配置草稿，以及建 Team（要审批）。
-_USER_SURFACE_ONLY = {
-    "agent_team",
-    "browser_handoff",
-    "propose_agent_configuration",
-    "propose_agent_team_configuration",
-}
+# 只能给用户能操作的对话：需要用户作答的 HITL / 交接与配置草稿。
+_USER_SURFACE_ONLY = {"browser_handoff", "propose_agent_configuration"}
 
 
 def _names(task_type: str, depth: int = 0) -> set[str]:
@@ -60,12 +50,11 @@ def test_sidebar_conversations_get_every_tool() -> None:
     assert _names("agent_fork") == everything - {"fork_task"}
 
 
-@pytest.mark.parametrize("task_type", ["agent_task", "team_node_task"])
-def test_read_only_tasks_can_delegate_but_not_use_user_surfaces(task_type: str) -> None:
-    """委派子 Agent 与 Team 节点只读：去掉需要用户界面的工具与建 Team，委派与等待照常保留。"""
-    names = _names(task_type)
+def test_read_only_tasks_can_delegate_but_not_use_user_surfaces() -> None:
+    """委派子 Agent 只读：去掉需要用户界面的工具，委派与等待照常保留。"""
+    names = _names("agent_task")
     assert not names & (_USER_SURFACE_ONLY | _terminal_session_tools())
-    # 终端读取与停止不依赖用户界面：子 Agent 与 Team 节点也能读、停自己的命令。
+    # 终端读取与停止不依赖用户界面：子 Agent 也能读、停自己的命令。
     assert {"terminal_list", "terminal_read", "terminal_stop"} <= names
     assert {"delegate_task", "send_message", "task_status", "wait_messages"} <= names
     # fork 出的是侧栏对话：只读 Task 不能 fork。
@@ -78,19 +67,10 @@ def test_unknown_task_type_is_an_assembly_defect() -> None:
         tools_for_task("mystery", [], depth=0)
 
 
-def test_team_node_tools_filter_by_rule_and_keep_unregistered_names() -> None:
-    """节点工具按规则过滤、不代为追加；注册表里没有的名字原样保留，让节点建 Task 时如实报错。"""
-    profile = SimpleNamespace(
-        allowed_tools=["read_file", "agent_team", "terminal_read", "delegate_task", "ghost"]
-    )
-    kept = materialize_node_tools(profile, depth=0)  # type: ignore[arg-type]
-    assert kept == ["read_file", "terminal_read", "delegate_task", "ghost"]
+_DERIVATION_TOOLS = {"delegate_task", "fork_task"}
 
 
-_DERIVATION_TOOLS = {"delegate_task", "fork_task", "agent_team"}
-
-
-@pytest.mark.parametrize("task_type", ["user", "user_fork", "agent_fork", "agent_task", "team_node_task"])
+@pytest.mark.parametrize("task_type", ["user", "user_fork", "agent_fork", "agent_task"])
 def test_tasks_at_the_depth_limit_get_no_derivation_tools(monkeypatch, task_type: str) -> None:
     """深度到上限的 Task 创建时就拿不到派生工具；没到时按类型规则给，等待与通信工具照常保留。"""
     monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
@@ -106,14 +86,6 @@ def test_agent_fork_cannot_fork_but_keeps_the_other_derivations(monkeypatch) -> 
     assert banned_derivation_tools(TaskType.AGENT_FORK, 1) == {"fork_task"}
     assert banned_derivation_tools(TaskType.AGENT_FORK, 2) == _DERIVATION_TOOLS
     assert banned_derivation_tools(TaskType.USER_FORK, 0) == frozenset()
-
-
-def test_team_nodes_share_the_main_task_depth_and_lose_delegation_at_the_limit(monkeypatch) -> None:
-    """节点与主 Task 同层：主 Task 已到上限时节点连委派也没有。"""
-    monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
-    profile = SimpleNamespace(allowed_tools=["read_file", "delegate_task"])
-    assert materialize_node_tools(profile, depth=1) == ["read_file", "delegate_task"]  # type: ignore[arg-type]
-    assert materialize_node_tools(profile, depth=2) == ["read_file"]  # type: ignore[arg-type]
 
 
 def test_task_type_enum_covers_rules_and_response_schema():

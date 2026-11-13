@@ -10,11 +10,8 @@ from types import SimpleNamespace
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 from mcp import types
-from pydantic import ValidationError as ModelValidationError
 
 from app.config.configuration import get_tool_registry
-from app.core.tool.multi_agent.agent_team_run import AgentTeamRunTool
-from app.core.tool.multi_agent.args.agent_team_args import AgentTeamArgs
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
@@ -112,7 +109,7 @@ def test_registered_tool_prompts_are_english_and_documented():
 @pytest.mark.usefixtures("backend_env")
 def test_registered_tools_are_strict_and_survive_task_json_snapshot():
     definitions = get_tool_registry().get_all_definitions()
-    assert {"mcp", "agent_team", "terminal_write", "execute_terminal"} <= {
+    assert {"mcp", "browser_handoff", "terminal_write", "execute_terminal"} <= {
         tool.name for tool in definitions
     }
     for tool in definitions:
@@ -187,46 +184,6 @@ def test_mcp_rejects_old_object_shape_and_non_object_json(arguments):
         MCPArgs,
     )
     assert not result.ok
-
-
-def _team_input():
-    return {
-        "team_id": "team",
-        "goal": "交付",
-        "node_goals": [{"node_id": "develop", "goal": "实现功能", "summary": "开发"}],
-    }
-
-
-def test_team_list_converts_to_domain_map(monkeypatch):
-    raw = _team_input()
-    schema = strict_parameters_schema(AgentTeamArgs)
-    Draft202012Validator(schema).validate(raw)
-    result = validate_tool_arguments(raw, schema, AgentTeamArgs)
-    assert result.ok
-    tool = object.__new__(AgentTeamRunTool)
-    received = []
-    context = SimpleNamespace(agent=object(), user_decision=None)
-
-    def prepare(team_id, goal, node_goals, execution_context, parent_profile):
-        received.append({key: value.model_dump() for key, value in node_goals.items()})
-        return "awaiting_review"
-
-    monkeypatch.setattr(tool, "_prepare_pending_run", prepare)
-    assert tool.execute(**result.arguments, execution_context=context) == "awaiting_review"
-    assert received == [{"develop": {"goal": "实现功能", "summary": "开发"}}]
-
-
-@pytest.mark.parametrize("kind", ["old_map", "duplicate", "reserved"])
-def test_team_rejects_ambiguous_node_identity(kind):
-    raw = _team_input()
-    if kind == "old_map":
-        raw["node_goals"] = {"develop": {"goal": "实现", "summary": "开发"}}
-    elif kind == "duplicate":
-        raw["node_goals"] *= 2
-    else:
-        raw["node_goals"][0]["node_id"] = "END"
-    with pytest.raises(ModelValidationError):
-        AgentTeamArgs.model_validate(raw)
 
 
 @pytest.mark.parametrize(

@@ -309,6 +309,37 @@ test("keeps scripted navigation to local files from leaving the page", async () 
   expect(await call("snapshot", { taskId: 1 })).toMatchObject({ ok: true, value: { url: `${origin}/escape`, title: "Escape" } });
 });
 
+// 目的：Agent 能按路径打开生成的本机 HTML，样式与同目录链接照常可用；潜在缺陷：本机文件被当成非网页拦下，或本机页面
+// 之间的跳转（会触发 will-navigate，与网页跳 file: 不同）被协议拦截挡住。
+test("opens local files by path and follows links between them", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cosir-local-page-"));
+  fs.writeFileSync(path.join(dir, "style.css"), "h1 { color: rgb(255, 0, 0) }");
+  fs.writeFileSync(path.join(dir, "首页 示例.html"), `<title>本机首页</title><link rel="stylesheet" href="style.css"><h1>Home</h1><a href="next.html">Next</a>`);
+  fs.writeFileSync(path.join(dir, "next.html"), `<title>Next local</title><p>Second local page</p>`);
+  const page = observedValueOf(await link("browser.navigate", 31, { url: path.join(dir, "首页 示例.html") }));
+  expect(page).toMatchObject({ title: "本机首页" });
+  expect(String(page.url)).toMatch(/^file:\/\/.*\/%E9%A6%96%E9%A1%B5%20%E7%A4%BA%E4%BE%8B\.html$/);
+  expect(valueOf(await link("browser.evaluate", 31, { expression: "getComputedStyle(document.querySelector('h1')).color" })).value).toBe('"rgb(255, 0, 0)"');
+  const next = refOf(String(page.snapshot), "link", "Next");
+  await call("act", { taskId: 31, actions: [clickOn(next)] });
+  await expect.poll(async () => pageOf(await call("snapshot", { taskId: 31 })).title).toBe("Next local");
+  // 标签计入全局上限，后面的上限用例按「此前只有 Task 1 的标签」计数。
+  await app.evaluate(() => {
+    (globalThis as unknown as { browserHarness: { host: { dropTasks(ids: number[]): void } } }).browserHarness.host.dropTasks([31]);
+  });
+});
+
+// 目的：网站的复制按钮、定位等能力可用（站点权限默认授权）；潜在缺陷：权限检查一律拒绝，网站功能静默失效。
+test("grants site permissions", async () => {
+  await navigate(32, { url: `${origin}/second` });
+  const state = (name: string) => `navigator.permissions.query({ name: "${name}" }).then((status) => status.state)`;
+  expect(valueOf(await link("browser.evaluate", 32, { expression: state("clipboard-write") })).value).toBe('"granted"');
+  expect(valueOf(await link("browser.evaluate", 32, { expression: state("geolocation") })).value).toBe('"granted"');
+  await app.evaluate(() => {
+    (globalThis as unknown as { browserHarness: { host: { dropTasks(ids: number[]): void } } }).browserHarness.host.dropTasks([32]);
+  });
+});
+
 test("recovers from a renderer crash by navigating again", async () => {
   await navigate(1, { url: `${origin}/form` });
   await app.evaluate(() => {
@@ -329,10 +360,15 @@ test("keeps tabs per task, enforces limits and drops a task's tabs", async () =>
   expect(await call("snapshot", { taskId: 2, tab: taskOneTab })).toMatchObject({ ok: false, code: "TAB_NOT_FOUND" });
   expect(await navigate(3, { url: `${origin}/second` })).toMatchObject({ ok: true });
   expect(await navigate(4, { url: `${origin}/second` })).toMatchObject({ ok: false, code: "TAB_LIMIT" });
+  // 后端在链路连上时按这份清单对账回收（删除通知丢失时的兜底）。
+  const owners = async () => (valueOf(await link("browser.taskIds", 0, {})) as { task_ids: number[] }).task_ids;
+  expect(await owners()).toEqual(expect.arrayContaining([1, 2, 3]));
 
   await app.evaluate(() => {
     (globalThis as unknown as { browserHarness: { host: { dropTasks(ids: number[]): void } } }).browserHarness.host.dropTasks([2, 3]);
   });
+  expect(await owners()).not.toEqual(expect.arrayContaining([2]));
+  expect(await owners()).not.toEqual(expect.arrayContaining([3]));
   expect(await call("snapshot", { taskId: 2 })).toMatchObject({ ok: false, code: "TAB_NOT_FOUND" });
   expect(await navigate(4, { url: `${origin}/second` })).toMatchObject({ ok: true });
 });
@@ -388,6 +424,32 @@ test("places one tab at a time on the window and freezes a frame", async () => {
     return host.freeze(second);
   }, { second });
   expect(frame).toMatch(/^data:image\/jpeg;base64,.{100,}/);
+});
+
+test("drops the placement when the window's document is replaced", async () => {
+  // 整页刷新时面板的卸载清理不执行，没人再发 place(null)：宿主自己随文档作废摆放。
+  const tabId = pageOf(await call("navigate", { taskId: 8, target: { url: `${origin}/form` }, context: context(roomy) })).tabId;
+
+  const result = await app.evaluate(async (_electron, { tabId, origin }) => {
+    type Harness = {
+      host: { place(tabId: string, rect: unknown): void; tabs: Map<string, { tab: { view: Electron.WebContentsView } }> };
+      window: Electron.BrowserWindow;
+    };
+    const { host, window } = (globalThis as unknown as { browserHarness: Harness }).browserHarness;
+    const view = host.tabs.get(tabId)!.tab.view;
+    host.place(tabId, { x: 10, y: 20, width: 300, height: 200 });
+    const placed = window.contentView.children.includes(view);
+    await window.webContents.loadURL(`${origin}/second`);
+    const afterReload = window.contentView.children.includes(view);
+    const viewport = view.getBounds();
+    await window.webContents.loadURL("about:blank");
+    return { placed, afterReload, viewport };
+  }, { tabId, origin });
+
+  expect(result.placed).toBe(true);
+  expect(result.afterReload).toBe(false);
+  // 摘下即恢复原视口，后台继续按 1280×800 工作。
+  expect(result.viewport).toEqual({ x: 0, y: 0, width: 1280, height: 800 });
 });
 
 /** 按可访问名称从快照里取 ref。 */

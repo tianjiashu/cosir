@@ -1,33 +1,41 @@
 #!/usr/bin/env python3
 """业务库会话上下文回放查询（log-triage skill 内置）。
 
-单一职责：只读解析 ``conversation_task_contexts`` 的 canonical 消息行，产出两类排障视图——
-「逐条消息回放」与「工具调用 / 结果配对汇总」，使 Agent 行为问题（答非所问、工具参数错、
-工具失败、上下文缺口）可以在不启动服务的情况下复盘。
+单一职责：只读解析 ``conversation_task_contexts`` 的消息行，产出两类排障视图——「逐条消息回放」与
+「工具调用 / 结果配对汇总」，使 Agent 行为问题（答非所问、工具参数错、工具失败、上下文缺口）可以在
+不启动服务的情况下复盘。
 
 职责边界：
-- 负责：按 task / run 读取消息行、解析 LangChain 序列化消息（``message_json``）与
-  Transport metadata（``transport_metadata_json``）、按 ``(run_id, tool_call_id)`` 配对调用与
-  结果、汇总上下文计数。
+- 负责：按 task / run 读取消息行、解析 ``message_json`` 与 ``metadata_json``、按 ``tool_call_id``
+  配对调用与结果、汇总上下文计数。
 - 不负责：run 生命周期状态与委派子任务（见 ``appdb_agent_facts``）、渲染与截断（见 CLI 入口）。
 
-数据结构事实：``message_json`` 为 ``{"type": "ai"|"tool"|"human"|"system", "data": {...}}``；
-AI 的工具调用在 ``data.tool_calls[]``（``{id, name, args}``）；工具结果在
-``data.content`` + ``data.tool_call_id`` + ``data.status``；Transport 侧的工具生命周期状态
-在 ``transport_metadata_json.status``（pending/running/completed/failed/cancelled）。
+数据结构事实（随后端 ``ContextEntry`` 同步）：
+
+- ``message_json`` 是 OpenAI SDK 请求消息：``{"role": "system"|"user"|"assistant"|"tool", ...}``。
+  assistant 的工具调用在 ``tool_calls[]``（``{id, type, function: {name, arguments}}``，
+  ``arguments`` 是 JSON 字符串）；tool 消息带 ``tool_call_id`` 与文本 ``content``。
+- ``metadata_json`` 按角色是不同结构：user 行带 ``kind``（``user_input`` / ``agent_message`` /
+  ``notice`` / ``background_result`` / ``user_decision`` / ``tool_image`` 等）；assistant 行带
+  ``model`` / ``finish_reason`` / ``usage``；tool 行带卡片状态 ``status``（pending / running /
+  completed / failed / cancelled）、``error`` 与后台工作记录 ``background``。
+- ``include_in_context=0`` 的行不进模型上下文：流式中或被中断的回复、撤回的回合都是这样。
+- ``tool_call_id`` 在 Task 内唯一（后端冲突时改写厂商 id），所以按 id 配对即可，不必带 run。
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from collections import deque
 from typing import Any
 
 from appdb_readonly import query_rows, require_tables, safe_json
 from sqlite_values import as_bool, bool_true_sql
 
-_TOOL_ERROR_PREFIX = "error:"
+_COLUMNS = (
+    "id, task_id, run_id, sequence, turn, include_in_context, project_to_transport, "
+    "metadata_json, message_json"
+)
 
 
 def list_messages(
@@ -37,29 +45,26 @@ def list_messages(
     run_id: int | None = None,
     limit: int,
     order: str = "asc",
-    include_streaming: bool = True,
+    in_context_only: bool = False,
 ) -> list[dict[str, Any]]:
-    """按插入顺序回放某任务（或某次运行）的会话上下文消息。
+    """按 ``sequence`` 回放某任务（或某次运行）的上下文消息。
 
     参数:
         connection: 只读 SQLite 连接。
         task_id: 任务标识。
-        run_id: 可选运行过滤；为 None 时返回该任务全部运行的消息。
+        run_id: 可选运行过滤；为 None 时返回该任务全部运行的消息（含继承来的、``run_id`` 为空的行）。
         limit: 最大返回行数。
-        order: ``asc``（按 sequence 升序回放，默认）或 ``desc``（最近的在前）。
-        include_streaming: 是否包含仅服务 Transport 冷重建的流式草稿（``is_streaming=1``）。
+        order: ``asc``（升序回放，默认）或 ``desc``（最近的在前）。
+        in_context_only: 只返回进模型上下文的行（排除流式 / 中断的回复与撤回的回合）。
 
     返回:
-        消息行列表，每行含 ``sequence`` / ``run_id`` / ``kind`` / ``tool_call_id`` /
-        ``is_streaming`` / ``include_in_context`` / ``transport_status`` / ``text`` /
-        ``tool_calls`` / ``usage`` / ``error``。
+        消息行列表，每行含 ``sequence`` / ``run_id`` / ``turn`` / ``role`` / ``kind`` /
+        ``tool_call_id`` / ``include_in_context`` / ``project_to_transport`` / ``tool_status`` /
+        ``text`` / ``tool_calls`` / ``usage`` / ``error``。
 
     异常:
         ValueError: ``conversation_task_contexts`` 表缺失，或 ``order`` 非法。
         sqlite3.Error: 查询失败。
-
-    副作用:
-        无。
     """
 
     require_tables(connection, "conversation_task_contexts")
@@ -70,20 +75,17 @@ def list_messages(
     if run_id is not None:
         where.append("run_id = ?")
         params.append(run_id)
-    if not include_streaming:
+    if in_context_only:
         # 走与 as_bool 同源的 SQL 判定，避免裸比较漏掉 TEXT 形态的布尔值。
-        where.append(f"NOT ({bool_true_sql('is_streaming')})")
+        where.append(bool_true_sql("include_in_context"))
     direction = "ASC" if order == "asc" else "DESC"
     sql = (
-        "SELECT id, task_id, run_id, sequence, is_streaming, "
-        "include_in_context, transport_metadata_json, message_json "
-        "FROM conversation_task_contexts WHERE "
+        f"SELECT {_COLUMNS} FROM conversation_task_contexts WHERE "  # noqa: S608 - 列名为常量
         + " AND ".join(where)
         + f" ORDER BY sequence {direction} LIMIT ?"
     )
     params.append(limit)
-    rows = query_rows(connection, sql, tuple(params))
-    return [_describe_message(row) for row in rows]
+    return [_describe_message(row) for row in query_rows(connection, sql, tuple(params))]
 
 
 def summarize_tool_calls(
@@ -95,333 +97,200 @@ def summarize_tool_calls(
     failures_only: bool = False,
     limit: int,
 ) -> list[dict[str, Any]]:
-    """按 ``tool_call_id`` 配对工具调用与结果，汇总每次工具调用的结局。
+    """按 ``tool_call_id`` 配对工具调用与结果，汇总每次调用的结局。
 
-    配对在**单遍、按 ``sequence`` 顺序**上进行，未配对调用按 ``(run_id, tool_call_id)`` 维护 FIFO
-    队列，结果行**优先**认领同一 run 内最早的未配对调用，因此并发调用、跨 run 复用同一 id、取消占位
-    都能正确还原（若只按 ``tool_call_id`` 配对，「run1 的调用无结果 + run2 复用同一 id 且有结果」会
-    把 run2 的结果错挂到 run1）。精确键 ``(run_id, tool_call_id)`` 队列为空时，才宽松回退到任意 run
-    下同 id 的队首，用于容忍结果行 run_id 与调用行不一致的异常数据（见
-    :func:`_claim_unmatched_call`）。
+    状态取结果行 metadata 的 ``status``（卡片状态的事实源）。判读口径：
 
-    待定状态的判读口径（重要）：
-    - ``cancelled``：run 被取消或后端重启恢复时，``ConversationTaskContextService
-      .close_unclosed_tool_calls_for_run``（连同 ``ConversationRunService.recover_orphaned_runs``）
-      会为未闭合调用**补一行占位 ToolMessage** 并把 Transport 状态记为 ``cancelled``，因此这类
-      调用通常表现为 ``cancelled`` 而非缺结果。
-    - ``pending``：仅当占位补行**未执行**（例如进程被强杀且之后未再启动）时才出现。
-    - 缺少调用行的孤立结果不产出条目；未携带 ``id`` 的调用按协议无需配对，同样不产出条目。
+    - ``pending`` 且带 ``background``：后台命令还在跑（或重启前没结算完）；
+    - ``pending`` 不带 ``background``：等用户决定（HITL）或交接等交还；
+    - ``running``：决定已接收、正在重放执行；
+    - 没有结果行（``no_result``）：调用后进程被强杀且没再启动，或 assistant 行未进上下文。
+    Run 被取消或重启收敛时，后端会把残留占位推到 ``cancelled``，所以正常库里 ``no_result`` 很少见。
 
     参数:
         connection: 只读 SQLite 连接。
         task_id: 任务标识。
-        run_id: 可选运行过滤。
-        contains: 可选关键字，匹配工具名 / 参数字典 / 结果文本。
-        failures_only: 是否只返回失败（``status == "error"`` 或结果以 ``error:`` 开头）的调用。
-            **注意**：``pending`` / ``cancelled`` 条目不算失败，会被本开关过滤掉。
-        limit: 最大返回条数。**limit 作用于产出条目数**，SQL 不做 LIMIT（需先全量扫描该
-            task 的消息行才能完成配对），大 task 下存在全量扫描开销。
+        run_id: 可选运行过滤（按发起调用的 assistant 行所属 run）。
+        contains: 可选关键字，匹配工具名 / 参数 / 结果文本。
+        failures_only: 只返回 ``failed`` 的调用。
+        limit: 最大返回条数；作用于产出条目，SQL 需要全量扫描该 task 的消息行才能配对。
 
     返回:
-        工具调用汇总列表，每项含 ``tool_call_id`` / ``tool_name`` / ``status`` /
-        ``is_error`` / ``args`` / ``result_summary`` / ``request_sequence`` /
-        ``result_sequence``；按请求顺序排列。
+        工具调用汇总列表，按请求顺序；每项含 ``tool_call_id`` / ``tool_name`` / ``status`` /
+        ``background`` / ``error`` / ``args`` / ``result_summary`` / ``run_id`` / ``turn`` /
+        ``request_sequence`` / ``result_sequence``。
 
     异常:
         ValueError: ``conversation_task_contexts`` 表缺失。
         sqlite3.Error: 查询失败。
-
-    副作用:
-        无。
-    """
-
-    require_tables(connection, "conversation_task_contexts")
-    where = ["task_id = ?"]
-    params: list[Any] = [task_id]
-    if run_id is not None:
-        where.append("run_id = ?")
-        params.append(run_id)
-    sql = (
-        "SELECT id, run_id, sequence, transport_metadata_json, message_json "
-        "FROM conversation_task_contexts WHERE " + " AND ".join(where) + " ORDER BY sequence ASC"
-    )
-    rows = query_rows(connection, sql, tuple(params))
-
-    # 单遍、按 sequence 顺序配对：未配对调用按 (run_id, tool_call_id) 建 FIFO 队列，结果行只
-    # 认领**同一 run 内**最早的未配对调用。为何必须带 run_id 而不是只用 tool_call_id——同一 task
-    # 内 tool_call_id 由模型给出、可跨 run 复用（数据库对它没有唯一约束），若只按 id 配对，
-    # 「run1 的调用没有结果、run2 复用同一 id 且有结果」时会把 run2 的结果错挂到 run1。
-    calls: list[dict[str, Any]] = []
-    unmatched: dict[tuple[Any, str], deque[dict[str, Any]]] = {}
-    for row in rows:
-        message = safe_json(row.get("message_json"), default={})
-        if not isinstance(message, dict):
-            continue
-        data = message.get("data")
-        if not isinstance(data, dict):
-            continue
-        kind = message.get("type")
-        if kind == "ai":
-            for call in data.get("tool_calls") or []:
-                if not isinstance(call, dict):
-                    continue
-                call_id = str(call.get("id") or "")
-                if not call_id:
-                    # 协议上未携带 id 的调用无需配对（与后端 ``tool_call_closure`` 的 plan 一致），
-                    # 不产出条目，避免把实际已执行的调用渲染成永久的 pending。
-                    continue
-                entry = {
-                    "tool_call_id": call_id,
-                    "tool_name": call.get("name") or "<unknown>",
-                    "args": call.get("args"),
-                    "status": "pending",
-                    "is_error": False,
-                    "result_summary": "",
-                    "run_id": row.get("run_id"),
-                    "request_sequence": row.get("sequence"),
-                    "result_sequence": None,
-                }
-                calls.append(entry)
-                unmatched.setdefault((row.get("run_id"), call_id), deque()).append(entry)
-            continue
-        if kind != "tool":
-            continue
-        call_id = str(data.get("tool_call_id") or "")
-        entry = _claim_unmatched_call(unmatched, row.get("run_id"), call_id)
-        if entry is None:
-            # 缺调用行的孤立结果（如上下文被压缩掉 AI 消息）不产出条目，避免伪造调用。
-            continue
-        content = data.get("content")
-        text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
-        reported = str(data.get("status") or "")
-        transport_status = _transport_status(row.get("transport_metadata_json"))
-        entry["status"] = reported or transport_status or "completed"
-        entry["is_error"] = reported == "error" or text.lstrip().startswith(_TOOL_ERROR_PREFIX)
-        entry["result_summary"] = text
-        entry["result_sequence"] = row.get("sequence")
-
-    selected = [call for call in calls if _matches(call, contains)]
-    if failures_only:
-        selected = [call for call in selected if call["is_error"]]
-    return selected[:limit]
-
-
-def _claim_unmatched_call(
-    unmatched: dict[tuple[Any, str], deque[dict[str, Any]]],
-    run_id: Any,
-    call_id: str,
-) -> dict[str, Any] | None:
-    """认领一条未配对调用。
-
-    优先在 ``(run_id, call_id)`` 精确键内按 FIFO 认领队首（正确覆盖「同一 run 内出现重复 id」的
-    畸形数据）；精确键缺失时再宽松回退到**任意** run 下同 ``call_id`` 的队首，以容忍结果行 run_id
-    与调用行不一致的异常数据。两者都无匹配时返回 None（孤儿结果）。
-
-    参数:
-        unmatched: 未配对调用队列索引，键为 ``(run_id, tool_call_id)``。
-        run_id: 结果行所属 run。
-        call_id: 结果行引用的工具调用 id。
-
-    返回:
-        被认领的调用条目字典；无匹配时返回 None。
-
-    异常:
-        无。
-
-    副作用:
-        命中时从对应队列弹出该条目（就地修改 ``unmatched``）。
-    """
-
-    queue = unmatched.get((run_id, call_id))
-    if queue:
-        return queue.popleft()
-    for (_, candidate_id), candidate_queue in unmatched.items():
-        if candidate_id == call_id and candidate_queue:
-            return candidate_queue.popleft()
-    return None
-
-
-def context_statistics(connection: sqlite3.Connection, *, task_id: int) -> dict[str, Any]:
-    """汇总某任务的上下文规模与构成。
-
-    参数:
-        connection: 只读 SQLite 连接。
-        task_id: 任务标识。
-
-    返回:
-        ``{"total", "in_context", "streaming_drafts", "runs", "by_kind"}``：
-        消息总数、纳入模型上下文条数、流式草稿条数、涉及运行数，以及按消息类型分组的条数。
-
-    异常:
-        ValueError: ``conversation_task_contexts`` 表缺失。
-        sqlite3.Error: 查询失败。
-
-    副作用:
-        无。
     """
 
     require_tables(connection, "conversation_task_contexts")
     rows = query_rows(
         connection,
-        "SELECT run_id, is_streaming, include_in_context, message_json "
+        f"SELECT {_COLUMNS} FROM conversation_task_contexts "  # noqa: S608 - 列名为常量
+        "WHERE task_id = ? ORDER BY sequence ASC",
+        (task_id,),
+    )
+    calls: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        message = _json_dict(row.get("message_json"))
+        role = message.get("role")
+        if role == "assistant":
+            if run_id is not None and row.get("run_id") != run_id:
+                continue
+            for call in message.get("tool_calls") or []:
+                if not isinstance(call, dict) or not call.get("id"):
+                    continue
+                function = call.get("function") if isinstance(call.get("function"), dict) else {}
+                calls[str(call["id"])] = {
+                    "tool_call_id": str(call["id"]),
+                    "tool_name": function.get("name") or "<unknown>",
+                    "args": _parse_arguments(function.get("arguments")),
+                    "status": "no_result",
+                    "background": None,
+                    "error": "",
+                    "result_summary": "",
+                    "run_id": row.get("run_id"),
+                    "turn": row.get("turn"),
+                    "request_sequence": row.get("sequence"),
+                    "result_sequence": None,
+                }
+        elif role == "tool":
+            entry = calls.get(str(message.get("tool_call_id") or ""))
+            if entry is None:
+                # 调用不在筛选范围内，或缺调用行的孤立结果：不伪造调用。
+                continue
+            metadata = _json_dict(row.get("metadata_json"))
+            entry["status"] = str(metadata.get("status") or "completed")
+            entry["background"] = metadata.get("background")
+            entry["error"] = str(metadata.get("error") or "")
+            entry["result_summary"] = _text(message.get("content"))
+            entry["result_sequence"] = row.get("sequence")
+
+    selected = [call for call in calls.values() if _matches(call, contains)]
+    if failures_only:
+        selected = [call for call in selected if call["status"] == "failed"]
+    return selected[:limit]
+
+
+def context_statistics(connection: sqlite3.Connection, *, task_id: int) -> dict[str, Any]:
+    """汇总某任务的上下文规模与构成。
+
+    返回:
+        ``{"total", "in_context", "excluded", "runs", "turns", "by_role", "by_user_kind"}``：
+        消息总数、进模型上下文的条数、不进的条数（流式 / 中断 / 撤回）、涉及的 run 数与回合数、
+        按角色分组的条数，以及 user 行按 metadata ``kind`` 分组的条数。
+
+    异常:
+        ValueError: ``conversation_task_contexts`` 表缺失。
+        sqlite3.Error: 查询失败。
+    """
+
+    require_tables(connection, "conversation_task_contexts")
+    rows = query_rows(
+        connection,
+        "SELECT run_id, turn, include_in_context, metadata_json, message_json "
         "FROM conversation_task_contexts WHERE task_id = ?",
         (task_id,),
     )
-    by_kind: dict[str, int] = {}
+    by_role: dict[str, int] = {}
+    by_user_kind: dict[str, int] = {}
     runs: set[Any] = set()
+    turns: set[Any] = set()
     in_context = 0
-    drafts = 0
     for row in rows:
-        message = safe_json(row.get("message_json"), default={})
-        kind = message.get("type") if isinstance(message, dict) else None
-        by_kind[str(kind or "unknown")] = by_kind.get(str(kind or "unknown"), 0) + 1
+        role = str(_json_dict(row.get("message_json")).get("role") or "unknown")
+        by_role[role] = by_role.get(role, 0) + 1
+        if role == "user":
+            kind = str(_json_dict(row.get("metadata_json")).get("kind") or "unknown")
+            by_user_kind[kind] = by_user_kind.get(kind, 0) + 1
         if as_bool(row.get("include_in_context")):
             in_context += 1
-        if as_bool(row.get("is_streaming")):
-            drafts += 1
         if row.get("run_id") is not None:
             runs.add(row.get("run_id"))
+        if row.get("turn"):
+            turns.add(row.get("turn"))
     return {
         "total": len(rows),
         "in_context": in_context,
-        "streaming_drafts": drafts,
+        "excluded": len(rows) - in_context,
         "runs": len(runs),
-        "by_kind": by_kind,
+        "turns": len(turns),
+        "by_role": by_role,
+        "by_user_kind": by_user_kind,
     }
 
 
 def _describe_message(row: dict[str, Any]) -> dict[str, Any]:
-    """把一条上下文行规约为回放视图。
+    """把一条上下文行规约为回放视图。"""
 
-    参数:
-        row: ``conversation_task_contexts`` 查询行。
-
-    返回:
-        含消息类型、文本、工具调用、用量与 Transport 状态的字典。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    message = safe_json(row.get("message_json"), default={})
-    data = message.get("data") if isinstance(message, dict) else None
-    if not isinstance(data, dict):
-        data = {}
+    message = _json_dict(row.get("message_json"))
+    metadata = _json_dict(row.get("metadata_json"))
+    role = message.get("role")
     tool_calls = []
-    for call in data.get("tool_calls") or []:
+    for call in message.get("tool_calls") or []:
         if isinstance(call, dict):
+            function = call.get("function") if isinstance(call.get("function"), dict) else {}
             tool_calls.append(
-                {"id": call.get("id"), "name": call.get("name"), "args": call.get("args")}
+                {
+                    "id": call.get("id"),
+                    "name": function.get("name"),
+                    "args": _parse_arguments(function.get("arguments")),
+                }
             )
     return {
         "sequence": row.get("sequence"),
         "run_id": row.get("run_id"),
-        "kind": message.get("type") if isinstance(message, dict) else None,
-        "tool_call_id": data.get("tool_call_id"),
-        "is_streaming": as_bool(row.get("is_streaming")),
+        "turn": row.get("turn"),
+        "role": role,
+        # user 行的输入种类；assistant 行给结束原因，便于一眼看出被截断或调用了工具。
+        "kind": metadata.get("kind") if role == "user" else metadata.get("finish_reason"),
+        "tool_call_id": message.get("tool_call_id"),
         "include_in_context": as_bool(row.get("include_in_context")),
-        "transport_status": _transport_status(row.get("transport_metadata_json")),
-        "result_status": data.get("status"),
-        "text": _message_text(data),
+        "project_to_transport": as_bool(row.get("project_to_transport")),
+        "tool_status": metadata.get("status") if role == "tool" else None,
+        "text": _text(message.get("content")),
         "tool_calls": tool_calls,
-        "usage": data.get("usage_metadata"),
-        "error": _transport_error(row.get("transport_metadata_json")),
+        "usage": metadata.get("usage") if role == "assistant" else None,
+        "error": str(metadata.get("error") or "") if role == "tool" else "",
     }
 
 
-def _message_text(data: dict[str, Any]) -> str:
-    """提取消息正文文本。
+def _json_dict(raw: Any) -> dict[str, Any]:
+    """解析 JSON 列为字典；缺失、损坏或不是对象时返回空字典。"""
 
-    参数:
-        data: 序列化消息的 ``data`` 字段。
+    value = safe_json(raw if isinstance(raw, str) else None, default={})
+    return value if isinstance(value, dict) else {}
 
-    返回:
-        ``content`` 为字符串时原样返回；为多模态列表时取其中文本片段拼接；
-        无文本时返回空字符串。
 
-    异常:
-        无。
+def _parse_arguments(raw: Any) -> Any:
+    """工具参数是 JSON 字符串；能解析就返回对象，否则原样返回（模型可能写出非法 JSON）。"""
 
-    副作用:
-        无。
-    """
+    if not isinstance(raw, str):
+        return raw
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
 
-    content = data.get("content")
+
+def _text(content: Any) -> str:
+    """提取消息正文：字符串原样返回，多段内容只取文本段拼接。"""
+
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = [
-            item.get("text", "")
+        return "".join(
+            item["text"]
             for item in content
             if isinstance(item, dict) and isinstance(item.get("text"), str)
-        ]
-        return "".join(parts)
-    return ""
-
-
-def _transport_status(raw: Any) -> str:
-    """读取 Transport metadata 中的工具生命周期状态。
-
-    参数:
-        raw: ``transport_metadata_json`` 原文。
-
-    返回:
-        状态字符串；缺失或无法解析时返回空字符串。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    metadata = safe_json(raw if isinstance(raw, str) else None, default={})
-    if isinstance(metadata, dict) and isinstance(metadata.get("status"), str):
-        return metadata["status"]
-    return ""
-
-
-def _transport_error(raw: Any) -> str:
-    """读取 Transport metadata 中的错误文本。
-
-    参数:
-        raw: ``transport_metadata_json`` 原文。
-
-    返回:
-        错误文本；缺失时为 ``str(metadata["error"])`` 的空值形态（空字符串）。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
-
-    metadata = safe_json(raw if isinstance(raw, str) else None, default={})
-    if isinstance(metadata, dict) and metadata.get("error"):
-        return str(metadata["error"])
+        )
     return ""
 
 
 def _matches(call: dict[str, Any], contains: str) -> bool:
-    """判断一次工具调用是否命中关键字过滤。
-
-    参数:
-        call: 工具调用汇总项。
-        contains: 关键字；空字符串表示不过滤。
-
-    返回:
-        命中返回 True。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
+    """判断一次工具调用是否命中关键字过滤；空关键字不过滤。"""
 
     if not contains:
         return True

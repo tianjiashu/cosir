@@ -47,8 +47,6 @@ class ToolObservation:
             失败与取消时为构造工厂组织好的说明文本。
         tool_call_id: 对应的模型工具调用 id（透传自 :class:`ToolCall`），缺失时为空。
         display_data: 面向客户端的结构化机读字典，仅供前端渲染。
-        team_run_id: 已创建 TeamRun 的定位信息；与错误短提示分离，供 Transport 在工具失败
-            后继续查询持久化执行事实，不代表第二套 Team 状态。
         suspend: 请求 Agent 挂起等消息：本批观察写入后由 prepare_input 迁移 Run 为
             ``suspended``、不再请求模型，由可唤醒消息继续同一个 Run（取消优先；已有外部可唤醒
             消息时直接继续）。它是工作流控制流事实，不进模型上下文、不随 ``display_data`` 下发。
@@ -72,7 +70,6 @@ class ToolObservation:
     content: str | None = None
     tool_call_id: str = ""
     display_data: dict[str, Any] | None = field(default_factory=dict)
-    team_run_id: int | None = None
     suspend: bool = False
     artifact_data: dict[str, Any] | None = field(default_factory=dict)
     awaiting_decision: bool = False

@@ -54,8 +54,8 @@ class AssistantTransportService:
         （见 ``dispatch_policy.next_input``）。判定阶段与入队在 Task 闸门内完成，actor 不会在两者
         之间开出或落定 Run；执行者自行结束不经闸门，此时排队的消息由刚结束的 Run 收尾时接续。
 
-        Agent 身份沿用 Task 当前 Run：Task 不绑定 Agent，身份随发起配置走，子 Agent / Team 节点的
-        Task 不能因为用户在它的页面里发一条消息就退回 ``main_agent``。尚无 Run 时用 ``main_agent``。
+        Agent 身份沿用 Task 当前 Run：Task 不绑定 Agent，身份随发起配置走，子 Agent 的 Task
+        不能因为用户在它的页面里发一条消息就退回 ``main_agent``。尚无 Run 时用 ``main_agent``。
         """
         current = await asyncio.to_thread(self._tasks.require_current_run, task_id)
         initial = (
@@ -178,9 +178,8 @@ class AssistantTransportService:
     async def cancel(self, task_id: int) -> None:
         """用户停止 Task：交给 Task 的 actor（运行中打信号，挂起的 Run 直接迁移为 cancelled）。
 
-        用户停止只打断当前驱动：后台工作、Agent Team 与子 Task 照常运行（见 ``TaskActor.cancel``）。停后台
-        命令走调用级的 :meth:`cancel_tool_call`，停 Team 按 TeamRun（``POST /agent-team/runs/{id}/cancel``），
-        停子 Task 就是对它本身发停止。「用户已停止」通知由下一次驱动从结束原因推导。
+        用户停止只打断当前驱动：后台工作与子 Task 照常运行（见 ``TaskActor.cancel``）。停后台命令走
+        调用级的 :meth:`cancel_tool_call`，停子 Task 就是对它本身发停止。「用户已停止」通知由下一次驱动从结束原因推导。
 
         异常:
             KeyError: Task 不存在。
@@ -231,7 +230,6 @@ class AssistantTransportService:
         异常:
             KeyError: Task 不存在。
             TaskCommandConflictError: ``DECISION_NOT_AWAITED`` / ``DECISION_ALREADY_SUBMITTED``。
-            UserInputRejectedError: ``DECISION_DATA_INVALID``。
         """
         await asyncio.to_thread(self._tasks.get_task, task_id)
         await asyncio.to_thread(
@@ -240,7 +238,6 @@ class AssistantTransportService:
             tool_call_id,
             request.decision,
             feedback=request.feedback,
-            data=request.data,
         )
 
     # ── 订阅与历史分页 ────────────────────────────────────────────────────────

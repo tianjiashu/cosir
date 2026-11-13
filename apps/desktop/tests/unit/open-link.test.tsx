@@ -102,6 +102,29 @@ describe("useOpenLink", () => {
     expect(openUserTab).not.toHaveBeenCalled();
   });
 
+  // 目的：Agent 写的 report.html 点开就是渲染结果，局域网设备与本机开发服务同等对待；潜在缺陷：只能看源码、工作区外
+  // 点不了，或局域网地址弹外链确认后交给系统浏览器。
+  it("opens local HTML files and LAN servers in the task's built-in browser", async () => {
+    openUserTab.mockResolvedValue("tab-1");
+    const opener = captureOpener(3);
+    opener.open(opener.resolve("out/report.html")!);
+    await vi.waitFor(() => expect(openUserTab).toHaveBeenCalledWith(3, "file:///repo/out/report.html"));
+    opener.open(opener.resolve("/Users/x/测试结果/a.html")!);
+    await vi.waitFor(() => expect(openUserTab).toHaveBeenCalledWith(3, "file:///Users/x/%E6%B5%8B%E8%AF%95%E7%BB%93%E6%9E%9C/a.html"));
+    opener.open(opener.resolve("http://192.168.1.5:5173")!);
+    await vi.waitFor(() => expect(openUserTab).toHaveBeenCalledWith(3, "http://192.168.1.5:5173"));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(windowOpen).not.toHaveBeenCalled();
+    expect(useDockStore.getState().panel).toBeNull();
+  });
+
+  // 目的：没有所属 Task 的界面不给点了没反应的入口；潜在缺陷：file 地址交给系统浏览器被宿主拦下，静默失败。
+  it("falls back to the file panel for local HTML when there is no task", () => {
+    const opener = captureOpener(null);
+    expect(opener.resolve("out/report.html")).toEqual({ kind: "workspace", path: "out/report.html", directory: false });
+    expect(opener.resolve("/Users/x/a.html")).toBeNull();
+  });
+
   it("confirms external links before opening them", async () => {
     confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const opener = captureOpener(3);
@@ -128,6 +151,17 @@ describe("markdown links", () => {
     expect(html).toContain('href="src/a.ts#L42"');
     expect(html).toContain('title="在文件面板打开 docs/plan/src/a.ts"');
     expect(html).toContain('title="在文件面板打开 docs/up.md"');
+  });
+
+  it("titles local HTML links by where they open", () => {
+    // 文件面板的 Markdown 没有所属 Task，本机网页退回文件面板。
+    expect(renderMarkdown("[r](out/report.html)")).toContain('title="在文件面板打开 out/report.html"');
+    function InTask() {
+      const components = useMarkdownLinkComponents("message");
+      return <Streamdown mode="static" rehypePlugins={markdownRehypePlugins} components={components}>{"[r](out/report.html)"}</Streamdown>;
+    }
+    const html = renderToStaticMarkup(inWorkspace(<LinkTaskContext.Provider value={3}><InTask /></LinkTaskContext.Provider>));
+    expect(html).toContain('title="在内置浏览器打开 /repo/out/report.html"');
   });
 
   it("renders unsafe or unresolvable links as plain text", () => {

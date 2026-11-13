@@ -9,7 +9,6 @@ import {
   PuzzleIcon,
   SlidersHorizontalIcon,
   SunMoonIcon,
-  UsersIcon,
   type LucideIcon,
 } from "lucide-react";
 
@@ -23,7 +22,6 @@ export const SYSTEM_SETTINGS_TABS = [
   { id: "appearance", label: "外观", icon: SunMoonIcon },
   { id: "agents", label: "子 Agent", icon: SlidersHorizontalIcon },
   { id: "models", label: "模型", icon: CpuIcon },
-  { id: "agent-teams", label: "Agent Team", icon: UsersIcon },
   { id: "main-agent", label: "主 Agent 提示词", icon: BotIcon },
   { id: "instructions", label: "全局 AGENTS.md", icon: FileTextIcon },
   { id: "environment", label: "环境变量", icon: KeyRoundIcon },
@@ -35,7 +33,6 @@ export type SystemSettingsTabId = (typeof SYSTEM_SETTINGS_TABS)[number]["id"];
 
 export const WORKSPACE_SETTINGS_TABS = [
   { id: "agents", label: "子 Agent", icon: Code2Icon },
-  { id: "agent-teams", label: "Agent Team", icon: UsersIcon },
   { id: "instructions", label: "AGENTS.md", icon: FileTextIcon },
   { id: "fileignore", label: ".fileignore", icon: FilterIcon },
   { id: "mcp", label: "MCP 服务", icon: NetworkIcon },

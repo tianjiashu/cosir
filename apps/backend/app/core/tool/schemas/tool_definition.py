@@ -48,8 +48,8 @@ class ToolDefinition:
     parallel_mode: Literal["serial", "parallel"] = "serial"
     # 需要用户决定（human in the loop）：首次调用只登记待决事项并返回等待占位
     # （:func:`tool_awaiting_decision`），用户决定之后的去向由这里声明，不看决定本身：
-    # ``"execute"`` 批准或驳回后都由 prepare_input 绕过模型、带着决定再次执行同一调用（如 Agent
-    # Team：批准即启动、驳回即落定，执行结果让等待占位收尾）；
+    # ``"execute"`` 批准或驳回后都由 prepare_input 绕过模型、带着决定再次执行同一调用（如交接：
+    # 用户交还即作出决定，重放时取回登记并报告资源状态，执行结果让等待占位收尾）；
     # ``"reply"`` 用户的回答作为消息交给模型（如意图澄清）；``None`` 不需要用户决定。
     # 非 None 的工具一批里只能单独调用（见 ``tool_batch_runner``），每个 Task 同时最多一个等待中的
     # 调用由工具自己的事实源保证。
@@ -57,10 +57,6 @@ class ToolDefinition:
     # 产出图片给模型看（观察的 ``images``）：本次 Run 的模型不支持图片输入时，准入门禁直接拒绝，
     # 不进 handler——判定只在 ``ToolAccessGate`` 一处，各工具不再各写一遍。
     returns_images: bool = False
-    # 批准时随决定提交的载荷（``DecisionBody.data``）的形状，与 ``args_model`` 对称：决定入口按它
-    # 校验前端输入，不合法同步拒绝；``None`` 表示决定不带载荷。只对 ``user_decision`` 非 None 的工具
-    # 有意义。
-    decision_model: type[BaseModel] | None = None
     # 要在用户能操作的界面里才用得了（交互终端、配置草稿）：只给侧栏对话。需要用户作答的工具
     # （``user_decision`` 非空）天然如此，不必重复声明，见 :attr:`requires_user_surface`。
     needs_user_surface: bool = False

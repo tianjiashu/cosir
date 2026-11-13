@@ -1,4 +1,4 @@
-"""Task metadata is typed once at storage; five kinds retain their distinct ownership."""
+"""Task metadata is typed once at storage; four kinds retain their distinct ownership."""
 
 import pytest
 from pydantic import ValidationError
@@ -6,25 +6,21 @@ from sqlalchemy import select
 
 from app.api.schemas.response.TaskResponse import TaskResponse
 from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
-from app.models.task_extra import TaskExtra, TaskFork, TaskNodeConfig
+from app.models.task_extra import TaskExtra, TaskFork
 from app.models.task_kind import TaskType
 from app.models.task_record import TaskRecord
 from app.storage.crud.task_crud import TaskCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.model.task_model import TaskModel
 from app.storage.store_engines import main_session_factory
-from tests.task_extra_fixtures import fork_extra, node_extra
+from tests.task_extra_fixtures import fork_extra
 
 
 @pytest.mark.usefixtures("isolated_storage")
 @pytest.mark.parametrize("kind", list(TaskType))
 def test_task_kind_and_typed_extra_round_trip(kind, tmp_path):
     workspace = WorkspaceCrud().create("types", str(tmp_path))
-    extra = (
-        fork_extra(123)
-        if kind in {TaskType.USER_FORK, TaskType.AGENT_FORK}
-        else (node_extra() if kind == TaskType.TEAM_NODE_TASK else TaskExtra())
-    )
+    extra = fork_extra(123) if kind in {TaskType.USER_FORK, TaskType.AGENT_FORK} else TaskExtra()
     task = TaskCrud().create(workspace.id, "task", task_type=kind, extra=extra)
     loaded = TaskCrud().get(task.id)
     assert loaded.task_type is kind and isinstance(loaded.extra, TaskExtra)
@@ -36,7 +32,6 @@ def test_task_kind_and_typed_extra_round_trip(kind, tmp_path):
     assert isinstance(raw, dict) and "created_by" not in str(raw)
     response = TaskResponse.from_record(loaded).model_dump(mode="json")
     assert response["task_type"] == kind.value
-    assert "team_node" not in response["extra"]  # execution configuration stays backend-only
     if extra.fork is not None:
         assert response["extra"]["fork"] == {"tree_parent_task_id": 123}
         assert RunLaunch.from_fork(loaded) is None  # absent model does not prevent history fork
@@ -48,9 +43,9 @@ def test_task_kind_and_typed_extra_round_trip(kind, tmp_path):
     [
         (TaskType.USER, fork_extra(1)),
         (TaskType.USER_FORK, TaskExtra()),
-        (TaskType.AGENT_FORK, node_extra()),
-        (TaskType.AGENT_TASK, node_extra()),
-        (TaskType.TEAM_NODE_TASK, TaskExtra()),
+        (TaskType.AGENT_FORK, TaskExtra()),
+        (TaskType.AGENT_TASK, fork_extra(1)),
+        (TaskType.USER, TaskExtra(deriving_call_id="call-1")),
     ],
 )
 def test_task_metadata_must_match_its_type(kind, extra):
@@ -65,10 +60,6 @@ def test_unknown_metadata_and_duplicate_creator_are_rejected():
     for removed in ("created_by", "tool_call_id"):
         with pytest.raises(ValidationError):
             TaskFork.model_validate({**data, removed: "obsolete"})
-    node = node_extra().team_node.model_dump(mode="json")
-    assert set(node) == {"role", "system_prompt", "structured_output", "model_settings"}
-    with pytest.raises(ValidationError):
-        TaskNodeConfig.model_validate({**node, "model_config_id": "test/m1"})
 
 
 @pytest.mark.usefixtures("isolated_storage")

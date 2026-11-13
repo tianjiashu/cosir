@@ -20,12 +20,12 @@ actor 随 ``TaskRuntimeSpace`` 物化而创建，由注册表在事件循环上�
 - **「判定 + 启动执行」在 Task 闸门内串行。** loop、执行结束后的接续与 HTTP 的恢复命令都在闸门内
   读 Run 状态再启动，同一 Task 不会出现两个执行者；闸门同时与删除、fork 互斥。执行期间不持闸门。
 - **执行阶段单一判定。** Run 状态（持久化业务事实）与执行登记（进程内是否有执行者）只在
-  :meth:`_phase` 合成一个阶段（driving / suspended / idle），调度、取消、恢复、静止与 HTTP 侧的
+  :meth:`_phase` 合成一个阶段（driving / suspended / idle），调度、取消、恢复与 HTTP 侧的
   活动判断都只看阶段，不各自组合两者：执行者的释放滞后于 Run 落定。
 - **执行登记归 ``TaskExecution``。** 至多一个后台执行，以及取消信号「有执行者才打、注销执行时取走」
   的不变量都在那里；actor 只决定何时启动、释放后怎么处理（:meth:`_after_drive`）。
-- **取消编排归 actor。** 停止有两种语义（见 :meth:`cancel`）：用户停止只打断当前驱动，后台工作、
-  Team 与子 Task 照常运行；上游停止另外收回这个 Task 交出去的一切（``TaskRecall``）。有执行者就交给
+- **取消编排归 actor。** 停止有两种语义（见 :meth:`cancel`）：用户停止只打断当前驱动，后台工作与
+  子 Task 照常运行；上游停止另外收回这个 Task 交出去的一切（``TaskRecall``）。有执行者就交给
   ``TaskExecution.cancel`` 打信号，工作流在检查点落定；挂起的 Run 没有执行者，在闸门内直接迁移为
   cancelled。上游停止下游从工具或工作线程发起，经 :meth:`request_cancel` 投递到 actor 所在的事件
   循环、不等待。
@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
 
 from app.config.logging.logger import log
@@ -87,14 +86,9 @@ class TaskActor:
         # 已判定过的最大消息 id：之后到达的才算新消息。
         # 外部队列「取出不删除」：行要等 prepare_input 写进 context 时才确认删除
         self._watermark = 0
-        # 已推进完的最大消息 id：loop 判定并推进（含开出新 Run）之后才前移；它与 ``_watermark``
-        # 之间的消息已被读到、还在推进途中，「无事可做」不能把它们当作已处理（见 :meth:`_quiescent`）。
-        self._handled = 0
         self._stopping = False
         # loop 停下后置位：删除流程等它再删，进程关闭时也置位。
         self.stopped = asyncio.Event()
-        # 阶段可能变化时换新并置位，``wait_quiescent`` 据此重新判定。
-        self.state_changed = asyncio.Event()
 
     # 协作者按需取进程单例，不在构造时取：space 在快照读取等许多路径上物化，构造 actor 不应
     # 牵出整套 Run / Task service 的装配。
@@ -127,7 +121,7 @@ class TaskActor:
     async def stop(self) -> None:
         """Task 即将删除：停止当前执行并等它落定，再停下 loop。不调度后续 Run。
 
-        不收回：删除入口已停下整棵所有权子树、排空 Team，后台工作在删除提交后撤销——删除没提交时
+        不收回：删除入口已停下整棵所有权子树，后台工作在删除提交后撤销——删除没提交时
         Task 仍在，交出去的工作不该丢。
         """
         self._stopping = True
@@ -155,7 +149,6 @@ class TaskActor:
         不自动重建 loop。
         """
         self.stopped.set()
-        self._publish_state()
 
     def _on_loop_done(self, done: asyncio.Task[None]) -> None:
         """loop 结束的兜底：异常退出在这里落一条日志并进入停止态，不留静默死掉的调度器。"""
@@ -209,17 +202,12 @@ class TaskActor:
             try:
                 await self._advance(pending, fresh)
             except Exception:
-                # 单轮失败只记录，不杀死 loop：队列行仍在，下一次被新消息唤醒时随之一并重读。
-                # 水位已经前移（否则待处理行会让 ``pending`` 立刻返回、loop 空转），但「已推进完」
-                # 不能跟着前移：那会让静止判定把这条消息当成已处理，等待方读走上一条 Run 的结论。
+                # 单轮失败只记录，不杀死 loop：队列行仍在，下一次被新消息唤醒时随之一并重读。水位已经
+                # 前移，否则待处理行会让 ``pending`` 立刻返回、loop 空转。
                 log.exception(
                     "task_actor_advance_failed",
                     extra={"msg": "Task 调度推进失败", "data": {"task_id": self.task_id}},
                 )
-                self._publish_state()
-                continue
-            self._handled = self._watermark
-            self._publish_state()
 
     async def _advance(self, pending: list[TaskMessage], fresh: list[TaskMessage]) -> None:
         """在 Task 闸门内按 ``dispatch_policy`` 推进一次：投递、唤醒、新开 Run 或不动。
@@ -266,17 +254,15 @@ class TaskActor:
                     # 增量收到，不重建、不推整份快照（长对话里每轮重发全部历史）。
                     run = await asyncio.to_thread(self._ledger.create_run, self.task_id, launch)
                     self._start(run, pending, fresh_run=True, preceding_run=current)
-        self._publish_state()
 
     async def cancel(self, reason: CancelReason = "user") -> None:
         """停止这个 Task；只发起停止，不等执行落定。重复取消幂等。
 
         两种语义按 ``reason`` 区分：
 
-        - ``user``（打断）：只停当前执行或挂起的 Run。后台工作、活动 Team（含待批准的方案）与子 Task 都
-          不动——它们属于 Task，结论到达时照常唤醒或开新 Run；要停它们各按自己的入口（后台命令在看板上逐项或
-          全部停止，Team 按 TeamRun，子 Task 对它本身停止）。Task 空闲时
-          什么也不做。
+        - ``user``（打断）：只停当前执行或挂起的 Run。后台工作与子 Task 都不动——它们属于 Task，
+          结论到达时照常唤醒或开新 Run；要停它们各按自己的入口（后台命令在看板上逐项或全部停止，子 Task
+          对它本身停止）。Task 空闲时什么也不做。
         - ``parent``（收回）：上游不再需要这个 Task 的任何结果，在打断之外收回它交出去的一切
           （``TaskRecall``）。有执行者时先打信号再收回：信号在时登记表拒收新登记、不交付结论（见
           ``command_results``），收回之后这次驱动不会再留下后台工作；挂起的 Run 先收回再迁移：迁移之后
@@ -299,14 +285,13 @@ class TaskActor:
                     await self._recall_work(driving=True)
             else:
                 await self._cancel_suspended(reason)
-        self._publish_state()
 
     def request_cancel(self, reason: CancelReason) -> None:
         """从任意线程发起 :meth:`cancel`，只投递、不等待；失败只记录。
 
         给上游停止下游用（收回向下传播、撤销委派）：调用方多在工具或工作线程里，没有可 await 的事件
         循环；在事件循环上的调用方（``TaskRecall``）正持自己的 Task 闸门，等对方的闸门会让父子互等。
-        能 await 且可以等的调用方（HTTP 用户停止、Coordinator 停节点）直接用 :meth:`cancel`。
+        能 await 且可以等的调用方（HTTP 用户停止）直接用 :meth:`cancel`。
 
         actor 尚未拉起（注册表还没 ``bind_loop``）或事件循环已关闭（进程退出中）时没有执行取消的
         地方，记录后放弃：前者只在启动瞬间出现，后者遗留的 running Run 由下次启动收敛。
@@ -394,85 +379,15 @@ class TaskActor:
             pending = await asyncio.to_thread(self._queue.pending_nowait, self.task_id)
             # 恢复清空结束原因：把迁移前的记录交给驱动，「用户已停止」据此推导。
             self._start(resumed, pending, fresh_run=False, preceding_run=current)
-        self._publish_state()
 
     async def phase(self) -> dispatch_policy.Phase:
-        """读当前 Run 得出执行阶段；供闸门外的调用方（HTTP 命令、Coordinator）判断活动。
+        """读当前 Run 得出执行阶段；供闸门外的调用方（HTTP 命令）判断活动。
 
         异常:
             KeyError: Task 不存在。
         """
         current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
         return self._phase(current)
-
-    async def wait_quiescent(self, wait_seconds: float | None = None) -> bool:
-        """等待 Task 无事可做，最多 ``wait_seconds`` 秒（``None`` 不限时）；返回是否已无事可做。
-
-        给「投递一条输入、等它的结论」的调用方用（委派子 Agent、Team 节点）：落定后读 Task 最新
-        Run 即是结论，不必记下是哪个 Run 处理了这条输入——并入运行中的 Run、与其他输入合并进同一
-        个新 Run、Run 完成后接续剩余消息，最终结论都在最新 Run 上。只看阶段是否 ``idle`` 不够：
-        投递之后、新 Run 开出来之前，以及 Run 完成后正要接续剩余消息时，Task 都是静止的。
-
-        调度器已停止（正常停止或异常退出）时立即返回 ``False``：队列里留下的可推进消息不会再被
-        处理，等下去不会有结果，由调用方按失败处理。
-
-        异常:
-            KeyError: Task 不存在（含等待期间被删除）。
-        """
-        return await self._wait_for(self._quiescent, wait_seconds)
-
-    async def _quiescent(self) -> bool:
-        """静止，且 actor 不会再主动推进：没有尚未推进完的可推进消息；最新 Run 完成（或尚无 Run）
-        时队列里也没有可推进的消息——执行结束后会接续它们；取消、失败不自动接续，留着的消息等新
-        消息到来再一起推进。系统通知不推进，不影响判定。
-
-        下游还有没了结的工作（后台命令、已批准的 Team、活动的派生 Task，见
-        ``derived_report.has_open_work``）也不算静止：Run 可以先答复，下游的结论到达后再开新 Run
-        收尾，否则等待方（Coordinator 等节点）会读走中间结论。后台登记表变化经
-        :meth:`notify_state_changed` 唤醒等待方；派生 Task 的汇报与停止通知经队列唤醒本 actor 的 loop。
-
-        调度器已停止时不报告静止：那些消息再也推不动，报静止会让等待方读走上一次 Run 的结论。"""
-        if self.stopped.is_set():
-            return False
-        if await asyncio.to_thread(derived_report.has_open_work, self.task_id):
-            return False
-        current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
-        if self._phase(current) != "idle":
-            return False
-        # 唤醒先写 running 再登记执行者，这里不持闸门，可能落在这个空档：还有人要跑，不算静止。
-        if current is not None and current.status == ConversationRunStatus.RUNNING:
-            return False
-        continues = current is None or current.status == ConversationRunStatus.COMPLETED.value
-        pending = await asyncio.to_thread(self._queue.pending_nowait, self.task_id)
-        return not any(
-            message.wakes(None) and (continues or cast(int, message.id) > self._handled)
-            for message in pending
-        )
-
-    async def _wait_for(
-            self, ready: Callable[[], Awaitable[bool]], wait_seconds: float | None
-    ) -> bool:
-        """反复判定 ``ready``，阶段变化时重判；先取事件再判定，判定之后的变化一定会置位这次取到
-        的事件，不会漏醒。"""
-        loop = asyncio.get_running_loop()
-        deadline = None if wait_seconds is None else loop.time() + wait_seconds
-        while True:
-            changed = self.state_changed
-            if await ready():
-                return True
-            if self.stopped.is_set():
-                # 调度器不再推进，等待不会再有结果：交给调用方按失败处理，不无限挂起。
-                return False
-            if deadline is None:
-                await changed.wait()
-                continue
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                return False
-            try:
-                await asyncio.wait_for(changed.wait(), remaining)
-            except TimeoutError:
-                return False
 
     # ── 执行 ──────────────────────────────────────────────────────────────
 
@@ -482,7 +397,7 @@ class TaskActor:
         return self._execution.driving
 
     def _phase(self, current: ConversationRunRecord | None) -> dispatch_policy.Phase:
-        """由当前 Run 与执行登记得出执行阶段：驱动、取消、恢复、静止与闸门外判断共用这一处。
+        """由当前 Run 与执行登记得出执行阶段：驱动、取消、恢复与闸门外判断共用这一处。
 
         有执行者即 ``driving``，不看 Run 状态——workflow 先写终态或挂起，执行者还要跑完 STOP Hook、
         收束工具调用才释放，这段时间另开执行会出现两个执行者。不存在「running 但没有执行者」：新 Run
@@ -514,6 +429,7 @@ class TaskActor:
             run, dispatch_policy.initial_messages(pending, fresh_run=fresh_run), preceding_run
         )
 
+
     async def _after_drive(self, run: ConversationRunRecord, reason: CancelReason | None) -> None:
         """执行已释放（``TaskExecution`` 的回调）：Run 落定为终态时汇报给派生方，再按落定状态与取消原因
         接续剩余消息，最后唤醒等待方。
@@ -524,8 +440,6 @@ class TaskActor:
         """
         recalled, self._recalled = self._recalled, {}
         if self._stopping:
-            # 执行已注销，仍要唤醒 ``wait_quiescent`` 的等待方重新判定，否则它们只能等到自己的超时。
-            self._publish_state()
             return
         # 收回时这次驱动还没写完的后台占位，现在都已写入（见 :meth:`_recall_work`）。
         await self._recall.settle(recalled)
@@ -553,7 +467,6 @@ class TaskActor:
                     "data": {"task_id": self.task_id, "run_id": run.id},
                 },
             )
-        self._publish_state()
 
     async def _report_settled(self, run: ConversationRunRecord) -> None:
         """Run 的唯一汇报点：落定为终态（挂起不算）时交给派生汇报，规则都在 ``derived_report``。
@@ -572,18 +485,3 @@ class TaskActor:
                     "data": {"task_id": self.task_id, "run_id": run.id},
                 },
             )
-
-    def notify_state_changed(self) -> None:
-        """从任意线程告知「静止判定的输入变了」（后台结果登记表变化），在 actor 的事件循环上唤醒等待方。
-
-        actor 尚未拉起或事件循环已关闭时没有等待方可唤醒，直接返回。
-        """
-        loop = self._event_loop
-        if loop is None or loop.is_closed():
-            return
-        loop.call_soon_threadsafe(self._publish_state)
-
-    def _publish_state(self) -> None:
-        """阶段可能已变化：换新事件并置位，唤醒 ``wait_quiescent`` 等待方重新判定。"""
-        changed, self.state_changed = self.state_changed, asyncio.Event()
-        changed.set()

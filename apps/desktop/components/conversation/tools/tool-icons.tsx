@@ -16,7 +16,6 @@ import {
   TerminalIcon,
   type LucideIcon,
   UsersIcon,
-  WorkflowIcon,
   WrenchIcon,
   XIcon,
 } from "lucide-react";
@@ -39,7 +38,6 @@ const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   send: SendIcon,
   terminal: TerminalIcon,
   users: UsersIcon,
-  workflow: WorkflowIcon,
   wrench: WrenchIcon,
   x: XIcon,
 };

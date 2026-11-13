@@ -21,6 +21,7 @@ HOST_DEADLINES: Final[dict[str, float]] = {
     "browser.screenshot": 30,
     "browser.snapshot": 30,
     "browser.tabs": 5,
+    "browser.taskIds": 5,
 }
 # 链路往返的余量：后端比宿主多等这么多，宿主的答复（包括超时答复）总能先到，模型拿得到做到了哪一步。
 _LINK_MARGIN_SECONDS = 5.0

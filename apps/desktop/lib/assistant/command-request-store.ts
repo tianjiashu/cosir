@@ -17,7 +17,7 @@ type Requests = Record<number, Partial<Record<CommandTarget, CommandRequest>>>;
  * 只有 Task 停止需要对账：它的按钮一直在，要知道何时不再显示「停止中」。前端看不到 Run，对账只看
  * 当前活动是否离开活动态；增量帧里停下与新 Run 开出总在不同帧，只有订阅断开重连拿到的完整快照会把
  * 二者并在一起，所以订阅断开时转为「待确认」（见 {@link markTaskRequestsUnsynced}）。工具调用级的按钮
- * 只在目标存活时渲染（存活由目标自身的事实决定：调用的 canonical、TeamRun 的轮询），所以它们的条目
+ * 只在目标存活时渲染（存活由目标自身的事实决定：调用的 canonical），所以它们的条目
  * 不用对账，调用 id 不复用，残留条目也不可见；按钮与失败提示的渲染条件里不能带槽位状态。
  */
 export const useCommandRequests = create<{ tasks: Requests }>(() => ({ tasks: {} }));

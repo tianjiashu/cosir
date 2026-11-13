@@ -52,7 +52,7 @@ function inputFromForm(form: AgentEditorForm): AgentConfigurationInput {
 }
 
 /**
- * 一次子 Agent 配置编辑的唯一 working copy owner，与 `TeamEditorSession` 同形：
+ * 一次子 Agent 配置编辑的唯一 working copy owner：
  * 配置页持有到离开编辑器，工作台草稿标签持有到关闭标签。
  *
  * - `initial` 为已有配置时 `saved` 为 true：以它为基线，首存即 update。

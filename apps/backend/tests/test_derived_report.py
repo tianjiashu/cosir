@@ -22,6 +22,7 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as 
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal import execute_terminal
 from app.tools.tool_handler.terminal.command_results import command_results
+from tests.actor_settle_support import wait_task_settled
 from tests.model_config_fixtures import create_model_config
 from tests.sdk_fixtures import sdk_events
 
@@ -179,18 +180,18 @@ def _pending_kinds(task_id: int) -> list[str]:
 
 async def _settle(*task_ids: int) -> None:
     for task_id in task_ids:
-        assert await spaces.get_or_create(task_id).actor.wait_quiescent(8)
+        spaces.get_or_create(task_id)
+        await wait_task_settled(task_id)
 
 
 async def _until(task_id: int, ready) -> None:
-    """按 actor 的状态事件等条件成立（先取事件再判定，判定之后的变化一定会置位这次取到的事件）。"""
-    actor = spaces.get_or_create(task_id).actor
+    """物化 Task 的 actor 后短间隔轮询，直到条件成立。"""
+    spaces.get_or_create(task_id)
     async with asyncio.timeout(8):
         while True:
-            changed = actor.state_changed
             if await asyncio.to_thread(ready):
                 return
-            await changed.wait()
+            await asyncio.sleep(0.02)
 
 
 async def test_delegation_completes_at_once_and_the_child_reports_its_run(derived):

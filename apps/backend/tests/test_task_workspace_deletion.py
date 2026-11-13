@@ -30,7 +30,7 @@ from app.storage.store_engines import init_storage, main_session_factory
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils.path import system_cosir as paths
 from tests.command_job_fakes import FakeCommandJob
-from tests.task_extra_fixtures import fork_extra, node_extra
+from tests.task_extra_fixtures import fork_extra
 
 
 def _user_meta(text: str) -> UserMessageMetadata:
@@ -81,21 +81,20 @@ def test_delete_task_removes_nested_tasks_and_runs(storage) -> None:
         task_type="agent_task",
         parent_task_id=root.id,
     )
-    # Team 节点与委派子 Task 同样挂在 parent_task_id 下；嵌套一层验证后序删除。
-    team_node = get_task_crud().create(
+    # 委派子 Task 挂在 parent_task_id 下；再嵌套一层验证后序删除。
+    middle = get_task_crud().create(
         workspace.id,
-        "team node",
-        task_type="team_node_task",
-        extra=node_extra(),
+        "middle",
+        task_type="agent_task",
         parent_task_id=root.id,
     )
     nested = get_task_crud().create(
         workspace.id,
         "nested",
         task_type="agent_task",
-        parent_task_id=team_node.id,
+        parent_task_id=middle.id,
     )
-    get_conversation_run_crud().create(team_node.id, status="completed")
+    get_conversation_run_crud().create(middle.id, status="completed")
     get_conversation_run_crud().create(nested.id, status="completed")
     root_run = get_conversation_run_crud().create(root.id, status="completed")
     child_run = get_conversation_run_crud().create(child.id, status="failed")
@@ -196,51 +195,6 @@ def test_task_delete_rolls_back_all_rows_when_tree_delete_fails(
     assert _count(ConversationRunModel) == 2
 
 
-def test_task_delete_recollects_children_inside_write_transaction(
-    storage, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    workspace, root = _new_workspace_and_task()
-    service = get_task_service()
-    collected = threading.Event()
-    release = threading.Event()
-    original_collect = service.collect_task_tree_ids
-    first_call = True
-
-    def collect_then_pause(task_id: int) -> set[int]:
-        nonlocal first_call
-        result = original_collect(task_id)
-        if first_call:
-            first_call = False
-            collected.set()
-            assert release.wait(5)
-        return result
-
-    monkeypatch.setattr(service, "collect_task_tree_ids", collect_then_pause)
-    created: list[int] = []
-
-    def create_child() -> None:
-        child = service.create_task(
-            workspace.id,
-            "created-between-tree-read-and-transaction",
-            task_type="agent_task",
-            parent_task_id=root.id,
-        )
-        created.append(child.id)
-
-    delete_thread = threading.Thread(target=service.delete_task, args=(root.id,))
-    create_thread = threading.Thread(target=create_child)
-    delete_thread.start()
-    assert collected.wait(5)
-    create_thread.start()
-    create_thread.join(5)
-    release.set()
-    delete_thread.join(10)
-
-    assert created
-    assert not delete_thread.is_alive()
-    assert get_task_crud().list_ids_by_workspace(workspace.id) == []
-
-
 def test_workspace_delete_rolls_back_all_rows_when_task_delete_fails(
     storage, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -276,19 +230,20 @@ def test_workspace_delete_serializes_task_creation(
     service = get_workspace_service()
     listed = threading.Event()
     release = threading.Event()
-    original_list = service._task_crud.list_ids_by_workspace
+    original_list = service._task_crud.list_root_ids_by_workspace
     first_call = True
 
+    # 删除持有工作区闸门、读出待删的根之后停住：此时到达的创建必须等删除提交，再因工作区已删而失败。
     def list_then_pause(workspace_id: int, session=None) -> list[int]:
         nonlocal first_call
         result = original_list(workspace_id, session=session)
-        if first_call and session is None:
+        if first_call:
             first_call = False
             listed.set()
             assert release.wait(5)
         return result
 
-    monkeypatch.setattr(service._task_crud, "list_ids_by_workspace", list_then_pause)
+    monkeypatch.setattr(service._task_crud, "list_root_ids_by_workspace", list_then_pause)
     deletion_error: list[BaseException] = []
     creation_error: list[BaseException] = []
 

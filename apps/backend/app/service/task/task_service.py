@@ -76,7 +76,7 @@ class TaskService:
         """创建 Task 并固化它的工具 schema。
 
         schema 由调用方筛选后传入、本方法不自行推导：主 Agent Task 的由
-        ``task_tool_scope.main_agent_tool_schemas`` 解析，委派 / Team 节点由各自调用方筛选。传入
+        ``task_tool_scope.main_agent_tool_schemas`` 解析，委派由调用方筛选。传入
         ``None`` 持久化为空列表，即该 Task 运行期没有可调用工具。
 
         参数:
@@ -132,8 +132,7 @@ class TaskService:
     def list_derived_tasks(self, task_id: int) -> list[TaskRecord]:
         """返回该 Task 直接派生的 Task：委派的子 Agent 与 Agent fork（``deriver_id()`` 指向它的）。
 
-        Team 节点不在其中：它们归 Coordinator 编排，主 Task 经 TeamRun 管它们。fork 不挂所有权子树，
-        发起方记在 ``extra.fork``，所以按工作区读出 Agent fork 再过滤。
+        fork 不挂所有权子树，发起方记在 ``extra.fork``，所以按工作区读出 Agent fork 再过滤。
 
         异常:
             KeyError: Task 不存在。
@@ -358,8 +357,8 @@ class TaskService:
     async def delete_task_tree(self, task_id: int, *, with_forks: bool = False) -> frozenset[int]:
         """删除 Task 的用户用例：删除 = 停止 + 删除记录，停止在任何锁之外；返回实际删除的 Task id。
 
-        经 :meth:`stop_then_delete` 先停下所有权子树（沿 ``parent_task_id`` 的委派子 Agent 与 Team
-        节点），再由 :meth:`delete_task` 在一个事务里删除记录。
+        经 :meth:`stop_then_delete` 先停下所有权子树（沿 ``parent_task_id`` 的委派子 Agent），再由
+        :meth:`delete_task` 在一个事务里删除记录。
         fork 不在所有权子树里，默认不随源 Task 删除、只改挂（见 :meth:`delete_task_tree_in_session`）；
         ``with_forks`` 为真时把全部 fork 后代（含 fork 的 fork）当作额外的根一并停止和删除。fork 后代
         只在开头收集一次，删除的就是停下的这批：停止之后才 fork 出来的照常改挂，不会删掉没停下的 Task。
@@ -408,10 +407,9 @@ class TaskService:
     ) -> _T:
         """删除一批 Task 的统一协议：在任何锁之外停下 ``collect()`` 给出的 Task，再执行 ``delete``。
 
-        停止即墓碑（见 ``TaskRuntimeSpaceRegistry.stop``），并等各 Task 的 Team 协调任务退出；收集与
-        停止反复到集合不再增长，覆盖父 Agent 在停下前刚委派出的子 Task。``collect`` 与 ``delete`` 是
-        同步函数，在工作线程里调用。``delete`` 没成功（闸门忙、写库失败）时为已停下的 Task 换上新
-        actor：Task 仍在，不能留着没有调度者。请求被取消时不回滚——工作线程里的删除可能照常提交，
+        停止即墓碑（见 ``TaskRuntimeSpaceRegistry.stop``）；收集与停止反复到集合不再增长，覆盖父 Agent
+        在停下前刚委派出的子 Task。``collect`` 与 ``delete`` 是同步函数，在工作线程里调用。``delete``
+        没成功（闸门忙、写库失败）时为已停下的 Task 换上新 actor：Task 仍在，不能留着没有调度者。请求被取消时不回滚——工作线程里的删除可能照常提交，
         回滚会给已删除的 Task 拉起 actor。
         """
         stopped: set[int] = set()
@@ -421,12 +419,15 @@ class TaskService:
                 if task_ids <= stopped:
                     break
                 await self._task_register.stop(task_ids - stopped)
-                await service_depends.get_agent_team_coordinator().drain_for_deletion(task_ids)
                 stopped |= task_ids
             return await asyncio.to_thread(delete)
         except Exception:
             self._task_register.restart_stopped(stopped)
             raise
+
+    def existing_task_ids(self, task_ids: set[int]) -> set[int]:
+        """``task_ids`` 中仍存在的 Task；id 自增不复用、删除不可逆，「已不存在」一经成立就不会变。"""
+        return self._task.list_existing_ids(task_ids)
 
     def collect_fork_descendant_ids(self, task_id: int) -> frozenset[int]:
         """返回从 ``task_id`` fork 出的全部后代（fork 的 fork 也算），不含自身。
@@ -481,7 +482,7 @@ class TaskService:
         task = self._task.get(task_id)
         try:
             with workspace_operations.operation(task.workspace_id, timeout=10):
-                deleted = self._delete_task_locked(task_id, fork_ids)
+                deleted = self._delete_task_after_operations(task_id, fork_ids)
         except TimeoutError as exc:
             raise DeletionBusyError("task", task_id) from exc
         service_depends.get_task_feed().publish_catalog(task.workspace_id, task.task_type)
@@ -541,15 +542,6 @@ class TaskService:
             },
         )
 
-    def _delete_task_locked(self, task_id: int, fork_ids: frozenset[int]) -> frozenset[int]:
-        """在已持有 workspace 闸门时删除任务树（及给定的 fork 后代），不触发附件清理。"""
-
-        tree_ids: set[int] = set()
-        for root_id in (task_id, *fork_ids):
-            tree_ids |= self.collect_task_tree_ids(root_id)
-        service_depends.get_agent_team_coordinator().cancel_for_task_ids(tree_ids)
-        return self._delete_task_after_operations(task_id, fork_ids)
-
     def _delete_task_after_operations(
         self, task_id: int, fork_ids: frozenset[int] = frozenset()
     ) -> frozenset[int]:
@@ -594,7 +586,7 @@ class TaskService:
         return ancestors
 
     def collect_task_tree_ids(self, root_task_id: int) -> set[int]:
-        """收集任务树（根任务及沿 ``parent_task_id`` 递归的全部子 Task，含 Team 节点）的 id 集合；
+        """收集任务树（根任务及沿 ``parent_task_id`` 递归的全部子 Task）的 id 集合；
         删除前先停止这些 Task 的执行。"""
 
         with self._session_factory() as session:
@@ -604,8 +596,7 @@ class TaskService:
         """按「子任务先于父任务」的顺序返回任务树全部 id。
 
         ``tasks.parent_task_id`` 是即时检查的自引用外键，父行必须晚于全部子行删除。广度优先
-        发现顺序里父任务总在子任务之前，反转即得所需顺序。子任务按 ``list_child_ids`` 收集、
-        不区分类型：Team 节点 Task 同样挂在父任务下，漏掉会让删除父行时外键失败。
+        发现顺序里父任务总在子任务之前，反转即得所需顺序。
         """
 
         order = [root_task_id]
@@ -620,7 +611,7 @@ class TaskService:
     ) -> frozenset[int]:
         """按后序在同一事务删除所有权子树，返回提交后需卸载的 Task 集合。
 
-        所有权子树沿 ``parent_task_id``（委派子 Agent、Team 节点）级联删除：它们是被删 Agent 执行的
+        所有权子树沿 ``parent_task_id``（委派子 Agent）级联删除：它们是被删 Agent 执行的
         一部分，提升到上一级会把子 Agent 交给没有创建它的 Agent（``child_agent_*`` 按
         ``parent_task_id`` 授权、重启收尾按它回投结论）。fork 是独立对话，来源在 ``extra.fork``，
         不在子树里：``fork_ids`` 里的 fork 作为额外的根连同各自子树一起删，其余来源被删的 fork 改挂到
@@ -653,7 +644,8 @@ class TaskService:
         from app.tools.tool_handler.terminal.command_results import command_results
 
         service_depends.get_terminal_session_service().delete_task_sessions(task_ids)
-        # 浏览器标签页归宿主所有：发后即忘的通知，宿主未连接时标签页也已不在（链路记日志）。
+        # 浏览器标签页归宿主所有：发后即忘的通知；宿主断线重连期间或后端崩溃时会丢，由链路连上时的
+        # 对账补回收（``service/browser/tab_reclaim``）。
         service_depends.get_host_link().notify(
             "browser.dropTasks", {"task_ids": sorted(task_ids)}
         )
@@ -703,7 +695,7 @@ def _fork_source(task: TaskRecord, deleted: frozenset[int]) -> int | None:
 
 
 def _require_forkable(source: TaskRecord) -> None:
-    """只有侧栏对话能 fork：子 Agent 与 Team 节点的工具面、系统提示词都是按只读 Task 定的，复制成
+    """只有侧栏对话能 fork：子 Agent 的工具面、系统提示词都是按只读 Task 定的，复制成
     侧栏对话会得到身份与能力对不上的混合体（前端只读面本来就不给 fork 入口）。"""
     if source.task_type not in USER_FACING_TASK_TYPES:
         raise TaskForkConflictError(

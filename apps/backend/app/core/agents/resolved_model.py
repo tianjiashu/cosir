@@ -14,8 +14,7 @@ class ResolvedModel:
     """模型构建（``build_chat_model``）的唯一输入；连接与能力字段全部非空，下游不再校验完整性。
 
     Attributes:
-        model_config_id: 本次选用的模型（「连接 id/模型名」）；Agent Team 以它作为节点缺少独立模型
-            配置时的回落值。
+        model_config_id: 本次选用的模型（「连接 id/模型名」）。
         api_key: 只在进程内流动，不进 repr、日志或任何持久化。
         temperature … reasoning_effort: 请求偏好，``None`` 表示交给运行时默认值。
     """
@@ -34,17 +33,6 @@ class ResolvedModel:
     drop_params: bool | None = None
     stream: bool | None = None
     reasoning_effort: ReasoningEffort | None = None
-
-    def preferences(self) -> ModelSettings:
-        """取回本次解析生效的请求偏好；Agent Team 节点沿用主 Agent 的模型时用它补默认值。"""
-        return ModelSettings(
-            temperature=self.temperature,
-            top_p=self.top_p,
-            max_tokens=self.max_tokens,
-            drop_params=self.drop_params,
-            stream=self.stream,
-            reasoning_effort=self.reasoning_effort,
-        )
 
 
 def resolve_model(

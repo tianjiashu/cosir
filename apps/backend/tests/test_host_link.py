@@ -201,6 +201,23 @@ def test_disconnect_fails_pending_requests(link: HostLink, client: TestClient) -
     _wait_connected(link, connected=False)
 
 
+def test_each_new_connection_is_announced_before_replies_are_read(
+    link: HostLink, client: TestClient
+) -> None:
+    connected: list[bool] = []
+    # 回调时这条连接已是当前连接：监听方经链路发出的请求能落到它上面。
+    link.set_on_connected(lambda: connected.append(link._connection is not None))
+    try:
+        for _ in range(2):
+            with client.websocket_connect("/host/link") as ws:
+                ws.send_json(_hello())
+                _wait_connected(link)
+            _wait_connected(link, connected=False)
+    finally:
+        link.set_on_connected(None)
+    assert connected == [True, True]
+
+
 def test_notify_sends_without_waiting(link: HostLink, client: TestClient) -> None:
     link.notify("demo.dropped", {"task_ids": [1]})  # 未连接：只记日志
     with client.websocket_connect("/host/link") as ws:

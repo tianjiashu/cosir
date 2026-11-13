@@ -1,4 +1,4 @@
-"""Agent 消息的入队前准备：委派、追加消息与 Team 节点输入共用，产出待入队的 ``TaskMessage``。
+"""Agent 消息的入队前准备：委派与追加消息共用，产出待入队的 ``TaskMessage``。
 
 和用户输入不同，Agent 文本是纯文本：不解析附件与图片 token，也不带图片。只校验发起配置与非空，
 不写库、不入队、不创建 Run。
@@ -25,8 +25,7 @@ def prepare_agent_message(
     """组装一条携带发起配置的 Agent 消息（尚未入队）；一律 ``immediate``：没有人替 Agent 点
     「立即发送」。
 
-    ``disabled_tool_groups`` 是新 Run 关掉的工具组：Agent fork 沿用父 Run 的选择，委派与 Team 节点
-    不关。
+    ``disabled_tool_groups`` 是新 Run 关掉的工具组：Agent fork 沿用父 Run 的选择，委派不关。
 
     异常:
         UserInputRejectedError: 模型配置不存在、不支持所选推理强度，或正文为空。

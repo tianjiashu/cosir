@@ -33,7 +33,7 @@ function AgentRunTransport({ taskId, workspaceId, connection, store }: {
  * 只读查看子 Task：与主对话共用同一种连接（`TaskTransportConnection`）——首帧即初始状态，断流有限重连，
  * 后端恢复或换代时原地重开订阅，Task 已不存在时说明并可关闭标签。不取消业务 Run。
  *
- * `workspaceId` 是工作台所在工作区：子 Agent 与 Team 节点 Task 都沿用父 Task 的工作区，
+ * `workspaceId` 是工作台所在工作区：子 Agent Task 沿用父 Task 的工作区，
  * 工作台又按工作区存放标签，所以它就是子 Task 附件（用户图片、工具截图）所在的工作区。
  */
 export function WorkbenchAgentRunSurface({ taskId, workspaceId, onClose }: { taskId: number; workspaceId: number; onClose: () => void }) {

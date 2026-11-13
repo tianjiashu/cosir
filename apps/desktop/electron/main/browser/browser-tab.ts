@@ -22,7 +22,7 @@ import { buildOutline, type Outline } from "./snapshot/outline";
 import { readSnapshot } from "./snapshot/read";
 import { TabEmulation, type Applied, type Emulation, type EmulationRequest } from "./tab-emulation";
 import { CANCELED_FAILURE, TabLog, type ConsoleLevel } from "./tab-log";
-import { isWebProtocol, urlProtocol } from "./web-url";
+import { isPageUrl } from "./page-url";
 import { abortable } from "./abortable";
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
@@ -172,8 +172,8 @@ export class BrowserTab {
     const contents = this.contents;
     contents.setBackgroundThrottling(false);
     contents.setWindowOpenHandler(({ url }) => events.onWindowOpen(url));
-    contents.on("will-navigate", (event, url) => this.blockNonWebNavigation(event, url));
-    contents.on("will-redirect", (event, url) => this.blockNonWebNavigation(event, url));
+    contents.on("will-navigate", (event, url) => this.blockNonPageNavigation(event, url));
+    contents.on("will-redirect", (event, url) => this.blockNonPageNavigation(event, url));
     contents.on("will-prevent-unload", (event) => {
       // 不放行时跳转会被静默取消（Agent 的导航只会超时）；没有可以作答的界面，按「离开」处理并告知。
       event.preventDefault();
@@ -617,11 +617,10 @@ export class BrowserTab {
     });
   }
 
-  private blockNonWebNavigation(event: Electron.Event, url: string): void {
-    const protocol = urlProtocol(url);
-    if (isWebProtocol(protocol)) return;
+  private blockNonPageNavigation(event: Electron.Event, url: string): void {
+    if (isPageUrl(url)) return;
     event.preventDefault();
-    this.log.note(`the page tried to navigate to a ${protocol || "non-web"} address; it was blocked`);
+    this.log.note(`the page tried to navigate to ${url.slice(0, 200)}; it was blocked (not a web page or local file)`);
   }
 }
 
