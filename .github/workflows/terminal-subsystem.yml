@@ -15,11 +15,7 @@ on:
     paths:
       - "apps/backend/app/tools/terminal_runtime/**"
       - "apps/backend/app/tools/tool_handler/terminal/**"
-      - "apps/backend/app/tools/tool_handler/terminal_session/**"
-      - "apps/backend/app/tools/tool_handler/execute_terminal.py"
-      - "../../apps/backend/app/tools/tool_models/terminal/execute_ter\
-        minal_args.py"
-      - "apps/backend/app/tools/tool_models/terminal_session_args.py"
+      - "apps/backend/app/tools/tool_models/terminal/**"
       - "apps/backend/app/tools/display/terminal_display.py"
       - "apps/backend/app/tools/shell/**"
       - "apps/backend/app/core/tool/execute/tool_terminal_projection.py"
@@ -47,11 +43,7 @@ on:
     paths:
       - "apps/backend/app/tools/terminal_runtime/**"
       - "apps/backend/app/tools/tool_handler/terminal/**"
-      - "apps/backend/app/tools/tool_handler/terminal_session/**"
-      - "apps/backend/app/tools/tool_handler/execute_terminal.py"
-      - "../../apps/backend/app/tools/tool_models/terminal/execute_ter\
-        minal_args.py"
-      - "apps/backend/app/tools/tool_models/terminal_session_args.py"
+      - "apps/backend/app/tools/tool_models/terminal/**"
       - "apps/backend/app/tools/display/terminal_display.py"
       - "apps/backend/app/tools/shell/**"
       - "apps/backend/app/core/tool/execute/tool_terminal_projection.py"
@@ -128,10 +120,7 @@ jobs:
           uv run ruff check \
             app/tools/terminal_runtime \
             app/tools/tool_handler/terminal \
-            app/tools/tool_handler/terminal_session \
-            app/tools/tool_handler/execute_terminal.py \
-            app/tools/tool_models/execute_terminal_args.py \
-            app/tools/tool_models/terminal_session_args.py \
+            app/tools/tool_models/terminal \
             app/tools/display/terminal_display.py \
             app/tools/shell \
             app/core/tool/execute/tool_terminal_projection.py \
