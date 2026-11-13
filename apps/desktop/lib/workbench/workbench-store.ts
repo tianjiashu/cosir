@@ -1,9 +1,7 @@
 import { create } from "zustand";
 
 import { createAgentEditorSession } from "@/lib/agent-editor/agent-editor-session";
-import { createTeamEditorSession } from "@/lib/agent-team-editor/agent-team-editor-session";
 import type { AgentConfigurationInput } from "@/lib/api/configuration";
-import type { AgentTeamConfigurationDraft } from "@/lib/api/agent-teams";
 import { useDockStore } from "@/lib/layout/dock-store";
 import type { WorkbenchDraftTab, WorkbenchTab } from "./workbench-tab-types";
 
@@ -24,7 +22,6 @@ export type AgentDraftInput = {
   toolCallId: string;
   draft: Pick<AgentConfigurationInput, "agent_id" | "role" | "description" | "system_prompt">;
 };
-export type TeamDraftInput = { taskId: number; toolCallId: string; draft: AgentTeamConfigurationDraft };
 
 type WorkbenchState = {
   /**
@@ -34,7 +31,6 @@ type WorkbenchState = {
   sessions: Record<number, WorkbenchSession>;
   openAgent: (workspaceId: number, input: { taskId: number; title: string }) => void;
   openAgentConfigurationDraft: (workspaceId: number, input: AgentDraftInput) => void;
-  openAgentTeamConfigurationDraft: (workspaceId: number, input: TeamDraftInput) => void;
   activateTab: (workspaceId: number, tabId: string) => void;
   closeTab: (workspaceId: number, tabId: string) => void;
   forgetWorkspace: (workspaceId: number) => void;
@@ -45,7 +41,7 @@ type WorkbenchState = {
 const EMPTY_WORKBENCH_SESSION: WorkbenchSession = { tabs: [], activeTabId: null, savedDraftIds: [] };
 
 export function isDraftTab(tab: WorkbenchTab): tab is WorkbenchDraftTab {
-  return tab.kind === "agent-configuration-draft" || tab.kind === "agent-team-configuration-draft";
+  return tab.kind === "agent-configuration-draft";
 }
 
 /** 已有同 id 标签时只激活（并按 `refresh` 更新），保证同一草稿的编辑会话不被覆盖；否则新建。 */
@@ -121,18 +117,6 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => {
         toolCallId,
         title: draft.agent_id || "子 Agent 配置草稿",
         session: createAgentEditorSession({ initial: draft, saved: false, scope: "workspace" }),
-      }),
-    )),
-    openAgentTeamConfigurationDraft: (workspaceId, { taskId, toolCallId, draft }) => reveal(workspaceId, (session) => openTab(
-      session,
-      `agent-team-config-draft:${draftKey(taskId, toolCallId)}`,
-      () => ({
-        id: `agent-team-config-draft:${draftKey(taskId, toolCallId)}`,
-        kind: "agent-team-configuration-draft",
-        taskId,
-        toolCallId,
-        title: draft.name || "Agent Team 配置草稿",
-        session: createTeamEditorSession({ initial: { ...draft, scope: "workspace" }, saved: false, workspaceId }),
       }),
     )),
     activateTab: (workspaceId, activeTabId) => update(workspaceId, (session) => ({ ...session, activeTabId })),

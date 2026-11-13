@@ -299,11 +299,7 @@ def _validate_message_fields(
 
 def _validate_source(value: object) -> None:
     source = as_shape(value, ConversationStateMessageSource, "snapshot message source")
-    if (source["taskId"] is None) == (source["teamRunId"] is None):
-        raise ValueError("snapshot message source needs exactly one of taskId and teamRunId")
-    for key in ("taskId", "teamRunId"):
-        if source[key] is not None:
-            require_int(source[key], f"snapshot message source {key}", minimum=0)
+    require_int(source["taskId"], "snapshot message source taskId", minimum=0)
     require_str(source["name"], "snapshot message source name")
     report = source["report"]
     if report is not None:
@@ -395,8 +391,6 @@ def _validate_tool_call_part(part: object) -> None:
         require_bool(tool_part["isError"], "snapshot tool isError")
     if "awaitingUser" in tool_part:
         require_bool(tool_part["awaitingUser"], "snapshot tool awaitingUser")
-    if "team_run_id" in tool_part:
-        require_int(tool_part["team_run_id"], "snapshot tool team_run_id", minimum=1)
     if "child_task_id" in tool_part:
         require_int(tool_part["child_task_id"], "snapshot tool child_task_id", minimum=1)
     if "agent_role" in tool_part:

@@ -11,7 +11,7 @@ export function turnPhaseOf(activity: TransportActivity | null): TurnPhase {
   return activity?.status === "running" ? "running" : activity?.status === "suspended" ? "suspended" : "settled";
 }
 export const CHANGES_KIND = "file-changes";
-export const STANDALONE_ARTIFACT_KINDS = ["agent-configuration-draft", "agent-team-configuration-draft"] as const;
+export const STANDALONE_ARTIFACT_KINDS = ["agent-configuration-draft"] as const;
 export type StandaloneArtifactKind = (typeof STANDALONE_ARTIFACT_KINDS)[number];
 /**
  * `inProcess`：这段正文已定性为过程（不是最终回复，且 Run 已有结局），随过程开合。Run 运行中、挂起时

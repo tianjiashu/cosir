@@ -45,7 +45,7 @@ NOTICE_LEVELS: dict[NoticeKind, NoticeLevel] = {
 }
 
 # 通知的唤醒范围（见 ``WakeScope``）：通知多半只提醒、不值得单独跑一轮模型。例外是「等着的东西没了」：
-# 派生的 Task / Team 被用户停止或删除、后端重启都不会再汇报，挂起在 ``wait_messages`` 上等它们的
+# 派生的 Task 被用户停止或删除、后端重启都不会再汇报，挂起在 ``wait_messages`` 上等它们的
 # Agent 只能靠这条通知醒来，否则一直挂着；Agent 空闲时仍不为它开新 Run。
 NOTICE_WAKE_SCOPES: dict[NoticeKind, WakeScope] = {
     "system_prompt_delta": "none",

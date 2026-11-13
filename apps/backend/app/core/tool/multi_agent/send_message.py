@@ -41,7 +41,7 @@ class SendMessageTool(HandlerBase):
         "delivered once and sending does not wait. A task you derived (a delegated child agent or "
         "a fork) reports back to you automatically when it finishes the run your message starts; "
         "other tasks do not, so reply explicitly with send_message to the source_task_id of an "
-        "<agent_message> that is not a report. Team nodes are scheduled by their coordinator."
+        "<agent_message> that is not a report."
     )
     args_model: type[SendMessageArgs] = SendMessageArgs
     timeout_seconds: ClassVar[float] = 30.0
@@ -63,10 +63,6 @@ class SendMessageTool(HandlerBase):
             target = self._task_service.get_task(task_id)
             if target.id == sender.id or target.workspace_id != sender.workspace_id:
                 return tool_error(self.name, "Choose another task in this workspace.")
-            if TaskType.TEAM_NODE_TASK in (target.task_type, sender.task_type) and not (
-                target.derived_by(sender.id) or sender.derived_by(target.id)
-            ):
-                return tool_error(self.name, "Team nodes are managed by their coordinator.")
             with task_runtime_spaces.get_or_create(task_id).operation():
                 launch = self._target_launch(target, execution_context)
                 if isinstance(launch, ToolObservation):

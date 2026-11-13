@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_task_state_service import (
         ConversationTaskStateService,
     )
-    from app.core.tool.multi_agent.agent_team.team_coordinator import AgentTeamCoordinator
     from app.core.workflow.conversation_run_ledger import ConversationRunLedger
     from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
     from app.service.conversation.conversation_task_context_service import (
@@ -97,14 +96,6 @@ def close_service_dependencies() -> None:
     reset_service_dependencies()
     workspace_operations.close()
     close_storage()
-
-
-@_process_singleton
-def get_agent_team_coordinator() -> AgentTeamCoordinator:
-    """持有本次后端生命周期的 Team 执行任务，关闭执行后随存储依赖一起释放。"""
-    from app.core.tool.multi_agent.agent_team.team_coordinator import AgentTeamCoordinator
-
-    return AgentTeamCoordinator()
 
 
 @_process_singleton
@@ -364,7 +355,7 @@ def get_conversation_run_ledger() -> ConversationRunLedger:
 def get_recover_service() -> RecoverService:
     """返回进程级启动恢复 service 单例。
 
-    只负责后端启动期的重启恢复（收敛遗留 Run / TeamRun、拉起待调度 Task、后台结果收尾）；
+    只负责后端启动期的重启恢复（收敛遗留 Run、拉起待调度 Task、后台结果收尾）；
     运行期的 Run 生命周期归属 ``get_conversation_run_ledger``。
     """
 

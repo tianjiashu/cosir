@@ -36,31 +36,16 @@ from app.config.constant import Constant
 from app.config.logging.configuration import install_logging_for_current_process, shutdown_logging
 from app.config.logging.logger import log
 from app.config.settings import Settings
-from app.core.agents.agent_profile_config import (
-    ensure_system_agent_config_dir,
-    ensure_system_agent_team_config_dir,
-)
+from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.events.event_sink import set_event_sink
 from app.core.tool.background_commands import set_background_commands
 from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.service.browser.tab_reclaim import schedule_tab_reclaim
-from app.service.configuration.agent_team_configuration_registry import (
-    AgentTeamConfigurationRegistry,
-    set_agent_team_registry,
-)
-from app.service.configuration.agent_team_configuration_service import (
-    AgentTeamConfigurationService,
-    set_agent_team_configuration_service,
-)
-from app.service.configuration.agent_team_configuration_source import (
-    AgentTeamConfigurationScopeSource,
-)
 from app.service.configuration.main_agent_prompt_configuration_service import (
     MainAgentPromptConfigurationService,
 )
 from app.service.depends import (
     close_service_dependencies,
-    get_agent_team_coordinator,
     get_conversation_event_projector,
     get_conversation_task_state_service,
     get_host_link,
@@ -76,10 +61,7 @@ from app.utils.path.system_cosir import system_cosir_dir
 
 
 def _on_background_changed(task_id: int) -> None:
-    """后台结果登记表的监听方：静止判定先于看板投影，投影失败不能拖住等待方。"""
-    space = task_runtime_spaces.get(task_id)
-    if space is not None:
-        space.actor.notify_state_changed()
+    """后台结果登记表的监听方：把看板与前台等待整表重投影进 Transport snapshot。"""
     get_conversation_task_state_service().refresh_background_results(task_id)
 
 
@@ -187,22 +169,17 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         backup_count=Constant.Logging.BACKUP_COUNT,
     )
     _ensure_system_cosir_dir()
-    # 确保系统级 Agent / Team 配置目录存在，作为用户手工放置自定义配置的固定位置。
-    # 配置内容不在此处装载：两个 registry 都在各自作用域首次被读取时按需装载，因此启动之后
+    # 确保系统级 Agent 配置目录存在，作为用户手工放置自定义配置的固定位置。
+    # 配置内容不在此处装载：registry 在各作用域首次被读取时按需装载，因此启动之后
     # 才创建的 workspace（或运行期新放入的 JSON）无需重启后端就能被解析到；坏配置由装载来源
     # 记日志并降级，不影响 Run。
     ensure_system_agent_config_dir()
-    ensure_system_agent_team_config_dir()
     main_agent_prompt = MainAgentPromptConfigurationService().read().content
     agent_registry = build_agent_registry(
         main_agent_prompt,
         main_agent_max_steps=Settings.MAIN_AGENT_MAX_STEPS,
     )
     set_agent_registry(agent_registry)
-    team_registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
-    team_configuration_service = AgentTeamConfigurationService(registry=team_registry)
-    set_agent_team_configuration_service(team_configuration_service)
-    set_agent_team_registry(team_registry)
     set_tool_registry(build_tool_registry())
 
     # 先接好运行时（事件循环、后台结果登记表与看板监听），再做重启恢复：恢复会物化 space、拉起
@@ -214,8 +191,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     set_background_commands(command_results)
     # core 交出的执行事件由 Transport 投影；core 不导入 ``assistant_transport``。
     set_event_sink(get_conversation_event_projector().process)
-    # 登记表变化：先唤醒等 Task 静止的等待方（Coordinator 等 Team 节点），再把看板与前台等待整表重投影进
-    # Transport snapshot（通知线程、锁外）。
+    # 登记表变化：把看板与前台等待整表重投影进 Transport snapshot（通知线程、锁外）。
     command_results.set_listener(_on_background_changed)
     # 进行中的交接随登记表变化整表重投影进 snapshot 顶层 ``handoffs``。
     handoff_registry.set_listener(
@@ -234,7 +210,6 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             # closed、唤醒等待线程与交接，它们不得在关闭期间写 task_messages。再停下全部 actor
             # （取消执行，不调度后续 Run），最后关闭服务依赖（终端服务随之关闭）。
             await asyncio.to_thread(command_results.close)
-            await get_agent_team_coordinator().aclose()
             command_results.set_listener(None)
             handoff_registry.set_listener(None)
             get_host_link().set_on_connected(None)

@@ -53,12 +53,3 @@ describe("toolHeading", () => {
   });
 });
 
-describe("TOOL_CATALOG", () => {
-  // 回归守卫：曾经的 Prepare / 配置口径让人把 agent_team 当成建 Team 的工具，而它只运行已有配置。
-  it("agent_team 的动词只说「运行」", () => {
-    const verb = toolVerb("agent_team");
-    for (const forbidden of ["prepare", "configur", "配置", "准备", "创建"]) {
-      expect(verb.toLowerCase()).not.toContain(forbidden);
-    }
-  });
-});

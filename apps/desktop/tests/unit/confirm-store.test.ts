@@ -42,9 +42,9 @@ describe("requestConfirmation", () => {
     cancelCurrentConfirmation();
     expect(useConfirmStore.getState().queue).toHaveLength(1);
 
-    fail(new UserFacingError("该 Agent 正被 Team 引用"));
+    fail(new UserFacingError("该 Agent 无法删除"));
     await accepting;
-    expect(useConfirmStore.getState()).toMatchObject({ busy: null, error: "该 Agent 正被 Team 引用" });
+    expect(useConfirmStore.getState()).toMatchObject({ busy: null, error: "该 Agent 无法删除" });
 
     cancelCurrentConfirmation();
     await expect(pending).resolves.toBe(false);

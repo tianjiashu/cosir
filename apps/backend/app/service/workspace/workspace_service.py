@@ -18,7 +18,6 @@ from app.core.tool.multi_agent.task_tool_scope import main_agent_tool_schemas
 from app.models import TaskRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service import depends as service_depends
-from app.service.configuration.agent_team_configuration_registry import get_agent_team_registry
 from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.mcp_tested_servers import MCPTestedServers
 from app.storage.store_engines import main_session_factory
@@ -26,8 +25,6 @@ from app.storage.write_transaction import begin_immediate
 from app.task_runtime.workspace_operation_registry import workspace_operations
 from app.utils.path.workspace_cosir import (
     workspace_agent_config_dir,
-    workspace_agent_team_config_dir,
-    workspace_agent_team_run_dir,
     workspace_attachment_dir,
     workspace_cosir_dir,
     workspace_skills_dir,
@@ -140,17 +137,15 @@ class WorkspaceService:
             无；目录创建失败仅记 error 日志，不向上抛出。
 
         副作用:
-            在 ``<root_path>/.cosir`` 及 ``Attachment`` / ``agents`` / ``agent-teams`` /
-            ``agent-team-runs`` / ``skills`` 子目录创建目录（已存在则幂等跳过）。
+            在 ``<root_path>/.cosir`` 及 ``Attachment`` / ``agents`` / ``skills`` 子目录创建目录
+            （已存在则幂等跳过）。
         """
         cosir_dir = workspace_cosir_dir(normalized_path)
-        # agents / agent-teams / skills 是用户放置自定义子 Agent、Team 与 Skill 的位置：装载路径只在
+        # agents / skills 是用户放置自定义子 Agent 与 Skill 的位置：装载路径只在
         # 目录存在时读到内容，因此不建目录就等于「配置永远为空，且用户不知道往哪放」。
         children = (
             workspace_attachment_dir(normalized_path),
             workspace_agent_config_dir(normalized_path),
-            workspace_agent_team_config_dir(normalized_path),
-            workspace_agent_team_run_dir(normalized_path),
             workspace_skills_dir(normalized_path),
         )
         try:
@@ -316,15 +311,12 @@ class WorkspaceService:
         副作用:
             删除工作区下全部 task 树（task / turn / run / trace / delegation / context）及其
             运行期引用；并删除 ``workspaces`` 表记录（旧 Runtime
-            事件体系已删除，不再参与级联删除）；提交后推送工作区列表失效，并卸载该根路径在 Agent profile 与
-            Agent Team 配置注册表中的作用域缓存（见 :meth:`_drop_workspace_config_scopes`）。
+            事件体系已删除，不再参与级联删除）；提交后推送工作区列表失效，并卸载该根路径在 Agent profile
+            注册表中的作用域缓存（见 :meth:`_drop_workspace_config_scopes`）。
         """
 
         try:
             with workspace_operations.operation(workspace_id, timeout=10):
-                service_depends.get_agent_team_coordinator().cancel_for_task_ids(
-                    set(self._task_crud.list_ids_by_workspace(workspace_id))
-                )
                 log.info(
                     "workspace_delete_start",
                     extra={
@@ -365,12 +357,11 @@ class WorkspaceService:
 
     @staticmethod
     def _drop_workspace_config_scopes(root_path: str) -> None:
-        """卸载已删除 workspace 的 Agent / Team 配置作用域缓存，并丢掉它的 MCP 本机测试记录。
+        """卸载已删除 workspace 的 Agent 配置作用域缓存，并丢掉它的 MCP 本机测试记录。
 
-        为什么需要：两类配置注册表都按「作用域只装载一次」缓存（见
-        ``AgentProfileRegistry`` / ``AgentTeamConfigurationRegistry``）。workspace 删除后同一
+        为什么需要：Agent 配置注册表按「作用域只装载一次」缓存（见 ``AgentProfileRegistry``）。workspace 删除后同一
         路径可能被重新创建（``create_workspace`` 复用同路径记录），若保留缓存就再也读不到新目录
-        内容，已删除的 Agent / Team 也会一直留在进程内。MCP 测试记录按工作区路径存放，同一路径换成
+        内容，已删除的 Agent 也会一直留在进程内。MCP 测试记录按工作区路径存放，同一路径换成
         另一个仓库时命令字面可能相同、内容却变了，所以一并丢掉、要求重新测试。清理在数据库提交成功后
         进行，与运行期缓存回收同一时机。
 
@@ -384,9 +375,8 @@ class WorkspaceService:
             ValueError: 根路径为空（不应出现；数据库中的 ``root_path`` 非空）。
 
         副作用:
-            清空两个注册表中该根路径作用域的索引与已装载标记；改写系统级 MCP 测试记录文件。
+            清空注册表中该根路径作用域的索引与已装载标记；改写系统级 MCP 测试记录文件。
         """
 
         get_agent_registry().drop_scope(root_path)
-        get_agent_team_registry().drop_scope(root_path)
         MCPTestedServers.drop_scope(ExtensionScope.workspace(root_path))

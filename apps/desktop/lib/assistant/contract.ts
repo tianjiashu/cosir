@@ -76,8 +76,6 @@ export type TransportToolCallPart = {
   awaitingUser: boolean;
   /** 后端治理后的 UI 展示数据，前端不得从 args 推导展示内容。 */
   display_data?: TransportToolDisplayData | null;
-  /** 持久化 TeamRun 的定位字段，工具失败后仍可查询流水线。 */
-  team_run_id?: number;
   /**
    * 后台工作的占位（结论稍后以 `background_result` 回投）上的工作记录。投影自占位行 metadata，只在是后台
    * 占位时出现，结算后保留；卡片只看它在不在（所有工具共用的「在后台」事实），后端看板从这些记录投影。
@@ -183,12 +181,10 @@ export type TransportAgentReport = {
 };
 
 /**
- * Agent 消息的发送方：`taskId` 与 `teamRunId` 恰好一个非空（Agent Team 不是 Task，它的汇报来自 TeamRun）。
- * `taskId` 用于跳到来源 Task，`name` 是发送时的显示名快照；`report` 非空即这条是它的汇报。
+ * Agent 消息的发送方：`taskId` 用于跳到来源 Task，`name` 是发送时的显示名快照；`report` 非空即这条是它的汇报。
  */
 export type TransportMessageSource = {
-  taskId: number | null;
-  teamRunId: number | null;
+  taskId: number;
   name: string;
   report: TransportAgentReport | null;
 };
@@ -205,7 +201,7 @@ export type TransportMessage = {
   /** Run 的结局，只挂在它最后一个可见回合的回复上（Run 终态后非空）；user 消息恒为 null。 */
   outcome: TransportOutcome | null;
   /**
-   * 仅 Agent 消息（另一个 Agent 交来、开启回合的 user 消息：委派、追加消息、Team 节点输入）非空。
+   * 仅 Agent 消息（另一个 Agent 交来、开启回合的 user 消息：委派、追加消息、汇报）非空。
    * 它不是用户说的话：另行渲染、不可编辑，也不认领用户的乐观发送。
    */
   source: TransportMessageSource | null;

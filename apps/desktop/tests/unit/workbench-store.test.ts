@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useDockStore } from "@/lib/layout/dock-store";
 import { useWorkbenchStore } from "@/lib/workbench/workbench-store";
-import type { WorkbenchAgentConfigurationDraftTab, WorkbenchAgentTeamConfigurationDraftTab } from "@/lib/workbench/workbench-tab-types";
+import type { PersistAgent } from "@/lib/agent-editor/agent-editor-session";
+import type { WorkbenchAgentConfigurationDraftTab } from "@/lib/workbench/workbench-tab-types";
 
 const agentDraft = {
   agent_id: "reviewer",
@@ -10,22 +11,14 @@ const agentDraft = {
   system_prompt: "请检查代码并给出结论。",
 };
 
-const teamDraft = {
-  team_id: "review-team",
-  name: "Review Team",
-  description: "审查代码",
-  max_runs: 8,
-  start_node_id: "review",
-  nodes: [{ node_id: "review", name: "审查", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }] }],
-  transitions: [{ from_node_id: "review", status: "done", target_node_id: "END" }],
-  scope: "workspace" as const,
-};
+const persistAgent: PersistAgent = async (input) => ({
+  ...input, source: "user_file", path: null, editable: true, deletable: true,
+  validation_status: "valid", validation_error: null, file_name: null,
+});
 
 const session = (workspaceId: number) => useWorkbenchStore.getState().sessions[workspaceId];
 const agentDraftTab = (workspaceId: number, toolCallId: string) => session(workspaceId).tabs
   .find((tab) => tab.id === `agent-config-draft:20:${toolCallId}`) as WorkbenchAgentConfigurationDraftTab;
-const teamDraftTab = (workspaceId: number, toolCallId: string) => session(workspaceId).tabs
-  .find((tab) => tab.id === `agent-team-config-draft:20:${toolCallId}`) as WorkbenchAgentTeamConfigurationDraftTab;
 
 describe("workbench store", () => {
   beforeEach(() => useWorkbenchStore.setState({ sessions: {} }));
@@ -71,14 +64,14 @@ describe("workbench store", () => {
 
   it("关闭已保存过的草稿记下已保存标记，重新打开时从原始草稿新建会话并清除标记", async () => {
     const store = useWorkbenchStore.getState();
-    store.openAgentTeamConfigurationDraft(7, { taskId: 20, toolCallId: "team-1", draft: teamDraft });
-    await teamDraftTab(7, "team-1").session.save(async () => teamDraft);
-    store.closeTab(7, "agent-team-config-draft:20:team-1");
-    expect(session(7).savedDraftIds).toEqual(["20:team-1"]);
+    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    await agentDraftTab(7, "call-1").session.save(persistAgent);
+    store.closeTab(7, "agent-config-draft:20:call-1");
+    expect(session(7).savedDraftIds).toEqual(["20:call-1"]);
 
-    store.openAgentTeamConfigurationDraft(7, { taskId: 20, toolCallId: "team-1", draft: teamDraft });
+    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
     expect(session(7).savedDraftIds).toEqual([]);
-    expect(teamDraftTab(7, "team-1").session.store.getState().dirty).toBe(true);
+    expect(agentDraftTab(7, "call-1").session.store.getState().dirty).toBe(true);
   });
 
   it("两个 Task 的同号调用各开各的草稿标签", () => {
@@ -112,8 +105,8 @@ describe("workbench store", () => {
 
   it("删除 Task 移除已保存过的草稿时不记已保存标记，未受影响的工作区桶保持原引用", async () => {
     const store = useWorkbenchStore.getState();
-    store.openAgentTeamConfigurationDraft(7, { taskId: 20, toolCallId: "team-1", draft: teamDraft });
-    await teamDraftTab(7, "team-1").session.save(async () => teamDraft);
+    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    await agentDraftTab(7, "call-1").session.save(persistAgent);
     store.openAgent(8, { taskId: 31, title: "保留" });
     const untouched = session(8);
 

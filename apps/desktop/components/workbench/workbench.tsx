@@ -4,7 +4,6 @@ import {
   PanelRightCloseIcon,
   BotIcon,
   UserCogIcon,
-  NetworkIcon,
   type LucideIcon,
 } from "lucide-react";
 import { useCallback } from "react";
@@ -27,7 +26,6 @@ import type { WorkbenchTab } from "@/lib/workbench/workbench-tab-types";
 const TAB_KIND_ICONS: Record<WorkbenchTab["kind"], LucideIcon> = {
   agent: BotIcon,
   "agent-configuration-draft": UserCogIcon,
-  "agent-team-configuration-draft": NetworkIcon,
 };
 
 /** 草稿标签直接订阅会话，未激活标签也能及时显示未保存状态。 */

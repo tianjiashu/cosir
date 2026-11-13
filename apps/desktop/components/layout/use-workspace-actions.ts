@@ -1,5 +1,4 @@
 import { forgetTaskComposerDrafts } from "@/lib/assistant/composer/composer-drafts";
-import { forgetTeamApprovalDrafts } from "@/lib/assistant/composer/team-approval-draft";
 import { forgetCommands } from "@/lib/assistant/command-request-store";
 import { useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
 import { useFilesStore } from "@/lib/workspace-files/workspace-files-store";
@@ -181,7 +180,6 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     forgetCommands(deletedTaskIds);
     for (const taskId of deletedTaskIds) {
       useDisclosureStore.getState().clearTask(taskId);
-      forgetTeamApprovalDrafts(taskId);
       forgetTaskComposerDrafts(taskId);
     }
     if (target.kind === "workspace") {

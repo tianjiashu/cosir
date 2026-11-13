@@ -4,7 +4,7 @@
 
 ## Agent 工具（4 个）
 
-- `terminal_list()`：纯文本，一行一个终端：先是用户会话（当前状态与最近命令结果，状态措辞与 read / write header 同源；活跃在前、随后是最近结束的会话），再是 Agent 自己运行中的命令。`terminal_list` / `terminal_read` / `terminal_stop` 开放给所有 Agent（子 Agent 与 Team 节点也能读、停自己的命令）；`terminal_write` 只给侧栏对话。
+- `terminal_list()`：纯文本，一行一个终端：先是用户会话（当前状态与最近命令结果，状态措辞与 read / write header 同源；活跃在前、随后是最近结束的会话），再是 Agent 自己运行中的命令。`terminal_list` / `terminal_read` / `terminal_stop` 开放给所有 Agent（子 Agent 也能读、停自己的命令）；`terminal_write` 只给侧栏对话。
 - `terminal_read(terminal_id, start_line, limit, tail, pattern, wait)`：按绝对行号读取；默认尾部 40 行，`limit ≤ 400`。`pattern`（Python 正则，不与 `tail` 同用）把读取变成搜索：从 `start_line`（缺省最早保留行）扫到末行，只返回命中行，`limit` 限制命中数，超出时提示续搜的 `start_line`；搜索总按逻辑行。无变化、无等待且涉及可变区的重复读取只返回一行提示。
 - `terminal_stop(terminal_id)`：停止 Agent 自己仍在运行的命令（连同它启动的进程），结束原因与结论仍以 `<background_result>` 回投；用户打开的终端不能停。前台命令与后台命令都走这条（`command_results.request_cancel`）。
 - `terminal_write(terminal_id, command)`：把**一行**命令填进用户终端的提示符，**不执行、不等待**；参数模型与 worker 两侧都拒绝空串、回车与控制字符。只有 shell 集成就绪、停在提示符、且这个提示符出现后还没有任何输入时才允许（见「Agent 填入」）。返回填入后的尾部观察；用户是否按回车、之后发生了什么，由 `terminal_read` 观察。

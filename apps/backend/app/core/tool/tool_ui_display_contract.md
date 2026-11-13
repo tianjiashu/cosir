@@ -55,8 +55,6 @@
 | `send_message` | `agent-task-result` | 结构化结果见第 4 节 |
 | `task_status` | `agent-task-result` | 结构化结果见第 4 节 |
 | `propose_agent_configuration` | `agent-configuration-draft` | 结构化结果见第 4 节 |
-| `propose_agent_team_configuration` | `agent-team-configuration-draft` | 结构化结果见第 4 节 |
-| `agent_team` | `agent-team-approval` | 结构化结果见第 4 节 |
 | `mcp` | `mcp-tool-result` | 结构化结果见第 4 节 |
 | `skill` | `skill-content` | 结构化结果见第 4 节 |
 
@@ -81,8 +79,6 @@
 | fork-task-result | title、child_task_id |
 | agent-task-result | send: operation/task_id/agent_name；status 另带 final_output/end_reason；当前 Task 状态由既有 Task 读取路径提供 |
 | agent-configuration-draft | status=draft、agent_id、role、description、system_prompt；保存和编辑属于 Workbench，遵守调用方只读限制 |
-| agent-team-configuration-draft | status=draft、team_id/name/description/scope/start_node/nodes/edges/configuration |
-| agent-team-approval | team_run_id/team_id/name/goal/node_goals/start_node/nodes/edges/configuration；审批/执行状态读 TeamRun，不从展示字符串推断 |
 | mcp-tool-result | action=call: server_name/tool_name/scope；action=list: servers[{server_name,scope,tools,error?}]，`scope` 为 system / workspace，单服务 error 不改变整个调用的生命周期 |
 | skill-content | action=list: skills[{name,description,scope}]；action=load: skill_name/resource_path/scope，正文只进模型上下文 |
 

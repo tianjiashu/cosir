@@ -187,7 +187,7 @@ function validatePart(value: unknown, path: string): void {
     return;
   }
   if (type !== "tool-call") throw new TransportSnapshotValidationError(`${path}.type`, "已知消息 part 类型");
-  const allowed = ["type", "toolCallId", "toolName", "presentation", "status", "args", "intent", "error", "errorCode", "awaitingUser", "display_data", "team_run_id", "background", "isError", "child_task_id", "agent_role", "startedAt", "terminal_output_seq"];
+  const allowed = ["type", "toolCallId", "toolName", "presentation", "status", "args", "intent", "error", "errorCode", "awaitingUser", "display_data", "background", "isError", "child_task_id", "agent_role", "startedAt", "terminal_output_seq"];
   if (Object.keys(part).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
   requireString(part.toolCallId, `${path}.toolCallId`);
   requireString(part.toolName, `${path}.toolName`);
@@ -205,7 +205,6 @@ function validatePart(value: unknown, path: string): void {
   if (hasOwn(part, "display_data")) validateDisplayData(part.display_data, `${path}.display_data`);
   if (hasOwn(part, "isError") && part.isError !== null && typeof part.isError !== "boolean") throw new TransportSnapshotValidationError(`${path}.isError`, "布尔值或 null");
   if (hasOwn(part, "child_task_id") && (!Number.isInteger(part.child_task_id) || (part.child_task_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.child_task_id`, "正整数");
-  if (hasOwn(part, "team_run_id") && (!Number.isInteger(part.team_run_id) || (part.team_run_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.team_run_id`, "正整数");
   if (hasOwn(part, "background")) validateBackgroundWork(part.background, `${path}.background`);
   if (hasOwn(part, "agent_role") && (typeof part.agent_role !== "string" || !part.agent_role.trim())) throw new TransportSnapshotValidationError(`${path}.agent_role`, "非空字符串");
   if (hasOwn(part, "startedAt") && part.startedAt !== null && (typeof part.startedAt !== "string" || !part.startedAt)) throw new TransportSnapshotValidationError(`${path}.startedAt`, "非空字符串或 null");
@@ -342,10 +341,8 @@ function validateMessage(rawMessage: unknown, messagePath: string, ids: Set<stri
 
 function validateSource(value: unknown, path: string): void {
   const source = requireRecord(value, path);
-  requireExactKeys(source, ["taskId", "teamRunId", "name", "report"], path);
-  const taskId = requireNullableNonNegativeInteger(source.taskId, `${path}.taskId`);
-  const teamRunId = requireNullableNonNegativeInteger(source.teamRunId, `${path}.teamRunId`);
-  if ((taskId === null) === (teamRunId === null)) throw new TransportSnapshotValidationError(path, "taskId 与 teamRunId 恰好一个非空");
+  requireExactKeys(source, ["taskId", "name", "report"], path);
+  if (requireNullableNonNegativeInteger(source.taskId, `${path}.taskId`) === null) throw new TransportSnapshotValidationError(`${path}.taskId`, "非负整数");
   requireString(source.name, `${path}.name`);
   if (source.report !== null) {
     const report = requireRecord(source.report, `${path}.report`);

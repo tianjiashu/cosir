@@ -2,7 +2,6 @@ import { memo } from "react";
 import { useAuiState } from "@assistant-ui/react";
 
 import { AgentConfigurationDraftTool } from "@/components/conversation/tools/configuration-draft/agent-configuration-draft-tool";
-import { AgentTeamConfigurationTool } from "@/components/conversation/tools/configuration-draft/agent-team-configuration-tool";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
 import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
@@ -35,12 +34,10 @@ function StandaloneArtifact({ card, taskId, interactive, taskCancelling, inherit
   switch (card.kind) {
     case "agent-configuration-draft":
       return <AgentConfigurationDraftTool {...props} />;
-    case "agent-team-configuration-draft":
-      return <AgentTeamConfigurationTool {...props} />;
   }
 }
 
-/** 产物区：本轮改动（聚合）排在前，其余草稿卡 / Team 卡按调用顺序；每张卡各自隔离渲染错误。 */
+/** 产物区：本轮改动（聚合）排在前，其余草稿卡按调用顺序；每张卡各自隔离渲染错误。 */
 export const ArtifactZone = memo(function ArtifactZone({ inherited, taskId, artifacts, interactive, taskCancelling }: ArtifactZoneProps) {
   if (artifacts.length === 0) return null;
   return (

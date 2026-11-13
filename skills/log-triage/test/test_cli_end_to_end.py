@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
-"""log-triage 两个 CLI 的端到端测试（内存/临时库，不触碰真实库）。
+"""log-triage 两个 CLI 的端到端测试（临时库用后端 ORM 建表，不触碰真实库）。
 
 通过 main(argv) 直接驱动 CLI，覆盖参数面、分发、渲染、退出码与 --save。
-
-注：``# ruff: noqa: E501`` —— 建表与造数用的一行 SQL/JSON 字面量天然超长，
-拆行会显著降低夹具可读性且无收益，故对本文件整体豁免行宽。
 """
-
-# ruff: noqa: E501
 
 from __future__ import annotations
 
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -24,76 +18,50 @@ if str(SCRIPTS) not in sys.path:
 
 import query_app_db as qad  # noqa: E402
 import query_logs as ql  # noqa: E402
+from app_db_fixture import (  # noqa: E402
+    add_context,
+    add_run,
+    add_task,
+    add_task_message,
+    add_workspace,
+    assistant_message,
+    create_app_db,
+    tool_message,
+    user_message,
+)
 
 
 def _build_app_db(path: Path) -> None:
-    con = sqlite3.connect(path)
-    con.executescript(
-        """
-        CREATE TABLE workspaces (id INTEGER PRIMARY KEY, name TEXT, root_path TEXT,
-            created_at TEXT, updated_at TEXT);
-        CREATE TABLE model_configs (id INTEGER PRIMARY KEY, config_name TEXT NOT NULL,
-            base_url TEXT NOT NULL, api_key TEXT NOT NULL, model_name TEXT NOT NULL,
-            context_window_k INTEGER NOT NULL, supports_thinking BOOLEAN NOT NULL DEFAULT 0,
-            supports_reasoning_effort BOOLEAN NOT NULL DEFAULT 0,
-            supports_image BOOLEAN NOT NULL DEFAULT 0,
-            enabled BOOLEAN NOT NULL DEFAULT 1, sort_order INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT, updated_at TEXT);
-        CREATE TABLE tasks (id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL,
-            creation_command_id TEXT, title TEXT NOT NULL, extra TEXT,
-            task_type TEXT NOT NULL, parent_task_id INTEGER, parent_run_id INTEGER,
-            current_run_id INTEGER, context_window_total INTEGER,
-            created_at TEXT, updated_at TEXT);
-        CREATE TABLE conversation_runs (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL,
-            checkpoint_thread_id TEXT, input_text TEXT NOT NULL, agent_id TEXT,
-            model_config_id INTEGER, image_paths TEXT, end_reason TEXT, final_output TEXT,
-            extra TEXT, usage_json TEXT, error_json TEXT, status TEXT NOT NULL,
-            created_at TEXT, updated_at TEXT);
-        CREATE TABLE agent_team_runs (id INTEGER PRIMARY KEY, team_id TEXT NOT NULL,
-            workspace_id INTEGER NOT NULL, parent_task_id INTEGER NOT NULL,
-            parent_run_id INTEGER NOT NULL, goal_input TEXT NOT NULL,
-            configuration_snapshot_json TEXT NOT NULL, status TEXT NOT NULL,
-            state_json TEXT NOT NULL, end_reason TEXT, started_at TEXT, ended_at TEXT,
-            created_at TEXT, updated_at TEXT);
-        CREATE TABLE conversation_task_contexts (id INTEGER PRIMARY KEY, task_id INTEGER,
-            run_id INTEGER, message_json TEXT NOT NULL,
-            transport_metadata_json TEXT NOT NULL, include_in_context BOOLEAN,
-            is_streaming BOOLEAN, sequence INTEGER, created_at TEXT, updated_at TEXT);
-        """
-    )
-    con.execute(
-        "INSERT INTO workspaces (id, name, root_path, created_at, updated_at) "
-        "VALUES (1, 'ws1', '/tmp/ws1', 't', 't')"
-    )
-    con.execute(
-        "INSERT INTO model_configs (id, config_name, base_url, api_key, model_name, "
-        "context_window_k, supports_thinking, supports_reasoning_effort, supports_image, "
-        "enabled, sort_order, created_at, updated_at) "
-        "VALUES (1, 'deepseek', 'https://api.deepseek.com', 'sk-secret', 'deepseek-flash', "
-        "1000, 1, 1, 1, 1, 0, 't', 't')"
-    )
-    con.execute(
-        "INSERT INTO tasks (id, workspace_id, creation_command_id, title, extra, task_type, "
-        "parent_task_id, parent_run_id, current_run_id, "
-        "context_window_total, created_at, updated_at) "
-        "VALUES (1, 1, NULL, '中文任务😀', NULL, 'user', NULL, NULL, 1, 100, 't', 't')"
-    )
-    con.execute(
-        "INSERT INTO conversation_runs (id, task_id, checkpoint_thread_id, input_text, "
-        "agent_id, model_config_id, image_paths, end_reason, final_output, extra, usage_json, "
-        "error_json, status, created_at, updated_at) "
-        "VALUES (1, 1, NULL, 'i', 'a', 1, NULL, 'done', 'o', NULL, '{}', '{}', 'completed', "
-        "'t', 't')"
-    )
-    import json as _json
+    """一个 Task 两个 Run：run 1 完成，run 2 挂起在后台命令上；外加一条排队消息。"""
 
-    con.execute(
-        "INSERT INTO conversation_task_contexts (id, task_id, run_id, "
-        "message_json, transport_metadata_json, include_in_context, is_streaming, sequence, "
-        "created_at, updated_at) VALUES (1, 1, 1, ?, '{}', 1, 0, 1, 't', 't')",
-        (_json.dumps({"type": "human", "data": {"content": "hello 世界"}}),),
-    )
+    con = create_app_db(path)
+    add_workspace(con, name="ws1", root_path="/tmp/ws1")
+    add_task(con, title="中文任务😀")
+    add_run(con, task_id=1, end_reason="done", final_output="o", usage_json="{}")
+    add_run(con, task_id=1, status="suspended")
+    con.execute("UPDATE tasks SET current_run_id = 2 WHERE id = 1")
     con.commit()
+    add_context(con, task_id=1, run_id=1, sequence=1, message=user_message("hello 世界"), metadata={"kind": "user_input"})
+    add_context(
+        con, task_id=1, run_id=1, sequence=2,
+        message=assistant_message("", ("c1", "read_file", {"path": "a.py"}), ("c2", "web_search", {"q": "x"})),
+        metadata={"model": "deepseek-flash", "finish_reason": "tool_calls", "usage": {"total_tokens": 9}},
+    )
+    add_context(con, task_id=1, run_id=1, sequence=3, message=tool_message("c1", "print(1)"), metadata={"status": "completed"})
+    # c2 没有结果行：调用后进程被强杀。
+    add_context(
+        con, task_id=1, run_id=2, sequence=4, turn=2,
+        message=assistant_message("", ("c3", "execute_terminal", {"command": "sleep 100"})),
+        metadata={"finish_reason": "tool_calls"},
+    )
+    add_context(
+        con, task_id=1, run_id=2, sequence=5, turn=2,
+        message=tool_message("c3", "running in background"),
+        metadata={"status": "pending", "background": {"label": "sleep"}},
+    )
+    # 被中断的流式回复：不进上下文。
+    add_context(con, task_id=1, run_id=2, sequence=6, turn=2, message=assistant_message("半截回复"), include_in_context=0)
+    add_task_message(con, task_id=1, kind="user_input", delivery="next_run")
     con.close()
 
 
@@ -104,20 +72,27 @@ def app_db(tmp_path: Path) -> str:
     return str(p)
 
 
+def _json(cmd: list[str], db: str, capsys: pytest.CaptureFixture[str]) -> object:
+    rc = qad.main([*cmd, "--db", db, "--format", "json"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.err
+    return json.loads(captured.out)
+
+
 APP_SUBCOMMANDS = [
     ["schema", "--no-columns"],
     ["workspaces"],
     ["tasks", "--limit", "5"],
     ["tasks", "--contains", "中文"],
     ["runs", "--status", "completed"],
+    ["runs", "--status", "suspended"],
     ["run", "1"],
     ["task", "1"],
-    ["agent-team-runs"],
     ["messages", "1"],
-    ["messages", "1", "--exclude-streaming"],
+    ["messages", "1", "--in-context-only"],
     ["tools", "1"],
+    ["tools", "1", "--failures-only"],
     ["child-tasks"],
-    ["model-configs"],
     ["stuck"],
 ]
 
@@ -132,6 +107,48 @@ class TestAppDbCli:
         captured = capsys.readouterr()
         assert rc == 0
         assert "Traceback" not in captured.err
+
+    # 目的：已删的子命令与旧参数被参数解析拒绝。潜在缺陷：旧入口残留，引导排查者去查不存在的事实。
+    @pytest.mark.parametrize("cmd", [["model-configs"], ["messages", "1", "--exclude-streaming"]])
+    def test_removed_entries_rejected(self, app_db: str, cmd: list[str]) -> None:
+        with pytest.raises(SystemExit) as excinfo:
+            qad.main([*cmd, "--db", app_db])
+        assert excinfo.value.code != 0
+
+    # 目的：--in-context-only 只留进模型上下文的行，排除被中断的流式回复。潜在缺陷：过滤失效或误删正常行。
+    def test_messages_in_context_only(self, app_db: str, capsys: pytest.CaptureFixture[str]) -> None:
+        everything = _json(["messages", "1"], app_db, capsys)
+        in_context = _json(["messages", "1", "--in-context-only"], app_db, capsys)
+        assert [m["sequence"] for m in everything] == [1, 2, 3, 4, 5, 6]
+        assert [m["sequence"] for m in in_context] == [1, 2, 3, 4, 5]
+        assert everything[-1]["include_in_context"] is False
+        assert everything[0]["kind"] == "user_input"
+        assert everything[1]["tool_calls"][0] == {"id": "c1", "name": "read_file", "args": {"path": "a.py"}}
+
+    # 目的：tools 按 tool_call_id 配对，状态取结果行 metadata；没有结果行为 no_result，后台占位带 background。
+    # 潜在缺陷：配对错位、缺结果被说成 pending、后台命令与 HITL 等待分不开。
+    def test_tools_pairing(self, app_db: str, capsys: pytest.CaptureFixture[str]) -> None:
+        rows = {r["tool_call_id"]: r for r in _json(["tools", "1"], app_db, capsys)}
+        assert rows["c1"]["status"] == "completed"
+        assert rows["c1"]["result_summary"] == "print(1)"
+        assert rows["c2"]["status"] == "no_result"
+        assert rows["c2"]["result_sequence"] is None
+        assert rows["c3"]["status"] == "pending"
+        assert rows["c3"]["background"] == {"label": "sleep"}
+        assert (rows["c3"]["run_id"], rows["c3"]["turn"]) == (2, 2)
+        assert _json(["tools", "1", "--run-id", "2"], app_db, capsys)[0]["tool_call_id"] == "c3"
+
+    # 目的：stuck 报出挂起的 run、指向它的 task、未结算的后台占位与排队积压。潜在缺陷：任一类漏报。
+    def test_stuck(self, app_db: str, capsys: pytest.CaptureFixture[str]) -> None:
+        out = _json(["stuck"], app_db, capsys)
+        assert [r["id"] for r in out["active_runs"]] == [2]
+        assert [t["id"] for t in out["tasks_with_active_run"]] == [1]
+        [placeholder] = out["open_tool_placeholders"]
+        assert placeholder["tool_call_id"] == "c3"
+        assert placeholder["is_background"] == 1
+        assert placeholder["run_status"] == "suspended"
+        [queued] = out["queued_messages"]
+        assert (queued["task_id"], queued["queued"], queued["kinds"]) == (1, 1, "user_input")
 
     # 目的：缺库文件返回码为 1 且错误文本清晰。潜在缺陷：FileNotFoundError 外泄堆栈。
     def test_missing_db_file(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

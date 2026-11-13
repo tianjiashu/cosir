@@ -64,7 +64,6 @@ class ToolCallStatusChangedEvent(WorkflowEventEnvelope):
         status: 迁移后的状态。
         error: 面向展示的短错误提示；仅失败时非空，不能承载完整诊断。
         display_data: 面向 UI 的结构化展示结果；不进入模型上下文。
-        team_run_id: 可选的 TeamRun 定位信息；不承载运行状态或错误正文。
 
     异常:
         pydantic.ValidationError: 标识为空、``status`` 取值非法，或出现未声明字段时抛出。
@@ -75,6 +74,5 @@ class ToolCallStatusChangedEvent(WorkflowEventEnvelope):
     status: ToolCallEventStatus
     error: str | None = None
     display_data: dict[str, object] | None = None
-    team_run_id: int | None = Field(default=None, gt=0)
     # 后台工作记录：占位写入与结算（并入、撤销、重启中断）时带上最新值；``None`` 时 part 上已有的保留。
     background: BackgroundWork | None = None

@@ -9,8 +9,8 @@ Task 闸门。Run 首次并入用户输入后，顺带启动标题支线（``bra
 
 需要直接执行的用户决定优先级最高、每轮只取一条：工具声明 ``user_decision == "execute"`` 时，
 无论批准还是驳回，都确认并写下决定后绕过模型、直接执行原调用（先确认再执行：执行中途进程退出
-不会重复执行），其余消息留到执行完回到这里再写。驳回也要执行：工具得落定自己的事实（如 pending
-TeamRun），等待占位也只有执行结果能收尾。``reply`` 类工具的决定只是普通消息，按 mailbox 的
+不会重复执行），其余消息留到执行完回到这里再写。驳回也要执行：工具得落定自己的事实（如交接登记），
+等待占位也只有执行结果能收尾。``reply`` 类工具的决定只是普通消息，按 mailbox 的
 优先级与时间线和其余消息一起交给模型。并入前不必先闭合工具协议：``load_message`` 发请求前会
 把被用户消息隔开的工具结果按调用恢复到合法顺序。
 """
@@ -136,7 +136,6 @@ async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | No
                 tool_call_id=body.tool_call_id,
                 status="running",
                 display_data=claimed.display_data,
-                team_run_id=claimed.team_run_id,
             )
         )
     call = _message_context().find_tool_call(body.tool_call_id)

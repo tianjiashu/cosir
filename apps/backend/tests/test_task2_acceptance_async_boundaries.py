@@ -84,11 +84,6 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     owner_thread = threading.get_ident()
     calls: list[str] = []
 
-    class _Teams:
-        async def aclose(self) -> None:
-            calls.append("drain_teams")
-
-    monkeypatch.setattr(lifespan_module, "get_agent_team_coordinator", _Teams)
     class _RecoverService:
         def recover_after_restart(self) -> None:
             pass
@@ -101,7 +96,6 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     monkeypatch.setattr(lifespan_module, "initialize_service_dependencies", lambda: None)
     monkeypatch.setattr(lifespan_module, "_ensure_system_cosir_dir", lambda: None)
     monkeypatch.setattr(lifespan_module, "ensure_system_agent_config_dir", lambda: None)
-    monkeypatch.setattr(lifespan_module, "ensure_system_agent_team_config_dir", lambda: None)
     # 重启恢复整体由替身代替，不触达存储。
     monkeypatch.setattr(lifespan_module, "get_recover_service", lambda: _RecoverService())
     monkeypatch.setattr(lifespan_module, "build_tool_registry", lambda: object())
@@ -126,4 +120,4 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
     async with lifespan_module._lifespan_impl(SimpleNamespace()):
         pass
 
-    assert calls == ["drain_teams", "close_dependencies"]
+    assert calls == ["close_dependencies"]

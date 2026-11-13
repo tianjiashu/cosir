@@ -234,7 +234,7 @@ function toolTraceState() {
 function alternatingSequenceState(phase) {
   const turn = 79;
   // 图标、动词与标题由前端工具目录按工具名 + 参数算出，夹具只给真实形状的参数。
-  const call = (toolCallId, toolName, args, status, extra = {}) => ({presentation: ["agent_team", "delegate_task", "fork_task"].includes(toolName) ? "standalone" : toolName === "wait_messages" ? "quiet" : "activity",
+  const call = (toolCallId, toolName, args, status, extra = {}) => ({presentation: ["delegate_task", "fork_task"].includes(toolName) ? "standalone" : toolName === "wait_messages" ? "quiet" : "activity",
     type: "tool-call", awaitingUser: false, toolCallId, toolName, args, status, error: null,
     display_data: null, isError: false, ...extra,
   });

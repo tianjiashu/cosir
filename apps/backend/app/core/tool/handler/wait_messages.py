@@ -1,7 +1,7 @@
 """wait_messages 工具：Agent 主动挂起，等下游的结论以消息送达。
 
-可等待的对象有三类：``execute_terminal`` 的后台命令（经端口 ``background_commands`` 问终端工具层）、
-批准后运行中的 Agent Team，以及本 Task 仍在活动的派生 Task（委派的子 Agent、Agent fork；后两类见
+可等待的对象有两类：``execute_terminal`` 的后台命令（经端口 ``background_commands`` 问终端工具层），
+以及本 Task 仍在活动的派生 Task（委派的子 Agent、Agent fork，见
 ``derived_report.open_derived_titles``）。都属于 Task，含更早 Run 开出的。
 
 Agent 不必在答复前等：答复之后才到的结论会唤醒或开出新 Run，所以本工具只用于「需要结论才能继续」。
@@ -34,8 +34,8 @@ class WaitMessagesTool(HandlerBase):
     name: str = TOOL_WAIT_MESSAGES
     description: str = (
         "Pause yourself until a result arrives, instead of polling. Use it when you need a result "
-        "before you can go on: a delegated child agent or fork that is still working, an approved "
-        "agent team, or a background terminal command, including ones started earlier in this "
+        "before you can go on: a delegated child agent or fork that is still working, or a "
+        "background terminal command, including ones started earlier in this "
         "task. You do not have to wait before answering: anything that finishes after you answer "
         "resumes you with its result. You resume when a child or fork reports (<agent_message "
         "report=...>), background work finishes (<background_result>), another agent messages "

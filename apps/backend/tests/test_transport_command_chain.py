@@ -224,7 +224,7 @@ async def chain(monkeypatch):
             enqueue=lambda task_id, message, **_kw: queue.put(task_id, message),
         ),
     )
-    # 收回时经子 Task 的 actor 停止子 Task、经 Coordinator 停止 Agent Team。
+    # 收回时经子 Task 的 actor 停止子 Task。
     monkeypatch.setattr(
         registry_module.task_runtime_spaces,
         "get_or_create",
@@ -233,16 +233,6 @@ async def chain(monkeypatch):
                 request_cancel=lambda reason: child_cancels.append((task_id, reason))
             )
         ),
-    )
-    cancelled_teams: list[int] = []
-
-    async def cancel_teams(task_id):
-        cancelled_teams.append(task_id)
-
-    monkeypatch.setattr(
-        recall_module.service_depends,
-        "get_agent_team_coordinator",
-        lambda: SimpleNamespace(cancel_for_parent_task=cancel_teams),
     )
     service = AssistantTransportService.__new__(AssistantTransportService)
     service._tasks = ledger
@@ -260,7 +250,6 @@ async def chain(monkeypatch):
         ledger=ledger,
         service=service,
         child_cancels=child_cancels,
-        cancelled_teams=cancelled_teams,
         withdrawn=chain_withdrawn,
     )
     await actor.abort()
@@ -572,12 +561,12 @@ async def test_signal_is_cleared_when_the_cancelled_execution_finishes(chain) ->
 
 
 # ---------------------------------------------------------------------------
-# 用户停止只打断；上游停止（parent）另外收回 Team、后台工作与子 Task
+# 用户停止只打断；上游停止（parent）另外收回后台工作与子 Task
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("phase", ["running", "suspended", "idle"])
-async def test_user_stop_leaves_teams_and_children_alone(chain, phase) -> None:
+async def test_user_stop_leaves_children_alone(chain, phase) -> None:
     chain.ledger.list_derived_tasks = lambda _task_id: [SimpleNamespace(id=_CHILD_TASK_ID)]
     if phase == "running":
         await chain.service.send(_TASK_ID, _send_request("first"))
@@ -592,12 +581,11 @@ async def test_user_stop_leaves_teams_and_children_alone(chain, phase) -> None:
         await _finish(run.id, "cancelled")
 
     assert run.status == ("completed" if phase == "idle" else "cancelled")
-    assert chain.cancelled_teams == []
     assert chain.child_cancels == []
 
 
 @pytest.mark.parametrize("phase", ["running", "suspended", "idle"])
-async def test_parent_stop_recalls_teams_and_children_at_once(chain, phase) -> None:
+async def test_parent_stop_recalls_children_at_once(chain, phase) -> None:
     chain.ledger.list_derived_tasks = lambda _task_id: [SimpleNamespace(id=_CHILD_TASK_ID)]
     if phase == "running":
         await chain.service.send(_TASK_ID, _send_request("first"))
@@ -609,13 +597,11 @@ async def test_parent_stop_recalls_teams_and_children_at_once(chain, phase) -> N
 
     await chain.actor.cancel("parent")
 
-    # 收回在发起停止时就完成：agent_team 工具阻塞在 Team 上，等 Run 落定会互等。
-    assert chain.cancelled_teams == [_TASK_ID]
+    # 收回在发起停止时就完成，不等 Run 落定。
     assert chain.child_cancels == [(_CHILD_TASK_ID, "parent")]
     if phase == "running":
         await _finish(run.id, "cancelled")
         # 落定后不再重复收回。
-        assert chain.cancelled_teams == [_TASK_ID]
         assert chain.child_cancels == [(_CHILD_TASK_ID, "parent")]
 
 

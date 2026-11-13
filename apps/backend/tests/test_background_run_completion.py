@@ -17,6 +17,7 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as 
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal import execute_terminal
 from app.tools.tool_handler.terminal.command_results import command_results
+from tests.actor_settle_support import wait_task_settled
 from tests.model_config_fixtures import create_model_config
 from tests.sdk_fixtures import sdk_events
 
@@ -101,13 +102,12 @@ async def test_background_results_reopen_the_task_after_its_run_answered(backend
     async def parked(actor):
         async with asyncio.timeout(8):
             while True:
-                changed = actor.state_changed
                 current = await asyncio.to_thread(
                     depends.get_task_service().require_current_run, task.id
                 )
                 if current is not None and current.status != "running" and not actor.driving:
                     return current
-                await changed.wait()
+                await asyncio.sleep(0.02)
 
     monkeypatch.setattr(execute_terminal, "LocalExecutionBackend", Command)
     monkeypatch.setattr(
@@ -164,7 +164,7 @@ async def test_background_results_reopen_the_task_after_its_run_answered(backend
             )
         else:
             gates["B"].set()
-        assert await actor.wait_quiescent(8)
+        await wait_task_settled(task.id)
         runs = depends.get_conversation_run_crud().list_by_task(task.id)
         rows = depends.get_conversation_task_context_crud().get(task.id)
         statuses = {

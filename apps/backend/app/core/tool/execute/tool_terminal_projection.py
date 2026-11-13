@@ -187,7 +187,6 @@ def terminal_event(
             run_id=run_id,
             tool_call_id=tool_call_id,
         ),
-        team_run_id=observation.team_run_id,
         background=observation.background,
     )
 

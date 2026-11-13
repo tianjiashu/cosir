@@ -2,7 +2,6 @@ import type { ComponentType } from "react";
 
 import { WorkbenchAgentRunSurface } from "./agent-run-surface";
 import { AgentConfigurationDraftSurface } from "./agent-configuration-draft-surface";
-import { AgentTeamConfigurationDraftSurface } from "./agent-team-configuration-draft-surface";
 import type { Workspace } from "@/lib/api/workspaces";
 import type { WorkbenchTab } from "@/lib/workbench/workbench-tab-types";
 
@@ -22,9 +21,6 @@ const workbenchSurfaces: { [K in WorkbenchTab["kind"]]: ComponentType<SurfacePro
   ),
   "agent-configuration-draft": ({ workspace, tab, onClose }) => (
     <AgentConfigurationDraftSurface workspaceId={workspace.workspace_id} tab={tab} onClose={onClose} />
-  ),
-  "agent-team-configuration-draft": ({ workspace, tab, onClose }) => (
-    <AgentTeamConfigurationDraftSurface workspaceId={workspace.workspace_id} tab={tab} onClose={onClose} />
   ),
 };
 

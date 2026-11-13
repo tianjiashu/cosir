@@ -9,7 +9,7 @@ from app.config.constant import Constant
 from app.config.logging.logger import log
 
 CancelReason = Literal["user", "parent"]
-"""取消原因：用户停止（打断当前驱动）、上游（父 Agent / Team）停止（另外收回 Task 交出去的工作，见
+"""取消原因：用户停止（打断当前驱动）、上游（父 Agent）停止（另外收回 Task 交出去的工作，见
 ``TaskActor.cancel``）。落库成不同的结束原因（:func:`cancel_end_reason`），只有用户停止会在下一次驱动
 推导出「用户已停止」通知。"""
 

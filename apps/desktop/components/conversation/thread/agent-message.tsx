@@ -39,7 +39,7 @@ export function AgentMessageRow({ id, text, source, taskId }: { id: string; text
       <div className="aui-md !space-y-3 leading-6"><StaticMarkdown>{text}</StaticMarkdown></div>
       <div className="text-muted-foreground mt-2 flex items-center gap-2 text-xs">
         <CopyIconButton label="复制消息原文" getText={() => text} logEvent="agent_message_copy_failed" logData={{ taskId, messageId: id }} />
-        {source.taskId !== null && <button type="button" className="hover:text-foreground" onClick={() => void openTask(source.taskId!, source.name)}>打开来源任务</button>}
+        <button type="button" className="hover:text-foreground" onClick={() => void openTask(source.taskId, source.name)}>打开来源任务</button>
       </div>
     </div>}
   </div>;

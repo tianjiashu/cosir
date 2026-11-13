@@ -31,7 +31,7 @@ export function detailsLiveInRail({ artifact, surface = "timeline", interactive,
 
 /** 一次解析得到的行展示；detail 存在即表示可展开，render 仅由可见详情子树调用。 */
 export type CallPresentation = {
-  /** 工具状态看不出的实体异常（子任务失败、Team 被驳回）；工具自身失败、取消、等你操作优先。正常时渲染为空。 */
+  /** 工具状态看不出的实体异常（子任务失败）；工具自身失败、取消、等你操作优先。正常时渲染为空。 */
   status?: ReactNode;
   /** 取代目录算出的目标文字，只用于让目标可交互（路径可点开），内容仍是同一个目标。 */
   target?: ReactNode;

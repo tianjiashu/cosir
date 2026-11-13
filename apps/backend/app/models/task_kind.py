@@ -23,19 +23,18 @@ class TaskType(StrEnum):
     USER_FORK = "user_fork"
     AGENT_FORK = "agent_fork"
     AGENT_TASK = "agent_task"
-    TEAM_NODE_TASK = "team_node_task"
 
 
 FORK_TASK_TYPES = frozenset({TaskType.USER_FORK, TaskType.AGENT_FORK})
 
-DerivationKind = Literal["delegate", "fork", "team"]
+DerivationKind = Literal["delegate", "fork"]
 
 
 @dataclass(frozen=True)
 class TaskKind:
     """一类 Task：是不是侧栏里用户能操作的对话，以及允许的派生方式。
 
-    ``user_facing`` 为假的 Task（委派子 Agent、Team 节点）在前端只读：需要用户作答（审批、交接）或
+    ``user_facing`` 为假的 Task（委派子 Agent）在前端只读：需要用户作答（审批、交接）或
     要在面板里操作（交互终端、配置草稿）的工具给了它也没人能用，调用后会永远等不到结果。
     """
 
@@ -43,16 +42,15 @@ class TaskKind:
     derives: frozenset[DerivationKind]
 
 
-_ALL_DERIVATIONS: frozenset[DerivationKind] = frozenset({"delegate", "fork", "team"})
+_ALL_DERIVATIONS: frozenset[DerivationKind] = frozenset({"delegate", "fork"})
 
 TASK_KINDS: dict[TaskType, TaskKind] = {
     TaskType.USER: TaskKind(user_facing=True, derives=_ALL_DERIVATIONS),
     TaskType.USER_FORK: TaskKind(user_facing=True, derives=_ALL_DERIVATIONS),
     # Agent fork 不再分叉：继承的第一人称历史会让它接着做来源的请求，嵌套只会放大这种混淆。
     TaskType.AGENT_FORK: TaskKind(user_facing=True, derives=_ALL_DERIVATIONS - {"fork"}),
-    # fork 与建 Team 都要用户能操作的界面（Team 要审批，fork 产物是侧栏对话），只读 Task 只能委派。
+    # fork 要用户能操作的界面（产物是侧栏对话），只读 Task 只能委派。
     TaskType.AGENT_TASK: TaskKind(user_facing=False, derives=frozenset({"delegate"})),
-    TaskType.TEAM_NODE_TASK: TaskKind(user_facing=False, derives=frozenset({"delegate"})),
 }
 
 # 侧栏对话的类型：侧栏列表、标题支线、终端工作台等「只对用户能操作的对话开放」的规则都从这里取。

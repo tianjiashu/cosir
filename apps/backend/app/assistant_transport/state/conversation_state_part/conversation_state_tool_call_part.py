@@ -47,8 +47,6 @@ class ConversationStateToolCallPart(TypedDict):
     # 行级规则（``awaits_user``：继承副本与撤回移出的调用不能决定）纠正一次。
     awaitingUser: NotRequired[bool]
     display_data: NotRequired[dict[str, object] | None]
-    # 指向持久化 TeamRun，失败态也能读取节点进度与诊断。
-    team_run_id: NotRequired[int]
     # 后台占位的工作记录：存在即后台占位，``pending`` 即「后台执行中」；投影自占位行 metadata。
     background: NotRequired[ConversationBackgroundWork]
     isError: NotRequired[bool]

@@ -41,11 +41,10 @@ export type TaskMessageRequest = {
   disabledToolGroups: readonly string[];
 };
 
-/** 用户对一次等待决定的工具调用（HITL）的决定；`data` 是批准时附带的工具自定义载荷，驳回只带 `feedback`。 */
+/** 用户对一次等待决定的工具调用（HITL）的决定；驳回可带 `feedback`。 */
 export type ToolDecision = {
   decision: "approve" | "reject";
   feedback?: string;
-  data?: Record<string, unknown>;
 };
 
 type CommandInit = Pick<HttpRequestInit, "signal" | "traceId">;
@@ -181,8 +180,8 @@ async function postCallCommand(
   target: CommandTarget,
   path: "cancel" | "background",
   action: string,
-  url = `/tasks/${taskId}/tool-calls/${encodeURIComponent(toolCallId)}/${path}`,
 ): Promise<string | null> {
+  const url = `/tasks/${taskId}/tool-calls/${encodeURIComponent(toolCallId)}/${path}`;
   const request = beginCommand(taskId, target);
   if (!request) return null;
   const traceId = newTraceId();
@@ -205,14 +204,6 @@ async function postCallCommand(
 /** 取消一次工具调用：登记了后台结果的调用不要求 Run 在执行，其余只命中 Task 当前执行中的调用。 */
 export function cancelToolCall(taskId: number, toolCallId: string): Promise<string | null> {
   return postCallCommand(taskId, toolCallId, stopTarget(toolCallId), "cancel", "停止请求");
-}
-
-/**
- * 单独停止一个运行中的 Agent Team：Team 是编排实体，按 TeamRun 停止，不经工具调用取消。与提出它的那次调用
- * 共用「停止中」槽位，执行卡上的停止按钮据此显示进行中；409（已落定）视为无需再停。
- */
-export function cancelAgentTeamRun(taskId: number, toolCallId: string, teamRunId: number): Promise<string | null> {
-  return postCallCommand(taskId, toolCallId, stopTarget(toolCallId), "cancel", "停止请求", `/agent-team/runs/${encodeURIComponent(teamRunId)}/cancel`);
 }
 
 /** 把一次前台等待转到后台：工具立即以「已转后台」占位闭合，结论稍后回投。 */

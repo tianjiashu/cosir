@@ -152,7 +152,7 @@ class ConversationTaskContextService:
         ``prepare_input`` 接收决定时在同一事务把它推到 ``running``，执行后由结算推到终态。所以
         「已决定、执行中」也不算等待，迟到的重复决定不会让原调用再重放一次。判定规则只在
         ``ConversationTaskContextRecord.awaits_user``（与侧栏「等你操作」同一条）。工具名取自发起
-        这次调用的 assistant 消息，不依赖工具自己的业务事实（如 TeamRun）。
+        这次调用的 assistant 消息，不依赖工具自己的业务事实（如交接登记）。
         """
         records = [
             r

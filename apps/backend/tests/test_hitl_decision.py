@@ -445,7 +445,7 @@ def test_decision_result_is_appended_and_placeholder_only_gets_display_update(is
     rc = runtime_stub(event_sink=events.append)
     context = _Context()
     observation = tool_success(
-        "hitl_tool", "team started", tool_call_id="call-hitl", display_data={"kind": "probe"}
+        "hitl_tool", "handed back", tool_call_id="call-hitl", display_data={"kind": "probe"}
     )
     batch = ToolBatch(
         calls=[_CALL],
@@ -459,7 +459,7 @@ def test_decision_result_is_appended_and_placeholder_only_gets_display_update(is
     [appended] = context.added
     assert appended["message"]["role"] == "user"
     assert "<tool_result" in appended["message"]["content"]
-    assert "team started" in appended["message"]["content"]
+    assert "handed back" in appended["message"]["content"]
     assert appended["project_to_transport"] is False
     [(call_id, metadata)] = context.updated
     assert (call_id, metadata.status) == ("call-hitl", "completed")
@@ -507,7 +507,7 @@ def test_context_finds_call_and_updates_only_tool_result_metadata() -> None:
 
 
 def test_decision_result_without_display_keeps_the_placeholder_card() -> None:
-    """结果不带展示数据时沿用占位的：HITL 卡片（如 Team 方案预览）由占位决定。"""
+    """结果不带展示数据时沿用占位的：HITL 卡片由占位决定。"""
     from app.core.context.context_entry import ContextEntry
     from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 
@@ -524,7 +524,7 @@ def test_decision_result_without_display_keeps_the_placeholder_card() -> None:
             1,
             4,
             metadata=ToolMessageMetadata(
-                status="pending", display_data={"kind": "probe"}, team_run_id=17
+                status="pending", display_data={"kind": "probe"}
             ),
             turn=1,
         ),
@@ -534,8 +534,4 @@ def test_decision_result_without_display_keeps_the_placeholder_card() -> None:
         "call-hitl", ToolMessageMetadata(status="completed")
     )
 
-    assert (written.status, written.display_data, written.team_run_id) == (
-        "completed",
-        {"kind": "probe"},
-        17,
-    )
+    assert (written.status, written.display_data) == ("completed", {"kind": "probe"})

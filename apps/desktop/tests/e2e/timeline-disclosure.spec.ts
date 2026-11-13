@@ -85,58 +85,6 @@ test("A5/A10 running shimmer survives hidden process, is static for reduced moti
   await expect(feedback.locator('[data-thinking-active="true"]')).toHaveCount(0);
 });
 
-const preview = { kind: "agent-team-approval", team_run_id: 17, team_id: "review", name: "代码检查", goal: "检查", start_node: "a", configuration: { team_id: "review" }, node_goals: { a: { goal: "检查实现", summary: "检查" } }, edges: [], nodes: [{ node_id: "a", name: "审查", role: "Reviewer", statuses: [{ name: "完成", color: "#888888" }], max_steps: 5 }] };
-const teamPart = () => toolCallPart("team", "agent_team", { presentation: "standalone", status: "pending", awaitingUser: true, team_run_id: 17, display_data: preview });
-
-test("A6/A7 pending draft survives disclosure and task switch; approved Team expands its execution card in place", async ({ page, request }) => {
-  let teamStatus = "pending";
-  await page.route("**/agent-team/runs/17", route => route.fulfill({ json: { id: 17, team_id: "review", goal: "检查", status: teamStatus, end_reason: null, current_node_id: null, nodes: [] } }));
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 43, title: "另一个任务" } });
-  await seedState(request, 42, state([teamPart()]));
-  await page.goto("/tasks/42");
-  const form = page.locator('[data-slot="agent-team-approval"]');
-  await expect(form).toHaveCount(1);
-  await page.getByLabel("Agent Team 目标", { exact: true }).fill("用户修改过的目标");
-  const row = page.locator('[data-slot="turn"] [data-tool-call-id="team"]');
-  await row.locator('[data-slot="call-row"]').click();
-  await expect(form).toBeHidden();
-  await row.locator('[data-slot="call-row"]').click();
-  await expect(page.getByLabel("Agent Team 目标", { exact: true })).toHaveValue("用户修改过的目标");
-  await page.getByRole("treeitem").filter({ hasText: "另一个任务" }).click();
-  await page.getByRole("treeitem").filter({ hasText: "时间线验收" }).click();
-  await expect(page.getByLabel("Agent Team 目标", { exact: true })).toHaveValue("用户修改过的目标");
-  await expect(page.locator('[data-background-task="team"]')).toHaveCount(0);
-  let submitted: unknown;
-  let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  await page.route("**/tasks/42/tool-calls/team/decision", async route => { submitted = route.request().postDataJSON(); await gate; teamStatus = "running"; await route.fulfill({ json: {} }); });
-  await page.getByRole("button", { name: "确认执行", exact: true }).click();
-  await expect.poll(() => submitted).toBeTruthy();
-  expect(JSON.stringify(submitted)).toContain("用户修改过的目标");
-  await expect(form.getByRole("button", { name: "正在提交…", exact: true }).last()).toBeDisabled();
-  release();
-  // 批准即开跑、调用当场完成：Team 是编排，不进后台看板，执行卡在时间线这一行就地展开。
-  await seedState(request, 42, state([{ ...teamPart(), status: "completed", awaitingUser: false }]));
-  await expect(form).toBeHidden();
-  await expect(row).toContainText("执行中");
-  // 用户在审批前展开过这一行：显式选择优先，批准后执行卡直接就地可见。
-  await expect(row.getByRole("region", { name: "Agent Team 执行进度" })).toBeVisible();
-  await expect(page.locator('[data-background-task="team"]')).toHaveCount(0);
-  await page.screenshot({ path: test.info().outputPath("team-background.png") });
-});
-
-for (const [status, endReason, label] of [["completed", null, null], ["failed", "error", "执行失败"], ["cancelled", "user_rejected", "已驳回"]] as const) test(`A7 Team ${status}/${endReason}: entity outcome is static and never an approval form`, async ({ page, request }) => {
-  await page.route("**/agent-team/runs/17", route => route.fulfill({ json: { id: 17, team_id: "review", goal: "检查", status, end_reason: endReason, nodes: [], current_node_id: null } }));
-  await seedState(request, 42, state([{ ...teamPart(), status: "completed", awaitingUser: false }], outcome("completed")));
-  await page.goto("/tasks/42");
-  const row = page.locator('[data-slot="turn"] [data-tool-call-id="team"]');
-  await expect(row.locator('[data-slot="call-title"]')).toBeVisible();
-  if (label) await expect(row).toContainText(label);
-  else await expect(row).not.toContainText("已完成");
-  await expect(page.locator('[data-slot="agent-team-approval"]')).toHaveCount(0);
-  await expect(row.locator('[data-thinking-active="true"]')).toHaveCount(0);
-});
-
 test("A10 automatic folding hands focus from the hidden process to its heading", async ({ page, request }) => {
   const parts = [call("read"), text("答复")];
   await seedState(request, 42, state(parts)); await page.goto("/tasks/42");

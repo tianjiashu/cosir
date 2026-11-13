@@ -99,7 +99,7 @@ async def test_catalog_changes_only_cover_sidebar_tasks_and_merge_per_workspace(
     feed.publish_task_catalog(3)
     feed.publish_task_catalog(99)  # 已删除：删除方自己发过
     feed.publish_catalog(7, TaskType.USER_FORK)
-    feed.publish_catalog(9, TaskType.TEAM_NODE_TASK)
+    feed.publish_catalog(9, TaskType.AGENT_TASK)
     await asyncio.sleep(0)
 
     batch = subscription.take()

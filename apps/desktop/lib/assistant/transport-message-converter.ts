@@ -174,7 +174,6 @@ function convertToolCallPart(part: TransportToolCallPart): ThreadMessage["conten
     presentation: part.presentation,
     awaitingUser: part.awaitingUser,
     display_data: part.display_data ?? null,
-    team_run_id: part.team_run_id,
     // 失败 / 取消的短提示由后端给出（status_hint、「执行异常」「已中断」等），前端不重新推导；
     // 只在缺失时兜底，保证终态卡片总有一句提示。
     error: backendStatus === "cancelled"

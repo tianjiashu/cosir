@@ -72,7 +72,7 @@ test("分叉已被删除：调用行留在时间线上，不反复重读目录",
 
 test("手动分叉的历史可读、截图可查看，但不操作来源任务", async ({ page, request }) => {
   const sourceRequests: string[] = [];
-  page.on("request", request => { if (/\/tasks\/991\b|\/agent-team\/runs\/992\b/.test(request.url())) sourceRequests.push(request.url()); });
+  page.on("request", request => { if (/\/tasks\/991\b/.test(request.url())) sourceRequests.push(request.url()); });
   const assetId = "a".repeat(64);
   await page.route(`${origin}/workspaces/7/attachments/${assetId}/content`, route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a8n8AAAAASUVORK5CYII=", "base64") }));
   await seedState(request, 9, {
@@ -101,7 +101,7 @@ test("手动分叉的历史可读、截图可查看，但不操作来源任务",
 
 test("继承历史共用文件、终端和错误展示，展开状态跨虚拟卸载保留", async ({ page, request }) => {
   const sourceRequests: string[] = [];
-  page.on("request", req => { if (/\/tasks\/991\b|\/agent-team\/runs\/992\b/.test(req.url())) sourceRequests.push(req.url()); });
+  page.on("request", req => { if (/\/tasks\/991\b/.test(req.url())) sourceRequests.push(req.url()); });
   const history: TransportState["messages"] = Array.from({ length: 100 }, (_, index) => ({
     id: `assistant-turn-${index + 1}`, role: "assistant", turn: index + 1, inherited: true, outcome: null, source: null,
     parts: [{ type: "text", status: "completed", text: `历史说明 ${index}。${"保留背景。".repeat(30)}` }],
@@ -117,8 +117,6 @@ test("继承历史共用文件、终端和错误展示，展开状态跨虚拟�
       { type: "tool-call", presentation: "activity", toolCallId: "context-draft", toolName: "propose_agent_configuration", status: "completed", awaitingUser: false, args: {},
         display_data: { kind: "agent-configuration-draft", status: "draft", agent_id: "historical-helper", role: "历史角色", description: "历史说明", system_prompt: "历史指令" } },
       { type: "tool-call", presentation: "quiet", toolCallId: "context-wait", toolName: "wait_messages", status: "completed", awaitingUser: false, intent: "不应显示的协调调用", args: {} },
-      { type: "tool-call", presentation: "standalone", toolCallId: "context-team", toolName: "agent_team", status: "completed", awaitingUser: false, args: {},
-        display_data: { kind: "agent-team-approval", team_run_id: 992, team_id: "review", name: "继承团队", goal: "仅阅读已保存目标", start_node: "a", configuration: { team_id: "review" }, node_goals: { a: { goal: "检查", summary: "检查" } }, edges: [], nodes: [{ node_id: "a", name: "审查", role: "Reviewer", statuses: [{ name: "完成", color: "#888888" }], max_steps: 5 }] } },
     ] }],
   });
   await page.goto("/tasks/9");

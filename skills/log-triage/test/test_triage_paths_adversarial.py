@@ -521,12 +521,10 @@ class TestAppDbSubcommands:
             a for a in parser._actions
             if isinstance(a, __import__("argparse")._SubParsersAction)
         )
-        for legacy in ("providers", "models", "sessions", "delegations", "commands"):
+        for legacy in ("providers", "models", "sessions", "delegations", "commands", "model-configs"):
             assert legacy not in sub.choices
         for current in (
             "child-tasks",
-            "model-configs",
-            "agent-team-runs",
             "tasks",
             "runs",
             "stuck",
@@ -572,17 +570,11 @@ class TestAppDbSubcommands:
 
 
 def _build_min_db(path: Path) -> None:
-    """构造一个只含 workspaces/tasks 的最小业务库，供 schema 子命令连通。"""
+    """用后端 ORM 建一个空业务库，供 schema 子命令连通。"""
 
-    import sqlite3
+    from app_db_fixture import create_app_db
 
-    con = sqlite3.connect(path)
-    con.executescript(
-        "CREATE TABLE workspaces (id INTEGER PRIMARY KEY, name TEXT);"
-        "CREATE TABLE tasks (id INTEGER PRIMARY KEY, workspace_id INTEGER, title TEXT);"
-    )
-    con.commit()
-    con.close()
+    create_app_db(path).close()
 
 
 # --------------------------------------------------------------------------- #
@@ -685,9 +677,7 @@ APPDB_SUBCOMMANDS: list[list[str]] = [
     ["workspaces"],
     ["tasks", "--limit", "5"],
     ["runs", "--limit", "5"],
-    ["agent-team-runs"],
     ["child-tasks"],
-    ["model-configs"],
     ["stuck"],
 ]
 

@@ -12,7 +12,7 @@ class TaskResponseFork(BaseModel):
 
 
 class TaskResponseExtra(BaseModel):
-    """Task 附属数据的 UI 投影，不下发 Team 节点的执行配置。"""
+    """Task 附属数据的 UI 投影。"""
 
     fork: TaskResponseFork | None = None
 
@@ -29,9 +29,8 @@ class TaskResponse(BaseModel):
         workspace_id: 所属工作区标识。
         title: 任务标题。
         task_type: 任务类型，取值见 ``models.task_kind.TASK_KINDS``：``"user"`` 为用户创建，
-            ``"user_fork"`` / ``"agent_fork"`` 区分分叉发起方，``"agent_task"`` 为委派子任务，
-            ``"team_node_task"`` 为 Team 节点。
-        parent_task_id: 父任务标识，委派子任务与 Team 节点有值。
+            ``"user_fork"`` / ``"agent_fork"`` 区分分叉发起方，``"agent_task"`` 为委派子任务。
+        parent_task_id: 父任务标识，委派子任务有值。
         created_at: 创建时间文本。
         updated_at: 更新时间文本。
 

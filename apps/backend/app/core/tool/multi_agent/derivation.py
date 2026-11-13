@@ -1,6 +1,6 @@
 """派生规则的唯一来源：哪几个工具会开出新 Task、建出什么类型、深度加几。
 
-派生方式是封闭的小集合（委派、fork、建 Team），每种恰好对应一个工具，所以在这里按工具名枚举，
+派生方式是封闭的小集合（委派、fork），每种恰好对应一个工具，所以在这里按工具名枚举，
 不让工具在定义上再声明一遍。哪类 Task 允许哪种派生是 Task 一侧的规则（``models.task_kind``）；
 深度上限不在派生入口拦，统一由 ``task_tool_scope`` 决定：新建 Task 固化时去掉，分叉在准入时拒绝。
 """
@@ -8,7 +8,6 @@
 from dataclasses import dataclass
 
 from app.core.tool.schemas import (
-    TOOL_AGENT_TEAM,
     TOOL_DELEGATE_TASK,
     TOOL_FORK_TASK,
 )
@@ -28,8 +27,6 @@ class Derivation:
 DERIVATIONS: dict[DerivationKind, Derivation] = {
     "delegate": Derivation(tool=TOOL_DELEGATE_TASK, creates=TaskType.AGENT_TASK, depth_step=1),
     "fork": Derivation(tool=TOOL_FORK_TASK, creates=TaskType.AGENT_FORK, depth_step=1),
-    # Team 是多个主 Agent 按固定流程协同，不是嵌套：节点与主 Task 同层，节点再委派出去才加深。
-    "team": Derivation(tool=TOOL_AGENT_TEAM, creates=TaskType.TEAM_NODE_TASK, depth_step=0),
 }
 
 

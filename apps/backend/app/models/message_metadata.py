@@ -127,7 +127,6 @@ class ToolMessageMetadata(BaseModel):
     status: ToolCallEventStatus
     display_data: dict[str, object] | None = None
     error: str | None = None
-    team_run_id: int | None = None
     # 后台结果的后台占位（见 ``ToolObservation.background``）：存在即后台占位，卡片状态与看板条目
     # 的持久化事实源。
     background: BackgroundWork | None = None

@@ -38,8 +38,6 @@ TOOL_SEND_MESSAGE: Final[str] = "send_message"
 TOOL_TASK_STATUS: Final[str] = "task_status"
 TOOL_WAIT_MESSAGES: Final[str] = "wait_messages"
 TOOL_PROPOSE_AGENT_CONFIGURATION: Final[str] = "propose_agent_configuration"
-TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION: Final[str] = "propose_agent_team_configuration"
-TOOL_AGENT_TEAM: Final[str] = "agent_team"
 TOOL_MCP: Final[str] = "mcp"
 TOOL_SKILL: Final[str] = "skill"
 
@@ -75,8 +73,6 @@ ToolName: TypeAlias = Literal[
     "task_status",
     "wait_messages",
     "propose_agent_configuration",
-    "propose_agent_team_configuration",
-    "agent_team",
     "mcp",
     "skill",
 ]
@@ -113,8 +109,6 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_TASK_STATUS,
     TOOL_WAIT_MESSAGES,
     TOOL_PROPOSE_AGENT_CONFIGURATION,
-    TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
-    TOOL_AGENT_TEAM,
     TOOL_MCP,
     TOOL_SKILL,
 )

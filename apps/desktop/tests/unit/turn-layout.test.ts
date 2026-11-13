@@ -98,9 +98,9 @@ describe("stable conversation projection", () => {
     expect(card.files[0].operations.map((op) => [op.toolCallId, op.change.status, op.change.insertions])).toEqual([["delete", "deleted", 0], ["new", "added", 12]]);
   });
   it("keeps artifacts and required decisions available independently of process folding", () => {
-    const team = call("team", { awaitingUser: true, status: "pending", display_data: { kind: "agent-team-approval" } });
+    const handoff = call("handoff", { toolName: "browser_handoff", awaitingUser: true, status: "pending", display_data: { kind: "browser-page" } });
     const draft = call("draft", { display_data: { kind: "agent-configuration-draft" } });
-    const layout = projectTurn([team, draft, text("回复", true)], "settled", outcome("completed"));
+    const layout = projectTurn([handoff, draft, text("回复", true)], "settled", outcome("completed"));
     expect(layout.defaultProcessOpen).toBe(false);
     expect(layout.attention).toHaveLength(1);
     expect(layout.artifacts.map((item) => item.kind)).toEqual(["agent-configuration-draft"]);

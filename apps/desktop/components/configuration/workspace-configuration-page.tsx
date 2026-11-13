@@ -6,7 +6,6 @@ import { WORKSPACE_SETTINGS_TABS, type WorkspaceSettingsTabId } from "@/componen
 import { MarkdownConfigurationPanel } from "@/components/configuration/markdown-configuration-panel";
 import { useConfigurationDocument, type ConfigurationDocumentAdapter } from "@/components/configuration/use-configuration-document";
 import { AgentConfigurationPanel } from "@/components/configuration/agent-configuration-panel";
-import { AgentTeamConfigurationPanel } from "@/components/agent-team/configuration-panel";
 import { MCPConfigurationPanel } from "@/components/configuration/mcp-configuration-panel";
 import { SkillConfigurationPanel } from "@/components/configuration/skill-configuration-panel";
 import { Alert } from "@/components/ui/alert";
@@ -71,7 +70,6 @@ export function WorkspaceConfigurationPage({ workspaceId, workspaceName, tab }: 
       )}
     >
       {tab === "agents" && <AgentConfigurationPanel workspaceId={workspaceId} />}
-      {tab === "agent-teams" && <AgentTeamConfigurationPanel workspaceId={workspaceId} />}
       {tab === "instructions" && <MarkdownConfigurationPanel adapter={instructionAdapter} placeholder="写入当前工作区的项目约束…" saveLabel="保存 AGENTS.md" />}
       {tab === "fileignore" && <WorkspaceFileIgnorePanel workspaceId={workspaceId} />}
       {tab === "mcp" && <MCPConfigurationPanel workspaceId={workspaceId} />}

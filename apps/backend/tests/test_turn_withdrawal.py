@@ -18,12 +18,10 @@ from app.core.workflow.message_queue.task_message import (
     TaskMessage,
     UserInputBody,
 )
-from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
 from app.models.withdrawal_plan import WithdrawalPlan
 from app.service import depends
-from app.storage.crud.agent_team_run_crud import AgentTeamRunCrud
 from app.storage.crud.conversation_run_crud import ConversationRunCrud
 from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
 from app.storage.crud.task_crud import TaskCrud
@@ -31,7 +29,6 @@ from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.tools.tool_handler.terminal.command_job import CommandConclusion
 from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
 from tests.command_job_fakes import FakeCommandJob
-from tests.test_agent_team_definitions import _configuration
 
 
 def _user(text: str) -> UserMessageMetadata:
@@ -69,8 +66,8 @@ def _result_of(call_id: str) -> UserMessageMetadata:
 
 @pytest.fixture
 def history(isolated_storage, tmp_path):
-    """两个回合：第一回合发起 ``call-early``，第二回合发起 ``call-late`` 与 Team 方案
-    ``call-team``。
+    """两个回合：第一回合发起 ``call-early``，第二回合发起 ``call-late`` 与等用户决定的
+    ``call-decide``。
 
     第一回合那次调用的结论、一条 Task 级通知（与驱动内的续写提示合成一行）都在第二回合途中
     并入。
@@ -89,9 +86,9 @@ def history(isolated_storage, tmp_path):
         (1, _call("call-early"), None, None),
         (1, *_placeholder("call-early"), None),
         (2, {"role": "user", "content": "second"}, _user("second"), 12),
-        (2, _call("call-late", "call-team"), None, None),
+        (2, _call("call-late", "call-decide"), None, None),
         (2, *_placeholder("call-late"), None),
-        (2, *_placeholder("call-team"), None),
+        (2, *_placeholder("call-decide"), None),
         (2, {"role": "user", "content": "early done"}, _result_of("call-early"), None),
         (2, notice_message, notice_metadata, None),
         (2, {"role": "assistant", "content": "a2"}, None, None),
@@ -109,7 +106,7 @@ def test_plan_withdraws_the_turn_and_keeps_late_results_of_earlier_calls(history
 
     plan = WithdrawalPlan.plan_withdrawal(rows, from_turn=2)
 
-    assert plan.calls == frozenset({"call-late", "call-team"})
+    assert plan.calls == frozenset({"call-late", "call-decide"})
     excluded = {r.sequence for r in rows if r.id in plan.excluded_row_ids}
     # 第一回合调用的结论（序号 8）回答的是第一回合，保留；其余第二回合的行全部移出。
     assert excluded == {4, 5, 6, 7, 9, 10}
@@ -118,11 +115,8 @@ def test_plan_withdraws_the_turn_and_keeps_late_results_of_earlier_calls(history
 
 
 @pytest.fixture
-def side_effects(history, monkeypatch):
+def side_effects(history):
     """被撤回那一回合留下的副产物，以及更早回合的同类事物（必须不受影响）。"""
-    # Team 协调器构造时读工具注册表；撤回只用它收敛待确认方案，不调度节点。
-    monkeypatch.setattr("app.config.configuration.get_tool_registry", lambda: object())
-    depends.get_agent_team_coordinator.cache_clear()
     revoked: list[str] = []
     for call_id in ("call-late", "call-early"):
         command_results.register(
@@ -141,17 +135,6 @@ def side_effects(history, monkeypatch):
             reason="sign in",
         )
     )
-    team = AgentTeamRunCrud().create(
-        configuration=AgentTeamConfiguration.model_validate(_configuration()),
-        workspace_id=history.workspace_id,
-        parent_task_id=history.task_id,
-        parent_run_id=history.run_id,
-        tool_call_id="call-team",
-        goal="审查",
-        node_runtime_snapshots={
-            "develop": {"agent_id": "general-assistant", "node_goal_summary": "开发"}
-        },
-    )
     queue = depends.get_task_message_queue()
 
     def result(call_id: str) -> TaskMessage:
@@ -166,7 +149,7 @@ def side_effects(history, monkeypatch):
     queue.put(
         history.task_id,
         TaskMessage.of(
-            DecisionBody(tool_call_id="call-team", tool_name="agent_team", decision="approve")
+            DecisionBody(tool_call_id="call-decide", tool_name="browser_handoff", decision="approve")
         ),
     )
     queue.put(
@@ -174,7 +157,7 @@ def side_effects(history, monkeypatch):
         TaskMessage.of(NoticeBody(content="shell exited", notice_kind="backend_restarted")),
     )
     queued_input = queue.put(history.task_id, _input("排着的"))
-    yield SimpleNamespace(revoked=revoked, team_id=team.id, queued_input=queued_input)
+    yield SimpleNamespace(revoked=revoked, queued_input=queued_input)
     command_results.withdraw_calls(history.task_id, ["call-early"])
     handoff_registry.drop_task(history.task_id)
 
@@ -215,8 +198,6 @@ def test_withdraw_gathers_every_side_effect_of_the_turn(history, side_effects) -
         is False
     )
     assert handoff_registry.leases(history.task_id) == []
-    team = AgentTeamRunCrud().get_by_id(side_effects.team_id)
-    assert team is not None and team.status == "cancelled"
     # 队列：这一回合调用的结论与决定被删；更早调用的结论、排队的通知与输入保留；移出的 Task 级
     # 通知重新投递。撤回不入队新消息、不开新 Run。
     assert _queued(history.task_id) == [

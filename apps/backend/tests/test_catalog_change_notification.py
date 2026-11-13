@@ -1,4 +1,4 @@
-"""能力目录变更通知：命中规则（工具、作用域、覆盖）与 Skill / MCP / Team 配置写入时的发布点。
+"""能力目录变更通知：命中规则（工具、作用域、覆盖）与 Skill / MCP 配置写入时的发布点。
 
 命中的 Task 经 ``task_runtime_spaces.enqueue`` 入外部队列；这里用不依赖 SQLite 的 space 外壳记录投递。
 """
@@ -99,7 +99,6 @@ def test_change_reaches_only_tasks_with_the_catalog_tool_in_scope(posted) -> Non
     ("catalog", "tool"),
     [
         ("agents", "delegate_task"),
-        ("agent_teams", "agent_team"),
         ("skills", "skill"),
         ("mcp_servers", "mcp"),
     ],
@@ -231,59 +230,4 @@ def test_mcp_test_and_save_publish_availability_changes(
         False,
     ]
     assert "动作：removed" in posted[1][1].content
-    assert 2 not in posted
-
-
-def test_team_save_update_delete_publish_catalog_changes(posted, monkeypatch, tmp_path) -> None:
-    from app.models.agent_team.configuration.agent_team_configuration import (
-        AgentTeamConfiguration,
-    )
-    from app.service.configuration.agent_team_configuration_registry import (
-        AgentTeamConfigurationRegistry,
-    )
-    from app.service.configuration.agent_team_configuration_service import (
-        AgentTeamConfigurationService,
-    )
-    from app.service.configuration.agent_team_configuration_source import (
-        AgentTeamConfigurationScopeSource,
-    )
-
-    workspace = tmp_path / "ws"
-    workspace.mkdir()
-    _install(1, ["agent_team"], str(workspace))
-    _install(2, ["agent_team"], str(tmp_path / "unrelated"))
-    service = AgentTeamConfigurationService(
-        AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
-    )
-    document = {
-        "team_id": "review_team",
-        "name": "评审",
-        "description": "两人评审",
-        "scope": "workspace",
-        "start_node_id": "a",
-        "nodes": [
-            {
-                "node_id": "a",
-                "name": "A",
-                "agent_id": "general",
-                "statuses": [{"name": "done", "color": "#16A34A"}],
-            }
-        ],
-        "transitions": [{"from_node_id": "a", "status": "done", "target_node_id": "END"}],
-    }
-    configuration = AgentTeamConfiguration.model_validate(document)
-
-    service.save(configuration, workspace_root=workspace)
-    service.update(
-        AgentTeamConfiguration.model_validate({**document, "description": "三人评审"}),
-        workspace_root=workspace,
-    )
-    service.delete("review_team", scope="workspace", workspace_root=workspace)
-
-    actions = [
-        next(line for line in notice.content.splitlines() if line.startswith("动作"))
-        for notice in posted[1]
-    ]
-    assert actions == ["动作：added", "动作：updated", "动作：removed"]
-    assert "三人评审" in posted[1][1].content
     assert 2 not in posted

@@ -114,7 +114,7 @@ describe("Transport snapshot validation", () => {
     const agent = transportState({ messages: [agentMessage("1", 1)] });
     expect(parseTransportState(agent)).toBe(agent);
     const onAssistant = transportState({
-      messages: [{ ...assistantMessage("assistant-1", 1), source: { taskId: 1, teamRunId: null, name: "x", report: null } }],
+      messages: [{ ...assistantMessage("assistant-1", 1), source: { taskId: 1, name: "x", report: null } }],
     });
     expect(() => parseTransportState(onAssistant)).toThrow("messages[0].source");
     const extra = transportState({ messages: [{ ...agentMessage("1", 1), source: { taskId: 1, name: "x", kind: "agent" } as never }] });

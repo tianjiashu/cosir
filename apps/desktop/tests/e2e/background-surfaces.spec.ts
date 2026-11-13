@@ -56,22 +56,3 @@ test("看板条目默认收起，手动展开后跨越运行结束仍保持展�
   await expect(toggle).toHaveAttribute("aria-expanded", "true");
   await expect(board.getByRole("button", { name: "查看输出" })).toBeVisible();
 });
-
-test("Team 结束后点时间线的行就地展开执行卡，看板上没有它", async ({ page, request }) => {
-  const preview = {
-    kind: "agent-team-approval", team_run_id: 17, team_id: "review", name: "代码审查",
-    goal: "审查改动", start_node: "review", configuration: { team_id: "review" },
-    node_goals: { review: { goal: "检查改动", summary: "审查" } }, edges: [],
-    nodes: [{ node_id: "review", name: "审查", role: "Reviewer", statuses: [{ name: "done", color: "#16A34A" }], max_steps: 5 }],
-  };
-  await page.route("**/agent-team/runs/17", route => route.fulfill({ json: { id: 17, team_id: "review", goal: "审查改动", status: "completed", nodes: [], current_node_id: null, end_reason: null } }));
-  await seedState(request, TASK, completedState(1, user, [{
-    presentation: "standalone", type: "tool-call", toolName: "agent_team", toolCallId: "team", args: { team_id: "review", goal: "审查改动" },
-    status: "completed", awaitingUser: false, display_data: preview, team_run_id: 17,
-  }]));
-  await page.goto(`/tasks/${TASK}`);
-  const row = page.locator('[data-slot="turn"] [data-tool-call-id="team"]');
-  await row.locator('[data-slot="call-row"]').click();
-  await expect(row.getByRole("region", { name: "Agent Team 执行进度" })).toBeVisible();
-  await expect(page.locator('[data-background-task="team"]')).toHaveCount(0);
-});

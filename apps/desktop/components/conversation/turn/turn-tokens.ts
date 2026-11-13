@@ -8,5 +8,5 @@ export const DISCLOSURE_CONTENT_CLASS = [
   "[--tw-duration:var(--animation-duration)]",
 ].join(" ");
 
-/** 产物卡（本轮改动、草稿、Team 卡）共用的底色面：`--surface`、圆角、不画边框与阴影（设计 §5.8）。 */
+/** 产物卡（本轮改动、草稿）共用的底色面：`--surface`、圆角、不画边框与阴影（设计 §5.8）。 */
 export const SURFACE_CARD_CLASS = "bg-surface rounded-(--radius)";

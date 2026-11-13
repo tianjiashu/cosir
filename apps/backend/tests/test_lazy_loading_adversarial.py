@@ -12,8 +12,7 @@
    隐藏文件、非 UTF-8、顶层非对象 —— 是否都能「降级 + 留痕（事件名）」且不抛异常、不阻断后续。
 5. 内置 profile 不被同名用户文件覆盖。
 6. 配置中心写入目录 = 装载目录；先落盘再注册不产生虚假重复告警。
-7. Team 侧可见性合并、``list_scope`` 不混入继承项、``save``/``delete`` 与装载目录一致。
-8. 边界：``normalize_workspace`` 的空串/空白/``None`` 契约、大小写与相对路径归一。
+7. 边界：``normalize_workspace`` 的空串/空白/``None`` 契约、大小写与相对路径归一。
 
 不修改任何生产代码；所有断言都以被测模块自身声明的契约为「期望」。
 """
@@ -35,27 +34,16 @@ from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import general_child_agent, main_agent
-from app.models.agent_team.configuration.agent_team_configuration import AgentTeamConfiguration
 from app.service.configuration.agent_configuration import AgentConfiguration
 from app.service.configuration.agent_configuration_service import (
     AgentConfigurationError,
     AgentConfigurationService,
-)
-from app.service.configuration.agent_team_configuration_registry import (
-    AgentTeamConfigurationRegistry,
-)
-from app.service.configuration.agent_team_configuration_service import (
-    AgentTeamConfigurationService,
-)
-from app.service.configuration.agent_team_configuration_source import (
-    AgentTeamConfigurationScopeSource,
 )
 from app.utils.scope_config_directory import ScopeDirectoryError, read_scope_json_files
 from app.utils.workspace_scope import SYSTEM_SCOPE, normalize_scope_path
 
 # 与 conftest 的 ``isolate_scope_config_dirs`` 保持一致：系统作用域被隔离到用例临时目录。
 _SYSTEM_AGENTS = "system-agents"
-_SYSTEM_TEAMS = "system-agent-teams"
 
 _JOIN_TIMEOUT = 15.0
 
@@ -104,49 +92,6 @@ def _file_profile(agent_id: str, *, role: str) -> AgentProfile:
         system_prompt="probe",
 
     )
-
-
-def _team_document(team_id: str, scope: str, *, name: str | None = None) -> dict[str, object]:
-    """返回一份最小合法 Team 配置文档。"""
-
-    return {
-        "team_id": team_id,
-        "name": name if name is not None else f"Team {team_id}",
-        "description": "Adversarial probe team",
-        "scope": scope,
-        "start_node_id": "develop",
-        "nodes": [
-            {
-                "node_id": "develop",
-                "name": "开发",
-                "agent_id": "general-assistant",
-                "statuses": [{"name": "done", "color": "#16A34A"}, {"name": "blocked", "color": "#DC2626"}],
-            },
-            {
-                "node_id": "review",
-                "name": "审查",
-                "agent_id": "general-assistant",
-                "statuses": [{"name": "passed", "color": "#16A34A"}, {"name": "needs_changes", "color": "#F59E0B"}],
-            },
-        ],
-        "transitions": [
-            {"from_node_id": "develop", "status": "done", "target_node_id": "review"},
-            {"from_node_id": "develop", "status": "blocked", "target_node_id": "END"},
-            {"from_node_id": "review", "status": "passed", "target_node_id": "END"},
-            {"from_node_id": "review", "status": "needs_changes", "target_node_id": "develop"},
-        ],
-    }
-
-
-def _write_team(directory: Path, team_id: str, *, scope: str, name: str | None = None) -> Path:
-    """在给定目录写入一份合法 Team 配置。"""
-
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{team_id}.json"
-    path.write_text(
-        json.dumps(_team_document(team_id, scope, name=name)), encoding="utf-8"
-    )
-    return path
 
 
 def _symlink_or_skip(link: Path, target: Path, *, target_is_directory: bool) -> None:
@@ -373,39 +318,6 @@ def test_drop_scope_waits_for_inflight_load_without_deadlock(tmp_path: Path) -> 
     assert len(workspace_loads) == 2, "drop 后仍标记已装载，未重新读盘"
 
 
-def test_team_registry_concurrent_read_and_write_no_exception(tmp_path: Path) -> None:
-    """[并发/健壮性] Team 注册表在并发 list_visible/register 下不得抛异常。"""
-
-    registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
-    workspace = tmp_path / "workspace"
-    _write_team(workspace / ".cosir" / "agent-teams", "disk-team", scope="workspace")
-    done = threading.Event()
-    failures: list[BaseException] = []
-
-    def writer() -> None:
-        try:
-            for index in range(200):
-                configuration = AgentTeamConfiguration.model_validate(
-                    _team_document(f"t-{index}", "workspace")
-                )
-                registry.register(configuration, workspace_root=workspace)
-        except BaseException as exc:
-            failures.append(exc)
-            done.set()
-
-    def reader() -> None:
-        try:
-            while not done.is_set():
-                assert all(item.team_id for item in registry.list_visible(workspace))
-                registry.list_scope("workspace", workspace_root=workspace)
-        except BaseException as exc:
-            failures.append(exc)
-            done.set()
-
-    _run_threads([writer], pollers=[reader, reader], stop=done)
-    assert not failures, f"Team 注册表并发出现异常: {failures!r}"
-
-
 # =========================================================== B. 跨作用域同名 agent_id
 
 
@@ -509,15 +421,12 @@ def test_drop_scope_on_never_loaded_scope_is_idempotent(tmp_path: Path) -> None:
     """[删除/幂等] 从未装载过的作用域上调用 drop_scope 不应报错。"""
 
     registry = AgentProfileRegistry(AgentProfileScopeSource())
-    team_registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
     workspace = tmp_path / "never-touched"
 
     registry.drop_scope(workspace)
     registry.drop_scope(workspace)
-    team_registry.drop_scope(workspace)
 
     assert registry.list(workspace) == []
-    assert team_registry.list_visible(workspace) == []
 
 
 def test_drop_scope_does_not_touch_other_scopes(tmp_path: Path) -> None:
@@ -572,27 +481,6 @@ def test_stale_scope_without_drop_ignores_on_disk_changes(tmp_path: Path) -> Non
     assert registry.resolve_local(workspace, "second") is None
 
 
-def test_team_drop_scope_rereads_directory_after_recreate(tmp_path: Path) -> None:
-    """[删除/重建] Team 侧 drop_scope 后同路径重建应读到新内容。"""
-
-    workspace = tmp_path / "workspace"
-    directory = workspace / ".cosir" / "agent-teams"
-    stale = _write_team(directory, "first-team", scope="workspace")
-    registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
-    assert [item.team_id for item in registry.list_scope("workspace", workspace_root=workspace)] == [
-        "first-team"
-    ]
-
-    stale.unlink()
-    _write_team(directory, "second-team", scope="workspace")
-    assert registry.list_scope("workspace", workspace_root=workspace)[0].team_id == "first-team"
-
-    registry.drop_scope(workspace)
-    assert [item.team_id for item in registry.list_scope("workspace", workspace_root=workspace)] == [
-        "second-team"
-    ]
-
-
 # =========================================================== D. 坏配置与布局破坏
 
 
@@ -630,22 +518,6 @@ def test_agents_path_is_regular_file_degrades_with_warning(
     assert "agent_profile_scope_load_failed" in {record.message for record in caplog.records}
     # 不阻断后续读取：作用域已标记装载，重复读取仍返回空且不抛。
     assert registry.list(workspace) == []
-
-
-def test_team_agents_path_is_regular_file_degrades_with_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
-    """[布局破坏/Team] Team 目录是普通文件时应降级并留痕。"""
-
-    workspace = tmp_path / "workspace"
-    (workspace / ".cosir").mkdir(parents=True)
-    (workspace / ".cosir" / "agent-teams").write_text("", encoding="utf-8")
-    registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
-
-    with caplog.at_level(logging.WARNING):
-        assert registry.list_visible(workspace) == []
-
-    assert "team_configuration_scope_load_failed" in {record.message for record in caplog.records}
 
 
 def test_agents_directory_is_symlink_degrades_with_warning(
@@ -708,39 +580,30 @@ def test_missing_configuration_directory_is_silent_no_config(
     """[边界] 目录不存在属于「没有配置」，不应产生告警噪音。"""
 
     registry = AgentProfileRegistry(AgentProfileScopeSource())
-    team_registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
     missing = tmp_path / "missing-workspace"
 
     with caplog.at_level(logging.WARNING):
         assert registry.list(missing) == []
-        assert team_registry.list_visible(missing) == []
 
     assert not [
-        record
-        for record in caplog.records
-        if record.message
-        in {"agent_profile_scope_load_failed", "team_configuration_scope_load_failed"}
+        record for record in caplog.records if record.message == "agent_profile_scope_load_failed"
     ]
 
 
 def test_cosir_occupied_by_regular_file_degrades_with_warning(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """[布局破坏/祖先] ``.cosir`` 被普通文件占位时两类配置都应留痕降级。"""
+    """[布局破坏/祖先] ``.cosir`` 被普通文件占位时 Agent 配置应留痕降级。"""
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / ".cosir").write_text("", encoding="utf-8")
     registry = AgentProfileRegistry(AgentProfileScopeSource())
-    team_registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
 
     with caplog.at_level(logging.WARNING):
         assert registry.resolve(workspace, "x") is None
-        assert team_registry.list_visible(workspace) == []
 
-    events = {record.message for record in caplog.records}
-    assert "agent_profile_scope_load_failed" in events
-    assert "team_configuration_scope_load_failed" in events
+    assert "agent_profile_scope_load_failed" in {record.message for record in caplog.records}
 
 
 def test_cosir_broken_symlink_ancestor_degrades_with_warning(
@@ -1035,102 +898,7 @@ def test_agent_service_create_does_not_log_false_duplicate_after_drop(
     }
 
 
-# =========================================================== G. Team 侧
-
-
-def test_team_list_visible_merges_system_and_workspace_override(tmp_path: Path) -> None:
-    """[Team/可见性] workspace 可见项应合并 system 继承项，且同名项由 workspace 覆盖。"""
-
-    system_directory = tmp_path / _SYSTEM_TEAMS
-    _write_team(system_directory, "shared", scope="system", name="System shared")
-    _write_team(system_directory, "sys-only", scope="system")
-    workspace = tmp_path / "workspace"
-    directory = workspace / ".cosir" / "agent-teams"
-    _write_team(directory, "shared", scope="workspace", name="Workspace shared")
-    _write_team(directory, "ws-only", scope="workspace")
-    registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
-
-    visible = {item.team_id: item.name for item in registry.list_visible(workspace)}
-
-    assert set(visible) == {"shared", "sys-only", "ws-only"}
-    assert visible["shared"] == "Workspace shared"
-    # ``list_scope`` 只列本作用域自有项，不得混入继承项。
-    owned = [item.team_id for item in registry.list_scope("workspace", workspace_root=workspace)]
-    assert owned == ["shared", "ws-only"]
-
-
-def test_team_resolve_prefers_workspace_over_system(tmp_path: Path) -> None:
-    """[Team/解析] 同名 team 解析应返回 workspace 覆盖项。"""
-
-    system_directory = tmp_path / _SYSTEM_TEAMS
-    _write_team(system_directory, "shared", scope="system", name="System shared")
-    workspace = tmp_path / "workspace"
-    _write_team(workspace / ".cosir" / "agent-teams", "shared", scope="workspace", name="WS shared")
-    registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
-
-    resolved = registry.resolve(workspace, "shared")
-
-    assert resolved is not None and resolved.name == "WS shared"
-
-
-def test_team_service_save_writes_to_loaded_directory_and_lists(tmp_path: Path) -> None:
-    """[Team/一致性] ``save`` 写入目录必须等于装载目录，保存后列表立即可读。"""
-
-    workspace = tmp_path / "workspace"
-    registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
-    service = AgentTeamConfigurationService(registry=registry)
-    configuration = AgentTeamConfiguration.model_validate(_team_document("t1", "workspace"))
-
-    service.save(configuration, workspace_root=workspace)
-
-    expected = registry.source.directory(
-        AgentTeamConfigurationRegistry.normalize_scope("workspace", workspace)
-    )
-    assert (expected / "t1.json").exists()
-    assert [
-        item.team_id for item in service.list_documents(scope="workspace", workspace_root=workspace)
-    ] == ["t1"]
-    assert (expected / "t1.json").exists()
-
-
-def test_team_service_save_without_workspace_root_is_rejected(tmp_path: Path) -> None:
-    """[Team/边界] workspace 作用域缺少根路径时应显式报错，而不是静默落到别处。"""
-
-    registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
-    service = AgentTeamConfigurationService(registry=registry)
-    configuration = AgentTeamConfiguration.model_validate(_team_document("t1", "workspace"))
-
-    with pytest.raises(ValueError):
-        service.save(configuration, workspace_root=None)
-
-
-@pytest.mark.xfail(
-    reason=(
-        "既有缺陷（非本次改动）：ConfigurationFileStore._delete_file 在 Windows 上用 "
-        "os.open(目录) fsync 恒抛 PermissionError；file_store.py 未被本次改动修改"
-    ),
-    strict=False,
-)
-def test_team_service_delete_workspace_keeps_system_inherit(tmp_path: Path) -> None:
-    """[Team/删除] 删除 workspace 覆盖项后，system 继承项应仍然可见。"""
-
-    system_directory = tmp_path / _SYSTEM_TEAMS
-    _write_team(system_directory, "shared", scope="system", name="System shared")
-    workspace = tmp_path / "workspace"
-    registry = AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource())
-    service = AgentTeamConfigurationService(registry=registry)
-    service.save(
-        AgentTeamConfiguration.model_validate(_team_document("shared", "workspace")),
-        workspace_root=workspace,
-    )
-
-    service.delete("shared", scope="workspace", workspace_root=workspace)
-
-    visible = {item.team_id: item.name for item in registry.list_visible(workspace)}
-    assert visible["shared"] == "System shared"
-
-
-# =========================================================== H. 作用域键边界
+# =========================================================== G. 作用域键边界
 
 
 def test_normalize_workspace_rejects_empty_and_whitespace() -> None:
@@ -1140,8 +908,6 @@ def test_normalize_workspace_rejects_empty_and_whitespace() -> None:
         AgentProfileRegistry.normalize_workspace("")
     with pytest.raises(ValueError):
         AgentProfileRegistry.normalize_workspace("   ")
-    with pytest.raises(ValueError):
-        AgentTeamConfigurationRegistry.normalize_scope("workspace", "")
 
 
 def test_normalize_workspace_none_is_not_silently_stringified() -> None:
@@ -1183,29 +949,10 @@ def test_normalize_workspace_relative_path_equals_absolute() -> None:
     assert relative == absolute
 
 
-def test_team_normalize_scope_contract() -> None:
-    """[边界/Team] system 哨兵与 workspace 键契约。"""
-
-    workspace = "/tmp/example-ws" if os.name != "nt" else "C:\\example-ws"
-
-    assert AgentTeamConfigurationRegistry.normalize_scope("system") == SYSTEM_SCOPE
-    assert AgentTeamConfigurationRegistry.normalize_scope(
-        "system", None
-    ) == AgentProfileRegistry.SYSTEM_WORKSPACE
-    assert AgentTeamConfigurationRegistry.normalize_scope(
-        "workspace", workspace
-    ) == AgentProfileRegistry.normalize_workspace(workspace)
-    with pytest.raises(ValueError):
-        AgentTeamConfigurationRegistry.normalize_scope("workspace", None)
-    with pytest.raises(ValueError):
-        AgentTeamConfigurationRegistry.normalize_scope("workspace", "   ")
-
-
 def test_sentinel_is_single_source(tmp_path: Path) -> None:
-    """[边界] 两类注册表的 system 哨兵必须同源，避免作用域键分裂。"""
+    """[边界] 注册表的 system 哨兵必须与共享作用域常量同源，避免作用域键分裂。"""
 
     assert AgentProfileRegistry.SYSTEM_WORKSPACE == SYSTEM_SCOPE
-    assert AgentTeamConfigurationRegistry.SYSTEM_SCOPE == SYSTEM_SCOPE
     # ``resolve``/``list`` 对 system 哨兵只访问 system 作用域。
     registry = AgentProfileRegistry(AgentProfileScopeSource())
     _write_agent(tmp_path / _SYSTEM_AGENTS, "sys-agent")

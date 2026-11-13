@@ -16,69 +16,6 @@ test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
 });
 
-test("画布全屏覆盖保活任务布局，退出与弹窗保留编辑状态", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "全屏回归" } });
-  await page.route("**/configuration/agent-teams", (route) => route.request().method() === "POST"
-    ? route.fulfill({ status: 400, json: { detail: "测试保存失败" } })
-    : route.fulfill({ json: [] }));
-  await page.route("**/configuration/agents", (route) => route.fulfill({ json: [] }));
-  await page.goto("/tasks/42");
-  await expect(page.getByLabel("消息输入")).toBeVisible();
-  await page.getByRole("button", { name: "系统配置", exact: true }).click();
-  await page.getByRole("navigation", { name: "系统配置分类" }).getByRole("link", { name: "Agent Team", exact: true }).click();
-  await page.getByRole("button", { name: "新建 Team" }).click();
-  // 人工加入定位包含块，验证全屏不依赖父页面当前恰好没有 transform。
-  await page.locator("main").evaluate((element) => { element.style.transform = "translateZ(0)"; });
-  // 切到画布即默认全屏；新建 Team 默认打开右侧 Team 属性面板。
-  await page.getByRole("button", { name: "画布", exact: true }).click();
-  const flowElement = await page.locator(".react-flow").elementHandle();
-  const surface = page.getByRole("region", { name: "Agent Team 画布编辑器" });
-  await expectViewportCoverage(page, surface);
-  const exit = page.getByRole("button", { name: "退出全屏画布" });
-  await expect(exit).toBeInViewport();
-  const teamPanel = surface.getByRole("region", { name: "Team 属性" });
-  await teamPanel.getByLabel("Team 名称").fill("全屏草稿");
-  // 输入框里的 Escape 属于输入本身，不退出全屏。
-  await page.keyboard.press("Escape");
-  await expectViewportCoverage(page, surface);
-  expect(await flowElement!.evaluate((element) => element.isConnected)).toBe(true);
-  await expect(surface.getByRole("heading", { name: "全屏草稿" })).toBeVisible();
-  await expect(surface.getByRole("button", { name: "撤销", exact: true })).toBeEnabled();
-
-  await teamPanel.getByLabel("用途说明").fill("全屏下修改");
-  await page.keyboard.press("Escape");
-  await expectViewportCoverage(page, surface);
-
-  await page.getByRole("button", { name: "保存", exact: true }).click();
-  await expect(page.getByRole("dialog").getByText("测试保存失败")).toBeVisible();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog")).toBeHidden();
-  await expectViewportCoverage(page, surface);
-
-  await page.setViewportSize({ width: 1000, height: 680 });
-  await expectViewportCoverage(page, surface);
-  await expect(exit).toBeInViewport();
-  await exit.focus();
-  await exit.click();
-  await expect(surface).not.toHaveClass(/fixed/);
-  expect(await flowElement!.evaluate((element) => element.isConnected)).toBe(true);
-  const enter = page.getByRole("button", { name: "全屏画布", exact: true });
-  await expect(enter).toBeFocused();
-  await enter.focus();
-  await enter.press("Enter");
-  await page.keyboard.press("Escape");
-  await expect(surface).not.toHaveClass(/fixed/);
-  await expect(enter).toBeFocused();
-  await enter.click();
-  await page.getByRole("button", { name: "返回 Team 编辑" }).click();
-  await expect(surface).toBeHidden();
-  await expect(page.getByLabel("用途说明")).toHaveValue("全屏下修改");
-  expect(await page.evaluate(() => document.body.style.overflow)).toBe("");
-  await page.getByRole("button", { name: "画布", exact: true }).click();
-  expect(await flowElement!.evaluate((element) => element.isConnected)).toBe(true);
-  await expect(surface.getByRole("button", { name: "撤销", exact: true })).toBeEnabled();
-});
-
 test("Mermaid 全屏避开消息裁剪，窗口缩放与两种退出入口可用", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-mermaid`);
   await page.goto("/tasks/42");

@@ -7,14 +7,10 @@
 from app.core.tool.handler.wait_messages import build_wait_messages_definition
 from app.core.tool.handler.web_extract import build_web_extract_definition
 from app.core.tool.handler.web_search import build_web_search_definition
-from app.core.tool.multi_agent.agent_team_run import build_agent_team_run_definition
 from app.core.tool.multi_agent.delegate_task import build_delegate_task_definition
 from app.core.tool.multi_agent.fork_task import build_fork_task_definition
 from app.core.tool.multi_agent.propose_agent_configuration import (
     build_propose_agent_configuration_definition,
-)
-from app.core.tool.multi_agent.propose_agent_team_configuration import (
-    build_propose_agent_team_configuration_definition,
 )
 from app.core.tool.multi_agent.send_message import (
     build_send_message_definition,
@@ -72,9 +68,6 @@ def build_tool_registry() -> ToolRegistry:
     registry.register(build_task_status_definition())
     registry.register(build_wait_messages_definition())
     registry.register(build_propose_agent_configuration_definition())
-    # Team 工具统一注册；是否对当前 Agent 开放由工具选择与 Run 授权决定。
-    registry.register(build_propose_agent_team_configuration_definition())
-    registry.register(build_agent_team_run_definition())
     registry.register(build_mcp_definition())
     registry.register(build_skill_definition())
     return registry

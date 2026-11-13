@@ -1,4 +1,4 @@
-"""收回一个 Task 交出去的工作：撤销后台工作、取消活动 Team、收回它派生的 Task。"""
+"""收回一个 Task 交出去的工作：撤销后台工作、收回它派生的 Task。"""
 
 from __future__ import annotations
 
@@ -13,21 +13,20 @@ from app.service import depends as service_depends
 class TaskRecall:
     """上游以 ``parent`` 原因停止一个 Task 时，它交出去的工作一并收回；由该 Task 的 ``TaskActor`` 持有。
 
-    停止分两种语义：用户停止（``user``）只打断当前驱动，后台工作、Team 与子 Task 照常运行，结论到达时
-    照常唤醒或开新 Run；上游停止（``parent``：Coordinator 停节点、撤回回合、收回向下传播）收回这个 Task
-    的一切，本类就是「收回」那一半。是否收回、何时收回归 actor：有执行者时在打信号之后，挂起的 Run 在
-    迁移之前，空闲时直接收回。删除不经这里：删除先停下整棵所有权子树，Team 由删除入口排空，后台工作在
-    删除提交后撤销。
+    停止分两种语义：用户停止（``user``）只打断当前驱动，后台工作与子 Task 照常运行，结论到达时照常唤醒
+    或开新 Run；上游停止（``parent``：撤销委派、撤回回合、收回向下传播）收回这个 Task 的一切，本类就是
+    「收回」那一半。是否收回、何时收回归 actor：有执行者时在打信号之后，挂起的 Run 在迁移之前，空闲时
+    直接收回。删除不经这里：删除先停下整棵所有权子树，后台工作在删除提交后撤销。
 
     撤销与结算是两步：撤销后台工作返回被撤销的调用，卡片结算由 actor 决定时机（见 :meth:`settle`）。
-    本类不持进程内状态，只读写各下游的事实源（后台结果登记表、TeamRun、派生 Task）。
+    本类不持进程内状态，只读写各下游的事实源（后台结果登记表、派生 Task）。
     """
 
     def __init__(self, task_id: int) -> None:
         self.task_id = task_id
 
     async def recall(self) -> dict[str, dict[str, object] | None]:
-        """撤销全部后台工作、取消全部活动 Team（待确认与运行中）、以 ``parent`` 原因收回派生 Task；不抛异常。
+        """撤销全部后台工作、以 ``parent`` 原因收回派生 Task；不抛异常。
 
         返回被撤销的后台调用及其卡片终态展示，交给 :meth:`settle`；本方法不结算卡片。
 
@@ -38,13 +37,6 @@ class TaskRecall:
         ``parent_cancelled`` 落定，不再向这里汇报。
         """
         revoked = await asyncio.to_thread(background_commands().recall_task, self.task_id)
-        try:
-            await service_depends.get_agent_team_coordinator().cancel_for_parent_task(self.task_id)
-        except Exception:
-            log.exception(
-                "task_recall_teams_failed",
-                extra={"msg": "收回时取消 Agent Team 失败", "data": {"task_id": self.task_id}},
-            )
         from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
         try:

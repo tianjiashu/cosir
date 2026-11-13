@@ -144,9 +144,6 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   task_status: { verb: "读取任务状态", icon: "info", target: taskRef },
   wait_messages: { verb: "等待结果", icon: "clock" },
   propose_agent_configuration: { verb: "生成子 Agent 配置草稿", icon: "bot", target: (args) => str(args.agent_id) },
-  // 只说「运行」：曾经的 Prepare / 配置口径让模型与用户都把它当成建 Team 的工具，而它只运行已有配置。
-  agent_team: { verb: "运行已有 Agent Team", icon: "workflow", target: (args) => str(args.team_id) },
-  propose_agent_team_configuration: { verb: "生成 Agent Team 配置草稿", icon: "users", target: (args) => str(args.name) },
 };
 
 /** 工具动词；目录里没有的工具（后端新增了但前端未登记）退回工具名，图标退回扳手。 */

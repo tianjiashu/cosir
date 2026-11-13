@@ -1,4 +1,3 @@
-import { teamView } from "./call-views/team-view";
 import { detailsLiveInRail, type CallView, type CallPresentation, type CallViewContext } from "./call-view";
 import { mcpView, skillView } from "./call-views/extension-views";
 import { imageReadView } from "./call-views/image-read-view";
@@ -14,7 +13,7 @@ import { terminalSessionView } from "./call-views/terminal-session-view";
 
 /**
  * `display_data.kind` → 调用行视图。这是前端唯一的工具展示路由：只按 kind，不按工具名、不按静态展示声明。
- * 新增一种工具展示只需在这里登记一个 kind；独立 Team 视图区分时间线审批/摘要与后台详情。
+ * 新增一种工具展示只需在这里登记一个 kind。
  * 配置草稿仍在产物区成卡。
  */
 export const CALL_VIEWS: Readonly<Record<string, CallView>> = {
@@ -27,7 +26,6 @@ export const CALL_VIEWS: Readonly<Record<string, CallView>> = {
   "image-read": imageReadView,
   "mcp-tool-result": mcpView,
   "skill-content": skillView,
-  "agent-team-approval": teamView,
   "terminal-result": terminalResultView,
   "terminal-session": terminalSessionView,
   "file-changes": fileChangesView,

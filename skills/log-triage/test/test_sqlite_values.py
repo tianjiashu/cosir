@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""log-triage 查询脚本的独立单元测试（第三轮对抗性复测）。
+"""log-triage 查询脚本的独立单元测试。
 
-只测行为契约：布尔归一（Python/SQL 双侧一致性）、消息回放流式过滤口径、
-stuck 残留草稿判定、工具调用配对、缺表可诊断性、只读与参数边界。
+只测行为契约：布尔归一（Python/SQL 双侧一致性）、消息回放 ``--in-context-only`` 过滤口径、
+stuck 未收敛体检、工具调用配对、缺表可诊断性与参数边界。
 
-不修改任何生产代码；所有用例走临时库或内存库。
-
-注：``# ruff: noqa: E501`` —— 建表与造数用的一行 SQL/JSON 字面量天然超长，
-拆行会显著降低夹具可读性且无收益，故对本文件整体豁免行宽。
+业务库用后端 ORM 建表（见 ``app_db_fixture``）；造数的消息字面量天然超长，故对本文件豁免行宽。
 """
 
 # ruff: noqa: E501
@@ -24,6 +21,17 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
+from app_db_fixture import (  # noqa: E402
+    add_context,
+    add_run,
+    add_task,
+    add_task_message,
+    add_workspace,
+    assistant_message,
+    create_app_db,
+    tool_message,
+    user_message,
+)
 from appdb_context import context_statistics, list_messages, summarize_tool_calls  # noqa: E402
 from appdb_health import find_unsettled  # noqa: E402
 from appdb_readonly import (  # noqa: E402
@@ -174,158 +182,88 @@ class TestBoolSqlEquivalence:
 
     # 目的：表达式片段必须为自洽合法 SQL，且假值集合来自唯一常量。潜在缺陷：拼接非法或漏 TS。
     def test_expression_contains_all_false_literals(self) -> None:
-        expr = bool_true_sql("c.is_streaming")
+        expr = bool_true_sql("c.include_in_context")
         for item in BOOL_FALSE_TEXTS:
             assert f"'{item}'" in expr
 
 
 # --------------------------------------------------------------------------- #
-# 临时库构造工具
+# 临时库：表结构来自后端 ORM
 # --------------------------------------------------------------------------- #
 
 
-def _base_schema(con: sqlite3.Connection) -> None:
-    con.executescript(
-        """
-        CREATE TABLE workspaces (id INTEGER PRIMARY KEY, name TEXT, root_path TEXT,
-            created_at TEXT, updated_at TEXT);
-        CREATE TABLE model_configs (id INTEGER PRIMARY KEY, config_name TEXT NOT NULL,
-            base_url TEXT NOT NULL, api_key TEXT NOT NULL, model_name TEXT NOT NULL,
-            context_window_k INTEGER NOT NULL, supports_thinking BOOLEAN NOT NULL DEFAULT 0,
-            supports_reasoning_effort BOOLEAN NOT NULL DEFAULT 0,
-            supports_image BOOLEAN NOT NULL DEFAULT 0,
-            enabled BOOLEAN NOT NULL DEFAULT 1, sort_order INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT, updated_at TEXT);
-        CREATE TABLE tasks (id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL,
-            creation_command_id TEXT, title TEXT NOT NULL, extra TEXT,
-            task_type TEXT NOT NULL, parent_task_id INTEGER, parent_run_id INTEGER,
-            current_run_id INTEGER, context_window_total INTEGER,
-            created_at TEXT, updated_at TEXT);
-        CREATE TABLE conversation_runs (id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL,
-            checkpoint_thread_id TEXT, input_text TEXT NOT NULL, agent_id TEXT,
-            model_config_id INTEGER, image_paths TEXT, end_reason TEXT, final_output TEXT,
-            extra TEXT, usage_json TEXT, error_json TEXT, status TEXT NOT NULL,
-            created_at TEXT, updated_at TEXT);
-        CREATE TABLE agent_team_runs (id INTEGER PRIMARY KEY, team_id TEXT NOT NULL,
-            workspace_id INTEGER NOT NULL, parent_task_id INTEGER NOT NULL,
-            parent_run_id INTEGER NOT NULL, goal_input TEXT NOT NULL,
-            configuration_snapshot_json TEXT NOT NULL, status TEXT NOT NULL,
-            state_json TEXT NOT NULL, end_reason TEXT, started_at TEXT, ended_at TEXT,
-            created_at TEXT, updated_at TEXT);
-        CREATE TABLE conversation_task_contexts (id INTEGER PRIMARY KEY, task_id INTEGER,
-            run_id INTEGER, message_json TEXT NOT NULL,
-            transport_metadata_json TEXT NOT NULL, include_in_context BOOLEAN,
-            is_streaming BOOLEAN, sequence INTEGER, created_at TEXT, updated_at TEXT);
-        """
-    )
-    con.execute(
-        "INSERT INTO workspaces (id, name, root_path, created_at, updated_at) "
-        "VALUES (1, 'ws1', '/tmp/ws1', 't', 't')"
-    )
-    con.execute(
-        "INSERT INTO model_configs (id, config_name, base_url, api_key, model_name, "
-        "context_window_k, supports_thinking, supports_reasoning_effort, supports_image, "
-        "enabled, sort_order, created_at, updated_at) "
-        "VALUES (1, 'deepseek', 'https://api.deepseek.com', 'sk-secret', 'deepseek-flash', "
-        "1000, 1, 1, 1, 1, 0, 't', 't')"
-    )
-    con.execute(
-        "INSERT INTO tasks (id, workspace_id, creation_command_id, title, extra, task_type, "
-        "parent_task_id, parent_run_id, current_run_id, "
-        "context_window_total, created_at, updated_at) "
-        "VALUES (1, 1, NULL, 't1', NULL, 'user', NULL, NULL, 1, 100, 't', 't')"
-    )
-    con.execute(
-        "INSERT INTO conversation_runs (id, task_id, checkpoint_thread_id, input_text, "
-        "agent_id, model_config_id, image_paths, end_reason, final_output, extra, usage_json, "
-        "error_json, status, created_at, updated_at) "
-        "VALUES (1, 1, NULL, 'i', 'a', 1, NULL, 'done', 'o', NULL, '{}', '{}', 'completed', "
-        "'t', 't')"
-    )
-    con.execute(
-        "INSERT INTO conversation_runs (id, task_id, checkpoint_thread_id, input_text, "
-        "agent_id, model_config_id, image_paths, end_reason, final_output, extra, usage_json, "
-        "error_json, status, created_at, updated_at) "
-        "VALUES (2, 1, NULL, 'i', 'a', 1, NULL, NULL, NULL, NULL, '{}', '{}', 'running', "
-        "'t', 't')"
-    )
-    con.commit()
-
-
 @pytest.fixture()
-def con() -> sqlite3.Connection:
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
-    _base_schema(connection)
+def con(tmp_path: Path) -> sqlite3.Connection:
+    """task 1 下两个 run：run 1 completed，run 2 running。"""
+
+    connection = create_app_db(tmp_path / "app.sqlite3")
+    add_workspace(connection, name="ws1", root_path="/tmp/ws1")
+    add_task(connection, title="t1")
+    add_run(connection, task_id=1, status="completed")
+    add_run(connection, task_id=1, status="running")
     yield connection
     connection.close()
 
 
-def _msg(kind: str, data: dict) -> str:
-    import json
-
-    return json.dumps({"type": kind, "data": data}, ensure_ascii=False)
-
-
 def _add(
     con: sqlite3.Connection,
-    task: int,
-    run: int | None,
     seq: int,
-    is_streaming: object,
-    mj: str,
-    tmeta: str = "{}",
+    message: dict | str,
+    metadata: dict | None = None,
+    *,
+    run: int | None = 1,
+    in_context: object = 1,
+    turn: int = 1,
 ) -> None:
-    con.execute(
-        "INSERT INTO conversation_task_contexts (task_id,run_id,message_json,"
-        "transport_metadata_json,include_in_context,sequence,created_at,updated_at,is_streaming)"
-        " VALUES (?,?,?,?,1,?,?,?,?)",
-        (task, run, mj, tmeta, seq, "t", "t", is_streaming),
+    add_context(
+        con,
+        task_id=1,
+        run_id=run,
+        sequence=seq,
+        message=message,
+        metadata=metadata,
+        turn=turn,
+        include_in_context=in_context,
     )
-    con.commit()
 
 
 # --------------------------------------------------------------------------- #
-# list_messages：--exclude-streaming 过滤与显示自洽性
+# list_messages：--in-context-only 过滤与显示自洽性
 # --------------------------------------------------------------------------- #
 
 
-class TestListMessagesStreamingFilter:
-    """messages 显示的 is_streaming 与 --exclude-streaming 过滤口径必须自洽。"""
+class TestListMessagesInContextFilter:
+    """messages 显示的 include_in_context 与 --in-context-only 过滤口径必须自洽。"""
 
-    # 目的：TEXT 假值（'false'/'no'/'FALSE'/'0'/NULL/''）不得被 --exclude-streaming 误删。潜在缺陷：裸比较整行漏掉。
-    @pytest.mark.parametrize("stored", ["false", "no", "FALSE", "0", None, ""])
-    def test_falsey_text_is_kept(self, con: sqlite3.Connection, stored: object) -> None:
-        _add(con, 1, 1, 1, stored, _msg("human", {"content": "keep-me"}))
-        rows = list_messages(con, task_id=1, limit=50, include_streaming=False)
-        assert len(rows) == 1
-        assert rows[0]["is_streaming"] is False
+    # 目的：TEXT 假值（'false'/'no'/'FALSE'/'0'/''）必须被 --in-context-only 排除且显示为 False。
+    # 潜在缺陷：裸比较把 TEXT 'false' 当真，流式草稿混进「模型看到的上下文」。
+    @pytest.mark.parametrize("stored", ["false", "no", "FALSE", "0", "", 0])
+    def test_falsey_is_excluded(self, con: sqlite3.Connection, stored: object) -> None:
+        _add(con, 1, assistant_message("draft"), in_context=stored)
+        assert list_messages(con, task_id=1, limit=50, in_context_only=True) == []
+        shown = list_messages(con, task_id=1, limit=50)
+        assert shown[0]["include_in_context"] is False
 
-    # 目的：真值（'true'/'1'/1）必须被 --exclude-streaming 排除，且显示侧为 True。潜在缺陷：TEXT 'true' 漏排除。
+    # 目的：真值（'true'/'1'/1）保留且显示为 True。潜在缺陷：TEXT 'true' 被误删。
     @pytest.mark.parametrize("stored", ["true", "TRUE", "1", 1])
-    def test_truthy_is_excluded(self, con: sqlite3.Connection, stored: object) -> None:
-        _add(con, 1, 1, 1, stored, _msg("ai", {"content": "drop-me"}))
-        assert list_messages(con, task_id=1, limit=50, include_streaming=False) == []
-        shown = list_messages(con, task_id=1, limit=50, include_streaming=True)
-        assert len(shown) == 1
-        assert shown[0]["is_streaming"] is True
+    def test_truthy_is_kept(self, con: sqlite3.Connection, stored: object) -> None:
+        _add(con, 1, user_message("keep-me"), {"kind": "user_input"}, in_context=stored)
+        rows = list_messages(con, task_id=1, limit=50, in_context_only=True)
+        assert len(rows) == 1
+        assert rows[0]["include_in_context"] is True
+        assert rows[0]["kind"] == "user_input"
 
-    # 目的：同一行在「显示」与「过滤」两侧必须自洽——显示 False 的行绝不能被当流式删掉。潜在缺陷：两侧口径分叉。
-    @pytest.mark.parametrize("stored", ["false", "no", "0", None, "", "true", "1", 1, 0])
+    # 目的：同一行在「显示」与「过滤」两侧自洽。潜在缺陷：两侧口径分叉。
+    @pytest.mark.parametrize("stored", ["false", "no", "0", "", "true", "1", 1, 0, " 1 "])
     def test_display_and_filter_self_consistent(
         self, con: sqlite3.Connection, stored: object
     ) -> None:
-        _add(con, 1, 1, 1, stored, _msg("human", {"content": "x"}))
-        shown = list_messages(con, task_id=1, limit=50, include_streaming=True)
-        filtered = list_messages(con, task_id=1, limit=50, include_streaming=False)
-        displayed_is_streaming = shown[0]["is_streaming"]
-        # 显示为 False => 过滤后必须仍在；显示为 True => 过滤后必须消失
-        if displayed_is_streaming is False:
-            assert len(filtered) == 1
-        else:
-            assert filtered == []
+        _add(con, 1, user_message("x"), in_context=stored)
+        shown = list_messages(con, task_id=1, limit=50)
+        filtered = list_messages(con, task_id=1, limit=50, in_context_only=True)
+        assert len(filtered) == (1 if shown[0]["include_in_context"] else 0)
 
-    # 目的：非法 order 抛 ValueError。潜在缺陷：静默接受导致 SQL 注入式拼接。
+    # 目的：非法 order 抛 ValueError。潜在缺陷：静默接受导致 SQL 拼接。
     def test_invalid_order_raises(self, con: sqlite3.Connection) -> None:
         with pytest.raises(ValueError):
             list_messages(con, task_id=1, limit=10, order="sideways")
@@ -342,85 +280,120 @@ class TestListMessagesStreamingFilter:
         finally:
             bare.close()
 
-    # 目的：desc 顺序 + limit 与 include_streaming=False 组合，确认 LIMIT 在过滤之后生效（无假值被挤掉）。潜在缺陷：过滤前 LIMIT 导致假值行被真值挤占。
+    # 目的：desc + limit 与 in_context_only 组合时 LIMIT 在过滤之后生效。潜在缺陷：过滤前 LIMIT 挤掉有效行。
     def test_desc_order_filter_before_limit(self, con: sqlite3.Connection) -> None:
-        for seq in range(1, 6):
-            _add(con, 1, 1, seq, "true", _msg("ai", {"content": f"draft{seq}"}))
-        _add(con, 1, 1, 6, "0", _msg("human", {"content": "real"}))
-        rows = list_messages(con, task_id=1, limit=5, order="desc", include_streaming=False)
+        _add(con, 1, user_message("real"))
+        for seq in range(2, 7):
+            _add(con, seq, assistant_message(f"draft{seq}"), in_context=0)
+        rows = list_messages(con, task_id=1, limit=5, order="desc", in_context_only=True)
         assert [r["text"] for r in rows] == ["real"]
 
-    # 目的：run_id 过滤与 task_id 联合，确认不串行到其它 run。潜在缺陷：run 过滤被忽略。
+    # 目的：run_id 过滤；不带 run_id 时含继承来的 run_id 为空的行。潜在缺陷：run 过滤失效或继承行被丢。
     def test_run_id_scoping(self, con: sqlite3.Connection) -> None:
-        _add(con, 1, 1, 1, 0, _msg("human", {"content": "r1"}))
-        _add(con, 1, 2, 2, 0, _msg("human", {"content": "r2"}))
-        rows = list_messages(con, task_id=1, run_id=2, limit=10)
-        assert [r["text"] for r in rows] == ["r2"]
+        _add(con, 1, user_message("inherited"), run=None)
+        _add(con, 2, user_message("r1"), run=1)
+        _add(con, 3, user_message("r2"), run=2)
+        assert [r["text"] for r in list_messages(con, task_id=1, run_id=2, limit=10)] == ["r2"]
+        assert len(list_messages(con, task_id=1, limit=10)) == 3
+
+    # 目的：多段 content 只拼文本段，assistant 行带 finish_reason 与 usage，tool 行带卡片状态与错误。
+    # 潜在缺陷：多模态消息正文丢失，或角色专属 metadata 串到别的角色。
+    def test_describe_fields_by_role(self, con: sqlite3.Connection) -> None:
+        _add(con, 1, {"role": "user", "content": [{"type": "text", "text": "看图"}, {"type": "image_url", "image_url": {"url": "x"}}]}, {"kind": "user_input"})
+        _add(con, 2, assistant_message("", ("c1", "read_file", "{not json")), {"finish_reason": "tool_calls", "usage": {"total_tokens": 3}})
+        _add(con, 3, tool_message("c1", "boom"), {"status": "failed", "error": "文件不存在"})
+        user, assistant, tool = list_messages(con, task_id=1, limit=10)
+        assert user["text"] == "看图"
+        assert (assistant["kind"], assistant["usage"]) == ("tool_calls", {"total_tokens": 3})
+        assert assistant["tool_calls"] == [{"id": "c1", "name": "read_file", "args": "{not json"}]
+        assert (tool["tool_call_id"], tool["tool_status"], tool["error"]) == ("c1", "failed", "文件不存在")
 
 
 # --------------------------------------------------------------------------- #
-# context_statistics：流式草稿计数口径
+# context_statistics：计数口径
 # --------------------------------------------------------------------------- #
 
 
 class TestContextStatistics:
-    """context_statistics 的 is_streaming/include_in_context 计数口径。"""
+    """context_statistics 的 in_context / runs / turns / 分组口径。"""
 
-    # 目的：TEXT 'true' 形态的流式草稿必须计入 streaming_drafts。潜在缺陷：as_bool 未用于计数导致漏计。
-    def test_streaming_drafts_counts_text_true(self, con: sqlite3.Connection) -> None:
-        _add(con, 1, 1, 1, "true", _msg("ai", {"content": "d"}))
-        _add(con, 1, 1, 2, " 1 ", _msg("ai", {"content": "d"}))
-        _add(con, 1, 1, 3, "false", _msg("human", {"content": "h"}))
+    # 目的：TEXT 形态的布尔按 as_bool 计数，excluded = total - in_context。潜在缺陷：TEXT 'false' 被计入上下文。
+    def test_in_context_counts_text_bools(self, con: sqlite3.Connection) -> None:
+        _add(con, 1, assistant_message("d"), in_context="false")
+        _add(con, 2, assistant_message("d"), in_context=" 1 ")
+        _add(con, 3, user_message("h"), {"kind": "user_input"}, in_context="true")
         stats = context_statistics(con, task_id=1)
-        assert stats["streaming_drafts"] == 2
-        assert stats["total"] == 3
+        assert (stats["total"], stats["in_context"], stats["excluded"]) == (3, 2, 1)
 
-    # 目的：by_kind 对损坏 message_json 归为 unknown 且不抛。潜在缺陷：JSON 解析失败导致异常。
-    def test_corrupt_json_is_unknown_kind(self, con: sqlite3.Connection) -> None:
-        _add(con, 1, 1, 1, 0, "{not json")
+    # 目的：runs / turns 去重计数，继承行（run_id 为空）不算 run；user 行按 kind 分组。
+    def test_runs_turns_and_kinds(self, con: sqlite3.Connection) -> None:
+        _add(con, 1, user_message("old"), {"kind": "user_input"}, run=None, turn=1)
+        _add(con, 2, user_message("go"), {"kind": "user_input"}, run=1, turn=2)
+        _add(con, 3, user_message("<system_notice>"), {"kind": "notice"}, run=2, turn=2)
+        _add(con, 4, user_message("from agent"), {"kind": "agent_message"}, run=2, turn=3)
+        _add(con, 5, assistant_message("ok"), run=2, turn=3)
         stats = context_statistics(con, task_id=1)
-        assert stats["by_kind"] == {"unknown": 1}
+        assert (stats["runs"], stats["turns"]) == (2, 3)
+        assert stats["by_role"] == {"user": 4, "assistant": 1}
+        assert stats["by_user_kind"] == {"user_input": 2, "notice": 1, "agent_message": 1}
+
+    # 目的：损坏 message_json 归为 unknown 且不抛。潜在缺陷：JSON 解析失败导致异常。
+    def test_corrupt_json_is_unknown_role(self, con: sqlite3.Connection) -> None:
+        _add(con, 1, "{not json")
+        assert context_statistics(con, task_id=1)["by_role"] == {"unknown": 1}
 
 
 # --------------------------------------------------------------------------- #
-# find_unsettled：残留流式草稿判定
+# find_unsettled：未收敛体检
 # --------------------------------------------------------------------------- #
 
 
 class TestFindUnsettled:
-    """stuck 的残留流式草稿判定。"""
+    """stuck 的活动 run、未结算工具占位与排队积压。"""
 
-    # 目的：终态 run 下 TEXT 'true'/'TRUE'/' 1 ' 草稿必须报出。潜在缺陷：TEXT 真值漏报。
-    @pytest.mark.parametrize("stored", ["true", "TRUE", " 1 ", "1", 1])
-    def test_stale_draft_true_reported(self, con: sqlite3.Connection, stored: object) -> None:
-        _add(con, 1, 1, 1, stored, _msg("ai", {"content": "stale"}))
-        result = find_unsettled(con, limit=50)
-        assert len(result["stale_streaming_drafts"]) == 1
+    # 目的：pending / running 的工具结果行报为未结算占位。潜在缺陷：HITL 等待或重放中的调用漏报。
+    @pytest.mark.parametrize("status", ["pending", "running"])
+    def test_open_placeholder_reported(self, con: sqlite3.Connection, status: str) -> None:
+        _add(con, 1, assistant_message("", ("c1", "t", {})))
+        _add(con, 2, tool_message("c1", "waiting"), {"status": status})
+        [row] = find_unsettled(con, limit=50)["open_tool_placeholders"]
+        assert (row["tool_call_id"], row["tool_status"], row["run_status"]) == ("c1", status, "completed")
+        assert row["is_background"] == 0
 
-    # 目的：TEXT 'false'/'0'/NULL 草稿在终态 run 下不得误报。潜在缺陷：裸比较把假值当流式。
-    @pytest.mark.parametrize("stored", ["false", "0", None, "", "no"])
-    def test_stale_draft_falsey_not_reported(self, con: sqlite3.Connection, stored: object) -> None:
-        _add(con, 1, 1, 1, stored, _msg("human", {"content": "fine"}))
-        result = find_unsettled(con, limit=50)
-        assert result["stale_streaming_drafts"] == []
+    # 目的：已结算的结果行不报。潜在缺陷：把终态卡片当未结算，体检噪声淹没真问题。
+    @pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+    def test_settled_not_reported(self, con: sqlite3.Connection, status: str) -> None:
+        _add(con, 1, tool_message("c1", "done"), {"status": status})
+        assert find_unsettled(con, limit=50)["open_tool_placeholders"] == []
 
-    # 目的：活跃 run（running）下的流式草稿不算残留（run 未终态）。潜在缺陷：把活跃 run 草稿误报为残留。
-    def test_active_run_draft_not_stale(self, con: sqlite3.Connection) -> None:
-        _add(con, 1, 2, 1, "true", _msg("ai", {"content": "live"}))  # run 2 = running
-        result = find_unsettled(con, limit=50)
-        assert result["stale_streaming_drafts"] == []
+    # 目的：带 background 的占位标为后台；user 行即使 metadata 写了 status 也不算工具占位。
+    # 潜在缺陷：后台命令与 HITL 等待分不开，或按 metadata 误判非 tool 行。
+    def test_background_flag_and_role_filter(self, con: sqlite3.Connection) -> None:
+        _add(con, 1, tool_message("bg", "running"), {"status": "pending", "background": {"label": "build"}})
+        _add(con, 2, user_message("x"), {"kind": "user_input", "status": "pending"})
+        [row] = find_unsettled(con, limit=50)["open_tool_placeholders"]
+        assert (row["tool_call_id"], row["is_background"]) == ("bg", 1)
 
-    # 目的：run 不存在（run_id 指向缺失行）的流式草稿算残留。潜在缺陷：LEFT JOIN NULL 分支漏判。
-    def test_orphan_run_draft_is_stale(self, con: sqlite3.Connection) -> None:
-        _add(con, 1, 999, 1, "true", _msg("ai", {"content": "ghost"}))
-        result = find_unsettled(con, limit=50)
-        assert len(result["stale_streaming_drafts"]) == 1
+    # 目的：排队消息按 Task 汇总条数与种类。潜在缺陷：「发了没反应」时看不到外部队列积压。
+    def test_queued_messages_grouped_by_task(self, con: sqlite3.Connection) -> None:
+        add_task(con, title="t2")
+        add_task_message(con, task_id=1, kind="user_input")
+        add_task_message(con, task_id=1, kind="background_result", delivery="immediate")
+        add_task_message(con, task_id=2, kind="system_notice")
+        queued = {q["task_id"]: q for q in find_unsettled(con, limit=50)["queued_messages"]}
+        assert queued[1]["queued"] == 2
+        assert set(queued[1]["kinds"].split(",")) == {"user_input", "background_result"}
+        assert (queued[2]["title"], queued[2]["queued"]) == ("t2", 1)
 
-    # 目的：活跃 run 必须被列出，终态 run 不列出。潜在缺陷：状态白名单错。
+    # 目的：活动 run（running/suspended）列出、终态不列；current_run_id 指向活动 run 的 task 列出。
     def test_active_runs_listed(self, con: sqlite3.Connection) -> None:
+        add_run(con, task_id=1, status="suspended")
+        add_run(con, task_id=1, status="cancelled")
+        con.execute("UPDATE tasks SET current_run_id = 3 WHERE id = 1")
+        con.commit()
         result = find_unsettled(con, limit=50)
-        ids = {r["id"] for r in result["active_runs"]}
-        assert ids == {2}
+        assert {r["id"] for r in result["active_runs"]} == {2, 3}
+        assert [(t["id"], t["current_run_status"]) for t in result["tasks_with_active_run"]] == [(1, "suspended")]
 
     # 目的：stuck 缺表必须抛带清单的 ValueError。潜在缺陷：裸 OperationalError。
     def test_missing_table_raises(self) -> None:
@@ -434,456 +407,83 @@ class TestFindUnsettled:
 
 
 # --------------------------------------------------------------------------- #
-# summarize_tool_calls：配对回归
+# summarize_tool_calls：配对
 # --------------------------------------------------------------------------- #
 
 
 class TestToolCallPairing:
-    """工具调用与结果的配对语义。"""
+    """工具调用与结果按 tool_call_id 配对（id 在 Task 内唯一）。"""
 
-    # 目的：无 id 的工具调用不产条目（对齐后端无需配对语义）。潜在缺陷：无 id 调用被渲染成永久 pending。
-    def test_idless_call_no_entry(self, con: sqlite3.Connection) -> None:
-        _add(
-            con,
-            1,
-            1,
-            1,
-            0,
-            _msg("ai", {"content": "", "tool_calls": [{"name": "no_id", "args": {}}]}),
-        )
-        assert summarize_tool_calls(con, task_id=1, limit=50) == []
-
-    # 目的：无 id 与有 id 混合时只产有 id 条目。潜在缺陷：整条 AI 消息被丢弃。
-    def test_mixed_idless_and_ided(self, con: sqlite3.Connection) -> None:
-        _add(
-            con,
-            1,
-            1,
-            1,
-            0,
-            _msg(
-                "ai",
-                {
-                    "content": "",
-                    "tool_calls": [
-                        {"name": "no_id", "args": {}},
-                        {"id": "c1", "name": "ok", "args": {}},
-                    ],
-                },
-            ),
-        )
-        _add(
-            con,
-            1,
-            1,
-            2,
-            0,
-            _msg("tool", {"content": "r", "tool_call_id": "c1", "status": "success"}),
-        )
+    # 目的：无 id / 空 id 的调用不产条目，同一消息里有 id 的调用照常产出。潜在缺陷：无 id 调用被渲染成永久缺结果。
+    def test_idless_and_empty_id_skipped(self, con: sqlite3.Connection) -> None:
+        message = assistant_message("", ("", "e", {}), ("c1", "ok", {}))
+        message["tool_calls"].insert(0, {"type": "function", "function": {"name": "no_id", "arguments": "{}"}})
+        _add(con, 1, message)
+        _add(con, 2, tool_message("c1", "r"), {"status": "completed"})
         rows = summarize_tool_calls(con, task_id=1, limit=50)
-        assert [r["tool_call_id"] for r in rows] == ["c1"]
-        assert rows[0]["status"] == "success"
+        assert [(r["tool_call_id"], r["tool_name"], r["status"]) for r in rows] == [("c1", "ok", "completed")]
 
-    # 目的：空 id 字符串（''）与缺 id 同义，不产条目。潜在缺陷：'' 被当有效 id。
-    def test_empty_string_id_no_entry(self, con: sqlite3.Connection) -> None:
-        _add(
-            con,
-            1,
-            1,
-            1,
-            0,
-            _msg("ai", {"content": "", "tool_calls": [{"id": "", "name": "e", "args": {}}]}),
-        )
-        assert summarize_tool_calls(con, task_id=1, limit=50) == []
+    # 目的：只有调用无结果 => no_result，result_sequence 为 None；与 pending 占位区分。潜在缺陷：缺结果被说成在等待。
+    def test_no_result_when_missing(self, con: sqlite3.Connection) -> None:
+        _add(con, 1, assistant_message("", ("p1", "p", {"x": 1})), turn=3)
+        [row] = summarize_tool_calls(con, task_id=1, limit=50)
+        assert (row["status"], row["result_sequence"], row["background"], row["error"]) == ("no_result", None, None, "")
+        assert (row["args"], row["run_id"], row["turn"], row["request_sequence"]) == ({"x": 1}, 1, 3, 1)
 
-    # 目的：跨三个 run 复用同一 tool_call_id，各自配对自己的结果（FIFO）。潜在缺陷：结果串到后续 run。
-    def test_cross_run_reuse_three_runs(self, con: sqlite3.Connection) -> None:
-        for run, base in ((1, 10), (2, 20), (3, 30)):
-            _add(
-                con,
-                1,
-                run,
-                base,
-                0,
-                _msg(
-                    "ai",
-                    {
-                        "content": "",
-                        "tool_calls": [{"id": "dup", "name": "rp", "args": {"run": run}}],
-                    },
-                ),
-            )
-            _add(
-                con,
-                1,
-                run,
-                base + 1,
-                0,
-                _msg("tool", {"content": f"res-{run}", "tool_call_id": "dup", "status": "success"}),
-            )
-        # run 3 未在基础 schema 中，补一行（显式列名，避免随 schema 列序漂移而失配）
-        con.execute(
-            "INSERT INTO conversation_runs (id, task_id, input_text, agent_id, model_config_id, "
-            "status, created_at, updated_at) "
-            "VALUES (3, 1, 'i', 'a', 1, 'completed', 't', 't')"
-        )
-        con.commit()
-        rows = summarize_tool_calls(con, task_id=1, limit=50)
-        assert [r["result_summary"] for r in rows] == ["res-1", "res-2", "res-3"]
-        assert [r["run_id"] for r in rows] == [1, 2, 3]
+    # 目的：状态与后台记录取结果行 metadata；metadata 无 status 时视为 completed。潜在缺陷：状态来源错。
+    def test_status_from_result_metadata(self, con: sqlite3.Connection) -> None:
+        _add(con, 1, assistant_message("", ("a", "x", {}), ("b", "y", {}), ("c", "z", {})))
+        _add(con, 2, tool_message("a", "bg"), {"status": "pending", "background": {"label": "build"}})
+        _add(con, 3, tool_message("b", ""), {"status": "cancelled"})
+        _add(con, 4, tool_message("c", "plain"))
+        rows = {r["tool_call_id"]: r for r in summarize_tool_calls(con, task_id=1, limit=50)}
+        assert (rows["a"]["status"], rows["a"]["background"]) == ("pending", {"label": "build"})
+        assert rows["b"]["status"] == "cancelled"
+        assert (rows["c"]["status"], rows["c"]["result_sequence"]) == ("completed", 4)
 
-    # 目的：只有调用无结果 => pending，result_sequence 为 None。潜在缺陷：pending 被误判 completed。
-    def test_pending_when_no_result(self, con: sqlite3.Connection) -> None:
-        _add(
-            con,
-            1,
-            1,
-            1,
-            0,
-            _msg("ai", {"content": "", "tool_calls": [{"id": "p1", "name": "p", "args": {}}]}),
-        )
-        rows = summarize_tool_calls(con, task_id=1, limit=50)
-        assert rows[0]["status"] == "pending"
-        assert rows[0]["result_sequence"] is None
+    # 目的：孤立结果（无前置调用）不产条目；结果先于调用时调用保持 no_result。潜在缺陷：伪造调用或错配。
+    def test_orphan_and_result_before_call(self, con: sqlite3.Connection) -> None:
+        _add(con, 1, tool_message("ghost", "orphan"), {"status": "completed"})
+        _add(con, 2, tool_message("lc", "early"), {"status": "completed"})
+        _add(con, 3, assistant_message("", ("lc", "lc", {})))
+        [row] = summarize_tool_calls(con, task_id=1, limit=50)
+        assert (row["tool_call_id"], row["status"]) == ("lc", "no_result")
 
-    # 目的：孤立结果（无前置调用）不产条目，避免伪造调用。潜在缺陷：orphan 被伪造成调用。
-    def test_orphan_result_no_entry(self, con: sqlite3.Connection) -> None:
-        _add(
-            con,
-            1,
-            1,
-            1,
-            0,
-            _msg("tool", {"content": "orphan", "tool_call_id": "ghost", "status": "success"}),
-        )
-        assert summarize_tool_calls(con, task_id=1, limit=50) == []
+    # 目的：run_id 只筛发起调用的 assistant 行，结果行可在别的 run 并入（后台结果在新 Run 回投）。
+    # 潜在缺陷：按结果行 run 筛选，跨 Run 回投的结果丢失。
+    def test_run_filter_by_request_row(self, con: sqlite3.Connection) -> None:
+        _add(con, 1, assistant_message("", ("r1", "first", {})), run=1)
+        _add(con, 2, assistant_message("", ("r2", "second", {})), run=2)
+        _add(con, 3, tool_message("r1", "late"), {"status": "completed"}, run=2)
+        [row] = summarize_tool_calls(con, task_id=1, run_id=1, limit=50)
+        assert (row["tool_call_id"], row["status"], row["result_summary"]) == ("r1", "completed", "late")
 
-    # 目的：结果先于调用（sequence 逆序）时，结果按孤立处理、调用保持 pending。记录契约行为。
-    def test_result_before_call(self, con: sqlite3.Connection) -> None:
-        _add(
-            con,
-            1,
-            1,
-            5,
-            0,
-            _msg("tool", {"content": "early", "tool_call_id": "lc", "status": "success"}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            6,
-            0,
-            _msg("ai", {"content": "", "tool_calls": [{"id": "lc", "name": "lc", "args": {}}]}),
-        )
-        rows = summarize_tool_calls(con, task_id=1, limit=50)
-        assert len(rows) == 1
-        assert rows[0]["status"] == "pending"
-
-    # 目的：配对必须按 (run_id, tool_call_id) 而非仅 tool_call_id —— run1 的调用没有结果、run2 复用
-    # 同一 id 且有结果时，结果只能挂在 run2 的调用上，run1 必须保持 pending。
-    # 潜在缺陷：只按 call_id 配对会把 run2 的结果错挂到 run1（双错：run1 假成功 + run2 假 pending）。
-    def test_run_scoped_pairing_when_earlier_run_has_no_result(
-        self, con: sqlite3.Connection
-    ) -> None:
-        _add(
-            con,
-            1,
-            1,
-            1,
-            0,
-            _msg(
-                "ai",
-                {"content": "", "tool_calls": [{"id": "dup", "name": "run1_call", "args": {}}]},
-            ),
-        )
-        _add(
-            con,
-            1,
-            2,
-            2,
-            0,
-            _msg(
-                "ai",
-                {"content": "", "tool_calls": [{"id": "dup", "name": "run2_call", "args": {}}]},
-            ),
-        )
-        _add(
-            con,
-            1,
-            2,
-            3,
-            0,
-            _msg("tool", {"content": "res-run2", "tool_call_id": "dup", "status": "success"}),
-        )
-        rows = summarize_tool_calls(con, task_id=1, limit=50)
-        by_name = {r["tool_name"]: r for r in rows}
-        assert by_name["run1_call"]["status"] == "pending"
-        assert by_name["run1_call"]["run_id"] == 1
-        assert by_name["run2_call"]["status"] == "success"
-        assert by_name["run2_call"]["result_summary"] == "res-run2"
-
-    # 目的：同一 key 下存在多个未配对调用时按 FIFO 认领（结果与调用一一对应、不错位不错配）。
-    # 潜在缺陷：后写覆盖 / LIFO 会让先到的调用永远 pending、结果整体错位一个。
-    def test_two_pending_same_id_then_two_results_fifo(self, con: sqlite3.Connection) -> None:
-        _add(
-            con,
-            1,
-            1,
-            1,
-            0,
-            _msg("ai", {"content": "", "tool_calls": [{"id": "dup", "name": "call1", "args": {}}]}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            2,
-            0,
-            _msg("ai", {"content": "", "tool_calls": [{"id": "dup", "name": "call2", "args": {}}]}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            3,
-            0,
-            _msg("tool", {"content": "res-for-call1", "tool_call_id": "dup", "status": "success"}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            4,
-            0,
-            _msg("tool", {"content": "res-for-call2", "tool_call_id": "dup", "status": "success"}),
-        )
-        rows = summarize_tool_calls(con, task_id=1, limit=50)
-        assert [(r["tool_name"], r["result_summary"]) for r in rows] == [
-            ("call1", "res-for-call1"),
-            ("call2", "res-for-call2"),
-        ]
-
-    # 目的：多个未配对调用只有部分结果时，最早的若干个被认领，其余保持 pending。
-    # 潜在缺陷：结果被挂到最后创建的调用上，导致完成态调用显示 pending。
-    def test_three_pending_same_id_partial_results(self, con: sqlite3.Connection) -> None:
-        for seq, name in ((1, "c1"), (2, "c2"), (3, "c3")):
-            _add(
-                con,
-                1,
-                1,
-                seq,
-                0,
-                _msg(
-                    "ai", {"content": "", "tool_calls": [{"id": "dup", "name": name, "args": {}}]}
-                ),
-            )
-        _add(
-            con,
-            1,
-            1,
-            4,
-            0,
-            _msg("tool", {"content": "r1", "tool_call_id": "dup", "status": "success"}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            5,
-            0,
-            _msg("tool", {"content": "r2", "tool_call_id": "dup", "status": "success"}),
-        )
-        rows = summarize_tool_calls(con, task_id=1, limit=50)
-        assert [(r["tool_name"], r["status"], r["result_summary"]) for r in rows] == [
-            ("c1", "success", "r1"),
-            ("c2", "success", "r2"),
-            ("c3", "pending", ""),
-        ]
-
-    # 目的：同一 key 下「先失败后成功」的两条结果不得互换（失败判定与结果摘要必须留在各自调用上）。
-    def test_error_then_success_same_id_not_swapped(self, con: sqlite3.Connection) -> None:
-        _add(
-            con,
-            1,
-            1,
-            1,
-            0,
-            _msg("ai", {"content": "", "tool_calls": [{"id": "dup", "name": "first", "args": {}}]}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            2,
-            0,
-            _msg(
-                "ai", {"content": "", "tool_calls": [{"id": "dup", "name": "second", "args": {}}]}
-            ),
-        )
-        _add(
-            con,
-            1,
-            1,
-            3,
-            0,
-            _msg("tool", {"content": "error: boom", "tool_call_id": "dup", "status": "error"}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            4,
-            0,
-            _msg("tool", {"content": "fine", "tool_call_id": "dup", "status": "success"}),
-        )
-        rows = summarize_tool_calls(con, task_id=1, limit=50)
-        assert [(r["tool_name"], r["is_error"], r["result_summary"]) for r in rows] == [
-            ("first", True, "error: boom"),
-            ("second", False, "fine"),
-        ]
-
-    # 目的：error 结果被识别为 is_error（status=='error' 或 content 以 'error:' 开头）。潜在缺陷：失败漏判。
-    @pytest.mark.parametrize(
-        "status,content,expected",
-        [
-            ("error", "dump", True),
-            ("success", "error: bad", True),
-            ("success", "ok", False),
-        ],
-    )
-    def test_error_detection(
-        self, con: sqlite3.Connection, status: str, content: str, expected: bool
-    ) -> None:
-        _add(
-            con,
-            1,
-            1,
-            1,
-            0,
-            _msg("ai", {"content": "", "tool_calls": [{"id": "e1", "name": "e", "args": {}}]}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            2,
-            0,
-            _msg("tool", {"content": content, "tool_call_id": "e1", "status": status}),
-        )
-        rows = summarize_tool_calls(con, task_id=1, limit=50)
-        assert rows[0]["is_error"] is expected
-
-    # 目的：failures_only 只保留 is_error 条目，pending/cancelled 不算失败。潜在缺陷：pending 被当失败。
+    # 目的：failed 带 error 文本；failures_only 只留 failed，cancelled / pending / no_result 不算失败。
     def test_failures_only(self, con: sqlite3.Connection) -> None:
-        _add(
-            con,
-            1,
-            1,
-            1,
-            0,
-            _msg("ai", {"content": "", "tool_calls": [{"id": "ok", "name": "a", "args": {}}]}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            2,
-            0,
-            _msg("tool", {"content": "done", "tool_call_id": "ok", "status": "success"}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            3,
-            0,
-            _msg("ai", {"content": "", "tool_calls": [{"id": "bad", "name": "b", "args": {}}]}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            4,
-            0,
-            _msg("tool", {"content": "error: x", "tool_call_id": "bad", "status": "error"}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            5,
-            0,
-            _msg("ai", {"content": "", "tool_calls": [{"id": "pend", "name": "c", "args": {}}]}),
-        )
+        _add(con, 1, assistant_message("", ("ok", "a", {}), ("bad", "b", {}), ("cx", "c", {}), ("hold", "d", {}), ("lost", "e", {})))
+        _add(con, 2, tool_message("ok", "done"), {"status": "completed"})
+        _add(con, 3, tool_message("bad", "error: x"), {"status": "failed", "error": "权限不足"})
+        _add(con, 4, tool_message("cx", ""), {"status": "cancelled"})
+        _add(con, 5, tool_message("hold", ""), {"status": "pending"})
         rows = summarize_tool_calls(con, task_id=1, limit=50, failures_only=True)
-        assert [r["tool_call_id"] for r in rows] == ["bad"]
+        assert [(r["tool_call_id"], r["error"]) for r in rows] == [("bad", "权限不足")]
 
     # 目的：limit 作用于产出条目数而非 SQL 行。潜在缺陷：limit 下推导致配对不完整。
     def test_limit_counts_entries(self, con: sqlite3.Connection) -> None:
         for i in range(5):
-            _add(
-                con,
-                1,
-                1,
-                10 + i,
-                0,
-                _msg(
-                    "ai", {"content": "", "tool_calls": [{"id": f"c{i}", "name": "t", "args": {}}]}
-                ),
-            )
-        rows = summarize_tool_calls(con, task_id=1, limit=2)
-        assert len(rows) == 2
+            _add(con, 10 + i, assistant_message("", (f"c{i}", "t", {})))
+        assert len(summarize_tool_calls(con, task_id=1, limit=2)) == 2
 
-    # 目的：contains 匹配工具名/参数/结果，忽略大小写。潜在缺陷：命中面过窄。
+    # 目的：contains 匹配工具名/参数/结果，忽略大小写；非法 JSON 参数原样保留。潜在缺陷：命中面过窄或解析异常。
     def test_contains_match(self, con: sqlite3.Connection) -> None:
-        _add(
-            con,
-            1,
-            1,
-            1,
-            0,
-            _msg(
-                "ai",
-                {
-                    "content": "",
-                    "tool_calls": [{"id": "s1", "name": "Search_Files", "args": {"q": "Hello"}}],
-                },
-            ),
-        )
-        _add(
-            con,
-            1,
-            1,
-            2,
-            0,
-            _msg("tool", {"content": "found", "tool_call_id": "s1", "status": "success"}),
-        )
+        _add(con, 1, assistant_message("", ("s1", "Search_Content", {"q": "Hello"}), ("s2", "raw", "{oops")))
+        _add(con, 2, tool_message("s1", "found"), {"status": "completed"})
         assert len(summarize_tool_calls(con, task_id=1, limit=50, contains="search")) == 1
         assert len(summarize_tool_calls(con, task_id=1, limit=50, contains="hello")) == 1
+        assert len(summarize_tool_calls(con, task_id=1, limit=50, contains="FOUND")) == 1
         assert summarize_tool_calls(con, task_id=1, limit=50, contains="nomatch") == []
-
-    # 目的：transport_metadata_json.status 在 tool 消息无 data.status 时兜底。潜在缺陷：状态回落错误。
-    def test_transport_status_fallback(self, con: sqlite3.Connection) -> None:
-        _add(
-            con,
-            1,
-            1,
-            1,
-            0,
-            _msg("ai", {"content": "", "tool_calls": [{"id": "cv", "name": "x", "args": {}}]}),
-        )
-        _add(
-            con,
-            1,
-            1,
-            2,
-            0,
-            _msg("tool", {"content": "", "tool_call_id": "cv"}),
-            tmeta='{"status": "cancelled"}',
-        )
-        rows = summarize_tool_calls(con, task_id=1, limit=50)
-        assert rows[0]["status"] == "cancelled"
+        [raw] = summarize_tool_calls(con, task_id=1, limit=50, contains="raw")
+        assert raw["args"] == "{oops"
 
 
 # --------------------------------------------------------------------------- #

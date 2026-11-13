@@ -57,7 +57,7 @@ class Settings:
     # 主 Agent 的单轮执行预算：保存环境配置后会重载主 Agent profile，下一轮新 Run 使用新值。
     MAIN_AGENT_MAX_STEPS: ClassVar[int] = 300
 
-    # Agent 派生（委派、fork、建 Team）的最大深度：深度达到它的 Task 创建时不给派生工具
+    # Agent 派生（委派、fork）的最大深度：深度达到它的 Task 创建时不给派生工具
     # （``core.tool.task_tool_scope``）。只影响之后新建的 Task，已建出的 Task 工具面不变。
     AGENT_MAX_DERIVATION_DEPTH: ClassVar[int] = 2
 

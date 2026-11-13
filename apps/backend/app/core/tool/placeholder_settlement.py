@@ -69,7 +69,6 @@ def cancel_placeholders(
                     status=status,
                     error=hint,
                     display_data=metadata.display_data,
-                    team_run_id=metadata.team_run_id,
                     background=metadata.background,
                 )
             )

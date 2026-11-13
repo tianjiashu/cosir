@@ -51,7 +51,7 @@ def should_launch(rc: RuntimeContext, state: ReactExecutionState) -> bool:
     「起过」记在持久执行状态 ``title_requested`` 上而不是驱动期的 ``rc.title_branch``：挂起后唤醒、
     重启后恢复都是新驱动，只看驱动期字段会让同一个 Run 重复起标题。
     """
-    # 只改写侧栏对话的标题：子 Agent 与 Team 节点的标题是 Agent / 节点名。
+    # 只改写侧栏对话的标题：子 Agent 的标题是 Agent 名。
     return not state.title_requested and rc.task.task_type in USER_FACING_TASK_TYPES
 
 

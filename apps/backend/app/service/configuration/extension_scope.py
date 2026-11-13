@@ -4,8 +4,8 @@
 ``config/mcp_servers.json``），所以路径、作用域键与「Agent 看到的分层」都从这一个值对象取，
 Skill 目录、MCP 配置、本机测试记录、连接池和目录变更通知不各自拼接。
 
-Agent 看到的是分层合并结果：系统层在下、当前 workspace 层在上，同名时 workspace 覆盖系统
-（与 Agent Team 的规则一致）。合并规则由各能力的读取模块实现，这里只提供层序。
+Agent 看到的是分层合并结果：系统层在下、当前 workspace 层在上，同名时 workspace 覆盖系统。
+合并规则由各能力的读取模块实现，这里只提供层序。
 """
 
 from __future__ import annotations

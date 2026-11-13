@@ -394,7 +394,7 @@ class RuntimeMessageContextManager:
 
         HITL 执行结果另行追加为消息，等待占位仍是模型协议上的结果；这里只把占位的卡片状态推到
         终态，历史前缀因此不变。结果没有带
-        展示数据时沿用占位的（HITL 卡片由占位的展示数据决定，如 Agent Team 的方案预览）。传入
+        展示数据时沿用占位的（HITL 卡片由占位的展示数据决定，如交接的页面预览）。传入
         ``session`` 时加入调用方事务（接收决定时与确认同一事务把占位推到 ``running``）。
 
         异常:
@@ -419,7 +419,6 @@ class RuntimeMessageContextManager:
                 status=metadata.status,
                 error=metadata.error,
                 display_data=metadata.display_data or previous.display_data,
-                team_run_id=metadata.team_run_id or previous.team_run_id,
                 background=metadata.background or previous.background,
             )
         self.context_store.replace_message(

@@ -33,7 +33,7 @@ export function attentionDescription(artifact: ToolArtifact): string | null {
  * （设计 §5.8：需要人动作、可能停留很久，深浅主题都要第一眼看到）。
  *
  * 交接：「打开面板」按 snapshot `handoffs` 里的登记把资源摆到用户面前；「交还」按工具调用寻址，后端重启后
- * 登记表为空、面板里没有提示条，这里仍是交还的唯一入口。Team 审批是独立调用行，不走这里。其余等待决定的
+ * 登记表为空、面板里没有提示条，这里仍是交还的唯一入口。其余等待决定的
  * 工具只有标题与说明（决定由各自的界面给出）。
  */
 export function AttentionCard({ taskId, toolCallId, toolName, args, artifact, interactive = true }: AttentionCardProps) {

@@ -1,6 +1,6 @@
 # Agent 权限档位与沙箱
 
-> 状态：2026-11-09 设计稿，未实施；11-13 按 Codex 新版修订（规则模型、提权保留信任根、屏蔽后端端口、缓存可写、Seatbelt 绕过点、终端优先分期），档位定为三个内置档、按回合生效、派生可收窄档位与工作区范围（§3），审批改为回合级（§5.5）、子 Agent 越界冒泡给用户（§5.4），Agent 消息不带档位、档位变化以通知告知（§3），自动审查与自定义档位列为待做（§11）。取代同日 DeepSeek 起草的「终端沙箱」稿与更早的 srt sidecar 稿（git 历史）。
+> 状态：2026-11-09 设计稿，未实施；11-13 按 Codex 新版修订（规则模型、提权保留信任根、屏蔽后端端口、缓存可写、Seatbelt 绕过点、终端优先分期），档位定为三个内置档、按回合生效、派生可收窄档位与工作区范围（§3），审批改为回合级（§5.5）、子 Agent 越界冒泡给用户（§5.4），Agent 消息不带档位、档位变化以通知告知（§3），自动审查与自定义档位列为待做（§11）；11-13 随 Agent Team 移除删去 Team 节点相关设计。取代同日 DeepSeek 起草的「终端沙箱」稿与更早的 srt sidecar 稿（git 历史）。
 > 前置：[`terminal-ownership-redesign.md`](terminal-ownership-redesign.md) **已实施**——Agent 没有常驻 shell，后端起用户进程只有 Terminal Worker 一处（`tools/terminal_runtime/worker_client.py`），Agent 的命令只经 `execute_terminal` 的执行模式。
 > 参考：Codex（`codex-rs`，HEAD `5045589550`）、sandbox-runtime（commit `98a4016`），借鉴清单见附录。
 
@@ -42,9 +42,9 @@
 
 11-13 定：档位按**回合**生效，不随 Run 冻结。用户想收紧或放宽，下一条消息就生效，不用等当前 Run 结束（Run 可能因等后台结果挂起很久）；Codex 的权限同样是会话设置，改动从后续回合起生效（`protocol/src/protocol.rs` `ThreadSettingsOverrides`）。
 
-- **档位是输入的事实，不是 Run 的发起配置**：用户输入与派生 Task 的首条输入（任务说明，§3.1）的消息体带 `permission_mode`（三个内置档 id 之一），并入时写进该行 metadata；其余 Agent 消息（`send_message`、追加消息、汇报、Coordinator 的后续调度输入）**不带档位**——派生 Task 已由创建时的档位与上级链两层约束，平级 Task 之间的「借道提权」属于注入威胁，本期不防（§1）；若让汇报携带 min 档位，主 Task 收到只读子 Agent 的汇报就会被降为只读。档位不进 `RunLaunch` / `ConversationRunOptions`（`core/workflow/message_queue/message_bodies/user_input.py:31`）——发起配置在活动 Run 期间锁定，档位不锁。
+- **档位是输入的事实，不是 Run 的发起配置**：用户输入与派生 Task 的首条输入（任务说明，§3.1）的消息体带 `permission_mode`（三个内置档 id 之一），并入时写进该行 metadata；其余 Agent 消息（`send_message`、追加消息、汇报）**不带档位**——派生 Task 已由创建时的档位与上级链两层约束，平级 Task 之间的「借道提权」属于注入威胁，本期不防（§1）；若让汇报携带 min 档位，主 Task 收到只读子 Agent 的汇报就会被降为只读。档位不进 `RunLaunch` / `ConversationRunOptions`（`core/workflow/message_queue/message_bodies/user_input.py:31`）——发起配置在活动 Run 期间锁定，档位不锁。
 - **Task 自身档位 = context 里最近一条并入的、带档位的输入**。用户输入总是开启回合（`RuntimeMessageContextManager._opens_turn`），所以对用户而言就是「从这条消息开启的回合起生效」；没有输入开头的回合（唤醒、结果续跑）沿用上一条输入的档位。事实只在 context 一处：重启后续跑、撤回回合（行移出上下文，档位回到更早的输入）、fork（行随 metadata 复制）都自然正确，Run 上不另存。
-- **生效档位 = min(自身档位, 上级的生效档位)**，沿上级链递归（上级：委派与 Agent fork 是派生方 `TaskRecord.deriver_id()`，Team 节点是主 Task；侧栏 Task 没有上级）。上级收紧时下级的下一次调用即按收紧后判定，不用等消息；上级放宽不会超过下级自身档位。门禁每次调用读一次上级链（深度受派生上限约束），不在下级缓存上级的档位。
+- **生效档位 = min(自身档位, 上级的生效档位)**，沿上级链递归（上级：委派与 Agent fork 的派生方 `TaskRecord.deriver_id()`；侧栏 Task 没有上级）。上级收紧时下级的下一次调用即按收紧后判定，不用等消息；上级放宽不会超过下级自身档位。门禁每次调用读一次上级链（深度受派生上限约束），不在下级缓存上级的档位。
 - **两处的分工**：当前驱动的**策略快照**（只读值对象，放进 `RuntimeContext`，经 `ToolExecutionContext` 交给门禁与工具）只保存**自身档位**，`prepare_input` 并入带档位的输入后替换；**生效档位**在每次调用时由门禁计算——取快照里的自身档位与上级链里的最严者，再展开成规则交给门禁判定与 worker 起进程。审批后的重放同样按执行时的生效档位。已在运行的命令进程不追溯（沙箱在起进程时定死），收紧档位不停它们。
 - **前端**：档位选择器不随活动 Run 锁定；运行中发出的消息照常排队，带的是发出时选的档位，并入时生效。选择器的「上次选择」是 localStorage 偏好（同模型选择）；首次默认「工作区内修改」。
 - 批准范围（「本 Task 内允许」）记下批准时的档位，切换档位不清空，但只在当前生效档位不比它更严时生效（§5.3）。
@@ -55,7 +55,7 @@
 
 ### 3.1 派生：创建时指定档位与工作区范围
 
-委派（`delegate_task`）、Agent fork（`fork_task`）与 Team（`agent_team` 的每个 `node_goals[]` 条目）都加两个可选参数，**只能收窄、缺省继承**；「发起方」对 Team 节点是提出方案的主 Task：
+委派（`delegate_task`）与 Agent fork（`fork_task`）各加两个可选参数，**只能收窄、缺省继承**：
 
 | 参数 | 取值 | 缺省 | 约束（工具执行时校验，越界返回错误并写明上限） |
 |---|---|---|---|
@@ -66,11 +66,7 @@
 - **工作区范围**是 Task 级事实，创建时定、之后不变：`TaskExtra.workspace_scope`（相对工作区根的路径，缺省 `None` 即整个工作区；侧栏 Task 恒为 `None`）。上级的范围也不可变，所以「⊆ 上级」只在创建时校验一次。
   - 消费方：沙箱规则里的 `:workspace` 展开为范围根（§8）；写类文件工具的工作区边界（P1 前是 `PathResolver` 的 containment 根，P1 后归门禁）；`execute_terminal` 缺省 `workdir`。三者都从 `ToolExecutionContext` 取，装配点只有一处（`core/workflow/node_helper/tool_batch_runner.py:171`），新增 `scope_root` 字段与 `workspace_root` 并列。
   - **不变的**：相对路径仍相对工作区根解析，工作区 `.cosir`（附件、下载、日志）仍在工作区根——Task 树与界面（链接、文件面板）共用一套坐标，范围只收窄可写区与缺省目录，不是另一个工作区。读不受范围限制（读本来就是全盘）。
-- **Team 节点**按节点给（`node_goals[]` 与节点目标同处，`core/tool/multi_agent/args/agent_team_args.py:43`）：
-  - 提出方案时由 `agent_team_preparation_service` 用同一个校验函数逐节点检查上限，与委派共用、不另写；通过后冻结进节点运行快照 `AgentTeamRunRuntime`（`models/agent_team/state/agent_team_run_components.py:37`），审批卡逐节点展示档位与范围，用户批准的就是这份。
-  - 只随这一次 TeamRun 走，**不写进 Team 配置文件**：同一个 Team 模板换个任务、换个子目录照样用；Team 配置仍只描述角色与流程。
-  - 批准后 Coordinator 建节点 Task 时写入 `TaskExtra.workspace_scope`，节点的首条输入带快照里冻结的档位；Coordinator 后续调度的输入不带档位，节点沿用自身档位，不会被放宽。主 Task 在待批或执行期间收紧，按上级链规则即时生效，不用重新审批。
-- 子 Agent 经档位通知（见下）得知自身的档位与范围；委派与分叉行、Team 审批卡的展示数据带上二者（`delegation-result` / `fork-task-result` / `agent-team-approval`），用户在时间线上看得到「只读 · packages/api」。
+- 子 Agent 经档位通知（见下）得知自身的档位与范围；委派与分叉行的展示数据带上二者（`delegation-result` / `fork-task-result`），用户在时间线上看得到「只读 · packages/api」。
 - 批准范围（grant）不随派生继承。
 
 
@@ -81,7 +77,7 @@
 | 通道 | 执行点 | 本期规则 |
 |---|---|---|
 | 读类文件工具（`read_file` / `search_content` / `find_files` / `list_directory` / `read_image`） | 工具自身（`PathResolver`） | 受保护读路径一律拒绝，与档位无关；目录类工具从上层目录遍历时跳过受保护子树 |
-| 写类文件工具（`write_file` / `patch_write` / `apply_patch` / `delete_file` / `move_file`） | **准入门禁** | 目标在可写区 → 放行；否则问用户（子 Agent 与 Team 节点同样冒泡给用户，§5.4） |
+| 写类文件工具（`write_file` / `patch_write` / `apply_patch` / `delete_file` / `move_file`） | **准入门禁** | 目标在可写区 → 放行；否则问用户（子 Agent 同样冒泡给用户，§5.4） |
 | `execute_terminal` | **OS 沙箱**（worker 起进程时） | 按策略起进程；调用显式请求越权时先问（§5） |
 | MCP 工具 | 准入门禁 | 「仅可查看」下问；其余档放行。MCP 服务进程本身不进沙箱 |
 | 读用户终端、`terminal_write` 填入、回复里的命令块 | — | 都不执行任何东西（执行由人触发），不受档位约束 |
@@ -106,7 +102,7 @@
 
 现有 HITL：工具声明 `user_decision="execute"` → 首次调用返回等待占位 → 用户决定入队 → `prepare_input` 确认决定后绕过模型重放原调用。等待机制（占位、决定入队、重放）能跨重启，权限审批照用这一套。
 
-**问题**：「要不要问、问完怎么办」今天全靠工具名查 `ToolDefinition`，消费方散在四处——重放还是交给模型（`core/workflow/nodes/prepare_input_node.py:107-114`）、决定载荷校验（`service/conversation/tool_decision_service.py:66`）、单独成批（`core/workflow/node_helper/tool_batch_runner.py:109`）、是否发布 running（`core/tool/execute/tool_executor.py:89` 以「有没有 `user_decision`」判断是否重放）。权限审批的工具本身（如 `execute_terminal`）不是 HITL 工具，查定义查不出它在等审批，照搬就要在四处各加一个「或」。
+**问题**：「要不要问、问完怎么办」今天全靠工具名查 `ToolDefinition`，消费方散在三处——重放还是交给模型（`core/workflow/nodes/prepare_input_node.py:107-114`）、单独成批（`core/workflow/node_helper/tool_batch_runner.py:109`）、是否发布 running（`core/tool/execute/tool_executor.py:89` 以「有没有 `user_decision`」判断是否重放）。权限审批的工具本身（如 `execute_terminal`）不是 HITL 工具，查定义查不出它在等审批，照搬就要在三处各加一个「或」；权限审批还要带载荷（批准范围），而决定载荷的校验已随 Team 一起删除（`decision_model`），要在等待事项上重新引入。
 
 **成熟做法**：Codex 把两件事分开——权限审批归执行管线，工具只声明需要什么（`Approvable` trait，`core/src/tools/sandboxing.rs:331-363`），由编排器去问、等、缓存，工具看不到「在等审批」；工具自己的用户交互是工具（`core/src/tools/handlers/request_user_input.rs`）。Claude Code 同样分开（权限规则与提示 vs `AskUserQuestion` 工具）。
 
@@ -114,7 +110,7 @@
 
 | 取值 | 契约来源 | 决定载荷 | 决定后 | 有效期（§5.5） |
 |---|---|---|---|---|
-| 工具交互（`agent_team`、`browser_handoff`） | 工具的 `ToolDefinition` | 工具的 `decision_model` | 按工具声明：重放（工具经 `ToolExecutionContext.user_decision` 拿到决定）或交给模型 | 工具声明 |
+| 工具交互（`browser_handoff`） | 工具的 `ToolDefinition` | 无 | 按工具声明：重放（工具经 `ToolExecutionContext.user_decision` 拿到决定）或交给模型 | 工具声明 |
 | 权限审批 | 固定 | `{scope: "once" \| "task"}` | 经门禁带着批准重放；工具照常执行，看不到这次决定（提权体现在交给 worker 的规则上） | 到下一回合 |
 
 1. 门禁判定「要决定」→ 执行器直接返回等待占位（`tool_awaiting_decision`），等待事项为权限审批，展示数据是通用审批卡（`kind: "permission-request"`：动作、目标、理由、发起的 Task）。
@@ -135,20 +131,20 @@
 - grant 归进程内 `PermissionGrantRegistry`（按 `task_id`），不持久化、不跨重启，Task 删除时清理——与交接登记表同类。
 - 不做「永久记住」与永久规则：本期没有权限配置文件（§7），放宽只靠切档位或单次批准。
 
-### 5.4 子 Agent 与 Team 节点越界：冒泡给用户（11-13 定）
+### 5.4 子 Agent 越界：冒泡给用户（11-13 定）
 
-子 Agent 与 Team 节点没有侧栏对话（`models/task_kind.py:54-55` 的 `user_facing=False`），但越界时**不直接拒绝**，审批照常挂在发起调用的子 Task 上，由用户作答：
+委派的子 Agent 没有侧栏对话（`models/task_kind.py` 的 `user_facing=False`），但越界时**不直接拒绝**，审批照常挂在发起调用的子 Task 上，由用户作答：
 
 - **为什么不「报回上级」**：成熟产品在有人值守时都冒泡给用户（Codex 把非当前线程的审批浮到当前视图并标明来源，`tui/src/app/thread_routing.rs:1456`；Claude Code 后台子 Agent 改过三次，现行也是冒泡）；「拒绝 → 汇报 → 上级重做」费时易走样，Claude Code 有子 Agent 被拒后绕路、审查了错误分支却报告无问题的 issue。**上级 Agent 不能替用户批准**——各家都不允许，Agent 消息不算用户的批准。
-- **在哪里批**：子 Run 挂起等待；委派行与 Team 执行卡按应用级任务状态推送显示「等你操作」（现有链路），点开在工作台的子 Task 里作答。审批卡写明发起的 Task。
+- **在哪里批**：子 Run 挂起等待；委派行按应用级任务状态推送显示「等你操作」（现有链路），点开在工作台的子 Task 里作答。审批卡写明发起的 Task。
 - **不改 `TASK_KINDS`**：「非侧栏 Task 不承接需要用户界面的工具」管的是工具 schema；权限审批由门禁发起、不是工具，不进子 Task 的工具列表。要补的只是工作台能渲染审批卡。
-- **上级要收到信号**：`task_status` 与 `wait_messages` 能看到「派生 Task 在等用户批准」，上级不会傻等，Team 执行卡能说清卡在哪个节点。Codex 的子 Agent 状态没有这一项（`protocol/src/protocol.rs:2074-2090`），Claude Code 有「后台子 Agent 卡在提示上、父会话收不到信号、流程挂几小时」的 issue。
+- **上级要收到信号**：`task_status` 与 `wait_messages` 能看到「派生 Task 在等用户批准」，上级不会傻等。Codex 的子 Agent 状态没有这一项（`protocol/src/protocol.rs:2074-2090`），Claude Code 有「后台子 Agent 卡在提示上、父会话收不到信号、流程挂几小时」的 issue。
 - **有效期**按 §5.5：上级给子 Task 发了新的 Agent 消息、开启新回合时，旧审批作废——上级已经换了指示。
 - **无人值守时直接拒绝**不做开关：它就是自定义档位的「越界时拒绝」（§11 待做）。
 
 ### 5.5 审批的有效期：回合级（11-13 定）
 
-现状 HITL 是 Task 级：等待中的决定在 Run 停止、失败、完成、重启后仍可决定，到达后在当时的 Run 里重放原调用。现有 HITL 工具只有 `browser_handoff` 与 `agent_team`（都是 `execute` 类），权限审批是第三个。Task 级有两个问题：
+现状 HITL 是 Task 级：等待中的决定在 Run 停止、失败、完成、重启后仍可决定，到达后在当时的 Run 里重放原调用。现有 HITL 工具只有 `browser_handoff`（`execute` 类），权限审批是第二个。Task 级有两个问题：
 
 - **过时的批准照样执行**：第 3 回合申请的提权，用户在第 7 回合才点批准，命令在第 7 回合重放，Agent 早已换了做法；档位按回合生效后还多一层「按哪个回合的档位跑」的歧义。
 - **审批挂着时用户的新消息被卡住**：等待占位让 Run 挂起（`core/tool/results/tool_awaiting_decision.py:33`），挂起时 `next_run` 不唤醒（`core/workflow/message_queue/dispatch_policy.py:90-94`），用户说的话在队列里等到他去批卡或点「立即发送」。
@@ -157,10 +153,10 @@
 
 | 有效期 | 适用 | 何时结束 |
 |---|---|---|
-| 到下一回合 | 权限审批、`agent_team` 方案审批——问的是「此刻做不做这件事」 | 用户决定；撤回所在回合；**下一回合开启**。Run 停止、失败、重启不结束（所在回合仍是最新回合，停止后照样能批） |
+| 到下一回合 | 权限审批——问的是「此刻做不做这件事」 | 用户决定；撤回所在回合；**下一回合开启**。Run 停止、失败、重启不结束（所在回合仍是最新回合，停止后照样能批） |
 | 到交还 | `browser_handoff`——一段租约，用户可能边登录边发消息问问题 | 交还、撤回所在回合、删除 Task（现状不变） |
 
-- **新回合开启时**：更早回合里仍在等待的「到下一回合」审批一律结算为「未批准：用户发了新消息」，占位推到终态，结果写进原调用，模型在新回合看到；待批的 TeamRun 收敛为驳回。结算放在开启回合的同一事务里（`prepare_input` 并入开启回合的输入时），与「确认决定 + 占位推到 running」互斥，迟到的决定照旧以 `DECISION_NOT_AWAITED` 拒绝。
+- **新回合开启时**：更早回合里仍在等待的「到下一回合」审批一律结算为「未批准：用户发了新消息」，占位推到终态，结果写进原调用，模型在新回合看到。结算放在开启回合的同一事务里（`prepare_input` 并入开启回合的输入时），与「确认决定 + 占位推到 running」互斥，迟到的决定照旧以 `DECISION_NOT_AWAITED` 拒绝。
 - **新消息即答复**：Run 挂起、且只在等「到下一回合」的审批时，用户输入唤醒同一个 Run、开启新回合，旧审批随之作废——发新消息就是「我不批，我想说别的」（Claude Code、Codex 同此：权限提示期间输入新指令即拒绝）。现规则「挂起时 `next_run` 不唤醒」是有意定的，实施前先查清原因，并定 Run 挂起在等后台结果时要不要一起改（Q11）。
 - **不受影响**：「本 Task 内允许」（§5.3）是已经给出的授权，不是待回答的问题，仍按 Task；Run 级不考虑——Run 对用户不可见（Transport 只按 Task + 回合），一个 Run 也可以有多个回合。
 
@@ -205,7 +201,7 @@ sandbox: "unrestricted"
 - **Windows**（P4）：Codex 的非提权受限令牌**做不到禁读**（`windows-sandbox-rs/src/lib.rs:745-753`），守不住 `.env`，断网只靠环境变量；专用用户与 MXC 容器要管理员 setup。P4 前 Windows 按「沙箱不可用」处理，届时再评估。
 - **Linux**：不是桌面目标，不做。
 
-**沙箱不可用**（Windows 未就绪、`sandbox-exec` 缺失、包装失败）：沙箱档下每条 `execute_terminal` 都按「要决定」处理，审批卡写明「此平台沙箱不可用，这条命令将不受限制地运行」。不裸跑，也不让终端整体不可用。子 Agent 与 Team 节点的每条命令也冒泡给用户（§5.4），P4 前在 Windows 上体验差但可用。
+**沙箱不可用**（Windows 未就绪、`sandbox-exec` 缺失、包装失败）：沙箱档下每条 `execute_terminal` 都按「要决定」处理，审批卡写明「此平台沙箱不可用，这条命令将不受限制地运行」。不裸跑，也不让终端整体不可用。子 Agent 的每条命令也冒泡给用户（§5.4），P4 前在 Windows 上体验差但可用。
 
 ## 9. 被拦之后
 
@@ -223,7 +219,7 @@ sandbox: "unrestricted"
 
 **自动审查（智能审查）**：引入「谁来批」维度。
 
-- 位置：门禁「要决定」后，审批人是模型时把请求交给审查器而不是挂等待占位；子 Agent 与 Team 节点的冒泡审批（§5.4）同样可由它作答。照 Codex，审查依据是根 Task 里用户的原话，不是上级 Agent 的转述（`core/src/agent/control/user_authorization.rs:256-318`）。
+- 位置：门禁「要决定」后，审批人是模型时把请求交给审查器而不是挂等待占位；子 Agent 的冒泡审批（§5.4）同样可由它作答。照 Codex，审查依据是根 Task 里用户的原话，不是上级 Agent 的转述（`core/src/agent/control/user_authorization.rs:256-318`）。
 - 审查器：只读、无工具的单次模型调用；输入是动作、目标、理由与最近对话摘要；输出严格 JSON `{risk_level, user_authorization, outcome: allow|deny, rationale}`（照 Codex `ext/guardian-reviewer/src/assessment.rs:13-24`）。
 - **失败处理（fail-closed）**：超时、解析失败一律拒绝；有用户界面的 Task 是否回落给用户届时再定（Codex 不回落，因其「替我批」档默认用户不在场）。熔断：同一回合连续拒绝 3 次中断（Codex `circuit_breaker.rs:3-7`）。不做「记住」。
 - 结论与理由落日志、在审批卡位置回看。它看到的命令是模型写的——**只防失误，不防注入**，写进档位说明。
@@ -249,7 +245,6 @@ sandbox: "unrestricted"
 - **按命令归因的违规监听**（§9）。
 - **自动审查、自定义档位**：列为待做（§11）。
 - **Linux**。
-- **在 Team 配置文件里给节点预设档位与范围**：档位与范围属于这一次任务，随 `agent_team` 调用给、经审批冻结（§3.1）；模板化等出现需求再说。
 - **派生后修改下级的工作区范围**：范围创建时定死，「⊆ 上级」因此只需校验一次；要换范围就新派生一个。
 - **切换档位时追溯运行中的命令**：沙箱在起进程时定死，收紧档位不停已在运行的命令；需要时用户自己停止（§3）。
 
@@ -297,8 +292,8 @@ sandbox: "unrestricted"
 | 期 | 内容 | 验证 | 依赖 |
 |---|---|---|---|
 | S1 | 规则模型与受保护路径事实源；Rust `sandbox/`（macOS Seatbelt）；`StartExec.sandbox` 必填；输入带 `permission_mode`，先只有「工作区内修改」「完全权限」两档、随回合切换，输入框选择器（不随活动 Run 锁定）；派生 Task 继承上级档位、上级链取 min、档位通知（§3）；提示词按策略生成；被拦提示。越界的出路暂为回复里的命令块（前置稿 ③）或下个 Run 换档；Windows 维持现状、提示词如实写「未沙箱」 | Rust 在 macOS 上的集成测试：工作区外写失败、`mkdir <ws>/.cosir` 失败、`mv .git` 失败、读系统 `.cosir/.env` 失败、连后端端口失败、`npm i` 成功 | 无 |
-| S2 | `sandbox: escalated` 与提权策略；门禁逐次判定「要决定」（Q4）；等待事项值对象（§5.2）、权限审批占位、通用审批卡、批准范围与 grant 登记（记档位、只属发起 Task）；子 Task 冒泡审批与上级可见的「在等用户批准」（§5.4）；审批有效期声明与新回合结算、新消息唤醒等审批的 Run（§5.5，`agent_team` 一并切换）；不可用平台（含 Windows）退化为逐条审批 | 后端单测：提权批准后工作区外写成功、`.env` 仍不可读；新消息使更早回合的审批与待批 TeamRun 作废、迟到决定被拒、交接不受影响、停止后仍可批；收紧档位后 grant 不放行；子 Agent 越界挂审批、`task_status` 报「在等用户批准」；E2E（无头）：审批卡批准与拒绝 | S1 |
-| S3 | 派生参数 `permission_mode` / `workspace_scope`（§3.1，委派、Agent fork、Team 节点；Team 冻结进 `AgentTeamRunRuntime`、审批卡展示）；`TaskExtra.workspace_scope` 与 `ToolExecutionContext.scope_root`；沙箱 `:workspace`、写类文件工具边界、`execute_terminal` 缺省 `workdir` 改读范围根；子 Agent 提示词与委派 / 分叉行展示档位与范围 | 后端单测：超出上限的档位与范围被拒（委派与 Team 方案各一）、缺省继承、Coordinator 后续调度不放宽节点档位；范围外写失败（命令与 `write_file` 各一）；上级收紧后下级下一次调用按收紧判定 | S1 |
+| S2 | `sandbox: escalated` 与提权策略；门禁逐次判定「要决定」（Q4）；等待事项值对象（§5.2）、权限审批占位、通用审批卡、批准范围与 grant 登记（记档位、只属发起 Task）；子 Task 冒泡审批与上级可见的「在等用户批准」（§5.4）；审批有效期声明与新回合结算、新消息唤醒等审批的 Run（§5.5）；不可用平台（含 Windows）退化为逐条审批 | 后端单测：提权批准后工作区外写成功、`.env` 仍不可读；新消息使更早回合的审批作废、迟到决定被拒、交接不受影响、停止后仍可批；收紧档位后 grant 不放行；子 Agent 越界挂审批、`task_status` 报「在等用户批准」；E2E（无头）：审批卡批准与拒绝 | S1 |
+| S3 | 派生参数 `permission_mode` / `workspace_scope`（§3.1，委派、Agent fork）；`TaskExtra.workspace_scope` 与 `ToolExecutionContext.scope_root`；沙箱 `:workspace`、写类文件工具边界、`execute_terminal` 缺省 `workdir` 改读范围根；子 Agent 提示词与委派 / 分叉行展示档位与范围 | 后端单测：超出上限的档位与范围被拒、缺省继承；范围外写失败（命令与 `write_file` 各一）；上级收紧后下级下一次调用按收紧判定 | S1 |
 | P0 | 读类工具（含搜索、查找、列目录的遍历）与 upload 拒读系统 `.cosir`，消费 S1 的受保护路径 | 单测：`read_file` 读 `.env` 被拒、读 `skills/` 放行；从用户主目录 `search_content` 不返回 `.cosir` 内的命中 | S1 |
 | P1 | 「仅可查看」档；门禁第四段（写类工具、MCP）；`PathResolver` 的工作区 containment 移交门禁 | 后端单测覆盖三档 × 写工作区内 / 外 | S2 |
 | P4 | Windows 沙箱选型与实现 | 实机验证 | S2 |
@@ -307,16 +302,16 @@ sandbox: "unrestricted"
 
 - **精简**：`PathResolver` 的工作区 containment 移交门禁（约 −40）；`system_prompt_builder` 的「not sandboxed」段落替换（约 −8）；`_requires_user_decision` 并入门禁判定（约 −10）。合计约 −60。
 - **新增**：
-  - 后端 `app/core/permission/`（规则模型与预设、策略快照、受保护路径、grant 登记，约 +450）；门禁第四段与工具访问声明（约 +200）；HITL 等待事项值对象与四处消费方改造（约 +100）；子 Task 冒泡审批与上级信号（约 +120）；审批有效期声明、新回合结算与挂起唤醒（约 +120）；`execute_terminal` 参数与沙箱字段、被拦判断（约 +160）；派生首条输入档位、上级链取 min、档位通知（约 +80）；派生参数、`workspace_scope` 校验与 `scope_root` 装配、提示词与展示（约 +180）；Team 节点参数、快照冻结与审批卡展示（约 +120）。
+  - 后端 `app/core/permission/`（规则模型与预设、策略快照、受保护路径、grant 登记，约 +450）；门禁第四段与工具访问声明（约 +200）；HITL 等待事项值对象、三处消费方改造与决定载荷校验（约 +120）；子 Task 冒泡审批与上级信号（约 +120）；审批有效期声明、新回合结算与挂起唤醒（约 +120）；`execute_terminal` 参数与沙箱字段、被拦判断（约 +160）；派生首条输入档位、上级链取 min、档位通知（约 +80）；派生参数、`workspace_scope` 校验与 `scope_root` 装配、提示词与展示（约 +180）。
   - Rust `apps/terminal-worker/src/sandbox/`（`mod.rs` 线上类型与 argv 改写约 +120、`seatbelt.rs` 规则编译约 +250、`seatbelt_base.sbpl` 约 +100、`protocol.rs` / `exec.rs` 约 +50、集成测试约 +200；Windows 另计）。
   - 前端：输入框档位选择器、通用审批卡（含工作台子 Task 内的渲染与来源标注，约 +500）。
-- **净变化**：约 +2680（不含 Windows 与 §11 待做；其中 S1 + S2 约 +2010，S3 约 +320）；实施时按阶段以 `git diff --stat` 对账。
+- **净变化**：约 +2580（不含 Windows 与 §11 待做；其中 S1 + S2 约 +2030，S3 约 +200）；实施时按阶段以 `git diff --stat` 对账。
 - **命名**：
   - `app/core/permission/`（新目录）——正向：找「权限、档位、受保护路径」能落到；反向：core 层的权限规则。放 core 是因为门禁在 `core/tool/execute/`，而 `core` 不得导入 `app.tools`。
   - `apps/terminal-worker/src/sandbox/`——worker 内「怎么起受限进程」。
   - `TaskExtra.workspace_scope` / `ToolExecutionContext.scope_root`——「工作区范围」：工作区内的一个目录，与 Workspace 记录区分；不叫 `work_dir`，因为它限定可写区而不只是起始目录。
   - 本文由 `terminal-sandbox-design.md` 改名：内容已是 Agent 权限而非终端。
-- **同步**：AGENTS.md「工具 UI 渲染边界」（HITL 不再只由工具静态声明；「等待中的决定在 Run 停止、失败、完成或重启后仍可决定」改为按有效期声明，审批到下一回合、交接到交还）与「进程间接口边界」调度段（挂起 Run 的唤醒规则，Q11）、「代码目录边界」（新目录）、待办「安全与权限」（完成项勾掉；自动审查与自定义档位留在待办）；AGENTS.md「数据与事实所有权」与「前端架构」的运行期配置锁定：档位是输入级事实、不属发起配置，选择器不锁；`tool_ui_display_contract.md` 加 `permission-request`，`delegation-result` / `fork-task-result` / `agent-team-approval` 加档位与范围。
+- **同步**：AGENTS.md「工具 UI 渲染边界」（HITL 不再只由工具静态声明；「等待中的决定在 Run 停止、失败、完成或重启后仍可决定」改为按有效期声明，审批到下一回合、交接到交还）与「进程间接口边界」调度段（挂起 Run 的唤醒规则，Q11）、「代码目录边界」（新目录）、待办「安全与权限」（完成项勾掉；自动审查与自定义档位留在待办）；AGENTS.md「数据与事实所有权」与「前端架构」的运行期配置锁定：档位是输入级事实、不属发起配置，选择器不锁；`tool_ui_display_contract.md` 加 `permission-request`，`delegation-result` / `fork-task-result` 加档位与范围。
 
 ## 附录：参考实现借鉴清单（已抽查）
 

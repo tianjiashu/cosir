@@ -175,7 +175,7 @@ async def submit_decision(
     """对一次等待用户决定的工具调用作出决定：同步校验后入队，由 Task 的 actor 唤醒或开新 Run。
 
     409 ``DECISION_NOT_AWAITED``（调用不在等待决定）/ ``DECISION_ALREADY_SUBMITTED``（已有未处理
-    的决定），400 ``DECISION_DATA_INVALID``（载荷不符合工具声明的形状）。"""
+    的决定）。"""
 
     return await _accept(task_id, "decide", service.decide(task_id, tool_call_id, request))
 

@@ -41,15 +41,6 @@ from app.core.tool.multi_agent.task_status import (
     build_task_status_definition,
 )
 from app.core.tool.schemas import ALL_TOOL_NAMES, ToolName
-from app.service.configuration import (
-    agent_team_configuration_registry as agent_team_registry_module,
-)
-from app.service.configuration.agent_team_configuration_registry import (
-    AgentTeamConfigurationRegistry,
-)
-from app.service.configuration.agent_team_configuration_source import (
-    AgentTeamConfigurationScopeSource,
-)
 from app.service.depends import close_service_dependencies
 from app.storage.store_engines import init_storage
 from app.tools.tool_registration import build_tool_registry
@@ -95,18 +86,9 @@ _CONDITIONALLY_SKIPPED_TOOLS = frozenset({"web_search", "web_extract"})
 
 
 @pytest.fixture
-def storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """为需要真实注册表/服务单例的用例提供隔离的主库，并按 lifespan 顺序注入 Team 注册表。
+def storage(tmp_path: Path) -> Iterator[None]:
+    """为需要真实注册表/服务单例的用例提供隔离的主库。"""
 
-    ``build_tool_registry()`` 装配期会构造 ``agent_team`` 工具，它读取进程级 Team
-    注册表；未注入时按契约抛 ``RuntimeError``，因此须先于工具系统装配注入。
-    """
-
-    monkeypatch.setattr(
-        agent_team_registry_module,
-        "_REGISTRY",
-        AgentTeamConfigurationRegistry(AgentTeamConfigurationScopeSource()),
-    )
     close_service_dependencies()
     db_dir = tmp_path / "storage"
     db_dir.mkdir()

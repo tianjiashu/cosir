@@ -80,7 +80,7 @@ class AgentProfileRegistry:
           就地修改其字段，需要变更时用 :meth:`replace` 整体替换。
     """
 
-    # 哨兵值来自 app.utils.workspace_scope 的唯一来源，避免与 Team 配置注册表各写一份。
+    # 哨兵值来自 app.utils.workspace_scope 的唯一来源，与其他作用域匹配方共用。
     SYSTEM_WORKSPACE = _SYSTEM_SCOPE
 
     def __init__(self, source: AgentProfileScopeSource) -> None:

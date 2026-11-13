@@ -83,10 +83,10 @@ describe("assistant transport converter", () => {
   it("Agent 消息的发送方随 user 消息的 custom 交给渲染层", () => {
     const message: TransportMessage = {
       id: "11", role: "user", parts: [{ type: "text", text: "做这个", status: "completed" }], turn: 3, inherited: false, outcome: null,
-      source: { taskId: 4, teamRunId: null, name: "主任务", report: null },
+      source: { taskId: 4, name: "主任务", report: null },
     };
     const converted = toThreadMessage(message, { turn: 3, inherited: false, source: message.source, outcome: null, activity: null });
-    expect(converted.metadata.custom).toEqual({ source: { taskId: 4, teamRunId: null, name: "主任务", report: null } });
+    expect(converted.metadata.custom).toEqual({ source: { taskId: 4, name: "主任务", report: null } });
   });
 
   it("projects the outcome and activity onto assistant message metadata (D5)", () => {

@@ -5,7 +5,6 @@ from app.core.tool.schemas.tool_definition import ToolDefinition
 from app.core.tool.schemas.tool_execution_context import ToolExecutionContext
 from app.core.tool.schemas.tool_names import (
     ALL_TOOL_NAMES,
-    TOOL_AGENT_TEAM,
     TOOL_APPLY_PATCH,
     TOOL_BROWSER_ACT,
     TOOL_BROWSER_EVALUATE,
@@ -24,7 +23,6 @@ from app.core.tool.schemas.tool_names import (
     TOOL_MCP,
     TOOL_MOVE_FILE,
     TOOL_PROPOSE_AGENT_CONFIGURATION,
-    TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION,
     TOOL_READ_FILE,
     TOOL_READ_IMAGE,
     TOOL_REPLACE,
@@ -46,7 +44,6 @@ from app.core.tool.schemas.tool_observation import ToolObservation
 
 __all__ = [
     "ALL_TOOL_NAMES",
-    "TOOL_AGENT_TEAM",
     "TOOL_APPLY_PATCH",
     "TOOL_BROWSER_ACT",
     "TOOL_BROWSER_EVALUATE",
@@ -65,7 +62,6 @@ __all__ = [
     "TOOL_MCP",
     "TOOL_MOVE_FILE",
     "TOOL_PROPOSE_AGENT_CONFIGURATION",
-    "TOOL_PROPOSE_AGENT_TEAM_CONFIGURATION",
     "TOOL_READ_FILE",
     "TOOL_READ_IMAGE",
     "TOOL_REPLACE",

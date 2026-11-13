@@ -9,7 +9,7 @@ import { AgentMessageRow } from "@/components/conversation/thread/agent-message"
 import type { TransportMessageSource } from "@/lib/assistant/contract";
 
 function row(report: TransportMessageSource["report"]): string {
-  return renderToStaticMarkup(<AgentMessageRow id="11" text="结论" source={{ taskId: 4, teamRunId: null, name: "review", report }} taskId={1} />);
+  return renderToStaticMarkup(<AgentMessageRow id="11" text="结论" source={{ taskId: 4, name: "review", report }} taskId={1} />);
 }
 
 describe("派生 Task 的汇报行", () => {

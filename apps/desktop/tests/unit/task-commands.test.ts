@@ -91,9 +91,9 @@ describe("task commands", () => {
     expect(lastCall()[0]).toMatch(/\/tasks\/7\/resume$/);
     expect(lastCall()[1].body).toBeUndefined();
 
-    await submitToolDecision(7, "call/1", { decision: "approve", data: { goal: "交付" } });
+    await submitToolDecision(7, "call/1", { decision: "reject", feedback: "换个方向" });
     expect(lastCall()[0]).toMatch(/\/tasks\/7\/tool-calls\/call%2F1\/decision$/);
-    expect(JSON.parse(String(lastCall()[1].body))).toEqual({ decision: "approve", data: { goal: "交付" } });
+    expect(JSON.parse(String(lastCall()[1].body))).toEqual({ decision: "reject", feedback: "换个方向" });
   });
 
   it("排队消息已不在队列中：409 MESSAGE_CONSUMED 原样抛出", async () => {

@@ -6,57 +6,6 @@ const jsonRequestInit = vi.hoisted(() => vi.fn((body: unknown, init: RequestInit
 vi.mock("@/lib/http/client", () => ({ requestJson, jsonRequestInit }));
 
 describe("configuration API", () => {
-  it("routes Team CRUD by owner and derives both body scopes from it", async () => {
-    requestJson.mockResolvedValue({ team_id: "review-team" });
-    const {
-      createAgentTeamConfiguration,
-      deleteAgentTeamConfiguration,
-      getAgentTeamConfigurations,
-      updateAgentTeamConfiguration,
-    } = await import("@/lib/api/agent-teams");
-    const configuration = {
-      team_id: "review-team",
-      name: "Review Team",
-      description: "Review changes",
-      max_runs: 8,
-      start_node_id: "review",
-      nodes: [{ node_id: "review", name: "Review", agent_id: "reviewer", statuses: [{ name: "done", color: "#16A34A" }] }],
-      transitions: [{ from_node_id: "review", status: "done", target_node_id: "END" }],
-      scope: "workspace" as const,
-    };
-
-    await createAgentTeamConfiguration(3, configuration);
-    expect(requestJson).toHaveBeenLastCalledWith(
-      "/workspaces/3/configuration/agent-teams",
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(jsonRequestInit).toHaveBeenLastCalledWith({ scope: "workspace", configuration }, { method: "POST" });
-
-    await updateAgentTeamConfiguration(null, "review-team", configuration);
-    expect(requestJson).toHaveBeenLastCalledWith(
-      "/configuration/agent-teams/review-team",
-      expect.objectContaining({ method: "PUT" }),
-    );
-    expect(jsonRequestInit).toHaveBeenLastCalledWith(
-      { scope: "system", configuration: { ...configuration, scope: "system" } },
-      { method: "PUT" },
-    );
-
-    await updateAgentTeamConfiguration(3, "review-team", configuration);
-    expect(requestJson).toHaveBeenLastCalledWith(
-      "/workspaces/3/configuration/agent-teams/review-team",
-      expect.objectContaining({ method: "PUT" }),
-    );
-    await deleteAgentTeamConfiguration(3, "review-team");
-    expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agent-teams/review-team", { method: "DELETE" });
-    await deleteAgentTeamConfiguration(null, "review-team");
-    expect(requestJson).toHaveBeenLastCalledWith("/configuration/agent-teams/review-team", { method: "DELETE" });
-    await getAgentTeamConfigurations(null);
-    expect(requestJson).toHaveBeenLastCalledWith("/configuration/agent-teams", undefined);
-    await getAgentTeamConfigurations(3);
-    expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agent-teams", undefined);
-  });
-
   it("routes sub-Agent CRUD to the system or the workspace collection", async () => {
     requestJson.mockResolvedValue({ agent_id: "reviewer" });
     const {

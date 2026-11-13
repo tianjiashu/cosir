@@ -17,7 +17,6 @@ class ToolResultFields(TypedDict):
     isError: bool
     awaitingUser: bool
     display_data: dict[str, object] | None
-    team_run_id: NotRequired[int]
     background: NotRequired[ConversationBackgroundWork]
     child_task_id: NotRequired[int]
     agent_role: NotRequired[str]
@@ -38,8 +37,6 @@ def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
         awaitingUser=metadata.awaiting_decision,
         display_data=deepcopy(metadata.display_data),
     )
-    if metadata.team_run_id is not None:
-        fields["team_run_id"] = metadata.team_run_id
     # 只在有记录时写入：不带记录的事件不能把 part 上已有的记录清掉。
     if metadata.background is not None:
         fields["background"] = project_background_work(metadata.background)

@@ -39,9 +39,7 @@ class TaskRecord:
         """派生出本 Task 的那个 Task（委派或 Agent fork 的发起方）；不是 Agent 派生的为 ``None``。
 
         ``send_message`` / ``task_status`` 的寻址只认这条父子关系。不能只看 ``parent_task_id``：
-        Team 节点同样挂在主 Task 下，主 Agent 不该绕过 Coordinator 给自己的节点发消息或读它的结论，
-        节点也不该越过 Coordinator 给主 Agent 发消息。Agent fork 不挂所有权子树，发起方记在
-        ``extra.fork``；用户手动 fork 的不算。
+        Agent fork 不挂所有权子树，发起方记在 ``extra.fork``；用户手动 fork 的不算。
         """
         if self.task_type == TaskType.AGENT_TASK:
             return self.parent_task_id

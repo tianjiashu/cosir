@@ -19,8 +19,8 @@ from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 # 重启后告诉 Agent 发生了什么：后台工作与终端会话都不跨重启。
 INTERRUPTED_NOTICE = (
     "The backend restarted. All interactive terminal sessions you opened before are gone, "
-    "background commands were stopped, delegated child agents, forks and Agent Teams that were "
-    "still working were stopped and will not report, and unfinished tool calls were interrupted. "
+    "background commands were stopped, delegated child agents and forks that were still "
+    "working were stopped and will not report, and unfinished tool calls were interrupted. "
     "Re-run what you still need."
 )
 
@@ -29,7 +29,7 @@ INTERRUPTED_NOTICE = (
 _RUNTIME_RESTARTED = "runtime_restarted"
 
 class RecoverService:
-    """后端启动期的重启恢复：收敛遗留 running Run / TeamRun，拉起待调度 Task，结算中断的占位。
+    """后端启动期的重启恢复：收敛遗留 running Run，拉起待调度 Task，结算中断的占位。
 
     不动 suspended Run 与 message_queue，不隐式重放旧执行，也不为重启生成结论消息或唤醒 Run。
     """
@@ -50,8 +50,7 @@ class RecoverService:
 
         顺序即契约：
 
-        1. 收敛遗留 Run 与 TeamRun，再取消作废 TeamRun 下挂起的节点 Run（没有 Coordinator 再等它，
-           不能被之后的结论唤醒后独自继续）：之后查出的待调度 Task 以收敛后的 Run 状态为准。
+        1. 收敛遗留 Run：之后查出的待调度 Task 以收敛后的 Run 状态为准。
         2. 为外部队列有待处理消息或当前 Run 挂起的 Task 物化 space（随之拉起 actor），让重启前
            已到达的消息照常处理、挂起的 Run 照常等唤醒。
         3. 把重启前还在等结果的占位推到「已中断」，再给受影响的 Task 各投一条重启通知：它只唤醒
@@ -59,12 +58,7 @@ class RecoverService:
            空闲的 Task 随下次驱动并入。
         """
 
-        # coordinator 消费已装配的工具系统，且与 service 层互相引用，惰性导入。
         recovered_runs = self.recover_orphaned_runs()
-        recovered_teams = service_depends.get_agent_team_coordinator().recover_after_restart()
-        cancelled_node_run_ids = self.cancel_orphaned_team_nodes(
-            [task_id for team in recovered_teams for task_id in team.node_task_ids]
-        )
         dispatch_task_ids = service_depends.get_task_service().list_task_ids_to_dispatch()
         for task_id in dispatch_task_ids:
             task_runtime_spaces.get_or_create(task_id)
@@ -72,8 +66,6 @@ class RecoverService:
         interrupted_task_ids = (
             recovered_task_ids
             | self._derivers_of(recovered_task_ids)
-            # 被收敛的 Team 不汇报：主 Task 只能从重启通知得知。
-            | {team.parent_task_id for team in recovered_teams}
             | self.interrupt_placeholders(dispatch_task_ids)
         )
         self.notify_interrupted(interrupted_task_ids)
@@ -83,7 +75,6 @@ class RecoverService:
                 "msg": "后端启动期重启恢复完成",
                 "data": {
                     "cancelled_run_ids": [run.id for run in recovered_runs],
-                    "cancelled_team_node_run_ids": cancelled_node_run_ids,
                     "dispatch_task_ids": sorted(dispatch_task_ids),
                     "interrupted_task_ids": sorted(interrupted_task_ids),
                 },
@@ -142,30 +133,6 @@ class RecoverService:
                     NoticeBody(content=INTERRUPTED_NOTICE, notice_kind="backend_restarted")
                 ),
             )
-
-    def cancel_orphaned_team_nodes(self, node_task_ids: list[int]) -> list[int]:
-        """取消作废 TeamRun 下挂起的节点 Run，返回被取消的 Run id。
-
-        只对「等待方不可能再出现」的节点这样做：一般的挂起 Run 照常保留、等可唤醒消息。单个失败
-        记录后继续。
-        """
-        tasks = service_depends.get_task_service()
-        cancelled: list[int] = []
-        for task_id in node_task_ids:
-            try:
-                run = tasks.require_current_run(task_id)
-                if run is None or run.status != ConversationRunStatus.SUSPENDED.value:
-                    continue
-                if self._ledger.transition(
-                    run.id, RunTransition.CANCEL, end_reason=_RUNTIME_RESTARTED
-                ):
-                    cancelled.append(run.id)
-            except Exception:
-                log.exception(
-                    "orphan_team_node_cancel_failed",
-                    extra={"msg": "取消作废 TeamRun 的挂起节点失败", "data": {"task_id": task_id}},
-                )
-        return cancelled
 
     def recover_orphaned_runs(self) -> list[ConversationRunRecord]:
         """启动时取消失去执行者的 running Run；suspended 没有执行者、不需要收敛，保留等消息唤醒。

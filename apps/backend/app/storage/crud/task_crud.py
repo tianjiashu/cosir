@@ -68,7 +68,7 @@ class TaskCrud:
         """新建一条 task 记录并落库。
 
         主键 ``id`` 由存储引擎自增分配，``created_at`` / ``updated_at`` 由本方法以当前 UTC 时间
-        统一填充。子 Task（委派、Team 节点）只经 ``parent_task_id`` 挂到父 Task，不记录发起它的
+        统一填充。子 Task（委派）只经 ``parent_task_id`` 挂到父 Task，不记录发起它的
         父 Run：子 Task 会被父 Agent 在后续多个 Run 中复用，创建时的 Run 无法代表归属。Agent
         身份不落在 Task 上，随入队输入在建 Run 时固化到 Run。
 
@@ -80,7 +80,7 @@ class TaskCrud:
             creation_command_id: 前端创建命令标识，用于首条命令未被接受时回收 provisional Task。
             session: 可选的外部 SQLAlchemy 会话。传入时在本方法内复用该事务（调用方负责提交）；
                 为 None 时由本方法自开事务并自动提交。
-            extra: Task 扩展 JSON（如 fork 来源、Team 节点快照）。
+            extra: Task 扩展 JSON（如 fork 来源、派生调用）。
             tool_schemas: 创建时固化的模型工具 schema。
             derivation_depth: 派生深度；由派生方按 ``core.tool.derivation.child_depth`` 算出，用户新建
                 与用户 fork 为 0。
@@ -239,8 +239,7 @@ class TaskCrud:
     def list_by_parent_task(self, parent_task_id: int) -> list[TaskRecord]:
         """返回某父任务直接委派的子 Agent Task（``task_type='agent_task'``），供展示使用。
 
-        只看一层且排除 Agent Team 节点 Task；需要整棵任务树（如删除）时用
-        ``list_child_ids``，不要复用本方法，否则会漏掉其他类型的子 Task。
+        只看一层；需要整棵任务树（如删除）时用 ``list_child_ids``。
         """
         stmt = (
             select(TaskModel)
@@ -267,8 +266,8 @@ class TaskCrud:
     def list_child_ids(self, parent_task_id: int, session: Session) -> list[int]:
         """在调用方事务内返回挂在某父任务下的全部直接子 Task id，不区分 ``task_type``。
 
-        任务树遍历的唯一入口：``tasks.parent_task_id`` 自引用外键对委派子 Task 与 Team 节点
-        Task 一视同仁，按类型过滤会让删除漏掉子行而触发外键失败。
+        任务树遍历的唯一入口：``tasks.parent_task_id`` 自引用外键不区分子 Task 类型，按类型过滤
+        会让删除漏掉子行而触发外键失败。
         """
         return list(
             session.scalars(select(TaskModel.id).where(TaskModel.parent_task_id == parent_task_id))
@@ -370,8 +369,7 @@ class TaskCrud:
             return True
 
     def list_by_workspace(self, workspace_id: int) -> list[TaskRecord]:
-        """侧栏对话（``USER_FACING_TASK_TYPES``），按更新时间倒序；委派子任务与 Team 节点不在
-        侧栏。"""
+        """侧栏对话（``USER_FACING_TASK_TYPES``），按更新时间倒序；委派子任务不在侧栏。"""
         stmt = (
             select(TaskModel)
             .where(

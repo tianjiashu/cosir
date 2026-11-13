@@ -77,7 +77,7 @@ function liveActionsAvailable(context: CallViewContext): boolean {
 }
 
 /**
- * 前台命令只停这一条（随 Task 停止也会一并结束）。图标按钮与子 Agent、Team 的停止同一个样子，次于「转到后台」：
+ * 前台命令只停这一条（随 Task 停止也会一并结束）。图标按钮与子 Agent 的停止同一个样子，次于「转到后台」：
  * 它会中断命令，用得少。HTTP 只确认进程内信号已发出，「正在停止」保持到 snapshot 里的工具状态落定。
  */
 function TerminalStopButton({ taskId, toolCallId }: CallViewContext) {

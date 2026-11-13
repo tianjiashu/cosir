@@ -5,8 +5,7 @@ import { draftKey, isDraftTab, useWorkbenchStore } from "./workbench-store";
 import type { WorkbenchDraftTab, WorkbenchTab } from "./workbench-tab-types";
 
 /**
- * 标签是否有未保存的草稿：两类草稿会话（子 Agent / Team）的 store 都暴露 `dirty`，这里统一订阅，
- * 不为此另立接口；非草稿标签恒为 false。判定不依赖标签是否激活或面板是否挂载。
+ * 标签是否有未保存的草稿：子 Agent 草稿会话的 store 暴露 `dirty`，这里订阅它；非草稿标签恒为 false。判定不依赖标签是否激活或面板是否挂载。
  */
 export function useWorkbenchTabDirty(tab: WorkbenchTab | undefined): boolean {
   const store = tab && isDraftTab(tab) ? tab.session.store : undefined;
