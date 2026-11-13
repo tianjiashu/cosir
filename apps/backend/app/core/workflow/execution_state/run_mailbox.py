@@ -24,8 +24,9 @@ class RunMailbox:
       这次执行的下一次请求有意义，不落库、不需要确认，随 :meth:`reset` 丢弃。只收 ``NoticeBody``，
       所以执行内无法绕过外部队列投递别的输入。
 
-    挂起判定看 :meth:`has_wakeable`（消息体的 ``WAKES``，与调度规则同一条），不看是否为空：通知
-    不论哪种来源都不值得为它推进。工具产出的图片不经这里：它是调用结果的一部分，要紧跟本批 tool
+    挂起判定看 :meth:`has_wakeable`（消息体的唤醒范围，与调度规则同一条），不看是否为空：多数通知
+    不值得为它推进，只有「等着的东西没了」那几种算（见 ``NOTICE_WAKE_SCOPES``）。
+    工具产出的图片不经这里：它是调用结果的一部分，要紧跟本批 tool
     消息（见 ``write_tool_images``）。
 
     出队按消息体的固定优先级（``PRIORITY``），同优先级按投递顺序：用户输入、后台结果与决定之间不
@@ -92,7 +93,7 @@ class RunMailbox:
             return not self._heap
 
     def has_wakeable(self, run_id: int) -> bool:
-        """是否有值得为它推进的消息（``WAKES``）；挂起前据此决定直接继续还是挂起。"""
+        """是否有能推进这个活动 Run 的消息（``TaskMessage.wakes``）；挂起前据此决定直接继续还是挂起。"""
         with self._lock:
             return any(entry[2].wakes(run_id) for entry in self._heap)
 

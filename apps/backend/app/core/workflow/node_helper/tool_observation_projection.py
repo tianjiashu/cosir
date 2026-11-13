@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.tool.background.background_registry import background_registry
 from app.core.tool.execute.tool_terminal_projection import (
     terminal_event,
 )
@@ -104,8 +103,6 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
             ),
             session=session,
         )
-    if observation.background is not None:
-        background_registry.commit_start(runtime.run.task_id, call_id)
     log.info(
         "tool_decision_result_persisted",
         extra={

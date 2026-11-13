@@ -16,3 +16,13 @@ class TaskTitleUpdatedEvent(WorkflowEventEnvelope):
 
     type: Literal["task_title_updated"] = "task_title_updated"
     title: str = Field(min_length=1)
+
+
+class TaskQueueChangedEvent(WorkflowEventEnvelope):
+    """Task 的外部队列有了新消息（已提交），消费方据此整表刷新排队投影。
+
+    由 Task 的调度 actor 在醒来读到新消息时发出：入队方可能在自己的事务里写入，提交后才由 actor 读到，
+    所以由它统一发出，而不是由各入队方。不属于任何 Run（``run_id`` 为空）；整表刷新，可重复投递。
+    """
+
+    type: Literal["task_queue_changed"] = "task_queue_changed"

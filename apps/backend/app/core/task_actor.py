@@ -40,9 +40,11 @@ from typing import TYPE_CHECKING, cast
 
 from app.config.logging.logger import log
 from app.core.context.context_store import ContextStore
+from app.core.events import TaskQueueChangedEvent
+from app.core.events.event_sink import event_sink
 from app.core.task_execution import TaskExecution
 from app.core.task_recall import TaskRecall
-from app.core.tool.background.background_registry import background_registry
+from app.core.tool.multi_agent import derived_report
 from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     CancelReason,
     cancel_end_reason,
@@ -52,9 +54,11 @@ from app.core.workflow.message_queue.task_message import TaskMessage
 from app.models import ConversationRunRecord
 from app.models.enums.conversation_run_status import (
     CONTINUE_AFTER_STATUSES,
+    TERMINAL_RUN_STATUSES,
     ConversationRunStatus,
     RunTransition,
 )
+from app.models.errors.task_command_errors import TaskCommandConflictError
 from app.service import depends as service_depends
 
 if TYPE_CHECKING:
@@ -62,18 +66,6 @@ if TYPE_CHECKING:
 
     from app.task_runtime.task_runtime_space import TaskRuntimeSpace
 
-
-class SessionConflictError(ValueError):
-    """当前 Task 状态不允许本次用户命令；``code`` 是稳定的机器码，API 映射为 409。
-
-    ``retryable`` 表示「刷新状态后重试可能成功」，前端据此决定是否提供重新同步入口；冲突已成定局
-    （如排队消息已被并入）时为 ``False``。
-    """
-
-    def __init__(self, code: str, message: str, *, retryable: bool = True) -> None:
-        super().__init__(message)
-        self.code = code
-        self.retryable = retryable
 
 class TaskActor:
     """一个 Task 的调度者；``start`` / ``stop`` 等方法只能在事件循环线程调用。"""
@@ -85,6 +77,8 @@ class TaskActor:
         self.mailbox = space.mailbox
         # 上游停止时收回交出去的工作；actor 只决定何时调用。
         self._recall = TaskRecall(self.task_id)
+        # 有执行者时收回的后台调用：驱动释放时再结算一次（见 :meth:`_recall_work`）。
+        self._recalled: dict[str, dict[str, object] | None] = {}
         # 执行登记：至多一个后台执行，释放后回到 :meth:`_after_drive`。
         self._execution = TaskExecution(self.task_id, self.mailbox, self._after_drive)
         self._loop_task: asyncio.Task[None] | None = None
@@ -236,11 +230,9 @@ class TaskActor:
         if self._stopping:
             return
         if fresh:
-            # 有新消息入队：把排队投影同步到队列现状（入队方可能在自己的事务里写入，提交后才由这里读到）。
-            await asyncio.to_thread(
-                service_depends.get_conversation_task_state_service().refresh_queued_messages,
-                self.task_id,
-            )
+            # 有新消息入队：交出「队列变了」的事实，由消费方把排队投影同步到队列现状（入队方可能在
+            # 自己的事务里写入，提交后才由这里读到）。
+            await asyncio.to_thread(event_sink(), TaskQueueChangedEvent(task_id=self.task_id))
         async with self._space.async_operation():
             current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
             action = dispatch_policy.next_action(self._phase(current), current, pending, fresh)
@@ -282,11 +274,12 @@ class TaskActor:
         两种语义按 ``reason`` 区分：
 
         - ``user``（打断）：只停当前执行或挂起的 Run。后台工作、活动 Team（含待批准的方案）与子 Task 都
-          不动——它们属于 Task，结论到达时照常唤醒或开新 Run；要停它们用看板逐项或全部停止。Task 空闲时
+          不动——它们属于 Task，结论到达时照常唤醒或开新 Run；要停它们各按自己的入口（后台命令在看板上逐项或
+          全部停止，Team 按 TeamRun，子 Task 对它本身停止）。Task 空闲时
           什么也不做。
         - ``parent``（收回）：上游不再需要这个 Task 的任何结果，在打断之外收回它交出去的一切
           （``TaskRecall``）。有执行者时先打信号再收回：信号在时登记表拒收新登记、不交付结论（见
-          ``background_registry``），收回之后这次驱动不会再留下后台工作；挂起的 Run 先收回再迁移：迁移之后
+          ``command_results``），收回之后这次驱动不会再留下后台工作；挂起的 Run 先收回再迁移：迁移之后
           才到的结论会被 loop 当作新消息开出新 Run。
 
         有执行者时打信号，由工作流在检查点落定、收尾时接续；挂起的 Run 没有执行者，在闸门内直接迁移为
@@ -297,13 +290,13 @@ class TaskActor:
         """
         if self._execution.cancel(reason):
             if reason == "parent":
-                await self._recall.recall()
+                await self._recall_work(driving=True)
             return
         async with self._space.async_operation():
             # 拿闸门期间可能已开出新执行：重新判定，不让信号落空或残留。
             if self._execution.cancel(reason):
                 if reason == "parent":
-                    await self._recall.recall()
+                    await self._recall_work(driving=True)
             else:
                 await self._cancel_suspended(reason)
         self._publish_state()
@@ -339,21 +332,35 @@ class TaskActor:
                 exc_info=done.exception(),
             )
 
+    async def _recall_work(self, *, driving: bool) -> None:
+        """收回交出去的工作并结算被撤销的后台卡片。
+
+        有执行者时同一批工具的占位行要等 observe 写入，此刻结算会扑空：先把被撤销的调用记下、交给
+        :meth:`_after_drive` 在驱动释放后再结算一次，再立即结算已写入的行。记下必须在立即结算之前——
+        结算要 await，驱动可能在这期间释放；早于记下就释放的驱动，它的行在立即结算时都已写入。
+        """
+        revoked = await self._recall.recall()
+        if driving:
+            self._recalled.update(revoked)
+        await self._recall.settle(revoked)
+
     async def _cancel_suspended(self, reason: CancelReason) -> None:
         """没有执行者：上游停止先收回，挂起的 Run 再直接迁移为 cancelled；调用方持 Task 闸门。
 
         收回在迁移之前（见 :meth:`cancel`）；Task 空闲时用户停止什么也不做，上游停止只收回。
         """
         if reason == "parent":
-            await self._recall.recall()
+            await self._recall_work(driving=False)
         current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
         if self._phase(current) == "suspended":
-            await asyncio.to_thread(
+            cancelled = await asyncio.to_thread(
                 self._ledger.transition,
                 current.id,
                 RunTransition.CANCEL,
                 end_reason=cancel_end_reason(reason),
             )
+            if cancelled is not None:
+                await self._report_settled(cancelled)
 
     async def resume(self) -> None:
         """当前 Run 为 cancelled / failed 且没有执行者时，从 prepare_input 续跑同一个 Run。
@@ -364,12 +371,12 @@ class TaskActor:
         已被撤回时拒绝：没有可续的回合，新输出会接在已撤回的回合上。
 
         异常:
-            SessionConflictError: ``RUN_NOT_RESUMABLE``。
+            TaskCommandConflictError: ``RUN_NOT_RESUMABLE``。
             KeyError: Task 不存在。
         """
         async with self._space.async_operation():
             if self._stopping:
-                raise SessionConflictError("RUN_NOT_RESUMABLE", "Task 正在删除，不可恢复")
+                raise TaskCommandConflictError("RUN_NOT_RESUMABLE", "Task 正在删除，不可恢复")
             current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
             resumed = None
             if (
@@ -383,7 +390,7 @@ class TaskActor:
                     self._ledger.transition, current.id, RunTransition.RESUME
                 )
             if resumed is None:
-                raise SessionConflictError("RUN_NOT_RESUMABLE", "当前运行不可恢复")
+                raise TaskCommandConflictError("RUN_NOT_RESUMABLE", "当前运行不可恢复")
             pending = await asyncio.to_thread(self._queue.pending_nowait, self.task_id)
             # 恢复清空结束原因：把迁移前的记录交给驱动，「用户已停止」据此推导。
             self._start(resumed, pending, fresh_run=False, preceding_run=current)
@@ -419,14 +426,15 @@ class TaskActor:
         时队列里也没有可推进的消息——执行结束后会接续它们；取消、失败不自动接续，留着的消息等新
         消息到来再一起推进。系统通知不推进，不影响判定。
 
-        后台工作属于 Task：Run 可以先结束，结论到达后再开新 Run 收尾，所以还有没交付完的后台工作就
-        不算静止，否则等待方会读走「已在后台跑」的中间结论。登记表变化经 :meth:`notify_state_changed`
-        唤醒等待方。
+        下游还有没了结的工作（后台命令、已批准的 Team、活动的派生 Task，见
+        ``derived_report.has_open_work``）也不算静止：Run 可以先答复，下游的结论到达后再开新 Run
+        收尾，否则等待方（Coordinator 等节点）会读走中间结论。后台登记表变化经
+        :meth:`notify_state_changed` 唤醒等待方；派生 Task 的汇报与停止通知经队列唤醒本 actor 的 loop。
 
         调度器已停止时不报告静止：那些消息再也推不动，报静止会让等待方读走上一次 Run 的结论。"""
         if self.stopped.is_set():
             return False
-        if background_registry.has_work(self.task_id):
+        if await asyncio.to_thread(derived_report.has_open_work, self.task_id):
             return False
         current = await asyncio.to_thread(self._tasks.require_current_run, self.task_id)
         if self._phase(current) != "idle":
@@ -507,17 +515,20 @@ class TaskActor:
         )
 
     async def _after_drive(self, run: ConversationRunRecord, reason: CancelReason | None) -> None:
-        """执行已释放（``TaskExecution`` 的回调）：按 Run 落定状态与取消原因接续剩余消息，最后唤醒
-        等待方。
+        """执行已释放（``TaskExecution`` 的回调）：Run 落定为终态时汇报给派生方，再按落定状态与取消原因
+        接续剩余消息，最后唤醒等待方。
 
         ``reason`` 是收尾时取走的取消原因（没收到取消为 ``None``）。取消在最后一个检查点之后才到时
         Run 可能已挂起或完成：挂起的直接迁移为 cancelled；收到取消时不接续剩余消息，停止之后才到的
         消息由 loop 在本执行结束后判定。删除前停止（``_stopping``）不接续。接续失败只记录。
         """
+        recalled, self._recalled = self._recalled, {}
         if self._stopping:
             # 执行已注销，仍要唤醒 ``wait_quiescent`` 的等待方重新判定，否则它们只能等到自己的超时。
             self._publish_state()
             return
+        # 收回时这次驱动还没写完的后台占位，现在都已写入（见 :meth:`_recall_work`）。
+        await self._recall.settle(recalled)
         try:
             settled = await asyncio.to_thread(self._ledger.get_run, run.id)
             if reason is not None and settled.status == ConversationRunStatus.SUSPENDED.value:
@@ -527,6 +538,7 @@ class TaskActor:
                     RunTransition.CANCEL,
                     end_reason=cancel_end_reason(reason),
                 ) or settled
+            await self._report_settled(settled)
             if reason is None and settled.status in CONTINUE_AFTER_STATUSES:
                 pending = await asyncio.to_thread(self._queue.pending_nowait, self.task_id)
                 if pending:
@@ -542,6 +554,24 @@ class TaskActor:
                 },
             )
         self._publish_state()
+
+    async def _report_settled(self, run: ConversationRunRecord) -> None:
+        """Run 的唯一汇报点：落定为终态（挂起不算）时交给派生汇报，规则都在 ``derived_report``。
+
+        两个落定点（执行释放、挂起 Run 被取消）都经这里；汇报失败只记录，不影响本 Task 的结局与接续。
+        """
+        if run.status not in TERMINAL_RUN_STATUSES:
+            return
+        try:
+            await asyncio.to_thread(derived_report.report_settled, run)
+        except Exception:
+            log.exception(
+                "derived_report_failed",
+                extra={
+                    "msg": "Run 落定后向派生方汇报失败",
+                    "data": {"task_id": self.task_id, "run_id": run.id},
+                },
+            )
 
     def notify_state_changed(self) -> None:
         """从任意线程告知「静止判定的输入变了」（后台结果登记表变化），在 actor 的事件循环上唤醒等待方。

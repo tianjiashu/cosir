@@ -94,7 +94,7 @@ class AssistantMessageMetadata(BaseModel):
     usage: CompletionUsage | None = None
 
 
-BackgroundKind = Literal["terminal_command", "child_agent", "agent_team"]
+BackgroundKind = Literal["terminal_command"]
 
 
 class BackgroundWork(BaseModel):
@@ -102,17 +102,16 @@ class BackgroundWork(BaseModel):
 
     为什么不单独建表：后台工作就是对话里的一次工具调用，占位行已经随对话 fork、撤回、Task
     删除；记录挂在它上面，看板就是对话的一个投影，没有第二个事实源要手工同步。工作是否还在跑
-    不在这里（进程内 ``background_registry`` 的活条目才是），这里只记重启后还需要的事实。
+    不在这里（进程内 ``command_results`` 的活条目才是），这里只记重启后还需要的事实。
 
     时间都是 UTC ISO 字符串，取自工作本身而不是行的时间戳：fork 复制行时会重新生成时间戳。
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: BackgroundKind
-    # 实际启动工作的 Run（只是来历：工作属于 Task，生命周期不看它）；批准 Team 的 Run 可能与原工具行
-    # 所属 Run 不同。
+    # 启动工作的 Run（只是来历：工作属于 Task，生命周期不看它）。
     run_id: int | None
-    # 启动时的原始命令意图 / 子 Task 名快照；UI 动词、图标与本地化仍归前端。
+    # 启动时的调用意图快照；UI 动词、图标与本地化仍归前端。
     label: str
     # 登记后台结果的时刻（转到后台的调用是它开始前台等待的时刻）。
     started_at: str
@@ -121,7 +120,8 @@ class BackgroundWork(BaseModel):
 
 
 class ToolMessageMetadata(BaseModel):
-    """工具结果的展示事实；等待决定归 Run，这里只保留卡片重建所需载荷。"""
+    """工具结果的展示事实与等待状态：``pending`` 的等待占位就是「等你操作」（见 :attr:`awaiting_decision`），
+    其余字段是卡片重建所需载荷。"""
 
     model_config = ConfigDict(extra="forbid")
     status: ToolCallEventStatus

@@ -1195,7 +1195,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
         "startedAt": "2026-01-01T00:00:00+00:00",
         "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
     }
-    task_runtime_spaces.get_or_create(task_id).replace_snapshot(state)
+    task_runtime_spaces.get_or_create(task_id).get_working_snapshot(lambda: state)
 
     projector.process(
         terminal_event(

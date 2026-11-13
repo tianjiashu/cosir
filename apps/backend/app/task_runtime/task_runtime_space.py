@@ -12,8 +12,8 @@ copy；持久化的 task / run / context 记录仍由 SQLite 负责。多个 spa
 本类除 ``_context_guard`` 外不自行加锁，这是刻意的单一闸门设计，不是遗漏：
 
 - **snapshot working copy（``_snapshot``）没有任何内部锁，是刻意的。** 其全部读写入口
-  （``get_snapshot`` / ``get_working_snapshot`` / ``replace_snapshot`` / ``unload_snapshot``）
-  的生产调用方只有 ``ConversationTaskStateService``；该 service 的类级 ``_lock``（RLock）是
+  （``get_working_snapshot`` / ``has_snapshot`` / ``unload_snapshot``）
+  的生产调用方只有 ``ConversationTaskStateService``（进程单例）；该 service 的 ``_lock``（RLock）是
   snapshot working copy 的**唯一序列化点**，已在懒加载、事件投影、subscriber 注册、删除清理
   所有路径上覆盖。此前额外存在的 ``_snapshot_guard`` 与外层 ``_lock`` 是同一临界区里的双层锁
   （外层 RLock 完全覆盖内层普通 Lock），已按"不重复加锁"删除。
@@ -234,74 +234,30 @@ class TaskRuntimeSpace:
         with self._context_guard:
             self._context_manager = None
 
-    def get_snapshot(
-        self, loader: Callable[[], ConversationStateSnapshot]
-    ) -> ConversationStateSnapshot:
-        """返回 task snapshot；首次调用时从 canonical records 懒加载重建。
-
-        参数:
-            loader: 在 snapshot 尚未物化时执行的重建函数。函数应只读取 canonical
-                Task/Run/Context records，不得写入本 space 的 snapshot。
-
-        返回:
-            当前 task 的 snapshot 深拷贝。调用方可以安全修改返回值而不污染 space 内的
-            working copy。
-
-        异常:
-            透传 ``loader`` 的重建异常；失败时不会缓存不完整 snapshot。
-
-        副作用:
-            首次调用时重建并缓存进程内 working copy；后续调用复用同一 task 的副本，不再读取
-            数据库或重复重建，直到 ``unload_snapshot`` 或进程内清理。
-
-        并发:
-            **本方法刻意不自行加锁**（原 ``_snapshot_guard`` 已随"同一临界区双层锁"删除）。
-            读写 ``_snapshot`` 必须全部经 ``ConversationTaskStateService``：其类级 ``_lock``
-            是唯一序列化点，已在懒加载、事件投影、subscriber 注册与删除清理路径上覆盖。
-            若有调用方绕过该 service 直接调用本方法或其它 snapshot 方法，需自行保证互斥。
-        """
-
-        if self._snapshot is None:
-            self._snapshot = copy.deepcopy(loader())
-        return copy.deepcopy(self._snapshot)
-
     def get_working_snapshot(
         self, loader: Callable[[], ConversationStateSnapshot]
     ) -> ConversationStateSnapshot:
-        """Return the task-local mutable snapshot to its owning state service.
+        """返回 task 的 snapshot working copy（不拷贝），首次调用时用 ``loader`` 懒加载。
 
-        This is deliberately narrower than ``get_snapshot``: only
-        ``ConversationTaskStateService`` calls it while holding that service's class-level
-        lock. It avoids copying the whole conversation for every token mutation; callers must
-        publish or otherwise finish their mutation before releasing the owning lock.
+        只有 ``ConversationTaskStateService`` 在持有其 ``_lock`` 时调用：投影直接改它，读取与发布由
+        service 自己裁窗口后拷贝，所以这里不为任何一方整份拷贝。``loader`` 必须返回新建的对象（交给
+        space 持有）；重建或校验失败时异常透传，不缓存不完整的 snapshot。
         """
 
         if self._snapshot is None:
-            self._snapshot = copy.deepcopy(loader())
+            self._snapshot = loader()
         return self._snapshot
 
     def has_snapshot(self) -> bool:
-        """snapshot 是否已物化；不复制、不触发懒加载。调用方约定同 ``get_snapshot``。"""
+        """snapshot 是否已物化；不复制、不触发懒加载。调用方约定同 ``get_working_snapshot``。"""
 
         return self._snapshot is not None
-
-    def replace_snapshot(self, snapshot: ConversationStateSnapshot) -> None:
-        """替换 task 的进程内 snapshot working copy。
-
-        仅供已完成 canonical 数据库提交后的显式重建或 Transport projector 使用；不会
-        写数据库，也不会通知 SSE subscriber。
-
-        并发:
-            与 ``get_snapshot`` 同一约定：不自行加锁，调用方须经 ``ConversationTaskStateService``。
-        """
-
-        self._snapshot = copy.deepcopy(snapshot)
 
     def unload_snapshot(self) -> None:
         """卸载 task snapshot，使下一次访问重新从 canonical records 懒加载。
 
         并发:
-            与 ``get_snapshot`` 同一约定：不自行加锁，调用方须经 ``ConversationTaskStateService``。
+            与 ``get_working_snapshot`` 同一约定：不自行加锁，调用方须经 ``ConversationTaskStateService``。
         """
 
         self._snapshot = None

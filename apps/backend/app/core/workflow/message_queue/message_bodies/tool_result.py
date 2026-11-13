@@ -22,10 +22,8 @@ class ToolResultBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     TAG: ClassVar[str] = "tool_result"
-    PROMPT_GUIDE: ClassVar[str] = (
-        "the late result of an earlier tool call that was waiting for the user's decision; it "
-        "supersedes that call's placeholder result."
-    )
+    # 属性已说明是哪次调用的结果；等待占位自己写着「结果会另行送达」（``tool_awaiting_decision``）。
+    PROMPT_GUIDE: ClassVar[str | None] = None
     tool_call_id: str
     tool_name: str
     status: Literal["success", "error", "cancelled"]

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, cast
 
 from app.config.configuration import get_tool_registry
 from app.core.events import EventSink
+from app.core.events.event_sink import event_sink
 from app.core.tool.multi_agent.task_tool_scope import banned_derivation_tools
 from app.core.workflow.cancel.conversation_run_cancellation_registry import (
     CancelReason,
@@ -17,7 +18,6 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import (
 from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.models import ConversationRunRecord, TaskRecord, WorkspaceRecord
-from app.service.depends import get_conversation_event_projector
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 
 if TYPE_CHECKING:
@@ -108,7 +108,7 @@ class RuntimeContext:
             run_banned=run_banned,
             preceding_run=preceding_run,
             task_space=task_space,
-            event_sink=get_conversation_event_projector().process,
+            event_sink=event_sink(),
             mailbox=task_space.mailbox,
         )
 

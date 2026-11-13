@@ -16,7 +16,7 @@ from app.core.events.run_event import (
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
 )
-from app.core.events.task_event import TaskTitleUpdatedEvent
+from app.core.events.task_event import TaskQueueChangedEvent, TaskTitleUpdatedEvent
 from app.core.events.tool_call_event import (
     ToolCallCreatedEvent,
     ToolCallIntentEvent,
@@ -38,7 +38,8 @@ WorkflowEvent = Annotated[
     | ToolCallIntentEvent
     | ToolCallStatusChangedEvent
     | ToolCallRuntimeUpdateEvent
-    | TaskTitleUpdatedEvent,
+    | TaskTitleUpdatedEvent
+    | TaskQueueChangedEvent,
     Field(discriminator="type"),
 ]
 """执行内核产出的任意一条事件；``type`` 字段为判别式。"""

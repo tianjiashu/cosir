@@ -24,7 +24,7 @@ def test_snapshot_and_history_use_real_storage_over_http(backend_env, tmp_path):
 @pytest.mark.parametrize("presentation", ["activity", "standalone", "quiet"])
 def test_nested_tool_parts_serialize_through_actual_routes(presentation):
     """服务替身控制载荷；路由、依赖解析和 Pydantic 响应序列化保持真实。"""
-    from app.api.assistant_transport_api import get_assistant_transport_service
+    from app.assistant_transport.assistant_transport_api import get_assistant_transport_service
 
     state = empty_snapshot()
     state["messages"] = [

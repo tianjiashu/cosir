@@ -144,6 +144,18 @@ class AgentTeamRunCrud:
             raise KeyError(tool_call_id)
         return row
 
+    def list_by_parent_task(self, parent_task_id: int) -> list[AgentTeamRunModel]:
+        """主 Task 的全部 TeamRun（任意状态）。"""
+
+        with self._session_factory() as session:
+            return list(
+                session.scalars(
+                    select(AgentTeamRunModel).where(
+                        AgentTeamRunModel.parent_task_id == parent_task_id
+                    )
+                ).all()
+            )
+
     def list_active(self) -> list[AgentTeamRunModel]:
         """读取所有已进入运行阶段且尚未进入 Team 终态的运行。
 

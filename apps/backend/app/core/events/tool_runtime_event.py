@@ -9,8 +9,21 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
 
 
+class TerminalCommandStartedData(BaseModel):
+    """命令已经拉起：卡片的初始展示数据（命令与工作目录，还没有输出）。
+
+    由工具在启动命令前经实时通道发出，先于任何输出块，所以运行中的卡片从启动起就能展开、看到命令；
+    输出块只往这份展示数据上追加。展示形状归工具（与后台占位同一个构造函数），这里只是透传的映射。
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["terminal_command_started"]
+    display_data: dict[str, object]
+
+
 class TerminalOutputDeltaData(BaseModel):
-    """One decoded terminal-output chunk for the running tool call."""
+    """运行中命令的一段已解码输出。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -18,7 +31,9 @@ class TerminalOutputDeltaData(BaseModel):
     text: str = Field(min_length=1, max_length=4096)
 
 
-ToolCallRuntimeUpdateData = Annotated[TerminalOutputDeltaData, Field(discriminator="kind")]
+ToolCallRuntimeUpdateData = Annotated[
+    TerminalCommandStartedData | TerminalOutputDeltaData, Field(discriminator="kind")
+]
 
 
 class ToolCallRuntimeUpdateEvent(WorkflowEventEnvelope):

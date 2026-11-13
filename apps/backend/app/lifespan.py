@@ -40,7 +40,8 @@ from app.core.agents.agent_profile_config import (
     ensure_system_agent_config_dir,
     ensure_system_agent_team_config_dir,
 )
-from app.core.tool.background.background_registry import background_registry
+from app.core.events.event_sink import set_event_sink
+from app.core.tool.background_commands import set_background_commands
 from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.service.configuration.agent_team_configuration_registry import (
     AgentTeamConfigurationRegistry,
@@ -59,11 +60,13 @@ from app.service.configuration.main_agent_prompt_configuration_service import (
 from app.service.depends import (
     close_service_dependencies,
     get_agent_team_coordinator,
+    get_conversation_event_projector,
     get_conversation_task_state_service,
     get_recover_service,
     initialize_service_dependencies,
 )
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.tools.tool_registration import build_tool_registry
 from app.utils.json_utils import JsonFileError, read_json_object
 from app.utils.path import system_cosir as paths
@@ -204,10 +207,14 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     # actor 并投递重启结论。恢复要消费已装配的工具系统，且须在后端 ready 前完成；步骤顺序见
     # ``RecoverService.recover_after_restart``。
     task_runtime_spaces.bind_loop(asyncio.get_running_loop())
-    background_registry.open()
-    # 登记表变化：先唤醒等 Task 静止的等待方（委派、Team 节点），再把看板与前台等待整表重投影进
+    command_results.open()
+    # core 经端口问后台命令（静止判定、wait_messages、收回）；core 不导入工具层。
+    set_background_commands(command_results)
+    # core 交出的执行事件由 Transport 投影；core 不导入 ``assistant_transport``。
+    set_event_sink(get_conversation_event_projector().process)
+    # 登记表变化：先唤醒等 Task 静止的等待方（Coordinator 等 Team 节点），再把看板与前台等待整表重投影进
     # Transport snapshot（通知线程、锁外）。
-    background_registry.set_listener(_on_background_changed)
+    command_results.set_listener(_on_background_changed)
     # 进行中的交接随登记表变化整表重投影进 snapshot 顶层 ``handoffs``。
     handoff_registry.set_listener(
         lambda task_id: get_conversation_task_state_service().refresh_handoffs(task_id)
@@ -222,9 +229,9 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             # 先禁止后台结果投递（撤销全部条目、等在途投递写完）：之后关闭终端会把会话结束为
             # closed、唤醒等待线程与交接，它们不得在关闭期间写 task_messages。再停下全部 actor
             # （取消执行，不调度后续 Run），最后关闭服务依赖（终端服务随之关闭）。
-            await asyncio.to_thread(background_registry.close)
+            await asyncio.to_thread(command_results.close)
             await get_agent_team_coordinator().aclose()
-            background_registry.set_listener(None)
+            command_results.set_listener(None)
             handoff_registry.set_listener(None)
             handoff_registry.close()
             await task_runtime_spaces.aclose()

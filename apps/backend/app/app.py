@@ -22,7 +22,6 @@ from app.api.middleware.api_logging import (
     install_http_exception_logging,
     install_request_logging,
 )
-from app.api.middleware.transport_error import install_transport_request_error_handler
 from app.api.middleware.validation_error import install_request_validation_error_handler
 from app.config.logging.logger import log
 from app.lifespan import lifespan
@@ -54,7 +53,6 @@ app.add_middleware(
 install_http_exception_logging(app, log)
 # 框架校验错误的响应形状（RequestValidationError 类型的唯一注册者）。
 install_request_validation_error_handler(app)
-install_transport_request_error_handler(app)
 
 # 触发各域路由的模块级装饰器注册到真实 app 上。
 # 这些模块通过 ``from app.app import app`` 复用同一单例，因此必须在本模块
@@ -63,7 +61,7 @@ install_transport_request_error_handler(app)
 # 必须使用 importlib.import_module 而非 ``import app.api.xxx``：后者会把顶层包名
 # ``app`` 绑定到本模块全局命名空间，覆盖此处创建的 FastAPI 实例。
 importlib.import_module("app.api.tasks_api")
-importlib.import_module("app.api.task_status_api")
+importlib.import_module("app.api.task_feed_api")
 importlib.import_module("app.api.workspaces_api")
 importlib.import_module("app.api.workspace_files_api")
 importlib.import_module("app.api.configuration.models")
@@ -80,4 +78,4 @@ importlib.import_module("app.api.browser_api")
 importlib.import_module("app.api.attachments_api")
 importlib.import_module("app.api.tools_api")
 importlib.import_module("app.api.agent_teams_api")
-importlib.import_module("app.assistant_transport.assistant_api")
+importlib.import_module("app.api.assistant_transport_api")

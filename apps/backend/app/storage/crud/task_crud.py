@@ -254,6 +254,16 @@ class TaskCrud:
             rows = session.scalars(stmt).all()
         return [TaskRecord.from_model(row) for row in rows]
 
+    def list_by_workspace_and_type(self, workspace_id: int, task_type: TaskType) -> list[TaskRecord]:
+        """工作区内某一类型的全部 Task，按创建先后。"""
+        stmt = (
+            select(TaskModel)
+            .where(TaskModel.workspace_id == workspace_id, TaskModel.task_type == task_type)
+            .order_by(TaskModel.created_at.asc(), TaskModel.id.asc())
+        )
+        with self._session_factory() as session:
+            return [TaskRecord.from_model(row) for row in session.scalars(stmt).all()]
+
     def list_child_ids(self, parent_task_id: int, session: Session) -> list[int]:
         """在调用方事务内返回挂在某父任务下的全部直接子 Task id，不区分 ``task_type``。
 

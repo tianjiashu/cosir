@@ -1,8 +1,9 @@
 """用户消息的展示绑定：未消费时归 message_queue，消费后归 context metadata，不在 Run 留副本。"""
 
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def image_asset_id(path: str) -> str:
@@ -14,16 +15,41 @@ def image_asset_id(path: str) -> str:
     return Path(path).name.split(".", 1)[0]
 
 
-class MessageSource(BaseModel):
-    """Agent 消息的发送方：去哪儿看它（``task_id``）与叫它什么（``name``，发送时的显示名快照）。
+class AgentReport(BaseModel):
+    """派生 Task 的一次汇报：它的某个 Run 以什么结局落定，落定时下游是否还有没了结的工作。
 
-    委派与追加消息的来源是父 Task，Team 节点输入的来源是主 Task；名字是快照，来源改名或被删不
-    回写已发出的消息。
+    由编排在 Run 落定时生成（``core.tool.multi_agent.derived_report``），不是 Agent 写的；``intermediate``
+    为真表示这只是中间结果——它还有运行中的命令或活动的派生 Task，之后再落定时会再汇报一次。
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    task_id: int
+    status: Literal["completed", "failed"]
+    intermediate: bool
+
+
+class MessageSource(BaseModel):
+    """Agent 消息的发送方：去哪儿看它（``task_id`` 或 ``team_run_id``，恰好一个）、叫它什么（``name``，
+    发送时的显示名快照），以及这条消息是不是它的汇报（``report``）。
+
+    委派与追加消息的来源是父 Task，Team 节点输入的来源是主 Task，派生 Task 的汇报来源是它自己；
+    Agent Team 不是 Task，它的汇报来源是那次 TeamRun。名字是快照，来源改名或被删不回写已发出的消息。
+    ``report`` 放在来源上而不是消息上：它说的是「谁以什么身份发来」，随来源一起持久化、投影，各条
+    路径不必另带一个字段。
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    task_id: int | None = None
+    team_run_id: int | None = None
     name: str
+    report: AgentReport | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_sender(self) -> "MessageSource":
+        if (self.task_id is None) == (self.team_run_id is None):
+            raise ValueError("a message source is either a task or a team run")
+        if self.team_run_id is not None and self.report is None:
+            raise ValueError("a team run only sends reports")
+        return self
 
 
 class UserInputPresentation(BaseModel):

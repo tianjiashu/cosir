@@ -21,13 +21,14 @@ from app.core.events.run_event import (
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
 )
-from app.core.events.task_event import TaskTitleUpdatedEvent
+from app.core.events.task_event import TaskQueueChangedEvent, TaskTitleUpdatedEvent
 from app.core.events.tool_call_event import (
     ToolCallCreatedEvent,
     ToolCallIntentEvent,
     ToolCallStatusChangedEvent,
 )
 from app.core.events.tool_runtime_event import (
+    TerminalCommandStartedData,
     TerminalOutputDeltaData,
     ToolCallRuntimeUpdateEvent,
 )
@@ -43,7 +44,9 @@ __all__ = [
     "RunInitializedEvent",
     "RunResultUpdatedEvent",
     "RunStatusChangedEvent",
+    "TaskQueueChangedEvent",
     "TaskTitleUpdatedEvent",
+    "TerminalCommandStartedData",
     "TerminalOutputDeltaData",
     "ToolCallCreatedEvent",
     "ToolCallIntentEvent",

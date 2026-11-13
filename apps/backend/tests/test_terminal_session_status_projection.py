@@ -232,14 +232,16 @@ def test_refresh_after_task_deleted_is_silent(
     service.refresh_terminal_sessions(task_id + 1000)
 
 
-def test_snapshot_read_rejects_entries_violating_contract(
+def test_refresh_rejects_entries_violating_contract(
     terminals: _FakeTerminals, task_id: int
 ) -> None:
-    """契约校验统一在 ``validate_snapshot``：刷新不重复校验，违约条目在读取快照时暴露。"""
+    """契约守卫在写入侧：违约条目在刷新写入时暴露，工作副本随之丢弃，之后的读取按 canonical 重建
+    （重建时同样整份校验，违约照样暴露），不会把违约内容发出去。"""
 
     service = ConversationTaskStateService()
     service.get_state(task_id)
     terminals.sessions[task_id] = [_entry(status="bogus")]
-    service.refresh_terminal_sessions(task_id)
+    with pytest.raises(ValueError):
+        service.refresh_terminal_sessions(task_id)
     with pytest.raises(ValueError):
         service.get_state(task_id)

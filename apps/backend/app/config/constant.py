@@ -63,15 +63,12 @@ class Constant:
         # 按行读取的默认尾部行数与单次 limit 上限。
         READ_DEFAULT_TAIL: int = 40
         READ_MAX_LIMIT: int = 400
-        # write / 条件等待返回新增行超预算时保留的头尾行数。
-        OBSERVATION_HEAD_LINES: int = 20
-        OBSERVATION_TAIL_LINES: int = 60
         # 观察文本中单行的最大字符数，超出部分以省略标记代替。
         OBSERVATION_LINE_MAX_CHARS: int = 2000
         # 卡片里命令输出保留的最近字符数；完整输出在日志文件里。每次重新订阅，首帧都要带上全部卡片，
         # 窗口越大重连越慢。
         DISPLAY_OUTPUT_WINDOW_CHARS: int = 256 * 1024
-        # write 默认等待：输出静默 500ms，总超时 3s。
+        # terminal_read 条件等待的缺省值：输出静默 500ms，总超时 3s。
         WAIT_DEFAULT_QUIET_MS: int = 500
         WAIT_DEFAULT_TIMEOUT_MS: int = 3000
         # 条件等待只在前台进行、占着工具线程，总超时上限因此要短；
@@ -91,7 +88,7 @@ class Constant:
         MAX_INPUT_QUEUE_FRAMES: int = 64
         # Worker 输入队列最大字节数（需容纳一帧 base64 编码的最大原始输入）。
         MAX_INPUT_QUEUE_BYTES: int = 512 * 1024
-        # Worker 子进程启动时注入的环境变量键，用于标识自身为终端 worker。
+        # 宿主拉起后端时注入的环境变量键：值是 Terminal Worker 可执行文件路径，后端据此启动 worker。
         WORKER_ENV: str = "CODING_AGENT_TERMINAL_WORKER"
 
         # --- 交互通道（WebSocket terminal-v2） ---
@@ -302,15 +299,10 @@ class Constant:
         )
 
     class Transport:
-        """Assistant Transport 层共享常量：cosir 资源定位符与事件去重窗口。"""
+        """Assistant Transport 层共享常量：cosir 资源定位符与历史窗口。"""
 
         # 图片资源定位符：``cosir-attachment://<64hex>``。
         IMAGE_LOCATOR: re.Pattern[str] = re.compile(r"^cosir-attachment://[0-9a-f]{64}$")
-        # Conversation event 去重窗口容量：projector 保留最近 N 条 event_id 用于抵御重复投递。
-        # 依据：重复投递只发生在同一投递路径的近距离重放；按增量合批口径（32 字符/次）换算，
-        # 本窗口约等于 256KB 流式文本，远超任何可能的重放距离。窗口有界 ⇒ 内存上界恒定
-        # （约 1MB 量级），且不需要任何按 task 的生命周期清理钩子。
-        EVENT_DEDUP_WINDOW: int = 8192
         # 完整快照与每页更早历史大约带多少条消息（起点再往前对齐到一条用户消息）。长对话里每次
         # 打开、重连与重新同步只传最近这一段，更早的历史随用户往上翻按页取。
         HISTORY_WINDOW_MESSAGES: int = 100

@@ -57,7 +57,8 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     取消优先于挂起：工具要求等待时 Run 恰好被停，按取消落定。挂起先于步数上限：Agent 明确在等
     消息时不按「步数用完」失败，唤醒后回到这里再检查上限。挂起前 mailbox 已有可唤醒消息（如子 Agent
     结论在工具执行期间送达）就直接继续，省掉「挂起 → 复查 → 唤醒」一圈；之后才到达的消息仍由 actor
-    的挂起后复查兜住。通知不算（``WAKES``，与调度规则同一条）：不值得为它推进。前三类落定都不写入：
+    的挂起后复查兜住。是否可唤醒与调度规则同一条（``TaskMessage.wakes``）：多数通知不算，派生工作
+    被停止这类告知算——它在挂起前一刻到达时，挂起就再没有人来叫醒。前三类落定都不写入：
     外部队列行留给后续执行，执行内通知随 mailbox 重置丢弃。
     """
     rc = _runtime_context()
@@ -227,7 +228,7 @@ def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: b
                 context.update_tool_result_metadata(
                     call_id, ToolMessageMetadata(status="running"), session=session
                 )
-        elif isinstance(current.body, BackgroundResultBody) and current.body.tool_call_id is not None:
+        elif isinstance(current.body, BackgroundResultBody):
             background_event = settle_background_placeholder(
                 current.body.tool_call_id, current.body, step_id=step_id, session=session
             )

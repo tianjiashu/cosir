@@ -1,13 +1,17 @@
 """Agent 消息：另一个 Agent 交给本 Task 的输入。
 
-委派、追加消息、Team 节点输入，以及下级中途发来的消息。
+委派、追加消息、Team 节点输入、下级中途发来的消息，以及派生 Task 的汇报（来源带 ``report``）。
 """
 
 from typing import ClassVar
 
 from openai.types.chat import ChatCompletionUserMessageParam
 
-from app.core.workflow.message_queue.message_bodies.base import EnqueuedMessageBody, TaskMessageKind
+from app.core.workflow.message_queue.message_bodies.base import (
+    EnqueuedMessageBody,
+    TaskMessageKind,
+    WakeScope,
+)
 from app.core.workflow.message_queue.message_bodies.rendering import escape_tag, render_time
 from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
 from app.models.conversation_input import MessageSource, UserInputPresentation
@@ -25,23 +29,41 @@ class AgentMessageBody(EnqueuedMessageBody):
 
     KIND: ClassVar[TaskMessageKind] = "agent_message"
     TAG: ClassVar[str] = "agent_message"
-    PROMPT_GUIDE: ClassVar[str] = (
-        "a message from another agent, named by from and source_task_id. For a delegated or "
-        "forked assignment, the original caller receives the task's conclusion. For ordinary "
-        "messages, send a reply explicitly with send_message to source_task_id if needed."
+    PROMPT_GUIDE: ClassVar[str | None] = (
+        "a message from another agent, named by from and source_task_id (or source_team_run_id "
+        "for an Agent Team). When it carries report=..., it is the report of work you started: "
+        "a task you derived (a delegated child agent or a fork) or an approved Agent Team. "
+        "status says how its run ended, report=\"intermediate\" means it still has work running "
+        "and will report again, report=\"final\" means it has nothing left running. Derived tasks and "
+        "teams report to you automatically, so do not ask them to reply; for other messages, "
+        "reply explicitly with send_message to source_task_id if needed."
     )
     PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = True
-    WAKES: ClassVar[bool] = True
+    WAKE: ClassVar[WakeScope] = "new_or_active"
     text: str
     launch: RunLaunch
     source: MessageSource
 
     def render(self) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
         sender = self.source.name.replace('"', "'")
+        report = self.source.report
+        attributes = (
+            ""
+            if report is None
+            else (
+                f' report="{"intermediate" if report.intermediate else "final"}"'
+                f' status="{report.status}"'
+            )
+        )
+        origin = (
+            f'source_task_id="{self.source.task_id}"'
+            if self.source.task_id is not None
+            else f'source_team_run_id="{self.source.team_run_id}"'
+        )
         content = (
-            f'<{self.TAG} time="{render_time()}" source_task_id="{self.source.task_id}" '
-            f'from="{sender}">\n{escape_tag(self.text, self.TAG)}\n</{self.TAG}>'
+            f'<{self.TAG} time="{render_time()}" {origin} '
+            f'from="{sender}"{attributes}>\n{escape_tag(self.text, self.TAG)}\n</{self.TAG}>'
         )
         return (
             ChatCompletionUserMessageParam(role="user", content=content),

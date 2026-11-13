@@ -1,9 +1,14 @@
 """Conversation Task Context 持久化模型。"""
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.storage.model.base import StorageBase
+
+AWAITING_STATUS_CONDITION = "json_extract(metadata_json, '$.status') = 'pending'"
+"""部分索引 ``idx_task_context_awaiting`` 的条件；查询必须逐字使用它（见
+``ConversationTaskContextCrud.awaiting_user``）。只有等待占位与后台占位会以 ``pending`` 落库，
+索引因此只收录当下在等的极少数行，流式改写其他行不维护索引条目。"""
 
 
 class ConversationTaskContextModel(StorageBase):
@@ -27,6 +32,17 @@ class ConversationTaskContextModel(StorageBase):
     __table_args__ = (
         UniqueConstraint("task_id", "sequence", name="uq_task_context_task_seq"),
         Index("idx_task_context_task_run", "task_id", "run_id"),
+        # 覆盖计数查询用到的全部列：查询不必回表，规划器才稳定选它；只按键选时它与
+        # ``idx_task_context_task_run`` 代价相同，按 Task 计数会落到后者、扫这个 Task 的全部行。
+        # 只收录 pending 行，带上 metadata 也只占极少空间。
+        Index(
+            "idx_task_context_awaiting",
+            "task_id",
+            "run_id",
+            "include_in_context",
+            "metadata_json",
+            sqlite_where=text(AWAITING_STATUS_CONDITION),
+        ),
     )
 
     task_id: Mapped[int] = mapped_column(Integer, nullable=False)

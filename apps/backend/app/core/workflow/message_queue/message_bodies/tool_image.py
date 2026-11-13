@@ -23,10 +23,8 @@ class ToolImageBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     TAG: ClassVar[str] = "tool_image"
-    PROMPT_GUIDE: ClassVar[str] = (
-        "images produced by the tool call with that tool_call_id (for example a browser "
-        "screenshot); they are part of that call's result."
-    )
+    # 属性已说明是哪次调用产出的图片（前言规则：带 tool_call_id 的消息是那次调用的后续）。
+    PROMPT_GUIDE: ClassVar[str | None] = None
     tool_call_id: str
     tool_name: str
     image_paths: list[str]

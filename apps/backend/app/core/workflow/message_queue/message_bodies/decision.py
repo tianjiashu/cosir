@@ -4,7 +4,11 @@ from typing import Any, ClassVar, Literal
 
 from openai.types.chat import ChatCompletionUserMessageParam
 
-from app.core.workflow.message_queue.message_bodies.base import EnqueuedMessageBody, TaskMessageKind
+from app.core.workflow.message_queue.message_bodies.base import (
+    EnqueuedMessageBody,
+    TaskMessageKind,
+    WakeScope,
+)
 from app.core.workflow.message_queue.message_bodies.rendering import escape_tag, render_time
 from app.models.message_metadata import UserMessageMetadata
 
@@ -24,13 +28,13 @@ class DecisionBody(EnqueuedMessageBody):
 
     KIND: ClassVar[TaskMessageKind] = "user_decision"
     TAG: ClassVar[str] = "user_decision"
-    PROMPT_GUIDE: ClassVar[str] = (
-        "the user's approve/reject on a tool call that was waiting for their decision, matched "
-        "by `tool_call_id`. `feedback`, if present, is the user's own words about that call."
+    PROMPT_GUIDE: ClassVar[str | None] = (
+        "the user's own decision on the call named by `tool_call_id`; `feedback`, if present, "
+        "is in their own words."
     )
     PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = False
-    WAKES: ClassVar[bool] = True
+    WAKE: ClassVar[WakeScope] = "new_or_active"
     tool_call_id: str
     tool_name: str
     decision: Literal["approve", "reject"]

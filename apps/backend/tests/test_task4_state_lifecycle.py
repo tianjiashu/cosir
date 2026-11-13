@@ -335,7 +335,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             return [run]
 
     service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
-    task_runtime_spaces.get_or_create(7).replace_snapshot(
+    task_runtime_spaces.get_or_create(7).get_working_snapshot(lambda: 
         {
             "title": "task",
             "messages": [

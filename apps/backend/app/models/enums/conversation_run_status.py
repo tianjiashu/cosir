@@ -62,3 +62,12 @@ class RunTransition(Enum):
         self.sources = sources
         self.target = target
         self.resets_result = resets_result
+
+    @classmethod
+    def declared(cls, source: str, target: str) -> bool:
+        """``source → target`` 是否是某条声明过的迁移（不含自迁移）。"""
+        return any(source in transition.sources and transition.target == target for transition in cls)
+
+
+# 能恢复的状态就是恢复迁移的来源状态。
+RESUMABLE_RUN_STATUSES = RunTransition.RESUME.sources

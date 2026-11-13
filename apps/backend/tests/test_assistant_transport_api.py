@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
-from app.api.assistant_transport_api import (
+from app.assistant_transport.assistant_transport_api import (
     assistant_history_page,
     assistant_transport_attach,
     assistant_transport_state,

@@ -3,11 +3,13 @@
 所有消息进模型时都是 user 角色，来源由 ``TaskMessage.kind`` 表达（由 body 类型决定，持久化时按
 它还原 body），后端规则只读 ``kind``、不解析正文。何时并入只看 ``delivery``，是否投影只看
 ``project_to_transport``，投递方不做额外判断；两者的默认值由 body 类型决定，生产者可覆盖。能否
-推进（开新 Run、唤醒挂起的 Run）也是类型规则（``WAKES``），由 ``dispatch_policy`` 读取。
+推进（开新 Run、唤醒挂起的 Run）由消息体声明（``WAKE`` / ``wake_scope``），由 ``dispatch_policy`` 读取。
 
-每类消息渲染为一个标签（``TAG``）：属性与正文只放结构化字段，不附带说明文字；读法由类型自己
-声明（``PROMPT_GUIDE``），``SystemPromptBuilder`` 遍历 :data:`MODEL_INPUT_BODIES` 生成系统提示词
-里的消息协议并只写一次。标签名与读法和 render 同处一个类，改消息格式时就地同步，提示词无需另改。
+每类消息渲染为一个标签（``TAG``）：属性与正文只放结构化字段，不附带说明文字。系统提示词的消息
+协议只写模型从消息本身推不出来的东西：通用规则（带 ``tool_call_id`` 的是那次调用的后续、只有用户
+自己的话是指令）写在前言，各类型的读法（``PROMPT_GUIDE``）只写行为规则与正文里的语法，靠属性就能
+说明自己的类型写 ``None``；``SystemPromptBuilder`` 遍历 :data:`MODEL_INPUT_BODIES` 生成并只写
+一次。标签名与读法和 render 同处一个类，改消息格式时就地同步，提示词无需另改。
 外部来源文本（用户反馈、子 Agent / 后台任务输出）里出现的同名标签先转义，防止伪造边界。
 
 新增一种消息：在本包加一个 body 模块（入队的继承 :class:`EnqueuedMessageBody`；``ToolResultBody``、
@@ -17,7 +19,11 @@
 
 from app.core.workflow.message_queue.message_bodies.agent_message import AgentMessageBody
 from app.core.workflow.message_queue.message_bodies.background_result import BackgroundResultBody
-from app.core.workflow.message_queue.message_bodies.base import EnqueuedMessageBody, TaskMessageKind
+from app.core.workflow.message_queue.message_bodies.base import (
+    EnqueuedMessageBody,
+    TaskMessageKind,
+    WakeScope,
+)
 from app.core.workflow.message_queue.message_bodies.decision import DecisionBody
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, notices_to_context
 from app.core.workflow.message_queue.message_bodies.rendering import escape_tag, render_time
@@ -41,6 +47,7 @@ __all__ = [
     "ToolImageBody",
     "ToolResultBody",
     "UserInputBody",
+    "WakeScope",
     "escape_tag",
     "notices_to_context",
     "render_time",
@@ -72,8 +79,9 @@ _BODY_OF_KIND: dict[str, type[MessageBody]] = {
     for body in (UserInputBody, AgentMessageBody, NoticeBody, DecisionBody, BackgroundResultBody)
 }
 
-# 能推进 Run 的 kind（``WAKES``）：外部队列里只有这些算「有待处理消息」。启动调度据此判断是否
-# 要拉起 Task 的 actor——通知只随下一次推进并入，为它常驻一个 actor 没有意义。
+# 类型层面能推进 Run 的 kind（``WAKE`` 不是 ``none``）：外部队列里只有这些算「有待处理消息」。启动
+# 调度据此判断是否要拉起 Task 的 actor。通知不在其中：只唤醒活动 Run 的那几种，所在 Task 若有挂起
+# 的 Run，启动调度本来就会为它拉起 actor。
 ADVANCING_KINDS: frozenset[TaskMessageKind] = frozenset(
-    body.KIND for body in _BODY_OF_KIND.values() if body.WAKES
+    body.KIND for body in _BODY_OF_KIND.values() if body.WAKE != "none"
 )

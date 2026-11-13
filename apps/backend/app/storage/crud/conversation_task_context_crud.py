@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
+from app.storage.model.conversation_task_context_model import (
+    AWAITING_STATUS_CONDITION,
+    ConversationTaskContextModel,
+)
 from app.storage.store_engines import main_session_factory
 
 
@@ -59,6 +62,23 @@ class ConversationTaskContextCrud:
         return and_(
             func.json_type(metadata, "$.background") == "object",
             func.json_extract(metadata, "$.status") == "pending",
+        )
+
+    @staticmethod
+    def awaiting_user() -> ColumnElement[bool]:
+        """「等你操作」的 SQL 写法：``ConversationTaskContextRecord.awaits_user`` 的同一规则，改一处
+        必须改另一处。
+
+        tool 行只有等待占位与后台占位会以 ``pending`` 落库，没有后台工作记录的就是等待占位。
+        状态那一项用字面量而不是绑定参数，并与部分索引 ``idx_task_context_awaiting`` 的条件逐字
+        相同：SQLite 只有在查询条件能推出索引条件时才用部分索引，绑定参数推不出。
+        """
+        metadata = ConversationTaskContextModel.metadata_json
+        return and_(
+            text(AWAITING_STATUS_CONDITION),
+            func.coalesce(func.json_type(metadata, "$.background"), "null") != "object",
+            ConversationTaskContextModel.run_id.is_not(None),
+            ConversationTaskContextModel.include_in_context.is_(True),
         )
 
     def list_unsettled_placeholders(

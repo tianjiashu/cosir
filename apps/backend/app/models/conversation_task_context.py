@@ -12,6 +12,7 @@ from app.core.llm_provider.message_codec import validate_message
 from app.models.message_metadata import (
     EmptyMessageMetadata,
     MessageMetadata,
+    ToolMessageMetadata,
     empty_message_metadata,
     parse_message_metadata,
 )
@@ -55,6 +56,21 @@ class ConversationTaskContextRecord:
         return (
             self.include_in_context or self.project_to_transport
             or (self.run_id is None and self.sequence > 0)
+        )
+
+    @property
+    def awaits_user(self) -> bool:
+        """这一行是否是「等你操作」的调用：本地 Run 的 HITL 等待占位，且仍在上下文里。
+
+        决定入口、冷重建与 Task 状态推送共用这一条规则：继承来的副本（``run_id`` 为空）不能作出
+        决定，撤回移出上下文的调用已无法重放，都不算。SQL 写法见
+        ``ConversationTaskContextCrud.awaiting_user``，两处是同一规则，改一处必须改另一处。
+        """
+        return (
+            self.run_id is not None
+            and self.include_in_context
+            and isinstance(self.metadata, ToolMessageMetadata)
+            and self.metadata.awaiting_decision
         )
 
     @classmethod

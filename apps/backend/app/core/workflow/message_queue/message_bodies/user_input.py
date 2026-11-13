@@ -10,7 +10,11 @@ from typing import TYPE_CHECKING, ClassVar
 from openai.types.chat import ChatCompletionUserMessageParam
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.core.workflow.message_queue.message_bodies.base import EnqueuedMessageBody, TaskMessageKind
+from app.core.workflow.message_queue.message_bodies.base import (
+    EnqueuedMessageBody,
+    TaskMessageKind,
+    WakeScope,
+)
 from app.core.workflow.message_queue.message_bodies.rendering import (
     escape_tag,
     render_time,
@@ -72,8 +76,8 @@ class UserInputBody(EnqueuedMessageBody):
 
     KIND: ClassVar[TaskMessageKind] = "user_input"
     TAG: ClassVar[str] = "user_input"
-    PROMPT_GUIDE: ClassVar[str] = (
-        "the user talking to you. Capsules in it are pointers the user attached: "
+    PROMPT_GUIDE: ClassVar[str | None] = (
+        "the user's own words to you. Capsules in it are pointers the user attached: "
         "`<file path>` is a local file, `<ref path>` a workspace path (an empty path means "
         "the workspace root) with optional `lines` or `page`, `<skill name path>` a Skill "
         "the user picked. Read them with read_file (PDFs through a Skill or script); for "
@@ -82,7 +86,7 @@ class UserInputBody(EnqueuedMessageBody):
     )
     PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = True
-    WAKES: ClassVar[bool] = True
+    WAKE: ClassVar[WakeScope] = "new_or_active"
     text: str
     launch: RunLaunch
     presentation: UserInputPresentation
