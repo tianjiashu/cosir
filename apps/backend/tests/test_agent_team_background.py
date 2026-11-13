@@ -221,7 +221,7 @@ async def test_approved_team_reports_to_the_main_task(proposed_team, ending):
         if ending == "done":
             assert owner.model_config_id != first.model_config_id
             assert row.state_json["node_runtime"]["a"]["model_config_id"] == first.model_config_id
-        assert service.get_state(task_id)["background_tasks"] == []
+        assert depends.get_conversation_task_state_service().get_state(task_id)["background_tasks"] == []
         with pytest.raises(TaskCommandConflictError) as caught:
             await service.decide(task_id, CALL_ID, decision)
         assert caught.value.code == "DECISION_NOT_AWAITED"

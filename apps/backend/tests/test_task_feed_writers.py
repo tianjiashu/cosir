@@ -51,6 +51,9 @@ def test_workspace_and_task_writes_publish_after_commit(feed: _RecordingFeed, tm
     tasks.update_title(task.id, "named")
     assert feed.events[-1] == ("task_catalog", task.id)
     assert TaskCrud().get(task.id).title == "named"
+    published = len(feed.events)
+    tasks.update_title(task.id, "named")  # 标题没变：不写库、不推送
+    assert len(feed.events) == published
 
     tasks.delete_task(task.id)
     assert feed.events[-1] == ("catalog", workspace.id, TaskType.USER)

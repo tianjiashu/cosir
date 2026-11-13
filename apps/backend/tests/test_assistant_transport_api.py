@@ -8,10 +8,9 @@ import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
-from app.assistant_transport.assistant_transport_api import (
+from app.api.assistant_transport_api import (
     assistant_history_page,
     assistant_transport_attach,
-    assistant_transport_state,
 )
 from app.api.tasks_api import get_task
 from app.app import app
@@ -21,39 +20,6 @@ from app.models.task_extra import TaskExtra
 from app.service.depends import get_workspace_service
 from app.service.recover_service import RecoverService
 from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-
-
-def _snapshot(
-    run_id: int | None = None, status: str = "running", end_reason: str | None = None
-) -> dict[str, object]:
-    if run_id is None:
-        return {"messages": [], "messageOffset": 0, "activity": None}
-    return {
-        "messages": [
-            {
-                "id": "1",
-                "role": "user",
-                "parts": [],
-                "turn": run_id,
-                "inherited": False,
-                "outcome": None,
-                "source": None,
-            }
-        ],
-        "messageOffset": 0,
-        "activity": {
-            "modelActivity": None,
-            "turn": None,
-            "resumable": False,
-            "status": status,
-            "endReason": end_reason,
-            "error": None,
-            "usage": None,
-            "contextWindowTotal": None,
-            "startedAt": "2026-01-01T00:00:00+00:00",
-            "launch": None,
-        },
-    }
 
 
 def test_task_route_has_one_get_method() -> None:
@@ -211,31 +177,6 @@ def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
         (8, RunTransition.CANCEL, "runtime_restarted"),
     ]
     assert repaired == [(1, 7), (2, 8)]
-
-
-def test_state_route_has_one_read_method() -> None:
-    routes = [
-        route
-        for route in app.routes
-        if isinstance(route, APIRoute) and route.path == "/tasks/{task_id}/assistant/state"
-    ]
-
-    assert len(routes) == 1
-    assert routes[0].methods == {"GET"}
-
-
-@pytest.mark.asyncio
-async def test_state_endpoint_returns_task_view_snapshot() -> None:
-    snapshot = _snapshot()
-
-    class _TransportService:
-        def get_state(self, _task_id: int) -> dict[str, object]:
-            return snapshot
-
-    result = await assistant_transport_state(1, _TransportService())
-
-    assert result == snapshot
-    assert set(result) == {"messages", "messageOffset", "activity"}
 
 
 @pytest.mark.asyncio
