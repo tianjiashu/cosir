@@ -131,6 +131,9 @@ jobs:
 
       - name: Pytest (terminal subsystem)
         working-directory: apps/backend
+        # Linux 不在后端的默认数据根平台里（只有 macOS / Windows 回落用户主目录），直跑后端须显式注入。
+        env:
+          CODING_AGENT_DATA_DIR: ${{ runner.temp }}/cosir-data
         run: |
           uv run pytest -q \
             tests/test_terminal_*.py \
