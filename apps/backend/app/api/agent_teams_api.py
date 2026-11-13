@@ -257,8 +257,8 @@ async def get_agent_team_run(run_id: int) -> AgentTeamRunResponse:
 async def cancel_agent_team_run(run_id: int) -> dict[str, int]:
     """用户单独停止一个运行中的 Agent Team；只表示停止已被接受，终态以 TeamRun 状态为准。
 
-    Team 是编排实体，按 TeamRun 停止，不经工具调用取消：节点与档案收尾后，主 Task 得到一条不唤醒
-    的停止通知（见 ``derived_report``）。
+    Team 是编排实体，按 TeamRun 停止，不经工具调用取消：节点与档案收尾后，主 Task 得到一条停止
+    通知，只唤醒它挂起的 Run、不开新 Run（见 ``derived_report``）。
 
     异常:
         HTTPException: TeamRun 不在运行中（已落定、仍待确认或不存在）时 409。

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from app.assistant_transport.stream import TransportFrame
 from app.core.events import TaskQueueChangedEvent, WorkflowEvent
-from app.service.depends import get_conversation_task_state_service, get_task_status_feed
+from app.service.depends import get_conversation_task_state_service, get_task_feed
 
 if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_task_state_service import (
@@ -43,8 +43,11 @@ class ConversationEventProjector:
             self._state_service.refresh_queued_messages(event.task_id)
             return None
         change = self._state_service.apply_planned(event)
-        # Task 状态推送：执行状态随 Run 开始与迁移变化，等你操作随工具调用状态迁移变化（等待占位
-        # 的写入、决定被接收、Run 外结算都经这个事件）；在投影锁外发布（要读库）。
+        # Task 推送：执行状态随 Run 开始与迁移变化，等你操作随工具调用状态迁移变化（等待占位
+        # 的写入、决定被接收、Run 外结算都经这个事件）；Run 开始还刷新了 Task 的排序时间，是目录
+        # 行的变化。都在投影锁外发布（要读库）。
         if event.type in ("run_initialized", "run_status_changed", "tool_call_status_changed"):
-            get_task_status_feed().publish(event.task_id)
+            get_task_feed().publish_status(event.task_id)
+        if event.type == "run_initialized":
+            get_task_feed().publish_task_catalog(event.task_id)
         return change

@@ -1,35 +1,25 @@
 from typing import cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.assistant_transport.request import TransportRequestError
 from app.assistant_transport.state.message_identity import parse_reply_id
 
 
 class ForkTaskRequest(BaseModel):
-    """校验手动分叉请求：``replyMessageId`` 是对话界面里一条回复的 wire 消息 id。"""
+    """校验手动分叉请求：``replyMessageId`` 是对话界面里一条回复的 wire 消息 id，只收这一个字段。
 
-    model_config = ConfigDict(populate_by_name=True)
+    不合法时走框架默认的 422（前端只从回复脚注发出合法 id，这条路实际走不到）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     reply_message_id: str = Field(alias="replyMessageId")
 
-    @model_validator(mode="before")
+    @field_validator("reply_message_id")
     @classmethod
-    def validate_wire(cls, value: object) -> object:
-        """将 Fork 请求的纯 wire 校验转换为项目统一的结构化异常。"""
-
-        if (
-            not isinstance(value, dict)
-            or set(value) != {"replyMessageId"}
-            or not isinstance(value["replyMessageId"], str)
-            or parse_reply_id(value["replyMessageId"]) is None
-        ):
-            raise TransportRequestError(
-                status_code=422,
-                code="FORK_REPLY_ID_REQUIRED",
-                message="fork 请求必须提供 replyMessageId",
-                retryable=False,
-            )
+    def _is_a_reply_id(cls, value: str) -> str:
+        if parse_reply_id(value) is None:
+            raise ValueError("replyMessageId must be a reply id")
         return value
 
     @property

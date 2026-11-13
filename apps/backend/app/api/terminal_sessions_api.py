@@ -1,8 +1,8 @@
 """终端工作台 HTTP 路由：可用 shell、活跃会话计数、用户新建与关闭会话。
 
-会话的画面、输入、尺寸与租约走每会话 WebSocket（``terminal_stream_api``），会话列表走 Transport
-snapshot；本模块只做 wire 映射与错误映射；shell 清单与活跃计数直接读 ``ShellResolver`` 与终端
-服务，新建 / 关闭的编排在 ``TerminalWorkbenchService``。阻塞调用（探测 shell、启动
+会话的画面、输入与尺寸走每会话 WebSocket（``terminal_stream_api``），会话列表走 Transport
+snapshot；本模块只做 wire 映射与错误映射；shell 清单与活跃计数直接读 ``available_session_shells``
+与终端服务，新建 / 关闭的编排在 ``TerminalWorkbenchService``。阻塞调用（探测 shell、启动
 worker、清理进程树）放进工作线程，不占事件循环。
 
 错误统一为 ``detail={code, message, retryable}``：Task / 会话不存在或不属于该 Task 404，容量、
@@ -34,7 +34,7 @@ from app.tools.terminal_runtime.errors import (
     TerminalSessionOwnershipError,
     TerminalWorkerUnavailableError,
 )
-from app.tools.terminal_runtime.session.shell_resolver import ShellResolver
+from app.tools.terminal_runtime.session.shell_resolver import available_session_shells
 
 _service = TerminalWorkbenchService()
 
@@ -77,7 +77,7 @@ def _raise_terminal_error(exc: TerminalError, *, task_id: int, operation: str) -
 async def list_terminal_shells() -> TerminalShellsResponse:
     """列出当前宿主可用的 shell 与集成支持。"""
 
-    shells = await asyncio.to_thread(ShellResolver.available)
+    shells = await asyncio.to_thread(available_session_shells)
     return TerminalShellsResponse(shells=shells)
 
 

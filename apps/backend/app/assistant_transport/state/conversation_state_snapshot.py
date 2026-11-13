@@ -4,7 +4,8 @@
 改声明，校验跟着走。
 """
 
-from typing import Literal, NotRequired, get_args
+from collections.abc import Callable, Iterable
+from typing import Literal, NotRequired, cast, get_args
 
 from typing_extensions import TypedDict
 
@@ -23,6 +24,7 @@ from app.assistant_transport.state.conversation_state_handoff import (
     ConversationHandoff,
     validate_handoffs,
 )
+from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_message import (
     ConversationQueuedMessage,
     ConversationStateMessage,
@@ -153,6 +155,51 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
     validate_background_tasks(snapshot["background_tasks"])
     validate_foreground_waits(snapshot["foreground_waits"])
     validate_handoffs(snapshot["handoffs"])
+
+
+def validate_mutated(
+    state: ConversationStateSnapshot, mutations: Iterable[ConversationStateMutation]
+) -> None:
+    """按变更触及的范围校验工作副本：工作副本物化时整份校验过，之后每次变更只需守住它碰过的部分。
+
+    - ``append-text`` 只加长一个已有字符串，不会改变形状，不校验（流式 token 与终端输出的热路径）；
+    - 只改某条消息内部（路径深入到消息之下、且不是消息 id）：只校验这条消息；
+    - 与消息无关的顶层字段（标题、当前活动、终端会话、看板、前台等待、交接）：只校验该字段；
+    - 其余（整条消息替换或追加、消息 id、排队消息——它们与消息共用 id 唯一性）：整份校验。
+
+    读取不再校验，所以这里是快照契约在运行期的唯一守卫。
+
+    异常:
+        ValueError: 变更后的快照不满足契约。
+    """
+
+    message_indexes: set[int] = set()
+    fields: set[str] = set()
+    for mutation in mutations:
+        if mutation.kind == "append-text":
+            continue
+        path = mutation.path
+        if path[0] == "messages" and len(path) >= 3 and path[2] != "id":
+            message_indexes.add(int(path[1]))
+        elif len(path) >= 1 and path[0] in _INDEPENDENT_FIELD_VALIDATORS:
+            fields.add(str(path[0]))
+        else:
+            validate_snapshot(state)
+            return
+    for index in message_indexes:
+        _validate_message(state["messages"][index], set())
+    snapshot = cast(dict[str, object], state)
+    for field in fields:
+        _INDEPENDENT_FIELD_VALIDATORS[field](snapshot[field])
+
+
+def _validate_title(value: object) -> None:
+    require_non_empty_str(value, "snapshot title")
+
+
+def _validate_optional_activity(value: object) -> None:
+    if value is not None:
+        _validate_activity(value)
 
 
 def _validate_fork(value: object) -> None:
@@ -362,3 +409,14 @@ def _validate_tool_call_part(part: object) -> None:
         )
     if "background" in tool_part:
         validate_background_work(tool_part["background"])
+
+
+# 与消息无关、可单独校验的顶层字段（见 :func:`validate_mutated`）。
+_INDEPENDENT_FIELD_VALIDATORS: dict[str, Callable[[object], None]] = {
+    "title": _validate_title,
+    "activity": _validate_optional_activity,
+    "terminal_sessions": validate_terminal_sessions,
+    "background_tasks": validate_background_tasks,
+    "foreground_waits": validate_foreground_waits,
+    "handoffs": validate_handoffs,
+}

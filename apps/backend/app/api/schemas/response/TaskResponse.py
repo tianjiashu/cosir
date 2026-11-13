@@ -22,7 +22,7 @@ class TaskResponse(BaseModel):
 
     Task 不绑定 Agent：本响应不含 agent_id，Agent 身份固化在各 Run 上。不下发 ``current_run_id``
     （后端的当前 Run 指针，对话界面的 Run 身份只在 snapshot 里供诊断），也不下发执行状态：
-    界面的 Task 状态只来自 ``GET /task-status/stream``，不在这里留第二个读取口。
+    界面的 Task 状态只来自 ``GET /task-feed/stream``，不在这里留第二个读取口。
 
     参数:
         task_id: 任务标识。

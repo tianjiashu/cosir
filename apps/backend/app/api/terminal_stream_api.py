@@ -1,7 +1,7 @@
 """每会话可写交互通道（WebSocket ``terminal-v2``）。
 
 一个 xterm 实例对应一条连接：首帧 ``attach`` 后服务端先重放输出、再推送实时输出与尺寸 / 输入标记 /
-退出帧；客户端可发送 ``input`` / ``resize``（交还交接走 HTTP 决定入口）。
+退出帧；客户端可发送 ``input`` / ``resize``。
 连接建立时按 Task 归属取到会话 runtime，之后输入直接调用它（只做内存更新与非阻塞入队），输出由订阅的
 ``asyncio.Queue`` 推送。断开连接只移除订阅，不关闭会话、不取消 Run。
 
@@ -32,8 +32,8 @@ from app.tools.terminal_runtime.session.session_runtime import TerminalSessionRu
 from app.tools.terminal_runtime.session.session_service import TerminalSessionService
 from app.tools.terminal_runtime.session.stream import (
     OVERFLOW_EVENT_TYPE,
-    PROTOCOL,
     TerminalStreamSubscription,
+    stream_identity,
 )
 
 _PROTOCOL_ERROR_CODE = "TERMINAL_STREAM_PROTOCOL_ERROR"
@@ -83,12 +83,7 @@ async def terminal_session_stream(
             await websocket.send_json(attachment.terminal_event)
             await websocket.close(code=1000)
             return
-        identity = {
-            "protocol": PROTOCOL,
-            "session_id": session_id,
-            "generation": attachment.attached["generation"],
-        }
-        await _serve(websocket, subscription, runtime, session_id, identity)
+        await _serve(websocket, subscription, runtime, session_id)
     except WebSocketDisconnect:
         pass
     except (ValueError, TypeError) as exc:  # json.JSONDecodeError 是 ValueError 子类
@@ -116,9 +111,10 @@ async def _serve(
     subscription: TerminalStreamSubscription,
     runtime: TerminalSessionRuntime,
     session_id: str,
-    identity: dict[str, object],
 ) -> None:
     """并发运行推送与接收；任一方结束（退出、重同步、断开、协议错误）即收尾另一方。"""
+
+    identity = stream_identity(session_id)
 
     send_lock = asyncio.Lock()
 
@@ -266,8 +262,7 @@ async def _send_protocol_error(
     try:
         await websocket.send_json(
             {
-                "protocol": PROTOCOL,
-                "session_id": session_id,
+                **stream_identity(session_id),
                 "type": "protocol_error",
                 "code": code,
                 "message": message,

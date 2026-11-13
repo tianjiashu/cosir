@@ -25,6 +25,7 @@ from app.assistant_transport.state.conversation_state_message import Conversatio
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import (
     ConversationStateSnapshot,
+    validate_mutated,
     validate_snapshot,
 )
 from app.assistant_transport.state.conversation_state_terminal_session import (
@@ -32,7 +33,7 @@ from app.assistant_transport.state.conversation_state_terminal_session import (
     to_terminal_session,
 )
 from app.assistant_transport.state.message_identity import user_message_id
-from app.assistant_transport.state.snapshot_window import HistoryPage, history_page
+from app.assistant_transport.state.snapshot_window import HistoryPage, history_page, window_snapshot
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.configuration import get_tool_registry
@@ -57,8 +58,12 @@ class ConversationTaskStateService:
     ``command_results``）以及进行中的交接（交接登记表）。之后复用这份工作副本，直到撤回重新发布、
     无人订阅时卸载或进程重置。
 
-    并发：``_lock`` 是每个 space 快照工作副本的**唯一串行化点**：懒重建、投影变更、发布、订阅注册与
-    删除清理全部经过它，因此 space 自身不持有快照锁（见 ``app.task_runtime.task_runtime_space``）。
+    契约守卫在写入侧：工作副本物化时整份校验一次，之后每次变更按触及范围校验（``validate_mutated``）；
+    读取与发布只裁出历史窗口、只拷贝窗口，不再校验，所以读取成本与历史长度无关。
+
+    并发：``_lock`` 是全部 space 快照工作副本的**唯一串行化点**（进程内一把锁）：懒重建、投影变更、
+    发布、订阅注册与删除清理全部经过它，因此 space 自身不持有快照锁（见
+    ``app.task_runtime.task_runtime_space``）。
     「Task 已删除」由 space 登记表在取 space 时拒绝（``KeyError``），这里不再另判。
     """
 
@@ -72,18 +77,21 @@ class ConversationTaskStateService:
         self._subscribers: dict[int, set[Subscriber]] = {}
 
     def get_state(self, task_id: int) -> ConversationStateSnapshot:
-        """返回已校验的完整快照（深拷贝），首次访问时懒重建。
+        """返回离开后端的快照：只带最近一段历史（``window_snapshot``），首次访问时懒重建。
+
+        先裁窗口再深拷贝：完整历史留在工作副本里，拷贝与序列化只付窗口的代价。不在这里校验——
+        工作副本由写入侧保证满足契约（见类说明）。
 
         异常:
             KeyError: Task 不存在或在本进程内已被删除。
+            ValueError: 首次物化的重建结果不满足快照契约。
             sqlalchemy.exc.SQLAlchemyError: canonical 数据源读取失败。
         """
 
         with self._lock:
             space = task_runtime_spaces.get_or_create(task_id)
-            state = space.get_snapshot(lambda: self._rebuild(task_id))
-            validate_snapshot(state)
-            return state
+            state = space.get_working_snapshot(lambda: self._materialize(task_id))
+            return copy.deepcopy(window_snapshot(state))
 
     def get_history_page(self, task_id: int, end: int) -> HistoryPage:
         """完整历史中位置 ``end`` 之前的一页；只拷贝这一页，不拷贝整份工作副本。
@@ -98,7 +106,7 @@ class ConversationTaskStateService:
 
         with self._lock:
             space = task_runtime_spaces.get_or_create(task_id)
-            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+            state = space.get_working_snapshot(lambda: self._materialize(task_id))
             return copy.deepcopy(history_page(state["messages"], end))
 
     # ── 进程内与队列事实的整表刷新 ──────────────────────────────────────────
@@ -129,7 +137,7 @@ class ConversationTaskStateService:
 
     def refresh_terminal_sessions(self, task_id: int) -> None:
         """会话变化通知入口：由 ``TerminalSessionRuntime.notify_changed`` 经终端副作用执行器调用
-        （非 PTY 读线程、锁外），任意线程可调。条目由本进程终端服务按契约产出，校验统一在读取快照时。"""
+        （非 PTY 读线程、锁外），任意线程可调。条目在写入工作副本时按字段校验（见 ``_refresh``）。"""
 
         self._refresh(task_id, {"terminal_sessions": lambda _state: self._terminal_sessions(task_id)})
 
@@ -164,7 +172,7 @@ class ConversationTaskStateService:
             space = task_runtime_spaces.get(task_id)
             if space is None or not space.has_snapshot():
                 return
-            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+            state = space.get_working_snapshot(lambda: self._materialize(task_id))
             snapshot = cast(dict[str, object], state)
             mutations = tuple(
                 ConversationStateMutation("set", (key,), value)
@@ -175,6 +183,7 @@ class ConversationTaskStateService:
                 return
             for mutation in mutations:
                 mutation.apply_to(state)
+            validate_mutated(state, mutations)
             self._publish(TransportFrame(task_id=task_id, kind="mutation", mutations=mutations))
 
     @staticmethod
@@ -231,7 +240,7 @@ class ConversationTaskStateService:
         task_id = event.task_id
         with self._lock:
             space = task_runtime_spaces.get_or_create(task_id)
-            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
+            state = space.get_working_snapshot(lambda: self._materialize(task_id))
             mutations = list(plan_event(event, state, presentation_catalog(get_tool_registry())))
             for mutation in mutations:
                 mutation.apply_to(state)
@@ -243,10 +252,7 @@ class ConversationTaskStateService:
                     mutation = ConversationStateMutation("set", ("background_tasks",), background)
                     mutation.apply_to(state)
                     mutations.append(mutation)
-            # 只追加正文的 token 帧不改变快照形状或任何生命周期不变量，``apply_to`` 的类型检查对这条
-            # 热路径已足够；结构性变更付出整份校验的代价。
-            if any(mutation.kind != "append-text" for mutation in mutations):
-                validate_snapshot(state)
+            validate_mutated(state, mutations)
             change = TransportFrame(task_id=task_id, kind="mutation", mutations=tuple(mutations))
             if mutations:
                 self._publish(change)
@@ -268,7 +274,7 @@ class ConversationTaskStateService:
         space = task_runtime_spaces.get(task_id)
         if space is None or not space.has_snapshot():
             return
-        activity = space.get_working_snapshot(lambda: self._rebuild(task_id))["activity"]
+        activity = space.get_working_snapshot(lambda: self._materialize(task_id))["activity"]
         if activity is not None and activity["status"] == ConversationRunStatus.RUNNING.value:
             return
         space.unload_snapshot()
@@ -296,10 +302,11 @@ class ConversationTaskStateService:
         with self._lock:
             space = task_runtime_spaces.get_or_create(task_id)
             space.unload_snapshot()
-            state = space.get_working_snapshot(lambda: self._rebuild(task_id))
-            validate_snapshot(state)
+            state = space.get_working_snapshot(lambda: self._materialize(task_id))
             self._publish(
-                TransportFrame(task_id=task_id, kind="full", state=copy.deepcopy(state))
+                TransportFrame(
+                    task_id=task_id, kind="full", state=copy.deepcopy(window_snapshot(state))
+                )
             )
 
     def subscribe_with_snapshot(
@@ -368,6 +375,13 @@ class ConversationTaskStateService:
             with suppress(RuntimeError):
                 subscriber.loop.call_soon_threadsafe(subscriber.close)
 
+    def _materialize(self, task_id: int) -> ConversationStateSnapshot:
+        """工作副本的加载函数：重建并整份校验一次；之后由 ``validate_mutated`` 守住每次变更。"""
+
+        state = self._rebuild(task_id)
+        validate_snapshot(state)
+        return state
+
     def _rebuild(self, task_id: int) -> ConversationStateSnapshot:
         """读取 canonical 记录与进程内事实，装配完整快照（带结构化日志）。"""
 
@@ -419,10 +433,8 @@ class ConversationTaskStateService:
         return state
 
     def _publish(self, change: TransportFrame) -> None:
-        """full 帧先安装为工作副本，再把帧交给各订阅者；须持 ``_lock`` 调用。"""
+        """把帧交给各订阅者；须持 ``_lock`` 调用。full 帧的 ``state`` 是已裁好的窗口副本，工作副本不经它改变。"""
 
-        if change.state is not None:
-            task_runtime_spaces.get_or_create(change.task_id).replace_snapshot(change.state)
         for subscriber in tuple(self._subscribers.get(change.task_id, set())):
             try:
                 subscriber.loop.call_soon_threadsafe(subscriber.offer, change)

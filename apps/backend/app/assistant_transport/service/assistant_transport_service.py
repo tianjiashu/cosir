@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.assistant_transport.request import DecisionRequest, SendMessageRequest
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
-from app.assistant_transport.state.snapshot_window import HistoryPage, window_snapshot
+from app.assistant_transport.state.snapshot_window import HistoryPage
 from app.assistant_transport.stream.task_sse_stream import TaskSseStream
 from app.config.logging.logger import log
 from app.core.workflow.message_queue.task_message import (
@@ -264,7 +264,7 @@ class AssistantTransportService:
             KeyError: Task 不存在。
         """
         self._tasks.get_task(task_id)
-        return window_snapshot(self._states.get_state(task_id))
+        return self._states.get_state(task_id)
 
     def get_history_page(self, task_id: int, end: int) -> HistoryPage:
         """完整历史中位置 ``end`` 之前的一页（前端往上翻时取）。

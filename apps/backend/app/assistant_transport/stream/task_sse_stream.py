@@ -7,7 +7,6 @@ import json
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any
 
-from app.assistant_transport.state.snapshot_window import window_snapshot
 from app.assistant_transport.stream.subscriber import SubscriberClosed
 from app.assistant_transport.stream.transport_frame import TransportFrame
 from app.config.logging.logger import log
@@ -122,7 +121,7 @@ class TaskSseStream:
     async def sse_records(self, task_id: int) -> AsyncIterator[str]:
         """将帧编码为紧凑的 ``data: ...`` SSE 记录，静默边界编码为注释行。
 
-        full 帧的 state 在这里按历史窗口裁剪：首帧、重新发布都只带最近一段消息。
+        full 帧的 state 已由 state service 裁成历史窗口（首帧、重新发布都只带最近一段消息），这里原样编码。
         """
 
         async for frame in self.frames(task_id):
@@ -139,7 +138,7 @@ class TaskSseStream:
                 "resync_reason": frame.resync_reason,
             }
             if frame.state is not None:
-                payload["state"] = window_snapshot(frame.state)
+                payload["state"] = frame.state
             yield f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
 
