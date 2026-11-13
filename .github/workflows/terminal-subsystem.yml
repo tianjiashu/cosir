@@ -15,11 +15,7 @@ on:
     paths:
       - "apps/backend/app/tools/terminal_runtime/**"
       - "apps/backend/app/tools/tool_handler/terminal/**"
-      - "apps/backend/app/tools/tool_handler/terminal_session/**"
-      - "apps/backend/app/tools/tool_handler/execute_terminal.py"
-      - "../../apps/backend/app/tools/tool_models/terminal/execute_ter\
-        minal_args.py"
-      - "apps/backend/app/tools/tool_models/terminal_session_args.py"
+      - "apps/backend/app/tools/tool_models/terminal/**"
       - "apps/backend/app/tools/display/terminal_display.py"
       - "apps/backend/app/tools/shell/**"
       - "apps/backend/app/core/tool/execute/tool_terminal_projection.py"
@@ -47,11 +43,7 @@ on:
     paths:
       - "apps/backend/app/tools/terminal_runtime/**"
       - "apps/backend/app/tools/tool_handler/terminal/**"
-      - "apps/backend/app/tools/tool_handler/terminal_session/**"
-      - "apps/backend/app/tools/tool_handler/execute_terminal.py"
-      - "../../apps/backend/app/tools/tool_models/terminal/execute_ter\
-        minal_args.py"
-      - "apps/backend/app/tools/tool_models/terminal_session_args.py"
+      - "apps/backend/app/tools/tool_models/terminal/**"
       - "apps/backend/app/tools/display/terminal_display.py"
       - "apps/backend/app/tools/shell/**"
       - "apps/backend/app/core/tool/execute/tool_terminal_projection.py"
@@ -112,8 +104,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       # 真进程用例要求：worker 已构建（测试回落到 target/debug）、zsh 已安装（shell 集成用例）。
+      # Ubuntu 的 /etc/zsh/zshrc 会跑 compinit；runner 镜像里有组/他人可写的补全目录时它会停在
+      # 「忽略不安全目录？」的提问上，排在后面的集成脚本永远发不出 ready。按 compaudit（compinit
+      # 用的同一判定）收回写权限，修不干净就在这一步失败，而不是变成用例超时。
       - name: Install zsh
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
+          audit() { zsh -fc 'autoload -U compaudit; compaudit' 2>/dev/null || true; }
+          insecure=$(audit)
+          echo "compaudit 不安全目录：${insecure:-无}"
+          [ -z "$insecure" ] || echo "$insecure" | xargs sudo chmod g-w,o-w
+          remaining=$(audit)
+          [ -z "$remaining" ] || { echo "compaudit 仍报告不安全目录：$remaining"; exit 1; }
 
       - name: Build Terminal Worker
         run: cargo build --package cosir-terminal-worker
@@ -128,10 +130,7 @@ jobs:
           uv run ruff check \
             app/tools/terminal_runtime \
             app/tools/tool_handler/terminal \
-            app/tools/tool_handler/terminal_session \
-            app/tools/tool_handler/execute_terminal.py \
-            app/tools/tool_models/execute_terminal_args.py \
-            app/tools/tool_models/terminal_session_args.py \
+            app/tools/tool_models/terminal \
             app/tools/display/terminal_display.py \
             app/tools/shell \
             app/core/tool/execute/tool_terminal_projection.py \
@@ -142,6 +141,9 @@ jobs:
 
       - name: Pytest (terminal subsystem)
         working-directory: apps/backend
+        # Linux 不在后端的默认数据根平台里（只有 macOS / Windows 回落用户主目录），直跑后端须显式注入。
+        env:
+          CODING_AGENT_DATA_DIR: ${{ runner.temp }}/cosir-data
         run: |
           uv run pytest -q \
             tests/test_terminal_*.py \
