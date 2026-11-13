@@ -12,8 +12,13 @@ import threading
 from collections.abc import Callable, Iterator
 
 from app.config.logging.logger import log
-from app.core.events import TerminalOutputDeltaData, ToolCallRuntimeUpdateEvent
+from app.core.events import (
+    TerminalCommandStartedData,
+    TerminalOutputDeltaData,
+    ToolCallRuntimeUpdateEvent,
+)
 from app.core.events.event_sink import EventSink
+from app.core.events.tool_runtime_event import ToolCallRuntimeUpdateData
 from app.core.tool.schemas.tool_execution_context import ToolExecutionContext
 
 # 合并窗口：读取线程按 4KB 块回调，逐块发事件会让投影与 SSE 帧数随输出线性膨胀。
@@ -62,6 +67,17 @@ class LiveOutputChannel:
         if loop is None or sink is None:
             return None
         return cls(execution_context, loop, sink)
+
+    def start(self, display_data: dict[str, object]) -> None:
+        """发布卡片的初始展示数据（命令与工作目录）；须在命令拉起、``emit`` 之前调用。
+
+        与输出块走同一个 ``call_soon_threadsafe`` 队列：事件循环按先进先出执行回调，输出块的发布
+        至少晚一个合并窗口，所以初始展示必然先到，投影不需要「第一块输出顺便建展示」的特例。
+        """
+        data = TerminalCommandStartedData(
+            kind="terminal_command_started", display_data=display_data
+        )
+        self._wake_loop(lambda: self._publish(data, seq=0))
 
     def emit(self, text: str) -> None:
         """接收读取线程的原始文本片段；通道关闭后静默丢弃。"""
@@ -138,26 +154,10 @@ class LiveOutputChannel:
             timer.cancel()
 
         for text in _iter_chunks(pending):
-            try:
-                self._sink(
-                    ToolCallRuntimeUpdateEvent(
-                        task_id=self._context.task_id,
-                        run_id=self._context.run_id,
-                        tool_call_id=self._context.tool_call_id,
-                        seq=self._seq,
-                        data=TerminalOutputDeltaData(kind="terminal_output_delta", text=text),
-                    )
-                )
-            except Exception:
-                log.exception(
-                    "terminal_output_publish_failed",
-                    extra={
-                        "msg": "终端输出发布失败，继续等待最终工具结果",
-                        "data": self._log_data(seq=self._seq),
-                    },
-                )
-            finally:
-                self._seq += 1
+            self._publish(
+                TerminalOutputDeltaData(kind="terminal_output_delta", text=text), seq=self._seq
+            )
+            self._seq += 1
 
         should_reschedule = False
         with self._lock:
@@ -167,6 +167,27 @@ class LiveOutputChannel:
                 should_reschedule = True
         if should_reschedule:
             self._wake_loop(self._schedule_drain)
+
+    def _publish(self, data: ToolCallRuntimeUpdateData, *, seq: int) -> None:
+        """在事件循环上交给 sink；失败只记日志，最终工具结果仍会带权威展示数据到达。"""
+        try:
+            self._sink(
+                ToolCallRuntimeUpdateEvent(
+                    task_id=self._context.task_id,
+                    run_id=self._context.run_id,
+                    tool_call_id=self._context.tool_call_id,
+                    seq=seq,
+                    data=data,
+                )
+            )
+        except Exception:
+            log.exception(
+                "terminal_output_publish_failed",
+                extra={
+                    "msg": "终端运行期更新发布失败，继续等待最终工具结果",
+                    "data": self._log_data(seq=seq, update=data.kind),
+                },
+            )
 
 
 def _iter_chunks(texts: list[str]) -> Iterator[str]:

@@ -46,9 +46,10 @@ def build_terminal_display_data(
     return data
 
 
-def build_terminal_placeholder_display_data(*, command: str, workdir: Path) -> dict[str, Any]:
-    """命令转到后台时占位卡片的展示数据：只有命令与工作目录，还没有输出与退出码。
+def build_terminal_started_display_data(*, command: str, workdir: Path) -> dict[str, Any]:
+    """命令已拉起、还没有结论时的展示数据：只有命令与工作目录，没有输出与退出码。
 
+    两处共用同一形状：前台命令启动时经实时通道交给卡片（输出块随后追加），后台占位写入的展示数据。
     「在后台」不写在这里：它是所有后台结果共有的事实，由占位行 metadata 的 ``background`` 投影到
     工具 part（持久化、结算时保留），前端统一读取，不按工具各存一份。卡片状态以 part 生命周期为准
     （占位为 ``pending``，结论并入或撤销时推到终态）。

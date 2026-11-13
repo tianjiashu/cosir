@@ -17,17 +17,14 @@ shell 清单。
 
 import platform
 import threading
-from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tool.background.background_job import BackgroundConclusion, BackgroundJob
-from app.core.tool.background.background_registry import background_registry
-from app.core.tool.background.run import start_background_job
 from app.core.tool.execute.tool_output_budget import fit_head_tail
+from app.core.tool.placeholder_settlement import USER_CANCELLED_HINT
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
@@ -44,7 +41,7 @@ from app.core.workflow.cancel.conversation_run_cancellation_registry import canc
 from app.models.message_metadata import BackgroundWork
 from app.tools.display.terminal_display import (
     build_terminal_display_data,
-    build_terminal_placeholder_display_data,
+    build_terminal_started_display_data,
 )
 from app.tools.shell.host_shells import available_shells
 from app.tools.terminal_runtime.command.command_output import CommandOutput, CommandOutputSummary
@@ -54,6 +51,8 @@ from app.tools.terminal_runtime.command.local_backend import (
     shell_display_name,
 )
 from app.tools.terminal_runtime.command.running_command_registry import running_commands
+from app.tools.tool_handler.terminal.command_job import CommandConclusion, CommandJob
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.tools.tool_handler.terminal.live_output_channel import LiveOutputChannel
 from app.tools.tool_models.terminal.execute_terminal_args import (
     DEFAULT_COMMAND_TIMEOUT_S,
@@ -131,27 +130,12 @@ _PlaceholderReason = Literal["background", "detached"]
 
 
 class ExecuteTerminalTool(HandlerBase):
-    """在本机 shell 中同步执行一条终端命令的工具。
-
-    严格对齐现状文件工具的既定范式：类属性契约 + ``execute`` 实例方法 +
-    类内 ``to_definition()`` 构造 ``ToolDefinition`` + 模块级
-    ``build_execute_terminal_definition`` 薄封装。
+    """在本机 shell 中执行一条终端命令（前台等待或后台运行）的工具。
 
     本工具不持有任何工作根目录状态；命令执行时的允许作用域由运行时经
-    ``execution_context.workspace_root`` 注入（``execute`` 的
-    ``execution_context`` 关键字参数），而非构造参数。
-
-    ``args_model`` 与 ``description`` 按宿主平台装配：按平台选定参数模型（Windows / macOS
-    各一套），工具名始终为 ``execute_terminal``。
-
-    返回:
-        ``ExecuteTerminalTool`` 实例。
-
-    异常:
-        初始化阶段不主动抛出业务异常。
-
-    副作用:
-        无（实例构造不执行命令、不读取文件系统、不保存状态）。
+    ``execution_context.workspace_root`` 注入，而非构造参数。``args_model`` 按宿主平台装配
+    （Windows / macOS 各一套），工具名始终为 ``execute_terminal``；构造时探测本机可用 shell（见
+    ``__init__``），不执行命令。
     """
 
     name = TOOL_EXECUTE_TERMINAL
@@ -303,7 +287,7 @@ class ExecuteTerminalTool(HandlerBase):
                 由单停、上游收回、删除、``terminal_stop`` 或后端退出结束，用户停止 Task 不结束它）。
                 前台转到后台时沿用启动时的时限。
             workdir: 工作目录；缺省 ``execution_context.workspace_root``；相对路径相对
-                该根解析；绝对路径直接使用。
+                该根解析；解析后须在该根内（绝对路径同样校验）。
             background: ``True`` 立即转后台；``None`` 与 False 均在前台等待。
             execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。workdir 只是命令的
                 起点：命令自己可以 cd 或用绝对路径，文件系统副作用不受工作区约束
@@ -321,7 +305,7 @@ class ExecuteTerminalTool(HandlerBase):
 
         副作用:
             经 Terminal Worker 执行命令；输出持续经实时通道推给前端（含转后台后的占位卡片）；以本次
-            ``tool_call_id`` 在 ``background_registry`` 登记作业。
+            ``tool_call_id`` 在 ``command_results`` 登记作业。
         """
         log.info(
             "terminal_command_started",
@@ -359,10 +343,14 @@ class ExecuteTerminalTool(HandlerBase):
         """启动命令并返回前台结果或后台占位；等待与结果路由均按调用创建，不存入工具实例。
 
         仅前台工具线程等待命令，Run 取消时通知后端停止并等结果收尾；用户转后台与命令完成
-        由登记表裁决先后，路由保证交接期间到达的结论仍能回投。超时与进程清理由执行后端负责。
+        由登记表裁决先后，转后台时登记表接过结论订阅，交接期间到达的结论照样回投。超时与进程清理
+        由执行后端负责。
         """
         tool_call_id = execution_context.tool_call_id
         channel = LiveOutputChannel.open(execution_context)
+        if channel is not None:
+            # 先于命令拉起：卡片从启动起就有命令可看，输出块之后只往上追加。
+            channel.start(build_terminal_started_display_data(command=command, workdir=cwd))
         # 运行中可读：先把命令登记进登记表，再让输出收集点同时喂它（整理后的行）。
         running = running_commands.start(
             task_id=execution_context.task_id,
@@ -378,13 +366,9 @@ class ExecuteTerminalTool(HandlerBase):
             on_text=channel.emit if channel is not None else None,
             on_lines=running.feed,
         )
-        # 作业线程跑完命令后在这里留下结局与输出汇总：前台拿到结论时按它渲染观察。
-        finished: list[tuple[ExecutionResult, CommandOutputSummary]] = []
-
         backend = LocalExecutionBackend()
 
-        def work(_cancelled: Callable[[], bool]) -> BackgroundConclusion:
-            # 撤销不靠轮询这个标记：作业的唤醒回调直接停下命令（``backend.stop``）。
+        def work() -> CommandConclusion:
             # 实时通道随命令而不是随工具调用结束：转到后台后命令还在跑，输出照常推给占位卡片。
             result: ExecutionResult | None = None
             try:
@@ -421,99 +405,89 @@ class ExecuteTerminalTool(HandlerBase):
                     },
                 },
             )
-            finished.append((result, summary))
-            return self._background_conclusion(command, cwd, result, summary)
+            return self._conclusion(command, cwd, result, summary)
 
-        job = BackgroundJob.start_in_thread(
+        # 撤销经唤醒回调直接停下命令（``backend.stop``），结论仍由 ``work`` 带着已收集输出返回。
+        job = CommandJob.start_in_thread(
             work, wake=backend.stop, name=f"execute-terminal-{tool_call_id[-8:]}"
         )
-        if background:
-            registered = start_background_job(
-                job, task_id=execution_context.task_id, run_id=execution_context.run_id,
-                tool_call_id=tool_call_id, kind="terminal_command",
-                label=execution_context.call_intent,
-                collect_cancelled=job.wait_result, reports_user_stop=True,
-            )
+        detached = None if background else threading.Event()
+        registered = command_results.register(
+            tool_call_id, task_id=execution_context.task_id, run_id=execution_context.run_id,
+            label=execution_context.call_intent, job=job, detached=detached,
+        )
+        if registered is None:
+            # 拒收（Task 正被收回或后端关闭）：作业已停下，按它的取消结论返回，不留后台占位。
+            return self._result_observation(cast(CommandConclusion, job.wait(None)))
+        if detached is None:
             return self._placeholder_observation(
                 command, cwd, timeout_s, "background", registered, tool_call_id
             )
-
-        detached = threading.Event()
-        registered = background_registry.register(
-            tool_call_id,
-            task_id=execution_context.task_id,
-            run_id=execution_context.run_id,
-            kind="terminal_command",
-            label=execution_context.call_intent,
-            mode="foreground",
-            on_cancel=lambda _reason: job.cancel(),
-            detached=detached,
-            collect_cancelled=job.wait_result, reports_user_stop=True,
-        )
-        wait = _ForegroundWait(execution_context.task_id, tool_call_id)
-        job.on_done(wait.on_result)
         while True:
-            conclusion = wait.wait_result(_CANCEL_CHECK_SECONDS)
+            conclusion = job.wait(_CANCEL_CHECK_SECONDS)
             if conclusion is not None:
                 break
-            if cancellation_registry.is_cancelled(execution_context.task_id):
-                # Run 取消：撤销作业并等它带取消结论收尾，前台照常返回结果。
-                job.cancel()
-                conclusion = wait.wait_result(None)
-                break
             if detached.is_set():
-                wait.detach()
+                # 登记表在转后台时已接过结论订阅。
                 return self._placeholder_observation(
                     command, cwd, timeout_s, "detached", registered, tool_call_id
                 )
-        assert conclusion is not None  # 取消路径必由作业的取消结论收尾
-        outcome = background_registry.settle_foreground(execution_context.task_id, tool_call_id)
+            if cancellation_registry.is_cancelled(execution_context.task_id):
+                # Run 取消只停前台等待：与转后台在登记表的锁里裁决，已转后台的命令照常运行。
+                if command_results.cancel_foreground(
+                    execution_context.task_id, tool_call_id
+                ) == "detached":
+                    return self._placeholder_observation(
+                        command, cwd, timeout_s, "detached", registered, tool_call_id
+                    )
+                conclusion = cast(CommandConclusion, job.wait(None))
+                break
+        outcome = command_results.settle_foreground(execution_context.task_id, tool_call_id)
         if outcome == "detached" or (outcome == "gone" and detached.is_set()):
-            # 转后台先于前台结算：即使随后被撤销，工具仍须返回后台占位。
-            background_registry.complete(execution_context.task_id, tool_call_id, conclusion)
+            # 转后台先于前台结算：结论已由登记表回投，即使随后被撤销，工具仍须返回后台占位。
             return self._placeholder_observation(
                 command, cwd, timeout_s, "detached", registered, tool_call_id
             )
-        if conclusion.result.get("end_reason") == "failed":
-            return tool_error(self.name, f"Command execution failed: {conclusion.result['error']}")
-        result, summary = finished[0]
-        return self._result_observation(command, cwd, result, summary)
+        return self._result_observation(conclusion)
 
-    def _result_observation(
-        self, command: str, cwd: Path, result: ExecutionResult, summary: CommandOutputSummary
-    ) -> ToolObservation:
-        """前台拿到结论时的观察：观察状态只按结局映射，这是结局到状态的唯一一处。"""
-        content = self._render_content(result, summary)
-        if result.end == "cancelled":
+    def _result_observation(self, conclusion: CommandConclusion) -> ToolObservation:
+        """前台拿到结论时的观察：观察状态只按结局映射，这是结局到状态的唯一一处。
+
+        正文与卡片展示都取自结论（:meth:`_conclusion` 在作业线程里拼好），前台与后台回投是同一份。
+        """
+        payload = conclusion.result
+        end = payload["end_reason"]
+        if end == "failed":
+            return tool_error(self.name, f"Command execution failed: {payload['error']}")
+        content = cast(str, payload["output"])
+        if end == "cancelled":
             observation = tool_cancelled(self.name, reason=_CANCELLED_REASON)
-        elif result.end == "timed_out":
+        elif end == "timed_out":
             observation = tool_error(self.name, content, status_hint="命令超时")
-        elif result.end == "start_failed":
+        elif end == "start_failed":
             observation = tool_error(self.name, content, status_hint="启动失败")
-        elif result.end == "worker_failed":
+        elif end == "worker_failed":
             observation = tool_error(self.name, content, status_hint="结果未知")
         else:
             observation = tool_success(self.name, content)
         # 状态说明执行结局，展示数据保留执行器实际收集的输出；不从模型正文还原。
         observation.display_data = {
-            **self._display_data(command, cwd, result, summary),
+            **(conclusion.display_data or {}),
             **(observation.display_data or {}),
         }
         return observation
 
-    def _background_conclusion(
+    def _conclusion(
         self,
         command: str,
         cwd: Path,
         result: ExecutionResult,
         summary: CommandOutputSummary,
-    ) -> BackgroundConclusion:
-        """转到后台后的结论：给模型的正文与前台同一份（:meth:`_render_content`，已在预算内，后台结论
-        通道没有执行器的通用预算，也不需要）；给占位卡片的终态展示是原始输出的最近一段（完整输出在
-        日志文件里），并入时写回卡片。
+    ) -> CommandConclusion:
+        """命令的结论，作业线程里拼一次：前台据它组装观察，转到后台后经登记表原样回投。
 
-        作业线程里调用：前台拿到结论时不使用它（见 ``finished``），只在转后台后经
-        ``background_registry.complete`` 回投。撤销的命令仍携带已收集输出，
+        给模型的正文是 :meth:`_render_content`（已在预算内，后台结论通道没有执行器的通用预算，也不需要）；
+        给卡片的终态展示是原始输出的最近一段（完整输出在日志文件里）。撤销的命令仍携带已收集输出，
         上游收回时只结算原占位，不回投模型消息。
         """
         payload: dict[str, object] = {
@@ -524,9 +498,9 @@ class ExecuteTerminalTool(HandlerBase):
             payload["exit_code"] = result.exit_code
         if result.signal is not None:
             payload["signal"] = result.signal
-        return BackgroundConclusion(
+        return CommandConclusion(
             payload,
-            cancel_hint="已取消" if result.end == "cancelled" else None,
+            cancel_hint=USER_CANCELLED_HINT if result.end == "cancelled" else None,
             display_data=self._display_data(command, cwd, result, summary),
         )
 
@@ -567,7 +541,7 @@ class ExecuteTerminalTool(HandlerBase):
                 "<background_result> message for this tool call (use wait_messages if you need "
                 "to pause for it)."
             ),
-            display_data=build_terminal_placeholder_display_data(command=command, workdir=cwd),
+            display_data=build_terminal_started_display_data(command=command, workdir=cwd),
         )
         observation.background = work
         return observation
@@ -698,47 +672,6 @@ class ExecuteTerminalTool(HandlerBase):
             f"{err}. "
             "Provide a safe, existing directory inside the workspace root.",
         )
-
-
-class _ForegroundWait:
-    """终端前台等待：作业结论的中转，交给工具线程或按转后台回投。
-
-    前台等待只有本工具使用（后台命令经 ``start_background_job`` 直接回投，不经过这里）。
-    中转必须活到工具调用结束：登记条目可能在结论到达前就被撤销（转后台、上游收回），那时工具
-    线程仍要拿到结论才能返回结果。转后台与结论到达在同一把锁里裁决，避免已到的结论无人投递。
-    """
-
-    def __init__(self, task_id: int, tool_call_id: str) -> None:
-        self._task_id = task_id
-        self._tool_call_id = tool_call_id
-        self._lock = threading.Lock()
-        self._arrived = threading.Event()
-        self._background = False
-        self._conclusion: BackgroundConclusion | None = None
-
-    def on_result(self, conclusion: BackgroundConclusion) -> None:
-        """作业线程交付结论：存下来；已经判给后台时直接回投。"""
-        with self._lock:
-            self._conclusion = conclusion
-            background = self._background
-            self._arrived.set()
-        if background:
-            background_registry.complete(self._task_id, self._tool_call_id, conclusion)
-
-    def detach(self) -> None:
-        """切到后台；结论已先到时由这里补投，否则留给 :meth:`on_result`。"""
-        with self._lock:
-            self._background = True
-            pending = self._conclusion if self._arrived.is_set() else None
-        if pending is not None:
-            background_registry.complete(self._task_id, self._tool_call_id, pending)
-
-    def wait_result(self, timeout: float | None) -> BackgroundConclusion | None:
-        """等结论：拿到返回它，超时返回 ``None``（``timeout=None`` 时一直等）。"""
-        if not self._arrived.wait(timeout):
-            return None
-        with self._lock:
-            return self._conclusion
 
 
 def build_execute_terminal_definition() -> ToolDefinition:

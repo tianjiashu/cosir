@@ -2,7 +2,6 @@
 
 from typing import ClassVar
 
-from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_TERMINAL_LIST,
@@ -12,7 +11,6 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL
-from app.core.workflow.cancel.tool_call_cancellation_registry import should_stop_call
 from app.tools.display.terminal_display import (
     build_terminal_list_display_data,
 )
@@ -44,8 +42,6 @@ class TerminalListTool(HandlerBase):
     group = TOOL_GROUP_TERMINAL
 
     def execute(self, execution_context: ToolExecutionContext) -> ToolObservation:
-        if should_stop_call(execution_context.task_id, execution_context.tool_call_id):
-            return tool_cancelled(self.name)
         summaries = terminal_summaries(execution_context.task_id)
         return tool_success(
             tool_name=self.name,

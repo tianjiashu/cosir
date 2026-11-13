@@ -4,8 +4,6 @@ from typing import ClassVar
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tool.background.background_registry import background_registry
-from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
@@ -19,6 +17,7 @@ from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL
 from app.core.workflow.cancel.tool_call_cancellation_registry import should_stop_call
 from app.tools.terminal_runtime.command.running_command import RunningCommand
 from app.tools.terminal_runtime.errors import TerminalSessionStateError
+from app.tools.tool_handler.terminal.command_results import command_results
 from app.tools.tool_handler.terminal.task_terminals import find_terminal
 from app.tools.tool_handler.terminal.tool_observation import with_terminal_errors
 from app.tools.tool_models import TerminalStopArgs
@@ -27,7 +26,7 @@ from app.tools.tool_models import TerminalStopArgs
 class TerminalStopTool(HandlerBase):
     """只能停 Agent 自己运行中的命令；用户终端归用户，不给 Agent 停。
 
-    停止走 ``background_registry`` 的单项取消（与用户点卡片上的「停止」同一条路）：登记表选择停止
+    停止走 ``command_results`` 的单项取消（与用户点卡片上的「停止」同一条路）：登记表选择停止
     对象，作业的撤销回调落到 ``LocalExecutionBackend.stop``；结论照常以 ``<background_result>``
     回投，工具这里只等进程收尾。
     """
@@ -49,8 +48,6 @@ class TerminalStopTool(HandlerBase):
     def execute(
         self, terminal_id: str, *, execution_context: ToolExecutionContext
     ) -> ToolObservation:
-        if should_stop_call(execution_context.task_id, execution_context.tool_call_id):
-            return tool_cancelled(self.name)
 
         def action() -> ToolObservation:
             # 查找顺序与 terminal_read 同一份（find_terminal）；找到的是用户会话就拒绝。
@@ -61,7 +58,7 @@ class TerminalStopTool(HandlerBase):
                     "your own commands still running from execute_terminal."
                 )
             # driving=False：目标是另一次调用登记的后台条目，不是当前正在执行的工具调用。
-            background_registry.request_cancel(
+            command_results.request_cancel(
                 execution_context.task_id, terminal_id, driving=False
             )
             log.info(

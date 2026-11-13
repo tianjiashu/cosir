@@ -4,8 +4,9 @@
 卡片展示保留原始文本、不经过这里。增量状态机：按块喂入，跨块的
 半截控制序列与半行留在内部状态里，因此调用方可以按任意块边界喂入。
 
-不做光标上下移动、颜色保留与 Unicode 宽度计算：管道输出没有屏幕几何，这里只保证「模型看到的
-一行是终端最终显示的那一行文字」。
+只做行内的水平定位（``\r``、退格、CSI ``G`` / ``C`` / ``D``）与行内擦除（CSI ``K``），不做光标上下
+移动、颜色保留与 Unicode 宽度计算：管道输出没有屏幕几何，这里只保证「模型看到的一行是终端最终
+显示的那一行文字」。列号按码点计，含宽字符的行里定位可能偏几格，可以接受。
 """
 
 from __future__ import annotations
@@ -138,9 +139,22 @@ class OutputNormalizer:
         if 0x20 <= code <= 0x2F:
             return None
         self._state = "normal"
-        if 0x40 <= code <= 0x7E and char == "K":
+        if char == "K":
             self._erase_in_line()
+        elif char in "GCD" and not self._csi_params.startswith(("?", ">", "<", "=")):
+            self._move_cursor(char)
         return None
+
+    def _move_cursor(self, final: str) -> None:
+        """CSI ``G`` 移到第 n 列（1 起），``C`` / ``D`` 右移 / 左移 n 格；参数缺省或 0 按 1。"""
+        first = self._csi_params.split(";", 1)[0]
+        count = max(int(first), 1) if first.isdigit() else 1
+        if final == "G":
+            self._cursor = min(count - 1, _max_line_chars())
+        elif final == "C":
+            self._cursor = min(self._cursor + count, _max_line_chars())
+        else:
+            self._cursor = max(self._cursor - count, 0)
 
     def _write(self, char: str) -> None:
         if self._cursor >= _max_line_chars():
@@ -156,12 +170,12 @@ class OutputNormalizer:
         self._cursor += 1
 
     def _erase_in_line(self) -> None:
-        """CSI ``K``：行内擦除；参数空或 0 截断光标之后，1 把光标之前清成空格，2 清空整行。"""
+        """CSI ``K``：行内擦除；参数空或 0 截断光标之后，1 把行首到光标（含）清成空格，2 清空整行。"""
         mode = self._csi_params.split(";", 1)[0]
         if mode in ("", "0"):
             del self._chars[self._cursor :]
         elif mode == "1":
-            for index in range(min(self._cursor, len(self._chars))):
+            for index in range(min(self._cursor + 1, len(self._chars))):
                 self._chars[index] = " "
         elif mode == "2":
             self._chars.clear()

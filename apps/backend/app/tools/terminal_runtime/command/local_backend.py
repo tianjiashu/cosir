@@ -7,13 +7,11 @@
 （自行 ``setsid`` 脱离进程组的守护进程除外，留给沙箱），超时与取消先 HUP、TERM，宽限 1 秒再
 KILL。后端被强杀时 worker 读到 stdin EOF 自行清理，命令不会成为孤儿。
 
-``shell="auto"`` 与 Windows 的 ``shell="cmd"`` 把命令原文交给 ``<COMSPEC> /c``（POSIX 为
-``/bin/sh -c``）解释；其余显式 shell（``powershell`` / ``pwsh`` / POSIX shell）把命令作为单个参数
-传给对应 shell。取舍与证据见 ``_resolve_command``。
+``shell="auto"`` 在 POSIX 上是 ``sh``、在 Windows 上是 ``cmd``（见 :func:`shell_display_name`）；cmd
+把命令原文交给 ``<COMSPEC> /c``，其余 shell 把命令作为单个参数传入。可执行文件一律经
+``host_shells.find_shell`` 定位，与参数模型的可用 shell 探测同一口径。取舍与证据见 ``_resolve_command``。
 """
 
-import base64
-import os
 import threading
 import uuid
 from collections.abc import Mapping
@@ -28,8 +26,8 @@ from app.tools.terminal_runtime.errors import TerminalWorkerUnavailableError
 from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
 from app.utils.host_platform import is_windows
 
-# 要求停止后等 worker 报回退出的时限：它清理整组最多 1 秒宽限、排空输出最多 2 秒，留足余量；
-# 到点仍无回音由 ``close`` 结束 worker 进程。
+# 要求停止（超时或取消）后等 worker 报回退出的时限：它清理整组最多 1 秒宽限、排空输出最多 2 秒，
+# 留足余量；到点仍无回音由 ``close`` 结束 worker 进程。这是停止收尾的唯一时限，上层不再另设。
 _SHUTDOWN_WAIT_SECONDS = 10.0
 
 _WORKER_LOST = "the terminal worker stopped unexpectedly"
@@ -47,11 +45,22 @@ class _Launch:
 
 
 class _Outcome:
-    """worker 报回的结局：读线程写入 ``exit``（或因断开留空），``ended`` set 之后执行线程读取。"""
+    """worker 报回的结局：读线程写入 ``exit``（或因断开留空），``ended`` set 之后执行线程读取。
 
-    def __init__(self) -> None:
+    结束时同时置位后端的 ``wake``：执行线程只等这一个事件，命令结束与停止请求都能叫醒它。
+    """
+
+    def __init__(self, wake: threading.Event) -> None:
         self.ended = threading.Event()
         self.exit: Mapping[str, object] | None = None
+        self._wake = wake
+
+    def end(self, exit: Mapping[str, object] | None) -> None:
+        """``exit`` 为 ``None`` 是断开：不覆盖已经报回的结局（断开总在 ``exit`` 之后补发）。"""
+        if exit is not None:
+            self.exit = exit
+        self.ended.set()
+        self._wake.set()
 
 
 class LocalExecutionBackend:
@@ -67,6 +76,8 @@ class LocalExecutionBackend:
         self._lock = threading.Lock()
         self._stop_cause: StopCause | None = None
         self._worker: ProcessTerminalWorker | None = None
+        # 「该收尾了」：命令结束或任何停止请求都置位它（见 ``execute`` 的等待）。
+        self._wake = threading.Event()
 
     def stop(self) -> None:
         """要求停止这条命令；不等待，结果仍由 ``execute`` 返回。"""
@@ -79,6 +90,7 @@ class LocalExecutionBackend:
                 return
             self._stop_cause = cause
             worker = self._worker
+        self._wake.set()
         if worker is not None:
             worker.shutdown()
 
@@ -103,10 +115,10 @@ class LocalExecutionBackend:
 
         返回:
             ``ExecutionResult``，结局见 ``CommandEnd``。启动前已被要求停止时不启动命令，直接返回
-            ``cancelled``。
+            ``cancelled``。shell 不可用与 worker 起不来都是 ``start_failed`` 结果，不抛出。
 
         异常:
-            不向上抛出。
+            其余异常（如 ``worker.close`` 收尸超时）照常上抛，由调用方的收尾（``finally``）兜住。
         """
         try:
             launch = _resolve_command(command, shell)
@@ -115,7 +127,7 @@ class LocalExecutionBackend:
         with self._lock:
             if self._stop_cause is not None:
                 return ExecutionResult(end="cancelled")
-        outcome = _Outcome()
+        outcome = _Outcome(self._wake)
         try:
             worker = ProcessTerminalWorker(f"exec-{uuid.uuid4().hex}")
             worker.start_exec(
@@ -135,9 +147,10 @@ class LocalExecutionBackend:
             worker.shutdown()
 
         try:
-            if not outcome.ended.wait(timeout):
+            if not self._wake.wait(timeout):
                 self._request_stop("timed_out")
-                outcome.ended.wait(_SHUTDOWN_WAIT_SECONDS)
+            # 命令已结束时立即返回；否则已要求停止（超时或取消同一条路），只限时等 worker 报回。
+            outcome.ended.wait(_SHUTDOWN_WAIT_SECONDS)
         finally:
             worker.close()
         with self._lock:
@@ -199,12 +212,12 @@ def _observe(
     """worker 读线程里的事件回调：输出进收集点，结局记进 ``outcome``。``exit`` 是最后一个事件。"""
     kind = event.get("type")
     if kind == "output":
-        output.feed(base64.b64decode(str(event["data_base64"])))
+        # 字节已在 worker 边界解码并校验（见 ``ProcessTerminalWorker._read_events``）。
+        output.feed(cast(bytes, event["data"]))
     elif kind == "exit":
-        outcome.exit = event
-        outcome.ended.set()
+        outcome.end(event)
     elif kind == "disconnected":
-        outcome.ended.set()
+        outcome.end(None)
     elif kind == "error":
         # 非致命诊断（清理失败等），结局照常由 ``exit`` 报回；这里只留排查线索。
         log.warning(
@@ -218,9 +231,9 @@ def _start_failed(reason: str) -> ExecutionResult:
 
 
 def shell_display_name(shell: str) -> str:
-    """这条命令实际由哪种 shell 解释，供运行中命令的表头显示。
+    """这条命令实际由哪种 shell 解释：``auto`` 在 POSIX 是 ``sh``、Windows 是 ``cmd``，其余原样。
 
-    与 :func:`_resolve_command` 的 ``auto`` 含义同源：POSIX 是 ``/bin/sh``，Windows 是 ``COMSPEC``。
+    ``auto`` 的含义只在这里：运行中命令的表头显示它，:func:`_resolve_command` 按它启动。
     """
     if shell != "auto":
         return shell
@@ -230,15 +243,15 @@ def shell_display_name(shell: str) -> str:
 def _resolve_command(command: str, shell: str) -> _Launch:
     """把 shell 选择转换为 worker 执行模式的启动参数。
 
-    - ``auto``（以及 Windows 的 ``cmd``）：命令原文交给 shell 解释。POSIX 为 ``/bin/sh -c <命令>``；
-      Windows 为 ``<COMSPEC> /c "<命令原文>"``，按原文拼进命令行（``raw_args``），与 Python
-      ``subprocess`` 的 ``shell=True`` 同一形态，命令内部的引号原样到达 cmd。
-    - 其余显式 shell：``<shell> <启动参数> <命令>``，命令作为**单个参数**经 MSVCRT 规则转义传递。
+    - Windows 的 ``cmd``（含 ``auto``）：``<COMSPEC> /c "<命令原文>"``，按原文拼进命令行
+      （``raw_args``），与 Python ``subprocess`` 的 ``shell=True`` 同一形态，命令内部的引号原样到达 cmd。
+    - 其余 shell（含 POSIX 的 ``auto`` 即 ``sh``）：``<shell> <启动参数> <命令>``，命令作为**单个参数**
+      经 MSVCRT 规则转义传递。
 
     转义职责（本函数的契约核心）：参数形态下命令内的引号按 MSVCRT 规则转义成 ``\\"``。
     PowerShell 的参数解析接受 ``\\"``，所以该形态在 ``powershell`` / ``pwsh`` 上可用；cmd 不还原
     ``\\"``，含引号的命令（如 ``dir /a /s /b "C:\\Program Files"``）会变成无意义路径并报「文件名、
-    目录名或卷标语法不正确」，故 Windows 的 ``cmd`` 与 ``auto`` 同为命令原文形态。
+    目录名或卷标语法不正确」，故 cmd 用命令原文形态。
 
     不能把显式 shell「统一改成原文形态」的原因：``powershell`` / ``pwsh`` 的命令原文一旦不经参数
     元素、直接拼进命令行，PowerShell 自身的参数解析会吃掉引号并把引号内的空格当作参数分隔符
@@ -250,19 +263,21 @@ def _resolve_command(command: str, shell: str) -> _Launch:
     """
 
     windows = is_windows()
-    if shell == "auto" or (windows and shell == "cmd"):
-        if windows:
-            comspec = os.environ.get("COMSPEC") or "cmd.exe"
-            return _Launch(comspec, (f'/c "{command}"',), raw_args=True)
-        return _Launch("/bin/sh", ("-c", command))
+    name = shell_display_name(shell)
+    if windows and name == "cmd":
+        return _Launch(_locate(name), (f'/c "{command}"',), raw_args=True)
     # 可下发的 shell 由平台参数模型约束（POSIX 契约没有 powershell），这里只拼装启动形态。
-    if shell == "pwsh" or (windows and shell == "powershell"):
+    if name == "pwsh" or (windows and name == "powershell"):
         launch: tuple[str, ...] = ("-NoLogo", "-NoProfile", "-NonInteractive", "-Command")
-    elif not windows and shell in {"sh", "bash", "zsh", "fish"}:
+    elif not windows and name in {"sh", "bash", "zsh", "fish"}:
         launch = ("-c",)
     else:
         raise ValueError(f"unsupported shell '{shell}'")
-    executable = find_shell(shell)
+    return _Launch(_locate(name), (*launch, command))
+
+
+def _locate(name: str) -> str:
+    executable = find_shell(name)
     if executable is None:
-        raise ValueError(f"{shell} is not available")
-    return _Launch(executable, (*launch, command))
+        raise ValueError(f"{name} is not available")
+    return executable

@@ -2,7 +2,6 @@
 
 from typing import Any, ClassVar
 
-from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.schemas import (
     TOOL_TERMINAL_READ,
     ToolDefinition,
@@ -54,8 +53,6 @@ class TerminalReadTool(HandlerBase):
         *,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-        if should_stop_call(execution_context.task_id, execution_context.tool_call_id):
-            return tool_cancelled(self.name)
 
         def action() -> ToolObservation:
             terminal = find_terminal(execution_context.task_id, terminal_id)

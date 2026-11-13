@@ -23,6 +23,7 @@ from collections.abc import MutableMapping
 
 from app.config.logging.logger import log
 from app.tools.shell.command_environment import HOST_VARIABLE_PREFIX
+from app.tools.shell.host_shells import user_default_shell
 from app.utils.host_platform import is_windows
 
 # 用户 rc 可据此跳过不适合在解析时执行的东西（tmux、交互提示等），对应 VS Code 的
@@ -55,7 +56,7 @@ def apply_login_shell_environment(environ: MutableMapping[str, str] | None = Non
     if is_windows():
         return
     target = os.environ if environ is None else environ
-    shell = _user_shell(target)
+    shell = user_default_shell(target)
     started = time.monotonic()
     try:
         resolved = _resolve(shell, target)
@@ -86,15 +87,6 @@ def apply_login_shell_environment(environ: MutableMapping[str, str] | None = Non
             },
         },
     )
-
-
-def _user_shell(environ: MutableMapping[str, str]) -> str:
-    configured = environ.get("SHELL", "").strip()
-    if configured:
-        return configured
-    import pwd  # POSIX 专有，Windows 已在上游跳过
-
-    return pwd.getpwuid(os.getuid()).pw_shell or "/bin/sh"
 
 
 def _resolve(shell: str, environ: MutableMapping[str, str]) -> dict[str, str]:

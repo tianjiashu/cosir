@@ -2,8 +2,8 @@
 
 ``CommandOutput`` 交来的整理后行写进行缓冲；读取、条件等待与渲染复用 ``ObservedTerminal``，所以
 Agent 读用户终端与读自己的命令是同一套参数与输出格式。事实边界：只在命令运行期间存在，结束即从
-登记表移除（结论由 ``background_registry`` 回投，不归这里）。停止不经这里：经
-``background_registry`` 的撤销回调落到 ``LocalExecutionBackend.stop``。
+登记表移除（结论由 ``command_results`` 回投，不归这里）。停止不经这里：经
+``command_results`` 的撤销回调落到 ``LocalExecutionBackend.stop``。
 
 线程边界：``feed`` 在 worker 读线程、``finish`` 在作业线程、``read`` 在工具线程调用，全部经
 ``_condition`` 保护。不自己整理输出：整理器只有一个，在 ``CommandOutput`` 里。
@@ -15,6 +15,7 @@ import threading
 import time
 from collections.abc import Callable
 
+from app.config.constant import Constant
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.terminal_runtime.observation.observed_terminal import ObservedTerminal
 from app.tools.terminal_runtime.observation.render import TerminalFacts, render_terminal_summary
@@ -37,7 +38,6 @@ class RunningCommand(ObservedTerminal):
     ) -> None:
         """构造即进入「命令已开始」状态：观察对象先 ready、再 command_started，与 shell 集成同一词表。"""
         self.terminal_id = command_id
-        self._command = command
         self._condition = threading.Condition(threading.RLock())
         self._observation = TerminalObservation(shell_kind, "auto")
         self._observation.shell_event({"kind": "ready"})
@@ -54,18 +54,21 @@ class RunningCommand(ObservedTerminal):
             self._condition.notify_all()
 
     def finish(self, result: ExecutionResult | None) -> None:
-        """落结局并唤醒等待者；只执行一次。``result`` 为 ``None`` 表示 worker 没报结局。"""
+        """落结局并唤醒等待者；只执行一次。``result`` 为 ``None`` 表示执行后端抛了异常、没给出结果
+        （worker 没报结局时后端给的是 ``worker_failed``），两者都按结局未知处理。"""
         with self._condition:
             if self._ended:
                 return
-            if result is None:
+            if result is None or result.end == "worker_failed":
+                # worker 失联：命令可能已经执行、也可能还在，结局未知。
                 self._observation.end_tracking("worker_failed")
             elif result.end == "exited":
                 self._observation.shell_event(
                     {"kind": "command_returned", "result": {"code": result.exit_code}}
                 )
             else:
-                self._observation.end_tracking(result.end)
+                # 被停止、超时、被信号结束或没能启动：命令确知已经不在跑。
+                self._observation.end_command(result.end)
             self._result = result
             self._ended = True
             self._condition.notify_all()
@@ -80,7 +83,7 @@ class RunningCommand(ObservedTerminal):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False
-                self._condition.wait(min(remaining, 0.25))
+                self._condition.wait(min(remaining, Constant.Terminal.WAIT_CANCEL_CHECK_SECONDS))
             return True
 
     def summary(self) -> str:
