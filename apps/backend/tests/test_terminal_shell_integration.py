@@ -122,12 +122,17 @@ def test_full_screen_app_screen_view_and_stable_line_numbers(terminal: _Terminal
     )
     number = int(marker.split("│")[0])
     terminal.user("seq 1 200 | less")
-    opened = terminal.read(wait=TerminalWait(until="match", pattern="^1$", timeout_ms=5000))
+    # 等 less 的「:」提示行：它在整屏内容与滚屏之后才画出。不能等「1」——有的 less（如 Ubuntu 的
+    # 590）进入全屏后不回左上角，从光标所在行往下写再滚屏，「1」出现时还不在第一行。
+    opened = terminal.read(wait=TerminalWait(until="match", pattern="^:$", timeout_ms=5000))
     assert opened.wait_result["end_reason"] == "matched"
     assert opened.screen and "s1│1" in opened.text, opened.text
     # 24 行终端里 less 显示 23 行：用户下移 3 行后才会出现 26。
     terminal.user_bytes(b"jjj")
-    scrolled = terminal.read(wait=TerminalWait(until="match", pattern="^26$", timeout_ms=5000))
+    reached = terminal.read(wait=TerminalWait(until="match", pattern="^26$", timeout_ms=5000))
+    assert reached.wait_result["end_reason"] == "matched", reached.text
+    # 「26」写在底行时最后一次滚屏还没发生（旧「:」也还在屏上，不能当完成信号）：等重绘停下再看。
+    scrolled = terminal.read(wait=TerminalWait(until="output_quiet", quiet_ms=300))
     assert scrolled.screen and "s1│4" in scrolled.text, scrolled.text
     # 全屏期间行号不被屏幕行占用：进入前的输出仍在原行号上。
     assert terminal.read(start_line=number, limit=1).text.splitlines()[-1] == marker
