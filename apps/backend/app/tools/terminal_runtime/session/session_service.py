@@ -27,8 +27,8 @@ from app.tools.terminal_runtime.errors import (
     TerminalSessionStateError,
 )
 from app.tools.terminal_runtime.session.session_runtime import (
-    TerminalSessionSnapshot,
     TerminalSessionRuntime,
+    TerminalSessionSnapshot,
 )
 from app.tools.terminal_runtime.session.shell_resolver import resolve_session_shell
 

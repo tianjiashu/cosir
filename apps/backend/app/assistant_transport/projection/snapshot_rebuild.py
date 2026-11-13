@@ -46,11 +46,6 @@ from app.assistant_transport.state.message_identity import reply_id, user_messag
 from app.core.tool.call_intent import display_call_arguments
 from app.core.tool.presentation import ToolPresentation
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.run_record import RunError, RunRecord
-from app.models.session_context import (
-    SessionContextRecord,
-    run_last_turn_withdrawn,
-)
 from app.models.enums.run_status import (
     RESUMABLE_RUN_STATUSES,
     TERMINAL_RUN_STATUSES,
@@ -60,6 +55,11 @@ from app.models.message_metadata import (
     AssistantMessageMetadata,
     ToolMessageMetadata,
     UserMessageMetadata,
+)
+from app.models.run_record import RunError, RunRecord
+from app.models.session_context import (
+    SessionContextRecord,
+    run_last_turn_withdrawn,
 )
 from app.models.session_record import SessionRecord
 from app.utils.datetime_utils import to_text

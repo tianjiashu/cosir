@@ -8,12 +8,12 @@ import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
+from app.api.sessions_api import get_session
+from app.app import app
 from app.assistant_transport.api import (
     assistant_history_page,
     assistant_transport_attach,
 )
-from app.api.sessions_api import get_session
-from app.app import app
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.enums.run_status import RunTransition
 from app.models.session_extra import SessionExtra

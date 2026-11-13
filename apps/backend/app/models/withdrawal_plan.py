@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import cast
 
 from app.core.workflow.message_queue.message_bodies.notice import NOTICE_LEVELS, NoticeKind
-from app.models.session_context import SessionContextRecord
 from app.models.message_metadata import NoticeEntry, UserMessageMetadata
+from app.models.session_context import SessionContextRecord
 
 
 @dataclass(frozen=True)

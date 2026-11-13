@@ -10,9 +10,9 @@ from sqlalchemy import func, select
 from app.api.sessions_api import delete_session as delete_session_endpoint
 from app.api.workspaces_api import delete_workspace as delete_workspace_endpoint
 from app.models.conversation_input import UserInputPresentation
-from app.models.session_context import SessionContextRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.models.message_metadata import UserMessageMetadata
+from app.models.session_context import SessionContextRecord
 from app.service.depends import (
     close_service_dependencies,
     get_run_crud,
@@ -22,12 +22,12 @@ from app.service.depends import (
     get_workspace_crud,
     get_workspace_service,
 )
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.storage.model.run_model import RunModel
 from app.storage.model.session_context_model import SessionContextModel
 from app.storage.model.session_model import SessionModel
 from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import init_storage, main_db_factory
-from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.utils.path import system_cosir as paths
 from tests.command_job_fakes import FakeCommandJob
 from tests.session_extra_fixtures import fork_extra

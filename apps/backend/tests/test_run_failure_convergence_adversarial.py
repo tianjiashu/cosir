@@ -40,13 +40,13 @@ from app.core.workflow import run_driver
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models import run_failure as failure_catalog
+from app.models.enums.error_kind import ErrorKind
+from app.models.enums.run_status import RunStatus, RunTransition
 from app.models.run_failure import (
     run_failure_message,
     run_terminal_error,
 )
 from app.models.run_record import RunRecord
-from app.models.enums.run_status import RunStatus, RunTransition
-from app.models.enums.error_kind import ErrorKind
 
 # --------------------------------------------------------------------------------------
 # 测试替身

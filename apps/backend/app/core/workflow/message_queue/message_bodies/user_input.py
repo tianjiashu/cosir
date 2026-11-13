@@ -21,8 +21,8 @@ from app.core.workflow.message_queue.message_bodies.rendering import (
     user_message_with_images,
 )
 from app.models.conversation_input import UserInputPresentation
-from app.models.run_options import RunOptions
 from app.models.message_metadata import UserMessageMetadata
+from app.models.run_options import RunOptions
 
 if TYPE_CHECKING:
     from app.models import RunRecord, SessionRecord

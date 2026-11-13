@@ -21,8 +21,8 @@ from app.core.workflow.message_queue.dispatch_policy import next_input
 from app.core.workflow.message_queue.session_message import LaunchInputBody, RunLaunch
 from app.models import RunRecord, SessionRecord
 from app.models.conversation_input import MessageSource
-from app.models.run_options import RunOptions
 from app.models.errors.input_errors import UserInputRejectedError
+from app.models.run_options import RunOptions
 from app.models.session_kind import SessionType
 from app.service.depends import (
     get_session_message_queue,

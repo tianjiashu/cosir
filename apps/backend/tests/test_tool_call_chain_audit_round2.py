@@ -33,8 +33,8 @@ from app.core.events import (
 )
 from app.core.tool.schemas import ToolObservation
 from app.models.conversation_input import UserInputPresentation
-from app.models.session_context import SessionContextRecord
 from app.models.message_metadata import ToolMessageMetadata
+from app.models.session_context import SessionContextRecord
 from tests.transport_fixtures import consumed
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。

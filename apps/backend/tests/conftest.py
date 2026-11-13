@@ -35,13 +35,13 @@ from app.service.conversation.session_context_service import (
 )
 from app.service.depends import close_service_dependencies
 from app.service.model_config import model_config_service
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.storage.crud.run_crud import RunCrud
 from app.storage.crud.session_context_crud import SessionContextCrud
 from app.storage.crud.session_crud import SessionCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.store_engines import init_storage, initialize_app_schema
-from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.tool_registration import build_tool_registry
 from app.utils.path import system_cosir as paths
 from tests.terminal_test_support import terminal_worker_path

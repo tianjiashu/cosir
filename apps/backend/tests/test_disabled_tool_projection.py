@@ -7,10 +7,10 @@ import pytest
 from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
 )
+from app.models.message_metadata import ToolMessageMetadata
 from app.models.session_context import (
     SessionContextRecord,
 )
-from app.models.message_metadata import ToolMessageMetadata
 
 
 def test_rebuild_pairs_disabled_tool_closure_with_metadata(

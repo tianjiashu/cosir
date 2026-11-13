@@ -12,9 +12,9 @@ from app.config.logging.logger import log
 from app.core.workflow.message_queue.session_message import DecisionBody, SessionMessage
 from app.models.errors.session_command_errors import SessionCommandConflictError
 from app.service import depends as service_depends
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.storage.store_engines import main_db_factory
 from app.storage.write_transaction import begin_immediate
-from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
 
 class ToolDecisionService:

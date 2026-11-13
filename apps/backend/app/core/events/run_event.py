@@ -14,8 +14,8 @@ from pydantic import Field, StrictInt, StrictStr
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
 from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
 from app.models import RunError
-from app.models.run_options import RunOptions
 from app.models.enums.run_status import RunStatus
+from app.models.run_options import RunOptions
 
 
 class RunInitializedEvent(WorkflowEventEnvelope):

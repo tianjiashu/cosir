@@ -27,10 +27,10 @@ from app.models.session_extra import SessionExtra, SessionFork
 from app.models.session_kind import FORK_SESSION_TYPES, USER_FACING_SESSION_TYPES, SessionType
 from app.service import depends as service_depends
 from app.service.session.fork_source import ForkCut, ForkSource
-from app.storage.store_engines import main_db_factory
-from app.storage.write_transaction import begin_immediate
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.session_runtime.workspace_operation_registry import workspace_operations
+from app.storage.store_engines import main_db_factory
+from app.storage.write_transaction import begin_immediate
 
 _T = TypeVar("_T")
 
@@ -181,7 +181,9 @@ class SessionService:
         return self._session.get(session_id)
 
     def update_title(self, session_id: int, title: str) -> None:
-        """写入 Session 标题，真的变了才推送目录失效；不进 Session 闸门：单列覆盖，与 Run 调度、删除没有需要互斥的不变量。
+        """写入 Session 标题，真的变了才推送目录失效。
+
+        不进 Session 闸门：单列覆盖，与 Run 调度、删除没有需要互斥的不变量。
 
         异常:
             KeyError: Session 不存在（含已被删除）。

@@ -13,9 +13,9 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.workflow.message_queue.session_message import DecisionBody
-from app.models.session_context import SessionContextRecord
 from app.models.errors.session_command_errors import SessionCommandConflictError
 from app.models.message_metadata import ToolMessageMetadata
+from app.models.session_context import SessionContextRecord
 from app.service import depends
 from app.service.conversation import tool_decision_service as module
 

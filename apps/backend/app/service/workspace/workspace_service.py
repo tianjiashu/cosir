@@ -20,9 +20,9 @@ from app.models.errors.deletion_errors import DeletionBusyError
 from app.service import depends as service_depends
 from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.mcp_tested_servers import MCPTestedServers
+from app.session_runtime.workspace_operation_registry import workspace_operations
 from app.storage.store_engines import main_db_factory
 from app.storage.write_transaction import begin_immediate
-from app.session_runtime.workspace_operation_registry import workspace_operations
 from app.utils.path.workspace_cosir import (
     workspace_agent_config_dir,
     workspace_attachment_dir,

@@ -29,8 +29,8 @@ from app.core.workflow.message_queue.session_message import (
 )
 from app.models.errors.session_command_errors import SessionCommandConflictError
 from app.service import depends as service_depends
-from app.storage.store_engines import main_db_factory
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
+from app.storage.store_engines import main_db_factory
 from app.tools.tool_handler.terminal.command_results import command_results
 
 
@@ -179,7 +179,8 @@ class AssistantTransportService:
         """用户停止 Session：交给 Session 的 actor（运行中打信号，挂起的 Run 直接迁移为 cancelled）。
 
         用户停止只打断当前驱动：后台工作与子 Session 照常运行（见 ``SessionActor.cancel``）。停后台命令走
-        调用级的 :meth:`cancel_tool_call`，停子 Session 就是对它本身发停止。「用户已停止」通知由下一次驱动从结束原因推导。
+        调用级的 :meth:`cancel_tool_call`，停子 Session 就是对它本身发停止。「用户已停止」通知由下一次驱动
+        从结束原因推导。
 
         异常:
             KeyError: Session 不存在。

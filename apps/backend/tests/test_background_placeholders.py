@@ -16,8 +16,8 @@ from app.core.tool.schemas import ToolObservation
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.session_message import BackgroundResultBody
 from app.core.workflow.node_helper import tool_observation_projection as projection_module
-from app.models.session_context import SessionContextRecord
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
+from app.models.session_context import SessionContextRecord
 from app.service import depends
 from app.tools.tool_handler.terminal.command_job import CommandConclusion
 from tests.command_job_fakes import FakeCommandJob

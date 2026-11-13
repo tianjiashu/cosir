@@ -90,7 +90,11 @@ async def test_subscribers_get_the_latest_status_per_session() -> None:
 async def test_catalog_changes_only_cover_sidebar_sessions_and_merge_per_workspace() -> None:
     feed, _, _ = _feed(
         {},
-        {1: _Session(7, SessionType.USER), 2: _Session(7, SessionType.DELEGATED), 3: _Session(8, SessionType.AGENT_FORK)},
+        {
+            1: _Session(7, SessionType.USER),
+            2: _Session(7, SessionType.DELEGATED),
+            3: _Session(8, SessionType.AGENT_FORK),
+        },
     )
     subscription = feed.subscribe(asyncio.get_running_loop())
 

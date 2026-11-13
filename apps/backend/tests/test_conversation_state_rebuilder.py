@@ -12,9 +12,9 @@ from app.assistant_transport.projection.snapshot_rebuild import (
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.conversation_input import UserInputPresentation
+from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.models.run_record import RunRecord
 from app.models.session_context import SessionContextRecord
-from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
 from app.models.session_record import SessionRecord
 
 

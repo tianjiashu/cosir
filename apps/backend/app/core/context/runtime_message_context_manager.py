@@ -39,9 +39,6 @@ from app.models import (
     RunRecord,
     WorkspaceRecord,
 )
-from app.models.session_context import (
-    SessionContextRecord,
-)
 from app.models.message_metadata import (
     TURN_INPUT_KINDS,
     AssistantMessageMetadata,
@@ -50,6 +47,9 @@ from app.models.message_metadata import (
     ToolMessageMetadata,
     UserMessageMetadata,
     empty_message_metadata,
+)
+from app.models.session_context import (
+    SessionContextRecord,
 )
 from app.utils.message_content import content_to_text
 

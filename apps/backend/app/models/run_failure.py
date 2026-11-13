@@ -21,9 +21,9 @@
 from __future__ import annotations
 
 from app.config.constant import Constant
-from app.models.run_record import RunError
-from app.models.enums.run_status import ERROR_RUN_STATUSES, RunStatus
 from app.models.enums.error_kind import ErrorKind
+from app.models.enums.run_status import ERROR_RUN_STATUSES, RunStatus
+from app.models.run_record import RunError
 
 # 唯一文案目录：键为失败 code，值为面向用户的受控文案。
 _RUN_FAILURE_MESSAGES: dict[str, str] = {

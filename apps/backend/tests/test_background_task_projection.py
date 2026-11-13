@@ -16,8 +16,8 @@ from app.assistant_transport.state.conversation_state_background_task import (
 )
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.placeholder_settlement import cancel_placeholders
-from app.models.session_context import SessionContextRecord
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
+from app.models.session_context import SessionContextRecord
 from app.service import depends
 from app.tools.tool_handler.terminal.command_results import command_results
 from tests.command_job_fakes import FakeCommandJob

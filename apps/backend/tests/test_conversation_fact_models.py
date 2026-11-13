@@ -6,23 +6,24 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session as DbSession, sessionmaker
+from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.orm import sessionmaker
 
 import app.service.user_input.user_input_service as user_input_module
 from app.core.context.context_store import ContextStore
 from app.core.events import RunStatusChangedEvent
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.message_queue.session_message import UserInputBody
 from app.core.workflow.run_ledger import (
     RunLedger,
 )
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.message_queue.session_message import UserInputBody
 from app.models.conversation_input import UserInputPresentation
+from app.models.errors.input_errors import UserInputRejectedError
+from app.models.message_metadata import ToolMessageMetadata
 from app.models.run_command import RunCommand
 from app.models.run_options import RunOptions
 from app.models.run_record import RunRecord
 from app.models.session_context import SessionContextRecord
-from app.models.errors.input_errors import UserInputRejectedError
-from app.models.message_metadata import ToolMessageMetadata
 from app.models.session_extra import SessionExtra
 from app.models.session_record import SessionRecord
 from app.service.conversation.session_context_service import (

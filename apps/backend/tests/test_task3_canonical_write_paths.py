@@ -12,11 +12,11 @@ import pytest
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.events import RunStatusChangedEvent
-from app.core.workflow.run_ledger import RunLedger
-from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.models.run_failure import run_failure_message
+from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
+from app.core.workflow.run_ledger import RunLedger
 from app.models.enums.run_status import RunStatus, RunTransition
+from app.models.run_failure import run_failure_message
 from app.service.recover_service import RecoverService
 from tests.model_config_fixtures import model_config_record, model_configs
 from tests.sdk_fixtures import sdk_completion
@@ -222,7 +222,11 @@ def _creation_service(store, monkeypatch, projector):
 
 def test_create_run_commits_inbox_and_current_run_before_projector(request, monkeypatch):
     """独立连接在事件发布时已能看到整组事实，context 留待模型边界并入。"""
-    from app.core.workflow.message_queue.session_message import RunLaunch, SessionMessage, UserInputBody
+    from app.core.workflow.message_queue.session_message import (
+        RunLaunch,
+        SessionMessage,
+        UserInputBody,
+    )
     from app.core.workflow.message_queue.session_message_queue import SessionMessageQueue
     from app.models.conversation_input import UserInputPresentation
 

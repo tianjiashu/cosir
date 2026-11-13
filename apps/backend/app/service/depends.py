@@ -25,8 +25,8 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_state_service import (
         ConversationStateService,
     )
-    from app.core.workflow.run_ledger import RunLedger
     from app.core.workflow.message_queue.session_message_queue import SessionMessageQueue
+    from app.core.workflow.run_ledger import RunLedger
     from app.service.conversation.session_context_service import (
         SessionContextService,
     )
@@ -90,8 +90,8 @@ def close_service_dependencies() -> None:
     ``command_results``，再调用本函数。
     """
 
-    from app.storage.store_engines import close_storage
     from app.session_runtime.workspace_operation_registry import workspace_operations
+    from app.storage.store_engines import close_storage
 
     reset_service_dependencies()
     workspace_operations.close()

@@ -24,7 +24,8 @@ from pathlib import Path
 from threading import Lock
 
 from sqlalchemy import Engine, create_engine, event
-from sqlalchemy.orm import Session as DbSession, sessionmaker
+from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
 
 

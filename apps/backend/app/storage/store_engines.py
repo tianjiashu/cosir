@@ -14,7 +14,8 @@ from threading import RLock
 from typing import cast
 
 from sqlalchemy import Engine, Table
-from sqlalchemy.orm import Session as DbSession, sessionmaker
+from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.orm import sessionmaker
 
 from app.storage.engine_cache import _engine_cache, create_db_factory
 from app.storage.model.base import StorageBase

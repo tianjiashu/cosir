@@ -10,8 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 # 此脚本只由测试在临时数据根下使用，绝不回落到用户数据。
 assert os.environ["CODING_AGENT_DATA_DIR"]
 from app.models.conversation_input import UserInputPresentation
-from app.models.session_context import SessionContextRecord
 from app.models.message_metadata import AssistantMessageMetadata, UserMessageMetadata
+from app.models.session_context import SessionContextRecord
 from app.service.depends import (
     get_run_crud,
     get_session_context_crud,

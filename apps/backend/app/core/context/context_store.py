@@ -18,11 +18,11 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.config.logging.logger import log
 from app.core.context.context_entry import ContextEntry
+from app.models.message_metadata import MessageMetadata, empty_message_metadata
 from app.models.session_context import (
     SessionContextRecord,
     run_last_turn_withdrawn,
 )
-from app.models.message_metadata import MessageMetadata, empty_message_metadata
 from app.storage.crud.session_context_crud import SessionContextCrud
 
 # Session 固定系统提示词占用 sequence 0 与回合 0，不参与压缩、编辑与 Run、回合划分。

@@ -30,8 +30,8 @@ from app.core.workflow.message_queue.session_message import (
     DecisionBody,
     SessionMessage,
 )
-from app.models.session_context import SessionContextRecord
 from app.models.errors.session_command_errors import SessionCommandConflictError
+from app.models.session_context import SessionContextRecord
 from app.models.withdrawal_plan import WithdrawalPlan
 from app.service import depends as service_depends
 from app.service.conversation.session_context_service import (

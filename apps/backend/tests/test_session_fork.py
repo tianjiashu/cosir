@@ -5,8 +5,8 @@ import threading
 from contextlib import contextmanager
 
 import pytest
-from pydantic import ValidationError
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import update
 
 from app.api.schemas import ForkSessionRequest
@@ -26,9 +26,9 @@ from app.models.message_metadata import (
 )
 from app.service.session.fork_source import ForkSource
 from app.service.session.session_service import SessionService
-from app.storage.model.session_model import SessionModel
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.session_runtime.workspace_operation_registry import workspace_operations
+from app.storage.model.session_model import SessionModel
 
 
 @pytest.fixture

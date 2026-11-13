@@ -10,8 +10,8 @@ from typing import Literal, NotRequired, cast, get_args
 from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_state_activity import (
-    ConversationStateLaunch,
     ConversationStateActivity,
+    ConversationStateLaunch,
     ModelActivity,
 )
 from app.assistant_transport.state.conversation_state_background_task import (
@@ -61,12 +61,12 @@ from app.config.constant import Constant
 from app.core.events.model_activity_event import ModelActivityPhase
 from app.core.tool.presentation import ToolPresentation
 from app.core.workflow.message_queue.session_message import Delivery
-from app.models.run_record import RunError
-from app.models.run_usage import RunUsage
 from app.models.enums.run_status import (
     TERMINAL_RUN_STATUSES,
     RunStatus,
 )
+from app.models.run_record import RunError
+from app.models.run_usage import RunUsage
 
 _RUN_STATUSES = frozenset({status.value for status in RunStatus})
 _TERMINAL_RUN_STATUS_VALUES = frozenset({status.value for status in TERMINAL_RUN_STATUSES})

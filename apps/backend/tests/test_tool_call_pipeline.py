@@ -21,8 +21,8 @@ from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper import tool_observation_projection as projection
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import observation_node, prepare_input_node, tools_node
-from app.models.enums.run_status import RunTransition
 from app.models.enums.react_route import ReactRoute
+from app.models.enums.run_status import RunTransition
 from tests.runtime_context_stub import install_runtime_singletons, runtime_stub
 from tests.sdk_fixtures import sdk_completion
 from tests.tool_executor_fakes import emit_running

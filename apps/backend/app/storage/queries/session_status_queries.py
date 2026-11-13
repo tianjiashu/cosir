@@ -7,7 +7,8 @@
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session as DbSession, sessionmaker
+from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.orm import sessionmaker
 
 from app.storage.crud.session_context_crud import SessionContextCrud
 from app.storage.model.run_model import RunModel

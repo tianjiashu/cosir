@@ -17,11 +17,11 @@ from typing import Any
 import pytest
 
 from app.config import configuration
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.run_usage_stats import (
     RunUsageStats,
 )
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.service import depends as service_depends
 
 
