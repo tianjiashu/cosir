@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.workflow.message_queue.message_bodies.base import (
     EnqueuedMessageBody,
-    TaskMessageKind,
+    SessionMessageKind,
     WakeScope,
 )
 from app.core.workflow.message_queue.message_bodies.rendering import (
@@ -21,27 +21,27 @@ from app.core.workflow.message_queue.message_bodies.rendering import (
     user_message_with_images,
 )
 from app.models.conversation_input import UserInputPresentation
-from app.models.conversation_run_options import ConversationRunOptions
+from app.models.run_options import RunOptions
 from app.models.message_metadata import UserMessageMetadata
 
 if TYPE_CHECKING:
-    from app.models import ConversationRunRecord, TaskRecord
+    from app.models import RunRecord, SessionRecord
 
 
 class RunLaunch(BaseModel):
     """一个 Run 的发起配置；活动 Run 期间锁定，交接新 Run 与入队校验共用。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    # 交接新 Run 时的 Agent 身份；Task 不绑定 Agent，身份随发起配置走。
+    # 交接新 Run 时的 Agent 身份；Session 不绑定 Agent，身份随发起配置走。
     agent_id: str = "main_agent"
     model_config_id: str
-    options: ConversationRunOptions = Field(default_factory=ConversationRunOptions)
+    options: RunOptions = Field(default_factory=RunOptions)
 
     @classmethod
-    def from_run(cls, run: "ConversationRunRecord | None") -> "RunLaunch | None":
+    def from_run(cls, run: "RunRecord | None") -> "RunLaunch | None":
         """沿用某个 Run 已冻结的发起配置；Run 没记录 Agent 或模型时返回 ``None``。
 
-        模型被删后 Run 仍保留原 id，这里照样返回；能否开新 Run 由 ``TaskActor`` 查模型是否还在。
+        模型被删后 Run 仍保留原 id，这里照样返回；能否开新 Run 由 ``SessionActor`` 查模型是否还在。
         """
 
         if run is None or run.agent_id is None or run.model_config_id is None:
@@ -53,14 +53,14 @@ class RunLaunch(BaseModel):
         )
 
     @classmethod
-    def from_fork(cls, task: "TaskRecord") -> "RunLaunch | None":
-        """分支还没有本地 Run 时沿用分叉时冻结的初始配置；不依赖来源 Task 是否还在。
+    def from_fork(cls, session: "SessionRecord") -> "RunLaunch | None":
+        """分支还没有本地 Run 时沿用分叉时冻结的初始配置；不依赖来源 Session 是否还在。
 
         冻结的模型 id 只是来历，不保证还存在：入队前的消息准备会校验所选模型，用户也可以换。
         不是分支，或冻结配置缺 Agent / 模型（已被删除）时返回 ``None``。
         """
 
-        fork = task.extra.fork
+        fork = session.extra.fork
         if fork is None:
             return None
         launch = fork.initial_launch
@@ -74,7 +74,7 @@ class RunLaunch(BaseModel):
 class UserInputBody(EnqueuedMessageBody):
     """用户输入：入队前已校验并规范化胶囊指针；唯一可编辑的消息，与 Agent 消息一样可交接新 Run。"""
 
-    KIND: ClassVar[TaskMessageKind] = "user_input"
+    KIND: ClassVar[SessionMessageKind] = "user_input"
     TAG: ClassVar[str] = "user_input"
     PROMPT_GUIDE: ClassVar[str | None] = (
         "the user's own words to you. Capsules in it are pointers the user attached: "

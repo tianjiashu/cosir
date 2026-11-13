@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal import execute_terminal as terminal_module
 from app.tools.tool_handler.terminal.command_job import CommandJob
@@ -61,7 +61,7 @@ def command(monkeypatch):
     command.stop()
     if command.thread is not None:
         command.join()
-    command_results.drop_task(1)
+    command_results.drop_session(1)
     cancellation_registry.consume(1)
 
 
@@ -78,7 +78,7 @@ def pool(command):
 def delivered(monkeypatch):
     calls = []
 
-    def deliver(task_id, tool_call_id, conclusion, *, starts_run=True):
+    def deliver(session_id, tool_call_id, conclusion, *, starts_run=True):
         calls.append((tool_call_id, conclusion.result))
         return True
 
@@ -92,7 +92,7 @@ def _execute(tmp_path: Path, *, background=False, call_id="call-1", tool=None):
         command=call_id, background=background,
         execution_context=ToolExecutionContext(
         call_intent="test command",
-            task_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
+            session_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
             step_id="step-1", tool_call_id=call_id,
         ),
     )
@@ -109,7 +109,7 @@ def _wait_registered(call_id="call-1") -> None:
 def test_only_background_commands_run_without_a_timeout_by_default(
     tmp_path, command, pool, delivered, background, expected,
 ):
-    """后台命令属于 Task、缺省不限时（开发服务器要常驻）；前台缺省仍是 300 秒。"""
+    """后台命令属于 Session、缺省不限时（开发服务器要常驻）；前台缺省仍是 300 秒。"""
     result = pool.submit(_execute, tmp_path, background=background)
     assert command.started.wait(2)
     assert command.timeout == expected
@@ -240,7 +240,7 @@ def test_foreground_cancel_stops_command_and_waits_for_result(
 
 def test_parent_stop_drops_background_result(tmp_path, command, delivered):
     _execute(tmp_path, background=True)
-    dropped = command_results.recall_task(1)
+    dropped = command_results.recall_session(1)
     assert dropped["call-1"]["output"] == "call-1"
     command.join()
     assert command.stopped.is_set() and delivered == []
@@ -325,7 +325,7 @@ def test_model_text_fits_the_channel_once_whatever_the_ending(
     )
     monkeypatch.setattr(terminal_module.LiveOutputChannel, "open", lambda _: None)
     context = ToolExecutionContext(
-        call_intent="noisy", task_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
+        call_intent="noisy", session_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
         step_id="step-1", tool_call_id="call-1",
     )
     try:
@@ -342,7 +342,7 @@ def test_model_text_fits_the_channel_once_whatever_the_ending(
             content = observation.content or ""
             assert ToolOutputBudget().apply(observation, context) is observation
     finally:
-        command_results.drop_task(1)
+        command_results.drop_session(1)
 
     assert len(content) <= Constant.Tools.MAX_OUTPUT_CHARS
     assert content.startswith(result.end_marker())
@@ -365,7 +365,7 @@ def test_model_text_fits_the_channel_once_whatever_the_ending(
 def test_refused_registration_returns_cancelled_without_a_placeholder(
     tmp_path, command, delivered, background,
 ):
-    """Task 正被收回时登记被拒：作业已停下，工具按取消返回，不写一张没人结算的后台占位。"""
+    """Session 正被收回时登记被拒：作业已停下，工具按取消返回，不写一张没人结算的后台占位。"""
     cancellation_registry.request_cancel(1, "parent")
     observation = _execute(tmp_path, background=background)
     command.join()

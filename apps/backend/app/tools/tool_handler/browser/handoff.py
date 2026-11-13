@@ -43,8 +43,8 @@ class BrowserHandoffTool(HandlerBase):
 
     交接期间用户在浏览器面板里直接操作页面，不经 Agent；页面状态以交还时的快照为准。标签在交接中
     被关掉时宿主无法通知后端（宿主工具链路只由后端发起），交还时如实报告标签已不在，按成功收尾。
-    只给侧栏对话：子 Task 在前端只读，用户无法交还。声明了 ``user_decision``，Task 类型规则
-    （``models.task_kind``）据此自动把它从只读 Task 的工具面去掉。
+    只给侧栏会话：子 Session 在前端只读，用户无法交还。声明了 ``user_decision``，Session 类型规则
+    （``models.session_kind``）据此自动把它从只读 Session 的工具面去掉。
     """
 
     name = TOOL_BROWSER_HANDOFF
@@ -73,7 +73,7 @@ class BrowserHandoffTool(HandlerBase):
             return browser_error_observation(self.name, error)
         if page is None:
             advice, hint = BROWSER_ERRORS["TAB_NOT_FOUND"]
-            missing = f"tab {tab} is not one of this task's tabs" if tab else "this task has no tab"
+            missing = f"tab {tab} is not one of this session's tabs" if tab else "this session has no tab"
             return tool_error(self.name, f"{missing}. {advice}", status_hint=hint)
         if page["operation"] is not None:
             code = "OPERATION_UNKNOWN" if page["operation"] == "unknown" else "TAB_BUSY"
@@ -88,7 +88,7 @@ class BrowserHandoffTool(HandlerBase):
             handoff_registry.begin(
                 HandoffLease(
                     tool_call_id=execution_context.tool_call_id,
-                    task_id=execution_context.task_id,
+                    session_id=execution_context.session_id,
                     tool_name=self.name,
                     resource_id=page["tab_id"],
                     reason=reason,
@@ -119,7 +119,7 @@ class BrowserHandoffTool(HandlerBase):
     def _hand_back(
         self, tab: str | None, execution_context: ToolExecutionContext
     ) -> ToolObservation:
-        handoff = handoff_registry.end(execution_context.task_id, execution_context.tool_call_id)
+        handoff = handoff_registry.end(execution_context.session_id, execution_context.tool_call_id)
         # 交接时解析出的标签为准：``tab`` 为空时「当前标签」可能已经变了。
         target = handoff.resource_id if handoff is not None else tab
         try:

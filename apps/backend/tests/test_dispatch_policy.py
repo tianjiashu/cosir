@@ -10,29 +10,29 @@ import pytest
 from app.core.workflow.message_queue import dispatch_policy
 from app.core.workflow.message_queue.dispatch_policy import Deliver, StartRun, Stay, Wake
 from app.core.workflow.message_queue.message_bodies.notice import NoticeKind
-from app.core.workflow.message_queue.task_message import (
+from app.core.workflow.message_queue.session_message import (
     AgentMessageBody,
     BackgroundResultBody,
     DecisionBody,
     Delivery,
     NoticeBody,
     RunLaunch,
-    TaskMessage,
+    SessionMessage,
     UserInputBody,
 )
-from app.models import ConversationRunRecord
+from app.models import RunRecord
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.enums.run_status import RunStatus
 
 _LAUNCH = RunLaunch(model_config_id="test/m1")
 _OTHER = RunLaunch(model_config_id="test/m2")
 
 
-def _run(status: str, launch: RunLaunch = _LAUNCH) -> ConversationRunRecord:
+def _run(status: str, launch: RunLaunch = _LAUNCH) -> RunRecord:
     now = datetime.now()
-    return ConversationRunRecord(
+    return RunRecord(
         id=10,
-        task_id=1,
+        session_id=1,
         status=status,
         created_at=now,
         updated_at=now,
@@ -44,22 +44,22 @@ def _run(status: str, launch: RunLaunch = _LAUNCH) -> ConversationRunRecord:
 
 def _user(
     message_id: int, launch: RunLaunch = _LAUNCH, delivery: Delivery = "immediate"
-) -> TaskMessage:
+) -> SessionMessage:
     body = UserInputBody(text="hi", launch=launch, presentation=UserInputPresentation(text="hi"))
-    return TaskMessage.of(body, delivery=delivery, message_id=message_id)
+    return SessionMessage.of(body, delivery=delivery, message_id=message_id)
 
 
-def _notice(message_id: int, kind: NoticeKind = "catalog_change") -> TaskMessage:
-    return TaskMessage.of(NoticeBody(content="n", notice_kind=kind), message_id=message_id)
+def _notice(message_id: int, kind: NoticeKind = "catalog_change") -> SessionMessage:
+    return SessionMessage.of(NoticeBody(content="n", notice_kind=kind), message_id=message_id)
 
 
-def _decision(message_id: int) -> TaskMessage:
+def _decision(message_id: int) -> SessionMessage:
     body = DecisionBody(tool_call_id="c1", tool_name="hitl_tool", decision="approve")
-    return TaskMessage.of(body, message_id=message_id)
+    return SessionMessage.of(body, message_id=message_id)
 
 
-def _result(message_id: int) -> TaskMessage:
-    return TaskMessage.of(
+def _result(message_id: int) -> SessionMessage:
+    return SessionMessage.of(
         BackgroundResultBody(
             ended_at="2026-01-01T00:01:00+00:00", tool_call_id="call-probe",
             tool_name="execute_terminal", tool_result="done",
@@ -69,14 +69,14 @@ def _result(message_id: int) -> TaskMessage:
 
 
 def _phase(current, driving) -> dispatch_policy.Phase:
-    """与 ``TaskActor._phase`` 相同的判定。
+    """与 ``SessionActor._phase`` 相同的判定。
 
     阶段规则归 actor，这里只是喂给 ``next_action`` 的脚手架。
     """
 
     if driving:
         return "driving"
-    if current is not None and current.status == ConversationRunStatus.SUSPENDED:
+    if current is not None and current.status == RunStatus.SUSPENDED:
         return "suspended"
     return "idle"
 
@@ -87,7 +87,7 @@ def _next(current, driving, pending, fresh):
 
 @pytest.mark.parametrize("status", ["completed", "suspended"])
 def test_executor_still_settling_receives_deliveries_not_a_new_run(status) -> None:
-    """Run 已落定但执行者未释放：只投递，不新开、不唤醒——否则同一 Task 出现两个执行者。"""
+    """Run 已落定但执行者未释放：只投递，不新开、不唤醒——否则同一 Session 出现两个执行者。"""
     message = _user(1)
     assert _next(_run(status), True, [message], [message]) == Deliver([message])
 
@@ -108,8 +108,8 @@ def test_any_new_message_starts_a_run_after_any_terminal_status(status, make) ->
 
 
 def test_single_call_cancellation_wakes_the_suspended_run_but_never_starts_one():
-    """后台工作属于 Task：回执唤醒挂起中的任意 Run（不论是谁登记的），Task 空闲时不凭它开新 Run。"""
-    receipt = TaskMessage.of(
+    """后台工作属于 Session：回执唤醒挂起中的任意 Run（不论是谁登记的），Session 空闲时不凭它开新 Run。"""
+    receipt = SessionMessage.of(
         BackgroundResultBody(
             tool_call_id="bg",
             tool_name="terminal_command",
@@ -155,14 +155,14 @@ def test_no_launch_to_inherit_stays() -> None:
 
 
 @pytest.mark.parametrize("latest", [None, _run("completed"), _run("cancelled")])
-def test_notices_alone_never_start_a_run(latest: ConversationRunRecord | None) -> None:
+def test_notices_alone_never_start_a_run(latest: RunRecord | None) -> None:
     action = _next(latest, False, [_notice(1)], [_notice(1)])
     assert action == Stay()
 
 
-@pytest.mark.parametrize("kind", ["derived_task_stopped", "backend_restarted"])
+@pytest.mark.parametrize("kind", ["derived_session_stopped", "backend_restarted"])
 def test_notices_that_end_a_wait_wake_only_an_active_run(kind: NoticeKind) -> None:
-    """「等着的东西没了」的通知：挂起的 Run 可能正等着它，唤醒；Task 空闲时不为它开新 Run。"""
+    """「等着的东西没了」的通知：挂起的 Run 可能正等着它，唤醒；Session 空闲时不为它开新 Run。"""
     notice = _notice(1, kind)
     assert _next(_run("suspended"), False, [notice], [notice]) == Wake()
     for latest in (None, _run("completed"), _run("cancelled")):
@@ -198,15 +198,15 @@ def test_fresh_run_receives_one_user_input_resumed_run_only_immediate() -> None:
     assert dispatch_policy.initial_messages(pending, fresh_run=False) == [pending[1], pending[3]]
 
 
-def _agent(message_id: int, launch: RunLaunch = _OTHER) -> TaskMessage:
+def _agent(message_id: int, launch: RunLaunch = _OTHER) -> SessionMessage:
     body = AgentMessageBody(
-        text="do it", launch=launch, source=MessageSource(task_id=1, name="parent")
+        text="do it", launch=launch, source=MessageSource(session_id=1, name="parent")
     )
-    return TaskMessage.of(body, message_id=message_id)
+    return SessionMessage.of(body, message_id=message_id)
 
 
 def test_agent_message_starts_a_run_with_its_own_launch_without_a_current_run() -> None:
-    """委派刚建的子 Task 没有 Run、无从继承：Agent 消息自带的配置开出第一个 Run。"""
+    """委派刚建的子 Session 没有 Run、无从继承：Agent 消息自带的配置开出第一个 Run。"""
     pending = [_agent(1)]
     assert dispatch_policy.next_action("idle", None, pending, pending) == StartRun(_OTHER)
 

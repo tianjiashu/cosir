@@ -14,14 +14,14 @@ from app.assistant_transport.projection.snapshot_rebuild import (
     rebuild_snapshot,
 )
 from app.core.events import RunInitializedEvent
-from app.core.workflow.conversation_run_ledger import ConversationRunLedger
-from app.models.conversation_run_record import ConversationRunRecord
-from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.core.workflow.run_ledger import RunLedger
+from app.models.run_record import RunRecord
+from app.models.session_context import SessionContextRecord
+from app.models.enums.run_status import RunStatus
 from app.models.message_metadata import parse_message_metadata
-from app.models.task_record import TaskRecord
-from app.storage.crud.conversation_run_crud import ConversationRunCrud
-from app.storage.crud.task_crud import TaskCrud
+from app.models.session_record import SessionRecord
+from app.storage.crud.run_crud import RunCrud
+from app.storage.crud.session_crud import SessionCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.store_engines import initialize_app_schema
@@ -34,10 +34,10 @@ def _timestamp(second: int = 0) -> datetime:
     return datetime(2026, 9, 12, 12, 0, second, tzinfo=UTC)
 
 
-def _run(run_id: int, task_id: int = 7) -> ConversationRunRecord:
-    return ConversationRunRecord(
+def _run(run_id: int, session_id: int = 7) -> RunRecord:
+    return RunRecord(
         id=run_id,
-        task_id=task_id,
+        session_id=session_id,
         status="completed",
         created_at=_timestamp(run_id),
         updated_at=_timestamp(run_id),
@@ -46,11 +46,11 @@ def _run(run_id: int, task_id: int = 7) -> ConversationRunRecord:
     )
 
 
-def _task(task_id: int = 7) -> TaskRecord:
-    return TaskRecord(
-        id=task_id,
+def _session(session_id: int = 7) -> SessionRecord:
+    return SessionRecord(
+        id=session_id,
         workspace_id=3,
-        title="task",
+        title="session",
         created_at=_timestamp(),
         updated_at=_timestamp(),
         current_run_id=None,
@@ -63,10 +63,10 @@ def _context_row(
     message: object,
     sequence: int,
     metadata: dict[str, object] | None = None,
-) -> ConversationTaskContextRecord:
-    return ConversationTaskContextRecord(
+) -> SessionContextRecord:
+    return SessionContextRecord(
         id=row_id,
-        task_id=7,
+        session_id=7,
         run_id=run_id,
         # 用户行的 wire 身份来自入队消息 id；测试直接复用行 id。
         message_id=row_id if message["role"] == "user" else None,
@@ -94,29 +94,29 @@ def test_workflow_event_dispatcher_swallows_projector_failure() -> None:
         raise RuntimeError("projector unavailable")
 
     with execution_scope(SimpleNamespace(event_sink=failing_sink), SimpleNamespace()):
-        emit(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=11))
+        emit(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=7, run_id=11))
 
 
 def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[object] = []
-    from app.models.conversation_run_options import ConversationRunOptions
+    from app.models.run_options import RunOptions
 
     run = SimpleNamespace(
         id=11,
-        task_id=7,
+        session_id=7,
         context_window_total=128_000,
         model_config_id="test/m1",
-        options=ConversationRunOptions(),
+        options=RunOptions(),
         created_at=_RUN_CREATED_AT,
     )
 
-    class RunCrud:
+    class FakeRunCrud:
         def create(self, *_args: Any, **_kwargs: Any) -> Any:
             return run
 
-    class TaskCrud:
+    class SessionCrud:
         def set_current_run_id(self, *_args: Any, **_kwargs: Any) -> None:
             return None
 
@@ -124,20 +124,20 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
         def process(self, event: object, **_kwargs: Any) -> None:
             events.append(event)
 
-    service = ConversationRunLedger.__new__(ConversationRunLedger)
-    service._run = RunCrud()
-    service._task = TaskCrud()
+    service = RunLedger.__new__(RunLedger)
+    service._run = FakeRunCrud()
+    service._session = SessionCrud()
     from contextlib import nullcontext
 
-    from app.core.workflow.message_queue.task_message import RunLaunch
+    from app.core.workflow.message_queue.session_message import RunLaunch
 
-    service._session_factory = SimpleNamespace(begin=lambda: nullcontext(object()))
+    service._db_factory = SimpleNamespace(begin=lambda: nullcontext(object()))
     monkeypatch.setattr(
         "app.service.depends.get_conversation_event_projector",
         lambda: Projector(),
     )
     monkeypatch.setattr(
-        "app.core.workflow.conversation_run_ledger.get_model_config_service",
+        "app.core.workflow.run_ledger.get_model_config_service",
         lambda: SimpleNamespace(
             get_config=lambda _config_id: SimpleNamespace(
                 model=SimpleNamespace(
@@ -157,37 +157,37 @@ def test_rebuild_reads_run_owned_context_windows_without_capability_lookup() -> 
     runs = [_run(11), _run(12)]
     runs[0].context_window_total = 8192
     runs[1].context_window_total = 16384
-    task = _task()
-    task.current_run_id = 12
-    state = rebuild_snapshot(task, runs, [], {})
+    session = _session()
+    session.current_run_id = 12
+    state = rebuild_snapshot(session, runs, [], {})
     # 只有最新 Run 的冻结窗口进入 activity；历史 Run 的窗口不进 wire。
     assert state["activity"] is not None
     assert state["activity"]["contextWindowTotal"] == 16384
 
 
 @pytest.fixture
-def real_run_crud(tmp_path: Path) -> tuple[ConversationRunCrud, TaskRecord, Any]:
+def real_run_crud(tmp_path: Path) -> tuple[RunCrud, SessionRecord, Any]:
     engine = create_sqlite_engine(tmp_path / "storage" / "app.sqlite3")
     initialize_app_schema(engine)
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     workspace_crud = WorkspaceCrud.__new__(WorkspaceCrud)
-    workspace_crud._session_factory = factory
-    task_crud = TaskCrud.__new__(TaskCrud)
-    task_crud._session_factory = factory
-    run_crud = ConversationRunCrud.__new__(ConversationRunCrud)
-    run_crud._session_factory = factory
+    workspace_crud._db_factory = factory
+    session_crud = SessionCrud.__new__(SessionCrud)
+    session_crud._db_factory = factory
+    run_crud = RunCrud.__new__(RunCrud)
+    run_crud._db_factory = factory
     workspace = workspace_crud.create("test", str(tmp_path))
-    task = task_crud.create(workspace.id, "task")
+    session = session_crud.create(workspace.id, "session")
     try:
-        yield run_crud, task, engine
+        yield run_crud, session, engine
     finally:
         engine.dispose()
 
 
 def test_resume_cancelled_run_clears_terminal_fields_and_preserves_progress(
-    real_run_crud: tuple[ConversationRunCrud, TaskRecord, Any],
+    real_run_crud: tuple[RunCrud, SessionRecord, Any],
 ) -> None:
-    run_crud, task, _engine = real_run_crud
+    run_crud, session, _engine = real_run_crud
     usage = {
         "input_tokens": 3,
         "output_tokens": 2,
@@ -198,18 +198,18 @@ def test_resume_cancelled_run_clears_terminal_fields_and_preserves_progress(
     }
     error = {"code": "old_failure", "message": "old"}
     run = run_crud.create(
-        task.id,
+        session.id,
         status="cancelled",
         usage=usage,
         error=error,
-        session=None,
+        db=None,
     )
 
     # 续跑清除终态字段，保留模型边界的累计进度。
     resumed = run_crud.update_status_if_in(
         run.id,
-        ConversationRunStatus.RUNNING.value,
-        (ConversationRunStatus.CANCELLED.value,),
+        RunStatus.RUNNING.value,
+        (RunStatus.CANCELLED.value,),
         clear_terminal_fields=True,
     )
 

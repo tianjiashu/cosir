@@ -21,7 +21,7 @@ APPLY_PATCH_DESCRIPTION = ApplyPatchTool.description
 
 
 def _context(root: Path) -> ToolExecutionContext:
-    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=991)
+    return ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=root, run_id=991)
 
 
 def _patch(path: str = "existing.txt") -> str:

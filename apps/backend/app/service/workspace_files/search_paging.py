@@ -42,7 +42,7 @@ def file_search_pages(
 def text_search_pages(
     batches: Iterator[TextSearchBatch], offset: int, limit: int, cancelled: threading.Event
 ) -> Iterator[dict[str, object]]:
-    """全文匹配同样有界；翻页重查磁盘并验证版本，不保留隐形长期搜索任务。"""
+    """全文匹配同样有界；翻页重查磁盘并验证版本，不保留隐形长期搜索会话。"""
     seen = 0
     delivered = 0
     for batch in batches:

@@ -119,16 +119,16 @@ def test_finished_command_reports_its_end_in_the_header() -> None:
 def test_registry_holds_commands_until_they_finish() -> None:
     registry = RunningCommandRegistry()
     first = registry.start(
-        task_id=1, command_id="call-1", command="a", shell_kind="sh", cwd="/w"
+        session_id=1, command_id="call-1", command="a", shell_kind="sh", cwd="/w"
     )
-    registry.start(task_id=1, command_id="call-2", command="b", shell_kind="sh", cwd="/w")
-    registry.start(task_id=2, command_id="call-1", command="c", shell_kind="sh", cwd="/w")
+    registry.start(session_id=1, command_id="call-2", command="b", shell_kind="sh", cwd="/w")
+    registry.start(session_id=2, command_id="call-1", command="c", shell_kind="sh", cwd="/w")
     assert registry.get(1, "call-1") is first
-    assert [command.terminal_id for command in registry.task_commands(1)] == ["call-1", "call-2"]
-    assert [command.terminal_id for command in registry.task_commands(2)] == ["call-1"]
+    assert [command.terminal_id for command in registry.session_commands(1)] == ["call-1", "call-2"]
+    assert [command.terminal_id for command in registry.session_commands(2)] == ["call-1"]
 
     with pytest.raises(RuntimeError):
-        registry.start(task_id=1, command_id="call-1", command="x", shell_kind="sh", cwd="/w")
+        registry.start(session_id=1, command_id="call-1", command="x", shell_kind="sh", cwd="/w")
 
     registry.finish(1, "call-1", ExecutionResult(end="exited", exit_code=0))
     with pytest.raises(KeyError):

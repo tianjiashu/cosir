@@ -6,8 +6,8 @@ import type { DownloadItem } from "electron";
 import { logDesktopEvent } from "../desktop-log";
 import type { BrowserDownload } from "../../shared/host-contract";
 
-/** 每个 Task 留几次已结束的下载（面板下载条与回答「下到哪了」够用）；进行中的从不挤掉。 */
-const KEPT_FINISHED_PER_TASK = 5;
+/** 每个 Session 留几次已结束的下载（面板下载条与回答「下到哪了」够用）；进行中的从不挤掉。 */
+const KEPT_FINISHED_PER_SESSION = 5;
 /** 进度推送的最小间隔：`updated` 事件很密，每次都推送会刷屏 IPC。状态变化不受它限制。 */
 const PROGRESS_PUBLISH_MS = 500;
 /** 给 Agent 的提示：下载目录在工作区 `.cosir` 只读区里，文件工具只能读。 */
@@ -15,16 +15,16 @@ const READ_ONLY_HINT = "it is in the workspace's read-only .cosir area: read it 
 
 type DownloadEvents = {
   onChange: () => void;
-  /** 给 Task 的 Agent 一条备注；`tabId` 是触发下载的标签（可能已关闭，由调用方决定落到哪个标签）。 */
-  note: (taskId: number, tabId: string, text: string) => void;
+  /** 给 Session 的 Agent 一条备注；`tabId` 是触发下载的标签（可能已关闭，由调用方决定落到哪个标签）。 */
+  note: (sessionId: number, tabId: string, text: string) => void;
 };
 
 /**
- * 内置浏览器全部下载的登记：下载归 Task，不归标签（与浏览器下载归 profile 一致）——触发它的标签关掉
- * （弹出页下载后自己 `window.close()` 很常见）不取消下载；只有 Task 删除与宿主退出才取消。
+ * 内置浏览器全部下载的登记：下载归 Session，不归标签（与浏览器下载归 profile 一致）——触发它的标签关掉
+ * （弹出页下载后自己 `window.close()` 很常见）不取消下载；只有 Session 删除与宿主退出才取消。
  *
- * 落盘到 Task 所在工作区的下载目录（标签创建时由后端给出），同名按「名字 (n).扩展名」避让，占用判断跨全部
- * 登记（不同标签、不同 Task 可能写同一个目录）与磁盘。状态投影进 `BrowserState.downloads`（面板下载条），
+ * 落盘到 Session 所在工作区的下载目录（标签创建时由后端给出），同名按「名字 (n).扩展名」避让，占用判断跨全部
+ * 登记（不同标签、不同 Session 可能写同一个目录）与磁盘。状态投影进 `BrowserState.downloads`（面板下载条），
  * 开始与结束各给 Agent 一条带绝对路径的备注。
  */
 export class BrowserDownloads {
@@ -38,7 +38,7 @@ export class BrowserDownloads {
    * 必须在 `will-download` 里同步调用：保存路径只能在事件处理期间设定，否则 Chromium 会弹保存框。
    * 目录建不出来等外部 IO 失败在这里收住：取消下载并告诉 Agent，不让异常漏出事件处理。
    */
-  accept(item: DownloadItem, source: { taskId: number; tabId: string; directory: string }): void {
+  accept(item: DownloadItem, source: { sessionId: number; tabId: string; directory: string }): void {
     let target: string;
     try {
       fs.mkdirSync(source.directory, { recursive: true });
@@ -47,13 +47,13 @@ export class BrowserDownloads {
     } catch (error) {
       item.cancel();
       const message = error instanceof Error ? error.message : String(error);
-      logDesktopEvent("WARNING", "browser", "browser_download_failed", { task_id: source.taskId, tab_id: source.tabId, error: message });
-      this.events.note(source.taskId, source.tabId, `a download of "${item.getFilename()}" could not be saved (${message}) and was cancelled`);
+      logDesktopEvent("WARNING", "browser", "browser_download_failed", { session_id: source.sessionId, tab_id: source.tabId, error: message });
+      this.events.note(source.sessionId, source.tabId, `a download of "${item.getFilename()}" could not be saved (${message}) and was cancelled`);
       return;
     }
     const download: BrowserDownload = {
       id: `d${++this.sequence}`,
-      taskId: source.taskId,
+      sessionId: source.sessionId,
       tabId: source.tabId,
       filename: path.basename(target),
       path: target,
@@ -63,7 +63,7 @@ export class BrowserDownloads {
       totalBytes: item.getTotalBytes(),
     };
     this.entries.push({ download, item });
-    this.trim(source.taskId);
+    this.trim(source.sessionId);
     // `updated` 里的 interrupted 是可恢复的中断（Chromium 会续传），不是结局：结局只在 `done` 里写（见 `ended`）。
     item.on("updated", (_event, state) => {
       const stalled = state === "interrupted";
@@ -78,16 +78,16 @@ export class BrowserDownloads {
       download.stalled = false;
       download.receivedBytes = item.getReceivedBytes();
       download.totalBytes = item.getTotalBytes();
-      this.trim(download.taskId);
+      this.trim(download.sessionId);
       this.publish();
-      logDesktopEvent("INFO", "browser", "browser_download_done", { task_id: download.taskId, download_id: download.id, state });
-      this.events.note(download.taskId, download.tabId, state === "completed"
+      logDesktopEvent("INFO", "browser", "browser_download_done", { session_id: download.sessionId, download_id: download.id, state });
+      this.events.note(download.sessionId, download.tabId, state === "completed"
         ? `the download "${download.filename}" finished: ${target} (${READ_ONLY_HINT})`
         : `the download "${download.filename}" ${state === "cancelled" ? "was cancelled" : "failed"}`);
     });
     this.publish();
-    logDesktopEvent("INFO", "browser", "browser_download_started", { task_id: download.taskId, tab_id: download.tabId, download_id: download.id });
-    this.events.note(download.taskId, download.tabId, `a download started: "${download.filename}" is being saved to ${target}`);
+    logDesktopEvent("INFO", "browser", "browser_download_started", { session_id: download.sessionId, tab_id: download.tabId, download_id: download.id });
+    this.events.note(download.sessionId, download.tabId, `a download started: "${download.filename}" is being saved to ${target}`);
   }
 
   list(): BrowserDownload[] {
@@ -98,14 +98,14 @@ export class BrowserDownloads {
     return this.entries.find(({ download }) => download.id === downloadId)?.download.path;
   }
 
-  /** 还有下载记录的 Task（链路连上时对账回收用，见 `BrowserHost.taskIds`）。 */
-  taskIds(): number[] {
-    return this.entries.map(({ download }) => download.taskId);
+  /** 还有下载记录的 Session（链路连上时对账回收用，见 `BrowserHost.sessionIds`）。 */
+  sessionIds(): number[] {
+    return this.entries.map(({ download }) => download.sessionId);
   }
 
-  /** Task 删除：取消它未完成的下载并忘掉它的全部记录。 */
-  dropTasks(taskIds: readonly number[]): void {
-    this.remove((download) => taskIds.includes(download.taskId));
+  /** Session 删除：取消它未完成的下载并忘掉它的全部记录。 */
+  dropSessions(sessionIds: readonly number[]): void {
+    this.remove((download) => sessionIds.includes(download.sessionId));
   }
 
   /** 宿主退出：取消全部未完成的下载。 */
@@ -123,10 +123,10 @@ export class BrowserDownloads {
     this.publish();
   }
 
-  /** 每个 Task 只留最近几次已结束的；进行中的不挤掉（挤掉就再也取消不了、也不参与同名避让）。 */
-  private trim(taskId: number): void {
-    const finished = this.entries.filter(({ download }) => download.taskId === taskId && ended(download));
-    for (const entry of finished.slice(0, Math.max(0, finished.length - KEPT_FINISHED_PER_TASK))) {
+  /** 每个 Session 只留最近几次已结束的；进行中的不挤掉（挤掉就再也取消不了、也不参与同名避让）。 */
+  private trim(sessionId: number): void {
+    const finished = this.entries.filter(({ download }) => download.sessionId === sessionId && ended(download));
+    for (const entry of finished.slice(0, Math.max(0, finished.length - KEPT_FINISHED_PER_SESSION))) {
       this.entries.splice(this.entries.indexOf(entry), 1);
     }
   }
@@ -149,7 +149,7 @@ export class BrowserDownloads {
 
 /**
  * 下载是否已结束：只看 `done` 写下的结局。挤出列表（`trim`）、删除时要不要取消（`remove`）都按它判断——正在续传的
- * 下载不算结束，挤掉就再也取消不了，删 Task 时不取消它，续传完成后会写进已删除 Task 的工作区。
+ * 下载不算结束，挤掉就再也取消不了，删 Session 时不取消它，续传完成后会写进已删除 Session 的工作区。
  */
 function ended(download: BrowserDownload): boolean {
   return download.state !== "progressing";

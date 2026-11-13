@@ -23,7 +23,7 @@ import {
 import { parseTransportState, validateTransportUpdate } from "@/lib/assistant/transport/snapshot-validation";
 
 type TransportFrameBase = {
-  task_id: number;
+  session_id: number;
   mutations: Array<{
     kind: "set" | "append-text";
     path: Array<string | number>;
@@ -88,7 +88,7 @@ export function parseTransportFrame(value: unknown): TransportFrameEnvelope {
     throw new Error("transport frame must be an object");
   }
   const frame = value as Record<string, unknown>;
-  if (!Number.isInteger(frame.task_id)) throw new Error("transport frame task_id is invalid");
+  if (!Number.isInteger(frame.session_id)) throw new Error("transport frame session_id is invalid");
   if (frame.kind !== "full" && frame.kind !== "mutation" && frame.kind !== "resync_required") {
     throw new Error("transport frame kind is invalid");
   }
@@ -120,7 +120,7 @@ export function parseTransportFrame(value: unknown): TransportFrameEnvelope {
     throw new Error("transport frame resync_reason is invalid");
   }
   const base = {
-    task_id: frame.task_id as number,
+    session_id: frame.session_id as number,
     mutations,
     resync_reason: frame.resync_reason as string | null | undefined,
   };
@@ -129,7 +129,7 @@ export function parseTransportFrame(value: unknown): TransportFrameEnvelope {
 }
 
 /**
- * 为单个 task 持有前端的 Transport frame 投影。
+ * 为单个 session 持有前端的 Transport frame 投影。
  *
  * mutation 只复制路径上的 state 祖先；发生变化的消息得到新的源对象，未变化的历史消息
  * 保持原对象身份，以便 assistant-ui 的按消息订阅复用转换结果。它只是渲染工作副本，
@@ -367,7 +367,7 @@ export class TransportFrameStore {
   /**
    * 比较前后两份 state 的当前活动：从非活动态进入活动态发 `started`，从活动态落到终态发 `settled`。
    * 前端看不到 Run：重连时一份 full 帧里旧 Run 已结束、新 Run 已开始，在这里只是一段没有中断的活动，
-   * 不补发 `settled`（下游只用它记日志与刷新 Task 列表，Task 状态另由 task-status 推送收敛）。
+   * 不补发 `settled`（下游只用它记日志与刷新 Session 列表，Session 状态另由 session-status 推送收敛）。
    */
   private emitActivityTransition(previous: TransportState): void {
     const before = previous.activity;

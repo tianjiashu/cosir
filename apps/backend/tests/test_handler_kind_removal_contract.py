@@ -3,7 +3,7 @@
 本次改动删除了：
 - ``ToolDefinition.handler_kind`` 字段与 ``AsyncToolHandler`` Protocol；
 - ``ToolExecutor.execute_async`` / ``_execute_inner_async`` / ``_run_async_handler`` /
-  ``_wait_for_cancellation`` / ``_await_cancelled_task``，以及 ``execute`` 内
+  ``_wait_for_cancellation`` / ``_await_cancelled_session``，以及 ``execute`` 内
   ``handler_kind != "sync"`` 断言；
 - 工具批次调度里的 ``_handler_kind_by_name`` / ``_execute_async_tool_call``（串行调用统一走
   ``asyncio.to_thread(self._execute_tool_call, ...)``），``_is_parallel_call`` 改为只看
@@ -154,13 +154,13 @@ def _operations_with_executor(
     return runtime_stub(
         tool_executor=executor,
         execution_context=execution_context
-        or ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=Path("."), run_id=0),
+        or ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=Path("."), run_id=0),
         admitted_tools=frozenset(allowed or ()),
         tool_definitions={
             name: SimpleNamespace(parallel_mode=mode, user_decision=None)
             for name, mode in (parallel_modes or {}).items()
         },
-        task=SimpleNamespace(id=1),
+        session=SimpleNamespace(id=1),
     )
 
 
@@ -462,7 +462,7 @@ def test_unknown_tool_name_yields_unknown_tool_observation_without_keyerror(
         [_make_definition(name="known_tool", parameters_schema={"type": "object"})]
     )
     executor = ToolExecutor(registry=registry)
-    context = ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=0)
+    context = ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=0)
     operations = _operations_with_executor(
         executor,
         parallel_modes={"known_tool": "serial"},
@@ -493,7 +493,7 @@ def test_unknown_tool_alongside_known_serial_tool_keeps_order_and_count(
         [_make_definition(name="known_tool", parameters_schema={"type": "object"})]
     )
     executor = ToolExecutor(registry=registry)
-    context = ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=0)
+    context = ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=0)
     operations = _operations_with_executor(
         executor,
         parallel_modes={"known_tool": "serial"},
@@ -753,7 +753,7 @@ _REMOVED_SYMBOLS = (
     "_execute_inner_async",
     "_run_async_handler",
     "_wait_for_cancellation",
-    "_await_cancelled_task",
+    "_await_cancelled_session",
     "_execute_async_tool_call",
     "_handler_kind_by_name",
     "_validate_handler_contract",
@@ -815,7 +815,7 @@ def test_removed_executor_and_scheduler_attributes_are_absent() -> None:
         "_execute_inner_async",
         "_run_async_handler",
         "_wait_for_cancellation",
-        "_await_cancelled_task",
+        "_await_cancelled_session",
     ):
         assert not hasattr(ToolExecutor, attribute), f"ToolExecutor.{attribute} 仍存在"
 
@@ -859,17 +859,17 @@ def test_emit_swallows_projector_failure() -> None:
         raise RuntimeError("projector exploded")
 
     with execution_scope(SimpleNamespace(event_sink=failing_sink), SimpleNamespace()):
-        emit(AssistantPartClosedEvent(source_sequence=1, task_id=1, run_id=1, turn=1, part="text"))
+        emit(AssistantPartClosedEvent(source_sequence=1, session_id=1, run_id=1, turn=1, part="text"))
 
 
-def test_is_cancelled_reads_task_signal() -> None:
-    """取消判定只按当前 Task 读进程内信号：同一 Task 的执行串行，命中即当前执行。"""
-    from app.core.workflow.cancel.conversation_run_cancellation_registry import (
+def test_is_cancelled_reads_session_signal() -> None:
+    """取消判定只按当前 Session 读进程内信号：同一 Session 的执行串行，命中即当前执行。"""
+    from app.core.workflow.cancel.run_cancellation_registry import (
         cancellation_registry,
     )
     from app.core.workflow.execution_state.runtime_context import RuntimeContext
 
-    context = SimpleNamespace(task=SimpleNamespace(id=9_100_001))
+    context = SimpleNamespace(session=SimpleNamespace(id=9_100_001))
     assert RuntimeContext.is_cancelled(context) is False
     cancellation_registry.request_cancel(9_100_001)
     try:

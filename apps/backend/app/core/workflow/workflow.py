@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from app.core.llm_provider.model_factory import resolve_chat_model
-from app.core.workflow.branch import task_title
+from app.core.workflow.branch import session_title
 from app.core.workflow.drive_notices import drive_notices
-from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.node_helper.common import RunStopped, execution_scope
 from app.core.workflow.nodes.model_node import _model_node
@@ -39,12 +39,12 @@ class ReactLikeWorkflow:
     async def run(self, rc: RuntimeContext) -> None:
         """驱动一次 Run：解析本次独占的模型、按持久化进度补齐驱动期状态，再循环节点直到 END。
 
-        ``rc`` 由装配方注入本次 Run 的事实与协作者；模型 schema 用 Task 固化的完整工具 schema，
-        不按本轮准入过滤，避免同一 Task 的请求前缀变化。client 归本次驱动独占，标题支线也复用它，
-        所以关闭前先收尾支线（见 ``branch.task_title.settle``）。
+        ``rc`` 由装配方注入本次 Run 的事实与协作者；模型 schema 用 Session 固化的完整工具 schema，
+        不按本轮准入过滤，避免同一 Session 的请求前缀变化。client 归本次驱动独占，标题支线也复用它，
+        所以关闭前先收尾支线（见 ``branch.session_title.settle``）。
         """
         resolved = resolve_chat_model(
-            model=rc.agent.model, tools=list(rc.task_space.task_tool_schemas)
+            model=rc.agent.model, tools=list(rc.session_space.session_tool_schemas)
         )
         rc.model = resolved.model
         rc.thinking_channel = "reasoning_content" if resolved.supports_thinking else ""
@@ -55,13 +55,13 @@ class ReactLikeWorkflow:
         finally:
             # 标题支线复用这个 client：先收尾支线再关闭。
             try:
-                await task_title.settle(rc)
+                await session_title.settle(rc)
             finally:
                 await resolved.model.close()
 
     async def _drive(self, rc: RuntimeContext) -> None:
         """从 ``prepare_input`` 进入，循环节点直到 END；调用方不传恢复模式。"""
-        context = rc.task_space.get_context_manager(agent=rc.agent)
+        context = rc.session_space.get_context_manager(agent=rc.agent)
         context.begin_run(rc.run)
         # 推导要读重建后的上下文；mailbox 已在驱动开始时重置，投进的通知随本次驱动写入或丢弃。
         for notice in drive_notices(rc, context):
@@ -69,12 +69,12 @@ class ReactLikeWorkflow:
         # 整个执行状态都落库，但新驱动只延续跨驱动事实，总从 prepare_input 进入（见 for_new_drive）。
         state = rc.run.execution_data.for_new_drive(rc.agent.max_steps)
         if rc.run.usage is not None:
-            rc.usage_stats = ConversationRunUsageStats(**rc.run.usage)
+            rc.usage_stats = RunUsageStats(**rc.run.usage)
         with execution_scope(rc, context):
             # 终态由产出节点就地落定，循环到 END 只停止驱动。
             while state.next_node != ReactRoute.END:
                 patch = await self._nodes[state.next_node](state)
                 state = state.model_copy(update=patch)
-                service_depends.get_conversation_run_ledger().save_execution(
+                service_depends.get_run_ledger().save_execution(
                     rc.run.id, state
                 )

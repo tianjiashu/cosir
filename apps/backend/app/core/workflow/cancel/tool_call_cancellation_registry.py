@@ -5,19 +5,19 @@ from __future__ import annotations
 import threading
 
 from app.config.logging.logger import log
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 
 
 class ToolCallCancellationRegistry:
-    """记录「某 Task 当前执行中的某次工具调用应停止」的信号。
+    """记录「某 Session 当前执行中的某次工具调用应停止」的信号。
 
-    与 Task 级取消（``conversation_run_cancellation_registry``）职责不同：Task 级取消让整个当前
+    与 Session 级取消（``run_cancellation_registry``）职责不同：Session 级取消让整个当前
     执行停下，本注册表只中止**一次工具调用**，Run 与 Agent 在其后继续。同一批并行工具调用中只有
     被点名的那一个停止。
 
-    键是 ``(task_id, tool_call_id)``，与 Task 级取消一样按 Task 而不是 Run 寻址：同一 Task 同时
-    只有一个执行者，命中的永远是当前执行，HTTP 入口也不必先把 Task 解析成 run_id。信号生命周期
-    由执行方保证：单次调用结束时经 :meth:`clear` 释放，执行收尾时经 :meth:`clear_task` 兜底回收
+    键是 ``(session_id, tool_call_id)``，与 Session 级取消一样按 Session 而不是 Run 寻址：同一 Session 同时
+    只有一个执行者，命中的永远是当前执行，HTTP 入口也不必先把 Session 解析成 run_id。信号生命周期
+    由执行方保证：单次调用结束时经 :meth:`clear` 释放，执行收尾时经 :meth:`clear_session` 兜底回收
     「点名了已结束的调用」这类不会再被消费的信号，否则会命中下一个执行里恰好同名的调用。
 
     本类只表达运行时控制信号：工具是否真的被中断、调用终态，仍由工具执行层产出的
@@ -28,9 +28,9 @@ class ToolCallCancellationRegistry:
         self._lock = threading.Lock()
         self._cancelled_calls: set[tuple[int, str]] = set()
 
-    def mark_cancelled(self, task_id: int, tool_call_id: str) -> bool:
+    def mark_cancelled(self, session_id: int, tool_call_id: str) -> bool:
         """记录取消意图；返回是否为新标记（已标记过时为 ``False``）。可从工具线程调用。"""
-        key = (task_id, tool_call_id)
+        key = (session_id, tool_call_id)
         with self._lock:
             if key in self._cancelled_calls:
                 return False
@@ -39,31 +39,31 @@ class ToolCallCancellationRegistry:
             "tool_call_cancellation_marked",
             extra={
                 "msg": "工具调用取消信号已登记",
-                "data": {"task_id": task_id, "tool_call_id": tool_call_id},
+                "data": {"session_id": session_id, "tool_call_id": tool_call_id},
             },
         )
         return True
 
-    def is_cancelled(self, task_id: int, tool_call_id: str) -> bool:
+    def is_cancelled(self, session_id: int, tool_call_id: str) -> bool:
         with self._lock:
-            return (task_id, tool_call_id) in self._cancelled_calls
+            return (session_id, tool_call_id) in self._cancelled_calls
 
-    def clear(self, task_id: int, tool_call_id: str) -> None:
+    def clear(self, session_id: int, tool_call_id: str) -> None:
         """单次调用结束时释放它的信号；重复清理安全。"""
         with self._lock:
-            self._cancelled_calls.discard((task_id, tool_call_id))
+            self._cancelled_calls.discard((session_id, tool_call_id))
 
-    def clear_task(self, task_id: int) -> None:
-        """执行收尾时回收该 Task 遗留的全部工具级信号；只记清理条数，不记调用 id 列表。"""
+    def clear_session(self, session_id: int) -> None:
+        """执行收尾时回收该 Session 遗留的全部工具级信号；只记清理条数，不记调用 id 列表。"""
         with self._lock:
-            removed = {key for key in self._cancelled_calls if key[0] == task_id}
+            removed = {key for key in self._cancelled_calls if key[0] == session_id}
             self._cancelled_calls -= removed
         if removed:
             log.info(
-                "tool_call_cancellation_task_cleared",
+                "tool_call_cancellation_session_cleared",
                 extra={
                     "msg": "执行收尾时清理了遗留的工具级取消信号",
-                    "data": {"task_id": task_id, "cleared_count": len(removed)},
+                    "data": {"session_id": session_id, "cleared_count": len(removed)},
                 },
             )
 
@@ -71,13 +71,13 @@ class ToolCallCancellationRegistry:
 tool_call_cancellation_registry = ToolCallCancellationRegistry()
 
 
-def should_stop_call(task_id: int, tool_call_id: str) -> bool:
-    """本 Task 收到停止信号，或用户单独取消了这次调用。
+def should_stop_call(session_id: int, tool_call_id: str) -> bool:
+    """本 Session 收到停止信号，或用户单独取消了这次调用。
 
     给在工具线程里长时间等待的 thread 工具轮询用：执行器只在 handler 执行前检查一次，等待期间
     到达的取消（两类信号任一）只能靠工具自己现读这里发现。
     """
 
-    if cancellation_registry.is_cancelled(task_id):
+    if cancellation_registry.is_cancelled(session_id):
         return True
-    return tool_call_cancellation_registry.is_cancelled(task_id, tool_call_id)
+    return tool_call_cancellation_registry.is_cancelled(session_id, tool_call_id)

@@ -1,4 +1,4 @@
-"""``browser_tabs``：列出、切换、关闭本 Task 的标签页。"""
+"""``browser_tabs``：列出、切换、关闭本 Session 的标签页。"""
 
 from typing import ClassVar
 
@@ -22,14 +22,14 @@ class BrowserTabsTool(HandlerBase):
     """新开标签不在这里：``browser_navigate`` 的 ``new_tab``，开的同时就有页面可看。"""
 
     name = TOOL_BROWSER_TABS
-    # 中文译文：管理本任务的内置浏览器标签页：list 列出（标出当前标签与用户开的标签），select
+    # 中文译文：管理本会话的内置浏览器标签页：list 列出（标出当前标签与用户开的标签），select
     # 把某个标签设为当前（省略 tab 的调用都用它），close 关闭不再需要的标签。新开标签用
-    # browser_navigate 的 new_tab。本任务的标签数有上限（只有几个），到上限后复用已有标签或先关掉
+    # browser_navigate 的 new_tab。本会话的标签数有上限（只有几个），到上限后复用已有标签或先关掉
     # 不用的，不要一直开新的。
     description = (
-        "Manage this task's built-in browser tabs: list them (the current one and the ones the "
+        "Manage this session's built-in browser tabs: list them (the current one and the ones the "
         "user opened are marked), select one as current (calls that omit tab use it), or close "
-        "tabs you no longer need. To open a new tab use browser_navigate with new_tab. A task "
+        "tabs you no longer need. To open a new tab use browser_navigate with new_tab. A session "
         "holds only a few tabs, so reuse or close them instead of opening more."
     )
     args_model = BrowserTabsArgs

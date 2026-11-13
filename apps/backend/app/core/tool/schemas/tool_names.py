@@ -33,9 +33,9 @@ TOOL_BROWSER_LOGS: Final[str] = "browser_logs"
 TOOL_BROWSER_EVALUATE: Final[str] = "browser_evaluate"
 TOOL_BROWSER_HANDOFF: Final[str] = "browser_handoff"
 TOOL_DELEGATE_TASK: Final[str] = "delegate_task"
-TOOL_FORK_TASK: Final[str] = "fork_task"
+TOOL_FORK_SESSION: Final[str] = "fork_session"
 TOOL_SEND_MESSAGE: Final[str] = "send_message"
-TOOL_TASK_STATUS: Final[str] = "task_status"
+TOOL_SESSION_STATUS: Final[str] = "session_status"
 TOOL_WAIT_MESSAGES: Final[str] = "wait_messages"
 TOOL_PROPOSE_AGENT_CONFIGURATION: Final[str] = "propose_agent_configuration"
 TOOL_MCP: Final[str] = "mcp"
@@ -68,9 +68,9 @@ ToolName: TypeAlias = Literal[
     "browser_evaluate",
     "browser_handoff",
     "delegate_task",
-    "fork_task",
+    "fork_session",
     "send_message",
-    "task_status",
+    "session_status",
     "wait_messages",
     "propose_agent_configuration",
     "mcp",
@@ -104,9 +104,9 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_BROWSER_EVALUATE,
     TOOL_BROWSER_HANDOFF,
     TOOL_DELEGATE_TASK,
-    TOOL_FORK_TASK,
+    TOOL_FORK_SESSION,
     TOOL_SEND_MESSAGE,
-    TOOL_TASK_STATUS,
+    TOOL_SESSION_STATUS,
     TOOL_WAIT_MESSAGES,
     TOOL_PROPOSE_AGENT_CONFIGURATION,
     TOOL_MCP,

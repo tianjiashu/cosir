@@ -15,7 +15,7 @@ import { ImageAttachmentStrip } from "@/components/composer/image-attachment-str
 import { ImageTile } from "@/components/image/image-tile";
 import { useComposerFiles } from "@/components/composer/use-composer-files";
 import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
-import { useTaskComposerDraft } from "@/components/composer/use-composer-draft";
+import { useSessionComposerDraft } from "@/components/composer/use-composer-draft";
 import { ComposerEditor } from "@/components/composer/composer-editor";
 
 
@@ -142,7 +142,7 @@ type InlineComposerInputProps = {
   className?: string;
   autoFocus?: boolean;
   hydrating?: boolean;
-  persistTaskDraft?: boolean;
+  persistSessionDraft?: boolean;
   /** 禁止提交但保留编辑（可选中、复制）；与 {@link ComposerSendButton} 的 `blocked` 传同一个值，回车才不会绕过它。 */
   submitDisabled?: boolean;
   "aria-label"?: string;
@@ -153,12 +153,12 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
   className,
   autoFocus,
   hydrating = false,
-  persistTaskDraft = false,
+  persistSessionDraft = false,
   submitDisabled = false,
   "aria-label": ariaLabel,
 }) => {
   const composer = unstable_useComposerInput();
-  const restoringDraft = useTaskComposerDraft(persistTaskDraft);
+  const restoringDraft = useSessionComposerDraft(persistSessionDraft);
   const addFiles = useComposerFiles(useComposerImageSink());
   const { canSubmit, submit } = useComposerSubmit(submitDisabled);
 

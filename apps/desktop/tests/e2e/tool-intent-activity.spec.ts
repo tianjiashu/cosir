@@ -4,19 +4,19 @@ import { activity, assistantMessage, outcome, toolCallPart, transportState, user
 import type { TransportState, TransportMessagePart } from "../../lib/assistant/contract";
 
 const seed = async (request: APIRequestContext, state: TransportState) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { taskId: 42, entries: state.background_tasks } });
-  return request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { taskId: 42, state, hold: true } });
+  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { sessionId: 42, entries: state.background_tasks } });
+  return request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { sessionId: 42, state, hold: true } });
 };
 const model = (parts: TransportMessagePart[], phase: "reasoning" | "responding" | null = null) => transportState({ messages: [userMessage("u", 1, "统一意图验收"), assistantMessage("a", 1, parts)], activity: activity(1, "running", { modelActivity: phase ? { stepId: "s", phase } : null }) });
 test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "统一意图验收" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "统一意图验收" } });
 });
 
 for (const colorScheme of ["light", "dark"] as const) test(`I6–I9 ${colorScheme}: single reading-position activity, real folding and stable prose`, async ({ page, request }) => {
   await page.emulateMedia({ colorScheme });
   const initial = model([], "reasoning"); initial.messages.pop();
-  await seed(request, initial); await page.goto("/tasks/42");
+  await seed(request, initial); await page.goto("/sessions/42");
   const feedback = page.locator('[data-slot="current-activity"]');
   await expect(feedback).toHaveCount(1); await expect(feedback).toHaveText("正在思考");
   const prose = { type: "text" as const, text: "先检查文件配置。" };
@@ -57,7 +57,7 @@ test("I5/I7/I8 background settling disables stop and updates the rail reader", a
   const job = { toolCallId: "cmd", kind: "terminal_command" as const, label: "检查导出", status: "running" as const, startedAt: "2026-01-01", endedAt: null };
   const command = toolCallPart("cmd", "execute_terminal", { status: "pending", intent: "检查导出", args: { command: "knip" }, background: { kind: "terminal_command", label: "检查导出", startedAt: "2026-01-01", endedAt: null }, display_data: { kind: "terminal-result", command: "knip", output: "first\n" } });
   const state = model([command], "reasoning"); state.background_tasks = [job];
-  await seed(request, state); await page.goto("/tasks/42");
+  await seed(request, state); await page.goto("/sessions/42");
   const head = page.locator('[data-slot="activity-head"]'); await head.click();
   const row = page.locator('[data-slot="turn"] [data-tool-call-id="cmd"]');
   await expect(row).toContainText("后台运行中"); await expect(row).not.toContainText("准备执行");

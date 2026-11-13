@@ -20,7 +20,7 @@ export function useRuntimeDiagnostics(context: RuntimeSessionContext): void {
     void frontendLog("INFO", "assistant_runtime_mounted", "Assistant runtime 已挂载", {
       traceId: context.traceId,
       data: {
-        taskId: context.taskId,
+        sessionId: context.sessionId,
         workspaceId: context.workspaceId ?? null,
         initialMessageCount: transportMessageCount(mounted),
         initialActivityTurn: mounted.activity?.turn ?? null,
@@ -39,7 +39,7 @@ export function useRuntimeDiagnostics(context: RuntimeSessionContext): void {
         void frontendLog("WARNING", "assistant_runtime_unmounted", "Assistant runtime 生命周期已清理", {
           traceId: context.traceId,
           data: {
-            taskId: context.taskId,
+            sessionId: context.sessionId,
             workspaceId: context.workspaceId ?? null,
             lastActivityTurn: last.activity?.turn ?? null,
             lastActivityStatus: last.activity?.status ?? null,

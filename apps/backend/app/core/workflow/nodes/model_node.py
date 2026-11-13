@@ -18,7 +18,7 @@ from app.core.llm_provider.message_codec import assistant_message
 from app.core.llm_provider.openai_model import usage_from_response
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.message_queue.task_message import NoticeBody
+from app.core.workflow.message_queue.session_message import NoticeBody
 from app.core.workflow.node_helper.common import (
     RunStopped,
     _message_context,
@@ -28,7 +28,7 @@ from app.core.workflow.node_helper.common import (
 from app.core.workflow.node_helper.model_stream_state_machine import (
     ModelStreamStateMachine,
 )
-from app.models.enums.conversation_run_status import RunTransition
+from app.models.enums.run_status import RunTransition
 from app.models.enums.react_route import ReactRoute
 from app.service import depends as service_depends
 from app.utils.message_content import content_to_text
@@ -44,14 +44,14 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     收尾看不到，这段内的失败由本节点收敛为 cancelled；提交之后的失败归 RunDriver 按上下文补结果。
     调用 Run 独占的 SDK 模型，逐帧替换持久化响应，结束后纳入上下文；部分输出留作展示，
     不进入模型上下文或工具执行。工具调用只按 id 与注册名过滤，参数交 tools；无保留调用时，
-    有完成原因时落定 Run（后台工作属于 Task，不等它们：结论稍后到达时唤醒或开出新 Run）；缺少完成原因时，
+    有完成原因时落定 Run（后台工作属于 Session，不等它们：结论稍后到达时唤醒或开出新 Run）；缺少完成原因时，
     输出仅供展示并重新请求模型。"""
 
     rc = _runtime_context()
     model = rc.model
 
     step_count = state.step_count + 1
-    task_id = rc.task.id
+    session_id = rc.session.id
     run_id = rc.run.id
     step_id = f"step-{step_count}"
 
@@ -75,7 +75,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     )
     # 请求阶段与输出事件由同一状态机管理；工具批次仅承担后续执行交接。
     batch = ToolBatch()
-    parts = ModelStreamStateMachine(task_id=task_id, run_id=run_id, step_id=step_id)
+    parts = ModelStreamStateMachine(session_id=session_id, run_id=run_id, step_id=step_id)
 
     # SDK 快照负责聚合；context 只保存请求正文副本和独立响应元数据。
     aggregated_message: ParsedChatCompletionSnapshot | None = None
@@ -132,7 +132,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
                 extra={
                     "msg": "模型调用已关闭，保存中断输出并收口工具预览",
                     "data": {
-                        "task_id": task_id,
+                        "session_id": session_id,
                         "run_id": run_id,
                         "step_id": step_id,
                         "usage": rc.usage_stats.to_dict(),
@@ -141,7 +141,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             )
             # 取消时工具 part 的收敛由状态机按「本请求已投影的调用」完成，不再查询生命周期记录。
             parts.cancel()
-            service_depends.get_conversation_run_ledger().transition(
+            service_depends.get_run_ledger().transition(
                 run_id,
                 RunTransition.CANCEL,
                 end_reason=rc.cancel_end_reason(),
@@ -218,7 +218,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             },
         },
     )
-    completed = service_depends.get_conversation_run_ledger().transition(
+    completed = service_depends.get_run_ledger().transition(
         run_id,
         RunTransition.COMPLETE,
         usage_stats=rc.usage_stats,

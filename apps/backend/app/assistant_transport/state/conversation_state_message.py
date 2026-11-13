@@ -1,4 +1,4 @@
-"""Conversation Transport 的消息契约（Task 视角，扁平排列，以回合为单位）。"""
+"""Conversation Transport 的消息契约（Session 视角，扁平排列，以回合为单位）。"""
 
 from typing import Literal
 
@@ -8,9 +8,9 @@ from app.assistant_transport.state.conversation_state_part import (
     ConversationStateMessageSource,
     ConversationStatePart,
 )
-from app.core.workflow.message_queue.task_message import Delivery
-from app.models.conversation_run_record import ConversationRunError
-from app.models.conversation_run_usage import ConversationRunUsage
+from app.core.workflow.message_queue.session_message import Delivery
+from app.models.run_record import RunError
+from app.models.run_usage import RunUsage
 
 MessageRole = Literal["user", "assistant"]
 
@@ -26,8 +26,8 @@ class ConversationStateOutcome(TypedDict):
 
     status: str
     endReason: str | None
-    error: ConversationRunError | None
-    usage: ConversationRunUsage | None
+    error: RunError | None
+    usage: RunUsage | None
     contextWindowTotal: int | None
     durationMs: int
 

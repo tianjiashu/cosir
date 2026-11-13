@@ -56,7 +56,7 @@ from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.tool_handler.read_file import ReadFileTool
 from tests.runtime_context_stub import runtime_stub
 from tests.tool_executor_fakes import emit_running
@@ -79,7 +79,7 @@ class _MemorySnapshotOwner:
         self.state = state
         self.applied: list[Any] = []
 
-    def get_state(self, _task_id: int) -> ConversationStateSnapshot:
+    def get_state(self, _session_id: int) -> ConversationStateSnapshot:
         return copy.deepcopy(self.state)
 
 
@@ -90,7 +90,7 @@ class _MemorySnapshotOwner:
         validate_snapshot(self.state)
         self.applied.append(event)
         return TransportFrame(
-            task_id=event.task_id,
+            session_id=event.session_id,
             kind="mutation",
             mutations=mutations,
         )
@@ -121,7 +121,7 @@ def _install_recorder(monkeypatch: pytest.MonkeyPatch) -> _EventRecorder:
 
 def _make_context(tmp_path: Path, **overrides: Any) -> ToolExecutionContext:
     base: dict[str, Any] = {
-        "task_id": 1,
+        "session_id": 1,
         "workspace_id": 1,
         "workspace_root": tmp_path,
         "run_id": 2,
@@ -213,12 +213,12 @@ def test_terminal_event_payload_matches_contract() -> None:
     )
 
     event = terminal_event(
-        observation, task_id=3, run_id=4, step_id="step-7", tool_call_id="call-x"
+        observation, session_id=3, run_id=4, step_id="step-7", tool_call_id="call-x"
     )
 
     assert isinstance(event, ToolCallStatusChangedEvent)
     # 身份不读 observation.tool_call_id（失败工厂未必回填）。
-    assert (event.task_id, event.run_id, event.step_id, event.tool_call_id) == (
+    assert (event.session_id, event.run_id, event.step_id, event.tool_call_id) == (
         3,
         4,
         "step-7",
@@ -237,7 +237,7 @@ def test_terminal_event_display_data_is_deep_copied() -> None:
     source = {"status_hint": "读取失败", "nested": {"k": [1, 2]}}
     event = terminal_event(
         _observation("error", display_data=source),
-        task_id=1,
+        session_id=1,
         run_id=2,
         step_id="s",
         tool_call_id="call-1",
@@ -258,7 +258,7 @@ def test_terminal_event_success_and_cancelled(
 
     event = terminal_event(
         _observation(status, display_data={"kind": "read-file-meta"}),
-        task_id=1,
+        session_id=1,
         run_id=2,
         step_id="s",
         tool_call_id="call-1",
@@ -287,7 +287,7 @@ def test_terminal_event_keeps_status_when_display_data_is_not_a_mapping(
     )
 
     with caplog.at_level("WARNING", logger="coding_agent.backend"):
-        event = terminal_event(observation, task_id=1, run_id=2, step_id="s", tool_call_id="call-1")
+        event = terminal_event(observation, session_id=1, run_id=2, step_id="s", tool_call_id="call-1")
 
     assert event.status == "failed"
     assert event.display_data is None, "不可用展示数据必须跳过展示字段更新，而非伪造载荷"
@@ -318,7 +318,7 @@ def test_terminal_event_keeps_status_when_deepcopy_fails(
     )
 
     with caplog.at_level("WARNING", logger="coding_agent.backend"):
-        event = terminal_event(observation, task_id=1, run_id=2, step_id="s", tool_call_id="call-1")
+        event = terminal_event(observation, session_id=1, run_id=2, step_id="s", tool_call_id="call-1")
 
     assert event.status == "failed"
     assert event.display_data is None
@@ -326,17 +326,17 @@ def test_terminal_event_keeps_status_when_deepcopy_fails(
 
 
 def test_dropped_log_carries_full_identity(caplog: pytest.LogCaptureFixture) -> None:
-    """畸形载荷的 warning 含 task_id/run_id/tool_call_id，且不记载荷内容。"""
+    """畸形载荷的 warning 含 session_id/run_id/tool_call_id，且不记载荷内容。"""
 
     observation = _observation("error", display_data=["not", "a", "mapping"])
 
     with caplog.at_level("WARNING"):
-        terminal_event(observation, task_id=11, run_id=22, step_id="s", tool_call_id="call-early")
+        terminal_event(observation, session_id=11, run_id=22, step_id="s", tool_call_id="call-early")
 
     dropped = _dropped_records(caplog)
     assert len(dropped) == 1, "应恰写一条 tool_display_data_dropped"
     data = dropped[0].data
-    assert data["task_id"] == 11
+    assert data["session_id"] == 11
     assert data["run_id"] == 22
     assert data["tool_call_id"] == "call-early"
     assert data["display_data_type"] == "list"
@@ -357,10 +357,10 @@ def test_projection_module_does_not_reach_global_projector() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _seed_run(owner: _MemorySnapshotOwner, task_id: int, run_id: int, call_id: str) -> None:
+def _seed_run(owner: _MemorySnapshotOwner, session_id: int, run_id: int, call_id: str) -> None:
     projector = ConversationEventProjector(owner)
-    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=task_id, run_id=run_id))
-    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=task_id, run_id=run_id, status="running"))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=session_id, run_id=run_id))
+    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), session_id=session_id, run_id=run_id, status="running"))
     owner.state["messages"].append(
         {
             "id": f"assistant-turn-{run_id}",
@@ -373,12 +373,12 @@ def _seed_run(owner: _MemorySnapshotOwner, task_id: int, run_id: int, call_id: s
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=task_id, run_id=run_id, turn=run_id, tool_call_id=call_id, tool_name="read_file"
+            session_id=session_id, run_id=run_id, turn=run_id, tool_call_id=call_id, tool_name="read_file"
         )
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=task_id,
+            session_id=session_id,
             run_id=run_id,
             tool_call_id=call_id,
             status="running",
@@ -400,11 +400,11 @@ def test_double_projection_cancel_then_settle_is_stable() -> None:
     """判据 E 补：取消路径「提前投影 → settle 兜底」终态确定不变（同值自迁移幂等）。"""
 
     owner = _MemorySnapshotOwner(empty_snapshot())
-    _seed_run(owner, task_id=1, run_id=9, call_id="call-1")
+    _seed_run(owner, session_id=1, run_id=9, call_id="call-1")
     projector = ConversationEventProjector(owner)
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=1,
+            session_id=1,
             run_id=9,
             tool_call_id="call-1",
             status="cancelled",
@@ -414,7 +414,7 @@ def test_double_projection_cancel_then_settle_is_stable() -> None:
     first = copy.deepcopy(_part(owner, 9, "call-1"))
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=1,
+            session_id=1,
             run_id=9,
             tool_call_id="call-1",
             status="cancelled",
@@ -513,7 +513,7 @@ def test_success_emits_running_then_completed(
     assert recorder.statuses("call-ok") == ["running", "completed"]
     running, terminal = recorder.events
     # running 展示准入后的最终参数（含 schema 默认值）。
-    assert (running.task_id, running.run_id, running.step_id) == (1, 2, "step-1")
+    assert (running.session_id, running.run_id, running.step_id) == (1, 2, "step-1")
     assert terminal.error is None
     assert terminal.step_id == "step-1"
     assert isinstance(terminal.display_data, dict) and terminal.display_data, "成功终态丢了展示数据"
@@ -985,24 +985,24 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
 
     owner = _MemorySnapshotOwner(empty_snapshot())
     projector = ConversationEventProjector(owner)
-    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=9))
-    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=1, run_id=9, status="running"))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=1, run_id=9))
+    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), session_id=1, run_id=9, status="running"))
     owner.state["messages"].append(
         {"id": "assistant-turn-9", "role": "assistant", "parts": [], "turn": 9, "inherited": False, "outcome": None, "source": None}
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=1, run_id=9, turn=9, tool_call_id="call-t", tool_name="execute_terminal"
+            session_id=1, run_id=9, turn=9, tool_call_id="call-t", tool_name="execute_terminal"
         )
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=1, run_id=9, tool_call_id="call-t", status="running"
+            session_id=1, run_id=9, tool_call_id="call-t", status="running"
         )
     )
     projector.process(
         ToolCallRuntimeUpdateEvent(
-            task_id=1,
+            session_id=1,
             run_id=9,
             tool_call_id="call-t",
             seq=0,
@@ -1018,7 +1018,7 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
         last_seq = seq
         projector.process(
             ToolCallRuntimeUpdateEvent(
-                task_id=1,
+                session_id=1,
                 run_id=9,
                 tool_call_id="call-t",
                 seq=seq,
@@ -1036,7 +1036,7 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
     # 最终完整 output 是权威事实，模型上下文预算不应参与这里的展示载荷。
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=1,
+            session_id=1,
             run_id=9,
             tool_call_id="call-t",
             status="completed",
@@ -1148,20 +1148,20 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
 ) -> None:
     """真实 state service：终态事件经真实 projector 投影后，快照终态落值。
 
-    任务运行时空间在构造时会从主库读 task / workspace，因此先经真实服务建出容器，再用它们
-    的 id 驱动投影（不硬编码一个不存在的 task_id）。
+    会话运行时空间在构造时会从主库读 session / workspace，因此先经真实服务建出容器，再用它们
+    的 id 驱动投影（不硬编码一个不存在的 session_id）。
     """
 
-    from app.service.depends import get_conversation_task_state_service, get_workspace_service
+    from app.service.depends import get_conversation_state_service, get_workspace_service
 
-    task_runtime_spaces.close()
+    session_runtime_spaces.close()
     projector = ConversationEventProjector()
 
     root = tmp_path / "projection-workspace"
     root.mkdir()
     workspace = get_workspace_service().create_workspace("projection", str(root))
-    task = get_workspace_service().create_task(workspace.id, "projection-task")
-    task_id = task.id
+    session = get_workspace_service().create_session(workspace.id, "projection-session")
+    session_id = session.id
     # 直接向进程内 state service 注入一条 run 骨架，使投影能命中 part。
     state = empty_snapshot()
     state["messages"] = [
@@ -1195,22 +1195,22 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
         "startedAt": "2026-01-01T00:00:00+00:00",
         "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
     }
-    task_runtime_spaces.get_or_create(task_id).get_working_snapshot(lambda: state)
+    session_runtime_spaces.get_or_create(session_id).get_working_snapshot(lambda: state)
 
     projector.process(
         terminal_event(
             _observation("success", display_data={"kind": "read-file-meta"}),
-            task_id=task_id,
+            session_id=session_id,
             run_id=5,
             step_id="s",
             tool_call_id="call-r",
         )
     )
 
-    part = _part_from_state(get_conversation_task_state_service().get_state(task_id), 5, "call-r")
+    part = _part_from_state(get_conversation_state_service().get_state(session_id), 5, "call-r")
     assert part["status"] == "completed"
     assert part["display_data"] == {"kind": "read-file-meta"}
-    task_runtime_spaces.close()
+    session_runtime_spaces.close()
 
 
 def _part_from_state(state: ConversationStateSnapshot, run_id: int, call_id: str) -> dict[str, Any]:
@@ -1315,7 +1315,7 @@ def test_no_dropped_log_for_none_empty_or_valid(
 
     with caplog.at_level("WARNING"):
         normalize_display_data(value)
-        normalize_display_data(value, task_id=1, run_id=2, tool_call_id="c")
+        normalize_display_data(value, session_id=1, run_id=2, tool_call_id="c")
 
     assert _dropped_records(caplog) == []
 
@@ -1335,6 +1335,6 @@ def test_normalize_display_data_defaults_are_optional() -> None:
     """判据 D 补：不传定位标识时仍可归一（新形参有默认值，不影响既有调用点）。"""
 
     assert normalize_display_data({"a": 1}) == {"a": 1}
-    assert normalize_display_data({"a": 1}, task_id=1) == {"a": 1}
+    assert normalize_display_data({"a": 1}, session_id=1) == {"a": 1}
     assert normalize_display_data({"a": 1}, run_id=2) == {"a": 1}
     assert normalize_display_data({"a": 1}, tool_call_id="c") == {"a": 1}

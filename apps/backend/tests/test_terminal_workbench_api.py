@@ -1,6 +1,6 @@
 """终端工作台 HTTP：shell 列表、活跃计数、用户新建 / 关闭会话与错误映射。
 
-终端服务用替身：本文件只验证 HTTP 编排（Task 类型判定、工作区根目录）与
+终端服务用替身：本文件只验证 HTTP 编排（Session 类型判定、工作区根目录）与
 ``detail={code, message, retryable}`` 的状态码映射，会话生命周期由终端服务自己的测试覆盖。
 """
 
@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from app.api import terminal_sessions_api
 from app.app import app
-from app.models.task_extra import TaskExtra
+from app.models.session_extra import SessionExtra
 from app.service import depends
 from app.service.terminal import terminal_workbench_service
 from app.tools.terminal_runtime.errors import (
@@ -26,7 +26,7 @@ from app.tools.terminal_runtime.errors import (
     TerminalSessionStateError,
     TerminalWorkerUnavailableError,
 )
-from tests.task_extra_fixtures import fork_extra
+from tests.session_extra_fixtures import fork_extra
 
 _SHELLS = [{"kind": "zsh", "label": "zsh", "isDefault": True, "integrationSupported": True}]
 
@@ -47,12 +47,12 @@ class _FakeTerminals:
         if self.start_error is not None:
             raise self.start_error
         self.started.append(kwargs)
-        return SimpleNamespace(session_id="term_new")
+        return SimpleNamespace(terminal_session_id="term_new")
 
-    def close(self, session_id: str, *, task_id: int) -> dict[str, object]:
+    def close(self, terminal_session_id: str, *, session_id: int) -> dict[str, object]:
         if self.close_error is not None:
             raise self.close_error
-        self.closed.append((session_id, task_id))
+        self.closed.append((terminal_session_id, session_id))
         return {}
 
 
@@ -75,15 +75,15 @@ def workspace(tmp_path) -> Any:
     return depends.get_workspace_crud().create("ws", str(tmp_path))
 
 
-def _task(workspace: Any, task_type: str = "user") -> int:
-    tasks = depends.get_task_crud()
-    if task_type == "agent_task":
-        parent = tasks.create(workspace.id, "parent")
-        return tasks.create(
-            workspace.id, "child", task_type=task_type, parent_task_id=parent.id
+def _session(workspace: Any, session_type: str = "user") -> int:
+    sessions = depends.get_session_crud()
+    if session_type == "delegated":
+        parent = sessions.create(workspace.id, "parent")
+        return sessions.create(
+            workspace.id, "child", session_type=session_type, parent_session_id=parent.id
         ).id
-    return tasks.create(workspace.id, "task", task_type=task_type,
-                        extra=fork_extra(987) if task_type.endswith("_fork") else TaskExtra()).id
+    return sessions.create(workspace.id, "session", session_type=session_type,
+                        extra=fork_extra(987) if session_type.endswith("_fork") else SessionExtra()).id
 
 
 def test_list_shells_and_active_count(client: TestClient, terminals: _FakeTerminals) -> None:
@@ -91,17 +91,17 @@ def test_list_shells_and_active_count(client: TestClient, terminals: _FakeTermin
     assert client.get("/terminal/sessions/active-count").json() == {"count": 3}
 
 
-@pytest.mark.parametrize("task_type", ["user", "user_fork", "agent_fork"])
-def test_user_creates_session_for_sidebar_task(
-    client: TestClient, terminals: _FakeTerminals, workspace: Any, task_type: str
+@pytest.mark.parametrize("session_type", ["user", "user_fork", "agent_fork"])
+def test_user_creates_session_for_sidebar_session(
+    client: TestClient, terminals: _FakeTerminals, workspace: Any, session_type: str
 ) -> None:
-    task_id = _task(workspace, task_type)
-    response = client.post(f"/tasks/{task_id}/terminal/sessions", json={"shell": "bash"})
+    session_id = _session(workspace, session_type)
+    response = client.post(f"/sessions/{session_id}/terminal/sessions", json={"shell": "bash"})
     assert response.status_code == 200
-    assert response.json() == {"sessionId": "term_new"}
+    assert response.json() == {"terminalSessionId": "term_new"}
     assert terminals.started == [
         {
-            "task_id": task_id,
+            "session_id": session_id,
             "cwd": str(Path(workspace.root_path).resolve()),
             "shell": "bash",
         }
@@ -111,18 +111,18 @@ def test_user_creates_session_for_sidebar_task(
 def test_create_defaults_shell_to_auto(
     client: TestClient, terminals: _FakeTerminals, workspace: Any
 ) -> None:
-    task_id = _task(workspace)
-    assert client.post(f"/tasks/{task_id}/terminal/sessions", json={}).status_code == 200
+    session_id = _session(workspace)
+    assert client.post(f"/sessions/{session_id}/terminal/sessions", json={}).status_code == 200
     assert terminals.started[0]["shell"] == "auto"
 
 
-def test_create_rejects_child_task(
+def test_create_rejects_child_session(
     client: TestClient, terminals: _FakeTerminals, workspace: Any
 ) -> None:
-    task_id = _task(workspace, "agent_task")
-    response = client.post(f"/tasks/{task_id}/terminal/sessions", json={"shell": "auto"})
+    session_id = _session(workspace, "delegated")
+    response = client.post(f"/sessions/{session_id}/terminal/sessions", json={"shell": "auto"})
     assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "TERMINAL_TASK_UNSUPPORTED"
+    assert response.json()["detail"]["code"] == "TERMINAL_SESSION_UNSUPPORTED"
     assert response.json()["detail"]["retryable"] is False
     assert terminals.started == []
 
@@ -131,19 +131,19 @@ def test_create_when_workspace_directory_is_gone_is_rejected_before_starting(
     client: TestClient, terminals: _FakeTerminals, tmp_path: Path
 ) -> None:
     gone = depends.get_workspace_crud().create("gone", str(tmp_path / "moved-away"))
-    task_id = _task(gone)
-    response = client.post(f"/tasks/{task_id}/terminal/sessions", json={"shell": "bash"})
+    session_id = _session(gone)
+    response = client.post(f"/sessions/{session_id}/terminal/sessions", json={"shell": "bash"})
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "TERMINAL_ERROR"
     assert terminals.started == []
 
 
-def test_create_for_missing_task_is_404(client: TestClient, terminals: _FakeTerminals) -> None:
-    response = client.post("/tasks/999/terminal/sessions", json={"shell": "auto"})
+def test_create_for_missing_session_is_404(client: TestClient, terminals: _FakeTerminals) -> None:
+    response = client.post("/sessions/999/terminal/sessions", json={"shell": "auto"})
     assert response.status_code == 404
     assert response.json()["detail"] == {
-        "code": "TASK_NOT_FOUND",
-        "message": "task not found",
+        "code": "SESSION_NOT_FOUND",
+        "message": "session not found",
         "retryable": False,
     }
 
@@ -167,8 +167,8 @@ def test_create_error_mapping(
     retryable: bool,
 ) -> None:
     terminals.start_error = error
-    task_id = _task(workspace)
-    response = client.post(f"/tasks/{task_id}/terminal/sessions", json={"shell": "auto"})
+    session_id = _session(workspace)
+    response = client.post(f"/sessions/{session_id}/terminal/sessions", json={"shell": "auto"})
     assert response.status_code == status
     detail = response.json()["detail"]
     assert detail["code"] == code
@@ -179,25 +179,25 @@ def test_create_error_mapping(
 def test_create_rejects_malformed_body(
     client: TestClient, terminals: _FakeTerminals, workspace: Any
 ) -> None:
-    task_id = _task(workspace)
-    response = client.post(f"/tasks/{task_id}/terminal/sessions", json={"shell": "auto", "x": 1})
+    session_id = _session(workspace)
+    response = client.post(f"/sessions/{session_id}/terminal/sessions", json={"shell": "auto", "x": 1})
     assert response.status_code in {400, 422}
     assert terminals.started == []
 
 
 def test_close_session(client: TestClient, terminals: _FakeTerminals, workspace: Any) -> None:
-    task_id = _task(workspace)
-    response = client.delete(f"/tasks/{task_id}/terminal/sessions/term_a")
+    session_id = _session(workspace)
+    response = client.delete(f"/sessions/{session_id}/terminal/sessions/term_a")
     assert response.status_code == 200
     assert response.json() == {}
-    assert terminals.closed == [("term_a", task_id)]
+    assert terminals.closed == [("term_a", session_id)]
 
 
 @pytest.mark.parametrize(
     ("error", "status"),
     [
         (TerminalSessionNotFoundError("missing"), 404),
-        (TerminalSessionOwnershipError("other task"), 404),
+        (TerminalSessionOwnershipError("other session"), 404),
         (TerminalWorkerUnavailableError("gone"), 503),
     ],
 )
@@ -209,7 +209,7 @@ def test_close_error_mapping(
     status: int,
 ) -> None:
     terminals.close_error = error
-    task_id = _task(workspace)
-    response = client.delete(f"/tasks/{task_id}/terminal/sessions/term_a")
+    session_id = _session(workspace)
+    response = client.delete(f"/sessions/{session_id}/terminal/sessions/term_a")
     assert response.status_code == status
     assert set(response.json()["detail"]) == {"code", "message", "retryable"}

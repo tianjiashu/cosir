@@ -1,4 +1,4 @@
-"""浏览器工具：宿主参数组装、页面正文、错误映射、模型 schema，以及 Task 删除后的回收通知。
+"""浏览器工具：宿主参数组装、页面正文、错误映射、模型 schema，以及 Session 删除后的回收通知。
 
 结果形状与正文渲染的跨语言样例另由 ``test_browser_contract_guard.py`` 核对。
 
@@ -28,10 +28,10 @@ from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
-from app.core.workflow.message_queue.task_message import DecisionBody
+from app.core.workflow.message_queue.session_message import DecisionBody
 from app.service import depends as service_depends
 from app.service.attachment.attachment_service import AttachmentService
-from app.service.task.task_service import TaskService
+from app.service.session.session_service import SessionService
 from app.tools.host.errors import UNAVAILABLE, HostCallError
 from app.tools.tool_handler.browser import (
     BrowserActTool,
@@ -122,7 +122,7 @@ class FakeLink:
 @pytest.fixture
 def context() -> ToolExecutionContext:
     return ToolExecutionContext(
-        task_id=42,
+        session_id=42,
         workspace_id=1,
         workspace_root=Path("."),
         step_id="s",
@@ -137,11 +137,11 @@ def _install(monkeypatch: pytest.MonkeyPatch, outcome: object, **by_method: obje
     return link
 
 
-def test_navigate_sends_task_and_tab_context(
+def test_navigate_sends_session_and_tab_context(
     monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
 ) -> None:
     link = _install(monkeypatch, PAGE)
-    monkeypatch.setattr(Settings, "BROWSER_MAX_TABS_PER_TASK", 3)
+    monkeypatch.setattr(Settings, "BROWSER_MAX_TABS_PER_SESSION", 3)
     monkeypatch.setattr(Settings, "BROWSER_MAX_TABS", 9)
 
     observation = BrowserNavigateTool().execute(
@@ -154,8 +154,8 @@ def test_navigate_sends_task_and_tab_context(
     # 参数模型的每个字段都照原样发（未给的为 null，宿主按「未给」理解，如没有 tab 即用当前
     # 标签）：这正是导出 schema 描述的线上形状。下载目录是工作区 .cosir/Download 的绝对路径。
     assert params == {
-        "task_id": 42,
-        "limits": {"per_task": 3, "total": 9},
+        "session_id": 42,
+        "limits": {"per_session": 3, "total": 9},
         "download_dir": str(Path(".").resolve() / ".cosir" / "Download"),
         "handoff_tabs": [],
         "url": "https://example.com/",
@@ -165,7 +165,7 @@ def test_navigate_sends_task_and_tab_context(
         "viewport": None,
         "color_scheme": None,
     }
-    assert meta == {"task_id": 42, "tool_call_id": "call-9"}
+    assert meta == {"session_id": 42, "tool_call_id": "call-9"}
     assert observation.display_data == {
         "kind": "browser-page",
         "tab_id": "t1",
@@ -192,7 +192,7 @@ def test_page_content_fences_the_snapshot_and_reports_context(
     )
 
     assert content.startswith("tab t1 · Example · https://example.com/ (still loading)")
-    assert "other tabs in this task: t2" in content
+    assert "other tabs in this session: t2" in content
     assert "2 embedded frame(s)" in content
     assert "- the page showed a confirm dialog" in content
     # 页面文字不能伪造快照边界。
@@ -353,7 +353,7 @@ def test_upload_sends_absolute_paths_of_existing_files(
     outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
     outside.write_text("x", encoding="utf-8")
     context = ToolExecutionContext(
-        task_id=42, workspace_id=1, workspace_root=tmp_path, step_id="s", run_id=1, tool_call_id="c"
+        session_id=42, workspace_id=1, workspace_root=tmp_path, step_id="s", run_id=1, tool_call_id="c"
     )
     link = _install(
         monkeypatch,
@@ -678,7 +678,7 @@ def _assert_wire_shape(tool_name: str, call: tuple[str, dict[str, Any], Any]) ->
     sent = {
         k: v
         for k, v in params.items()
-        if k not in ("task_id", "limits", "download_dir", "handoff_tabs")
+        if k not in ("session_id", "limits", "download_dir", "handoff_tabs")
     }
     errors = [error.message for error in Draft202012Validator(schema).iter_errors(sent)]
     assert method == f"browser.{tool_name.removeprefix('browser_')}"
@@ -701,20 +701,20 @@ def test_models_export_strict_schemas() -> None:
         assert set(schema["required"]) == set(schema["properties"])
 
 
-def test_task_deletion_tells_the_host_to_drop_tabs(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_session_deletion_tells_the_host_to_drop_tabs(monkeypatch: pytest.MonkeyPatch) -> None:
     link = _install(monkeypatch, None)
 
     class Terminals:
-        def delete_task_sessions(self, task_ids: frozenset[int]) -> None:
+        def delete_session_terminals(self, session_ids: frozenset[int]) -> None:
             pass
 
     monkeypatch.setattr(service_depends, "get_terminal_session_service", lambda: Terminals())
-    service = object.__new__(TaskService)
-    monkeypatch.setattr(service, "_unload_deleted_task_spaces", lambda task_ids: None)
+    service = object.__new__(SessionService)
+    monkeypatch.setattr(service, "_unload_deleted_session_spaces", lambda session_ids: None)
 
-    service.finalize_deleted_task_spaces(frozenset({5, 3}))
+    service.finalize_deleted_session_spaces(frozenset({5, 3}))
 
-    assert link.notifications == [("browser.dropTasks", {"task_ids": [3, 5]})]
+    assert link.notifications == [("browser.dropSessions", {"session_ids": [3, 5]})]
 
 
 def test_act_reports_where_it_stopped_and_returns_the_fresh_page(
@@ -978,7 +978,7 @@ def test_logs_sends_every_field_and_renders_entries(
     assert {
         key: params[key]
         for key in params
-        if key not in ("task_id", "limits", "download_dir", "handoff_tabs")
+        if key not in ("session_id", "limits", "download_dir", "handoff_tabs")
     } == {
         "kind": "console",
         "since": None,
@@ -1057,7 +1057,7 @@ def test_handoff_requires_host_operation_to_have_settled(monkeypatch, context, o
     assert result.status == "error"
     assert [
         lease
-        for lease in handoff_registry.leases(context.task_id)
+        for lease in handoff_registry.leases(context.session_id)
         if lease.resource_id == "t1"
     ] == []
 

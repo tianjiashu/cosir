@@ -17,15 +17,15 @@ function downloadTerminalOutput(output: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** 阅读位置属于 Task UI，-1 表示跟随最新；不会写入后端执行事实。 */
-export function TerminalOutputReader({ taskId, toolCallId, output, omittedLines, logPath, links, open, onOpenChange, command, statusLabel, finalFocus }: {
-  taskId: number; toolCallId: string; output: string; omittedLines?: number; logPath?: string; links: TerminalLinkOptions;
+/** 阅读位置属于 Session UI，-1 表示跟随最新；不会写入后端执行事实。 */
+export function TerminalOutputReader({ sessionId, toolCallId, output, omittedLines, logPath, links, open, onOpenChange, command, statusLabel, finalFocus }: {
+  sessionId: number; toolCallId: string; output: string; omittedLines?: number; logPath?: string; links: TerminalLinkOptions;
   open: boolean; onOpenChange: (open: boolean) => void; command?: string; statusLabel: string; finalFocus?: () => HTMLElement | boolean;
 }) {
   const viewport = useRef<TerminalViewportHandle>(null);
   const [truncated, setTruncated] = useState(false);
   const [pausedAtOutput, setPausedAtOutput] = useState<string | null>(null);
-  const position = useDisclosureStore.getState().terminalPositions[taskId]?.[toolCallId];
+  const position = useDisclosureStore.getState().terminalPositions[sessionId]?.[toolCallId];
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent finalFocus={finalFocus} className="flex h-[min(80vh,800px)] w-[min(1100px,calc(100vw-2rem))] max-w-none flex-col overflow-hidden sm:max-w-none">
@@ -33,11 +33,11 @@ export function TerminalOutputReader({ taskId, toolCallId, output, omittedLines,
         <DialogDescription className="sr-only">只读终端输出。向上滚动暂停跟随，回到最新继续跟随。</DialogDescription>
         {command && <div className="flex min-w-0 shrink-0 items-start gap-2">
           <pre className="line-clamp-2 min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-xs" title={command}>{command}</pre>
-          <CopyIconButton showLabel label="复制命令" getText={() => command} logEvent="terminal_command_copy_failed" logData={{ taskId, toolCallId }} />
+          <CopyIconButton showLabel label="复制命令" getText={() => command} logEvent="terminal_command_copy_failed" logData={{ sessionId, toolCallId }} />
         </div>}
         <div className="flex shrink-0 flex-wrap items-center gap-2 pr-8">
           <span className="text-muted-foreground text-xs">{statusLabel}</span>
-          <CopyIconButton showLabel label={truncated ? "复制保留内容" : "复制输出"} getText={() => viewport.current?.copyText() ?? ""} logEvent="terminal_output_copy_failed" logData={{ taskId, toolCallId }} />
+          <CopyIconButton showLabel label={truncated ? "复制保留内容" : "复制输出"} getText={() => viewport.current?.copyText() ?? ""} logEvent="terminal_output_copy_failed" logData={{ sessionId, toolCallId }} />
           <Button variant="ghost" size="sm" onClick={() => downloadTerminalOutput(output)}>下载原始输出</Button>
           {pausedAtOutput !== null && pausedAtOutput !== output && <Button variant="outline" size="sm" onClick={() => viewport.current?.scrollToBottom()}>有新输出 · 回到最新</Button>}
         </div>
@@ -47,7 +47,7 @@ export function TerminalOutputReader({ taskId, toolCallId, output, omittedLines,
           <TerminalViewport ref={viewport} output={output} links={links} initialLine={position} onTruncatedChange={setTruncated}
             onPositionChange={(line, bottom) => {
               if (!open) return;
-              useDisclosureStore.getState().setTerminalPosition(taskId, toolCallId, bottom ? -1 : line);
+              useDisclosureStore.getState().setTerminalPosition(sessionId, toolCallId, bottom ? -1 : line);
               setPausedAtOutput((previous) => bottom ? null : previous ?? output);
             }} />
         </div>

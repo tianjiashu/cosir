@@ -10,25 +10,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 # 此脚本只由测试在临时数据根下使用，绝不回落到用户数据。
 assert os.environ["CODING_AGENT_DATA_DIR"]
 from app.models.conversation_input import UserInputPresentation
-from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.session_context import SessionContextRecord
 from app.models.message_metadata import AssistantMessageMetadata, UserMessageMetadata
 from app.service.depends import (
-    get_conversation_run_crud,
-    get_conversation_task_context_crud,
-    get_task_crud,
+    get_run_crud,
+    get_session_context_crud,
+    get_session_crud,
 )
 from app.storage.store_engines import init_storage
 
 init_storage()
-task_id = int(sys.argv[1])
+session_id = int(sys.argv[1])
 reason = sys.argv[2]
-runs = get_conversation_run_crud()
-run = runs.create(task_id, status="running")
-get_task_crud().set_current_run_id(task_id, run.id)
-context = get_conversation_task_context_crud()
+runs = get_run_crud()
+run = runs.create(session_id, status="running")
+get_session_crud().set_current_run_id(session_id, run.id)
+context = get_session_context_crud()
 context.create(
-    ConversationTaskContextRecord(
-        task_id=task_id,
+    SessionContextRecord(
+        session_id=session_id,
         run_id=run.id,
         sequence=1,
         include_in_context=True,
@@ -44,8 +44,8 @@ if len(sys.argv) > 3 and sys.argv[3] == "plain":
     responses = [(2, "真实后端结论", reason)]
 for seq, text, finish in responses:
     context.create(
-        ConversationTaskContextRecord(
-            task_id=task_id,
+        SessionContextRecord(
+            session_id=session_id,
             run_id=run.id,
             sequence=seq,
             include_in_context=finish is not None,

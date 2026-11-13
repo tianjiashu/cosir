@@ -1,8 +1,8 @@
-"""delegate_task 工具 handler：把一次委派落地为一个子 Agent Task，投递任务说明后当场完成。
+"""delegate_task 工具 handler：把一次委派落地为一个子 Agent Session，投递任务说明后当场完成。
 
-委派是多 Agent 编排，不是后台执行的工具：调用在建好子 Task、投递完任务说明时就完成了，之后的进展
-属于子 Task 自己。它的每个 Run 落定时由编排把结论以 Agent 消息汇报给本 Task
-（``core.tool.multi_agent.derived_report``）；父侧用 ``wait_messages`` 挂起等待，或 ``task_status``
+委派是多 Agent 编排，不是后台执行的工具：调用在建好子 Session、投递完任务说明时就完成了，之后的进展
+属于子 Session 自己。它的每个 Run 落定时由编排把结论以 Agent 消息汇报给本 Session
+（``core.tool.multi_agent.derived_report``）；父侧用 ``wait_messages`` 挂起等待，或 ``session_status``
 查询。参数校验与准入门禁归 ``ToolAccessGate``。
 """
 import copy
@@ -17,7 +17,7 @@ from app.core.agents.agent_profile import (
 from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
 from app.core.tool.multi_agent.derivation import child_depth
-from app.core.tool.multi_agent.task_tool_scope import tools_for_task
+from app.core.tool.multi_agent.session_tool_scope import tools_for_session
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
@@ -29,19 +29,19 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.models.conversation_input import MessageSource
-from app.models.task_extra import TaskExtra
-from app.models.task_kind import TaskType
+from app.models.session_extra import SessionExtra
+from app.models.session_kind import SessionType
 from app.service.depends import (
-    get_conversation_run_ledger,
-    get_task_service,
+    get_run_ledger,
+    get_session_service,
 )
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
 
 class DelegateTaskTool(HandlerBase):
-    """把一次 delegate_task 调用落地为已启动的子 Agent Task；不等子 Task 执行（结论见模块说明）。"""
+    """把一次 delegate_task 调用落地为已启动的子 Agent Session；不等子 Session 执行（结论见模块说明）。"""
 
     name: str = TOOL_DELEGATE_TASK
     # HandlerBase 要求提供类级描述；描述与工具集、workspace 候选无关（子 Agent 目录由系统提示词
@@ -49,10 +49,10 @@ class DelegateTaskTool(HandlerBase):
     description: str = (
         "Delegate a focused subtask to a child agent. It runs its own loop with only your "
         "message as input — it cannot see this conversation — so the message must be a "
-        "self-contained task contract. The call returns as soon as the child task is created; "
+        "self-contained task contract. The call returns as soon as the child session is created; "
         "the child then reports to you automatically with an <agent_message report=...> each "
         "time it finishes a run, so wait for it with wait_messages or continue other "
-        "non-interfering work. To give it more instructions later, use send_message to its task. "
+        "non-interfering work. To give it more instructions later, use send_message to its session. "
         "A failed delegation "
         "is terminal — adjust the contract or ask the user rather than retrying identical "
         "arguments. Keep inputs within the stated length limits; an oversized call is "
@@ -75,12 +75,12 @@ class DelegateTaskTool(HandlerBase):
             无（依赖由工具系统装配层提供；服务未初始化时由依赖装配层抛出异常）。
 
         副作用:
-            在实例上绑定 Task 服务与 Run 读取服务；构造即解析依赖单例，因此必须晚于存储与运行期
+            在实例上绑定 Session 服务与 Run 读取服务；构造即解析依赖单例，因此必须晚于存储与运行期
             装配。
         """
 
-        self._task_service = get_task_service()
-        self._ledger = get_conversation_run_ledger()
+        self._session_service = get_session_service()
+        self._ledger = get_run_ledger()
 
     def execute(
             self,
@@ -89,11 +89,11 @@ class DelegateTaskTool(HandlerBase):
             message: str,
             execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-        """委派一个自由文本子任务给指定 child Agent，投递任务说明后返回已启动的观察。
+        """委派一个自由文本子会话给指定 child Agent，投递任务说明后返回已启动的观察。
 
         参数:
             child_agent_id: 要运行的 child agent profile 标识。
-            agent_name: Agent 名称，用作 child Task 标题（展示与可追溯）。
+            agent_name: Agent 名称，用作 child Session 标题（展示与可追溯）。
             message: 面向子 Agent 的自由文本任务契约，原样作为 child turn 的输入。
             execution_context: 父工具执行边界，提供工作区根与父事件循环。
 
@@ -107,11 +107,11 @@ class DelegateTaskTool(HandlerBase):
             ``delegate_task_exception`` 日志，不向上抛异常。
 
         副作用:
-            创建 child Task（记下派生它的这次调用），经调度入口投递任务说明，由子 Task 的 actor
+            创建 child Session（记下派生它的这次调用），经调度入口投递任务说明，由子 Session 的 actor
             开出 Run（不等待 child 执行结束）；写日志。
         """
 
-        if cancellation_registry.is_cancelled(execution_context.task_id):
+        if cancellation_registry.is_cancelled(execution_context.session_id):
             return tool_cancelled(
                 tool_name=self.name,
             )
@@ -150,22 +150,22 @@ class DelegateTaskTool(HandlerBase):
             from app.config.configuration import get_tool_registry
 
             parent_run = self._ledger.get_run(execution_context.run_id)
-            parent_task = self._task_service.get_task(execution_context.task_id)
-            depth = child_depth(parent_task, "delegate")
-            child_task_tools = child_agent_profile.select_tools(
+            parent_session = self._session_service.get_session(execution_context.session_id)
+            depth = child_depth(parent_session, "delegate")
+            child_session_tools = child_agent_profile.select_tools(
                 get_tool_registry().get_all_definitions()
             )
-            child_final_task_tools = tools_for_task(TaskType.AGENT_TASK, child_task_tools, depth=depth)
+            child_final_session_tools = tools_for_session(SessionType.DELEGATED, child_session_tools, depth=depth)
 
-            child_task = self._task_service.create_task(
+            child_session = self._session_service.create_session(
                 workspace_id=execution_context.workspace_id,
                 title=agent_name,
-                task_type=TaskType.AGENT_TASK,
-                parent_task_id=execution_context.task_id,
-                extra=TaskExtra(deriving_call_id=execution_context.tool_call_id),
+                session_type=SessionType.DELEGATED,
+                parent_session_id=execution_context.session_id,
+                extra=SessionExtra(deriving_call_id=execution_context.tool_call_id),
                 tool_schemas=[
                     copy.deepcopy(definition.to_model_tool_definition())
-                    for definition in child_final_task_tools
+                    for definition in child_final_session_tools
                 ],
                 derivation_depth=depth,
             )
@@ -175,13 +175,13 @@ class DelegateTaskTool(HandlerBase):
                                 else None)
             child_agent_model_config_id = child_agent_profile.model_config_id
             model_config_id = child_agent_model_config_id or parent_run.model_config_id
-            # 子 Task 的 actor 新开 Run。任务说明是父 Agent 说的话，以 Agent 消息投递：子 Agent 不会
+            # 子 Session 的 actor 新开 Run。任务说明是父 Agent 说的话，以 Agent 消息投递：子 Agent 不会
             # 把它读成用户的请求。
-            task_runtime_spaces.enqueue(
-                child_task.id,
+            session_runtime_spaces.enqueue(
+                child_session.id,
                 prepare_agent_message(
                     message,
-                    source=MessageSource(task_id=parent_task.id, name=parent_task.title),
+                    source=MessageSource(session_id=parent_session.id, name=parent_session.title),
                     agent_id=child_agent_id,
                     model_config_id=model_config_id,
                     reasoning_effort=reasoning_effort,
@@ -192,7 +192,7 @@ class DelegateTaskTool(HandlerBase):
                 content=json.dumps(
                     {
                         "status": "started",
-                        "child_task_id": child_task.id,
+                        "child_session_id": child_session.id,
                         "child_agent_id": child_agent_id,
                         "agent_name": agent_name,
                     },
@@ -201,7 +201,7 @@ class DelegateTaskTool(HandlerBase):
                 display_data=self._delegation_display_data(
                     title=agent_name,
                     child_agent_id=child_agent_id,
-                    child_task_id=child_task.id,
+                    child_session_id=child_session.id,
                     role=child_agent_profile.role,
                 ),
             )
@@ -228,14 +228,14 @@ class DelegateTaskTool(HandlerBase):
         title: str,
         child_agent_id: str,
         delegation_id: int | None = None,
-        child_task_id: int | None = None,
+        child_session_id: int | None = None,
         role: str | None = None,
     ) -> dict[str, Any]:
         """构造父级委派展示数据，不携带 prompt 或 child 正文。
 
-        子 Agent 的最终输出属于 child task 的结果，不属于父级委派卡片；子 Task 的运行状态也不在
+        子 Agent 的最终输出属于 child session 的结果，不属于父级委派卡片；子 Session 的运行状态也不在
         这里：
-        展示数据不是事实源，前端按 ``child_task_id`` 读应用级任务状态推送。
+        展示数据不是事实源，前端按 ``child_session_id`` 读应用级会话状态推送。
         """
 
         data: dict[str, Any] = {
@@ -247,8 +247,8 @@ class DelegateTaskTool(HandlerBase):
             data["role"] = role
         if delegation_id is not None:
             data["delegation_id"] = delegation_id
-        if child_task_id is not None:
-            data["child_task_id"] = child_task_id
+        if child_session_id is not None:
+            data["child_session_id"] = child_session_id
         return data
 
     def to_definition(self) -> ToolDefinition:
@@ -264,7 +264,7 @@ class DelegateTaskTool(HandlerBase):
 
         返回:
             使用进程内线程执行、同一回复内多个委派可工具级并行的 delegate_task 工具定义；
-            工具观察仅确认 child Task 已建好、任务说明已投递，不等待 child workflow 完成。
+            工具观察仅确认 child Session 已建好、任务说明已投递，不等待 child workflow 完成。
 
         异常:
             无。
@@ -304,8 +304,8 @@ def build_delegate_task_definition() -> ToolDefinition | None:
         无。
 
     副作用:
-        创建 `DelegateTaskTool` 实例（解析 Task/Run 服务单例）并生成基础
-        `ToolDefinition`；不创建 child Task、不启动委派。
+        创建 `DelegateTaskTool` 实例（解析 Session/Run 服务单例）并生成基础
+        `ToolDefinition`；不创建 child Session、不启动委派。
     """
 
     return DelegateTaskTool().to_definition_if_avaliable()

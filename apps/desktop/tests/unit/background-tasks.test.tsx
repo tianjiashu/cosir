@@ -7,14 +7,14 @@ vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolved
 const board = vi.hoisted(() => ({ entries: new Map<number, unknown[]>(), waits: new Map<number, string[]>(), parts: new Map<string, unknown>(), open: new Set<string>() }));
 vi.mock("@/lib/background-tasks/background-tasks-store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/background-tasks/background-tasks-store")>(),
-  useBackgroundTasks: (taskId: number | null) => (taskId === null ? [] : board.entries.get(taskId) ?? []),
-  useForegroundWaits: (taskId: number | null) => (taskId === null ? [] : board.waits.get(taskId) ?? []),
-  useBackgroundTaskPart: (_taskId: number, toolCallId: string) => board.parts.get(toolCallId) ?? null,
+  useBackgroundTasks: (sessionId: number | null) => (sessionId === null ? [] : board.entries.get(sessionId) ?? []),
+  useForegroundWaits: (sessionId: number | null) => (sessionId === null ? [] : board.waits.get(sessionId) ?? []),
+  useBackgroundTaskPart: (_sessionId: number, toolCallId: string) => board.parts.get(toolCallId) ?? null,
 }));
 
 vi.mock("@/lib/assistant/turn/disclosure-store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/assistant/turn/disclosure-store")>(),
-  useDisclosure: (_taskId: number, key: string, defaultOpen: boolean) => [board.open.has(key) || defaultOpen, () => undefined],
+  useDisclosure: (_sessionId: number, key: string, defaultOpen: boolean) => [board.open.has(key) || defaultOpen, () => undefined],
 }));
 
 import { ForegroundWaitAction } from "@/components/conversation/tools/foreground-wait-action";
@@ -23,7 +23,7 @@ import { BackgroundTasksActions, BackgroundTasksBody, BackgroundTasksSummary, us
 import type { BackgroundTaskEntry, TransportBackgroundWork, TransportToolCallPart } from "@/lib/assistant/contract";
 import { toToolCallPart } from "@/lib/assistant/transport-message-converter";
 import { parseTransportState, TransportSnapshotValidationError } from "@/lib/assistant/transport/snapshot-validation";
-import { backgroundToolCall } from "@/lib/assistant/task-commands";
+import { backgroundToolCall } from "@/lib/assistant/session-commands";
 import { callKey, resolveDisclosure, useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
 import { countRunning, useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
 import { useConversationAsideStore } from "@/lib/conversation-aside/conversation-aside-store";
@@ -64,8 +64,8 @@ function withParts(...parts: TransportToolCallPart[]) {
 }
 
 beforeEach(() => {
-  useBackgroundTasksStore.setState({ tasks: {}, foregroundWaits: {}, parts: {} });
-  useDisclosureStore.setState({ tasks: {} });
+  useBackgroundTasksStore.setState({ sessions: {}, foregroundWaits: {}, parts: {} });
+  useDisclosureStore.setState({ sessions: {} });
   board.entries.clear();
   board.waits.clear();
   board.parts.clear();
@@ -126,63 +126,63 @@ describe("snapshot background_tasks 与工具 part background", () => {
 
 describe("ForegroundWaitAction", () => {
   it("只在 foreground_waits 列出该调用时提供「转到后台」", () => {
-    expect(renderToStaticMarkup(<ForegroundWaitAction taskId={1} toolCallId="c1" />)).toBe("");
+    expect(renderToStaticMarkup(<ForegroundWaitAction sessionId={1} toolCallId="c1" />)).toBe("");
     board.waits.set(1, ["c1"]);
-    expect(renderToStaticMarkup(<ForegroundWaitAction taskId={1} toolCallId="c1" />)).toContain("转到后台");
+    expect(renderToStaticMarkup(<ForegroundWaitAction sessionId={1} toolCallId="c1" />)).toContain("转到后台");
   });
 });
 
 describe("后台任务卡", () => {
-  it("这个 Task 有过后台工作才算有内容；运行中在前、已结束收成「N 已结束」", () => {
-    const HasContent = ({ taskId }: { taskId: number }) => <>{String(useBackgroundTasksHasContent(taskId))}</>;
-    expect(renderToStaticMarkup(<HasContent taskId={1} />)).toBe("false");
+  it("这个 Session 有过后台工作才算有内容；运行中在前、已结束收成「N 已结束」", () => {
+    const HasContent = ({ sessionId }: { sessionId: number }) => <>{String(useBackgroundTasksHasContent(sessionId))}</>;
+    expect(renderToStaticMarkup(<HasContent sessionId={1} />)).toBe("false");
     board.entries.set(1, [
       entry("run", { label: "cd /work && make" }),
       entry("done", { status: "completed", endedAt: "2026-10-28T08:00:42+00:00" }),
     ]);
-    expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("1 个运行中");
-    const html = renderToStaticMarkup(<BackgroundTasksBody taskId={1} />);
+    expect(renderToStaticMarkup(<BackgroundTasksSummary sessionId={1} />)).toBe("1 个运行中");
+    const html = renderToStaticMarkup(<BackgroundTasksBody sessionId={1} />);
     expect(html).toContain("cd /work &amp;&amp; make");
     expect(html).toContain("1 已结束");
     expect(html).not.toContain("terminal_command:done");
     board.entries.set(1, [entry("done", { status: "completed", endedAt: "2026-10-28T08:00:42+00:00" })]);
-    expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("1 已结束");
-    // 全部结束后仍算有内容：一个 Task 里侧栏只出现一次，不随条目结束来回闪。
-    expect(renderToStaticMarkup(<HasContent taskId={1} />)).toBe("true");
+    expect(renderToStaticMarkup(<BackgroundTasksSummary sessionId={1} />)).toBe("1 已结束");
+    // 全部结束后仍算有内容：一个 Session 里侧栏只出现一次，不随条目结束来回闪。
+    expect(renderToStaticMarkup(<HasContent sessionId={1} />)).toBe("true");
   });
 
   // 目的：工作结束、占位还没落定时条目留在进行中；潜在缺陷：被算进「已结束」或继续计时、露出停止按钮。
   it("收尾中的条目留在进行中：不计时、不能停止，摘要报「收尾中」", () => {
     board.entries.set(1, [entry("a", { status: "settling" })]);
-    expect(renderToStaticMarkup(<BackgroundTasksSummary taskId={1} />)).toBe("收尾中");
-    const html = renderToStaticMarkup(<BackgroundTasksBody taskId={1} />);
+    expect(renderToStaticMarkup(<BackgroundTasksSummary sessionId={1} />)).toBe("收尾中");
+    const html = renderToStaticMarkup(<BackgroundTasksBody sessionId={1} />);
     expect(html).toContain("收尾中");
     expect(html).not.toContain("已结束");
     expect(html).not.toContain("停止");
     expect(html).not.toMatch(/\d+s</);
   });
 
-  // 目的：用户停止 Task 不动后台工作，「全部停止」是一次停掉它们的入口；潜在缺陷：没有运行中的条目时仍露出按钮。
+  // 目的：用户停止 Session 不动后台工作，「全部停止」是一次停掉它们的入口；潜在缺陷：没有运行中的条目时仍露出按钮。
   it("标题行的「全部停止」只在有运行中的条目时出现", () => {
     board.entries.set(1, [entry("a", { status: "settling" }), entry("b", { status: "completed" })]);
-    expect(renderToStaticMarkup(<BackgroundTasksActions taskId={1} />)).toBe("");
+    expect(renderToStaticMarkup(<BackgroundTasksActions sessionId={1} />)).toBe("");
     board.entries.set(1, [entry("a"), entry("b", { status: "settling" })]);
-    expect(renderToStaticMarkup(<BackgroundTasksActions taskId={1} />)).toContain("全部停止");
+    expect(renderToStaticMarkup(<BackgroundTasksActions sessionId={1} />)).toContain("全部停止");
   });
 
   it("运行数", () => {
     expect(countRunning([entry("a"), entry("b", { status: "cancelled" })])).toBe(1);
   });
 
-  it("离开 Task 置空、删除 Task 丢弃桶", () => {
+  it("离开 Session 置空、删除 Session 丢弃桶", () => {
     const store = useBackgroundTasksStore.getState();
     store.sync(1, indexedState({ ...withParts(terminalPart("a")), background_tasks: [entry("a")], foreground_waits: ["c1"] }));
     store.sync(1, null);
-    expect(useBackgroundTasksStore.getState().tasks[1]).toBeNull();
+    expect(useBackgroundTasksStore.getState().sessions[1]).toBeNull();
     expect(useBackgroundTasksStore.getState().foregroundWaits[1]).toBeNull();
     expect(useBackgroundTasksStore.getState().parts[1]).toBeNull();
     store.forget([1]);
-    expect(1 in useBackgroundTasksStore.getState().tasks).toBe(false);
+    expect(1 in useBackgroundTasksStore.getState().sessions).toBe(false);
     expect(1 in useBackgroundTasksStore.getState().foregroundWaits).toBe(false);
     expect(1 in useBackgroundTasksStore.getState().parts).toBe(false);
   });
@@ -214,7 +214,7 @@ describe("后台任务卡", () => {
     board.entries.set(1, [entry("a", { label: "terminal_command:make watch" })]);
     board.parts.set("a", terminalPart("a"));
     const html = renderToStaticMarkup(
-      <QueryClientProvider client={createQueryClient()}><BackgroundTasksBody taskId={1} /></QueryClientProvider>,
+      <QueryClientProvider client={createQueryClient()}><BackgroundTasksBody sessionId={1} /></QueryClientProvider>,
     );
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain('data-slot="terminal-status-bar"');
@@ -235,7 +235,7 @@ describe("后台任务卡", () => {
     board.open.add(callKey("a"));
     // 终端命令的展开体经 `useOpenLink` 接上链接打开，需要 Query 上下文。
     const html = renderToStaticMarkup(
-      <QueryClientProvider client={createQueryClient()}><BackgroundTasksBody taskId={1} /></QueryClientProvider>,
+      <QueryClientProvider client={createQueryClient()}><BackgroundTasksBody sessionId={1} /></QueryClientProvider>,
     );
     expect(html).toContain('aria-expanded="true"');
     expect(html).not.toContain('data-tool-call-id="a"');
@@ -246,7 +246,7 @@ describe("后台任务卡", () => {
 
   it("对应 part 未加载（不在已加载的历史里）时只剩外壳、不可展开", () => {
     board.entries.set(1, [entry("a")]);
-    const html = renderToStaticMarkup(<BackgroundTasksBody taskId={1} />);
+    const html = renderToStaticMarkup(<BackgroundTasksBody sessionId={1} />);
     const row = html.slice(html.indexOf('data-background-task="a"'));
     expect(row).toContain("terminal_command:a");
     expect(row).not.toContain('aria-expanded="');
@@ -257,12 +257,12 @@ describe("后台任务卡", () => {
 describe("backgroundToolCall", () => {
   // http client 按 runtime config 解析后端地址，它读 window；单测跑在 Node 环境，给一个空 window。
   beforeEach(() => vi.stubGlobal("window", {}));
-  it("POST 到按 Task 寻址的转后台接口，409 视为不可转", async () => {
+  it("POST 到按 Session 寻址的转后台接口，409 视为不可转", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     await expect(backgroundToolCall(3, "call/1")).resolves.toBeNull();
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringMatching(/\/tasks\/3\/tool-calls\/call%2F1\/background$/),
+      expect.stringMatching(/\/sessions\/3\/tool-calls\/call%2F1\/background$/),
       expect.objectContaining({ method: "POST" }),
     );
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 409 })));

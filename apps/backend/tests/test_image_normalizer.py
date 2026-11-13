@@ -72,7 +72,7 @@ def test_run_initialized_has_no_messages_and_input_event_projects_image() -> Non
     """Run 骨架不预置 user 消息；用户输入事件把图片 locator 原样投影为独立 user 消息。"""
 
     snapshot = _apply_planned(
-        RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=1), empty_snapshot()
+        RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=1, run_id=1), empty_snapshot()
     )
     assert snapshot["messages"] == []
 

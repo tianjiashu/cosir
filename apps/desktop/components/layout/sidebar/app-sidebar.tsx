@@ -14,30 +14,30 @@ import { toast } from "sonner";
 
 import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
 import type { DeleteTarget } from "@/components/layout/use-workspace-actions";
-import { forkDescendantIds } from "@/components/task-tree/task-tree-model";
-import { RowActionsMenu } from "@/components/task-tree/row-actions-menu";
-import { WorkspaceTree } from "@/components/task-tree/workspace-tree";
+import { forkDescendantIds } from "@/components/session-tree/session-tree-model";
+import { RowActionsMenu } from "@/components/session-tree/row-actions-menu";
+import { WorkspaceTree } from "@/components/session-tree/workspace-tree";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import type { WorkspaceTask } from "@/lib/api/workspaces";
+import type { WorkspaceSession } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { readPinnedTaskIds, setTaskPinned, subscribePinnedTaskIds } from "@/lib/pinned-task-storage";
+import { readPinnedSessionIds, setSessionPinned, subscribePinnedSessionIds } from "@/lib/pinned-session-storage";
 import { withShortcut, type AppShortcutId } from "@/lib/keyboard/shortcuts";
 
 export type SidebarSection = "conversation" | "settings" | "workspace-settings" | "observer";
 
 type AppSidebarProps = {
   catalog: WorkspaceCatalog;
-  focusedTaskId: number | null;
+  focusedSessionId: number | null;
   section: SidebarSection;
-  /** 开始新对话；带 `workspaceId` 时在该工作区开始（侧栏工作区行的「+」）。 */
+  /** 开始新会话；带 `workspaceId` 时在该工作区开始（侧栏工作区行的「+」）。 */
   onNewConversation: (workspaceId?: number) => void;
-  onSelectTask: (task: WorkspaceTask, workspaceId: number) => void;
+  onSelectSession: (session: WorkspaceSession, workspaceId: number) => void;
   onOpenSettings: () => void;
   onOpenWorkspaceSettings: (workspaceId: number) => void;
   onOpenObserver: () => void;
-  /** 区头的搜索：打开命令面板（它按任务标题与工作区名搜索），侧栏不另做一套搜索。 */
+  /** 区头的搜索：打开命令面板（它按会话标题与工作区名搜索），侧栏不另做一套搜索。 */
   onOpenSearch: () => void;
   /** 区头的添加工作区（`useWorkspaceActions.addWorkspaceFromFolder`）。 */
   onAddWorkspace: () => void;
@@ -48,7 +48,7 @@ type AppSidebarProps = {
 };
 
 /**
- * 应用侧栏：新对话、「工作区」区头（搜索、添加工作区）、工作区 / 任务树、底部的系统配置与上下文观测入口。
+ * 应用侧栏：新会话、「工作区」区头（搜索、添加工作区）、工作区 / 会话树、底部的系统配置与上下文观测入口。
  *
  * 铺在窗口底色（canvas）上，不画边线：与主区的分隔靠两者明度差，底部入口靠 mt-auto 的留白。
  *
@@ -58,10 +58,10 @@ type AppSidebarProps = {
  */
 export function AppSidebar({
   catalog,
-  focusedTaskId,
+  focusedSessionId,
   section,
   onNewConversation,
-  onSelectTask,
+  onSelectSession,
   onOpenSettings,
   onOpenWorkspaceSettings,
   onOpenObserver,
@@ -72,12 +72,12 @@ export function AppSidebar({
   headerControls,
 }: AppSidebarProps) {
   const { workspaces, status, error, load } = catalog;
-  const pinnedTaskIds = useSyncExternalStore(subscribePinnedTaskIds, readPinnedTaskIds, readPinnedTaskIds);
+  const pinnedSessionIds = useSyncExternalStore(subscribePinnedSessionIds, readPinnedSessionIds, readPinnedSessionIds);
 
-  const togglePinned = (taskId: number, pinned: boolean) => {
-    const saved = setTaskPinned(taskId, pinned);
-    void frontendLog(saved ? "INFO" : "WARNING", "task_pin_changed", saved ? "任务置顶状态已更新" : "任务置顶状态写入失败", {
-      data: { taskId, pinned, saved },
+  const togglePinned = (sessionId: number, pinned: boolean) => {
+    const saved = setSessionPinned(sessionId, pinned);
+    void frontendLog(saved ? "INFO" : "WARNING", "session_pin_changed", saved ? "会话置顶状态已更新" : "会话置顶状态写入失败", {
+      data: { sessionId, pinned, saved },
     });
     if (!saved) toast.error(pinned ? "置顶失败" : "取消置顶失败", { description: "本机存储不可用。" });
   };
@@ -88,12 +88,12 @@ export function AppSidebar({
       <div className="app-drag-region flex h-14 shrink-0 items-center pl-[max(1rem,var(--titlebar-inset-left))]">{headerControls}</div>
 
       <div className="shrink-0 px-3 pt-1 pb-3">
-        <SidebarLink active={false} icon={<SquarePenIcon className="size-4" />} label="新对话" shortcut="newConversation" onClick={() => onNewConversation()} />
+        <SidebarLink active={false} icon={<SquarePenIcon className="size-4" />} label="新会话" shortcut="newConversation" onClick={() => onNewConversation()} />
       </div>
-      <nav className="flex min-h-0 flex-1 flex-col px-2 pb-4" aria-label="工作区任务列表">
+      <nav className="flex min-h-0 flex-1 flex-col px-2 pb-4" aria-label="工作区会话列表">
         <div className="flex h-7 shrink-0 items-center gap-0.5 pr-1 pl-2">
           <h2 className="text-muted-foreground min-w-0 flex-1 truncate text-xs">工作区</h2>
-          <TooltipIconButton tooltip={withShortcut("搜索任务", "commandPalette")} aria-label="搜索任务" className="text-muted-foreground size-6" onClick={onOpenSearch}>
+          <TooltipIconButton tooltip={withShortcut("搜索会话", "commandPalette")} aria-label="搜索会话" className="text-muted-foreground size-6" onClick={onOpenSearch}>
             <SearchIcon />
           </TooltipIconButton>
           <TooltipIconButton tooltip="添加工作区" aria-label="添加工作区" className="text-muted-foreground size-6" disabled={addingWorkspace} onClick={onAddWorkspace}>
@@ -108,12 +108,12 @@ export function AppSidebar({
           <div className="min-h-0 flex-1">
             <WorkspaceTree
               workspaces={workspaces}
-              pinnedTaskIds={pinnedTaskIds}
-              activeTaskId={section === "conversation" ? focusedTaskId : null}
+              pinnedSessionIds={pinnedSessionIds}
+              activeSessionId={section === "conversation" ? focusedSessionId : null}
               selectedWorkspaceId={catalog.selectedWorkspaceId}
               expandedWorkspaceIds={catalog.expandedWorkspaceIds}
               onWorkspaceExpansionChange={catalog.updateWorkspaceExpansion}
-              onSelectTask={onSelectTask}
+              onSelectSession={onSelectSession}
               renderWorkspaceActions={(workspace, tabIndex) => (
                 <>
                   <RowActionsMenu
@@ -125,7 +125,7 @@ export function AppSidebar({
                         label: "删除工作区",
                         icon: <Trash2Icon />,
                         destructive: true,
-                        onSelect: () => onRequestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, taskCount: workspace.tasks.length }),
+                        onSelect: () => onRequestDelete({ kind: "workspace", id: workspace.workspace_id, label: workspace.name, sessionCount: workspace.sessions.length }),
                       },
                     ]}
                   />
@@ -134,33 +134,33 @@ export function AppSidebar({
                     size="icon-sm"
                     tabIndex={tabIndex}
                     className="text-muted-foreground"
-                    aria-label={`在 ${workspace.name} 中新建对话`}
-                    title={`在 ${workspace.name} 中新建对话`}
+                    aria-label={`在 ${workspace.name} 中新建会话`}
+                    title={`在 ${workspace.name} 中新建会话`}
                     onClick={() => onNewConversation(workspace.workspace_id)}
                   >
                     <PlusIcon className="size-4" />
                   </Button>
                 </>
               )}
-              renderTaskActions={(item, tabIndex) => (
+              renderSessionActions={(item, tabIndex) => (
                 <RowActionsMenu
-                  label={item.task.full_title}
+                  label={item.session.full_title}
                   tabIndex={tabIndex}
                   actions={[
                     ...(item.pinnable ? [{
                       label: item.pinned ? "取消置顶" : "置顶",
                       icon: item.pinned ? <PinOffIcon /> : <PinIcon />,
-                      onSelect: () => togglePinned(item.task.task_id, !item.pinned),
+                      onSelect: () => togglePinned(item.session.session_id, !item.pinned),
                     }] : []),
                     {
                       label: "删除",
                       icon: <Trash2Icon />,
                       destructive: true,
                       onSelect: () => onRequestDelete({
-                        kind: "task",
-                        id: item.task.task_id,
-                        label: item.task.full_title,
-                        forkCount: forkDescendantIds(item.task).length,
+                        kind: "session",
+                        id: item.session.session_id,
+                        label: item.session.full_title,
+                        forkCount: forkDescendantIds(item.session).length,
                       }),
                     },
                   ]}

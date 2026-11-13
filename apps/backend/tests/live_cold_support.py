@@ -23,21 +23,21 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolDefinition
 from app.core.tool.schemas.tool_execution_context import ToolExecutionContext
 from app.core.workflow import workflow
-from app.core.workflow.branch import task_title
-from app.core.workflow.message_queue.task_message import (
+from app.core.workflow.branch import session_title
+from app.core.workflow.message_queue.session_message import (
     AgentMessageBody,
     RunLaunch,
-    TaskMessage,
+    SessionMessage,
     UserInputBody,
 )
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.conversation_run_options import ConversationRunOptions
-from app.models.conversation_run_record import ConversationRunRecord
-from app.models.task_record import TaskRecord
+from app.models.run_options import RunOptions
+from app.models.run_record import RunRecord
+from app.models.session_record import SessionRecord
 from app.service import depends
-from app.storage.model.task_model import TaskModel
-from app.storage.store_engines import main_session_factory
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
+from app.storage.model.session_model import SessionModel
+from app.storage.store_engines import main_db_factory
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces as spaces
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal import execute_terminal
 from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
@@ -100,8 +100,8 @@ def _hitl(*, execution_context: ToolExecutionContext) -> Any:
     )
 
 
-def _install_probe_tools(task: TaskRecord) -> None:
-    """注册一个需要用户决定的探针工具，并把它固化进 Task 的模型 schema。"""
+def _install_probe_tools(session: SessionRecord) -> None:
+    """注册一个需要用户决定的探针工具，并把它固化进 Session 的模型 schema。"""
     registry = get_tool_registry()
     if registry.get_tool_definition("probe_hitl") is None:
         registry.register(
@@ -116,10 +116,10 @@ def _install_probe_tools(task: TaskRecord) -> None:
         )
     definition = registry.get_tool_definition("probe_hitl")
     assert definition is not None
-    schemas = [*task.tool_schemas, definition.to_model_tool_definition()]
-    with main_session_factory().begin() as session:
-        session.execute(
-            update(TaskModel).where(TaskModel.id == task.id).values(tool_schemas=schemas)
+    schemas = [*session.tool_schemas, definition.to_model_tool_definition()]
+    with main_db_factory().begin() as db:
+        db.execute(
+            update(SessionModel).where(SessionModel.id == session.id).values(tool_schemas=schemas)
         )
 
 
@@ -162,7 +162,7 @@ class GatedCommands:
 
 
 class LiveColdEnv:
-    """一个工作区加一个 Task；保持订阅，让实时快照一直是投影出来的工作副本。"""
+    """一个工作区加一个 Session；保持订阅，让实时快照一直是投影出来的工作副本。"""
 
     def __init__(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, steps: Sequence[Any]
@@ -179,70 +179,70 @@ class LiveColdEnv:
             supports_image=False,
         )
         self.workspace = depends.get_workspace_service().create_workspace("ws", str(tmp_path))
-        self.task = depends.get_workspace_service().create_task(self.workspace.id, "parent")
-        _install_probe_tools(self.task)
+        self.session = depends.get_workspace_service().create_session(self.workspace.id, "parent")
+        _install_probe_tools(self.session)
         monkeypatch.setattr(
             workflow,
             "resolve_chat_model",
             lambda **_: SimpleNamespace(model=self.model, supports_thinking=True),
         )
-        monkeypatch.setattr(task_title, "should_launch", lambda *_: False)
+        monkeypatch.setattr(session_title, "should_launch", lambda *_: False)
         spaces.bind_loop(asyncio.get_running_loop())
         command_results.open()
-        self.state = depends.get_conversation_task_state_service()
-        _, self._unsubscribe, _ = self.state.subscribe_with_snapshot(self.task.id)
+        self.state = depends.get_conversation_state_service()
+        _, self._unsubscribe, _ = self.state.subscribe_with_snapshot(self.session.id)
 
     def send(
         self,
         text: str = "start",
         *,
         delivery: str | None = None,
-        task_id: int | None = None,
-        options: ConversationRunOptions | None = None,
+        session_id: int | None = None,
+        options: RunOptions | None = None,
     ) -> None:
         kwargs = {"delivery": delivery} if delivery else {}
         launch = RunLaunch(
-            model_config_id=self.model_config.id, options=options or ConversationRunOptions()
+            model_config_id=self.model_config.id, options=options or RunOptions()
         )
         body = UserInputBody(
             text=text, launch=launch, presentation=UserInputPresentation(text=text)
         )
-        spaces.enqueue(task_id or self.task.id, TaskMessage.of(body, **kwargs))
+        spaces.enqueue(session_id or self.session.id, SessionMessage.of(body, **kwargs))
 
     def send_agent(self, text: str) -> None:
         body = AgentMessageBody(
             text=text,
             launch=RunLaunch(model_config_id=self.model_config.id),
-            source=MessageSource(task_id=4, name="上级"),
+            source=MessageSource(session_id=4, name="上级"),
         )
-        spaces.enqueue(self.task.id, TaskMessage.of(body))
+        spaces.enqueue(self.session.id, SessionMessage.of(body))
 
-    async def parked(self, task_id: int | None = None) -> ConversationRunRecord:
+    async def parked(self, session_id: int | None = None) -> RunRecord:
         """等到当前 Run 离开运行态且没有执行者。"""
-        return await self._wait(task_id, lambda run: run.status != "running")
+        return await self._wait(session_id, lambda run: run.status != "running")
 
-    async def until(self, status: str, task_id: int | None = None) -> ConversationRunRecord:
-        return await self._wait(task_id, lambda run: run.status == status)
+    async def until(self, status: str, session_id: int | None = None) -> RunRecord:
+        return await self._wait(session_id, lambda run: run.status == status)
 
     async def _wait(
-        self, task_id: int | None, matches: Callable[[ConversationRunRecord], bool]
-    ) -> ConversationRunRecord:
-        target = task_id or self.task.id
+        self, session_id: int | None, matches: Callable[[RunRecord], bool]
+    ) -> RunRecord:
+        target = session_id or self.session.id
         async with asyncio.timeout(8):
             while True:
                 actor = spaces.get(target).actor
                 run = await asyncio.to_thread(
-                    depends.get_task_service().require_current_run, target
+                    depends.get_session_service().require_current_run, target
                 )
                 if run is not None and matches(run) and not actor.driving:
                     return run
                 await asyncio.sleep(0.02)
 
     def live(self) -> dict[str, Any]:
-        return copy.deepcopy(self.state.get_state(self.task.id))
+        return copy.deepcopy(self.state.get_state(self.session.id))
 
-    def cold(self, task_id: int | None = None) -> dict[str, Any]:
-        return copy.deepcopy(self.state._rebuild(task_id or self.task.id))
+    def cold(self, session_id: int | None = None) -> dict[str, Any]:
+        return copy.deepcopy(self.state._rebuild(session_id or self.session.id))
 
     def assert_parity(self) -> None:
         assert normalized(self.live()) == normalized(self.cold())
@@ -254,9 +254,9 @@ class LiveColdEnv:
         command_results.open()
 
 
-def registered(registry: CommandResultRegistry, task_id: int, tool_call_id: str) -> bool:
+def registered(registry: CommandResultRegistry, session_id: int, tool_call_id: str) -> bool:
     """这次调用是否有活条目（前台或后台）。"""
-    live = [*registry.live_background(task_id), *registry.foreground_calls(task_id)]
+    live = [*registry.live_background(session_id), *registry.foreground_calls(session_id)]
     return tool_call_id in live
 
 

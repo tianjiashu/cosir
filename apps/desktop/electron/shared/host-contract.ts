@@ -72,7 +72,7 @@ export type OpenDirectoryOptions = {
 
 export type HostPlatform = "darwin" | "win32" | "linux";
 
-/** 谁开的标签：用户与 Agent 都能在 Task 里新开（与交互终端一致）。 */
+/** 谁开的标签：用户与 Agent 都能在 Session 里新开（与交互终端一致）。 */
 export type BrowserTabCreator = "agent" | "user";
 
 export const BROWSER_DIALOG_TYPES = ["alert", "confirm", "prompt"] as const;
@@ -94,12 +94,12 @@ export type BrowserDialog = {
 export type BrowserDialogAnswer = { accept: boolean; text?: string };
 
 /**
- * Task 的一次下载，存进 Task 所在工作区的下载目录。下载归 Task 而不归标签（与浏览器的下载归 profile 一致）：
+ * Session 的一次下载，存进 Session 所在工作区的下载目录。下载归 Session 而不归标签（与浏览器的下载归 profile 一致）：
  * 触发它的标签关掉（常见于弹出页下载后自己关闭）不会取消下载。
  */
 export type BrowserDownload = {
   id: string;
-  taskId: number;
+  sessionId: number;
   /** 触发下载的标签（之后可能已关闭）。 */
   tabId: string;
   filename: string;
@@ -116,10 +116,10 @@ export type BrowserDownload = {
   totalBytes: number;
 };
 
-/** 内置浏览器的一个标签页（宿主事实，见 `electron/main/browser/browser-host.ts`）；每个标签属于一个 Task。 */
+/** 内置浏览器的一个标签页（宿主事实，见 `electron/main/browser/browser-host.ts`）；每个标签属于一个 Session。 */
 export type BrowserTabSummary = {
   tabId: string;
-  taskId: number;
+  sessionId: number;
   createdBy: BrowserTabCreator;
   /** 页面用 `window.open` / `target=_blank` 开出的标签记下来源标签（来源已关闭时仍保留 id）；否则为 null。 */
   openerId: string | null;
@@ -137,7 +137,7 @@ export type BrowserTabSummary = {
 /** 内置浏览器的完整状态（宿主事实），推送与读取都是这一份。 */
 export type BrowserState = {
   tabs: BrowserTabSummary[];
-  /** 各 Task 最近的下载，旧的在前。 */
+  /** 各 Session 最近的下载，旧的在前。 */
   downloads: BrowserDownload[];
 };
 
@@ -150,11 +150,11 @@ export const BROWSER_NAVIGATION_ACTIONS = ["back", "forward", "reload"] as const
 export type BrowserNavigation = { url: string } | { action: (typeof BROWSER_NAVIGATION_ACTIONS)[number] };
 
 /** 两个标签上限；事实源是后端配置中心，每次请求随参数带来，宿主不另存配置。 */
-export type BrowserTabLimits = { perTask: number; total: number };
+export type BrowserTabLimits = { perSession: number; total: number };
 
 /**
- * 新开标签需要的后端事实（后端按 Task 解析：`GET /tasks/{id}/browser-context`，Agent 侧经工具参数带来）：
- * 上限，以及这个 Task 所在工作区的下载目录（本机绝对路径）。下载目录在标签创建时定下，页面开出的标签沿用来源标签的。
+ * 新开标签需要的后端事实（后端按 Session 解析：`GET /sessions/{id}/browser-context`，Agent 侧经工具参数带来）：
+ * 上限，以及这个 Session 所在工作区的下载目录（本机绝对路径）。下载目录在标签创建时定下，页面开出的标签沿用来源标签的。
  */
 export type BrowserTabContext = { limits: BrowserTabLimits; downloadDir: string };
 
@@ -189,10 +189,10 @@ export type CosirHost = {
     /** 订阅状态变化（每次推送完整状态），返回取消订阅函数。 */
     onStateChanged(listener: (state: BrowserState) => void): () => void;
     /**
-     * 在 Task 里新开一个空白标签，返回标签 id；要打开地址再对它 `navigate`（开标签与导航各自成败）。`context` 由
-     * 后端按 Task 给出：宿主不存配置，超出上限时抛出带原因的错误。
+     * 在 Session 里新开一个空白标签，返回标签 id；要打开地址再对它 `navigate`（开标签与导航各自成败）。`context` 由
+     * 后端按 Session 给出：宿主不存配置，超出上限时抛出带原因的错误。
      */
-    open(taskId: number, context: BrowserTabContext): Promise<string>;
+    open(sessionId: number, context: BrowserTabContext): Promise<string>;
     /**
      * 把标签的网页画面放到页面的这个矩形上；`null` 收起。同一时刻只有一个标签显示，放上新的会收起旧的。
      * 网页是叠在页面之上的原生画面，不参与 CSS 层叠。

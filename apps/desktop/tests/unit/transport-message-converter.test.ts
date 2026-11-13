@@ -83,10 +83,10 @@ describe("assistant transport converter", () => {
   it("Agent 消息的发送方随 user 消息的 custom 交给渲染层", () => {
     const message: TransportMessage = {
       id: "11", role: "user", parts: [{ type: "text", text: "做这个", status: "completed" }], turn: 3, inherited: false, outcome: null,
-      source: { taskId: 4, name: "主任务", report: null },
+      source: { sessionId: 4, name: "主会话", report: null },
     };
     const converted = toThreadMessage(message, { turn: 3, inherited: false, source: message.source, outcome: null, activity: null });
-    expect(converted.metadata.custom).toEqual({ source: { taskId: 4, name: "主任务", report: null } });
+    expect(converted.metadata.custom).toEqual({ source: { sessionId: 4, name: "主会话", report: null } });
   });
 
   it("projects the outcome and activity onto assistant message metadata (D5)", () => {
@@ -210,7 +210,7 @@ describe("assistant transport converter", () => {
     const cancelled = toToolCallPart(tool("cancelled"));
     const delegation = toToolCallPart(tool("running", {
       toolName: "delegate_task",
-      child_task_id: 22,
+      child_session_id: 22,
     }));
 
     expect(pending).toMatchObject({ type: "tool-call", argsText: '{"command":"npm test"}', artifact: {presentation: "activity",  backendStatus: "pending" } });
@@ -222,7 +222,7 @@ describe("assistant transport converter", () => {
     expect(failed).toMatchObject({ result: { kind: "tool-terminal", status: "failed" } });
     expect(cancelled).toMatchObject({ isError: false, artifact: {presentation: "activity",  backendStatus: "cancelled", error: "已取消" } });
     expect(cancelled).toMatchObject({ result: { kind: "tool-terminal", status: "cancelled" } });
-    expect(delegation).toMatchObject({ artifact: { childTaskId: 22 } });
+    expect(delegation).toMatchObject({ artifact: { childSessionId: 22 } });
   });
 
   // 目的：等待用户与展示数据原样进 artifact，调用行只读这里；参数留在 assistant-ui 的 args 上，标题由前端目录算。

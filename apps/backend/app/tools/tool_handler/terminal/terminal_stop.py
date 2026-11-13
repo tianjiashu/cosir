@@ -18,7 +18,7 @@ from app.core.workflow.cancel.tool_call_cancellation_registry import should_stop
 from app.tools.terminal_runtime.command.running_command import RunningCommand
 from app.tools.terminal_runtime.errors import TerminalSessionStateError
 from app.tools.tool_handler.terminal.command_results import command_results
-from app.tools.tool_handler.terminal.task_terminals import find_terminal
+from app.tools.tool_handler.terminal.session_terminals import find_terminal
 from app.tools.tool_handler.terminal.tool_observation import with_terminal_errors
 from app.tools.tool_models import TerminalStopArgs
 
@@ -51,7 +51,7 @@ class TerminalStopTool(HandlerBase):
 
         def action() -> ToolObservation:
             # 查找顺序与 terminal_read 同一份（find_terminal）；找到的是用户会话就拒绝。
-            command = find_terminal(execution_context.task_id, terminal_id)
+            command = find_terminal(execution_context.session_id, terminal_id)
             if not isinstance(command, RunningCommand):
                 raise TerminalSessionStateError(
                     f"terminal {terminal_id} is a terminal the user opened; you can stop only "
@@ -59,28 +59,28 @@ class TerminalStopTool(HandlerBase):
                 )
             # driving=False：目标是另一次调用登记的后台条目，不是当前正在执行的工具调用。
             command_results.request_cancel(
-                execution_context.task_id, terminal_id, driving=False
+                execution_context.session_id, terminal_id, driving=False
             )
             log.info(
                 "terminal_command_stop_requested",
                 extra={
                     "msg": "Agent 要求停止运行中的终端命令",
                     "data": {
-                        "task_id": execution_context.task_id,
+                        "session_id": execution_context.session_id,
                         "terminal_id": terminal_id,
                     },
                 },
             )
             stopped = command.wait_finished(
                 Constant.Terminal.COMMAND_STOP_WAIT_SECONDS,
-                lambda: should_stop_call(execution_context.task_id, execution_context.tool_call_id),
+                lambda: should_stop_call(execution_context.session_id, execution_context.tool_call_id),
             )
             log.info(
                 "terminal_command_stopped",
                 extra={
                     "msg": "终端命令停止请求的收尾结果",
                     "data": {
-                        "task_id": execution_context.task_id,
+                        "session_id": execution_context.session_id,
                         "terminal_id": terminal_id,
                         "stopped": stopped,
                     },

@@ -1,7 +1,7 @@
 /**
  * 后端 Assistant Transport 协议约定的 state 结构（传输契约类型）。
  *
- * 契约是 Task 视角：对话是按回合扁平排列的消息列表（每个回合：开启它的输入 + 一条回复），Run 只在
+ * 契约是 Session 视角：对话是按回合扁平排列的消息列表（每个回合：开启它的输入 + 一条回复），Run 只在
  * 后端承载状态，wire 上没有 Run 身份——前端只读 `activity`（最新 Run 的状态）、回复上的 `outcome`
  * 与各处的显式事实（`inherited`、`activity.turn`、`activity.resumable`）。后端先推 full 帧再按路径增量
  * 推送 mutation（`messages` / `activity` / `queued_messages` / `error`）。字段与后端
@@ -84,8 +84,8 @@ export type TransportToolCallPart = {
   background?: TransportBackgroundWork;
   /** 后端显式标记的错误结果。 */
   isError?: boolean | null;
-  /** 委派 / 子 Agent 调用指向的子 Task；委派行据此读任务状态推送、点击打开子任务，不渲染为文本。 */
-  child_task_id?: number;
+  /** 委派 / 子 Agent 调用指向的子 Session；委派行据此读会话状态推送、点击打开子会话，不渲染为文本。 */
+  child_session_id?: number;
   /** Current AgentProfile.role resolved by the backend. */
   agent_role?: string;
   /** 进入 running 的时刻（ISO 8601，取自后端状态事件），其余时候为 null；调用行据此本地计时运行时长。 */
@@ -142,7 +142,7 @@ type TransportError = {
   message: string;
 };
 
-/** Run 生命周期状态：与后端 `ConversationRunStatus` 的五个值一一对应。 */
+/** Run 生命周期状态：与后端 `RunStatus` 的五个值一一对应。 */
 export type TransportRunStatus = "running" | "suspended" | "completed" | "failed" | "cancelled";
 
 /** Run 的终态（不会再产生运行中内容）。 */
@@ -174,22 +174,22 @@ export type TransportOutcome = {
   durationMs: number;
 };
 
-/** 派生 Task 的汇报：它的 Run 以什么结局落定；`intermediate` 表示它还有工作在跑、之后还会再汇报。 */
+/** 派生 Session 的汇报：它的 Run 以什么结局落定；`intermediate` 表示它还有工作在跑、之后还会再汇报。 */
 export type TransportAgentReport = {
   status: "completed" | "failed";
   intermediate: boolean;
 };
 
 /**
- * Agent 消息的发送方：`taskId` 用于跳到来源 Task，`name` 是发送时的显示名快照；`report` 非空即这条是它的汇报。
+ * Agent 消息的发送方：`sessionId` 用于跳到来源 Session，`name` 是发送时的显示名快照；`report` 非空即这条是它的汇报。
  */
 export type TransportMessageSource = {
-  taskId: number;
+  sessionId: number;
   name: string;
   report: TransportAgentReport | null;
 };
 
-/** 单条 Transport 消息：Task 级扁平消息列表中的 canonical 消息。 */
+/** 单条 Transport 消息：Session 级扁平消息列表中的 canonical 消息。 */
 export type TransportMessage = {
   id: string;
   role: "user" | "assistant";
@@ -208,7 +208,7 @@ export type TransportMessage = {
 };
 
 /**
- * 当前活动：Task 最新 Run 的状态投影（事实源仍是后端 `ConversationRunModel.status`）。对话界面按
+ * 当前活动：Session 最新 Run 的状态投影（事实源仍是后端 `RunModel.status`）。对话界面按
  * `status` 判断「运行中 / 已停下」，按 `turn` 认出当前回复，按 `resumable` 决定能否恢复，都不推断。
  */
 export type TransportActivity = {
@@ -262,14 +262,14 @@ export type TransportQueuedMessage = {
 export type TerminalSessionStatus = "starting" | "running" | "exited" | "closed" | "failed";
 
 /**
- * Task 级交互终端会话条目（snapshot 顶层 `terminal_sessions`）。
+ * Session 级交互终端会话条目（snapshot 顶层 `terminal_sessions`）。
  *
  * 事实源在后端 `TerminalSessionService`，这里只是投影：活跃会话在前、按创建时间排序，已结束
  * 会话最多保留 10 个。前端标签栏与工具卡片的「在终端中打开」都只读它，不自行推断会话存活；后端重启后
  * 列表清空。会话都由用户新建，标签按「终端 N」编号。
  */
 export type TerminalSessionEntry = {
-  sessionId: string;
+  terminalSessionId: string;
   shellKind: string;
   status: TerminalSessionStatus;
   endReason: string | null;
@@ -290,7 +290,7 @@ export type TransportBackgroundWork = {
 };
 
 /**
- * Task 后台工作看板条目（snapshot 顶层 `background_tasks`）。
+ * Session 后台工作看板条目（snapshot 顶层 `background_tasks`）。
  *
  * 后端从工作副本里带后台记录的工具 part 与登记表活条目投影：只含后台工作（一开始就在后台或已转到后台），
  * 进行中的在前（按开始先后），之后是最近结束的若干条；重启后保留历史。前台等待见 `foreground_waits`。
@@ -321,7 +321,7 @@ export type HandoffEntry = {
   reason: string;
 };
 
-/** Task 级 Transport state。 */
+/** Session 级 Transport state。 */
 /** 更早历史的一页：完整历史中 `[messageOffset, messageOffset + messages.length)` 这一段。 */
 export type TransportHistoryPage = {
   messages: TransportMessage[];
@@ -329,8 +329,8 @@ export type TransportHistoryPage = {
 };
 
 export type TransportState = {
-  fork?: { sourceTaskId: number; sourceTitle: string; taskType: "user_fork" | "agent_fork"; initialLaunch: TransportRunLaunch };
-  /** Task 标题，投影自后端 `tasks.title`；侧栏目录不读它，经 Task 推送的目录失效重读。 */
+  fork?: { sourceSessionId: number; sourceTitle: string; sessionType: "user_fork" | "agent_fork"; initialLaunch: TransportRunLaunch };
+  /** Session 标题，投影自后端 `sessions.title`；侧栏目录不读它，经 Session 推送的目录失效重读。 */
   title: string;
   /** 扁平消息列表，按 context 序号排列；只含已加载的一段（最近窗口加上往上翻已取到的页）。 */
   messages: TransportMessage[];
@@ -339,12 +339,12 @@ export type TransportState = {
    * （`/assistant/messages?end=`）；增量路径里的消息下标是完整历史里的位置，减去它才是本地位置。
    */
   messageOffset: number;
-  /** 最新 Run 的摘要；Task 尚无 Run 时为 null。 */
+  /** 最新 Run 的摘要；Session 尚无 Run 时为 null。 */
   activity: TransportActivity | null;
   queued_messages?: TransportQueuedMessage[];
-  /** 本 Task 的交互终端会话列表（必填，可为空数组）。 */
+  /** 本 Session 的交互终端会话列表（必填，可为空数组）。 */
   terminal_sessions: TerminalSessionEntry[];
-  /** 本 Task 的后台工作看板条目（必填，可为空数组）。 */
+  /** 本 Session 的后台工作看板条目（必填，可为空数组）。 */
   background_tasks: BackgroundTaskEntry[];
   /** 正在前台等待、可转到后台的工具调用 id（必填，可为空数组）；只服务工具卡片的「转到后台」。 */
   foreground_waits: string[];

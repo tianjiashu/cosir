@@ -19,11 +19,11 @@ from app.core.events import (
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
 )
-from app.models.conversation_run_record import ConversationRunRecord
-from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.run_record import RunRecord
+from app.models.session_context import SessionContextRecord
+from app.models.enums.run_status import RunStatus
 from app.models.message_metadata import AssistantMessageMetadata
-from app.models.task_record import TaskRecord
+from app.models.session_record import SessionRecord
 
 NOW = datetime(2026, 11, 7, tzinfo=UTC)
 
@@ -46,28 +46,28 @@ def apply(state, event):
 )
 def test_live_and_rebuild_agree(status, reason, content, expected):
     state = empty_snapshot()
-    apply(state, RunInitializedEvent(task_id=7, run_id=1, created_at=NOW))
+    apply(state, RunInitializedEvent(session_id=7, run_id=1, created_at=NOW))
     for sequence, text in [(1, "中途进展"), (2, content)]:
         apply(
             state,
-            AssistantTextDeltaEvent(task_id=7, run_id=1, turn=1, source_sequence=sequence, delta=text),
+            AssistantTextDeltaEvent(session_id=7, run_id=1, turn=1, source_sequence=sequence, delta=text),
         )
-        apply(state, AssistantPartClosedEvent(task_id=7, run_id=1, turn=1, source_sequence=sequence))
+        apply(state, AssistantPartClosedEvent(session_id=7, run_id=1, turn=1, source_sequence=sequence))
     apply(
         state,
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=7,
+            session_id=7,
             run_id=1,
-            status=ConversationRunStatus(status),
+            status=RunStatus(status),
             end_reason=reason,
             response_sequence=2,
         ),
     )
     validate_snapshot(state)
     rows = [
-        ConversationTaskContextRecord(
-            task_id=7,
+        SessionContextRecord(
+            session_id=7,
             run_id=1,
             sequence=sequence,
             include_in_context=True,
@@ -79,19 +79,19 @@ def test_live_and_rebuild_agree(status, reason, content, expected):
         )
         for sequence, text in [(1, "中途进展"), (2, content)]
     ]
-    task = TaskRecord(
+    session = SessionRecord(
         id=7, workspace_id=1, title="验收", current_run_id=1, created_at=NOW, updated_at=NOW
     )
-    run = ConversationRunRecord(
+    run = RunRecord(
         id=1,
-        task_id=7,
+        session_id=7,
         status=status,
         end_reason=reason,
         final_output="结构化支线的其他内容",
         created_at=NOW,
         updated_at=NOW,
     )
-    cold = rebuild_snapshot(task, [run], rows, {})
+    cold = rebuild_snapshot(session, [run], rows, {})
     validate_snapshot(cold)
     for snapshot in (state, cold):
         marked = [
@@ -105,43 +105,43 @@ def test_live_and_rebuild_agree(status, reason, content, expected):
 
 def test_all_text_parts_from_final_response_marked_and_structured_result_does_not_erase():
     state = empty_snapshot()
-    apply(state, RunInitializedEvent(task_id=7, run_id=1, created_at=NOW))
+    apply(state, RunInitializedEvent(session_id=7, run_id=1, created_at=NOW))
     for sequence, text in [(1, "草稿"), (2, "结论上半"), (2, "结论下半")]:
         apply(
             state,
-            AssistantTextDeltaEvent(task_id=7, run_id=1, turn=1, source_sequence=sequence, delta=text),
+            AssistantTextDeltaEvent(session_id=7, run_id=1, turn=1, source_sequence=sequence, delta=text),
         )
-        apply(state, AssistantPartClosedEvent(task_id=7, run_id=1, turn=1, source_sequence=sequence))
+        apply(state, AssistantPartClosedEvent(session_id=7, run_id=1, turn=1, source_sequence=sequence))
     apply(
         state,
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=7,
+            session_id=7,
             run_id=1,
-            status=ConversationRunStatus.COMPLETED,
+            status=RunStatus.COMPLETED,
             end_reason="stop",
             response_sequence=2,
         ),
     )
-    apply(state, RunResultUpdatedEvent(task_id=7, run_id=1, end_reason="structured_output_failed"))
+    apply(state, RunResultUpdatedEvent(session_id=7, run_id=1, end_reason="structured_output_failed"))
     assert [bool(p.get("finalReply")) for p in state["messages"][0]["parts"]] == [False, True, True]
     validate_snapshot(state)
 
 
 def _complete_turn(state, run_id: int, turn: int, text: str, end_reason: str = "stop") -> None:
-    apply(state, RunInitializedEvent(task_id=7, run_id=run_id, created_at=NOW))
+    apply(state, RunInitializedEvent(session_id=7, run_id=run_id, created_at=NOW))
     apply(
         state,
-        AssistantTextDeltaEvent(task_id=7, run_id=run_id, turn=turn, source_sequence=turn, delta=text),
+        AssistantTextDeltaEvent(session_id=7, run_id=run_id, turn=turn, source_sequence=turn, delta=text),
     )
-    apply(state, AssistantPartClosedEvent(task_id=7, run_id=run_id, turn=turn, source_sequence=turn))
+    apply(state, AssistantPartClosedEvent(session_id=7, run_id=run_id, turn=turn, source_sequence=turn))
     apply(
         state,
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, turn, tzinfo=UTC),
-            task_id=7,
+            session_id=7,
             run_id=run_id,
-            status=ConversationRunStatus.COMPLETED,
+            status=RunStatus.COMPLETED,
             end_reason=end_reason,
             response_sequence=turn,
         ),
@@ -153,7 +153,7 @@ def test_later_runs_neither_clear_earlier_final_replies_nor_receive_their_result
     state = empty_snapshot()
     _complete_turn(state, 1, 1, "第一个结论")
     _complete_turn(state, 2, 2, "第二个结论")
-    apply(state, RunResultUpdatedEvent(task_id=7, run_id=2, end_reason="structured_output_failed"))
+    apply(state, RunResultUpdatedEvent(session_id=7, run_id=2, end_reason="structured_output_failed"))
     validate_snapshot(state)
     first, second = state["messages"]
     assert (first["id"], second["id"]) == ("assistant-turn-1", "assistant-turn-2")

@@ -52,7 +52,7 @@ class InstructionConfigurationService:
         return self._document(raw)
 
     def update(self, content: str) -> GlobalInstructionDocument:
-        """校验 token 预算后原子写入全局指令，再把变更以增量通知已装配的 Task。"""
+        """校验 token 预算后原子写入全局指令，再把变更以增量通知已装配的 Session。"""
 
         previous = self.read().content
         document = self._document(content)

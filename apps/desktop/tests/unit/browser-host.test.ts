@@ -51,22 +51,22 @@ class FakeTab {
   title = "";
   loading = true;
   readonly currentEmulation = { width: 1280, height: 800, mobile: false, colorScheme: null };
-  readonly tabId: string; readonly taskId: number; readonly events: TabEvents; readonly options: TabOptions;
+  readonly tabId: string; readonly sessionId: number; readonly events: TabEvents; readonly options: TabOptions;
   get openerId() { return this.options.openerId; }
   get downloadDir() { return this.options.downloadDir; }
   get createdBy() { return this.options.createdBy; }
   constructor(options: TabOptions) {
     this.options = options;
-    this.tabId = options.tabId; this.taskId = options.taskId; this.events = options.events;
+    this.tabId = options.tabId; this.sessionId = options.sessionId; this.events = options.events;
     FakeTab.instances.push(this);
   }
   initialize(signal: AbortSignal) { return abortable(this.pending, signal); }
   summary() {
-    return { tabId: this.tabId, taskId: this.taskId, createdBy: this.createdBy, openerId: this.openerId, url: this.url, title: this.title, loading: this.loading, crashed: false, dialog: null };
+    return { tabId: this.tabId, sessionId: this.sessionId, createdBy: this.createdBy, openerId: this.openerId, url: this.url, title: this.title, loading: this.loading, crashed: false, dialog: null };
   }
 }
 
-const context = (perTask = 2, total = 3) => ({ limits: { perTask, total }, downloadDir: "/workspace/.cosir/Download" });
+const context = (perSession = 2, total = 3) => ({ limits: { perSession, total }, downloadDir: "/workspace/.cosir/Download" });
 const limits = context();
 const tab = (index = 0) => FakeTab.instances[index];
 const flush = async () => { for (let i = 0; i < 12; i += 1) await Promise.resolve(); };
@@ -87,7 +87,7 @@ describe("BrowserHost execution receipt budget", () => {
       const snapshot = await tab().snapshot();
       let resolveSnapshot!: (value: typeof snapshot) => void;
       tab().snapshot.mockImplementation(() => new Promise(resolve => { resolveSnapshot = resolve; }));
-      const result = withinDeadline("browser.act", new AbortController().signal, signal => host.act({ taskId: 1, context: limits, actions: [{ type: "wait_for", seconds: 1 }] }, signal));
+      const result = withinDeadline("browser.act", new AbortController().signal, signal => host.act({ sessionId: 1, context: limits, actions: [{ type: "wait_for", seconds: 1 }] }, signal));
       await vi.advanceTimersByTimeAsync(deadlineMs("browser.act") - 500);
       await expect(result).resolves.toMatchObject({ execution, observation: null, observationError: { code: "DEADLINE_EXCEEDED" } });
       resolveSnapshot(snapshot); await flush();
@@ -97,12 +97,12 @@ describe("BrowserHost execution receipt budget", () => {
 });
 
 describe("BrowserHost 资源生命周期", () => {
-  it("初始化中即可列出标签；快照等待初始化，且不跨 Task 访问", async () => {
+  it("初始化中即可列出标签；快照等待初始化，且不跨 Session 访问", async () => {
     const host = new BrowserHost(() => null);
     const opening = host.userOpen(1, limits);
-    expect(host.manageTabs({ taskId: 1, action: "list", context: limits })).toMatchObject([{ tabId: "t1", current: true }]);
-    const snapshot = host.snapshot({ taskId: 1, view: {}, context: limits }, new AbortController().signal);
-    await expect(host.snapshot({ taskId: 2, tab: "t1", view: {}, context: limits }, new AbortController().signal)).rejects.toMatchObject({ code: "TAB_NOT_FOUND" });
+    expect(host.manageTabs({ sessionId: 1, action: "list", context: limits })).toMatchObject([{ tabId: "t1", current: true }]);
+    const snapshot = host.snapshot({ sessionId: 1, view: {}, context: limits }, new AbortController().signal);
+    await expect(host.snapshot({ sessionId: 2, tab: "t1", view: {}, context: limits }, new AbortController().signal)).rejects.toMatchObject({ code: "TAB_NOT_FOUND" });
     expect(tab().snapshot).not.toHaveBeenCalled();
     tab().finish();
     await expect(opening).resolves.toBe("t1");
@@ -119,33 +119,33 @@ describe("BrowserHost 资源生命周期", () => {
     await opening;
     let release!: () => void;
     tab().snapshot.mockReturnValueOnce(new Promise((resolve) => { release = () => resolve({ document: 0, outline: null, dialog: null }); }));
-    const reading = host.snapshot({ taskId: 1, view: {}, context: limits }, new AbortController().signal);
+    const reading = host.snapshot({ sessionId: 1, view: {}, context: limits }, new AbortController().signal);
     await flush();
     expect(host.state().tabs[0].agentBusy).toBe(true);
     release();
     await reading;
     expect(host.state().tabs[0].agentBusy).toBe(false);
     tab().snapshot.mockRejectedValueOnce(new Error("boom"));
-    await expect(host.snapshot({ taskId: 1, view: {}, context: limits }, new AbortController().signal)).rejects.toThrow("boom");
+    await expect(host.snapshot({ sessionId: 1, view: {}, context: limits }, new AbortController().signal)).rejects.toThrow("boom");
     expect(host.state().tabs[0].agentBusy).toBe(false);
     expect(states.slice(-4)).toEqual([true, false, true, false]);
   });
 
-  it("初始化中的标签计入每 Task 与全局上限", async () => {
+  it("初始化中的标签计入每 Session 与全局上限", async () => {
     const host = new BrowserHost(() => null);
     const openings = [host.userOpen(1, limits), host.userOpen(1, limits), host.userOpen(2, limits)];
-    await expect(host.userOpen(1, limits)).rejects.toThrow(/per-task/);
+    await expect(host.userOpen(1, limits)).rejects.toThrow(/per-session/);
     await expect(host.userOpen(3, limits)).rejects.toThrow(/global/);
     FakeTab.instances.forEach((item) => item.finish());
     await Promise.all(openings);
   });
 
-  it.each(["task", "user", "shutdown"])("%s 关闭初始化中的标签，迟到完成不复活", async (kind) => {
+  it.each(["session", "user", "shutdown"])("%s 关闭初始化中的标签，迟到完成不复活", async (kind) => {
     const host = new BrowserHost(() => null);
     const opening = host.userOpen(1, limits);
     const rejected = expect(opening).rejects.toMatchObject({ code: "TAB_NOT_FOUND" });
     await flush();
-    if (kind === "task") host.dropTasks([1]);
+    if (kind === "session") host.dropSessions([1]);
     else if (kind === "user") host.userClose("t1");
     else host.closeAll();
     await rejected;
@@ -215,7 +215,7 @@ describe("BrowserHost 资源生命周期", () => {
   it("新建请求取消回收资源；已有标签的等待者取消不关闭共享标签", async () => {
     const host = new BrowserHost(() => null);
     const owner = new AbortController();
-    const opening = host.navigate({ taskId: 1, context: limits, newTab: true, target: { url: "https://example.com" } }, owner.signal);
+    const opening = host.navigate({ sessionId: 1, context: limits, newTab: true, target: { url: "https://example.com" } }, owner.signal);
     const rejected = expect(opening).rejects.toMatchObject({ name: "AbortError" });
     owner.abort();
     await rejected;
@@ -223,7 +223,7 @@ describe("BrowserHost 资源生命周期", () => {
 
     const next = host.userOpen(1, limits);
     const waiter = new AbortController();
-    const waiting = host.snapshot({ taskId: 1, view: {}, context: limits }, waiter.signal);
+    const waiting = host.snapshot({ sessionId: 1, view: {}, context: limits }, waiter.signal);
     const cancelled = expect(waiting).rejects.toMatchObject({ name: "AbortError" });
     waiter.abort();
     await cancelled;
@@ -232,7 +232,7 @@ describe("BrowserHost 资源生命周期", () => {
     await next;
   });
 
-  it("页面开出的标签沿用来源的 Task 与下载目录、不抢当前标签；自己关掉时注销并告诉来源", async () => {
+  it("页面开出的标签沿用来源的 Session 与下载目录、不抢当前标签；自己关掉时注销并告诉来源", async () => {
     const host = new BrowserHost(() => null);
     const first = host.userOpen(1, context(5, 5));
     tab().finish(); await first;
@@ -240,11 +240,11 @@ describe("BrowserHost 资源生命周期", () => {
     expect(response).toMatchObject({ action: "allow", outlivesOpener: true });
     const adopted = { id: "popup-contents" };
     const returned = (response as { createWindow: (options: unknown) => unknown }).createWindow({ webContents: adopted });
-    expect(tab(1).options).toMatchObject({ taskId: 1, openerId: "t1", downloadDir: context().downloadDir, adopted });
+    expect(tab(1).options).toMatchObject({ sessionId: 1, openerId: "t1", downloadDir: context().downloadDir, adopted });
     expect(returned).toBe(tab(1).contents);
     expect(tab().log.note).toHaveBeenCalledWith(expect.stringContaining("in a new tab t2"));
     tab(1).finish(); await flush();
-    expect(host.manageTabs({ taskId: 1, action: "list", context: limits }).find((item) => item.current)?.tabId).toBe("t1");
+    expect(host.manageTabs({ sessionId: 1, action: "list", context: limits }).find((item) => item.current)?.tabId).toBe("t1");
     tab(1).log.undeliveredNotes.mockReturnValue(["the download \"a.csv\" finished"]);
     tab(1).events.onGone();
     expect(host.state().tabs.map((item: { tabId: string }) => item.tabId)).toEqual(["t1"]);
@@ -260,7 +260,7 @@ describe("BrowserHost 资源生命周期", () => {
     tab().finish(); await first;
     expect(tab().events.onWindowOpen("file:///etc/passwd")).toEqual({ action: "deny" });
     expect(tab().events.onWindowOpen("https://example.com")).toEqual({ action: "deny" });
-    expect(tab().log.note).toHaveBeenLastCalledWith(expect.stringContaining("per-task limit"));
+    expect(tab().log.note).toHaveBeenLastCalledWith(expect.stringContaining("per-session limit"));
     host.closeAll();
     expect(tab().events.onWindowOpen("https://example.com")).toEqual({ action: "deny" });
     expect(FakeTab.instances).toHaveLength(1);
@@ -272,7 +272,7 @@ describe("BrowserHost 资源生命周期", () => {
     FakeTab.instances.forEach((item) => item.finish());
     await Promise.all(openings);
     host.userClose("t3");
-    expect(host.manageTabs({ taskId: 1, action: "list", context: limits }).find((item) => item.current)?.tabId).toBe("t2");
+    expect(host.manageTabs({ sessionId: 1, action: "list", context: limits }).find((item) => item.current)?.tabId).toBe("t2");
   });
 
   // 目的：弹窗停住的是整个渲染进程；潜在缺陷：同进程的另一个标签 CDP 空等 10 秒报「无响应」，Agent 不知道该去哪答。
@@ -287,12 +287,12 @@ describe("BrowserHost 资源生命周期", () => {
     expect(tab(0).interruptCdp).toHaveBeenCalledWith(expect.objectContaining({ code: "DIALOG_OPEN" }));
     expect(tab(1).interruptCdp).toHaveBeenCalledTimes(1);
     expect(tab(2).interruptCdp).not.toHaveBeenCalled();
-    expect(tab(1).events.pausedBy()?.message).toMatch(/tab t1 \(this task\) shares its browser process and is showing a confirm dialog \(#9\)/);
+    expect(tab(1).events.pausedBy()?.message).toMatch(/tab t1 \(this session\) shares its browser process and is showing a confirm dialog \(#9\)/);
     expect(tab(2).events.pausedBy()).toBeNull();
   });
 
-  // 目的：下载归 Task 不归标签；潜在缺陷：弹出页下载后自己关闭，下载随标签一起被取消，结果也没人收到。
-  it("keeps a download going after its tab closes itself and reports it on the task's current tab", async () => {
+  // 目的：下载归 Session 不归标签；潜在缺陷：弹出页下载后自己关闭，下载随标签一起被取消，结果也没人收到。
+  it("keeps a download going after its tab closes itself and reports it on the session's current tab", async () => {
     const host = new BrowserHost(() => null);
     const first = host.userOpen(1, { ...context(5, 5), downloadDir: fs.mkdtempSync(path.join(os.tmpdir(), "cosir-host-dl-")) });
     tab().finish(); await first;
@@ -308,9 +308,9 @@ describe("BrowserHost 资源生命周期", () => {
     tab(1).events.onGone();
     expect(item.cancelled).toBe(false);
     item.emit("done", {}, "completed");
-    expect(host.state().downloads).toMatchObject([{ taskId: 1, tabId: "t2", state: "completed" }]);
+    expect(host.state().downloads).toMatchObject([{ sessionId: 1, tabId: "t2", state: "completed" }]);
     expect(tab(0).log.note).toHaveBeenCalledWith(expect.stringContaining('the download "report.csv" finished'));
-    host.dropTasks([1]);
+    host.dropSessions([1]);
     expect(host.state().downloads).toEqual([]);
   });
 });
@@ -329,7 +329,7 @@ describe("回执页面事实与投影语义", () => {
       return execution;
     });
     tab().snapshot.mockRejectedValueOnce(new Error("the page is paused"));
-    const outcome = await host.act({ taskId: 1, context: limits, actions: [{ type: "click", target: { ref: "e2" }, button: "left", clickCount: 1, modifiers: [] }] }, new AbortController().signal);
+    const outcome = await host.act({ sessionId: 1, context: limits, actions: [{ type: "click", target: { ref: "e2" }, button: "left", clickCount: 1, modifiers: [] }] }, new AbortController().signal);
     expect(outcome).toMatchObject({ url: "https://after.example/new", title: "after", loading: false, execution, observation: null, observationError: { code: "ACTION_FAILED" } });
     host.closeAll();
   });
@@ -346,7 +346,7 @@ describe("回执页面事实与投影语义", () => {
       return execution;
     });
     tab().snapshot.mockRejectedValueOnce(new HostMethodError("TAB_NOT_FOUND", "tab t1 was closed"));
-    const outcome = await host.act({ taskId: 1, context: limits, actions: [{ type: "click", target: { x: 1, y: 1 }, button: "left", clickCount: 1, modifiers: [] }] }, new AbortController().signal);
+    const outcome = await host.act({ sessionId: 1, context: limits, actions: [{ type: "click", target: { x: 1, y: 1 }, button: "left", clickCount: 1, modifiers: [] }] }, new AbortController().signal);
     expect(outcome).toMatchObject({ url: "https://before.example/old", title: "before", execution, observation: null, observationError: { code: "TAB_NOT_FOUND" } });
     host.closeAll();
   });
@@ -359,7 +359,7 @@ describe("回执页面事实与投影语义", () => {
     await Promise.all(openings);
     tab(0).dialog = { id: 7, type: "confirm", message: "sure?", defaultText: "" };
     tab(0).snapshot.mockRejectedValueOnce(new Error("the page is paused"));
-    const page = await host.navigate({ taskId: 1, tab: "t1", context: limits, newTab: false, target: { url: "https://example.com" } }, new AbortController().signal);
+    const page = await host.navigate({ sessionId: 1, tab: "t1", context: limits, newTab: false, target: { url: "https://example.com" } }, new AbortController().signal);
     expect(page.otherTabs).toEqual(["t2"]);
     expect(page.dialog).toEqual({ id: 7, type: "confirm", message: "sure?", defaultText: "" });
     expect(page.notes.join("\n")).toContain("read a fresh snapshot before continuing");
@@ -368,7 +368,7 @@ describe("回执页面事实与投影语义", () => {
 
     // 降级不推进基准；下一次成功页面结果补交一次，不丢不重。
     tab(0).snapshot.mockResolvedValue({ document: 0, outline: { entries: [], frames: 0 }, dialog: null });
-    await host.navigate({ taskId: 1, tab: "t1", context: limits, newTab: false, target: { url: "https://example.com" } }, new AbortController().signal);
+    await host.navigate({ sessionId: 1, tab: "t1", context: limits, newTab: false, target: { url: "https://example.com" } }, new AbortController().signal);
     expect(tab(0).log.digest).toHaveBeenCalledTimes(1);
     host.closeAll();
   });
@@ -394,7 +394,7 @@ describe("回执页面事实与投影语义", () => {
     const opening = host.userOpen(1, limits);
     tab().finish(); await opening;
     tab().url = "https://after.example/new"; tab().title = "after"; tab().act.mockResolvedValue(execution);
-    const outcome = await host.act({ taskId: 1, context: limits, actions: [{ type: "click", target: { x: 1, y: 1 }, button: "left", clickCount: 1, modifiers: [] }] }, new AbortController().signal);
+    const outcome = await host.act({ sessionId: 1, context: limits, actions: [{ type: "click", target: { x: 1, y: 1 }, button: "left", clickCount: 1, modifiers: [] }] }, new AbortController().signal);
     expect(outcome.observation).not.toBeNull();
     expect({ url: outcome.url, title: outcome.title, status: outcome.status, emulation: outcome.emulation })
       .toEqual({ url: outcome.observation!.url, title: outcome.observation!.title, status: outcome.observation!.status, emulation: outcome.observation!.emulation });

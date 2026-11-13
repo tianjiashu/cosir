@@ -2,7 +2,7 @@
 
 ``execute_terminal`` 跑一条命令（自带 ``build_execute_terminal_definition``，与其他独立工具同一范式）；
 ``terminal_list`` / ``terminal_read`` / ``terminal_stop`` 同时覆盖用户打开的交互会话与 Agent 自己运行中
-的命令（两类终端的组合只在 ``task_terminals``）；``terminal_write`` 只把一行命令填进用户终端的空提示符
+的命令（两类终端的组合只在 ``session_terminals``）；``terminal_write`` 只把一行命令填进用户终端的空提示符
 （不执行，回车只能由用户按）。终端本身（会话、命令、观察模型、worker）在 ``app.tools.terminal_runtime``，
 本包只做参数复核、编排与 ``ToolObservation`` 组装。
 """

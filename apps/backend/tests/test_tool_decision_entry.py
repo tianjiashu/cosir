@@ -11,11 +11,11 @@ from pydantic import BaseModel
 
 from app.assistant_transport.request import DecisionRequest
 from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
-from app.core.workflow.message_queue.task_message import DecisionBody, TaskMessage
-from app.models.errors.task_command_errors import TaskCommandConflictError
+from app.core.workflow.message_queue.session_message import DecisionBody, SessionMessage
+from app.models.errors.session_command_errors import SessionCommandConflictError
 from app.service.conversation import tool_decision_service as module
 
-_TASK_ID = 3
+_SESSION_ID = 3
 _CALL_ID = "call-1"
 
 
@@ -25,30 +25,30 @@ class _Args(BaseModel):
 
 @pytest.fixture
 def harness(monkeypatch: pytest.MonkeyPatch):
-    enqueued: list[tuple[int, TaskMessage]] = []
-    queued: list[TaskMessage] = []
+    enqueued: list[tuple[int, SessionMessage]] = []
+    queued: list[SessionMessage] = []
     awaiting: dict[str, str] = {_CALL_ID: "some_hitl_tool"}
     monkeypatch.setattr(
         module,
-        "task_runtime_spaces",
+        "session_runtime_spaces",
         SimpleNamespace(
-            enqueue=lambda task_id, message, **_kw: enqueued.append((task_id, message))
+            enqueue=lambda session_id, message, **_kw: enqueued.append((session_id, message))
         ),
     )
     # 判定与入队的写事务由真实主库保证（见 ``test_decision_claim.py``）；这里只测校验。
-    monkeypatch.setattr(module, "main_session_factory", lambda: None)
+    monkeypatch.setattr(module, "main_db_factory", lambda: None)
     monkeypatch.setattr(module, "begin_immediate", lambda _factory: contextlib.nullcontext())
     context = SimpleNamespace(
-        awaiting_decision_tool=lambda _task_id, call_id, **_kw: awaiting.get(call_id)
+        awaiting_decision_tool=lambda _session_id, call_id, **_kw: awaiting.get(call_id)
     )
-    queue = SimpleNamespace(pending_nowait=lambda _task_id, **_kw: list(queued))
-    monkeypatch.setattr(module.service_depends, "get_conversation_task_context_service", lambda: context)
-    monkeypatch.setattr(module.service_depends, "get_task_message_queue", lambda: queue)
+    queue = SimpleNamespace(pending_nowait=lambda _session_id, **_kw: list(queued))
+    monkeypatch.setattr(module.service_depends, "get_session_context_service", lambda: context)
+    monkeypatch.setattr(module.service_depends, "get_session_message_queue", lambda: queue)
     monkeypatch.setattr(
         module.service_depends, "get_tool_decision_service", lambda: module.ToolDecisionService()
     )
     service = AssistantTransportService.__new__(AssistantTransportService)
-    service._tasks = SimpleNamespace(get_task=lambda _id: SimpleNamespace(id=_id))
+    service._sessions = SimpleNamespace(get_session=lambda _id: SimpleNamespace(id=_id))
     return SimpleNamespace(
         service=service,
         enqueued=enqueued,
@@ -58,12 +58,12 @@ def harness(monkeypatch: pytest.MonkeyPatch):
 
 
 async def _decide(harness, **request: Any) -> None:
-    await harness.service.decide(_TASK_ID, _CALL_ID, DecisionRequest.model_validate(request))
+    await harness.service.decide(_SESSION_ID, _CALL_ID, DecisionRequest.model_validate(request))
 
 
 def _only_decision(harness) -> DecisionBody:
-    [(task_id, message)] = harness.enqueued
-    assert task_id == _TASK_ID
+    [(session_id, message)] = harness.enqueued
+    assert session_id == _SESSION_ID
     assert isinstance(message.body, DecisionBody)
     return message.body
 
@@ -89,7 +89,7 @@ async def test_call_no_longer_awaiting_conflicts(harness) -> None:
     """已决定、已被撤回移出上下文或根本不存在的调用，都以占位行不在等待来判定。"""
     harness.awaiting.clear()
 
-    with pytest.raises(TaskCommandConflictError) as caught:
+    with pytest.raises(SessionCommandConflictError) as caught:
         await _decide(harness, decision="approve")
 
     assert caught.value.code == "DECISION_NOT_AWAITED"
@@ -98,24 +98,24 @@ async def test_call_no_longer_awaiting_conflicts(harness) -> None:
 
 async def test_second_decision_while_the_first_is_queued_conflicts(harness) -> None:
     harness.queued.append(
-        TaskMessage.of(
+        SessionMessage.of(
             DecisionBody(tool_call_id=_CALL_ID, tool_name="some_hitl_tool", decision="approve"),
             message_id=1,
         )
     )
 
-    with pytest.raises(TaskCommandConflictError) as caught:
+    with pytest.raises(SessionCommandConflictError) as caught:
         await _decide(harness, decision="reject")
 
     assert caught.value.code == "DECISION_ALREADY_SUBMITTED"
     assert harness.enqueued == []
 
 
-async def test_missing_task_is_not_found(harness) -> None:
-    def missing(task_id: int):
-        raise KeyError(task_id)
+async def test_missing_session_is_not_found(harness) -> None:
+    def missing(session_id: int):
+        raise KeyError(session_id)
 
-    harness.service._tasks = SimpleNamespace(get_task=missing)
+    harness.service._sessions = SimpleNamespace(get_session=missing)
 
     with pytest.raises(KeyError):
         await _decide(harness, decision="reject")

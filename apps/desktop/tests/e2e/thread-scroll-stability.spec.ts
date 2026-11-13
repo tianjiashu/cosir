@@ -13,8 +13,8 @@ import { API_ORIGIN as origin } from "./e2e-env";
  * 挂载里再经过时几乎不补偿（消息根节点不得叠加 content-visibility，否则每次经过都回到占位高度）；
  * 切走再回来时按消息 id 记下的实测行高仍然生效。
  */
-const TASK_ID = 4201;
-const OTHER_TASK_ID = 4202;
+const SESSION_ID = 4201;
+const OTHER_SESSION_ID = 4202;
 const PAIRS = 60;
 const ACTIVITY_OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
 // `durationMs` 只属于结局；activity 是固定字段的白名单。
@@ -78,10 +78,10 @@ test.beforeEach(async ({ request }) => {
 
 // 目的：未测量的行穿过时总高度一直在变；潜在缺陷：平滑滚动反复重发，已结束的长对话几秒都到不了底。
 test("已结束的长对话从顶部回到底部一步到位", async ({ page, request }) => {
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: TASK_ID, title: "长对话" } });
-  await request.post(`${origin}/__test__/seed-state`, { data: { taskId: TASK_ID, state: longConversation() } });
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: SESSION_ID, title: "长对话" } });
+  await request.post(`${origin}/__test__/seed-state`, { data: { sessionId: SESSION_ID, state: longConversation() } });
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto(`/tasks/${TASK_ID}`);
+  await page.goto(`/sessions/${SESSION_ID}`);
   const viewport = page.locator(".aui-thread-root .overflow-y-auto").first();
   await expect(page.getByRole("button", { name: "回到底部", exact: true })).toBeDisabled();
   await viewport.evaluate(el => { el.scrollTop = 2000; });
@@ -97,10 +97,10 @@ test("运行中上翻历史保留不连续尾行之间的高度，正文增长�
   const last = state.messages.at(-1)!;
   last.outcome = null;
   last.parts = [{ type: "text", text: "正在生成的末尾回复", status: "running" }];
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: TASK_ID, title: "运行中长对话" } });
-  await request.post(`${origin}/__test__/seed-state`, { data: { taskId: TASK_ID, state, hold: true } });
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: SESSION_ID, title: "运行中长对话" } });
+  await request.post(`${origin}/__test__/seed-state`, { data: { sessionId: SESSION_ID, state, hold: true } });
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto(`/tasks/${TASK_ID}`);
+  await page.goto(`/sessions/${SESSION_ID}`);
   const viewport = page.locator(".aui-thread-root .overflow-y-auto").first();
   await expect(page.getByText("正在生成的末尾回复", { exact: true })).toBeVisible();
   await viewport.evaluate(el => { el.scrollTop = 4000; });
@@ -116,7 +116,7 @@ test("运行中上翻历史保留不连续尾行之间的高度，正文增长�
   });
   expect(geometry.gap).toBeGreaterThan(geometry.missingRows * 60);
   const before = await viewport.evaluate(el => el.scrollTop);
-  await request.post(`${origin}/__test__/append-text`, { data: { taskId: TASK_ID, messageIndex: 79, partIndex: 0, text: "\n\n流式增长".repeat(30) } });
+  await request.post(`${origin}/__test__/append-text`, { data: { sessionId: SESSION_ID, messageIndex: 79, partIndex: 0, text: "\n\n流式增长".repeat(30) } });
   await expect(page.locator('[data-index="79"]')).toContainText("流式增长");
   await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBeCloseTo(before, 0);
   // 同一交互仍能明确回到底部，且当前两条消息始终挂载。
@@ -124,18 +124,18 @@ test("运行中上翻历史保留不连续尾行之间的高度，正文增长�
   await page.getByRole("button", { name: "回到底部", exact: true }).click();
   await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(3);
   const bottomBefore = await viewport.evaluate(el => el.scrollTop);
-  await request.post(`${origin}/__test__/append-text`, { data: { taskId: TASK_ID, messageIndex: 79, partIndex: 0, text: "\n\n回到底部后的增长".repeat(30) } });
+  await request.post(`${origin}/__test__/append-text`, { data: { sessionId: SESSION_ID, messageIndex: 79, partIndex: 0, text: "\n\n回到底部后的增长".repeat(30) } });
   await expect(page.locator('[data-index="79"]')).toContainText("回到底部后的增长");
   await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBeCloseTo(bottomBefore, 0);
 });
 
 test("长对话向上滚动时虚拟列表少修正 scrollTop，切走再回来沿用实测行高", async ({ page, request }) => {
   test.setTimeout(90_000);
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: OTHER_TASK_ID, title: "另一个对话" } });
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: TASK_ID, title: "长对话" } });
-  await seedState(request, TASK_ID, longConversation());
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: OTHER_SESSION_ID, title: "另一个会话" } });
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: SESSION_ID, title: "长对话" } });
+  await seedState(request, SESSION_ID, longConversation());
   await page.setViewportSize({ width: 1280, height: 900 });
-  await page.goto(`/tasks/${TASK_ID}`);
+  await page.goto(`/sessions/${SESSION_ID}`);
   // 只等消息行出来，不断言打开时落在底部：曾在已移除的无头 WebKit 项目里首次落底偶发失败，
   // 测量本身会先把视口滚到底。
   const rows = page.locator(".aui-thread-root [data-index]");
@@ -144,10 +144,10 @@ test("长对话向上滚动时虚拟列表少修正 scrollTop，切走再回来�
   const first = await scrollUpThroughHistory(page);
   const again = await scrollUpThroughHistory(page);
 
-  await page.getByRole("treeitem").filter({ hasText: "另一个对话" }).click();
-  await expect(page).toHaveURL(new RegExp(`/tasks/${OTHER_TASK_ID}$`));
+  await page.getByRole("treeitem").filter({ hasText: "另一个会话" }).click();
+  await expect(page).toHaveURL(new RegExp(`/sessions/${OTHER_SESSION_ID}$`));
   await page.getByRole("treeitem").filter({ hasText: "长对话" }).click();
-  await expect(page).toHaveURL(new RegExp(`/tasks/${TASK_ID}$`));
+  await expect(page).toHaveURL(new RegExp(`/sessions/${SESSION_ID}$`));
   await expect(rows.first()).toBeVisible();
   const revisit = await scrollUpThroughHistory(page);
 

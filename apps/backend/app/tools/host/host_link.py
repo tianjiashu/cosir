@@ -7,7 +7,7 @@
 - 宿主 → 后端应答：``{"id": int, "result": any}`` 或
   ``{"id": int, "error": {"code": str, "message": str}}``
 
-``meta`` 只服务两端日志按调用关联（``task_id`` / ``tool_call_id``），宿主方法不应依赖它
+``meta`` 只服务两端日志按调用关联（``session_id`` / ``tool_call_id``），宿主方法不应依赖它
 做业务判断。
 
 同一时刻只保留最新一条连接：宿主随后端 generation 重连时，新连接顶替旧连接，旧连接上的未决
@@ -236,7 +236,7 @@ class HostLink:
         )
 
     def notify(self, method: str, params: dict[str, Any]) -> None:
-        """发后即忘的通知（如 Task 删除后让宿主回收资源）；未连接时记日志后返回。"""
+        """发后即忘的通知（如 Session 删除后让宿主回收资源）；未连接时记日志后返回。"""
 
         with self._lock:
             connection = self._connection

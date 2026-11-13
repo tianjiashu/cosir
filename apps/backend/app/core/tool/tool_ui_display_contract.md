@@ -8,7 +8,7 @@
 
 调用意图由 `ToolDefinition.to_model_tool_definition` 在模型可见 schema 根部统一注入必填 `intent`，不进入业务 Args、Hook 参数、handler kwargs、宿主参数或 MCP 远端参数。执行准入拆出并校验后放入 `ToolExecutionContext.call_intent`；Hook 不得改写该保留字段。终端后台标签消费同一上下文，不再使用工具专有 `description`。
 
-原始 `assistant.tool_calls[].function.arguments.intent` 是唯一持久来源。模型流正常/异常/取消收口都独立发布意图事实，Transport 投影为 `tool part.intent`，不依赖是否准入执行；冷重建使用同一解析规则。不完整 JSON 不猜意图。意图是模型声明的目的，不是进度、执行承诺或授权依据。Task 冻结模型 schema，因此变更后新建 Task 使用新契约，不迁移旧 schema 或保留旧字段兼容分支。
+原始 `assistant.tool_calls[].function.arguments.intent` 是唯一持久来源。模型流正常/异常/取消收口都独立发布意图事实，Transport 投影为 `tool part.intent`，不依赖是否准入执行；冷重建使用同一解析规则。不完整 JSON 不猜意图。意图是模型声明的目的，不是进度、执行承诺或授权依据。Session 冻结模型 schema，因此变更后新建 Session 使用新契约，不迁移旧 schema 或保留旧字段兼容分支。
 
 前端 `TurnLayout` 将当前活动放在最近的过程区间，正文开始后前一区间转为历史摘要。模型阶段与后台登记组合展示，后台收尾不冒充运行；渲染与估高共享区间可见规则。普通工具组、时间线终端详情默认折叠；用户选择、必要审批与独立 Reader 保留。
 
@@ -51,9 +51,9 @@
 | `browser_tabs` | 无 | 结构化结果见第 4 节 |
 | `wait_messages` | 无 | 结构化结果见第 4 节 |
 | `delegate_task` | `delegation-result` | 结构化结果见第 4 节 |
-| `fork_task` | `fork-task-result` | 结构化结果见第 4 节 |
-| `send_message` | `agent-task-result` | 结构化结果见第 4 节 |
-| `task_status` | `agent-task-result` | 结构化结果见第 4 节 |
+| `fork_session` | `fork-session-result` | 结构化结果见第 4 节 |
+| `send_message` | `agent-session-result` | 结构化结果见第 4 节 |
+| `session_status` | `agent-session-result` | 结构化结果见第 4 节 |
 | `propose_agent_configuration` | `agent-configuration-draft` | 结构化结果见第 4 节 |
 | `mcp` | `mcp-tool-result` | 结构化结果见第 4 节 |
 | `skill` | `skill-content` | 结构化结果见第 4 节 |
@@ -75,9 +75,9 @@
 | web-search-results | query、results[{title,url}]，不含网页正文 |
 | web-extract-urls | partial（必有 boolean）、urls[{url}]；URL 可能包含失败页面，URL 数不是成功页数；全部失败走错误观察，不出现此 kind |
 | browser-page | tab_id/url/title；可含 screenshot（asset ID）、handoff_reason、steps[{action,target,status,hint}]；步骤 status 为 done/failed/skipped/unknown；done 只表示输入执行完成，unknown 表示可能生效、须观察后决定，skipped 不算执行失败 |
-| delegation-result | title、child_agent_id；可含 role/delegation_id/child_task_id |
-| fork-task-result | title、child_task_id |
-| agent-task-result | send: operation/task_id/agent_name；status 另带 final_output/end_reason；当前 Task 状态由既有 Task 读取路径提供 |
+| delegation-result | title、child_agent_id；可含 role/delegation_id/child_session_id |
+| fork-session-result | title、child_session_id |
+| agent-session-result | send: operation/session_id/agent_name；status 另带 final_output/end_reason；当前 Session 状态由既有 Session 读取路径提供 |
 | agent-configuration-draft | status=draft、agent_id、role、description、system_prompt；保存和编辑属于 Workbench，遵守调用方只读限制 |
 | mcp-tool-result | action=call: server_name/tool_name/scope；action=list: servers[{server_name,scope,tools,error?}]，`scope` 为 system / workspace，单服务 error 不改变整个调用的生命周期 |
 | skill-content | action=list: skills[{name,description,scope}]；action=load: skill_name/resource_path/scope，正文只进模型上下文 |

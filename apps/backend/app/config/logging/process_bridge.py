@@ -6,7 +6,7 @@
 - 父进程 QueueListener 在固定 JSONL 文件 handler 上消费，复用父进程已配置的
   截断与上下文关联，不重复创建写入管线。
 - 子进程创建日志记录时，当前上下文中的 trace_id 会随 LogRecord 跨队列传递；
-  业务实体 ID（如 run_id、task_id）应放在 extra.data 中，不由日志层反查。
+  业务实体 ID（如 run_id、session_id）应放在 extra.data 中，不由日志层反查。
 
 契约：
 - 子进程侧调用 install_logging_for_current_process(log_queue=queue)，把日志导向队列；

@@ -1,4 +1,4 @@
-"""冷重建：只依据规范会话事实（Task、Run、context 行）以纯函数装配 Task 级 Transport 快照。
+"""冷重建：只依据规范会话事实（Session、Run、context 行）以纯函数装配 Session 级 Transport 快照。
 
 与实时投影（``event_projection``）同源：回合、回复 id、结局与 ``activity`` 的规则两边一致，刷新后的
 快照与实时推进出的快照同形。这里不访问 Session、快照存储、工具或进程内 registry；终端会话、看板、
@@ -46,12 +46,12 @@ from app.assistant_transport.state.message_identity import reply_id, user_messag
 from app.core.tool.call_intent import display_call_arguments
 from app.core.tool.presentation import ToolPresentation
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.conversation_run_record import ConversationRunError, ConversationRunRecord
-from app.models.conversation_task_context import (
-    ConversationTaskContextRecord,
+from app.models.run_record import RunError, RunRecord
+from app.models.session_context import (
+    SessionContextRecord,
     run_last_turn_withdrawn,
 )
-from app.models.enums.conversation_run_status import (
+from app.models.enums.run_status import (
     RESUMABLE_RUN_STATUSES,
     TERMINAL_RUN_STATUSES,
 )
@@ -61,12 +61,12 @@ from app.models.message_metadata import (
     ToolMessageMetadata,
     UserMessageMetadata,
 )
-from app.models.task_record import TaskRecord
+from app.models.session_record import SessionRecord
 from app.utils.datetime_utils import to_text
 from app.utils.message_content import content_to_text
 
 
-def run_error(run: ConversationRunRecord) -> ConversationRunError | None:
+def run_error(run: RunRecord) -> RunError | None:
     """把持久化的 Run 错误契约（``run_terminal_error`` 写入）投影为 Transport 错误契约。
 
     ``message`` 保留原值（模型 HTTP 失败时可能是响应 message）；Run 没有错误契约时返回 ``None``。
@@ -92,18 +92,18 @@ def run_error(run: ConversationRunRecord) -> ConversationRunError | None:
         or not text.strip()
     ):
         raise ValueError(f"run {run.id} carries a malformed error contract")
-    return ConversationRunError(code=code, message=text)
+    return RunError(code=code, message=text)
 
 
 def pair_tool_parts(
-    rows: list[ConversationTaskContextRecord],
+    rows: list[SessionContextRecord],
     presentations: Mapping[str, ToolPresentation],
 ) -> dict[str, ConversationStateToolCallPart]:
     """把一段 context 行（已按 ``sequence`` 排序）里的工具调用按调用 id 配成 tool-call part。
 
     AI 消息里的每个调用先以 ``cancelled`` 登记，再由同一 ``tool_call_id`` 的 tool 行补全真实状态、
     展示数据与错误；未收到结果的调用保持 ``cancelled``。展示数据只读 tool 行的
-    ``metadata.display_data``，不按工具名、委派或子任务记录推断。调用 id 在 Task 内唯一，由模型响应
+    ``metadata.display_data``，不按工具名、委派或子会话记录推断。调用 id 在 Session 内唯一，由模型响应
     持久化入口保证。
 
     异常:
@@ -145,12 +145,12 @@ def pair_tool_parts(
 
 
 def rebuild_snapshot(
-    task: TaskRecord,
-    runs: Sequence[ConversationRunRecord],
-    context_rows: Sequence[ConversationTaskContextRecord],
+    session: SessionRecord,
+    runs: Sequence[RunRecord],
+    context_rows: Sequence[SessionContextRecord],
     presentations: Mapping[str, ToolPresentation],
 ) -> ConversationStateSnapshot:
-    """从 Task、它的全部 Run 与 context 行装配 Task 级快照。
+    """从 Session、它的全部 Run 与 context 行装配 Session 级快照。
 
     消息按回合扁平排列：继承来的回合在前，本地回合按 Run 的 ``created_at`` 再按 id、Run 内按 context
     序号；同一回合的 assistant 行合成一条回复 ``assistant-turn-{回合号}``（见 ``_turn_messages``）。
@@ -163,7 +163,7 @@ def rebuild_snapshot(
         ValueError: 某个 Run 的错误契约被污染（见 :func:`run_error`）。
     """
 
-    # Task 系统提示词（``run_id=None``、序号 0）是模型上下文事实，不进快照；其余 ``run_id=None`` 的
+    # Session 系统提示词（``run_id=None``、序号 0）是模型上下文事实，不进快照；其余 ``run_id=None`` 的
     # 行是继承来的副本，可见性归行本身（含 Agent 分叉），不查任何历史实体。
     run_groups = {
         run_id: sorted(rows, key=attrgetter("sequence"))
@@ -173,7 +173,7 @@ def rebuild_snapshot(
         )
     }
     inherited_rows = [row for row in context_rows if row.run_id is None and row.sequence > 0]
-    snapshot = empty_snapshot(task.title)
+    snapshot = empty_snapshot(session.title)
     messages = snapshot["messages"]
     messages.extend(_turn_messages(inherited_rows, presentations, inherited=True))
     for run in runs:
@@ -183,7 +183,7 @@ def rebuild_snapshot(
         )
         messages.extend(run_messages)
         last_reply = next((m for m in reversed(run_messages) if m["role"] == "assistant"), None)
-        is_current = run.id == task.current_run_id
+        is_current = run.id == session.current_run_id
         if (last_reply is None or run.status not in TERMINAL_RUN_STATUSES) and not is_current:
             continue
         error = run_error(run)
@@ -213,12 +213,12 @@ def rebuild_snapshot(
                 contextWindowTotal=run.context_window_total,
                 launch=run_launch_snapshot(run.model_config_id, run.options),
             )
-    fork = task.extra.fork
+    fork = session.extra.fork
     if fork:
         snapshot["fork"] = {
-            "sourceTaskId": fork.source_task_id,
+            "sourceSessionId": fork.source_session_id,
             "sourceTitle": fork.source_title,
-            "taskType": cast(ForkKind, task.task_type),
+            "sessionType": cast(ForkKind, session.session_type),
             "initialLaunch": run_launch_snapshot(
                 fork.initial_launch.model_config_id, fork.initial_launch.options
             ),
@@ -227,7 +227,7 @@ def rebuild_snapshot(
 
 
 def _final_sequence(
-    run: ConversationRunRecord, rows: list[ConversationTaskContextRecord]
+    run: RunRecord, rows: list[SessionContextRecord]
 ) -> int | None:
     """这个 Run 的最终回复正文所在的 context 序号；最后一条已提交的回复带工具调用或不算最终回复时为空。"""
 
@@ -249,7 +249,7 @@ def _final_sequence(
 
 
 def _turn_messages(
-    rows: list[ConversationTaskContextRecord],
+    rows: list[SessionContextRecord],
     presentations: Mapping[str, ToolPresentation],
     *,
     inherited: bool,
@@ -267,7 +267,7 @@ def _turn_messages(
     """
 
     tool_parts = pair_tool_parts(rows, presentations)
-    turns: dict[int, list[ConversationTaskContextRecord]] = {}
+    turns: dict[int, list[SessionContextRecord]] = {}
     for row in rows:
         turns.setdefault(row.turn, []).append(row)
     turn_messages: list[ConversationStateMessage] = []

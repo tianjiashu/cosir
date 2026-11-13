@@ -17,7 +17,7 @@ from app.service.recover_service import RecoverService
 
 def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, Any]] = []
-    recovered = [SimpleNamespace(id=11, task_id=1)]
+    recovered = [SimpleNamespace(id=11, session_id=1)]
     dispatch = {3, 5}
 
     service = RecoverService.__new__(RecoverService)
@@ -26,26 +26,26 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
     )
     monkeypatch.setattr(
         recover_module.service_depends,
-        "get_task_service",
+        "get_session_service",
         lambda: SimpleNamespace(
-            list_task_ids_to_dispatch=lambda: dispatch,
-            get_task=lambda task_id: SimpleNamespace(id=task_id, deriver_id=lambda: None),
+            list_session_ids_to_dispatch=lambda: dispatch,
+            get_session=lambda session_id: SimpleNamespace(id=session_id, deriver_id=lambda: None),
         ),
     )
     monkeypatch.setattr(
         recover_module,
-        "task_runtime_spaces",
-        SimpleNamespace(get_or_create=lambda task_id: calls.append(("space", task_id))),
+        "session_runtime_spaces",
+        SimpleNamespace(get_or_create=lambda session_id: calls.append(("space", session_id))),
     )
     monkeypatch.setattr(
         service,
         "interrupt_placeholders",
-        lambda task_ids: calls.append(("interrupt", task_ids)) or frozenset({2}),
+        lambda session_ids: calls.append(("interrupt", session_ids)) or frozenset({2}),
     )
     monkeypatch.setattr(
         service,
         "notify_interrupted",
-        lambda task_ids: calls.append(("notify", frozenset(task_ids))),
+        lambda session_ids: calls.append(("notify", frozenset(session_ids))),
     )
     service.recover_after_restart()
 
@@ -53,5 +53,5 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
     assert steps[0] == "runs"
     assert sorted(arg for name, arg in calls if name == "space") == [3, 5]
     assert steps[-2:] == ["interrupt", "notify"]
-    # 通知集合 = 被收敛的 Run 所属 Task ∪ 它们的派生方（这里没有）∪ 结算了占位的 Task。
+    # 通知集合 = 被收敛的 Run 所属 Session ∪ 它们的派生方（这里没有）∪ 结算了占位的 Session。
     assert dict(calls)["notify"] == {1, 2}

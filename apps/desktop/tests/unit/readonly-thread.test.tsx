@@ -24,15 +24,15 @@ describe("ReadonlyThread", () => {
   // 携带 messages 的只读 core，会遮蔽 external state，使 thread.state 恒为 null，Thread
   // 子树中读取 Transport state 的 selector 在渲染期抛错并导致整屏渲染失败。
   it("复用调用方 runtime 渲染 Thread，且不提供 composer 写入能力", () => {
-    renderToStaticMarkup(<ReadonlyThread taskId={501} workspaceId={7} />);
+    renderToStaticMarkup(<ReadonlyThread sessionId={501} workspaceId={7} />);
 
-    expect(captured.thread).toMatchObject({ readonly: true, taskId: 501 });
+    expect(captured.thread).toMatchObject({ readonly: true, sessionId: 501 });
   });
 
   // 目的：只读线程里的图片（用户上传图、read_image、浏览器截图）按工作区解析附件地址。潜在缺陷：
   // 不把工作区交给 Thread 时，附件上下文为空，这些图片都解析不出地址、只显示占位。
   it("把工作区交给 Thread，供附件图片解析地址", () => {
-    renderToStaticMarkup(<ReadonlyThread taskId={501} workspaceId={7} />);
+    renderToStaticMarkup(<ReadonlyThread sessionId={501} workspaceId={7} />);
 
     expect(captured.thread).toMatchObject({ workspaceId: 7 });
   });

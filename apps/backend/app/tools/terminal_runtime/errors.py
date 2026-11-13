@@ -20,7 +20,7 @@ class TerminalError(Exception):
 
 
 class TerminalNotFoundError(TerminalError):
-    """Agent 按 id 找本 Task 的终端：既不是用户打开的会话，也不是自己仍在运行的命令。"""
+    """Agent 按 id 找本 Session 的终端：既不是用户打开的会话，也不是自己仍在运行的命令。"""
 
     code = "TERMINAL_NOT_FOUND"
     advice = "Call terminal_list to see the user's terminals and your running commands."
@@ -34,7 +34,7 @@ class TerminalSessionNotFoundError(TerminalError):
 
 
 class TerminalSessionOwnershipError(TerminalError):
-    """session 不属于当前 Task。"""
+    """session 不属于当前 Session。"""
 
     code = "TERMINAL_SESSION_OWNERSHIP_ERROR"
 

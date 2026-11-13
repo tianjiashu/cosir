@@ -9,7 +9,7 @@ import app.core.workflow.workflow as module
 from app.core.tool.schemas import ToolObservation
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.models.enums.conversation_run_status import RunTransition
+from app.models.enums.run_status import RunTransition
 from app.models.enums.react_route import ReactRoute
 from tests.runtime_context_stub import run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion
@@ -28,17 +28,17 @@ def loop(monkeypatch):
         ],
     )
     model = SimpleNamespace(close=AsyncMock())
-    run = SimpleNamespace(id=1, task_id=2, execution_data=ReactExecutionState(), usage=None)
+    run = SimpleNamespace(id=1, session_id=2, execution_data=ReactExecutionState(), usage=None)
     operations = runtime_stub(
         run=run,
-        task=SimpleNamespace(id=run.task_id),
+        session=SimpleNamespace(id=run.session_id),
         agent=SimpleNamespace(max_steps=10, structured_output=None, model=None),
         admitted_tools=frozenset({"review"}),
         run_state=run_state_stub(
             save_execution=lambda _run_id, value: progress.append(value),
             transition=lambda _run_id, transition, **k: calls.append(transition.name.lower()),
         ),
-        task_space=SimpleNamespace(task_tool_schemas=(), get_context_manager=lambda **k: context),
+        session_space=SimpleNamespace(session_tool_schemas=(), get_context_manager=lambda **k: context),
     )
     async def prepare_input(state):
         """message_queue 并入节点替身：不触碰真实 message_queue，只记录经过并流向 model。"""
@@ -175,7 +175,7 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
     loop.ops.agent.structured_output = SimpleNamespace(
         name="result", json_schema={"type": "object", "required": ["ok"]}
     )
-    loop.ops.task = SimpleNamespace(id=2, workspace_id=1)
+    loop.ops.session = SimpleNamespace(id=2, workspace_id=1)
     timeline = []
     updates = []
 

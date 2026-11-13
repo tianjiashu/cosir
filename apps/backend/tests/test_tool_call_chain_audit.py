@@ -23,9 +23,9 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.tool_registry import ToolRegistry
-from app.models.conversation_run_options import ConversationRunOptions
-from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.task_extra import TaskExtra
+from app.models.run_options import RunOptions
+from app.models.session_context import SessionContextRecord
+from app.models.session_extra import SessionExtra
 from app.tools.tool_handler.read_file import ReadFileTool
 
 # ============================================================================
@@ -90,7 +90,7 @@ def _execution_context(tmp_path: Any) -> ToolExecutionContext:
 
     return ToolExecutionContext(
         step_id="step-1",
-        task_id=11,
+        session_id=11,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=200,
@@ -198,10 +198,10 @@ def test_t2_unknown_tool_wins_over_everything(tmp_path: Any) -> None:
 # ============================================================================
 
 
-def _ai_row(tool_calls: list[dict[str, Any]]) -> ConversationTaskContextRecord:
-    return ConversationTaskContextRecord(
+def _ai_row(tool_calls: list[dict[str, Any]]) -> SessionContextRecord:
+    return SessionContextRecord(
         id=1,
-        task_id=7,
+        session_id=7,
         run_id=1,
         message={"role": "assistant", "content": "", "tool_calls": tool_calls},
         include_in_context=False,
@@ -216,10 +216,10 @@ def _tool_row(
     content: str,
     metadata: dict[str, Any],
     sequence: int,
-) -> ConversationTaskContextRecord:
-    return ConversationTaskContextRecord(
+) -> SessionContextRecord:
+    return SessionContextRecord(
         id=row_id,
-        task_id=7,
+        session_id=7,
         run_id=1,
         message={"role": "tool", "content": content, "tool_call_id": tool_call_id},
         include_in_context=False,
@@ -319,7 +319,7 @@ def test_t4_rebuild_snapshot_materializes_all_tool_results(
 
     run = SimpleNamespace(
         id=1,
-        task_id=7,
+        session_id=7,
         status="completed",
         end_reason=None,
         usage=None,
@@ -327,14 +327,14 @@ def test_t4_rebuild_snapshot_materializes_all_tool_results(
         text="",
         context_window_total=None,
         model_config_id=None,
-        options=ConversationRunOptions(),
+        options=RunOptions(),
         image_paths=None,
-        extra=TaskExtra(),
+        extra=SessionExtra(),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
-    task = SimpleNamespace(
-        id=7, title="task", current_run_id=1, context_window_total=None, extra=TaskExtra()
+    session = SimpleNamespace(
+        id=7, title="session", current_run_id=1, context_window_total=None, extra=SessionExtra()
     )
     rows = [
         _ai_row(
@@ -371,7 +371,7 @@ def test_t4_rebuild_snapshot_materializes_all_tool_results(
         ),
     ]
 
-    snapshot = rebuild_snapshot(task, [run], rows, {})
+    snapshot = rebuild_snapshot(session, [run], rows, {})
     parts = snapshot["messages"][-1]["parts"]
 
     tool_part_ids = [part["toolCallId"] for part in parts if part["type"] == "tool-call"]
@@ -438,9 +438,9 @@ def test_t4_build_run_error_contract(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_t4_delegation_display_data_backfills_child_locators(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T4-h：委派结果的展示数据回填 child_task_id / agent_role（子 Agent 按 Task 寻址，无 run_id）。
+    """T4-h：委派结果的展示数据回填 child_session_id / agent_role（子 Agent 按 Session 寻址，无 run_id）。
 
-    实际观测：``display_data.kind == "delegation-result"`` 时，part 上出现 ``child_task_id``；
+    实际观测：``display_data.kind == "delegation-result"`` 时，part 上出现 ``child_session_id``；
     ``display_data`` 使用持久化 role，并把 role 写回 ``display_data["role"]`` 与
     ``part["agent_role"]``。
     是否符合预期：符合（旧委派记录的 role 回填既定行为）。
@@ -473,7 +473,7 @@ def test_t4_delegation_display_data_backfills_child_locators(
                 "status": "completed",
                 "display_data": {
                     "kind": "delegation-result",
-                    "child_task_id": 22,
+                    "child_session_id": 22,
                     "child_agent_id": "reviewer",
                     "role": "workspace-reviewer",
                 },
@@ -485,6 +485,6 @@ def test_t4_delegation_display_data_backfills_child_locators(
 
     part = pair_tool_parts(rows, {})["delegate-1"]
 
-    assert part["child_task_id"] == 22
+    assert part["child_session_id"] == 22
     assert part["agent_role"] == "workspace-reviewer"
     assert part["display_data"]["role"] == "workspace-reviewer"

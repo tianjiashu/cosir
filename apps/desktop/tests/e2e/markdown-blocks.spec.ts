@@ -33,12 +33,12 @@ const style = (locator: Locator, property: "opacity" | "borderTopWidth" | "paddi
 
 test.beforeEach(async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 100, title: "Markdown 块" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 100, title: "Markdown 块" } });
   await seedState(request, 100, completedState(70, {
     id: "markdown-user",
     parts: [{ type: "text", text: "给个表格", status: "completed" }],
   }, [{ type: "text", text: markdown, status: "completed" }]));
-  await page.goto("/tasks/100");
+  await page.goto("/sessions/100");
 });
 
 test("表格去掉外框，按钮悬停才出现且可进入全屏", async ({ page }) => {
@@ -130,6 +130,6 @@ for (const scheme of ["light", "dark"] as const) {
     }
     await reference.click();
     await expect(answer.locator("[data-footnote-backref]")).toBeInViewport();
-    await expect(page).toHaveURL(/\/tasks\/100$/);
+    await expect(page).toHaveURL(/\/sessions\/100$/);
   });
 }

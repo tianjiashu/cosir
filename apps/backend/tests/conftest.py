@@ -4,7 +4,7 @@
 
 - ``restore_backend_logging_state``（autouse）：保证同进程内日志的全局开关在用例之间不互相污染。
 - ``isolated_storage`` / ``initialized_process_singletons``：按需装配「真实主库」与「进程级单例
-  （agent profile 目录、工具系统）」，供需要触碰服务层 / 任务运行时的用例显式请求。
+  （agent profile 目录、工具系统）」，供需要触碰服务层 / 会话运行时的用例显式请求。
 
 后两者刻意不做 autouse：不少用例断言「未初始化时的行为」（如 ``init_storage`` 的路径切换语义），
 自动初始化会把那类契约测掉。
@@ -20,8 +20,8 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.orm import sessionmaker
 
-from app.assistant_transport.service.conversation_task_state_service import (
-    ConversationTaskStateService,
+from app.assistant_transport.service.conversation_state_service import (
+    ConversationStateService,
 )
 from app.config import configuration
 from app.config.configuration import build_agent_registry
@@ -30,18 +30,18 @@ from app.core.context.context_store import ContextStore
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.tool_registry import ToolRegistry
 from app.service.configuration import extension_scope, mcp_tested_servers
-from app.service.conversation.conversation_task_context_service import (
-    ConversationTaskContextService,
+from app.service.conversation.session_context_service import (
+    SessionContextService,
 )
 from app.service.depends import close_service_dependencies
 from app.service.model_config import model_config_service
-from app.storage.crud.conversation_run_crud import ConversationRunCrud
-from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
-from app.storage.crud.task_crud import TaskCrud
+from app.storage.crud.run_crud import RunCrud
+from app.storage.crud.session_context_crud import SessionContextCrud
+from app.storage.crud.session_crud import SessionCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.store_engines import init_storage, initialize_app_schema
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.tool_registration import build_tool_registry
 from app.utils.path import system_cosir as paths
 from tests.terminal_test_support import terminal_worker_path
@@ -177,7 +177,7 @@ def reopen_background_registry() -> Iterator[None]:
     from app.service import depends
     from app.tools.tool_handler.terminal.command_results import command_results
 
-    # 先关再开：清掉上一个用例残留的活条目（同一 task_id 会被反复使用）。
+    # 先关再开：清掉上一个用例残留的活条目（同一 session_id 会被反复使用）。
     command_results.close()
     command_results.open()
     # 不经 lifespan 的用例也会走到 core 的后台命令端口（静止判定、wait_messages、收回）。
@@ -192,7 +192,7 @@ def reopen_background_registry() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def reset_handoff_registry() -> Iterator[None]:
-    """进程级交接登记表：每个用例从空表开始（同一 task_id 与调用 id 会被反复使用）。"""
+    """进程级交接登记表：每个用例从空表开始（同一 session_id 与调用 id 会被反复使用）。"""
 
     from app.core.tool.handoff.handoff_registry import handoff_registry
 
@@ -264,8 +264,8 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 def isolated_storage(tmp_path: Path) -> Iterator[None]:
     """为用例装配隔离的主库与日志路径。
 
-    为什么需要它：任务运行时空间、service 与 CRUD 现在都在构造时取真实会话工厂
-    （``TaskRuntimeSpace.__post_init__`` 会读当前 task），因此触碰服务层的用例必须先初始化主库；
+    为什么需要它：会话运行时空间、service 与 CRUD 现在都在构造时取真实 db 工厂
+    （``SessionRuntimeSpace.__post_init__`` 会读当前 session），因此触碰服务层的用例必须先初始化主库；
     若指向真实用户目录，用例之间会互相污染，也会写脏开发者的本地数据。
 
     参数:
@@ -278,12 +278,12 @@ def isolated_storage(tmp_path: Path) -> Iterator[None]:
         无。
 
     副作用:
-        关闭既有依赖与任务空间 → 把 ``paths`` 指向用例临时目录 → ``init_storage()`` 建库；
-        退出时关闭任务空间与依赖并复原 ``paths``（不删除临时目录，交给 pytest 清理）。
+        关闭既有依赖与会话空间 → 把 ``paths`` 指向用例临时目录 → ``init_storage()`` 建库；
+        退出时关闭会话空间与依赖并复原 ``paths``（不删除临时目录，交给 pytest 清理）。
     """
 
     close_service_dependencies()
-    task_runtime_spaces.close()
+    session_runtime_spaces.close()
     db_dir = tmp_path / "storage"
     db_dir.mkdir()
     paths.override(
@@ -294,7 +294,7 @@ def isolated_storage(tmp_path: Path) -> Iterator[None]:
     try:
         yield
     finally:
-        task_runtime_spaces.close()
+        session_runtime_spaces.close()
         close_service_dependencies()
         paths.reset()
 
@@ -366,7 +366,7 @@ def _bind(crud_type: type[object], factory: sessionmaker) -> object:
     """Bind a real CRUD implementation to the acceptance fixture's SQLite factory."""
 
     crud = crud_type.__new__(crud_type)
-    crud._session_factory = factory  # type: ignore[attr-defined]
+    crud._db_factory = factory  # type: ignore[attr-defined]
     return crud
 
 
@@ -383,57 +383,57 @@ def empty_tool_registry() -> Iterator[None]:
 def canonical_store(tmp_path: Path, monkeypatch):
     """用同一个临时 SQLite 库装配 CRUD、消息队列和快照服务。
 
-    夹具创建工作区与 Task，不预置 Run 或上下文记录。
+    夹具创建工作区与 Session，不预置 Run 或上下文记录。
     """
 
     engine = create_sqlite_engine(tmp_path / "storage" / "app.sqlite3")
     initialize_app_schema(engine)
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     monkeypatch.setattr(
-        "app.core.workflow.message_queue.task_message_queue.main_session_factory", lambda: factory
+        "app.core.workflow.message_queue.session_message_queue.main_db_factory", lambda: factory
     )
     workspaces = _bind(WorkspaceCrud, factory)
-    tasks = _bind(TaskCrud, factory)
-    runs = _bind(ConversationRunCrud, factory)
-    contexts = _bind(ConversationTaskContextCrud, factory)
+    sessions = _bind(SessionCrud, factory)
+    runs = _bind(RunCrud, factory)
+    contexts = _bind(SessionContextCrud, factory)
     context_store = ContextStore.__new__(ContextStore)
     context_store._crud = contexts
-    context_service = ConversationTaskContextService.__new__(ConversationTaskContextService)
+    context_service = SessionContextService.__new__(SessionContextService)
     context_service._crud = contexts
     context_service._store = context_store
     workspace = workspaces.create("acceptance", str(tmp_path))
-    task = tasks.create(workspace.id, "canonical conversation_run")
-    task_runtime_spaces.close()
+    session = sessions.create(workspace.id, "canonical run")
+    session_runtime_spaces.close()
     # 快照服务通过 depends 取这三个 CRUD，必须读到用例写入的同一份数据。
-    monkeypatch.setattr("app.service.depends.get_task_crud", lambda: tasks)
-    monkeypatch.setattr("app.service.depends.get_conversation_run_crud", lambda: runs)
-    monkeypatch.setattr("app.service.depends.get_conversation_task_context_crud", lambda: contexts)
+    monkeypatch.setattr("app.service.depends.get_session_crud", lambda: sessions)
+    monkeypatch.setattr("app.service.depends.get_run_crud", lambda: runs)
+    monkeypatch.setattr("app.service.depends.get_session_context_crud", lambda: contexts)
     monkeypatch.setattr(
-        "app.task_runtime.task_runtime_space.get_task_service",
-        lambda: SimpleNamespace(get_task=tasks.get),
+        "app.session_runtime.session_runtime_space.get_session_service",
+        lambda: SimpleNamespace(get_session=sessions.get),
     )
     monkeypatch.setattr(
-        "app.task_runtime.task_runtime_space.get_workspace_service",
+        "app.session_runtime.session_runtime_space.get_workspace_service",
         lambda: SimpleNamespace(get_workspace=workspaces.get),
     )
-    state = ConversationTaskStateService()
-    task_runtime_spaces.close()
+    state = ConversationStateService()
+    session_runtime_spaces.close()
     store = SimpleNamespace(
         engine=engine,
         factory=factory,
         workspaces=workspaces,
-        tasks=tasks,
+        sessions=sessions,
         runs=runs,
         contexts=contexts,
         context=context_store,
         context_service=context_service,
         state=state,
         workspace=workspace,
-        task=task,
+        session=session,
     )
     try:
         yield store
     finally:
-        task_runtime_spaces.close()
-        task_runtime_spaces.close()
+        session_runtime_spaces.close()
+        session_runtime_spaces.close()
         engine.dispose()

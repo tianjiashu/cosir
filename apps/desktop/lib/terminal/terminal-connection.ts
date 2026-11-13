@@ -44,8 +44,8 @@ export type TerminalControlFrame = Exclude<TerminalServerFrame, { type: "output"
 export type TerminalConnectionState = "connecting" | "connected" | "reconnecting" | "ended" | "expired" | "failed";
 
 export type TerminalConnectionOptions = {
-  taskId: number;
-  sessionId: string;
+  sessionId: number;
+  terminalSessionId: string;
   onOutput: (data: Uint8Array) => void;
   /**
    * 缓冲接不上（服务端要求、seq 断档或视图写入积压）：调用方清屏，清屏真正生效后调用 `resume`，连接才从
@@ -77,8 +77,8 @@ export function decodeBase64(value: string): Uint8Array {
   return bytes;
 }
 
-function terminalStreamUrl(baseUrl: string, taskId: number, sessionId: string, traceId: TraceId): string {
-  const url = new URL(`${baseUrl}/tasks/${taskId}/terminal/sessions/${encodeURIComponent(sessionId)}/stream`);
+function terminalStreamUrl(baseUrl: string, sessionId: number, terminalSessionId: string, traceId: TraceId): string {
+  const url = new URL(`${baseUrl}/sessions/${sessionId}/terminal/sessions/${encodeURIComponent(terminalSessionId)}/stream`);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("trace_id", traceId);
   return url.toString();
@@ -161,7 +161,7 @@ export class TerminalConnection {
   private connect(): void {
     if (this.disposed || this.stopped) return;
     this.setState(this.lastSeq === 0 && this.retryCount === 0 ? "connecting" : "reconnecting");
-    const url = terminalStreamUrl(getApiBaseUrl(), this.options.taskId, this.options.sessionId, this.traceId);
+    const url = terminalStreamUrl(getApiBaseUrl(), this.options.sessionId, this.options.terminalSessionId, this.traceId);
     const socket = new WebSocket(url);
     this.socket = socket;
     const afterSeq = this.lastSeq === 0 ? null : this.lastSeq;
@@ -282,7 +282,7 @@ export class TerminalConnection {
   private log(level: "INFO" | "WARNING" | "ERROR", event: string, msg: string, data: Record<string, unknown> = {}, error?: unknown): void {
     void frontendLog(level, event, msg, {
       traceId: this.traceId,
-      data: { taskId: this.options.taskId, sessionId: this.options.sessionId, ...data },
+      data: { sessionId: this.options.sessionId, terminalSessionId: this.options.terminalSessionId, ...data },
       error,
     });
   }

@@ -125,12 +125,12 @@ describe("inlineCodeLink", () => {
 
   it("keeps filename search separate from file addresses", () => {
     // 不知道目录，不构造根目录候选。
-    expect(inlineCodeLink("task.ts", { workspaceRoot: "/repo" })).toMatchObject({ kind: "filename-search", query: "task.ts" });
-    expect(inlineCodeLink("src/task.ts", { workspaceRoot: "/repo" })).toMatchObject({ kind: "workspace", path: "src/task.ts" });
+    expect(inlineCodeLink("session.ts", { workspaceRoot: "/repo" })).toMatchObject({ kind: "filename-search", query: "session.ts" });
+    expect(inlineCodeLink("src/session.ts", { workspaceRoot: "/repo" })).toMatchObject({ kind: "workspace", path: "src/session.ts" });
   });
 
   it("ignores code that only looks path-like", () => {
-    for (const text of ["obj.method", "text/plain", "/api/tasks", "https://example.com/a.ts", "npm run dev", ".gitignore"]) {
+    for (const text of ["obj.method", "text/plain", "/api/sessions", "https://example.com/a.ts", "npm run dev", ".gitignore"]) {
       expect(inlineCodeLink(text, { workspaceRoot: "/repo" })).toBeNull();
     }
     expect(inlineCodeLink("src/app.ts", { workspaceRoot: null })).toBeNull();

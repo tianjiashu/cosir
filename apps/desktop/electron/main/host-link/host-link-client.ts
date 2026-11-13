@@ -140,7 +140,7 @@ export class HostLinkClient {
     } catch (error) {
       if (controller.signal.aborted) return;
       if (id === null) {
-        // 通知没有应答可带回失败，后端只知道发出去了：失败只能在这里留下记录（如 Task 删除后回收标签失败）。
+        // 通知没有应答可带回失败，后端只知道发出去了：失败只能在这里留下记录（如 Session 删除后回收标签失败）。
         logDesktopEvent(error instanceof HostMethodError ? "WARNING" : "ERROR", "host_link", "host_notification_failed", { method, ...meta }, error);
         return;
       }

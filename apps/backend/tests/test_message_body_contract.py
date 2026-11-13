@@ -1,4 +1,4 @@
-"""Task 消息类型的契约：类级元数据完整、kind/tag 唯一、注册表与联合一一对应。
+"""Session 消息类型的契约：类级元数据完整、kind/tag 唯一、注册表与联合一一对应。
 
 ABC 只强制 ``render``；六个 ClassVar 漏写时要到被访问时才炸（``KIND`` 在注册表构造时、``WAKE``
 在调度判定时）。这里用纯测试把契约锁在类型定义处，避免用 ``__init_subclass__`` 之类的运行期自查。
@@ -13,7 +13,7 @@ from app.core.workflow.message_queue.message_bodies import (
     MODEL_INPUT_BODIES,
     EnqueuedMessageBody,
     MessageBody,
-    TaskMessageKind,
+    SessionMessageKind,
     ToolResultBody,
     WakeScope,
 )
@@ -33,7 +33,7 @@ def test_every_enqueued_body_declares_the_full_contract() -> None:
     """每个入队 body 自己写下元数据：继承来的默认值会让新类型默默带上别的类型的语义。"""
 
     assert _ENQUEUED
-    kinds = get_args(TaskMessageKind)
+    kinds = get_args(SessionMessageKind)
     for body in _ENQUEUED:
         assert issubclass(body, EnqueuedMessageBody)
         for name in _REQUIRED:
@@ -52,7 +52,7 @@ def test_every_notice_kind_declares_level_and_wake_scope() -> None:
     assert set(NOTICE_LEVELS) == kinds == set(NOTICE_WAKE_SCOPES)
     # 只有「等着的东西没了」的告知能唤醒挂起的 Run，且都不开新 Run。
     assert {kind for kind, scope in NOTICE_WAKE_SCOPES.items() if scope != "none"} == {
-        "derived_task_stopped",
+        "derived_session_stopped",
         "backend_restarted",
     }
     assert "new_or_active" not in NOTICE_WAKE_SCOPES.values()
@@ -85,7 +85,7 @@ def test_enqueued_base_rejects_a_body_without_render() -> None:
     """基类真的抽象：漏写 ``render`` 的类型无法被实例化，不会产出无法写进 context 的消息。"""
 
     class WithoutRender(EnqueuedMessageBody):
-        KIND: ClassVar[TaskMessageKind] = "user_input"
+        KIND: ClassVar[SessionMessageKind] = "user_input"
         TAG: ClassVar[str] = "probe"
         PROMPT_GUIDE: ClassVar[str | None] = "probe"
         PRIORITY: ClassVar[int] = 1

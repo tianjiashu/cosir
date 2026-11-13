@@ -10,13 +10,13 @@ const state = (parts: TransportMessagePart[], status: "running" | "suspended" | 
 });
 test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "界面改造验证" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "界面改造验证" } });
 });
 
 test("live snapshot updates preserve the original prose DOM and selection; stopped content remains readable", async ({ page, request }) => {
   const prose = text("先检查取消处理，再核对结果。");
   await seedState(request, 42, state([prose], "suspended"));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const slot = page.locator('[data-slot="prose-part"]').first();
   await expect(slot).toBeVisible();
   await slot.evaluate((element) => {
@@ -39,33 +39,33 @@ test("live snapshot updates preserve the original prose DOM and selection; stopp
 test("wait does not render a card; suspended has a neutral heading and errors stay discoverable", async ({ page, request }) => {
   const wait = toolCallPart("wait", "wait_messages", { status: "completed", presentation: "quiet" });
   await seedState(request, 42, state([text("等待结果回来。"), wait], "suspended"));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await expect(page.locator('[data-slot="current-activity"]')).toContainText("等待继续");
   await expect(page.locator('[data-slot="activity-group"]')).toHaveCount(0);
   await expect(page.locator('[data-tool-call-id="wait"]')).toHaveCount(0);
-  await seedState(request, 42, state([text("等待结果回来。"), { ...wait, status: "failed", error: "没有可等待的任务" }], "suspended"));
+  await seedState(request, 42, state([text("等待结果回来。"), { ...wait, status: "failed", error: "没有可等待的会话" }], "suspended"));
   await expect(page.locator('[data-slot="activity-head"]')).toContainText("1 个失败");
   await page.locator('[data-slot="activity-head"]').click();
-  await expect(page.locator('[data-tool-call-id="wait"]')).toContainText("没有可等待的任务");
+  await expect(page.locator('[data-tool-call-id="wait"]')).toContainText("没有可等待的会话");
 });
 
 test("Agent messages are compact, explicitly expandable and never human edit targets", async ({ page, request }) => {
   const message = agentMessage("incoming", 1, "需要检查取消路径。\n\n原始详细说明第二段。");
   await seedState(request, 42, transportState({ messages: [message, assistantMessage("a", 1, [text("我继续核对。")], outcome("completed"))] }));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const incoming = page.locator('[data-role="agent-message"]');
-  await expect(incoming).toContainText("来自 主任务");
+  await expect(incoming).toContainText("来自 主会话");
   await expect(incoming.locator('[data-slot="agent-message-body"]')).toHaveCount(0);
   await incoming.getByRole("button", { name: /来自/ }).click();
   await expect(incoming.locator('[data-slot="agent-message-body"]')).toContainText("原始详细说明第二段。");
-  await expect(incoming.getByRole("button", { name: "打开来源任务" })).toBeVisible();
+  await expect(incoming.getByRole("button", { name: "打开来源会话" })).toBeVisible();
   await expect(incoming.getByRole("button", { name: /编辑|重跑/ })).toHaveCount(0);
   await page.screenshot({ path: `${OUTPUT_DIR}/conversation-agent.png`, animations: "disabled" });
 });
 
 test("completed reply folds prose in place and keeps the result signal on its call row", async ({ page, request }) => {
   await seedState(request, 42, state([text("正在运行测试。"), toolCallPart("cmd", "execute_terminal", { status: "completed", display_data: { kind: "terminal-result", command: "test", output: "assertion", exit_code: 1 } }), text("测试有一个断言需要修复。", true)], "completed"));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await expect(page.getByText("正在运行测试。", { exact: true })).toBeHidden();
   await expect(page.getByText("测试有一个断言需要修复。", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "用时 8秒，展开过程" })).toBeVisible();
@@ -78,17 +78,17 @@ test("completed reply folds prose in place and keeps the result signal on its ca
 });
 
 test("stop request is disabled across unmount until the canonical outcome arrives", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 43, title: "另一个任务" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 43, title: "另一个会话" } });
   await seedState(request, 42, state([text("已完成部分检查。")], "suspended"));
-  await page.route(`${API_ORIGIN}/tasks/42/cancel`, (route) => route.fulfill({ status: 202, contentType: "application/json", body: "{}" }));
-  await page.goto("/tasks/42");
+  await page.route(`${API_ORIGIN}/sessions/42/cancel`, (route) => route.fulfill({ status: 202, contentType: "application/json", body: "{}" }));
+  await page.goto("/sessions/42");
   await page.getByRole("button", { name: "停止", exact: true }).click();
   await expect(page.getByRole("button", { name: "正在停止", exact: true })).toBeDisabled();
   await expect(page.locator('[data-slot="current-activity"]')).toContainText("正在停止");
-  await page.getByRole("treeitem").filter({ hasText: "另一个任务" }).click();
-  await expect(page).toHaveURL(/tasks\/43$/);
+  await page.getByRole("treeitem").filter({ hasText: "另一个会话" }).click();
+  await expect(page).toHaveURL(/sessions\/43$/);
   await page.getByRole("treeitem").filter({ hasText: "界面改造验证" }).click();
-  await expect(page).toHaveURL(/tasks\/42$/);
+  await expect(page).toHaveURL(/sessions\/42$/);
   await expect(page.getByRole("button", { name: "正在停止", exact: true })).toBeDisabled();
   await seedState(request, 42, state([text("已完成部分检查。")], "cancelled"));
   await expect(page.locator('[data-slot="turn-status"]')).toContainText("已停止");
@@ -98,9 +98,9 @@ test("stop request is disabled across unmount until the canonical outcome arrive
 test("an unknown stop result offers explicit retry without claiming a failed execution", async ({ page, request }) => {
   await seedState(request, 42, state([text("保留当前进展。")], "suspended"));
   let calls = 0;
-  await page.route(`${API_ORIGIN}/tasks/42/cancel`, route => ++calls === 1
+  await page.route(`${API_ORIGIN}/sessions/42/cancel`, route => ++calls === 1
     ? route.abort("failed") : route.fulfill({ status: 202, contentType: "application/json", body: "{}" }));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await page.getByRole("button", { name: "停止", exact: true }).click();
   await expect(page.getByRole("button", { name: "重试停止", exact: true }).first()).toBeEnabled();
   await expect(page.getByText("停止结果待确认", { exact: true })).toBeVisible();
@@ -115,17 +115,17 @@ test("a late stop response cannot make a later Run appear to be stopping", async
   await seedState(request, 42, state([text("旧运行。")], "suspended"));
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
-  await page.route(`${API_ORIGIN}/tasks/42/cancel`, async route => {
+  await page.route(`${API_ORIGIN}/sessions/42/cancel`, async route => {
     await held;
     await route.fulfill({ status: 202, contentType: "application/json", body: "{}" });
   });
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await page.getByRole("button", { name: "停止", exact: true }).click();
   await expect(page.getByRole("button", { name: "正在停止", exact: true })).toBeDisabled();
   await seedState(request, 42, state([text("旧运行。")], "cancelled"));
   await seedState(request, 42, transportState({ messages: [userMessage("u2", 2), assistantMessage("assistant-turn-2", 2, [text("新运行。")])], activity: activity(2, "suspended") }));
   await expect(page.getByText("新运行。", { exact: true })).toBeVisible();
-  const response = page.waitForResponse(`${API_ORIGIN}/tasks/42/cancel`);
+  const response = page.waitForResponse(`${API_ORIGIN}/sessions/42/cancel`);
   release();
   await response;
   await expect(page.getByRole("button", { name: "停止", exact: true })).toBeEnabled();

@@ -4,24 +4,24 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
-// 服务端渲染读 zustand 的初始状态；任务状态推送的镜像换成可控的表。
-const taskStatuses = vi.hoisted(() => new Map<number, string | null>());
+// 服务端渲染读 zustand 的初始状态；会话状态推送的镜像换成可控的表。
+const sessionStatuses = vi.hoisted(() => new Map<number, string | null>());
 const awaitingCalls = vi.hoisted(() => new Map<number, number>());
-vi.mock("@/lib/task-status/task-status-store", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@/lib/task-status/task-status-store")>(),
-  useTaskExecutionStatus: (taskId: number | null | undefined) => (taskId == null ? null : taskStatuses.get(taskId) ?? null),
-  useTaskAwaitingUserCalls: (taskId: number | null | undefined) => (taskId == null ? 0 : awaitingCalls.get(taskId) ?? 0),
+vi.mock("@/lib/session-status/session-status-store", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/lib/session-status/session-status-store")>(),
+  useSessionExecutionStatus: (sessionId: number | null | undefined) => (sessionId == null ? null : sessionStatuses.get(sessionId) ?? null),
+  useSessionAwaitingUserCalls: (sessionId: number | null | undefined) => (sessionId == null ? 0 : awaitingCalls.get(sessionId) ?? 0),
 }));
 
 // 开合与前台等待同样读 store：换成可控的表（终端卡片在展开体里，去留操作看前台等待）。
 const surface = vi.hoisted(() => ({ open: new Set<string>(), waits: new Map<number, string[]>() }));
 vi.mock("@/lib/assistant/turn/disclosure-store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/assistant/turn/disclosure-store")>(),
-  useDisclosure: (_taskId: number, key: string, defaultOpen: boolean) => [surface.open.has(key) || defaultOpen, () => undefined],
+  useDisclosure: (_sessionId: number, key: string, defaultOpen: boolean) => [surface.open.has(key) || defaultOpen, () => undefined],
 }));
 vi.mock("@/lib/background-tasks/background-tasks-store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/background-tasks/background-tasks-store")>(),
-  useForegroundWaits: (taskId: number | null) => (taskId === null ? [] : surface.waits.get(taskId) ?? []),
+  useForegroundWaits: (sessionId: number | null) => (sessionId === null ? [] : surface.waits.get(sessionId) ?? []),
 }));
 
 import { CallRow } from "@/components/conversation/tools/call-row";
@@ -41,22 +41,22 @@ function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
   };
 }
 
-type RenderProps = { interactive?: boolean; inherited?: boolean; taskCancelling?: boolean; toolName?: string; args?: Record<string, unknown> };
+type RenderProps = { interactive?: boolean; inherited?: boolean; sessionCancelling?: boolean; toolName?: string; args?: Record<string, unknown> };
 
 function render(overrides: Partial<ToolArtifact> = {}, { toolName = "read_file", args = {}, ...props }: RenderProps = {}): string {
   // 终端命令的展开体经 `useOpenLink` 接上链接打开，需要 Query 上下文（应用里由根组件提供）。
   return renderToStaticMarkup(
     <QueryClientProvider client={createQueryClient()}>
-      <CallRow taskId={7} toolCallId="call-1" toolName={toolName} args={args} artifact={artifact(overrides)} {...props} />
+      <CallRow sessionId={7} toolCallId="call-1" toolName={toolName} args={args} artifact={artifact(overrides)} {...props} />
     </QueryClientProvider>,
   );
 }
 
 beforeEach(() => {
-  useDisclosureStore.setState({ tasks: {} });
+  useDisclosureStore.setState({ sessions: {} });
   surface.open.clear();
   surface.waits.clear();
-  taskStatuses.clear();
+  sessionStatuses.clear();
   awaitingCalls.clear();
 });
 
@@ -189,61 +189,61 @@ describe("CallRow kind 视图", () => {
   const fork = (overrides: Partial<ToolArtifact> = {}, props: { interactive?: boolean } = {}) => renderToStaticMarkup(
     <MemoryRouter>
       <CallRow
-        taskId={7}
+        sessionId={7}
         toolCallId="call-fork"
-        toolName="fork_task"
+        toolName="fork_session"
         args={{ title: "前端部分", message: "只做前端" }}
-        artifact={artifact({ childTaskId: 41, display_data: { kind: "fork-task-result", title: "前端部分", child_task_id: 41 }, ...overrides })}
+        artifact={artifact({ childSessionId: 41, display_data: { kind: "fork-session-result", title: "前端部分", child_session_id: 41 }, ...overrides })}
         {...props}
       />
     </MemoryRouter>,
   );
 
-  it.each(["running", "completed", null])("子任务 %s 时委派行不说状态，且不读展示数据", (status) => {
-    taskStatuses.set(501, status);
+  it.each(["running", "completed", null])("子会话 %s 时委派行不说状态，且不读展示数据", (status) => {
+    sessionStatuses.set(501, status);
     const html = render({
-      childTaskId: 501,
-      display_data: { kind: "delegation-result", title: "审查代码", child_task_id: 501, status: "completed" },
+      childSessionId: 501,
+      display_data: { kind: "delegation-result", title: "审查代码", child_session_id: 501, status: "completed" },
     });
     expect(html).not.toContain("运行中");
     expect(html).not.toContain("已完成");
   });
 
-  it.each([["failed", "运行失败"], ["cancelled", "已停止"], ["suspended", "等待结果"]])("子任务 %s 时委派行报异常", (status, label) => {
-    taskStatuses.set(501, status);
-    const html = render({ childTaskId: 501, display_data: { kind: "delegation-result", title: "审查代码", child_task_id: 501 } });
+  it.each([["failed", "运行失败"], ["cancelled", "已停止"], ["suspended", "等待结果"]])("子会话 %s 时委派行报异常", (status, label) => {
+    sessionStatuses.set(501, status);
+    const html = render({ childSessionId: 501, display_data: { kind: "delegation-result", title: "审查代码", child_session_id: 501 } });
     expect(html).toContain(label);
   });
 
-  it("子任务有事等你操作时，不论它的 Run 怎样，调用行都写明等你操作", () => {
-    taskStatuses.set(501, "completed");
+  it("子会话有事等你操作时，不论它的 Run 怎样，调用行都写明等你操作", () => {
+    sessionStatuses.set(501, "completed");
     awaitingCalls.set(501, 1);
-    const html = render({ childTaskId: 501, display_data: { kind: "delegation-result", title: "审查代码", child_task_id: 501 } });
+    const html = render({ childSessionId: 501, display_data: { kind: "delegation-result", title: "审查代码", child_session_id: 501 } });
     expect(html).toContain("等你操作");
     expect(html).not.toContain("已完成");
   });
 
-  it("工具自身取消时不再叠子任务状态", () => {
-    taskStatuses.set(41, "cancelled");
+  it("工具自身取消时不再叠子会话状态", () => {
+    sessionStatuses.set(41, "cancelled");
     const html = fork({ backendStatus: "cancelled", error: "已取消" });
     expect(html).toContain("已取消");
     expect(html).not.toContain("已停止");
   });
 
   it("后台分叉在时间线只留一行：点行定位看板，没有打开、停止与展开", () => {
-    taskStatuses.set(41, "running");
+    sessionStatuses.set(41, "running");
     const html = fork({ backendStatus: "pending", background: true });
     expect(html).toContain("在后台任务中查看：");
     expect(html).toMatch(/<button[^>]*data-slot="call-row"/);
     expect(html).not.toContain("aria-expanded");
-    expect(html).not.toContain("打开分叉对话");
-    expect(html).not.toContain("停止分叉对话");
+    expect(html).not.toContain("打开分叉会话");
+    expect(html).not.toContain("停止分叉会话");
   });
 
-  it("只读阅读器里当前 Task 没有看板：分叉仍可打开与展开，打开悬停才显示", () => {
+  it("只读阅读器里当前 Session 没有看板：分叉仍可打开与展开，打开悬停才显示", () => {
     const html = fork({ background: true }, { interactive: false });
-    expect(html).toContain("打开分叉对话：前端部分");
-    expect(html.match(/<button[^>]*打开分叉对话[^>]*>/)?.[0]).toContain("opacity-0");
+    expect(html).toContain("打开分叉会话：前端部分");
+    expect(html.match(/<button[^>]*打开分叉会话[^>]*>/)?.[0]).toContain("opacity-0");
     expect(html).toContain("aria-expanded");
     expect(html).not.toContain("在后台任务中查看");
   });
@@ -256,32 +256,32 @@ describe("CallRow kind 视图", () => {
   });
 
   it("消息卡片可以打开收件方，但不授予停止对方的能力", () => {
-    taskStatuses.set(41, "running");
+    sessionStatuses.set(41, "running");
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <CallRow taskId={9} toolCallId="call-send" toolName="send_message"
-          args={{ task_id: 41, message: "进展" }}
+        <CallRow sessionId={9} toolCallId="call-send" toolName="send_message"
+          args={{ session_id: 41, message: "进展" }}
           artifact={artifact({ display_data: {
-            kind: "agent-task-result", operation: "send", task_id: 41, agent_name: "前端部分",
+            kind: "agent-session-result", operation: "send", session_id: 41, agent_name: "前端部分",
           } })}
         />
       </MemoryRouter>,
     );
-    expect(html).toContain("打开任务：前端部分");
-    expect(html).not.toContain("停止任务");
+    expect(html).toContain("打开会话：前端部分");
+    expect(html).not.toContain("停止会话");
   });
 
-  it("状态查询行保留停止：子任务被消息唤醒后这里是单独停止它的入口", () => {
-    taskStatuses.set(41, "running");
+  it("状态查询行保留停止：子会话被消息唤醒后这里是单独停止它的入口", () => {
+    sessionStatuses.set(41, "running");
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <CallRow taskId={9} toolCallId="call-status" toolName="task_status"
-          args={{ task_id: 41 }}
-          artifact={artifact({ display_data: { kind: "agent-task-result", operation: "status", task_id: 41, agent_name: "前端部分" } })}
+        <CallRow sessionId={9} toolCallId="call-status" toolName="session_status"
+          args={{ session_id: 41 }}
+          artifact={artifact({ display_data: { kind: "agent-session-result", operation: "status", session_id: 41, agent_name: "前端部分" } })}
         />
       </MemoryRouter>,
     );
-    expect(html).toContain("停止任务：前端部分");
+    expect(html).toContain("停止会话：前端部分");
   });
 
   it("只读面不渲染停止与转到后台", () => {
@@ -358,9 +358,9 @@ describe("终端卡片", () => {
     expect(done).toContain("已结束");
   });
 
-  it("Task 停止中收起操作，状态条说正在停止", () => {
+  it("Session 停止中收起操作，状态条说正在停止", () => {
     openCall();
-    const html = render(running, { toolName: "execute_terminal", taskCancelling: true });
+    const html = render(running, { toolName: "execute_terminal", sessionCancelling: true });
     expect(html).not.toContain("停止终端命令");
     expect(html).toContain("正在停止…");
   });

@@ -1,4 +1,4 @@
-"""send_message 只负责向同工作区的另一 Task 投递 Agent 消息；调度由收件方的 actor 决定。"""
+"""send_message 只负责向同工作区的另一 Session 投递 Agent 消息；调度由收件方的 actor 决定。"""
 
 import json
 from typing import ClassVar, cast
@@ -18,18 +18,18 @@ from app.core.tool.schemas import (
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.workflow.message_queue.dispatch_policy import next_input
-from app.core.workflow.message_queue.task_message import LaunchInputBody, RunLaunch
-from app.models import ConversationRunRecord, TaskRecord
+from app.core.workflow.message_queue.session_message import LaunchInputBody, RunLaunch
+from app.models import RunRecord, SessionRecord
 from app.models.conversation_input import MessageSource
-from app.models.conversation_run_options import ConversationRunOptions
+from app.models.run_options import RunOptions
 from app.models.errors.input_errors import UserInputRejectedError
-from app.models.task_kind import TaskType
+from app.models.session_kind import SessionType
 from app.service.depends import (
-    get_task_message_queue,
-    get_task_service,
+    get_session_message_queue,
+    get_session_service,
     get_workspace_service,
 )
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
 
 class SendMessageTool(HandlerBase):
@@ -37,10 +37,10 @@ class SendMessageTool(HandlerBase):
 
     name: str = TOOL_SEND_MESSAGE
     description: str = (
-        "Send a message to another task in this workspace using its task_id. The message is "
-        "delivered once and sending does not wait. A task you derived (a delegated child agent or "
+        "Send a message to another session in this workspace using its session_id. The message is "
+        "delivered once and sending does not wait. A session you derived (a delegated child agent or "
         "a fork) reports back to you automatically when it finishes the run your message starts; "
-        "other tasks do not, so reply explicitly with send_message to the source_task_id of an "
+        "other sessions do not, so reply explicitly with send_message to the source_session_id of an "
         "<agent_message> that is not a report."
     )
     args_model: type[SendMessageArgs] = SendMessageArgs
@@ -48,30 +48,30 @@ class SendMessageTool(HandlerBase):
     group = TOOL_GROUP_CHILD_AGENT
 
     def __init__(self) -> None:
-        self._task_service = get_task_service()
+        self._session_service = get_session_service()
         self._workspace_service = get_workspace_service()
 
     def execute(
         self,
-        task_id: int,
+        session_id: int,
         message: str,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """投递一条 immediate 消息，运行中、挂起与空闲的去向统一由收件方决定。"""
-        sender = self._task_service.get_task(execution_context.task_id)
+        sender = self._session_service.get_session(execution_context.session_id)
         try:
-            target = self._task_service.get_task(task_id)
+            target = self._session_service.get_session(session_id)
             if target.id == sender.id or target.workspace_id != sender.workspace_id:
-                return tool_error(self.name, "Choose another task in this workspace.")
-            with task_runtime_spaces.get_or_create(task_id).operation():
+                return tool_error(self.name, "Choose another session in this workspace.")
+            with session_runtime_spaces.get_or_create(session_id).operation():
                 launch = self._target_launch(target, execution_context)
                 if isinstance(launch, ToolObservation):
                     return launch
-                task_runtime_spaces.enqueue(
-                    task_id,
+                session_runtime_spaces.enqueue(
+                    session_id,
                     prepare_agent_message(
                         message,
-                        source=MessageSource(task_id=sender.id, name=sender.title),
+                        source=MessageSource(session_id=sender.id, name=sender.title),
                         agent_id=launch.agent_id,
                         model_config_id=launch.model_config_id,
                         reasoning_effort=launch.options.reasoning_effort,
@@ -79,49 +79,49 @@ class SendMessageTool(HandlerBase):
                     ),
                 )
         except KeyError:
-            return tool_error(self.name, f"Target task {task_id} is unavailable.")
+            return tool_error(self.name, f"Target session {session_id} is unavailable.")
         except UserInputRejectedError as exc:
             return tool_error(self.name, exc.message)
         return tool_success(
             tool_name=self.name,
-            content=json.dumps({"task_id": task_id, "status": "delivered"}, separators=(",", ":")),
+            content=json.dumps({"session_id": session_id, "status": "delivered"}, separators=(",", ":")),
             display_data={
-                "kind": "agent-task-result",
+                "kind": "agent-session-result",
                 "operation": "send",
-                "task_id": task_id,
+                "session_id": session_id,
                 "agent_name": target.title,
             },
         )
 
     def _target_launch(
-        self, target: TaskRecord, execution_context: ToolExecutionContext
+        self, target: SessionRecord, execution_context: ToolExecutionContext
     ) -> RunLaunch | ToolObservation:
         """只读收件方配置。首 Run 尚未建立时，继承 actor 将选中的启动输入。"""
-        current = self._task_service.require_current_run(target.id)
+        current = self._session_service.require_current_run(target.id)
         if current is None:
-            first = next_input(get_task_message_queue().pending_nowait(target.id))
+            first = next_input(get_session_message_queue().pending_nowait(target.id))
             if first is not None:
                 return cast(LaunchInputBody, first.body).launch
             initial = RunLaunch.from_fork(target)
             if initial is not None:
                 return initial
-            return tool_error(self.name, "The target task has no launch configuration yet.")
-        if target.task_type == TaskType.AGENT_TASK:
+            return tool_error(self.name, "The target session has no launch configuration yet.")
+        if target.session_type == SessionType.DELEGATED:
             return self._child_profile_launch(target, current, execution_context)
         launch = RunLaunch.from_run(current)
         if launch is None:
-            return tool_error(self.name, "The target task's model configuration is unavailable.")
+            return tool_error(self.name, "The target session's model configuration is unavailable.")
         return launch
 
     def _child_profile_launch(
         self,
-        child_task: TaskRecord,
-        current_run: ConversationRunRecord,
+        child_session: SessionRecord,
+        current_run: RunRecord,
         execution_context: ToolExecutionContext,
     ) -> RunLaunch | ToolObservation:
         """委派子 Agent 的发起配置每次按当前 profile 重算：profile 改了，下一个新 Run 就生效。"""
         try:
-            workspace = self._workspace_service.get_workspace(child_task.workspace_id)
+            workspace = self._workspace_service.get_workspace(child_session.workspace_id)
             from app.config.configuration import get_agent_registry
 
             current_profile = get_agent_registry().resolve(
@@ -135,7 +135,7 @@ class SendMessageTool(HandlerBase):
                     "msg": "workspace 子 Agent 配置无效，拒绝创建 follow-up Run",
                     "data": {
                         "parent_run_id": execution_context.run_id,
-                        "child_task_id": child_task.id,
+                        "child_session_id": child_session.id,
                         "error_type": type(exc).__name__,
                     },
                 },
@@ -158,7 +158,7 @@ class SendMessageTool(HandlerBase):
             agent_id=current_run.agent_id or "",
             model_config_id=current_profile.model_config_id
             or cast(str, current_run.model_config_id),
-            options=ConversationRunOptions(reasoning_effort=reasoning_effort),
+            options=RunOptions(reasoning_effort=reasoning_effort),
         )
 
     def to_definition(self) -> ToolDefinition:

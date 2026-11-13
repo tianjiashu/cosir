@@ -59,7 +59,7 @@ def _terminal_output_update(
 ) -> ToolCallRuntimeUpdateEvent:
     """Construct one typed terminal-output payload carried by the runtime-update event."""
     return ToolCallRuntimeUpdateEvent(
-        task_id=7,
+        session_id=7,
         run_id=9,
         tool_call_id="call-1",
         seq=seq,
@@ -73,7 +73,7 @@ def _terminal_output_update(
 def _terminal_started_update() -> ToolCallRuntimeUpdateEvent:
     """命令拉起时的初始展示（命令与工作目录），先于任何输出块。"""
     return ToolCallRuntimeUpdateEvent(
-        task_id=7,
+        session_id=7,
         run_id=9,
         tool_call_id="call-1",
         seq=0,
@@ -208,7 +208,7 @@ def test_execute_terminal_normalizes_model_output_and_keeps_raw_display(
         execution_context=ToolExecutionContext(
             call_intent="test",
             step_id="step-1",
-            task_id=7,
+            session_id=7,
             workspace_id=1,
             workspace_root=tmp_path,
             run_id=1,
@@ -229,7 +229,7 @@ def test_terminal_output_budget_preserves_raw_content_and_artifact(
 ) -> None:
     raw_output = "token=visible-secret\n" + ("x" * 300)
     context = ToolExecutionContext(
-        step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1
+        step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1
     )
     observation = ToolObservation(
         tool_name="execute_terminal",
@@ -251,7 +251,7 @@ def test_terminal_output_budget_preserves_raw_content_and_artifact(
 def test_runtime_update_event_uses_a_strict_payload_discriminator() -> None:
     event = ToolCallRuntimeUpdateEvent.model_validate(
         {
-            "task_id": 7,
+            "session_id": 7,
             "run_id": 9,
             "tool_call_id": "call-1",
             "seq": 0,
@@ -267,7 +267,7 @@ def test_runtime_update_event_uses_a_strict_payload_discriminator() -> None:
     with pytest.raises(ValidationError):
         ToolCallRuntimeUpdateEvent.model_validate(
             {
-                "task_id": 7,
+                "session_id": 7,
                 "run_id": 9,
                 "tool_call_id": "call-1",
                 "seq": 0,
@@ -292,7 +292,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
         ToolExecutionContext(
             call_intent="test",
             step_id="step-1",
-            task_id=7,
+            session_id=7,
             workspace_id=1,
             workspace_root=Path("."),
             run_id=9,
@@ -359,8 +359,8 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
         tool_definitions={
             "execute_terminal": SimpleNamespace(parallel_mode="serial", user_decision=None)
         },
-        run=SimpleNamespace(id=9, task_id=7),
-        task=SimpleNamespace(id=7),
+        run=SimpleNamespace(id=9, session_id=7),
+        session=SimpleNamespace(id=7),
         workspace=SimpleNamespace(id=2, root_path=str(tmp_path)),
         agent=agent,
         event_sink=sink,
@@ -375,7 +375,7 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
 
     assert len(observations) == 1
     [context] = received
-    assert (context.task_id, context.run_id, context.workspace_id) == (7, 9, 2)
+    assert (context.session_id, context.run_id, context.workspace_id) == (7, 9, 2)
     assert context.workspace_root == tmp_path
     assert context.step_id == "step-1"
     assert context.agent is agent
@@ -397,7 +397,7 @@ async def test_terminal_output_channel_is_built_from_worker_thread(tmp_path: Pat
     context = ToolExecutionContext(
         call_intent="test",
         step_id="step-1",
-        task_id=7,
+        session_id=7,
         workspace_id=2,
         workspace_root=tmp_path,
         run_id=9,
@@ -417,19 +417,19 @@ async def test_terminal_output_channel_is_built_from_worker_thread(tmp_path: Pat
 def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() -> None:
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
     projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=7,
+            session_id=7,
             run_id=9,
             status="running",
         )
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=7,
+            session_id=7,
             run_id=9,
             turn=1,
             tool_call_id="call-1",
@@ -438,7 +438,7 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=7,
+            session_id=7,
             run_id=9,
             tool_call_id="call-1",
             status="running",
@@ -465,23 +465,23 @@ def test_runtime_update_trims_terminal_output_window(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(Constant.Terminal, "DISPLAY_OUTPUT_WINDOW_CHARS", 20)
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
     projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=7,
+            session_id=7,
             run_id=9,
             status="running",
         )
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
+            session_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
         )
     )
     projector.process(
-        ToolCallStatusChangedEvent(task_id=7, run_id=9, tool_call_id="call-1", status="running")
+        ToolCallStatusChangedEvent(session_id=7, run_id=9, tool_call_id="call-1", status="running")
     )
 
     projector.process(_terminal_started_update())
@@ -497,30 +497,30 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
     """转到后台的命令在 Run 挂起后仍在输出：只看 part 自己是否还是活的后台占位，不看 Run。"""
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
     projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=7,
+            session_id=7,
             run_id=9,
             status="running",
         )
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
+            session_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
         )
     )
     projector.process(
-        ToolCallStatusChangedEvent(task_id=7, run_id=9, tool_call_id="call-1", status="running")
+        ToolCallStatusChangedEvent(session_id=7, run_id=9, tool_call_id="call-1", status="running")
     )
     projector.process(_terminal_started_update())
     projector.process(_terminal_output_update(0, "before "))
     # 用户把前台等待转到后台：占位 pending + background，展示数据不带输出，已流出的输出保留。
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=7,
+            session_id=7,
             run_id=9,
             tool_call_id="call-1",
             status="pending",
@@ -536,7 +536,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
     projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=7,
+            session_id=7,
             run_id=9,
             status="suspended",
         )
@@ -549,7 +549,7 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
     # 结论并入：完整终态写回卡片，实时累计的输出仍是展示上的权威值；之后的迟到块丢弃。
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=7,
+            session_id=7,
             run_id=9,
             tool_call_id="call-1",
             status="completed",
@@ -573,19 +573,19 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
 def test_runtime_update_skips_a_pending_part_that_is_not_a_background_placeholder() -> None:
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
     projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=7,
+            session_id=7,
             run_id=9,
             status="running",
         )
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
+            session_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
         )
     )
     projector.process(_terminal_output_update(0, "early"))
@@ -597,19 +597,19 @@ def test_runtime_update_skips_a_pending_part_that_is_not_a_background_placeholde
 def test_final_terminal_status_uses_authoritative_output_including_unstreamed_tail() -> None:
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
     projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=7,
+            session_id=7,
             run_id=9,
             status="running",
         )
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=7,
+            session_id=7,
             run_id=9,
             turn=1,
             tool_call_id="call-1",
@@ -618,7 +618,7 @@ def test_final_terminal_status_uses_authoritative_output_including_unstreamed_ta
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=7,
+            session_id=7,
             run_id=9,
             tool_call_id="call-1",
             status="running",
@@ -631,7 +631,7 @@ def test_final_terminal_status_uses_authoritative_output_including_unstreamed_ta
         projector.process(_terminal_output_update(seq, streamed_output[start : start + 4096]))
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=7,
+            session_id=7,
             run_id=9,
             tool_call_id="call-1",
             status="completed",
@@ -657,7 +657,7 @@ class _MemorySnapshotOwner:
     def __init__(self, state: ConversationStateSnapshot) -> None:
         self.state = state
 
-    def get_state(self, _task_id: int) -> ConversationStateSnapshot:
+    def get_state(self, _session_id: int) -> ConversationStateSnapshot:
         return copy.deepcopy(self.state)
 
     def apply_planned(self, event: Any) -> TransportFrame:
@@ -666,7 +666,7 @@ class _MemorySnapshotOwner:
             mutation.apply_to(self.state)
         validate_snapshot(self.state)
         return TransportFrame(
-            task_id=event.task_id,
+            session_id=event.session_id,
             kind="mutation",
             mutations=mutations,
         )
@@ -678,24 +678,24 @@ def _streamed_terminal_projector() -> (
     """建一个已实时流出终端输出、仍在 running 的 ``execute_terminal`` part。"""
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
     projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=7,
+            session_id=7,
             run_id=9,
             status="running",
         )
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
+            session_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
         )
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=7,
+            session_id=7,
             run_id=9,
             tool_call_id="call-1",
             status="running",
@@ -760,7 +760,7 @@ def test_terminal_replay_is_idempotent_for_streamed_part(
     def replay() -> None:
         projector.process(
             terminal_event(
-                observation, task_id=7, run_id=9, step_id="step-1", tool_call_id="call-1"
+                observation, session_id=7, run_id=9, step_id="step-1", tool_call_id="call-1"
             )
         )
 
@@ -787,7 +787,7 @@ async def test_output_channel_publishes_started_display_before_any_output() -> N
         ToolExecutionContext(
             call_intent="test",
             step_id="step-1",
-            task_id=7,
+            session_id=7,
             workspace_id=1,
             workspace_root=Path("."),
             run_id=9,
@@ -818,24 +818,24 @@ def _running_terminal_projector() -> tuple[ConversationStateSnapshot, Conversati
     """建一个刚进入 running、还没有任何输出的 ``execute_terminal`` part。"""
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
-    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=9))
+    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=7, run_id=9))
     projector.process(consumed(7, 9, 1, UserInputPresentation(text="run tool")))
     projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=7,
+            session_id=7,
             run_id=9,
             status="running",
         )
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
+            session_id=7, run_id=9, turn=1, tool_call_id="call-1", tool_name="execute_terminal"
         )
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=7,
+            session_id=7,
             run_id=9,
             tool_call_id="call-1",
             status="running",
@@ -877,7 +877,7 @@ def test_cancelling_a_command_without_output_keeps_its_command() -> None:
                 status="cancelled",
                 display_data={"status_hint": "已取消"},
             ),
-            task_id=7,
+            session_id=7,
             run_id=9,
             step_id="step-1",
             tool_call_id="call-1",
@@ -906,7 +906,7 @@ def test_duplicate_running_event_keeps_the_original_start_time() -> None:
 
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=7,
+            session_id=7,
             run_id=9,
             tool_call_id="call-1",
             status="running",
@@ -924,7 +924,7 @@ def test_leaving_running_clears_the_start_time() -> None:
 
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=7,
+            session_id=7,
             run_id=9,
             tool_call_id="call-1",
             status="completed",

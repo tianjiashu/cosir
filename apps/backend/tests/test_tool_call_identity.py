@@ -1,7 +1,7 @@
-"""``tool_call_id`` 的约定：模型给什么都行，进入持久化后在 Task 内唯一。
+"""``tool_call_id`` 的约定：模型给什么都行，进入持久化后在 Session 内唯一。
 
 全系统（决定与取消入口、占位结算、看板、前端开合）都按 id 寻址，厂商重复 id 不能让这些入口串线。
-不同 Task 之间 id 可以相同，进程级登记表因此按 ``(task_id, tool_call_id)`` 寻址。
+不同 Session 之间 id 可以相同，进程级登记表因此按 ``(session_id, tool_call_id)`` 寻址。
 """
 
 import asyncio
@@ -21,7 +21,7 @@ def _command(name: str) -> dict[str, object]:
     return {"intent": name, "command": name, "background": True}
 
 
-async def test_same_response_duplicates_both_run_and_the_task_stays_usable(
+async def test_same_response_duplicates_both_run_and_the_session_stays_usable(
     backend_env, tmp_path, monkeypatch
 ):
     write = {"intent": "写", "content": "x"}
@@ -128,7 +128,7 @@ async def test_two_pending_decisions_with_the_same_id_are_decided_separately(
         await env.parked()
         waiting = [p["toolCallId"] for p in tool_parts(env.live()) if p["awaitingUser"]]
         assert waiting == ["h", "h_2"]
-        await asyncio.to_thread(ToolDecisionService().submit, env.task.id, "h", "approve")
+        await asyncio.to_thread(ToolDecisionService().submit, env.session.id, "h", "approve")
         await asyncio.sleep(0.1)
         await env.parked()
         statuses = {p["toolCallId"]: p["status"] for p in tool_parts(env.cold())}
@@ -161,7 +161,7 @@ async def test_a_provider_repeating_the_id_on_every_chunk_gets_one_card(
         await env.close()
 
 
-async def test_same_id_in_two_tasks_runs_independently(backend_env, tmp_path, monkeypatch):
+async def test_same_id_in_two_sessions_runs_independently(backend_env, tmp_path, monkeypatch):
     commands = GatedCommands(monkeypatch, "A", "B")
     call = {"A": tool_call("call_0", "execute_terminal", _command("A"))}
     call["B"] = tool_call("call_0", "execute_terminal", _command("B"))
@@ -180,21 +180,21 @@ async def test_same_id_in_two_tasks_runs_independently(backend_env, tmp_path, mo
     try:
         env.send()
         await env.parked()
-        other = depends.get_workspace_service().create_task(env.workspace.id, "other")
-        env.send("另一个", task_id=other.id)
+        other = depends.get_workspace_service().create_session(env.workspace.id, "other")
+        env.send("另一个", session_id=other.id)
         await asyncio.sleep(0.1)
         await env.parked(other.id)
-        assert list(command_results.live_background(env.task.id)) == ["call_0"]
+        assert list(command_results.live_background(env.session.id)) == ["call_0"]
         assert list(command_results.live_background(other.id)) == ["call_0"]
     finally:
         commands.release()
         await env.close()
 
 
-def test_handoffs_with_the_same_id_stay_in_their_own_task():
+def test_handoffs_with_the_same_id_stay_in_their_own_session():
     registry = HandoffRegistry()
     registry.begin(HandoffLease("call_0", 1, "browser_handoff", "t1", "r"))
     registry.begin(HandoffLease("call_0", 2, "browser_handoff", "t2", "r"))
     ended = registry.end(1, "call_0")
-    assert ended is not None and ended.task_id == 1
-    assert [lease.task_id for lease in registry.leases(2)] == [2]
+    assert ended is not None and ended.session_id == 1
+    assert [lease.session_id for lease in registry.leases(2)] == [2]

@@ -40,8 +40,8 @@ class Constant:
 
         # 单进程同时活跃的终端会话数上限（全局容量闸门，用户新建受它约束）。
         MAX_ACTIVE_SESSIONS: int = 32
-        # 每个 Task 保留的已结束会话数（snapshot 与 terminal_list 可见）。
-        MAX_ENDED_SESSIONS_PER_TASK: int = 10
+        # 每个 Session 保留的已结束会话数（snapshot 与 terminal_list 可见）。
+        MAX_ENDED_SESSIONS_PER_SESSION: int = 10
         # 全进程已结束会话的总保留上限；每个终态会话仍持有行缓冲与预览缓冲，需整体有界。
         MAX_TERMINAL_HISTORY_SESSIONS: int = 64
         # 单会话原始 PTY 输出（预览重放窗口）的字节上限，超出后最旧输出帧被丢弃。
@@ -98,8 +98,8 @@ class Constant:
     class Run:
         """Conversation Run 失败 / 终态相关的稳定 code 与状态集合。
 
-        单一事实源：所有 Run 失败 code 只在此声明一次，``conversation_runs.end_reason`` 与
-        ``ConversationRunError.code`` 共用同一组值，避免两处漂移。模型调用错误的分类词表是
+        单一事实源：所有 Run 失败 code 只在此声明一次，``runs.end_reason`` 与
+        ``RunError.code`` 共用同一组值，避免两处漂移。模型调用错误的分类词表是
         ``ErrorKind``（``app.models.enums.error_kind``），本模块不再另行定义 ``model_*`` 系列 code。
         """
 
@@ -156,7 +156,7 @@ class Constant:
         # 已完成 Run 的结构化支线失败原因；不改变 Run 生命周期状态。
         STRUCTURED_OUTPUT_FAILURE_REASON: str = "structured_output_failed"
         # 标题支线从启动起的总时限（秒）：Run 收尾最多等到这里，超时即取消，保留原标题。
-        TASK_TITLE_TIMEOUT_SECONDS: float = 20.0
+        SESSION_TITLE_TIMEOUT_SECONDS: float = 20.0
         # 流式文本刷新最小字符数（达到后再 flush，减少碎片）。
         DEFAULT_TEXT_FLUSH_MIN_CHARS: int = 32
         # 流式文本刷新最大间隔（秒）。

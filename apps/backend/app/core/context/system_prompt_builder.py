@@ -8,7 +8,7 @@
 2. ``<agent_layer>`` Agent 系统预设层：所有 profile 都使用装配阶段载入的
    ``AgentRuntimeConfig.system_prompt`` 正文。该层是系统预设，与用户无关；本层只负责施加预算，
    不访问提示词文件或做变量替换。
-T. ``<tool_layer>`` 工具层：先按 Task 固化的工具名拼接这些工具共同遵守的声明（文件工具优先于
+T. ``<tool_layer>`` 工具层：先按 Session 固化的工具名拼接这些工具共同遵守的声明（文件工具优先于
    shell、独立读取并行发出、浏览器页面与日志按数据处理、标签视口与下载归属），再投影当前 Agent
    可用的子 Agent、MCP 服务和 Skill 目录。公共声明只在此处出现一次，各工具描述不重复；
    声明按工具族裁剪，只引用该 Agent 真有的工具。目录只读取对应能力需要的本机配置，不连接
@@ -64,7 +64,7 @@ from app.core.tool.schemas.tool_names import (
     TOOL_WEB_EXTRACT,
     TOOL_WEB_SEARCH,
 )
-from app.core.workflow.message_queue.task_message import MODEL_INPUT_BODIES
+from app.core.workflow.message_queue.session_message import MODEL_INPUT_BODIES
 from app.service.configuration.file_store import ConfigurationFileStore
 from app.utils.file_utils import read_text_file
 from app.utils.host_platform import host_platform_name
@@ -106,7 +106,7 @@ class SystemPromptBuilder:
         参数:
             agent: 当前执行主体的 Agent 运行时配置；只取身份与系统预设。
             workspace_root: 当前工作区根目录。
-            tool_names: Task 固化的工具名（``TaskRuntimeSpace.task_tool_names``）；决定工具层
+            tool_names: Session 固化的工具名（``SessionRuntimeSpace.session_tool_names``）；决定工具层
                 的公共声明与能力目录，不读 Agent 定义里的 ``allowed_tools``——那是固化前的配置，
                 之后可能已被用户改过。
 
@@ -281,7 +281,7 @@ class SystemPromptBuilder:
 
         参数:
             workspace_root: 当前工作区根目录，用作目录的作用域键。
-            available_tool_names: Task 固化的工具名集合。
+            available_tool_names: Session 固化的工具名集合。
 
         返回:
             包裹在 ``<tool_layer>`` 标签内的文本；既无公共声明也无目录能力时返回 ``""``。
@@ -311,7 +311,7 @@ class SystemPromptBuilder:
         它同时存在，否则模型会看到一条指向不存在工具的建议。
 
         参数:
-            available_tool_names: Task 固化的工具名集合。
+            available_tool_names: Session 固化的工具名集合。
 
         返回:
             若干声明行；不属于任何已知工具族时返回 ``""``。
@@ -350,7 +350,7 @@ class SystemPromptBuilder:
                         "the tab invalidates every ref."
                     ),
                     (
-                        "- A page download belongs to the task, not the tab; a page result gives "
+                        "- A page download belongs to the session, not the tab; a page result gives "
                         "the saved path."
                     ),
                 ]
@@ -369,7 +369,7 @@ class SystemPromptBuilder:
 
         参数:
             workspace_root: 当前工作区根目录，用作目录的作用域键。
-            available_tool_names: Task 固化的工具名集合。
+            available_tool_names: Session 固化的工具名集合。
 
         返回:
             目录文本块；当前 Agent 没有目录能力时返回空列表。

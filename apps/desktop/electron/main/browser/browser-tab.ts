@@ -54,7 +54,7 @@ type Delivered = { document: number; outline: Outline };
 export type EvaluateOutcome = Evaluation & { dialog: BrowserDialog | null };
 
 export type TabEvents = {
-  /** 页面要开新窗口：由 `BrowserHost` 决定拒绝，或收养成同 Task 的新标签（保留 opener）。 */
+  /** 页面要开新窗口：由 `BrowserHost` 决定拒绝，或收养成同 Session 的新标签（保留 opener）。 */
   onWindowOpen: (url: string) => WindowOpenHandlerResponse;
   /** 摘要里的任一项变了（地址、标题、加载、崩溃、弹窗）：`BrowserHost` 据此推送状态。 */
   onChange: () => void;
@@ -77,11 +77,11 @@ export type TabEvents = {
 
 export type TabOptions = {
   tabId: string;
-  taskId: number;
+  sessionId: number;
   createdBy: BrowserTabCreator;
   /** 开出这个标签的标签（页面 `window.open` / `target=_blank`）；否则为 null。 */
   openerId: string | null;
-  /** Task 所在工作区的下载目录（本机绝对路径），标签创建时定下；下载本身由 `BrowserHost` 登记。 */
+  /** Session 所在工作区的下载目录（本机绝对路径），标签创建时定下；下载本身由 `BrowserHost` 登记。 */
   downloadDir: string;
   /** 页面开出的标签：Chromium 已建好的 webContents（保留 opener）；新建的标签不传。 */
   adopted?: WebContents;
@@ -117,7 +117,7 @@ export class BrowserTab {
   readonly view: WebContentsView;
   readonly contents: WebContents;
   readonly tabId: string;
-  readonly taskId: number;
+  readonly sessionId: number;
   readonly createdBy: BrowserTabCreator;
   readonly openerId: string | null;
   readonly downloadDir: string;
@@ -146,9 +146,9 @@ export class BrowserTab {
   fileChooser: FileChooser | null = null;
 
   constructor(options: TabOptions) {
-    const { tabId, taskId, events } = options;
+    const { tabId, sessionId, events } = options;
     this.tabId = tabId;
-    this.taskId = taskId;
+    this.sessionId = sessionId;
     this.createdBy = options.createdBy;
     this.openerId = options.openerId;
     this.downloadDir = options.downloadDir;
@@ -199,7 +199,7 @@ export class BrowserTab {
     contents.on("did-start-loading", changed);
     contents.on("did-stop-loading", changed);
     contents.on("render-process-gone", (_event, details) => {
-      logDesktopEvent("WARNING", "browser", "browser_tab_crashed", { tab_id: tabId, task_id: taskId, reason: details.reason });
+      logDesktopEvent("WARNING", "browser", "browser_tab_crashed", { tab_id: tabId, session_id: sessionId, reason: details.reason });
       this.dismissDialog("the page's process ended");
       changed();
     });
@@ -291,7 +291,7 @@ export class BrowserTab {
       signal,
       paused: this.session.pausedSignal,
       timeoutMs: NAVIGATION_TIMEOUT_MS,
-      log: { tab_id: this.tabId, task_id: this.taskId },
+      log: { tab_id: this.tabId, session_id: this.sessionId },
     });
     operation.track(navigationCompletion(contents));
     if ("url" in target) {
@@ -406,7 +406,7 @@ export class BrowserTab {
       logDesktopEvent("INFO", "browser", "browser_dialog_answer_stale", { tab_id: this.tabId, dialog_id: id, by });
       return;
     }
-    logDesktopEvent("INFO", "browser", "browser_dialog_answered", { tab_id: this.tabId, task_id: this.taskId, type: dialog.type, accept: answer.accept, by });
+    logDesktopEvent("INFO", "browser", "browser_dialog_answered", { tab_id: this.tabId, session_id: this.sessionId, type: dialog.type, accept: answer.accept, by });
     if (by === "user") this.log.note(`the user answered the page's ${dialog.type} dialog #${dialog.id} (${answer.accept ? "accepted" : "dismissed"})`);
     this.events.onChange();
     this.events.onDialogClosed();
@@ -484,7 +484,7 @@ export class BrowserTab {
     return {
       operation: this.operation?.state ?? null,
       tabId: this.tabId,
-      taskId: this.taskId,
+      sessionId: this.sessionId,
       createdBy: this.createdBy,
       openerId: this.openerId,
       url: contents.getURL(),
@@ -521,13 +521,13 @@ export class BrowserTab {
   /** CDP 事件只在这里订阅：选文件框、绕过 preload 的原生弹窗、网络请求的生命周期、跨进程子框架的附加与分离。 */
   private subscribeCdp(): void {
     const session = this.session;
-    session.on("Target.attachedToTarget", (params: Parameters<PageFrames["attached"]>[0], sessionId) => this.frames.attached(params, sessionId));
+    session.on("Target.attachedToTarget", (params: Parameters<PageFrames["attached"]>[0], cdpSessionId) => this.frames.attached(params, cdpSessionId));
     session.on("Target.detachedFromTarget", (params: { sessionId: string }) => this.frames.detached(params));
-    session.on("Page.fileChooserOpened", (params: { backendNodeId?: number; mode: string }, sessionId) => this.fileChooserOpened(params, sessionId));
+    session.on("Page.fileChooserOpened", (params: { backendNodeId?: number; mode: string }, cdpSessionId) => this.fileChooserOpened(params, cdpSessionId));
     // 走到 Electron 原生弹窗说明页面绕过了网页 preload（例如框架还没跑 preload），已被 `disableDialogs` 按取消处理。
     session.on("Page.javascriptDialogOpening", ({ type }: { type: string }) => {
       this.log.note(`the page showed a ${type} dialog that could not be held for an answer; it was dismissed automatically`);
-      logDesktopEvent("WARNING", "browser", "browser_native_dialog_dismissed", { tab_id: this.tabId, task_id: this.taskId, type });
+      logDesktopEvent("WARNING", "browser", "browser_native_dialog_dismissed", { tab_id: this.tabId, session_id: this.sessionId, type });
     });
     type Request = { requestId: string; type?: string; timestamp: number; request: { method: string; url: string }; redirectResponse?: { status: number } };
     session.on("Network.requestWillBeSent", ({ requestId, type, timestamp, request, redirectResponse }: Request) => {
@@ -561,11 +561,11 @@ export class BrowserTab {
     const opening = this.dialogs.open(event, request);
     if ("refused" in opening) {
       // 已按取消答复：同一标签另一个框架同时弹窗（不排队），或网页 preload 之外的异常请求。
-      logDesktopEvent("WARNING", "browser", "browser_dialog_refused", { tab_id: this.tabId, task_id: this.taskId, reason: opening.refused });
+      logDesktopEvent("WARNING", "browser", "browser_dialog_refused", { tab_id: this.tabId, session_id: this.sessionId, reason: opening.refused });
       if (opening.refused === "busy") this.log.note(`the page showed another ${request.type} dialog while one was waiting; it was dismissed`);
       return;
     }
-    logDesktopEvent("INFO", "browser", "browser_dialog_opened", { tab_id: this.tabId, task_id: this.taskId, type: opening.dialog.type, dialog_id: opening.dialog.id });
+    logDesktopEvent("INFO", "browser", "browser_dialog_opened", { tab_id: this.tabId, session_id: this.sessionId, type: opening.dialog.type, dialog_id: opening.dialog.id });
     this.events.onDialogOpened();
     this.events.onChange();
   }
@@ -597,21 +597,21 @@ export class BrowserTab {
    * 打开的拦下并告知。只看「不在 Agent 动作期间」不够：Agent 的点击给了页面约 5 秒的用户激活，页面可以在宽限之后
    * 才打开选文件框，这时它挂在面板上就交给用户。
    */
-  private fileChooserOpened({ backendNodeId, mode }: { backendNodeId?: number; mode: string }, sessionId: string | undefined): void {
+  private fileChooserOpened({ backendNodeId, mode }: { backendNodeId?: number; mode: string }, cdpSessionId: string | undefined): void {
     const multiple = mode === "selectMultiple";
     if (backendNodeId !== undefined && Date.now() < this.agentChooserUntil) {
-      this.fileChooser = { node: { sessionId, backendNodeId }, multiple };
+      this.fileChooser = { node: { sessionId: cdpSessionId, backendNodeId }, multiple };
       this.log.note(`the page opened a file chooser${multiple ? " for several files" : ""}; answer it with an upload action without a ref`);
-      logDesktopEvent("INFO", "browser", "browser_file_chooser_for_agent", { tab_id: this.tabId, task_id: this.taskId, multiple });
+      logDesktopEvent("INFO", "browser", "browser_file_chooser_for_agent", { tab_id: this.tabId, session_id: this.sessionId, multiple });
       return;
     }
     if (!this.events.isAttached() || backendNodeId === undefined) {
       this.log.note("the page opened a file chooser on its own; it was blocked");
-      logDesktopEvent("INFO", "browser", "browser_file_chooser_blocked", { tab_id: this.tabId, task_id: this.taskId });
+      logDesktopEvent("INFO", "browser", "browser_file_chooser_blocked", { tab_id: this.tabId, session_id: this.sessionId });
       return;
     }
     this.events.chooseFiles(multiple).then(
-      (files) => (files?.length ? this.session.send("DOM.setFileInputFiles", { files, backendNodeId }, { sessionId }) : undefined),
+      (files) => (files?.length ? this.session.send("DOM.setFileInputFiles", { files, backendNodeId }, { sessionId: cdpSessionId }) : undefined),
     ).catch((error: unknown) => {
       logDesktopEvent("WARNING", "browser", "browser_file_chooser_failed", { tab_id: this.tabId }, error);
     });

@@ -8,7 +8,7 @@ from app.tools.tool_handler.patch_write.patch_apply import PatchApplyError
 
 
 def _context(tmp_path: Path) -> ToolExecutionContext:
-    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=917)
+    return ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=917)
 
 
 def _valid_patch() -> str:
@@ -123,7 +123,7 @@ def test_hunk_validation_failure_does_not_write_any_file(tmp_path: Path) -> None
 # 使模型能核对「按正文应用」的结果，而不是重复失败到触顶。
 # 2026-09-21 契约 B：计数不符改为按正文重算 + 提示——工具不再报错，而是报 success 且**确实写入**，
 # 并把「第几个 hunk、头部原文、声明值、实际值」写进模型可见的 content。原「error + 零写入」的期望
-# 已过时（任务要求把该用例翻转到新契约）。
+# 已过时（会话要求把该用例翻转到新契约）。
 def test_hunk_count_mismatch_is_repaired_and_names_the_bad_header(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("keep\nold\n", encoding="utf-8")

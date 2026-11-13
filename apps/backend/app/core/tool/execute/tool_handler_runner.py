@@ -26,7 +26,7 @@ from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.models.enums.error_kind import ErrorKind
 
@@ -45,7 +45,7 @@ class ToolHandlerRunner:
     - 其余（含默认 ``"thread"``）：在当前调用线程直接运行 handler，无子进程 / Queue / pickle /
       日志桥开销，但**无硬超时强杀**。
 
-    取消语义：观察 Task 级与工具级两类进程内取消信号（见 :meth:`_cancel_sources`），命中即停止
+    取消语义：观察 Session 级与工具级两类进程内取消信号（见 :meth:`_cancel_sources`），命中即停止
     本次调用并返回 ``cancelled`` 观察；工具级信号只中止本次调用，run 与 Agent 继续执行。
     process 路径在启动前与等待期间轮询；thread 路径只在 handler 执行**前**检查一次——同步
     handler 无法中途打断，跑完后也不推翻其真实结果。
@@ -67,7 +67,7 @@ class ToolHandlerRunner:
         参数:
             arguments: 已通过准入门禁与参数校验的关键字参数字典。
             execution_context: 本次调用的完整执行边界；``tool_call_id`` 用于回写观察结果，并与
-                ``task_id`` 一起界定取消检查的范围。
+                ``session_id`` 一起界定取消检查的范围。
 
         副作用:
             无论结果如何，退出前释放本次调用的工具级取消信号。
@@ -79,7 +79,7 @@ class ToolHandlerRunner:
             return self._execute_in_thread(tool, arguments, execution_context)
         finally:
             tool_call_cancellation_registry.clear(
-                execution_context.task_id, execution_context.tool_call_id
+                execution_context.session_id, execution_context.tool_call_id
             )
 
     # ------------------------------------------------------------------
@@ -290,16 +290,16 @@ class ToolHandlerRunner:
 
     @staticmethod
     def _cancel_sources(execution_context: ToolExecutionContext) -> tuple[bool, bool]:
-        """返回 ``(Task 级已取消, 本调用已取消)``；每次调用都重新读两个注册表。
+        """返回 ``(Session 级已取消, 本调用已取消)``；每次调用都重新读两个注册表。
 
-        Task 级信号（按 ``task_id``）停止整个 Task 的当前执行；工具级信号（按 ``task_id`` +
+        Session 级信号（按 ``session_id``）停止整个 Session 的当前执行；工具级信号（按 ``session_id`` +
         ``tool_call_id``）只中止本次调用。必须现读而不是在执行开始时取一次快照：快照会让工具
         启动之后到达的取消永远查不到。
         """
         return (
-            cancellation_registry.is_cancelled(execution_context.task_id),
+            cancellation_registry.is_cancelled(execution_context.session_id),
             tool_call_cancellation_registry.is_cancelled(
-                execution_context.task_id, execution_context.tool_call_id
+                execution_context.session_id, execution_context.tool_call_id
             ),
         )
 

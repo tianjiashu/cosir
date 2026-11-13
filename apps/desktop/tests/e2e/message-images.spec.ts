@@ -17,7 +17,7 @@ async function openWithUserImages(page: Page, request: APIRequestContext, count:
     type: "image" as const, image: `cosir-attachment://${index.toString(16).padStart(64, "0")}`,
   }));
   await seedState(request, 42, snapshot);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
 }
 
 test.beforeEach(async ({ request }) => {

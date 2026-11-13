@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.tool_handler.search.errors import (
     SearchCancelled,
     SearchPathNotFound,
@@ -28,27 +28,27 @@ class SearchScope:
 
     ``path`` 是已经通过 PathResolver 安全解析的绝对路径。目录 scope 递归遍历，
     文件 scope 只产生自身一个 candidate；engine 不需要再次判断路径类型。
-    handler 必须提供所属 Task（取消信号按 Task 记录）和基于 monotonic 的绝对截止
+    handler 必须提供所属 Session（取消信号按 Session 记录）和基于 monotonic 的绝对截止
     时间；遍历与内容处理共用此预算。
     """
 
     workspace_root: Path
     path: Path
     kind: ScopeKind
-    task_id: int
+    session_id: int
     deadline: float
 
     @classmethod
     def from_path(
-        cls, workspace_root: Path, path: Path, task_id: int, deadline: float
+        cls, workspace_root: Path, path: Path, session_id: int, deadline: float
     ) -> SearchScope:
         """从已解析路径创建 scope，并拒绝不存在或不可搜索的目录项。"""
 
         try:
             if path.is_file():
-                return cls(workspace_root, path, "file", task_id, deadline)
+                return cls(workspace_root, path, "file", session_id, deadline)
             if path.is_dir():
-                return cls(workspace_root, path, "directory", task_id, deadline)
+                return cls(workspace_root, path, "directory", session_id, deadline)
         except OSError as exc:
             raise SearchPathUnreadable(str(path)) from exc
         raise SearchPathNotFound(str(path))
@@ -56,7 +56,7 @@ class SearchScope:
     def check_cancel_and_timeout(self) -> None:
         """检查 scope 是否已被取消或超时。"""
 
-        if cancellation_registry.is_cancelled(self.task_id):
+        if cancellation_registry.is_cancelled(self.session_id):
             raise SearchCancelled("search cancelled")
         if time.monotonic() >= self.deadline:
             raise SearchTimedOut("search timed out")

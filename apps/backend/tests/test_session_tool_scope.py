@@ -1,0 +1,98 @@
+"""Session 类型规则（``models.session_kind``）决定各类 Session 固化的工具面，并守住规则表的扩展点。
+
+对真实注册表断言：需要用户界面来自工具自己的声明（``needs_user_surface`` / ``user_decision``），
+新增工具不必改任何清单；派生工具是封闭集合，按工具名登记在 ``core.tool.derivation``。
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.config.configuration import get_tool_registry
+from app.config.settings import Settings
+from app.core.tool.multi_agent.derivation import DERIVATIONS
+from app.core.tool.multi_agent.session_tool_scope import banned_derivation_tools, tools_for_session
+from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
+from app.models.session_kind import SESSION_KINDS, USER_FACING_SESSION_TYPES, SessionType
+
+pytestmark = pytest.mark.usefixtures("backend_env")
+
+# 只能给用户能操作的对话：需要用户作答的 HITL / 交接与配置草稿。
+_USER_SURFACE_ONLY = {"browser_handoff", "propose_agent_configuration"}
+
+
+def _names(session_type: str, depth: int = 0) -> set[str]:
+    definitions = get_tool_registry().get_all_definitions()
+    return {tool.name for tool in tools_for_session(session_type, definitions, depth=depth)}
+
+
+def _terminal_session_tools() -> set[str]:
+    return set(get_tool_registry().tool_groups_to_tool_names([TOOL_GROUP_TERMINAL_SESSION]))
+
+
+def test_rule_table_is_closed_over_its_own_references() -> None:
+    """扩展守卫：派生建出的类型都已登记、HITL 工具都只给侧栏。
+
+    派生工具都在注册表里：工具改名时这里失败，而不是过滤悄悄失效。
+    """
+    assert {rule.creates for rule in DERIVATIONS.values()} <= set(SESSION_KINDS)
+    assert {"user", "user_fork", "agent_fork"} == USER_FACING_SESSION_TYPES
+    definitions = get_tool_registry().get_all_definitions()
+    assert {rule.tool for rule in DERIVATIONS.values()} <= {tool.name for tool in definitions}
+    assert all(
+        tool.requires_user_surface for tool in definitions if tool.user_decision is not None
+    )
+
+
+def test_sidebar_conversations_get_every_tool() -> None:
+    everything = set(get_tool_registry().get_all_tool_names())
+    assert _names("user") == _names("user_fork") == everything
+    assert _names("agent_fork") == everything - {"fork_session"}
+
+
+def test_read_only_sessions_can_delegate_but_not_use_user_surfaces() -> None:
+    """委派子 Agent 只读：去掉需要用户界面的工具，委派与等待照常保留。"""
+    names = _names("delegated")
+    assert not names & (_USER_SURFACE_ONLY | _terminal_session_tools())
+    # 终端读取与停止不依赖用户界面：子 Agent 也能读、停自己的命令。
+    assert {"terminal_list", "terminal_read", "terminal_stop"} <= names
+    assert {"delegate_task", "send_message", "session_status", "wait_messages"} <= names
+    # fork 出的是侧栏会话：只读 Session 不能 fork。
+    assert "fork_session" not in names
+    assert {"read_file", "execute_terminal", "browser_navigate"} <= names
+
+
+def test_unknown_session_type_is_an_assembly_defect() -> None:
+    with pytest.raises(KeyError):
+        tools_for_session("mystery", [], depth=0)
+
+
+_DERIVATION_TOOLS = {"delegate_task", "fork_session"}
+
+
+@pytest.mark.parametrize("session_type", ["user", "user_fork", "agent_fork", "delegated"])
+def test_sessions_at_the_depth_limit_get_no_derivation_tools(monkeypatch, session_type: str) -> None:
+    """深度到上限的 Session 创建时就拿不到派生工具；没到时按类型规则给，等待与通信工具照常保留。"""
+    monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
+    assert "delegate_task" in _names(session_type, depth=1)
+    at_limit = _names(session_type, depth=2)
+    assert not at_limit & _DERIVATION_TOOLS
+    assert {"wait_messages", "read_file"} <= at_limit
+
+
+def test_agent_fork_cannot_fork_but_keeps_the_other_derivations(monkeypatch) -> None:
+    """分叉的派生限制走准入：Agent fork 少 ``fork_session``，到上限全禁，用户手动分叉不受限。"""
+    monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
+    assert banned_derivation_tools(SessionType.AGENT_FORK, 1) == {"fork_session"}
+    assert banned_derivation_tools(SessionType.AGENT_FORK, 2) == _DERIVATION_TOOLS
+    assert banned_derivation_tools(SessionType.USER_FORK, 0) == frozenset()
+
+
+def test_session_type_enum_covers_rules_and_response_schema():
+    from app.api.schemas.response.SessionResponse import SessionResponse
+    assert set(SESSION_KINDS) == set(SessionType)
+    assert all(isinstance(rule.creates, SessionType) for rule in DERIVATIONS.values())
+    schema = SessionResponse.model_json_schema()
+    assert set(schema["$defs"]["SessionType"]["enum"]) == {kind.value for kind in SessionType}
+    with pytest.raises(ValueError):
+        SessionType("fork")

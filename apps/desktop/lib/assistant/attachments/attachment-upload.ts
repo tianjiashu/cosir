@@ -46,7 +46,7 @@ export function isSupportedImageFile(file: Pick<File, "name" | "type">): boolean
 const UPLOAD_TIMEOUT_MS = 120_000;
 
 /**
- * 通过 workspace 级 HTTP 接口上传图片；不创建或绑定 Task/Run。
+ * 通过 workspace 级 HTTP 接口上传图片；不创建或绑定 Session/Run。
  * 上传成功后返回 workspace 内稳定的 asset locator，调用方再把 locator
  * 放入 Assistant Transport 的 image part。
  *

@@ -72,8 +72,8 @@ describe("BrowserDownloads", () => {
     const downloads = new BrowserDownloads({ onChange: vi.fn(), note: vi.fn() });
     const a = fakeItem("report.csv");
     const b = fakeItem("report.csv");
-    downloads.accept(a, { taskId: 1, tabId: "t1", directory: dir });
-    downloads.accept(b, { taskId: 2, tabId: "t5", directory: dir });
+    downloads.accept(a, { sessionId: 1, tabId: "t1", directory: dir });
+    downloads.accept(b, { sessionId: 2, tabId: "t5", directory: dir });
     expect([a.savePath, b.savePath]).toEqual([path.join(dir, "report (1).csv"), path.join(dir, "report (2).csv")]);
   });
 
@@ -82,15 +82,15 @@ describe("BrowserDownloads", () => {
     const dir = directory();
     const downloads = new BrowserDownloads({ onChange: vi.fn(), note: vi.fn() });
     const running = fakeItem("big.zip");
-    downloads.accept(running, { taskId: 1, tabId: "t1", directory: dir });
+    downloads.accept(running, { sessionId: 1, tabId: "t1", directory: dir });
     for (let index = 0; index < 7; index += 1) {
       const item = fakeItem(`f${index}.txt`);
-      downloads.accept(item, { taskId: 1, tabId: "t1", directory: dir });
+      downloads.accept(item, { sessionId: 1, tabId: "t1", directory: dir });
       item.emit("done", {}, "completed");
     }
     const kept = downloads.list();
     expect(kept.map((item) => item.filename)).toEqual(["big.zip", "f2.txt", "f3.txt", "f4.txt", "f5.txt", "f6.txt"]);
-    downloads.dropTasks([1]);
+    downloads.dropSessions([1]);
     expect(running.cancelled).toBe(true);
     expect(downloads.list()).toEqual([]);
   });
@@ -102,7 +102,7 @@ describe("BrowserDownloads", () => {
     const note = vi.fn();
     const downloads = new BrowserDownloads({ onChange: vi.fn(), note });
     const item = fakeItem("a.csv");
-    downloads.accept(item, { taskId: 3, tabId: "t2", directory: path.join(blocker, "sub") });
+    downloads.accept(item, { sessionId: 3, tabId: "t2", directory: path.join(blocker, "sub") });
     expect(item.cancelled).toBe(true);
     expect(downloads.list()).toEqual([]);
     expect(note).toHaveBeenCalledWith(3, "t2", expect.stringContaining("could not be saved"));
@@ -113,7 +113,7 @@ describe("BrowserDownloads", () => {
     const note = vi.fn();
     const downloads = new BrowserDownloads({ onChange, note });
     const item = fakeItem("a.csv");
-    downloads.accept(item, { taskId: 1, tabId: "t1", directory: directory() });
+    downloads.accept(item, { sessionId: 1, tabId: "t1", directory: directory() });
     onChange.mockClear();
     item.emit("updated", {}, "interrupted");
     expect(onChange).toHaveBeenCalledTimes(1);
@@ -123,22 +123,22 @@ describe("BrowserDownloads", () => {
     expect(note).toHaveBeenLastCalledWith(1, "t1", expect.stringMatching(/finished: .*read-only \.cosir area/));
   });
 
-  // 目的：断线续传中的下载仍是进行中；潜在缺陷：可恢复的中断被当成结局——被挤出列表后再也取消不了，删 Task 时
-  // 既不取消又注销，续传完成后文件写进已删除 Task 的工作区。
+  // 目的：断线续传中的下载仍是进行中；潜在缺陷：可恢复的中断被当成结局——被挤出列表后再也取消不了，删 Session 时
+  // 既不取消又注销，续传完成后文件写进已删除 Session 的工作区。
   it("keeps a download that is resuming after an interruption under management", () => {
     const dir = directory();
     const downloads = new BrowserDownloads({ onChange: vi.fn(), note: vi.fn() });
     const resuming = fakeItem("big.zip");
-    downloads.accept(resuming, { taskId: 1, tabId: "t1", directory: dir });
+    downloads.accept(resuming, { sessionId: 1, tabId: "t1", directory: dir });
     resuming.state = "interrupted";
     resuming.emit("updated", {}, "interrupted");
     for (let index = 0; index < 7; index += 1) {
       const item = fakeItem(`f${index}.txt`);
-      downloads.accept(item, { taskId: 1, tabId: "t1", directory: dir });
+      downloads.accept(item, { sessionId: 1, tabId: "t1", directory: dir });
       item.emit("done", {}, "completed");
     }
     expect(downloads.list().map((item) => item.filename)).toContain("big.zip");
-    downloads.dropTasks([1]);
+    downloads.dropSessions([1]);
     expect(resuming.cancelled).toBe(true);
   });
 });

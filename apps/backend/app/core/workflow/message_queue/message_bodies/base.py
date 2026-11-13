@@ -12,15 +12,15 @@ from pydantic import BaseModel, ConfigDict
 
 from app.models.message_metadata import UserMessageMetadata
 
-TaskMessageKind = Literal[
+SessionMessageKind = Literal[
     "user_input", "agent_message", "system_notice", "background_result", "user_decision"
 ]
 
 WakeScope = Literal["new_or_active", "active", "none"]
-"""一条消息能把 Task 推进到哪一步，``dispatch_policy`` 与挂起判定只读它：
+"""一条消息能把 Session 推进到哪一步，``dispatch_policy`` 与挂起判定只读它：
 
-- ``new_or_active``：唤醒挂起的 Run，Task 空闲（终态或尚无 Run）时凭它开新 Run；
-- ``active``：只对活动 Run 起作用——驱动中不让它挂起、挂起中唤醒它；Task 空闲时不开新 Run，消息
+- ``new_or_active``：唤醒挂起的 Run，Session 空闲（终态或尚无 Run）时凭它开新 Run；
+- ``active``：只对活动 Run 起作用——驱动中不让它挂起、挂起中唤醒它；Session 空闲时不开新 Run，消息
   随下一次推进并入。用于「等着的东西没了」的告知（单项取消的回执、派生工作被停止、重启）：挂起的
   Agent 可能正等着它，空闲的 Agent 不值得为它跑一轮；
 - ``none``：不推进，随下一次推进并入。
@@ -38,7 +38,7 @@ class EnqueuedMessageBody(BaseModel, ABC):
     """
 
     model_config = ConfigDict(extra="forbid")
-    KIND: ClassVar[TaskMessageKind]
+    KIND: ClassVar[SessionMessageKind]
     TAG: ClassVar[str]
     PROMPT_GUIDE: ClassVar[str | None]
     PRIORITY: ClassVar[int]

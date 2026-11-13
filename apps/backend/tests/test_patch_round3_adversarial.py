@@ -115,7 +115,7 @@ def _run_tool(tmp_path: pathlib.Path, patch: str, content: str) -> tuple[str, by
     target = tmp_path / "m.txt"
     target.write_bytes(content.encode("utf-8"))
     observation = ApplyPatchTool().execute(
-        ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=11),
+        ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=11),
         patch=patch,
     )
     after = target.read_bytes() if target.exists() else b""
@@ -467,7 +467,7 @@ def test_copying_the_documented_sample_verbatim_succeeds(tmp_path: pathlib.Path)
     (pkg / "mod.py").write_text(filler + "\n", encoding="utf-8")
 
     observation = ApplyPatchTool().execute(
-        ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=12),
+        ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=12),
         patch=_documented_sample(),
     )
 
@@ -626,7 +626,7 @@ def test_rejected_patch_writes_nothing(tmp_path: pathlib.Path) -> None:
 
     for name, patch in rejected_shapes.items():
         observation = ApplyPatchTool().execute(
-            ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=13),
+            ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=13),
             patch=patch,
         )
 
@@ -644,7 +644,7 @@ def test_context_mismatch_fails_validation_without_writing(tmp_path: pathlib.Pat
     target.write_bytes(b"a\n")
 
     observation = ApplyPatchTool().execute(
-        ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=14),
+        ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=14),
         patch=patch,
     )
 
@@ -662,7 +662,7 @@ def test_successful_patch_emits_file_change_display_payload(tmp_path: pathlib.Pa
     target.write_bytes(b"a\n")
 
     observation = ApplyPatchTool().execute(
-        ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=15),
+        ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=15),
         patch=patch,
     )
 

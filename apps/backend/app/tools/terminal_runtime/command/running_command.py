@@ -23,9 +23,9 @@ from app.tools.terminal_runtime.observation.terminal_observation import Terminal
 
 
 class RunningCommand(ObservedTerminal):
-    """一条命令运行期间的观察对象；由 ``RunningCommandRegistry`` 按 (Task, 调用 id) 持有。
+    """一条命令运行期间的观察对象；由 ``RunningCommandRegistry`` 按 (Session, 调用 id) 持有。
 
-    Task 归属只记在登记表的键上，本对象不重复保存。
+    Session 归属只记在登记表的键上，本对象不重复保存。
     """
 
     def __init__(

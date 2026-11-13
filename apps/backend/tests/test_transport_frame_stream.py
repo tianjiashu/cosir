@@ -15,7 +15,7 @@ _TEXT_PATH = ("messages", 0, "parts", 0, "text")
 
 def mutation_frame(value: str, *, path: tuple[str | int, ...] = _TEXT_PATH) -> TransportFrame:
     return TransportFrame(
-        task_id=1,
+        session_id=1,
         kind="mutation",
         mutations=(ConversationStateMutation("append-text", path, value),),
     )
@@ -28,7 +28,7 @@ async def test_subscriber_coalesces_adjacent_text_and_prioritizes_control_frame(
     subscriber.offer(mutation_frame("b"))
     subscriber.offer(
         TransportFrame(
-            task_id=1,
+            session_id=1,
             kind="resync_required",
             mutations=(),
             resync_reason="subscriber_backpressure",
@@ -48,7 +48,7 @@ async def test_subscriber_keeps_mutations_that_arrive_after_a_full_frame() -> No
     """full 帧之后到达的 mutation 是相对新边界产生的，丢掉就再也补不回来。"""
     subscriber = Subscriber(asyncio.get_running_loop(), mutation_limit=4)
     full = TransportFrame(
-        task_id=1,
+        session_id=1,
         kind="full",
         mutations=(),
         state=cast(ConversationStateSnapshot, {"messages": []}),
@@ -93,7 +93,7 @@ async def test_subscriber_does_not_coalesce_across_activity_change() -> None:
     subscriber.offer(mutation_frame("a"))
     subscriber.offer(
         TransportFrame(
-            task_id=1,
+            session_id=1,
             kind="mutation",
             mutations=(ConversationStateMutation("set", ("activity", "status"), "completed"),),
         )

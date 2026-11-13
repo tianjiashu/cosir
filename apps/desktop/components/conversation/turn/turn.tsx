@@ -20,16 +20,16 @@ import { TurnFooter } from "./turn-footer";
 import { LiveTurnHeading } from "./turn-heading";
 
 export type TurnProps = {
-  taskId: number;
+  sessionId: number;
   readonly: boolean;
-  /** 用户已请求停止 Task 的当前活动、尚未收敛。 */
+  /** 用户已请求停止 Session 的当前活动、尚未收敛。 */
   cancelling: boolean;
   /** 放进回合脚注的回复级操作；回合不知道它是什么。 */
   footerAction?: ReactNode;
 };
 
 /** 调用行按 part 下标订阅 assistant-ui 的 part：拿到 args 与 artifact，同一调用从排队到终态始终是这一行。 */
-const CallRowByIndex = memo(function CallRowByIndex({ index, taskId, interactive, taskCancelling, visible, inherited }: { index: number; taskId: number; interactive: boolean; taskCancelling: boolean; visible: boolean; inherited: boolean }) {
+const CallRowByIndex = memo(function CallRowByIndex({ index, sessionId, interactive, sessionCancelling, visible, inherited }: { index: number; sessionId: number; interactive: boolean; sessionCancelling: boolean; visible: boolean; inherited: boolean }) {
   const part = useAuiState((state) => state.message.parts[index]);
   const [mounted, setMounted] = useState(visible);
   if (visible && !mounted) setMounted(true);
@@ -45,19 +45,19 @@ const CallRowByIndex = memo(function CallRowByIndex({ index, taskId, interactive
       <CallRow
         visible={visible}
         inherited={inherited}
-        taskId={taskId}
+        sessionId={sessionId}
         toolCallId={part.toolCallId}
         toolName={part.toolName}
         args={(part.args ?? {}) as Record<string, unknown>}
         artifact={readToolArtifact(part.artifact)}
         interactive={interactive}
-        taskCancelling={taskCancelling}
+        sessionCancelling={sessionCancelling}
       />
     </RenderIsolationBoundary>
   );
 });
 
-const AttentionByIndex = memo(function AttentionByIndex({ index, taskId, interactive }: { index: number; taskId: number; interactive: boolean }) {
+const AttentionByIndex = memo(function AttentionByIndex({ index, sessionId, interactive }: { index: number; sessionId: number; interactive: boolean }) {
   const part = useAuiState((state) => state.message.parts[index]);
   if (part?.type !== "tool-call") return null;
   return (
@@ -68,7 +68,7 @@ const AttentionByIndex = memo(function AttentionByIndex({ index, taskId, interac
       fallback={({ onRetry }) => <RenderErrorCard scope="tool" label={part.toolName} onRetry={onRetry} />}
     >
       <AttentionCard
-        taskId={taskId}
+        sessionId={sessionId}
         toolCallId={part.toolCallId}
         toolName={part.toolName}
         args={(part.args ?? {}) as Record<string, unknown>}
@@ -84,7 +84,7 @@ const AttentionByIndex = memo(function AttentionByIndex({ index, taskId, interac
  * 不移动正文 DOM；需要操作的卡与文件结果独立保留。布局由 projectTurn 给出，活动计时读取 startedAt，
  * 终态读取 outcome.durationMs，不创造挂起原因或猜测模型最终答复。
  */
-export function Turn({ taskId, readonly, cancelling, footerAction }: TurnProps) {
+export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProps) {
   const messageId = useAuiState((state) => state.message.id);
   const custom = useAuiState((state) => state.message.metadata.custom);
   const turn = custom?.turn as number;
@@ -95,9 +95,9 @@ export function Turn({ taskId, readonly, cancelling, footerAction }: TurnProps) 
   const phase = layout.phase;
   const answerText = useMemo(() => layout.answer.map((item) => item.part.text).join("\n\n"), [layout.answer]);
   const interactive = !readonly && !inherited;
-  const renderCall = useCallback((item: CallItem, visible: boolean) => <CallRowByIndex index={item.index} taskId={taskId} interactive={interactive} taskCancelling={cancelling} visible={visible} inherited={inherited} />, [taskId, interactive, cancelling, inherited]);
+  const renderCall = useCallback((item: CallItem, visible: boolean) => <CallRowByIndex index={item.index} sessionId={sessionId} interactive={interactive} sessionCancelling={cancelling} visible={visible} inherited={inherited} />, [sessionId, interactive, cancelling, inherited]);
 
-  const [processOpen, setProcessOpen] = useDisclosure(taskId, processKey(messageId), layout.defaultProcessOpen);
+  const [processOpen, setProcessOpen] = useDisclosure(sessionId, processKey(messageId), layout.defaultProcessOpen);
   const root = useRef<HTMLDivElement>(null);
   // 焦点不能留在隐藏元素上，交给标题，再按一次就能展开回去。过程收起和块失去常显条件（审批
   // 决定完、当前活动切走）都会隐藏元素，所以每次提交都查，不在焦点里时只有一次 contains。
@@ -123,22 +123,22 @@ export function Turn({ taskId, readonly, cancelling, footerAction }: TurnProps) 
           data-slot={block.kind === "narration" ? "prose-part" : "process-part"} data-part-index={block.index} className="min-w-0">
           {block.kind === "narration" ? <div className="text-foreground text-chat leading-7">
             <MessagePrimitive.PartByIndex index={block.index} components={TEXT_PART_COMPONENTS} />
-          </div> : block.kind === "agent" ? <AgentMessageRow id={block.part.id} text={block.part.text} source={block.part.source} taskId={taskId} />
-            : block.kind === "standalone" ? <CallRowByIndex index={block.index} taskId={taskId} interactive={interactive} taskCancelling={cancelling} visible={!hidden} inherited={inherited} />
-            : <ProcessBlock taskId={taskId} messageId={messageId} group={block} feedback={layout.current?.groupKey === block.key ? (cancelling ? STOPPING_FEEDBACK : layout.current.feedback) : undefined} visible={!hidden} renderCall={renderCall} />}
+          </div> : block.kind === "agent" ? <AgentMessageRow id={block.part.id} text={block.part.text} source={block.part.source} sessionId={sessionId} />
+            : block.kind === "standalone" ? <CallRowByIndex index={block.index} sessionId={sessionId} interactive={interactive} sessionCancelling={cancelling} visible={!hidden} inherited={inherited} />
+            : <ProcessBlock sessionId={sessionId} messageId={messageId} group={block} feedback={layout.current?.groupKey === block.key ? (cancelling ? STOPPING_FEEDBACK : layout.current.feedback) : undefined} visible={!hidden} renderCall={renderCall} />}
         </div>;
       })}
       {/* 输出正文时没有活动槽位，停止反馈不能跟着消失。 */}
       {cancelling && phase === "running" && !layout.current && <ActivityStatus feedback={STOPPING_FEEDBACK} className="block text-2sm" />}
       {stopped && <p data-slot="partial-reply" className="text-muted-foreground text-2sm">{answerText.trim() ? "回复可能尚未完成。" : "尚未生成回复。"}</p>}
       {layout.attention.length > 0 && <div data-slot="attention-zone" className="flex flex-col gap-2">
-        {layout.attention.map((item) => <AttentionByIndex key={item.part.toolCallId} index={item.index} taskId={taskId} interactive={interactive} />)}
+        {layout.attention.map((item) => <AttentionByIndex key={item.part.toolCallId} index={item.index} sessionId={sessionId} interactive={interactive} />)}
       </div>}
-      <ArtifactZone inherited={inherited} taskId={taskId} artifacts={layout.artifacts} interactive={interactive} taskCancelling={cancelling} />
+      <ArtifactZone inherited={inherited} sessionId={sessionId} artifacts={layout.artifacts} interactive={interactive} sessionCancelling={cancelling} />
       <TurnError />
       {!layout.intro && <div>
         <TurnFooter
-          taskId={taskId}
+          sessionId={sessionId}
           messageId={messageId}
           turn={turn}
           inherited={inherited}

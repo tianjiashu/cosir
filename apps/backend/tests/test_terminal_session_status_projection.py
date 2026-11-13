@@ -1,7 +1,7 @@
 """snapshot ``terminal_sessions`` 的契约校验与投影：重建整表填入、变化通知推送 set mutation。
 
-终端会话是进程内事实：重建与刷新只读 ``TerminalSessionService.task_runtimes`` 各会话的 ``snapshot()``，不回写
-工具卡片，也不为未物化 / 已删除的 Task 物化 space。
+终端会话是进程内事实：重建与刷新只读 ``TerminalSessionService.session_runtimes`` 各会话的 ``snapshot()``，不回写
+工具卡片，也不为未物化 / 已删除的 Session 物化 space。
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ from typing import Any
 
 import pytest
 
-from app.assistant_transport.service.conversation_task_state_service import (
-    ConversationTaskStateService,
+from app.assistant_transport.service.conversation_state_service import (
+    ConversationStateService,
 )
 from app.assistant_transport.state.conversation_state_snapshot import (
     empty_snapshot,
@@ -21,15 +21,15 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.assistant_transport.stream import TransportFrame
 from app.service import depends
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
-from app.tools.terminal_runtime.session.session_runtime import SessionSnapshot
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
+from app.tools.terminal_runtime.session.session_runtime import TerminalSessionSnapshot
 
 pytestmark = pytest.mark.usefixtures("isolated_storage", "empty_tool_registry")
 
 
-def _entry(session_id: str = "term_1", **overrides: Any) -> dict[str, Any]:
+def _entry(terminal_session_id: str = "term_1", **overrides: Any) -> dict[str, Any]:
     entry: dict[str, Any] = {
-        "sessionId": session_id,
+        "terminalSessionId": terminal_session_id,
         "shellKind": "zsh",
         "status": "running",
         "endReason": None,
@@ -48,10 +48,10 @@ class _FakeRuntime:
     def __init__(self, entry: dict[str, Any]) -> None:
         self._entry = entry
 
-    def snapshot(self) -> SessionSnapshot:
+    def snapshot(self) -> TerminalSessionSnapshot:
         entry = self._entry
-        return SessionSnapshot(
-            session_id=entry["sessionId"],
+        return TerminalSessionSnapshot(
+            terminal_session_id=entry["terminalSessionId"],
             shell_kind=entry["shellKind"],
             created_at=datetime.fromisoformat(entry["createdAt"]),
             status=entry["status"],
@@ -64,15 +64,15 @@ class _FakeRuntime:
 
 
 class _FakeTerminals:
-    """只实现投影用到的 ``task_runtimes``；``sessions`` 按 task 保存可变条目列表。"""
+    """只实现投影用到的 ``session_runtimes``；``sessions`` 按 session 保存可变条目列表。"""
 
     def __init__(self) -> None:
         self.sessions: dict[int, list[dict[str, Any]]] = {}
         self.calls: list[int] = []
 
-    def task_runtimes(self, task_id: int) -> list[_FakeRuntime]:
-        self.calls.append(task_id)
-        return [_FakeRuntime(entry) for entry in self.sessions.get(task_id, [])]
+    def session_runtimes(self, session_id: int) -> list[_FakeRuntime]:
+        self.calls.append(session_id)
+        return [_FakeRuntime(entry) for entry in self.sessions.get(session_id, [])]
 
 
 @pytest.fixture
@@ -92,20 +92,20 @@ def terminals(monkeypatch: pytest.MonkeyPatch) -> _FakeTerminals:
 @pytest.fixture
 def published(monkeypatch: pytest.MonkeyPatch) -> list[TransportFrame]:
     frames: list[TransportFrame] = []
-    original = ConversationTaskStateService._publish
+    original = ConversationStateService._publish
 
-    def record(self: ConversationTaskStateService, change: TransportFrame) -> None:
+    def record(self: ConversationStateService, change: TransportFrame) -> None:
         frames.append(change)
         original(self, change)
 
-    monkeypatch.setattr(ConversationTaskStateService, "_publish", record)
+    monkeypatch.setattr(ConversationStateService, "_publish", record)
     return frames
 
 
 @pytest.fixture
-def task_id(tmp_path) -> int:
+def session_id(tmp_path) -> int:
     workspace = depends.get_workspace_crud().create("ws", str(tmp_path))
-    return depends.get_task_crud().create(workspace.id, "终端任务").id
+    return depends.get_session_crud().create(workspace.id, "终端会话").id
 
 
 # ── 契约校验 ─────────────────────────────────────────────────────────────
@@ -133,7 +133,7 @@ def test_snapshot_without_terminal_sessions_is_rejected() -> None:
         _entry(commandRunning="yes"),
         _entry(exitCode=True),
         {**_entry(), "handoff": None},
-        _entry(sessionId=""),
+        _entry(terminalSessionId=""),
         {**_entry(), "extra": 1},
         {k: v for k, v in _entry().items() if k != "createdAt"},
     ],
@@ -165,83 +165,83 @@ def test_duplicate_session_ids_are_rejected() -> None:
 
 
 def test_rebuild_fills_terminal_sessions_from_service(
-    terminals: _FakeTerminals, task_id: int
+    terminals: _FakeTerminals, session_id: int
 ) -> None:
-    terminals.sessions[task_id] = [_entry()]
-    state = ConversationTaskStateService().get_state(task_id)
+    terminals.sessions[session_id] = [_entry()]
+    state = ConversationStateService().get_state(session_id)
     assert state["terminal_sessions"] == [_entry()]
 
 
 def test_refresh_publishes_set_mutation_only_on_change(
-    terminals: _FakeTerminals, published: list[TransportFrame], task_id: int
+    terminals: _FakeTerminals, published: list[TransportFrame], session_id: int
 ) -> None:
-    service = ConversationTaskStateService()
-    service.get_state(task_id)
+    service = ConversationStateService()
+    service.get_state(session_id)
     published.clear()
 
-    terminals.sessions[task_id] = [_entry()]
-    service.refresh_terminal_sessions(task_id)
+    terminals.sessions[session_id] = [_entry()]
+    service.refresh_terminal_sessions(session_id)
     assert len(published) == 1
     frame = published[0]
     assert frame.kind == "mutation"
     assert [(m.kind, m.path, m.value) for m in frame.mutations] == [
         ("set", ("terminal_sessions",), [_entry()])
     ]
-    assert service.get_state(task_id)["terminal_sessions"] == [_entry()]
+    assert service.get_state(session_id)["terminal_sessions"] == [_entry()]
 
-    service.refresh_terminal_sessions(task_id)
+    service.refresh_terminal_sessions(session_id)
     assert len(published) == 1, "列表未变化不应再发 mutation"
 
-    terminals.sessions[task_id] = [_entry(status="exited", exitCode=0, endReason="shell_exited")]
-    service.refresh_terminal_sessions(task_id)
+    terminals.sessions[session_id] = [_entry(status="exited", exitCode=0, endReason="shell_exited")]
+    service.refresh_terminal_sessions(session_id)
     assert len(published) == 2
-    assert service.get_state(task_id)["terminal_sessions"][0]["status"] == "exited"
+    assert service.get_state(session_id)["terminal_sessions"][0]["status"] == "exited"
 
 
-def test_refresh_skips_unmaterialized_task_without_creating_space(
-    terminals: _FakeTerminals, published: list[TransportFrame], task_id: int
+def test_refresh_skips_unmaterialized_session_without_creating_space(
+    terminals: _FakeTerminals, published: list[TransportFrame], session_id: int
 ) -> None:
-    terminals.sessions[task_id] = [_entry()]
-    ConversationTaskStateService().refresh_terminal_sessions(task_id)
-    assert task_runtime_spaces.get(task_id) is None
+    terminals.sessions[session_id] = [_entry()]
+    ConversationStateService().refresh_terminal_sessions(session_id)
+    assert session_runtime_spaces.get(session_id) is None
     assert published == []
     assert terminals.calls == []
 
 
 def test_refresh_skips_space_without_snapshot(
-    terminals: _FakeTerminals, published: list[TransportFrame], task_id: int
+    terminals: _FakeTerminals, published: list[TransportFrame], session_id: int
 ) -> None:
-    task_runtime_spaces.get_or_create(task_id)
-    ConversationTaskStateService().refresh_terminal_sessions(task_id)
+    session_runtime_spaces.get_or_create(session_id)
+    ConversationStateService().refresh_terminal_sessions(session_id)
     assert published == []
     assert terminals.calls == []
 
 
-def test_refresh_after_task_deleted_is_silent(
-    terminals: _FakeTerminals, published: list[TransportFrame], task_id: int
+def test_refresh_after_session_deleted_is_silent(
+    terminals: _FakeTerminals, published: list[TransportFrame], session_id: int
 ) -> None:
-    service = ConversationTaskStateService()
-    service.get_state(task_id)
-    task_runtime_spaces.mark_deleted(task_id)
-    service.release_deleted_task(task_id)
+    service = ConversationStateService()
+    service.get_state(session_id)
+    session_runtime_spaces.mark_deleted(session_id)
+    service.release_deleted_session(session_id)
     published.clear()
-    terminals.sessions[task_id] = [_entry()]
-    service.refresh_terminal_sessions(task_id)
+    terminals.sessions[session_id] = [_entry()]
+    service.refresh_terminal_sessions(session_id)
     assert published == []
-    # 从未物化的 Task 收到通知也不抛错。
-    service.refresh_terminal_sessions(task_id + 1000)
+    # 从未物化的 Session 收到通知也不抛错。
+    service.refresh_terminal_sessions(session_id + 1000)
 
 
 def test_refresh_rejects_entries_violating_contract(
-    terminals: _FakeTerminals, task_id: int
+    terminals: _FakeTerminals, session_id: int
 ) -> None:
     """契约守卫在写入侧：违约条目在刷新写入时暴露，工作副本随之丢弃，之后的读取按 canonical 重建
     （重建时同样整份校验，违约照样暴露），不会把违约内容发出去。"""
 
-    service = ConversationTaskStateService()
-    service.get_state(task_id)
-    terminals.sessions[task_id] = [_entry(status="bogus")]
+    service = ConversationStateService()
+    service.get_state(session_id)
+    terminals.sessions[session_id] = [_entry(status="bogus")]
     with pytest.raises(ValueError):
-        service.refresh_terminal_sessions(task_id)
+        service.refresh_terminal_sessions(session_id)
     with pytest.raises(ValueError):
-        service.get_state(task_id)
+        service.get_state(session_id)

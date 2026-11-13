@@ -27,13 +27,13 @@ OVERFLOW_EVENT_TYPE = "subscriber_overflow"
 _METADATA_SIZE = 128
 
 
-def stream_identity(session_id: str) -> StreamEvent:
+def stream_identity(terminal_session_id: str) -> StreamEvent:
     """每个服务端帧都带的身份字段；本模块与 WS 路由（``input_rejected``、``protocol_error``）共用。
 
-    一个 session_id 一生只有一个输出窗口、会话也不跨重启，所以没有窗口代次：后端重启后旧会话在
+    一个 terminal_session_id 一生只有一个输出窗口、会话也不跨重启，所以没有窗口代次：后端重启后旧会话在
     attach 时直接得到 ``TERMINAL_SESSION_NOT_FOUND``。
     """
-    return {"protocol": PROTOCOL, "session_id": session_id}
+    return {"protocol": PROTOCOL, "terminal_session_id": terminal_session_id}
 
 
 @dataclass(frozen=True)
@@ -45,9 +45,9 @@ class _Delivery:
 class TerminalStreamSubscription:
     """绑定一个事件循环的有界订阅；溢出只通知重连，不影响其他读取者。"""
 
-    def __init__(self, loop: asyncio.AbstractEventLoop, session_id: str) -> None:
+    def __init__(self, loop: asyncio.AbstractEventLoop, terminal_session_id: str) -> None:
         self._loop = loop
-        self._session_id = session_id
+        self._terminal_session_id = terminal_session_id
         self._queue: asyncio.Queue[_Delivery] = asyncio.Queue()
         self._lock = threading.Lock()
         self._frames = 0
@@ -80,7 +80,7 @@ class TerminalStreamSubscription:
                 "terminal_stream_loop_closed",
                 extra={
                     "msg": "终端订阅的事件循环已关闭，停止投递",
-                    "data": {"session_id": self._session_id},
+                    "data": {"terminal_session_id": self._terminal_session_id},
                 },
             )
 
@@ -114,9 +114,9 @@ class _OutputFrame:
 class TerminalStreamBuffer:
     """原始输出窗口与订阅集合；所有方法由所属会话锁保护。"""
 
-    def __init__(self, session_id: str, limit: int) -> None:
-        self._session_id = session_id
-        self._identity = stream_identity(session_id)
+    def __init__(self, terminal_session_id: str, limit: int) -> None:
+        self._terminal_session_id = terminal_session_id
+        self._identity = stream_identity(terminal_session_id)
         self._limit = limit
         self._frames: deque[_OutputFrame] = deque()
         self._bytes = 0
@@ -168,7 +168,7 @@ class TerminalStreamBuffer:
         """
         if after_seq is not None and after_seq < self.first_available_seq - 1:
             raise TerminalSessionResyncRequiredError(after_seq, self.first_available_seq)
-        subscription = TerminalStreamSubscription(loop, self._session_id)
+        subscription = TerminalStreamSubscription(loop, self._terminal_session_id)
         replay = tuple(
             self._output_event(frame)
             for frame in self._frames

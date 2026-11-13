@@ -5,7 +5,7 @@ import { activity, assistantMessage, outcome, toolCallPart, transportState, user
 
 test("一次调用中的同路径操作在汇总与过程详情中都逐条保留", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 49, title: "文件操作" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 49, title: "文件操作" } });
   const keyErrors: string[] = [];
   page.on("console", message => { if (/same key|unique.*key/i.test(message.text())) keyErrors.push(message.text()); });
   await seedState(request, 49, transportState({
@@ -16,7 +16,7 @@ test("一次调用中的同路径操作在汇总与过程详情中都逐条保�
       ] },
     })], outcome("completed"))], activity: activity(1, "completed"),
   }));
-  await page.goto("/tasks/49");
+  await page.goto("/sessions/49");
   const card = page.locator('[data-slot="changes-card"]');
   await expect(card).toContainText("2 次操作");
   await card.getByRole("button").click();

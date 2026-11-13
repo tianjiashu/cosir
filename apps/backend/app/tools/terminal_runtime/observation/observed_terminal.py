@@ -54,7 +54,7 @@ class ObservedTerminal(ABC):
         ``pattern`` 把读取变成搜索：从 ``start_line``（缺省为最早保留行）扫到末行，只返回命中行，
         ``limit`` 限制命中数；搜索总是按逻辑行（全屏程序期间搜冻结的主屏）。正则已在参数边界校验。
 
-        ``is_cancelled`` 要同时认 Task 停止与单次调用的取消：等待在工具线程里持锁进行，只靠它复查
+        ``is_cancelled`` 要同时认 Session 停止与单次调用的取消：等待在工具线程里持锁进行，只靠它复查
         取消（thread 工具的执行器只在 handler 执行前检查一次）。
         """
         wait_result: dict[str, object] | None = None

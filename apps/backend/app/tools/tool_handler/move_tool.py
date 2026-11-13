@@ -21,7 +21,7 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_FILE_EDIT
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
@@ -168,7 +168,7 @@ class MoveTool(HandlerBase):
                 "move destination parent directory does not exist. "
                 "Choose a destination whose parent directory already exists.",
             )
-        if cancellation_registry.is_cancelled(execution_context.task_id):
+        if cancellation_registry.is_cancelled(execution_context.session_id):
             return tool_cancelled(tool_name=self.name)
         try:
             current_source, source_error = resolver.resolve_within_workspace(

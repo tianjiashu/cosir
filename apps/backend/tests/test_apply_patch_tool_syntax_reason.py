@@ -211,7 +211,7 @@ def test_success_with_broken_python_reports_english_syntax_content(tmp_path: Pat
             "+def f(]",
         )
     )
-    context = ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1)
+    context = ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1)
 
     observation = ApplyPatchTool().execute(context, patch=patch)
 
@@ -224,7 +224,7 @@ def test_success_with_broken_python_reports_english_syntax_content(tmp_path: Pat
 # A cancelled run must short-circuit to ``cancelled`` before any hunk is written.
 def test_cancelled_run_returns_cancelled_without_writing(tmp_path: Path) -> None:
     from app.core.tool.schemas import ToolExecutionContext
-    from app.core.workflow.cancel.conversation_run_cancellation_registry import (
+    from app.core.workflow.cancel.run_cancellation_registry import (
         cancellation_registry,
     )
 
@@ -243,13 +243,13 @@ def test_cancelled_run_returns_cancelled_without_writing(tmp_path: Path) -> None
     run_id = 7_700_777
     context = ToolExecutionContext(
         step_id="step-1",
-        task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=run_id
+        session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=run_id
     )
-    cancellation_registry.request_cancel(context.task_id)
+    cancellation_registry.request_cancel(context.session_id)
     try:
         observation = ApplyPatchTool().execute(context, patch=patch)
     finally:
-        cancellation_registry.consume(context.task_id)
+        cancellation_registry.consume(context.session_id)
 
     assert observation.status == "cancelled"
     assert target.read_bytes() == b"old\n"

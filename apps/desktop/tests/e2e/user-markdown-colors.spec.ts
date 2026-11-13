@@ -4,10 +4,10 @@ import { seedState, completedState } from "./transport-fixtures";
 
 for (const theme of ["light", "dark"]) test(`${theme}: user inline code has readable local colors, including workspace links`, async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 48, title: "配色" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 48, title: "配色" } });
   await seedState(request, 48, completedState(1, { id: "u", parts: [{ type: "text", text: "检查 `inlineToken` 和 `./src/main.ts`。" }] }, [{ type: "text", text: "助手 `inlineToken`", finalReply: true }]));
   await page.addInitScript(theme => localStorage.setItem("cosir.theme-preference", theme), theme);
-  await page.goto("/tasks/48");
+  await page.goto("/sessions/48");
   const codes = page.locator('[data-role="user"] code');
   await expect(codes).toHaveCount(2);
   const contrasts = await codes.evaluateAll(elements => elements.map(code => {

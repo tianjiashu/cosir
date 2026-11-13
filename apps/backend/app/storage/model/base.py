@@ -2,7 +2,7 @@
 
 所有 ORM 实体继承 ``StorageBase``。基类自动提供三类公共列，业务模型无需重复声明：
 - ``id``：自增整数 surrogate 主键（``Integer``、``primary_key``、``autoincrement``），
-  是表内关联、级联删除与对外查询的唯一主键；业务外键列（如 ``task_id`` / ``run_id``）
+  是表内关联、级联删除与对外查询的唯一主键；业务外键列（如 ``session_id`` / ``run_id``）
   为 ``int`` 类型并指向关联表的 ``id``，由子类自行声明。
 - ``created_at`` / ``updated_at``：ISO-8601 文本时间戳（项目约定时间戳以 ``Text``
   存储，不依赖数据库函数）。``created_at`` 在插入时默认当前 UTC；``updated_at`` 在
@@ -28,7 +28,7 @@ class StorageBase(DeclarativeBase):
     管理，避免每个模型重复定义并手动填充时间戳。``id`` 为自增整数主键（SQLite 仅
     对 ``INTEGER PRIMARY KEY`` 生效 AUTOINCREMENT，故用 ``Integer`` 而非 ``BigInteger``，
     并由 :meth:`__init_subclass__` 为每张表启用 ``sqlite_autoincrement``）；各业务外键列
-    （如 ``task_id`` / ``run_id``）为
+    （如 ``session_id`` / ``run_id``）为
     ``int`` 类型，由子类声明 ``ForeignKey`` 指向关联表的 ``id``。
     """
 
@@ -36,7 +36,7 @@ class StorageBase(DeclarativeBase):
         """映射完成后给每张表开启 ``sqlite_autoincrement``。
 
         不放在基类 ``__table_args__``：子类一声明自己的索引 / 约束就会整体覆盖它，表退化成
-        SQLite 默认的「复用已删除最大 id」，而 Run、Task、message_queue 等表的行 id 是对外身份，复用会
+        SQLite 默认的「复用已删除最大 id」，而 Run、Session、message_queue 等表的行 id 是对外身份，复用会
         让新行与已删除行撞 id。在这里设置后，子类可以自由声明 ``__table_args__``。
         """
         super().__init_subclass__(**kwargs)

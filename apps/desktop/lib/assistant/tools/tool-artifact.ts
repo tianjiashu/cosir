@@ -16,7 +16,7 @@ export type ToolArtifact = {
   display_data: TransportToolDisplayData | null;
   error: string | null;
   errorCode: string | null;
-  childTaskId?: number;
+  childSessionId?: number;
   agent_role?: string;
   /** 后台结果的后台占位（投影自 part `background`，结算后保留）：所有工具共用的「在后台」事实。 */
   background: boolean;

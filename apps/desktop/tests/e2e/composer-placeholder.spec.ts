@@ -35,13 +35,13 @@ async function caretPosition(input: Locator) {
 }
 
 for (const surface of [
-  { name: "新对话", path: "/", label: "新对话内容" },
-  { name: "任务", path: "/tasks/42", label: "消息输入" },
+  { name: "新会话", path: "/", label: "新会话内容" },
+  { name: "会话", path: "/sessions/42", label: "消息输入" },
 ]) {
   for (const width of [1280, 640]) {
     test(`${surface.name}输入框在 ${width}px 下占位与光标对齐，清空后恢复`, async ({ page, request }, testInfo) => {
       await request.post(`${API_ORIGIN}/__test__/reset`);
-      await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "占位对齐回归" } });
+      await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "占位对齐回归" } });
       await page.setViewportSize({ width, height: 900 });
       await page.goto(surface.path);
       const input = page.getByRole("textbox", { name: surface.label, exact: true });

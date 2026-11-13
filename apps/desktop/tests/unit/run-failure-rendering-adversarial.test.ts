@@ -28,8 +28,8 @@ describe("toAssistantMessageStatus 全组合对抗", () => {
   });
 
   it.each(["cancelled", "client_disconnected"])("failed + endReason=%s 仍按 failed 渲染错误，不按旧原因重判状态", (endReason) => {
-    const failed = outcome("failed", { endReason, error: { code: "x", message: "已取消本轮对话" } });
-    expect(toAssistantMessageStatus(ended(failed))).toEqual({ type: "incomplete", reason: "error", error: "已取消本轮对话" });
+    const failed = outcome("failed", { endReason, error: { code: "x", message: "已停止这次运行" } });
+    expect(toAssistantMessageStatus(ended(failed))).toEqual({ type: "incomplete", reason: "error", error: "已停止这次运行" });
   });
 
   it("cancelled 结局即使带 error 契约也必须渲染为已取消，不得显示为错误", () => {

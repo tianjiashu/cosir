@@ -1,4 +1,4 @@
-"""Task/workspace/run 删除领域异常。"""
+"""Session/workspace/run 删除领域异常。"""
 
 
 class DeletionBusyError(RuntimeError):
@@ -8,7 +8,7 @@ class DeletionBusyError(RuntimeError):
         """构造可供 API 映射的忙碌异常。
 
         参数:
-            resource_type: 资源类型，取 ``task`` 或 ``workspace``。
+            resource_type: 资源类型，取 ``session`` 或 ``workspace``。
             resource_id: 资源标识。
 
         返回:
@@ -18,7 +18,7 @@ class DeletionBusyError(RuntimeError):
             ValueError: ``resource_type`` 不在支持范围内。
         """
 
-        if resource_type not in {"task", "workspace"}:
+        if resource_type not in {"session", "workspace"}:
             raise ValueError(f"unsupported deletion resource type: {resource_type}")
         self.resource_type = resource_type
         self.resource_id = resource_id
@@ -27,10 +27,10 @@ class DeletionBusyError(RuntimeError):
         super().__init__(self.message)
 
 
-class ProvisionalTaskCleanupConflictError(RuntimeError):
-    """临时 Task 清理闸门拒绝了不安全的删除请求。"""
+class ProvisionalSessionCleanupConflictError(RuntimeError):
+    """临时 Session 清理闸门拒绝了不安全的删除请求。"""
 
-    def __init__(self, message: str = "provisional task cleanup is not allowed") -> None:
+    def __init__(self, message: str = "provisional session cleanup is not allowed") -> None:
         super().__init__(message)
-        self.code = "PROVISIONAL_TASK_CLEANUP_REJECTED"
+        self.code = "PROVISIONAL_SESSION_CLEANUP_REJECTED"
         self.message = message

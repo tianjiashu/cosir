@@ -31,14 +31,14 @@ describe("Transport snapshot validation", () => {
     expect(parseTransportState(snapshot)).toBe(snapshot);
   });
 
-  it("Task 标题是必填的非空字符串", () => {
+  it("Session 标题是必填的非空字符串", () => {
     const withoutTitle: Record<string, unknown> = { ...transportState() };
     delete withoutTitle.title;
     expect(() => parseTransportState(withoutTitle)).toThrow(TransportSnapshotValidationError);
     expect(() => parseTransportState(transportState({ title: "  " }))).toThrow(TransportSnapshotValidationError);
   });
 
-  it("接受 Task 视角的完整 snapshot：消息、结局、活动与排队消息", () => {
+  it("接受 Session 视角的完整 snapshot：消息、结局、活动与排队消息", () => {
     const snapshot = transportState({
       messages: [userMessage("1", 1), assistantMessage("assistant-1", 1, undefined, outcome("completed"))],
       activity: activity(1, "completed", { endReason: "stop", contextWindowTotal: 128_000 }),
@@ -67,7 +67,7 @@ describe("Transport snapshot validation", () => {
 
   it("拒绝重复会话、未知状态与多余字段", () => {
     expect(() => parseTransportState(transportState({ terminal_sessions: [terminalSession("t1"), terminalSession("t1")] })))
-      .toThrow(/terminal_sessions\[1\]\.sessionId/);
+      .toThrow(/terminal_sessions\[1\]\.terminalSessionId/);
     expect(() => parseTransportState(transportState({
       terminal_sessions: [{ ...terminalSession("t1"), status: "interrupted" } as never],
     }))).toThrow(/terminal_sessions\[0\]\.status/);
@@ -114,17 +114,17 @@ describe("Transport snapshot validation", () => {
     const agent = transportState({ messages: [agentMessage("1", 1)] });
     expect(parseTransportState(agent)).toBe(agent);
     const onAssistant = transportState({
-      messages: [{ ...assistantMessage("assistant-1", 1), source: { taskId: 1, name: "x", report: null } }],
+      messages: [{ ...assistantMessage("assistant-1", 1), source: { sessionId: 1, name: "x", report: null } }],
     });
     expect(() => parseTransportState(onAssistant)).toThrow("messages[0].source");
-    const extra = transportState({ messages: [{ ...agentMessage("1", 1), source: { taskId: 1, name: "x", kind: "agent" } as never }] });
+    const extra = transportState({ messages: [{ ...agentMessage("1", 1), source: { sessionId: 1, name: "x", kind: "agent" } as never }] });
     expect(() => parseTransportState(extra)).toThrow("messages[0].source");
   });
 
   it("途中来信 part 字段固定，来源校验与 user 消息同一份", () => {
     const valid = transportState({ messages: [assistantMessage("assistant-1", 1, [agentMessagePart("5")])] });
     expect(parseTransportState(valid)).toBe(valid);
-    const noSource = { ...agentMessagePart("5"), source: { taskId: 1 } } as never;
+    const noSource = { ...agentMessagePart("5"), source: { sessionId: 1 } } as never;
     expect(() => parseTransportState(transportState({ messages: [assistantMessage("assistant-1", 1, [noSource])] })))
       .toThrow("messages[0].parts[0].source");
   });
@@ -169,10 +169,10 @@ describe("Transport snapshot validation", () => {
   });
 
   it("accepts a positive child Run locator and rejects invalid locators", () => {
-    const part = {presentation: "standalone",  type: "tool-call", awaitingUser: false, toolCallId: "delegate-1", toolName: "delegate_task", status: "running", args: {}, child_task_id: 501 };
+    const part = {presentation: "standalone",  type: "tool-call", awaitingUser: false, toolCallId: "delegate-1", toolName: "delegate_task", status: "running", args: {}, child_session_id: 501 };
     const snapshot = withToolPart(part);
     expect(parseTransportState(snapshot)).toBe(snapshot);
-    expect(() => parseTransportState(withToolPart({ ...part, child_task_id: 0 }))).toThrow("child_task_id");
+    expect(() => parseTransportState(withToolPart({ ...part, child_session_id: 0 }))).toThrow("child_session_id");
   });
 
   it("接受后端 execute_terminal 流式输出的去重序号 terminal_output_seq", () => {
@@ -185,48 +185,48 @@ describe("Transport snapshot validation", () => {
   it("accepts the minimal child session display contract", () => {
     const snapshot = withToolPart({presentation: "standalone",
       type: "tool-call", awaitingUser: false, toolCallId: "delegate-1", toolName: "delegate_task", status: "completed", args: {},
-      display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_task_id: 501, status: "completed" },
+      display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_session_id: 501, status: "completed" },
     });
     expect(parseTransportState(snapshot)).toBe(snapshot);
   });
 
-  it("accepts the send_message / task_status result contract", () => {
+  it("accepts the send_message / session_status result contract", () => {
     const part = (display_data: Record<string, unknown>) => withToolPart({presentation: "activity",
-      type: "tool-call", awaitingUser: false, toolCallId: "status-1", toolName: "task_status", status: "completed", args: {}, display_data,
+      type: "tool-call", awaitingUser: false, toolCallId: "status-1", toolName: "session_status", status: "completed", args: {}, display_data,
     });
     const snapshot = part({
-      kind: "agent-task-result", operation: "status", task_id: 501,
+      kind: "agent-session-result", operation: "status", session_id: 501,
       agent_name: "审查代码", final_output: "已完成审查。", end_reason: null,
     });
     expect(parseTransportState(snapshot)).toBe(snapshot);
-    const sent = part({ kind: "agent-task-result", operation: "send", task_id: 501, agent_name: "收件方" });
+    const sent = part({ kind: "agent-session-result", operation: "send", session_id: 501, agent_name: "收件方" });
     expect(parseTransportState(sent)).toBe(sent);
-    // 对方 Run 的状态读任务状态推送，不在展示数据里。
+    // 对方 Run 的状态读会话状态推送，不在展示数据里。
     expect(() => parseTransportState(part({
-      kind: "agent-task-result", operation: "send", task_id: 501,
-      agent_name: "主任务", status: "completed",
+      kind: "agent-session-result", operation: "send", session_id: 501,
+      agent_name: "主会话", status: "completed",
     }))).toThrow("固定字段");
     expect(() => parseTransportState(part({
-      kind: "agent-task-result", operation: "send", direction: "sideways", task_id: 501,
+      kind: "agent-session-result", operation: "send", direction: "sideways", session_id: 501,
       agent_name: null,
     }))).toThrow("固定字段");
   });
 
   it("accepts the fork display contract and rejects fields outside it", () => {
     const fork = (display_data: Record<string, unknown>) => withToolPart({presentation: "standalone",
-      type: "tool-call", awaitingUser: false, toolCallId: "fork-1", toolName: "fork_task", status: "completed", args: {}, display_data,
+      type: "tool-call", awaitingUser: false, toolCallId: "fork-1", toolName: "fork_session", status: "completed", args: {}, display_data,
     });
-    const snapshot = fork({ kind: "fork-task-result", title: "前端部分", child_task_id: 41 });
+    const snapshot = fork({ kind: "fork-session-result", title: "前端部分", child_session_id: 41 });
     expect(parseTransportState(snapshot)).toBe(snapshot);
-    // 分叉的状态与结论都在它自己的对话里，卡片只带标题与 Task id。
-    expect(() => parseTransportState(fork({ kind: "fork-task-result", title: "前端部分", child_task_id: 41, status: "completed" }))).toThrow("固定字段");
-    expect(() => parseTransportState(fork({ kind: "fork-task-result", title: "前端部分" }))).toThrow();
+    // 分叉的状态与结论都在它自己的对话里，卡片只带标题与 Session id。
+    expect(() => parseTransportState(fork({ kind: "fork-session-result", title: "前端部分", child_session_id: 41, status: "completed" }))).toThrow("固定字段");
+    expect(() => parseTransportState(fork({ kind: "fork-session-result", title: "前端部分" }))).toThrow();
   });
 
   it("rejects child output embedded in a parent delegation display", () => {
     const snapshot = withToolPart({presentation: "standalone",
       type: "tool-call", awaitingUser: false, toolCallId: "delegate-1", toolName: "delegate_task", status: "completed", args: {},
-      display_data: { kind: "delegation-result", title: "审查代码", child_task_id: 501, status: "completed", final_output: "不应进入父级委派卡片" },
+      display_data: { kind: "delegation-result", title: "审查代码", child_session_id: 501, status: "completed", final_output: "不应进入父级委派卡片" },
     });
     expect(() => parseTransportState(snapshot)).toThrow("已知字段");
   });

@@ -10,7 +10,7 @@ import type { BrowserDownload, CosirHost } from "@/electron/shared/host-contract
 const host = { browser: {} } as unknown as CosirHost;
 
 function download(id: string, patch: Partial<BrowserDownload> = {}): BrowserDownload {
-  return { id, taskId: 7, tabId: "t1", filename: `${id}.zip`, path: `/ws/downloads/${id}.zip`, state: "completed", stalled: false, receivedBytes: 10, totalBytes: 10, ...patch };
+  return { id, sessionId: 7, tabId: "t1", filename: `${id}.zip`, path: `/ws/downloads/${id}.zip`, state: "completed", stalled: false, receivedBytes: 10, totalBytes: 10, ...patch };
 }
 
 describe("BrowserDialogBanner", () => {

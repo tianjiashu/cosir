@@ -27,22 +27,22 @@ from app.tools.terminal_runtime.errors import (
     TerminalSessionStateError,
 )
 from app.tools.terminal_runtime.session.session_runtime import (
-    SessionSnapshot,
+    TerminalSessionSnapshot,
     TerminalSessionRuntime,
 )
 from app.tools.terminal_runtime.session.shell_resolver import resolve_session_shell
 
 
 class TerminalSessionService:
-    """终端归 Task 所有，Run 结束不关闭；Task 删除及后端退出负责资源兜底。"""
+    """终端归 Session 所有，Run 结束不关闭；Session 删除及后端退出负责资源兜底。"""
 
     def __init__(self, *, on_sessions_changed: Callable[[int], None]) -> None:
-        """``on_sessions_changed(task_id)`` 在副作用线程、锁外调用：该 Task 的会话条目变了。"""
+        """``on_sessions_changed(session_id)`` 在副作用线程、锁外调用：该 Session 的会话条目变了。"""
         self._on_sessions_changed = on_sessions_changed
         self._registry: dict[str, TerminalSessionRuntime] = {}
         self._ended: OrderedDict[str, TerminalSessionRuntime] = OrderedDict()
         self._registry_lock = threading.RLock()
-        self._closing_tasks: set[int] = set()
+        self._closing_sessions: set[int] = set()
         self._accepting = True
         self._effects = ThreadPoolExecutor(max_workers=1, thread_name_prefix="terminal-effects")
 
@@ -51,7 +51,7 @@ class TerminalSessionService:
     def start(
         self,
         *,
-        task_id: int,
+        session_id: int,
         cwd: str,
         shell: str = "auto",
         integration: str = "auto",
@@ -62,29 +62,29 @@ class TerminalSessionService:
         with self._registry_lock:
             if not self._accepting:
                 raise TerminalSessionStateError("terminal session service is shutting down")
-            if task_id in self._closing_tasks:
-                raise TerminalSessionStateError("task is already closing")
+            if session_id in self._closing_sessions:
+                raise TerminalSessionStateError("session is already closing")
             active = [runtime for runtime in self._registry.values() if runtime.active]
             if len(active) >= Constant.Terminal.MAX_ACTIVE_SESSIONS:
                 raise TerminalSessionCapacityError("maximum active terminal session count reached")
             runtime = TerminalSessionRuntime(
-                task_id=task_id,
+                session_id=session_id,
                 initial_cwd=cwd,
                 spec=spec,
                 notify_sessions_changed=self._notify_sessions_changed,
             )
-            session_id = runtime.session_id
+            terminal_session_id = runtime.terminal_session_id
             # 先登记、后握手：握手期间的会话列表刷新已带上新会话，前端按 HTTP 返回的 id 选中时
             # 不会被一帧尚不含它的列表冲掉（见前端 terminal-workbench-store 的 reconcileActive）。
             # 勿改为握手后登记。
-            self._registry[session_id] = runtime
+            self._registry[terminal_session_id] = runtime
         log.info(
             "terminal_session_creating",
             extra={
                 "msg": "创建终端会话",
                 "data": {
-                    "task_id": task_id,
                     "session_id": session_id,
+                    "terminal_session_id": terminal_session_id,
                     "shell_kind": spec.kind,
                 },
             },
@@ -96,11 +96,11 @@ class TerminalSessionService:
         try:
             runtime.start(on_event)
             with self._registry_lock:
-                stale = not self._accepting or task_id in self._closing_tasks
+                stale = not self._accepting or session_id in self._closing_sessions
             if stale:
                 # 批量清理已赢得终态迁移并负责关闭（等握手结束，见 dispose_worker）；
                 # 这里的 finish 不会再赢，不会重复关闭。
-                raise TerminalSessionStateError("task or backend is closing")
+                raise TerminalSessionStateError("session or backend is closing")
         except Exception as exc:
             reason = f"worker_start_failed: {type(exc).__name__}"
             if runtime.finish("failed", reason):
@@ -108,12 +108,12 @@ class TerminalSessionService:
             raise
         return runtime
 
-    def close(self, session_id: str, *, task_id: int) -> SessionSnapshot:
+    def close(self, terminal_session_id: str, *, session_id: int) -> TerminalSessionSnapshot:
         """重复关闭只返回终态；显式关闭的资源清理失败向调用者报告。
 
-        会话只由用户在终端面板关闭，原因恒为 ``closed_by_user``；Task 删除与后端退出走批量清理。
+        会话只由用户在终端面板关闭，原因恒为 ``closed_by_user``；Session 删除与后端退出走批量清理。
         """
-        runtime = self.require(session_id, task_id)
+        runtime = self.require(terminal_session_id, session_id)
         if runtime.finish("closed", "closed_by_user"):
             error = self._complete_termination(runtime)
             if error is not None:
@@ -129,42 +129,42 @@ class TerminalSessionService:
             self._ended.clear()
         self._effects.shutdown(wait=True)
 
-    def delete_task_sessions(self, task_ids: Iterable[int]) -> int:
-        ids = set(task_ids)
+    def delete_session_terminals(self, session_ids: Iterable[int]) -> int:
+        ids = set(session_ids)
         with self._registry_lock:
-            self._closing_tasks.update(ids)
-        count = self._close_matching(lambda runtime: runtime.task_id in ids, reason="task_deleted")
+            self._closing_sessions.update(ids)
+        count = self._close_matching(lambda runtime: runtime.session_id in ids, reason="session_deleted")
         with self._registry_lock:
-            for session_id, runtime in tuple(self._ended.items()):
-                if runtime.task_id in ids:
-                    self._ended.pop(session_id)
+            for terminal_session_id, runtime in tuple(self._ended.items()):
+                if runtime.session_id in ids:
+                    self._ended.pop(terminal_session_id)
         return count
 
     # ------------------------------------------------------------------ 查询
 
-    def require(self, session_id: str, task_id: int) -> TerminalSessionRuntime:
-        """按 Task 归属取会话（活会话或保留的终态会话），单会话操作由调用方直接调 runtime。
+    def require(self, terminal_session_id: str, session_id: int) -> TerminalSessionRuntime:
+        """按 Session 归属取会话（活会话或保留的终态会话），单会话操作由调用方直接调 runtime。
 
         异常:
             TerminalSessionNotFoundError: 会话不存在（含后端关闭后，集合已清空）。
-            TerminalSessionOwnershipError: 会话不属于该 Task。
+            TerminalSessionOwnershipError: 会话不属于该 Session。
         """
-        runtime = self._lookup(session_id)
+        runtime = self._lookup(terminal_session_id)
         if runtime is None:
-            raise TerminalSessionNotFoundError(f"session {session_id} no longer exists")
-        if runtime.task_id != task_id:
-            raise TerminalSessionOwnershipError("terminal session does not belong to task")
+            raise TerminalSessionNotFoundError(f"session {terminal_session_id} no longer exists")
+        if runtime.session_id != session_id:
+            raise TerminalSessionOwnershipError("terminal session does not belong to session")
         return runtime
 
-    def task_runtimes(self, task_id: int) -> list[TerminalSessionRuntime]:
-        """活跃会话按创建时间在前，随后是最近结束的会话（入历史时已按 Task 裁到
-        ``MAX_ENDED_SESSIONS_PER_TASK`` 个，见 :meth:`_retire_runtime`）。
+    def session_runtimes(self, session_id: int) -> list[TerminalSessionRuntime]:
+        """活跃会话按创建时间在前，随后是最近结束的会话（入历史时已按 Session 裁到
+        ``MAX_ENDED_SESSIONS_PER_SESSION`` 个，见 :meth:`_retire_runtime`）。
 
         结束的会话也列出，让 Agent 与前端知道它已退出。
         """
         with self._registry_lock:
-            active = [r for r in self._registry.values() if r.task_id == task_id]
-            ended = [r for r in self._ended.values() if r.task_id == task_id]
+            active = [r for r in self._registry.values() if r.session_id == session_id]
+            ended = [r for r in self._ended.values() if r.session_id == session_id]
         active.sort(key=lambda runtime: runtime.created_at)
         return [*active, *ended]
 
@@ -181,7 +181,7 @@ class TerminalSessionService:
         with self._registry_lock:
             runtimes = [runtime for runtime in self._registry.values() if predicate(runtime)]
             for runtime in runtimes:
-                self._registry.pop(runtime.session_id, None)
+                self._registry.pop(runtime.terminal_session_id, None)
         for runtime in runtimes:
             if runtime.finish("closed", reason):
                 self._complete_termination(runtime)
@@ -198,7 +198,7 @@ class TerminalSessionService:
         threading.Thread(
             target=self._complete_termination,
             args=(runtime,),
-            name=f"terminal-dispose-{runtime.session_id[-8:]}",
+            name=f"terminal-dispose-{runtime.terminal_session_id[-8:]}",
             daemon=True,
         ).start()
 
@@ -206,7 +206,7 @@ class TerminalSessionService:
         """终态迁移赢家的锁外收尾（只调用一次）：释放 worker、归档、通知。
 
         返回清理异常供显式关闭上报；终态原因已由 runtime 的 ``terminal_session_ended`` 日志按
-        session_id 记录，这里不重复。
+        terminal_session_id 记录，这里不重复。
         """
         error = None
         try:
@@ -217,7 +217,7 @@ class TerminalSessionService:
                 "terminal_session_close_worker_failed",
                 extra={
                     "msg": "Terminal Worker 清理失败",
-                    "data": {"session_id": runtime.session_id},
+                    "data": {"terminal_session_id": runtime.terminal_session_id},
                 },
             )
         self._retire_runtime(runtime)
@@ -225,24 +225,24 @@ class TerminalSessionService:
         return error
 
     def _retire_runtime(self, runtime: TerminalSessionRuntime) -> None:
-        session_id = runtime.session_id
+        terminal_session_id = runtime.terminal_session_id
         with self._registry_lock:
-            if self._registry.get(session_id) is runtime:
-                self._registry.pop(session_id)
-            if not self._accepting or runtime.task_id in self._closing_tasks:
+            if self._registry.get(terminal_session_id) is runtime:
+                self._registry.pop(terminal_session_id)
+            if not self._accepting or runtime.session_id in self._closing_sessions:
                 return
-            self._ended[session_id] = runtime
-            self._ended.move_to_end(session_id)
-            task_ended = [sid for sid, r in self._ended.items() if r.task_id == runtime.task_id]
-            for stale in task_ended[: -Constant.Terminal.MAX_ENDED_SESSIONS_PER_TASK]:
+            self._ended[terminal_session_id] = runtime
+            self._ended.move_to_end(terminal_session_id)
+            session_ended = [sid for sid, r in self._ended.items() if r.session_id == runtime.session_id]
+            for stale in session_ended[: -Constant.Terminal.MAX_ENDED_SESSIONS_PER_SESSION]:
                 self._ended.pop(stale)
             while len(self._ended) > Constant.Terminal.MAX_TERMINAL_HISTORY_SESSIONS:
                 self._ended.popitem(last=False)
 
-    def _notify_sessions_changed(self, task_id: int) -> None:
+    def _notify_sessions_changed(self, session_id: int) -> None:
         """会话条目变化的通知串行交给副作用线程；关闭后的提交直接丢弃（进程正在退出，已无接收方）。"""
         try:
-            self._effects.submit(self._run_effect, lambda: self._on_sessions_changed(task_id))
+            self._effects.submit(self._run_effect, lambda: self._on_sessions_changed(session_id))
         except RuntimeError:
             log.info(
                 "terminal_effect_dropped_after_shutdown",
@@ -259,7 +259,7 @@ class TerminalSessionService:
                 extra={"msg": "终端副作用执行失败（会话列表重投影）", "data": {}},
             )
 
-    def _lookup(self, session_id: str) -> TerminalSessionRuntime | None:
+    def _lookup(self, terminal_session_id: str) -> TerminalSessionRuntime | None:
         """活会话或保留的终态会话。"""
         with self._registry_lock:
-            return self._registry.get(session_id) or self._ended.get(session_id)
+            return self._registry.get(terminal_session_id) or self._ended.get(terminal_session_id)

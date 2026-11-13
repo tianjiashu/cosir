@@ -5,9 +5,9 @@
 
 from datetime import UTC, datetime
 
-# Task 标题的统一上限：创建时的用户输入兜底与 Run 标题支线生成的标题都按它截断，
+# Session 标题的统一上限：创建时的用户输入兜底与 Run 标题支线生成的标题都按它截断，
 # 侧栏窄，过长的标题会挤掉行内操作。
-TASK_TITLE_LIMIT = 20
+SESSION_TITLE_LIMIT = 20
 
 
 def utc_now() -> datetime:

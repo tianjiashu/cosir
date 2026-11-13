@@ -20,17 +20,17 @@ export function ContextObserverPage() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const task = params.get("task_id") ?? "";
+  const session = params.get("session_id") ?? "";
   const turnParam = params.get("turn") ?? "";
-  const taskId = parseId(task);
+  const sessionId = parseId(session);
   const turn = parseId(turnParam);
   const query = useMemo<ContextMessageQuery>(
-    () => ({ taskId, turn }),
-    [taskId, turn],
+    () => ({ sessionId, turn }),
+    [sessionId, turn],
   );
-  const invalid = Boolean((task && !taskId) || (turnParam && !turn) || (turnParam && !task));
-  const hasQuery = !invalid && taskId !== undefined;
-  const scopeKey = `${taskId ?? ""}:${turn ?? ""}`;
+  const invalid = Boolean((session && !sessionId) || (turnParam && !turn) || (turnParam && !session));
+  const hasQuery = !invalid && sessionId !== undefined;
+  const scopeKey = `${sessionId ?? ""}:${turn ?? ""}`;
   const contextQuery = useQuery({
     queryKey: queryKeys.contextMessages(query),
     queryFn: ({ signal }) => getContextMessages(query, { signal }),
@@ -50,13 +50,13 @@ export function ContextObserverPage() {
     void contextQuery.refetch();
   };
   const changeQuery = (next: ContextMessageQuery) => {
-    if (next.taskId === taskId && next.turn === turn && hasQuery) {
+    if (next.sessionId === sessionId && next.turn === turn && hasQuery) {
       refresh();
       return;
     }
     const nextParams = new URLSearchParams();
-    if (next.taskId !== undefined)
-      nextParams.set("task_id", String(next.taskId));
+    if (next.sessionId !== undefined)
+      nextParams.set("session_id", String(next.sessionId));
     if (next.turn !== undefined) nextParams.set("turn", String(next.turn));
     setParams(nextParams, { state: location.state });
   };
@@ -71,8 +71,8 @@ export function ContextObserverPage() {
       data-testid="context-observer"
     >
       <QueryBar
-        key={`${task}:${turnParam}`}
-        task={task}
+        key={`${session}:${turnParam}`}
+        session={session}
         turn={turnParam}
         busy={contextQuery.isFetching}
         hasQuery={hasQuery}
@@ -83,14 +83,14 @@ export function ContextObserverPage() {
       {invalid ? (
         <ErrorState
           className="m-5"
-          message="查询地址无效：Task ID 与回合必须是正整数，按回合查询时要同时给出 Task ID。"
+          message="查询地址无效：Session ID 与回合必须是正整数，按回合查询时要同时给出 Session ID。"
         />
       ) : !hasQuery ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-6">
           <EmptyState
             className="max-w-xl border-0"
             icon={<SearchIcon />}
-            title="选择一个任务（可选回合），开始检查上下文"
+            title="选择一个会话（可选回合），开始检查上下文"
           />
         </div>
       ) : (

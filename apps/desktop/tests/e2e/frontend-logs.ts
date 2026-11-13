@@ -24,11 +24,11 @@ export async function frontendLogs(page: Page): Promise<FrontendLog[]> {
  */
 export async function openedSubscriptionCount(
   page: Page,
-  { surface = "conversation", taskId }: { surface?: "conversation" | "workbench"; taskId?: number } = {},
+  { surface = "conversation", sessionId }: { surface?: "conversation" | "workbench"; sessionId?: number } = {},
 ): Promise<number> {
   return (await frontendLogs(page)).filter((entry) => (
     entry.event === "assistant_transport_subscription_opened"
     && entry.data?.surface === surface
-    && (taskId === undefined || entry.data?.taskId === taskId)
+    && (sessionId === undefined || entry.data?.sessionId === sessionId)
   )).length;
 }

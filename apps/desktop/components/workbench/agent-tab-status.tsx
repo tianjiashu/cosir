@@ -1,6 +1,6 @@
 import { BotIcon, CheckIcon, CircleAlertIcon, ClockIcon, HourglassIcon, LoaderCircleIcon, PauseIcon, SquareIcon, UnplugIcon } from "lucide-react";
-import { AWAITING_USER_LABEL, executionStatusPresentation } from "@/components/task-status/task-status-indicator";
-import { useTaskAwaitingUserCalls, useTaskExecutionStatus, useTaskStatusConnected } from "@/lib/task-status/task-status-store";
+import { AWAITING_USER_LABEL, executionStatusPresentation } from "@/components/session-status/session-status-indicator";
+import { useSessionAwaitingUserCalls, useSessionExecutionStatus, useSessionStatusConnected } from "@/lib/session-status/session-status-store";
 
 const STATUS_ICONS = {
   pending: ClockIcon,
@@ -16,13 +16,13 @@ const TONE_CLASS = {
 };
 
 /**
- * 状态图形占用原 Agent 图标位置；状态来自应用级 Task 状态推送（与侧栏同一来源）。推送断开时
+ * 状态图形占用原 Agent 图标位置；状态来自应用级 Session 状态推送（与侧栏同一来源）。推送断开时
  * 保留上次的状态并标为未同步，避免与草稿未保存圆点混淆。
  */
-export function WorkbenchAgentTabStatus({ taskId, expanded = false }: { taskId: number; expanded?: boolean }) {
-  const status = useTaskExecutionStatus(taskId);
-  const awaitingUser = useTaskAwaitingUserCalls(taskId) > 0;
-  const connected = useTaskStatusConnected();
+export function WorkbenchAgentTabStatus({ sessionId, expanded = false }: { sessionId: number; expanded?: boolean }) {
+  const status = useSessionExecutionStatus(sessionId);
+  const awaitingUser = useSessionAwaitingUserCalls(sessionId) > 0;
+  const connected = useSessionStatusConnected();
   const presentation = executionStatusPresentation(status, true);
   // 等你操作优先于执行状态（与侧栏同一规则）。
   const knownLabel = awaitingUser ? AWAITING_USER_LABEL : presentation?.label ?? "尚未运行";

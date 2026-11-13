@@ -61,7 +61,7 @@ def _write_mcp_servers(cosir_dir: Path, *servers: MCPServerConfig) -> None:
 
 def _context(workspace_root: Path) -> ToolExecutionContext:
     return ToolExecutionContext(
-        task_id=1, workspace_id=1, workspace_root=workspace_root, step_id="step", run_id=1
+        session_id=1, workspace_id=1, workspace_root=workspace_root, step_id="step", run_id=1
     )
 
 

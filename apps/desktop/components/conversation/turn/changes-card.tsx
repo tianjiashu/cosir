@@ -8,10 +8,10 @@ import { fileKey, useDisclosure } from "@/lib/assistant/turn/disclosure-store";
 import { cn } from "@/lib/utils";
 import { SURFACE_CARD_CLASS } from "./turn-tokens";
 
-export type ChangesCardProps = { card: ChangesCardLayout; taskId: number; messageId: string };
+export type ChangesCardProps = { card: ChangesCardLayout; sessionId: number; messageId: string };
 
-function FileHistory({ file, taskId, messageId }: ChangesCardProps & { file: ChangedFile }) {
-  const [open, setOpen] = useDisclosure(taskId, fileKey(messageId, file.path), false);
+function FileHistory({ file, sessionId, messageId }: ChangesCardProps & { file: ChangedFile }) {
+  const [open, setOpen] = useDisclosure(sessionId, fileKey(messageId, file.path), false);
   const single = file.operations.length === 1 ? file.operations[0].change : null;
   return <li className="min-w-0">
     <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="hover:bg-muted flex min-h-8 w-full items-center gap-2 px-3 text-left text-2sm">

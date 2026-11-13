@@ -61,7 +61,7 @@ function joined(...parts: (string | null)[]): string | null {
 
 const path = (args: ToolArgs) => str(args.path);
 const terminalId = (args: ToolArgs) => str(args.terminal_id);
-const taskRef = (args: ToolArgs) => (typeof args.task_id === "number" ? `#${args.task_id}` : null);
+const sessionRef = (args: ToolArgs) => (typeof args.session_id === "number" ? `#${args.session_id}` : null);
 
 const PATCH_FILE_HEADER = /^diff --git a\/(\S+) b\//gm;
 
@@ -139,9 +139,9 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   mcp: { verb: "调用 MCP", icon: "network", target: mcpTarget },
   skill: { verb: "加载 Skill", icon: "puzzle", target: skillTarget },
   delegate_task: { verb: "委派任务", icon: "users", title: (args) => str(args.agent_name), target: (args) => str(args.child_agent_id) },
-  fork_task: { verb: "分叉对话", icon: "git-fork", title: (args) => str(args.title) },
-  send_message: { verb: "发送消息", icon: "send", target: taskRef },
-  task_status: { verb: "读取任务状态", icon: "info", target: taskRef },
+  fork_session: { verb: "分叉会话", icon: "git-fork", title: (args) => str(args.title) },
+  send_message: { verb: "发送消息", icon: "send", target: sessionRef },
+  session_status: { verb: "读取会话状态", icon: "info", target: sessionRef },
   wait_messages: { verb: "等待结果", icon: "clock" },
   propose_agent_configuration: { verb: "生成子 Agent 配置草稿", icon: "bot", target: (args) => str(args.agent_id) },
 };

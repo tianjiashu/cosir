@@ -47,7 +47,7 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _context(root: Path) -> ToolExecutionContext:
     return ToolExecutionContext(
-        task_id=7, workspace_id=1, workspace_root=root, step_id="s", run_id=1, tool_call_id="c1"
+        session_id=7, workspace_id=1, workspace_root=root, step_id="s", run_id=1, tool_call_id="c1"
     )
 
 

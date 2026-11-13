@@ -10,15 +10,15 @@ import pytest
 
 from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
 from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
-from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
-from app.models.conversation_run_options import ConversationRunOptions
+from app.core.workflow.message_queue.session_message import NoticeBody, SessionMessage
+from app.models.run_options import RunOptions
 from app.service.conversation.tool_decision_service import ToolDecisionService
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces as spaces
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces as spaces
 from tests.live_cold_support import LiveColdEnv, tool_call, tool_parts
 from tests.sdk_fixtures import sdk_events
 
 _READ = {"intent": "看文件", "path": "a.txt"}
-_DISABLE_SEARCH = ConversationRunOptions(disabled_tool_groups=[TOOL_GROUP_SEARCH])
+_DISABLE_SEARCH = RunOptions(disabled_tool_groups=[TOOL_GROUP_SEARCH])
 
 _SCENARIOS = {
     "plain": ([([{"content": "hello "}, {"content": "world"}], "stop")], None),
@@ -107,7 +107,7 @@ async def test_a_pending_decision_survives_a_failed_run(backend_env, tmp_path, m
         assert (part["status"], part["awaitingUser"]) == ("pending", True)
         env.assert_parity()
 
-        await asyncio.to_thread(ToolDecisionService().submit, env.task.id, "h1", "approve")
+        await asyncio.to_thread(ToolDecisionService().submit, env.session.id, "h1", "approve")
         await env.until("completed")
         [part] = tool_parts(env.live())
         assert (part["status"], part["awaitingUser"]) == ("completed", False)
@@ -202,7 +202,7 @@ async def test_a_queued_notice_reaches_the_model_right_before_the_input_that_sta
     env = LiveColdEnv(tmp_path, monkeypatch, [([{"content": "结论"}], "stop")])
     try:
         notice = NoticeBody(content="交接通知", notice_kind="fork_handover")
-        spaces.enqueue(env.task.id, TaskMessage.of(notice))
+        spaces.enqueue(env.session.id, SessionMessage.of(notice))
         await asyncio.sleep(0.05)  # 通知单独到达时 actor 不开 Run
         assert env.model.requests == []
         env.send_agent("任务说明")
@@ -225,7 +225,7 @@ async def test_a_cancelled_run_keeps_its_pending_decision(backend_env, tmp_path,
     try:
         env.send()
         await env.parked()
-        await AssistantTransportService().cancel(env.task.id)
+        await AssistantTransportService().cancel(env.session.id)
         await env.until("cancelled")
         [part] = tool_parts(env.live())
         assert part["awaitingUser"] is True
@@ -245,7 +245,7 @@ async def test_resuming_a_failed_run_keeps_live_and_cold_in_step(backend_env, tm
         assert env.live()["activity"]["resumable"] is True
         env.assert_parity()
 
-        await spaces.get(env.task.id).actor.resume()
+        await spaces.get(env.session.id).actor.resume()
         await env.until("completed")
         state = env.live()
         replies = [m for m in state["messages"] if m["role"] == "assistant"]
@@ -269,12 +269,12 @@ async def test_resuming_a_cancelled_run_keeps_live_and_cold_in_step(backend_env,
     try:
         env.send()
         await env.parked()
-        await AssistantTransportService().cancel(env.task.id)
+        await AssistantTransportService().cancel(env.session.id)
         await env.until("cancelled")
         assert env.live()["activity"]["resumable"] is True
         env.assert_parity()
 
-        await spaces.get(env.task.id).actor.resume()
+        await spaces.get(env.session.id).actor.resume()
         await env.until("completed")
         state = env.live()
         replies = [m for m in state["messages"] if m["role"] == "assistant"]

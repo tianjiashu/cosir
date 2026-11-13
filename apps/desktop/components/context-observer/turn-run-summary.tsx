@@ -3,7 +3,7 @@ import { formatTime } from "./message-model";
 
 /**
  * 按回合查询时，这一回合所属运行的状态事实。结局与用量属于整个运行（一个运行可以有多个回合），
- * 所以单独成行、注明归属；起止时间用来按 Task 与时间窗检索后端日志。
+ * 所以单独成行、注明归属；起止时间用来按 Session 与时间窗检索后端日志。
  */
 export function TurnRunSummary({ run }: { run: ContextTurnRun }) {
   const total = run.usage?.total_tokens;

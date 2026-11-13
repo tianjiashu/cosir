@@ -106,8 +106,8 @@ function useComposerDraft(key: string | null): boolean {
   return restoring;
 }
 
-/** 主输入框：草稿 key 就是它所在的 Task。 */
-export function useTaskComposerDraft(enabled: boolean): boolean {
+/** 主输入框：草稿 key 就是它所在的 Session。 */
+export function useSessionComposerDraft(enabled: boolean): boolean {
   const target = useContext(ReferenceTargetScope);
-  return useComposerDraft(enabled && target?.startsWith("task:") ? target : null);
+  return useComposerDraft(enabled && target?.startsWith("session:") ? target : null);
 }

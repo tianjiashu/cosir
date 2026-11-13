@@ -8,7 +8,7 @@ from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
 )
 from app.core.events import ToolCallStatusChangedEvent
-from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.session_context import SessionContextRecord
 from app.models.message_metadata import ToolMessageMetadata, parse_message_metadata
 
 
@@ -45,8 +45,8 @@ from app.models.message_metadata import ToolMessageMetadata, parse_message_metad
     ],
 )
 def test_role_metadata_round_trip_without_polluting_sdk_message(message, metadata):
-    record = ConversationTaskContextRecord(
-        task_id=1,
+    record = SessionContextRecord(
+        session_id=1,
         run_id=1,
         sequence=1,
         include_in_context=True,
@@ -54,7 +54,7 @@ def test_role_metadata_round_trip_without_polluting_sdk_message(message, metadat
         metadata=parse_message_metadata(message["role"], metadata),
         turn=1,
     )
-    restored = ConversationTaskContextRecord._from_model(record._to_model())
+    restored = SessionContextRecord._from_model(record._to_model())
     assert restored.message == message
     assert restored.message_id == record.message_id
     assert restored.metadata == record.metadata
@@ -77,7 +77,7 @@ def test_storage_boundary_rejects_role_mismatch_and_obsolete_shapes(role, metada
 
 
 def _running_state(part: dict) -> dict:
-    """Run 1 运行中、只有一条助手消息承载 ``part`` 的最小 Task snapshot。"""
+    """Run 1 运行中、只有一条助手消息承载 ``part`` 的最小 Session snapshot。"""
 
     return {
         "messages": [
@@ -114,7 +114,7 @@ def _running_state(part: dict) -> dict:
             status="completed",
             display_data={
                 "kind": "delegation-result",
-                "child_task_id": 2,
+                "child_session_id": 2,
                 "role": "saved role",
             },
         ),
@@ -125,8 +125,8 @@ def _running_state(part: dict) -> dict:
     ],
 )
 def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch):
-    call = ConversationTaskContextRecord(
-        task_id=1,
+    call = SessionContextRecord(
+        session_id=1,
         run_id=1,
         sequence=1,
         include_in_context=True,
@@ -143,8 +143,8 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
         },
         turn=1,
     )
-    result = ConversationTaskContextRecord(
-        task_id=1,
+    result = SessionContextRecord(
+        session_id=1,
         run_id=1,
         sequence=2,
         include_in_context=True,
@@ -158,7 +158,7 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
     initial["error"] = "old error"
     state = _running_state(initial)
     event = ToolCallStatusChangedEvent(
-        task_id=1,
+        session_id=1,
         run_id=1,
         tool_call_id="call-1",
         status=metadata.status,
@@ -167,7 +167,7 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
     )
     for mutation in plan_event(event, state, {}):
         initial[mutation.path[-1]] = mutation.value
-    restored = ConversationTaskContextRecord._from_model(result._to_model())
+    restored = SessionContextRecord._from_model(result._to_model())
     cold = pair_tool_parts([call, restored], {})["call-1"]
     assert initial == cold
     assert "model-only result" not in str(cold)
@@ -189,7 +189,7 @@ def test_final_tool_metadata_uses_authoritative_terminal_output():
     }
     state = _running_state(part)
     event = ToolCallStatusChangedEvent(
-        task_id=1,
+        session_id=1,
         run_id=1,
         tool_call_id="call-1",
         status="completed",

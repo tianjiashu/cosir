@@ -6,5 +6,5 @@
   "browser.screenshot": 30,
   "browser.snapshot": 30,
   "browser.tabs": 5,
-  "browser.taskIds": 5
+  "browser.sessionIds": 5
 }

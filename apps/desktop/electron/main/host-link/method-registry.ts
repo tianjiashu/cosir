@@ -7,7 +7,7 @@
  * 长耗时 handler 应据此尽早停下。
  */
 
-export type HostCallMeta = { task_id?: number; tool_call_id?: string };
+export type HostCallMeta = { session_id?: number; tool_call_id?: string };
 
 export type HostMethodHandler = (params: unknown, context: { signal: AbortSignal; meta: HostCallMeta }) => Promise<unknown>;
 

@@ -13,7 +13,7 @@ class StructuredOutputSpec(BaseModel):
 
     配置随 Agent profile 加载，并在执行期随 profile 快照传递。模型调用使用其名称和
     ``json_schema`` 构建临时结构化输出请求；节点仍会在本地执行 JSON Schema 校验，只有
-    校验通过的 JSON 字符串才写入 ConversationRun.final_output。
+    校验通过的 JSON 字符串才写入 Run.final_output。
 
     本模型只承载输出契约，不创建模型、不访问数据库，也不负责重试或 Run 状态迁移。
 

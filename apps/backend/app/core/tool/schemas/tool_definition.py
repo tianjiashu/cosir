@@ -51,19 +51,19 @@ class ToolDefinition:
     # ``"execute"`` 批准或驳回后都由 prepare_input 绕过模型、带着决定再次执行同一调用（如交接：
     # 用户交还即作出决定，重放时取回登记并报告资源状态，执行结果让等待占位收尾）；
     # ``"reply"`` 用户的回答作为消息交给模型（如意图澄清）；``None`` 不需要用户决定。
-    # 非 None 的工具一批里只能单独调用（见 ``tool_batch_runner``），每个 Task 同时最多一个等待中的
+    # 非 None 的工具一批里只能单独调用（见 ``tool_batch_runner``），每个 Session 同时最多一个等待中的
     # 调用由工具自己的事实源保证。
     user_decision: Literal["execute", "reply"] | None = None
     # 产出图片给模型看（观察的 ``images``）：本次 Run 的模型不支持图片输入时，准入门禁直接拒绝，
     # 不进 handler——判定只在 ``ToolAccessGate`` 一处，各工具不再各写一遍。
     returns_images: bool = False
-    # 要在用户能操作的界面里才用得了（交互终端、配置草稿）：只给侧栏对话。需要用户作答的工具
+    # 要在用户能操作的界面里才用得了（交互终端、配置草稿）：只给侧栏会话。需要用户作答的工具
     # （``user_decision`` 非空）天然如此，不必重复声明，见 :attr:`requires_user_surface`。
     needs_user_surface: bool = False
 
     @property
     def requires_user_surface(self) -> bool:
-        """是否只能给用户能操作的 Task（``models.task_kind.TaskKind.user_facing``）。"""
+        """是否只能给用户能操作的 Session（``models.session_kind.SessionKind.user_facing``）。"""
         return self.needs_user_surface or self.user_decision is not None
 
     def normalized(self) -> "ToolDefinition":
@@ -78,7 +78,7 @@ class ToolDefinition:
         return replace(self, parameters_schema=strict_parameters_schema(self.args_model))
 
     def to_model_tool_definition(self) -> dict[str, Any]:
-        """导出可固化到 Task 的 strict function 定义。
+        """导出可固化到 Session 的 strict function 定义。
 
         仅做投影：用本类 ``name`` / ``description`` 覆盖 pydantic 类名（如
         ``SearchContentArgs``），确保 registry / tools_node / 前端全链路使用注册名

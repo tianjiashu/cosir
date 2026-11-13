@@ -23,7 +23,7 @@ async function startModel() {
     let raw = ""; for await (const part of req) raw += part;
     if (!req.url?.endsWith("/chat/completions")) { res.writeHead(404); res.end(); return; }
     const body = JSON.parse(raw);
-    // 非流式请求是标题支线；让它失败，侧栏标题保持创建时的值，用例才能按标题切换 Task。
+    // 非流式请求是标题支线；让它失败，侧栏标题保持创建时的值，用例才能按标题切换 Session。
     if (!body.stream) { res.writeHead(400); res.end(); return; }
     requests.push(body);
     const turn = turns.shift() ?? { text: "脚本之外的请求" };
@@ -52,27 +52,27 @@ async function startModel() {
   return { server, turns, requests, port: (server.address() as { port: number }).port };
 }
 
-/** 一个工作区、若干 Task、一份模型配置。`base` 随后端重启变化，只经 `env` 读取。 */
+/** 一个工作区、若干 Session、一份模型配置。`base` 随后端重启变化，只经 `env` 读取。 */
 class Env {
   base = "";
   root = "";
   modelConfigId = "";
   private constructor(readonly app: ElectronApplication, readonly page: Page, readonly home: string, readonly model: Awaited<ReturnType<typeof startModel>>) {}
 
-  static async open(titles: string[]): Promise<{ env: Env; tasks: number[] }> {
+  static async open(titles: string[]): Promise<{ env: Env; sessions: number[] }> {
     const model = await startModel();
     const { app, page, home } = await launchDesktop();
     const env = new Env(app, page, home, model);
-    await expect(page.getByRole("navigation", { name: "工作区任务列表" })).toBeVisible({ timeout: 120_000 });
+    await expect(page.getByRole("navigation", { name: "工作区会话列表" })).toBeVisible({ timeout: 120_000 });
     env.base = await backendBaseUrl(page);
     const config = (await env.post("/configuration/model-connections", { name: "真实链路", base_url: `http://127.0.0.1:${model.port}/v1`, api_key: "local-test-only", models: [{ model_name: "chain-test", context_window_k: 128, supports_thinking: true, supports_reasoning_effort: true }] }) as { models: { config_id: string; connection_id: string; model_name: string }[] }).models[0]!;
     env.modelConfigId = config.config_id;
     env.root = path.join(home, "chain-workspace"); fs.mkdirSync(env.root);
     const { workspace_id } = await env.post("/workspaces", { name: "真实链路验收", root_path: env.root }) as { workspace_id: number };
-    const tasks: number[] = [];
-    for (const title of titles) tasks.push((await env.post(`/workspaces/${workspace_id}/tasks`, { text: title, creationCommandId: `chain-${title}` }) as { task_id: number }).task_id);
+    const sessions: number[] = [];
+    for (const title of titles) sessions.push((await env.post(`/workspaces/${workspace_id}/sessions`, { text: title, creationCommandId: `chain-${title}` }) as { session_id: number }).session_id);
     await page.reload();
-    return { env, tasks };
+    return { env, sessions };
   }
 
   async post(route: string, body: object): Promise<unknown> {
@@ -81,18 +81,18 @@ class Env {
     return response.json();
   }
 
-  send(task: number, text: string): Promise<unknown> {
-    return this.post(`/tasks/${task}/messages`, { message: { role: "user", parts: [{ type: "text", text }] }, modelConfigId: this.modelConfigId });
+  send(session: number, text: string): Promise<unknown> {
+    return this.post(`/sessions/${session}/messages`, { message: { role: "user", parts: [{ type: "text", text }] }, modelConfigId: this.modelConfigId });
   }
 
-  async state(task: number): Promise<TransportState> {
-    return await attachFirstFrame(this.base, task);
+  async state(session: number): Promise<TransportState> {
+    return await attachFirstFrame(this.base, session);
   }
 
   /** 命令返回时新 Run 可能还没出现，所以等这一轮的回复，而不是等状态落到终态。 */
-  async replied(task: number, text: string): Promise<void> {
+  async replied(session: number, text: string): Promise<void> {
     await expect.poll(async () => {
-      const state = await this.state(task);
+      const state = await this.state(session);
       return state.activity?.status === "completed" && state.messages.flatMap(message => message.parts).some(part => part.type === "text" && part.text === text);
     }, { timeout: 30_000 }).toBe(true);
   }
@@ -144,19 +144,19 @@ test.afterEach(async () => { await env?.close(); env = undefined; });
 test("a vendor reusing one tool call id keeps every call apart, live and after a restart", async () => {
   const opened = await Env.open(["重复调用"]);
   env = opened.env;
-  const [task] = opened.tasks;
+  const [session] = opened.sessions;
   for (const name of ["a", "b", "c", "d"]) fs.writeFileSync(path.join(env.root, `${name}.txt`), `内容-${name}`);
   const read = (name: string): ToolCall => ({ id: "dup", name: "read_file", args: { intent: `读取 ${name}`, path: `${name}.txt`, offset: 1, limit: 500 } });
   await env.open("重复调用");
   env.model.turns.push({ calls: [read("a"), read("b")] }, { calls: [read("c")] }, { text: "第一轮完成" });
-  await env.send(task, "第一轮");
-  await env.replied(task, "第一轮完成");
+  await env.send(session, "第一轮");
+  await env.replied(session, "第一轮完成");
   env.model.turns.push({ calls: [read("d")] }, { text: "第二轮完成" });
-  await env.send(task, "第二轮");
-  await env.replied(task, "第二轮完成");
+  await env.send(session, "第二轮");
+  await env.replied(session, "第二轮完成");
 
   // 后缀规则归后端；这里只要求第一个保持厂商原值、其余互不相同，且结果各归各的。
-  const expected = toolSummary(await env.state(task));
+  const expected = toolSummary(await env.state(session));
   expect(expected.map(part => [part.status, part.intent])).toEqual(["a", "b", "c", "d"].map(name => ["completed", `读取 ${name}`]));
   expect(expected[0].id).toBe("dup");
   expect(new Set(expected.map(part => part.id)).size).toBe(4);
@@ -164,7 +164,7 @@ test("a vendor reusing one tool call id keeps every call apart, live and after a
   expected.forEach(({ id }, index) => expect(results.get(id)).toContain(`内容-${"abcd"[index]}`));
 
   await env.restartBackend();
-  expect(toolSummary(await env.state(task))).toEqual(expected);
+  expect(toolSummary(await env.state(session))).toEqual(expected);
   await expect(env.page.getByText("第二轮完成", { exact: true })).toBeVisible();
   for (const slot of ["process-head", "activity-head"]) {
     const closed = env.page.locator(`[data-slot="${slot}"][aria-expanded="false"]`);
@@ -184,12 +184,12 @@ async function withdrawLatest(page: Page) {
 test("a withdrawn message goes back to the composer, the model no longer sees it, and a stale withdraw is refused", async () => {
   const opened = await Env.open(["撤回甲"]);
   env = opened.env;
-  const [task] = opened.tasks;
+  const [session] = opened.sessions;
   const { page } = env;
   await env.open("撤回甲");
   env.model.turns.push({ text: "第一次回答" });
-  await env.send(task, "原始问题");
-  await env.replied(task, "第一次回答");
+  await env.send(session, "原始问题");
+  await env.replied(session, "第一次回答");
 
   await withdrawLatest(page);
   const composer = page.getByLabel("消息输入");
@@ -200,18 +200,18 @@ test("a withdrawn message goes back to the composer, the model no longer sees it
   await page.keyboard.type("，加上改动");
   env.model.turns.push({ text: "改过之后的回答" });
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  await env.replied(task, "改过之后的回答");
+  await env.replied(session, "改过之后的回答");
   const resent = JSON.stringify(env.model.requests.at(-1)!.messages);
   expect(resent).toContain("原始问题，加上改动");
   expect(resent).not.toContain('"原始问题"');
   expect(resent).not.toContain("第一次回答");
 
   // 撤回请求在途时目标才变：只有后端能发现，以 WITHDRAW_TARGET_STALE 拒绝。放行前让新消息先落定。
-  const withdrawRoute = `${env.base}/tasks/${task}/messages/*/withdraw`;
+  const withdrawRoute = `${env.base}/sessions/${session}/messages/*/withdraw`;
   await page.route(withdrawRoute, async (route) => {
     env!.model.turns.push({ text: "第二条回答" });
-    await env!.send(task, "在途时发出的新消息");
-    await env!.replied(task, "第二条回答");
+    await env!.send(session, "在途时发出的新消息");
+    await env!.replied(session, "第二条回答");
     await route.continue();
   });
   await withdrawLatest(page);
@@ -223,34 +223,34 @@ test("a withdrawn message goes back to the composer, the model no longer sees it
 
 // 目的：模型调用失败时 Run 落定、卡片不悬空、后续模型请求的协议完整；
 // 潜在缺陷：断流留下的半截调用永远显示进行中，或下一次请求带着没有结果的调用被厂商拒绝。
-test("a model failure settles the run and leaves the task usable, live and after a restart", async () => {
+test("a model failure settles the run and leaves the session usable, live and after a restart", async () => {
   const opened = await Env.open(["失败路径"]);
   env = opened.env;
-  const [task] = opened.tasks;
+  const [session] = opened.sessions;
   const { page } = env;
   fs.writeFileSync(path.join(env.root, "a.txt"), "内容-a");
   await env.open("失败路径");
 
   env.model.turns.push({ calls: [{ id: "kept", name: "read_file", args: { intent: "读取 a", path: "a.txt", offset: 1, limit: 500 } }] }, { dropMidCall: true });
-  await env.send(task, "第一次");
-  await expect.poll(async () => (await env!.state(task)).activity?.status, { timeout: 30_000 }).toBe("failed");
-  const settled = toolSummary(await env.state(task));
+  await env.send(session, "第一次");
+  await expect.poll(async () => (await env!.state(session)).activity?.status, { timeout: 30_000 }).toBe("failed");
+  const settled = toolSummary(await env.state(session));
   expect(settled.find(part => part.id === "kept")?.status).toBe("completed");
   expect(settled.filter(part => part.status === "pending" || part.status === "running")).toEqual([]);
 
   env.model.turns.push({ refuse: "测试模型拒绝了请求" });
-  await env.send(task, "第二次");
+  await env.send(session, "第二次");
   await expect(page.getByText("测试模型拒绝了请求").first()).toBeVisible({ timeout: 30_000 });
-  await expect.poll(async () => (await env!.state(task)).activity?.status).toBe("failed");
+  await expect.poll(async () => (await env!.state(session)).activity?.status).toBe("failed");
 
   env.model.turns.push({ text: "恢复后的回答" });
-  await env.send(task, "第三次");
-  await env.replied(task, "恢复后的回答");
+  await env.send(session, "第三次");
+  await env.replied(session, "恢复后的回答");
   const results = resultsById(env.model.requests.at(-1)!.messages);
   expect(results.get("kept")).toContain("内容-a");
 
-  const live = toolSummary(await env.state(task));
+  const live = toolSummary(await env.state(session));
   await env.restartBackend();
-  expect(toolSummary(await env.state(task))).toEqual(live);
+  expect(toolSummary(await env.state(session))).toEqual(live);
   await expect(page.getByText("恢复后的回答", { exact: true })).toBeVisible();
 });

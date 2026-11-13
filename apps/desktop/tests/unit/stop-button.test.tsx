@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { CancelTaskResult } from "@/lib/assistant/task-commands";
+import type { CancelSessionResult } from "@/lib/assistant/session-commands";
 
 const captured = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
-  cancelRun: vi.fn(async (): Promise<CancelTaskResult> => ({ accepted: true })),
+  cancelRun: vi.fn(async (): Promise<CancelSessionResult> => ({ accepted: true })),
 }));
 
 vi.mock("@/components/ui/button", () => ({
@@ -13,8 +13,8 @@ vi.mock("@/components/ui/button", () => ({
     return null;
   },
 }));
-vi.mock("@/lib/assistant/task-commands", () => ({
-  cancelTask: captured.cancelRun,
+vi.mock("@/lib/assistant/session-commands", () => ({
+  cancelSession: captured.cancelRun,
 }));
 
 describe("StopButton", () => {
@@ -23,7 +23,7 @@ describe("StopButton", () => {
     const event = {} as React.MouseEvent<HTMLButtonElement>;
 
     renderToStaticMarkup(
-      <StopButton taskId={42} />,
+      <StopButton sessionId={42} />,
     );
     const onClick = captured.props?.onClick;
     expect(onClick).toEqual(expect.any(Function));
@@ -41,7 +41,7 @@ describe("StopButton", () => {
     });
 
     renderToStaticMarkup(
-      <StopButton taskId={42} />,
+      <StopButton sessionId={42} />,
     );
     const onClick = captured.props?.onClick;
     (onClick as (event: React.MouseEvent<HTMLButtonElement>) => void)({} as React.MouseEvent<HTMLButtonElement>);
@@ -54,7 +54,7 @@ describe("StopButton", () => {
 
     renderToStaticMarkup(
       <StopButton
-        taskId={42}
+        sessionId={42}
         ref={ref}
         data-testid="stop-button"
         aria-label="custom-stop"
@@ -72,7 +72,7 @@ describe("StopButton", () => {
     const { StopButton } = await import("@/components/conversation-runtime/stop-button");
 
     renderToStaticMarkup(
-      <StopButton taskId={42} isCancelling />,
+      <StopButton sessionId={42} isCancelling />,
     );
 
     expect(captured.props?.disabled).toBe(true);

@@ -4,7 +4,7 @@
 mailbox 是进入 Run 的唯一通道：外部队列行的副本确认（删除外部队列行）与 context 写入同一事务提交，
 消息不会丢也不会并入两次；执行内通知没有队列行，写入即可。全部通知（两种来源）先写、合成
 一条 ``<system_notice>``，其余消息再按优先级逐条写。本节点不读外部队列、不按模型截断、不持
-Task 闸门。Run 首次并入用户输入后，顺带启动标题支线（``branch.task_title``，每个 Run 至多
+Session 闸门。Run 首次并入用户输入后，顺带启动标题支线（``branch.session_title``，每个 Run 至多
 一次），它与主线并行、不影响流转。
 
 需要直接执行的用户决定优先级最高、每轮只取一条：工具声明 ``user_decision == "execute"`` 时，
@@ -21,14 +21,14 @@ from typing import cast
 from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
 from app.core.events import InputConsumedEvent, ToolCallStatusChangedEvent
-from app.core.workflow.branch import task_title
+from app.core.workflow.branch import session_title
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.message_queue.task_message import (
+from app.core.workflow.message_queue.session_message import (
     BackgroundResultBody,
     DecisionBody,
     NoticeBody,
-    TaskMessage,
+    SessionMessage,
     notices_to_context,
 )
 from app.core.workflow.node_helper.common import (
@@ -43,11 +43,11 @@ from app.core.workflow.node_helper.tool_observation_projection import (
     settle_background_placeholder,
 )
 from app.models.conversation_input import UserInputPresentation
-from app.models.enums.conversation_run_status import RunTransition
+from app.models.enums.run_status import RunTransition
 from app.models.enums.react_route import ReactRoute
 from app.models.message_metadata import TURN_INPUT_KINDS, ToolMessageMetadata
 from app.service import depends as service_depends
-from app.storage.store_engines import main_session_factory
+from app.storage.store_engines import main_db_factory
 
 
 async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
@@ -57,7 +57,7 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     取消优先于挂起：工具要求等待时 Run 恰好被停，按取消落定。挂起先于步数上限：Agent 明确在等
     消息时不按「步数用完」失败，唤醒后回到这里再检查上限。挂起前 mailbox 已有可唤醒消息（如子 Agent
     结论在工具执行期间送达）就直接继续，省掉「挂起 → 复查 → 唤醒」一圈；之后才到达的消息仍由 actor
-    的挂起后复查兜住。是否可唤醒与调度规则同一条（``TaskMessage.wakes``）：多数通知不算，派生工作
+    的挂起后复查兜住。是否可唤醒与调度规则同一条（``SessionMessage.wakes``）：多数通知不算，派生工作
     被停止这类告知算——它在挂起前一刻到达时，挂起就再没有人来叫醒。前三类落定都不写入：
     外部队列行留给后续执行，执行内通知随 mailbox 重置丢弃。
     """
@@ -98,14 +98,14 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
             consumed_input = True
     # 用户说了新话才值得重新起标题；副本在主线开始流式改写 working copy 前取好。
     patch: dict[str, object] = {**route_state(state.step_count, ReactRoute.MODEL), "batch": ToolBatch(), "wait_for_input": False}
-    if consumed_input and task_title.should_launch(rc, state):
-        task_title.launch(rc, await asyncio.to_thread(_message_context().load_message))
+    if consumed_input and session_title.should_launch(rc, state):
+        session_title.launch(rc, await asyncio.to_thread(_message_context().load_message))
         patch["title_requested"] = True
     # 下一模型步不再看上一批观察或复用本次挂起请求。
     return patch
 
 
-def _executes_tool(message: TaskMessage) -> bool:
+def _executes_tool(message: SessionMessage) -> bool:
     """这条消息是否是「需要绕过模型直接执行」的决定；去向由工具声明，不看批准还是驳回。"""
     if message.kind != "user_decision":
         return False
@@ -114,7 +114,7 @@ def _executes_tool(message: TaskMessage) -> bool:
     return definition is not None and definition.user_decision == "execute"
 
 
-async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | None:
+async def _route_decision(decision: SessionMessage, step_id: str) -> ToolBatch | None:
     """确认并写下这条需要执行的决定；原调用仍在上下文时返回只含该调用的批次，否则交给模型。
 
     先确认再执行（最多执行一次）：确认删除、决定消息与「等待占位推到 ``running``」同一事务提交，
@@ -130,7 +130,7 @@ async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | No
     if claimed is not None and claimed.status == "running":
         emit(
             ToolCallStatusChangedEvent(
-                task_id=rc.run.task_id,
+                session_id=rc.run.session_id,
                 run_id=rc.run.id,
                 step_id=step_id,
                 tool_call_id=body.tool_call_id,
@@ -168,15 +168,15 @@ async def _route_decision(decision: TaskMessage, step_id: str) -> ToolBatch | No
     return ToolBatch(calls=[call], decision=body.model_dump(mode="json"))
 
 
-def _write_notices(notices: list[TaskMessage]) -> None:
+def _write_notices(notices: list[SessionMessage]) -> None:
     """把这一批通知合成一条 ``<system_notice>`` 写入；工作线程执行。
 
     其中的外部队列行与写入同一事务确认，写入以确认返回的行内容为准，已被别的执行确认或被撤回的
     跳过；执行内通知没有行，原样写入。一条都不剩时不写。
     """
     row_ids = [notice.id for notice in notices if notice.id is not None]
-    with main_session_factory().begin() as session:
-        acked = service_depends.get_task_message_queue().ack(session, row_ids) if row_ids else {}
+    with main_db_factory().begin() as db:
+        acked = service_depends.get_session_message_queue().ack(db, row_ids) if row_ids else {}
         bodies = [
             cast(NoticeBody, (acked[notice.id] if notice.id is not None else notice).body)
             for notice in notices
@@ -186,11 +186,11 @@ def _write_notices(notices: list[TaskMessage]) -> None:
             return
         message, metadata = notices_to_context(bodies)
         _message_context().add_message(
-            message, metadata=metadata, session=session, project_to_transport=False
+            message, metadata=metadata, db=db, project_to_transport=False
         )
 
 
-def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: bool = False) -> bool:
+def _write_message(session_message: SessionMessage, *, step_id: str, claim_decision: bool = False) -> bool:
     """确认并写入一条外部队列消息，返回是否实际写入；工作线程执行。
 
     同一事务内先确认删除再写入，写入以确认返回的行内容为准；已被别的执行确认或被用户撤回的消息
@@ -203,9 +203,9 @@ def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: b
     rc = _runtime_context()
     context = _message_context()
     background_event = None
-    with main_session_factory().begin() as session:
-        acked = service_depends.get_task_message_queue().ack(session, [cast(int, task_message.id)])
-        current = acked.get(cast(int, task_message.id))
+    with main_db_factory().begin() as db:
+        acked = service_depends.get_session_message_queue().ack(db, [cast(int, session_message.id)])
+        current = acked.get(cast(int, session_message.id))
         if current is None:
             return False
         message, metadata = current.body.render()
@@ -214,7 +214,7 @@ def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: b
         context.add_message(
             message,
             metadata=metadata,
-            session=session,
+            db=db,
             project_to_transport=current.project_to_transport,
             message_id=current.id if is_turn_input else None,
         )
@@ -225,11 +225,11 @@ def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: b
             placeholder = context.tool_result_metadata(call_id)
             if placeholder is not None and placeholder.awaiting_decision:
                 context.update_tool_result_metadata(
-                    call_id, ToolMessageMetadata(status="running"), session=session
+                    call_id, ToolMessageMetadata(status="running"), db=db
                 )
         elif isinstance(current.body, BackgroundResultBody):
             background_event = settle_background_placeholder(
-                current.body.tool_call_id, current.body, step_id=step_id, session=session
+                current.body.tool_call_id, current.body, step_id=step_id, db=db
             )
     if background_event is not None:
         log.info("background_placeholder_settled", extra={
@@ -241,7 +241,7 @@ def _write_message(task_message: TaskMessage, *, step_id: str, claim_decision: b
     if is_turn_input:
         emit(
             InputConsumedEvent(
-                task_id=rc.task.id,
+                session_id=rc.session.id,
                 run_id=rc.run.id,
                 message_id=cast(int, current.id),
                 presentation=cast(UserInputPresentation, metadata.presentation),
@@ -262,7 +262,7 @@ def _cancel_before_request(step_id: str, run_id: int) -> None:
             "data": {"step_id": step_id, "run_id": run_id},
         },
     )
-    service_depends.get_conversation_run_ledger().transition(
+    service_depends.get_run_ledger().transition(
         run_id,
         RunTransition.CANCEL,
         end_reason=rc.cancel_end_reason(),
@@ -274,7 +274,7 @@ def _cancel_before_request(step_id: str, run_id: int) -> None:
 def _suspend(step_id: str, run_id: int) -> None:
     """有挂起请求且没有现成的可唤醒消息：迁移为 ``suspended``，由 actor 收尾并复查唤醒。"""
     rc = _runtime_context()
-    suspended = service_depends.get_conversation_run_ledger().transition(
+    suspended = service_depends.get_run_ledger().transition(
         run_id, RunTransition.SUSPEND, usage_stats=rc.usage_stats
     )
     log.info(

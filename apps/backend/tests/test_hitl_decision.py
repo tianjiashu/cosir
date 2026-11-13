@@ -21,10 +21,10 @@ from app.core.tool.schemas import ToolCall, ToolDefinition
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.message_queue.task_message import (
+from app.core.workflow.message_queue.session_message import (
     DecisionBody,
     NoticeBody,
-    TaskMessage,
+    SessionMessage,
 )
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
@@ -58,16 +58,16 @@ def _definition(name: str, *, hitl: bool = False) -> ToolDefinition:
     )
 
 
-def _decision(decision: str = "approve", *, message_id: int | None = 5) -> TaskMessage:
-    return TaskMessage.of(
+def _decision(decision: str = "approve", *, message_id: int | None = 5) -> SessionMessage:
+    return SessionMessage.of(
         DecisionBody(tool_call_id="call-hitl", tool_name="hitl_tool", decision=decision),
         message_id=message_id,
     )
 
 
-def _notice(text: str, message_id: int) -> TaskMessage:
+def _notice(text: str, message_id: int) -> SessionMessage:
     """外部队列里的通知行。"""
-    return TaskMessage.of(
+    return SessionMessage.of(
         NoticeBody(content=text, notice_kind="backend_restarted"), message_id=message_id
     )
 
@@ -99,9 +99,9 @@ class _Context:
     def tool_result_metadata(self, _tool_call_id: str) -> ToolMessageMetadata | None:
         return self.placeholder
 
-    def update_tool_result_metadata(self, tool_call_id, metadata, *, session=None):
+    def update_tool_result_metadata(self, tool_call_id, metadata, *, db=None):
         self.updated.append((tool_call_id, metadata))
-        self.update_sessions.append(session)
+        self.update_sessions.append(db)
         self.placeholder = metadata
         return metadata
 
@@ -111,7 +111,7 @@ class _Context:
 # ---------------------------------------------------------------------------
 
 
-def test_task_message_kind_follows_body_and_roundtrips_through_storage() -> None:
+def test_session_message_kind_follows_body_and_roundtrips_through_storage() -> None:
     message = _decision("reject")
     assert (message.kind, message.project_to_transport) == ("user_decision", False)
 
@@ -122,7 +122,7 @@ def test_task_message_kind_follows_body_and_roundtrips_through_storage() -> None
         delivery="immediate",
         project_to_transport=False,
     )
-    restored = TaskMessage.of_model(row)
+    restored = SessionMessage.of_model(row)
     assert restored.body == message.body
     assert restored.id == 9
 
@@ -162,7 +162,7 @@ def test_mailbox_take_first_removes_only_the_first_match() -> None:
     for message in (_notice("a", 11), first, second):
         mailbox.post(message)
 
-    def is_decision(message: TaskMessage) -> bool:
+    def is_decision(message: SessionMessage) -> bool:
         return message.kind == "user_decision"
 
     assert mailbox.take_first(is_decision) is first
@@ -256,7 +256,7 @@ async def test_single_hitl_call_runs_and_receives_the_decision() -> None:
 
 def test_awaiting_placeholder_projects_pending_and_suspends() -> None:
     observation = tool_awaiting_decision("hitl_tool", "c1")
-    event = terminal_event(observation, task_id=1, run_id=2, step_id="step-1", tool_call_id="c1")
+    event = terminal_event(observation, session_id=1, run_id=2, step_id="step-1", tool_call_id="c1")
 
     assert observation.suspend is True
     assert "awaiting the user's decision" in observation.content
@@ -289,7 +289,7 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
     base = ("messages", 0, "parts", 0)
     for status in ("pending", "completed"):
         mutations = plan_tool_call_status_changed(
-            ToolCallStatusChangedEvent(task_id=1, run_id=2, tool_call_id="c1", status=status),
+            ToolCallStatusChangedEvent(session_id=1, run_id=2, tool_call_id="c1", status=status),
             state,
         )
         assert {m.path: m.value for m in mutations}[(*base, "status")] == status
@@ -301,7 +301,7 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _prepare_rc(acked: dict[int, TaskMessage], decision_mode: str | None = "execute"):
+def _prepare_rc(acked: dict[int, SessionMessage], decision_mode: str | None = "execute"):
     tool = _definition("hitl_tool", hitl=True)
     if decision_mode != "execute":
         tool = dataclasses.replace(tool, user_decision=decision_mode)
@@ -355,8 +355,8 @@ async def test_accepting_a_decision_claims_the_placeholder_in_the_same_transacti
 
     [(call_id, metadata)] = context.updated
     assert (call_id, metadata.status) == ("call-hitl", "running")
-    [session] = context.update_sessions
-    assert session is not None  # 加入了确认的事务，而不是提交后再单独写
+    [db] = context.update_sessions
+    assert db is not None  # 加入了确认的事务，而不是提交后再单独写
     [event] = emitted
     assert (event.tool_call_id, event.status) == ("call-hitl", "running")
 
@@ -480,7 +480,7 @@ def test_context_finds_call_and_updates_only_tool_result_metadata() -> None:
     manager = RuntimeMessageContextManager.__new__(RuntimeMessageContextManager)
     manager._used_call_ids = set()
     manager._response_call_ids = {}
-    manager.current_task_id = 1
+    manager.current_session_id = 1
     manager.context_store = SimpleNamespace(
         replace_message=lambda record, **_kw: replaced.append(record)
     )
@@ -516,7 +516,7 @@ def test_decision_result_without_display_keeps_the_placeholder_card() -> None:
     manager._used_call_ids = set()
 
     manager._response_call_ids = {}
-    manager.current_task_id = 1
+    manager.current_session_id = 1
     manager.context_store = SimpleNamespace(replace_message=lambda _record, **_kw: None)
     manager._entries = [
         ContextEntry(

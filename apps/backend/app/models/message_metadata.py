@@ -24,7 +24,7 @@ MessageKind = Literal[
     "tool_result",
     "tool_image",
 ]
-"""Task 消息队列的消息种类；并入 context 后记在 user 消息的 metadata 上，后端规则只读它。"""
+"""Session 消息队列的消息种类；并入 context 后记在 user 消息的 metadata 上，后端规则只读它。"""
 
 CALL_RESULT_KINDS: frozenset[MessageKind] = frozenset(
     {"decision", "background_result", "tool_result", "tool_image"}
@@ -37,7 +37,7 @@ TURN_INPUT_KINDS: frozenset[MessageKind] = frozenset({"user_input", "agent_messa
 
 
 class NoticeEntry(BaseModel):
-    """合成进一条 ``<system_notice>`` 的单条通知：撤回回合时据此重新投递 Task 级通知，工具准入
+    """合成进一条 ``<system_notice>`` 的单条通知：撤回回合时据此重新投递 Session 级通知，工具准入
     通知的推导据 ``banned_tools`` 对照上次告知的禁用集合（见 ``NOTICE_LEVELS``）。"""
 
     model_config = ConfigDict(extra="forbid")
@@ -47,7 +47,7 @@ class NoticeEntry(BaseModel):
 
 
 class UserMessageMetadata(BaseModel):
-    """落库的 user 消息都来自 Task 消息队列：``kind`` 记录来源，一轮的输入另带展示绑定。
+    """落库的 user 消息都来自 Session 消息队列：``kind`` 记录来源，一轮的输入另带展示绑定。
 
     所有队列消息进模型时都是 user 角色，区分来源只能靠 ``kind``，不解析正文标签：编辑资格、
     排队与消费投影都据此判断。模型正文与展示正文是同一份规范化胶囊文本（Skill 已补 ``path``），
@@ -100,7 +100,7 @@ BackgroundKind = Literal["terminal_command"]
 class BackgroundWork(BaseModel):
     """一次后台工作的持久化记录，挂在这次调用的后台占位行上，看板与卡片都从它重建。
 
-    为什么不单独建表：后台工作就是对话里的一次工具调用，占位行已经随对话 fork、撤回、Task
+    为什么不单独建表：后台工作就是对话里的一次工具调用，占位行已经随对话 fork、撤回、Session
     删除；记录挂在它上面，看板就是对话的一个投影，没有第二个事实源要手工同步。工作是否还在跑
     不在这里（进程内 ``command_results`` 的活条目才是），这里只记重启后还需要的事实。
 
@@ -109,7 +109,7 @@ class BackgroundWork(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     kind: BackgroundKind
-    # 启动工作的 Run（只是来历：工作属于 Task，生命周期不看它）。
+    # 启动工作的 Run（只是来历：工作属于 Session，生命周期不看它）。
     run_id: int | None
     # 启动时的调用意图快照；UI 动词、图标与本地化仍归前端。
     label: str

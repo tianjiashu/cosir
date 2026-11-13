@@ -4,19 +4,19 @@ import { formatTurnDiagnostics } from "@/components/conversation-runtime/turn-di
 
 describe("turn diagnostics", () => {
   it("按回合输出可检索的诊断行，不含 Run 标识", () => {
-    expect(formatTurnDiagnostics({ taskId: 12, turn: 3, status: "completed" }))
-      .toBe("task_id=12\nturn=3\nrun_status=completed");
+    expect(formatTurnDiagnostics({ sessionId: 12, turn: 3, status: "completed" }))
+      .toBe("session_id=12\nturn=3\nrun_status=completed");
   });
 
   it("结局带结束原因与错误码时追加", () => {
     expect(formatTurnDiagnostics({
-      taskId: 12,
+      sessionId: 12,
       turn: 3,
       status: "failed",
       endReason: "model_error",
       errorCode: "MODEL_HTTP_ERROR",
     })).toBe([
-      "task_id=12",
+      "session_id=12",
       "turn=3",
       "run_status=failed",
       "end_reason=model_error",

@@ -1,4 +1,4 @@
-"""child-task tool display and canonical parent delegation regressions."""
+"""child-session tool display and canonical parent delegation regressions."""
 
 import json
 from datetime import UTC, datetime
@@ -10,23 +10,23 @@ from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
 )
 from app.core.tool.multi_agent.delegate_task import DelegateTaskTool
-from app.core.tool.multi_agent.task_status import TaskStatusTool
-from app.models.conversation_run_record import ConversationRunRecord
-from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.core.tool.multi_agent.session_status import SessionStatusTool
+from app.models.run_record import RunRecord
+from app.models.session_context import SessionContextRecord
 from app.models.message_metadata import ToolMessageMetadata
 
 
 def _run(
     *,
     run_id: int,
-    task_id: int,
+    session_id: int,
     status: str,
     final_output: str | None = None,
-) -> ConversationRunRecord:
+) -> RunRecord:
     now = datetime(2026, 9, 24, tzinfo=UTC)
-    return ConversationRunRecord(
+    return RunRecord(
         id=run_id,
-        task_id=task_id,
+        session_id=session_id,
         status=status,
         created_at=now,
         updated_at=now,
@@ -37,16 +37,16 @@ def _run(
 
 
 def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> None:
-    result = TaskStatusTool._agent_task_display_data(
-        task_id=2,
+    result = SessionStatusTool._agent_session_display_data(
+        session_id=2,
         agent_name="Review",
         final_output="summary",
         end_reason=None,
     )
     assert result == {
-        "kind": "agent-task-result",
+        "kind": "agent-session-result",
         "operation": "status",
-        "task_id": 2,
+        "session_id": 2,
         "agent_name": "Review",
         "final_output": "summary",
         "end_reason": None,
@@ -57,7 +57,7 @@ def test_parent_delegation_display_never_carries_child_output() -> None:
     display = DelegateTaskTool._delegation_display_data(
         title="Review",
         child_agent_id="reviewer",
-        child_task_id=2,
+        child_session_id=2,
         role="Reviewer",
     )
 
@@ -65,7 +65,7 @@ def test_parent_delegation_display_never_carries_child_output() -> None:
         "kind": "delegation-result",
         "title": "Review",
         "child_agent_id": "reviewer",
-        "child_task_id": 2,
+        "child_session_id": 2,
         "role": "Reviewer",
     }
     assert "final_output" not in display
@@ -75,8 +75,8 @@ def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
     monkeypatch,
 ) -> None:
     rows = [
-        ConversationTaskContextRecord(
-            task_id=1,
+        SessionContextRecord(
+            session_id=1,
             run_id=10,
             message={
                 "role": "assistant",
@@ -103,8 +103,8 @@ def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
             metadata={},
             turn=1,
         ),
-        ConversationTaskContextRecord(
-            task_id=1,
+        SessionContextRecord(
+            session_id=1,
             run_id=10,
             message={"role": "tool", "content": "started", "tool_call_id": "delegate-call"},
             include_in_context=True,
@@ -116,7 +116,7 @@ def test_cold_rebuild_uses_persisted_delegation_display_data_without_inference(
                         "kind": "delegation-result",
                         "title": "Review",
                         "child_agent_id": "reviewer",
-                        "child_task_id": 2,
+                        "child_session_id": 2,
                     },
                 }
             ),

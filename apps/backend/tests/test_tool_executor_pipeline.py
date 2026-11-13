@@ -36,7 +36,7 @@ def _make_context(tmp_path: Path) -> ToolExecutionContext:
         tmp_path: pytest 临时目录，作为 workspace 根。
 
     返回:
-        绑定 task/workspace/run 标识的 ``ToolExecutionContext``。
+        绑定 session/workspace/run 标识的 ``ToolExecutionContext``。
 
     异常:
         无。
@@ -47,7 +47,7 @@ def _make_context(tmp_path: Path) -> ToolExecutionContext:
 
     return ToolExecutionContext(
         step_id="step-1",
-        task_id=1,
+        session_id=1,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=1,

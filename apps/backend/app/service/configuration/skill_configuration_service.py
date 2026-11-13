@@ -110,7 +110,7 @@ class SkillConfigurationService:
         return {skill.name: skill.description for skill in self.catalog.list_skills() if skill.enabled}
 
     def _publish(self, before: dict[str, str | None]) -> None:
-        """写入已提交后，通知固化了 ``skill`` 工具的 Task 目录有哪些可见变化。"""
+        """写入已提交后，通知固化了 ``skill`` 工具的 Session 目录有哪些可见变化。"""
 
         broadcast_catalog_changes(
             CatalogChange.between(

@@ -27,7 +27,7 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_FILE_EDIT
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
@@ -91,7 +91,7 @@ class WriteFileTool(HandlerBase):
         参数:
             path: 待写入的文件路径（相对项目根）。
             content: 待写入的内容。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
+            execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）；
                 由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
                 破坏性操作以其 ``workspace_root`` 作为路径 containment 的唯一事实源。
 
@@ -146,7 +146,7 @@ class WriteFileTool(HandlerBase):
                 )
 
         try:
-            if cancellation_registry.is_cancelled(execution_context.task_id):
+            if cancellation_registry.is_cancelled(execution_context.session_id):
                 return tool_cancelled(
                     tool_name=self.name,
                 )

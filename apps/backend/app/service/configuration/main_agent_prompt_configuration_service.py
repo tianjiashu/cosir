@@ -1,7 +1,7 @@
 """主 Agent 系统提示词的文件配置 service。
 
 负责主 Agent 系统提示词用户文件的创建、读取、预算校验和原子写入，不负责构造 Agent profile、
-系统提示词分层或 Task context 刷新。运行时 profile 的更新由配置装配层在保存成功后完成。
+系统提示词分层或 Session context 刷新。运行时 profile 的更新由配置装配层在保存成功后完成。
 
 提示词事实源唯一：``<system_cosir_dir>/main_agent_system_prompt.md``。该文件不存在时读取会创建
 空白文件，不安装任何随应用分发的内置模板；用户尚未配置时主 Agent 没有系统预设，
@@ -131,7 +131,7 @@ class MainAgentPromptConfigurationService:
 
         副作用：
             原子替换系统 ``.cosir`` 下的主 Agent prompt 文件、写入结构化配置日志，并把变更以增量
-            通知已装配的主 Agent Task。
+            通知已装配的主 Agent Session。
         """
 
         self._assert_writable(content)

@@ -16,7 +16,7 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_FILE_EDIT
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
@@ -116,7 +116,7 @@ class ApplyPatchTool(HandlerBase):
                     "cannot create, delete, or move files."
                 ),
             )
-        if cancellation_registry.is_cancelled(execution_context.task_id):
+        if cancellation_registry.is_cancelled(execution_context.session_id):
             return tool_cancelled(tool_name=self.name)
         try:
             results = apply_all_with_diff(operations, resolver)

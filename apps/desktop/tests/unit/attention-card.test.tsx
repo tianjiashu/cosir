@@ -6,7 +6,7 @@ vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolved
 const handoffs = vi.hoisted(() => new Map<string, { toolCallId: string; toolName: string; resourceId: string; reason: string }>());
 vi.mock("@/lib/handoff/handoff-store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/handoff/handoff-store")>(),
-  useHandoffStore: (selector: (state: { tasks: Record<number, unknown[]> }) => unknown) => selector({ tasks: { 7: [...handoffs.values()] } }),
+  useHandoffStore: (selector: (state: { sessions: Record<number, unknown[]> }) => unknown) => selector({ sessions: { 7: [...handoffs.values()] } }),
 }));
 
 import { AttentionCard, attentionDescription } from "@/components/conversation/turn/attention-card";
@@ -26,7 +26,7 @@ function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
 
 function render(overrides: Partial<ToolArtifact> = {}, interactive = true, toolName = "browser_handoff"): string {
   return renderToStaticMarkup(
-    <AttentionCard taskId={7} toolCallId="call-1" toolName={toolName} args={{ tab: "t1", reason: "完成登录" }} artifact={artifact(overrides)} interactive={interactive} />,
+    <AttentionCard sessionId={7} toolCallId="call-1" toolName={toolName} args={{ tab: "t1", reason: "完成登录" }} artifact={artifact(overrides)} interactive={interactive} />,
   );
 }
 

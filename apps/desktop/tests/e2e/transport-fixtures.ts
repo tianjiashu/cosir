@@ -3,7 +3,7 @@ import type { APIRequestContext } from "@playwright/test";
 import type { TransportMessagePart, TransportState } from "@/lib/assistant/contract";
 import { API_ORIGIN } from "./e2e-env";
 
-/** E2E 共用的 Task 视角 snapshot 构造器，与 tests/e2e/test-server.mjs 的契约一致。 */
+/** E2E 共用的 Session 视角 snapshot 构造器，与 tests/e2e/test-server.mjs 的契约一致。 */
 const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
 
 /** 一个已完成回合的快照；第一个参数是回合号（回复 id 按它编码）。 */
@@ -31,11 +31,11 @@ type ProcessFacts = "terminal_sessions" | "background_tasks" | "foreground_waits
 type SeedState = Omit<TransportState, ProcessFacts> & Partial<Pick<TransportState, ProcessFacts>>;
 
 /** 让模拟后端持有这份 state：attach 首帧与 `readState` 读到的是同一份事实。 */
-export async function seedState(request: APIRequestContext, taskId: number, state: SeedState): Promise<void> {
-  await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { taskId, state } });
+export async function seedState(request: APIRequestContext, sessionId: number, state: SeedState): Promise<void> {
+  await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { sessionId, state } });
 }
 
 /** 模拟后端此刻的 canonical state（attach 首帧会带的那份），供断言后端事实。 */
-export async function readState(request: APIRequestContext, taskId: number): Promise<TransportState> {
-  return await (await request.get(`${API_ORIGIN}/__test__/state?taskId=${taskId}`)).json() as TransportState;
+export async function readState(request: APIRequestContext, sessionId: number): Promise<TransportState> {
+  return await (await request.get(`${API_ORIGIN}/__test__/state?sessionId=${sessionId}`)).json() as TransportState;
 }

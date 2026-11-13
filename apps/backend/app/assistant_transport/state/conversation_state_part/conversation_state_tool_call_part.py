@@ -50,9 +50,9 @@ class ConversationStateToolCallPart(TypedDict):
     # 后台占位的工作记录：存在即后台占位，``pending`` 即「后台执行中」；投影自占位行 metadata。
     background: NotRequired[ConversationBackgroundWork]
     isError: NotRequired[bool]
-    # 子 Task 定位：只有委派与分叉把子 Task 提升到 part，
-    # 委派行据此读应用级任务状态推送，不在展示数据里镜像子 Run 状态。
-    child_task_id: NotRequired[int]
+    # 子 Session 定位：只有委派与分叉把子 Session 提升到 part，
+    # 委派行据此读应用级会话状态推送，不在展示数据里镜像子 Run 状态。
+    child_session_id: NotRequired[int]
     agent_role: NotRequired[str]
     # 进入 ``running`` 的时刻（ISO 8601，取自状态事件），前端据此本地计时运行时长；其余时候为
     # ``None``（建 part、冷重建与离开 running 时）。冷重建没有运行中的调用，所以恒为 ``None``。

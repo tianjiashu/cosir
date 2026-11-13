@@ -140,7 +140,7 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 /** 触发器内的紧凑占用环；仅作视觉提示，可访问的数值由弹层内的 progressbar 提供。 */
 function UsageRing({ percent, tone }: { percent: number; tone: UsageTone }): ReactElement {
   return (
-    <svg viewBox="0 0 16 16" className="size-3.5 -rotate-90" aria-hidden="true" data-testid="task-context-usage-ring">
+    <svg viewBox="0 0 16 16" className="size-3.5 -rotate-90" aria-hidden="true" data-testid="session-context-usage-ring">
       <circle cx="8" cy="8" r={RING_RADIUS} fill="none" strokeWidth="2.5" className="stroke-muted-foreground/25" />
       <circle
         cx="8"
@@ -166,7 +166,7 @@ function statusLabel(status: ContextUsagePresentation["status"]): string {
   return "未测量";
 }
 
-export function TaskContextUsage(): ReactElement {
+export function SessionContextUsage(): ReactElement {
   // useAuiState 以 Object.is 比较快照：selector 返回新建对象会触发无限重渲染，
   // 因此这里逐字段选择原始值，再在渲染期重组测量对象。
   const used = useAuiState((state) => latestMeasuredContextUsage(state.thread.state)?.used ?? null);
@@ -182,7 +182,7 @@ export function TaskContextUsage(): ReactElement {
         render={
           <button
             type="button"
-            data-testid="task-context-usage"
+            data-testid="session-context-usage"
             aria-label={presentation.status === "normal" || presentation.status === "unknown"
               ? presentation.label
               : `${presentation.label}，${statusLabel(presentation.status)}`}
@@ -245,7 +245,7 @@ export function TaskContextUsage(): ReactElement {
 
 /**
  * 回复所属 Run 的用量（用量属于整个 Run，挂在它最后一条回复上）。数据由消息自身携带：历史回复取 `outcome.usage`，当前活动的最后一条回复取
- * `activity.usage`（见 frame store 的消息渲染上下文），不回查 Task 级 state。
+ * `activity.usage`（见 frame store 的消息渲染上下文），不回查 Session 级 state。
  */
 export function RunUsageDisplay({ usage, running, visible }: {
   usage: TransportUsage | null;

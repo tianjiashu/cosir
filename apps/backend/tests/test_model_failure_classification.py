@@ -24,7 +24,7 @@ from app.core.llm_provider.model_failure import (
     classify_model_failure,
     extract_model_response_message,
 )
-from app.models.conversation_run_failure import run_failure_message
+from app.models.run_failure import run_failure_message
 from app.models.enums.error_kind import ErrorKind
 
 # 文案里绝不允许出现的厂商/模型词（大小写不敏感比较）。

@@ -18,7 +18,7 @@ def test_configure_logging_writes_fixed_jsonl_record(tmp_path: Path) -> None:
     try:
         log.info(
             "backend_file_log_test",
-            extra={"msg": "固定格式日志测试", "data": {"task_id": "task-1"}},
+            extra={"msg": "固定格式日志测试", "data": {"session_id": "session-1"}},
         )
     finally:
         reset_log_context(token)
@@ -42,7 +42,7 @@ def test_configure_logging_writes_fixed_jsonl_record(tmp_path: Path) -> None:
     assert record["level"] == "INFO"
     assert record["trace_id"] == "a" * 32
     assert record["msg"] == "固定格式日志测试"
-    assert record["data"] == {"task_id": "task-1"}
+    assert record["data"] == {"session_id": "session-1"}
 
 
 def test_shutdown_logging_does_not_close_unmanaged_handlers(tmp_path: Path) -> None:

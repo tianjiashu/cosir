@@ -18,7 +18,7 @@ class ToolResultFields(TypedDict):
     awaitingUser: bool
     display_data: dict[str, object] | None
     background: NotRequired[ConversationBackgroundWork]
-    child_task_id: NotRequired[int]
+    child_session_id: NotRequired[int]
     agent_role: NotRequired[str]
 
 
@@ -27,7 +27,7 @@ def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
 
     ``awaitingUser`` 按 metadata 计算：占位行 ``pending`` 且不是后台占位，就是「等你操作」（HITL 等
     决定、交接等交还）。每次都显式写，决定到达、重放写回终态时自然清回 ``False``。实时投影的行
-    恒属当前 Run、在上下文里；冷重建另按行级规则 ``ConversationTaskContextRecord.awaits_user``
+    恒属当前 Run、在上下文里；冷重建另按行级规则 ``SessionContextRecord.awaits_user``
     纠正继承副本与撤回移出的行。
     """
     fields = ToolResultFields(
@@ -41,15 +41,15 @@ def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
     if metadata.background is not None:
         fields["background"] = project_background_work(metadata.background)
     display = metadata.display_data
-    if display is not None and display.get("kind") in {"delegation-result", "fork-task-result"}:
-        child_task_id = display.get("child_task_id")
+    if display is not None and display.get("kind") in {"delegation-result", "fork-session-result"}:
+        child_session_id = display.get("child_session_id")
         role = display.get("role")
         if (
-            isinstance(child_task_id, int)
-            and not isinstance(child_task_id, bool)
-            and child_task_id > 0
+            isinstance(child_session_id, int)
+            and not isinstance(child_session_id, bool)
+            and child_session_id > 0
         ):
-            fields["child_task_id"] = child_task_id
+            fields["child_session_id"] = child_session_id
         if isinstance(role, str) and role.strip():
             fields["agent_role"] = role
     return fields

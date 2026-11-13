@@ -1,4 +1,4 @@
-"""Task 5 acceptance tests for canonical conversation state and lifecycle boundaries."""
+"""Session 5 acceptance tests for canonical conversation state and lifecycle boundaries."""
 
 from __future__ import annotations
 
@@ -14,24 +14,24 @@ from app.assistant_transport.projection.snapshot_rebuild import (
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
 )
-from app.assistant_transport.stream.task_sse_stream import TaskSseStream
+from app.assistant_transport.stream.session_sse_stream import SessionSseStream
 from app.config import configuration
 from app.core.events import AssistantTextDeltaEvent
 from app.core.tool.tool_registry import ToolRegistry
-from app.core.workflow.conversation_run_ledger import ConversationRunLedger
-from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.models import ConversationRunError, ConversationRunStatus
+from app.core.workflow.run_ledger import RunLedger
+from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
+from app.models import RunError, RunStatus
 from app.models.conversation_input import UserInputPresentation
-from app.models.enums.conversation_run_status import RunTransition
+from app.models.enums.run_status import RunTransition
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
-from app.models.task_extra import TaskForkLaunch
+from app.models.session_extra import SessionForkLaunch
 from app.service.recover_service import RecoverService
-from app.service.task.fork_source import ForkCut, ForkSource
+from app.service.session.fork_source import ForkCut, ForkSource
 from app.storage.engine_cache import create_sqlite_engine
-from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
+from app.storage.model.session_context_model import SessionContextModel
 from app.storage.store_engines import APP_MODELS, initialize_app_schema
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
 
 # 本组测试使用独立 canonical_store；只需呈现目录，不再创建第二套存储环境。
@@ -59,22 +59,22 @@ _TOOL_WIRE_STATUS: dict[str, ToolCallEventStatus] = {
 
 
 def _create_run(store, *, status: str = "running", current: bool = False):
-    """Create a real Run and optionally make it the Task's explicit current Run."""
+    """Create a real Run and optionally make it the Session's explicit current Run."""
 
-    run = store.runs.create(store.task.id, status=status)
+    run = store.runs.create(store.session.id, status=status)
     if current:
-        store.tasks.set_current_run_id(store.task.id, run.id)
+        store.sessions.set_current_run_id(store.session.id, run.id)
     return run
 
 
 def _append(store, run_id: int, message: object, *, metadata: object = None) -> None:
-    """按 Task 内下一个可用序号追加一条 context 事实。
+    """按 Session 内下一个可用序号追加一条 context 事实。
 
     序号游标属于调用方（运行期由 ``RuntimeMessageContextManager`` 持有）：本 node_helper 用
-    ``max_sequence + 1`` 复现同一口径，避免测试直接依赖 ``(task_id, sequence)`` 唯一键的细节。
+    ``max_sequence + 1`` 复现同一口径，避免测试直接依赖 ``(session_id, sequence)`` 唯一键的细节。
     """
 
-    sequence = store.context.max_sequence(store.task.id) + 1
+    sequence = store.context.max_sequence(store.session.id) + 1
     message_id = None
     if message["role"] == "user":
         # 落库的 user 行必须带身份（运行期是 message_queue 行 id，见 ``prepare_input``）与展示绑定；
@@ -86,7 +86,7 @@ def _append(store, run_id: int, message: object, *, metadata: object = None) -> 
                 presentation=UserInputPresentation(text=message["content"]),
             )
     store.context.append(
-        store.task.id,
+        store.session.id,
         run_id,
         message,
         sequence,
@@ -145,13 +145,13 @@ def _append_user_ai_tool(store, run, call_id: str, result_status: str | None = N
 def _settle_run(store, run, status: str, end_reason: str) -> None:
     """Persist terminal Run facts through the real Run CRUD conditional update."""
 
-    error: ConversationRunError | None = (
+    error: RunError | None = (
         None if status == "completed" else {"code": end_reason, "message": "运行失败"}
     )
     updated = store.runs.update_status_if_in(
         run.id,
         status,
-        (ConversationRunStatus.RUNNING.value,),
+        (RunStatus.RUNNING.value,),
         end_reason=end_reason,
         final_output="run summary must not become a UI message",
         usage=_USAGE,
@@ -167,18 +167,18 @@ def test_fresh_target_schema_has_no_persisted_conversation_snapshot_surface(tmp_
     try:
         initialize_app_schema(engine)
         table_names = set(inspect(engine).get_table_names())
-        assert "conversation_task_snapshots" not in table_names
+        assert "conversation_session_snapshots" not in table_names
         assert {model.__tablename__ for model in APP_MODELS}.isdisjoint(
-            {"conversation_task_snapshots"}
+            {"conversation_session_snapshots"}
         )
-        assert "conversation_task_contexts" in table_names
+        assert "session_contexts" in table_names
         assert "conversation_commands" not in table_names
         assert "file_snapshots" not in table_names
         backend_app = Path(__file__).parents[1] / "app"
-        assert not list(backend_app.rglob("conversation_task_snapshot*.py"))
+        assert not list(backend_app.rglob("conversation_session_snapshot*.py"))
         forbidden = (
-            "conversation_task_snapshots",
-            "ConversationTaskSnapshot",
+            "conversation_session_snapshots",
+            "ConversationSessionSnapshot",
             "ensure_state_snapshot",
         )
         assert not any(
@@ -192,7 +192,7 @@ def test_fresh_target_schema_has_no_persisted_conversation_snapshot_surface(tmp_
 def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_outcomes(
     canonical_store,
 ) -> None:
-    """Cold Transport and Agent context use real Task/Run/Context rows for all tool outcomes."""
+    """Cold Transport and Agent context use real Session/Run/Context rows for all tool outcomes."""
 
     store = canonical_store
     completed = _create_run(store, current=True)
@@ -204,9 +204,9 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     _settle_run(store, completed, "completed", "done")
     _settle_run(store, failed, "failed", "runtime_failed")
     _settle_run(store, cancelled, "cancelled", "user_cancelled")
-    store.tasks.set_current_run_id(store.task.id, cancelled.id)
+    store.sessions.set_current_run_id(store.session.id, cancelled.id)
 
-    state = store.state.get_state(store.task.id)
+    state = store.state.get_state(store.session.id)
     # 消息按回合扁平排列（夹具里每个 Run 一个回合），Run 不进快照；activity 是最新 Run 的摘要。
     assert [message["turn"] for message in state["messages"]] == [
         completed.id,
@@ -219,7 +219,7 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     assert state["activity"]["turn"] == cancelled.id
     assert state["activity"]["status"] == "cancelled"
     assert state["activity"]["resumable"] is True
-    first_user = store.contexts.get(store.task.id, include_in_context=False)[0]
+    first_user = store.contexts.get(store.session.id, include_in_context=False)[0]
     assert [message["id"] for message in state["messages"][:2]] == [
         str(first_user.message_id),
         f"assistant-turn-{first_user.turn}",
@@ -234,7 +234,7 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     assert state["messages"][0]["parts"][0]["text"] == f"user-{completed.id}"
     # 工具终态由 Run 分组配对产出（同一份 canonical 行同时驱动冷读快照与模型上下文）。
     tool_parts = pair_tool_parts(
-        store.contexts.get(store.task.id, include_in_context=False), {}
+        store.contexts.get(store.session.id, include_in_context=False), {}
     )
     assert {call_id: part["status"] for call_id, part in tool_parts.items()} == {
         "call-success": "completed",
@@ -252,7 +252,7 @@ def test_real_sqlite_malformed_metadata_fails_and_not_as_empty_state(
 ) -> None:
     """Malformed durable metadata is an explicit cold-read failure.
 
-    写入非 JSON 文本已被 SQLite 拒绝（部分索引 ``idx_task_context_awaiting`` 的条件要解析
+    写入非 JSON 文本已被 SQLite 拒绝（部分索引 ``idx_session_context_awaiting`` 的条件要解析
     metadata），所以这里用形状不符的合法 JSON 模拟损坏。
     """
 
@@ -261,20 +261,20 @@ def test_real_sqlite_malformed_metadata_fails_and_not_as_empty_state(
     _append_user_ai_tool(store, run, "call-malformed")
     ai_row = next(
         row
-        for row in store.contexts.get(store.task.id, include_in_context=False)
+        for row in store.contexts.get(store.session.id, include_in_context=False)
         if row.message["role"] == "assistant"
     )
-    with store.factory.begin() as session:
-        session.execute(
-            update(ConversationTaskContextModel)
-            .where(ConversationTaskContextModel.id == ai_row.id)
+    with store.factory.begin() as db:
+        db.execute(
+            update(SessionContextModel)
+            .where(SessionContextModel.id == ai_row.id)
             .values(metadata_json='{"not_a_field": 1}')
         )
 
-    # ``ConversationTaskContextRecord._from_model`` 按角色严格校验 metadata，未知字段以
+    # ``SessionContextRecord._from_model`` 按角色严格校验 metadata，未知字段以
     # ``ValidationError``（``ValueError`` 子类）向冷读边界传播。
     with pytest.raises(ValueError):
-        store.state.get_state(store.task.id)
+        store.state.get_state(store.session.id)
 
 
 def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durable(
@@ -285,7 +285,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
     store = canonical_store
     run = _create_run(store, current=True)
     _append(store, run.id, {"role": "user", "content": "durable user"})
-    service = ConversationRunLedger.__new__(ConversationRunLedger)
+    service = RunLedger.__new__(RunLedger)
     service._run = store.runs
 
     class FailingProjector:
@@ -296,7 +296,7 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
         "app.service.depends.get_conversation_event_projector",
         lambda: FailingProjector(),
     )
-    stats = ConversationRunUsageStats(**_USAGE)
+    stats = RunUsageStats(**_USAGE)
     # 终态落库先于投影：投影失败向上传播，但已提交的 Run 事实与用量必须完好。
     with pytest.raises(RuntimeError, match="SSE failed after commit"):
         service.transition(
@@ -309,8 +309,8 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
     assert persisted.status == "completed"
     assert persisted.final_output == "durable final summary"
     assert persisted.usage == _USAGE
-    task_runtime_spaces.close()
-    state = store.state.get_state(store.task.id)
+    session_runtime_spaces.close()
+    state = store.state.get_state(store.session.id)
     assert state["activity"]["status"] == "completed"
     assert state["messages"][0]["parts"][0]["text"] == "durable user"
 
@@ -329,10 +329,10 @@ async def test_sse_first_frame_and_projector_are_memory_only_and_disconnect_does
         run.id,
         {"role": "assistant", "content": "canonical", "reasoning_content": None},
     )
-    stream = TaskSseStream(store.state).frames(store.task.id)
+    stream = SessionSseStream(store.state).frames(store.session.id)
     first = await anext(stream)
     assert first.state["messages"][1]["parts"][0]["text"] == "canonical"
-    before_count = len(store.contexts.get(store.task.id, include_in_context=False))
+    before_count = len(store.contexts.get(store.session.id, include_in_context=False))
     await stream.aclose()
     assert store.runs.get(run.id).status == "running"
     projector = ConversationEventProjector(state_service=store.state)
@@ -340,14 +340,14 @@ async def test_sse_first_frame_and_projector_are_memory_only_and_disconnect_does
         AssistantTextDeltaEvent(
             source_sequence=1,
             event_id="live-delta",
-            task_id=store.task.id,
+            session_id=store.session.id,
             run_id=run.id,
             turn=run.id,
             part="text",
             delta=" live",
         )
     )
-    assert len(store.contexts.get(store.task.id, include_in_context=False)) == before_count
+    assert len(store.contexts.get(store.session.id, include_in_context=False)) == before_count
 
 
 def test_real_sqlite_fork_preserves_canonical_identity(
@@ -360,19 +360,19 @@ def test_real_sqlite_fork_preserves_canonical_identity(
     _append_user_ai_tool(store, source_run, "call-fork", "success")
     _settle_run(store, source_run, "completed", "done")
     store.context.create_system_prompt(
-        store.task.id,
+        store.session.id,
         {"role": "system", "content": "fixed system prompt"},
     )
-    target = store.tasks.create(store.workspace.id, "fork")
-    with store.factory.begin() as session:
-        rows = store.contexts.get(store.task.id, include_in_context=False, session=session)
-        cut = ForkCut(max(row.sequence for row in rows) + 1, TaskForkLaunch.from_run(source_run))
-        ForkSource(task=store.task, rows=rows, runs=[]).copy_before(
-            cut, target, store.contexts, session
+    target = store.sessions.create(store.workspace.id, "fork")
+    with store.factory.begin() as db:
+        rows = store.contexts.get(store.session.id, include_in_context=False, db=db)
+        cut = ForkCut(max(row.sequence for row in rows) + 1, SessionForkLaunch.from_run(source_run))
+        ForkSource(session=store.session, rows=rows, runs=[]).copy_before(
+            cut, target, store.contexts, db
         )
     assert target.current_run_id is None
-    assert store.runs.list_by_task(target.id) == []
-    source_rows = store.contexts.get(store.task.id, include_in_context=False)
+    assert store.runs.list_by_session(target.id) == []
+    source_rows = store.contexts.get(store.session.id, include_in_context=False)
     target_rows = store.contexts.get(target.id, include_in_context=False)
     assert [row.id for row in target_rows] != [row.id for row in source_rows]
     assert [row.message for row in target_rows] == [row.message for row in source_rows]
@@ -389,8 +389,8 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     service = RecoverService.__new__(RecoverService)
     service._run = store.runs
     service._context = store.context_service
-    service._session_factory = store.factory
-    service._ledger = ConversationRunLedger.__new__(ConversationRunLedger)
+    service._db_factory = store.factory
+    service._ledger = RunLedger.__new__(RunLedger)
     service._ledger._run = store.runs
     recovered = service.recover_orphaned_runs()
     assert [item.id for item in recovered] == [run.id]
@@ -400,18 +400,18 @@ def test_real_sqlite_restart_recovery_is_bounded_repairs_tools_and_never_replays
     assert persisted.end_reason == "runtime_restarted"
     repaired = [
         row
-        for row in store.contexts.get(store.task.id, include_in_context=False)
+        for row in store.contexts.get(store.session.id, include_in_context=False)
         if row.message["role"] == "tool"
     ]
     assert len(repaired) == 1
     assert repaired[0].run_id == run.id
     assert repaired[0].metadata == ToolMessageMetadata.model_validate({"status": "cancelled"})
-    task_runtime_spaces.close()
-    state = store.state.get_state(store.task.id)
+    session_runtime_spaces.close()
+    state = store.state.get_state(store.session.id)
     assert state["activity"]["status"] == "cancelled"
     # 工具终态由 Run 分组配对产出（占位行写入 wire 口径的 cancelled）。
     repaired_parts = pair_tool_parts(
-        store.contexts.get(store.task.id, include_in_context=False), {}
+        store.contexts.get(store.session.id, include_in_context=False), {}
     )
     assert {call_id: part["status"] for call_id, part in repaired_parts.items()} == {
         "call-interrupted": "cancelled"

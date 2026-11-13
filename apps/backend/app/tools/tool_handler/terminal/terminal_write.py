@@ -49,7 +49,7 @@ class TerminalWriteTool(HandlerBase):
         def action() -> ToolObservation:
             # 填入只针对用户终端：不经 ``find_terminal``（运行中的命令不能输入）。
             runtime = service_depends.get_terminal_session_service().require(
-                terminal_id, execution_context.task_id
+                terminal_id, execution_context.session_id
             )
             result = runtime.prefill(
                 command,

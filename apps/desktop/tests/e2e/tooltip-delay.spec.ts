@@ -8,7 +8,7 @@ test.beforeEach(async ({ page, request }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await request.post(`${API_ORIGIN}/__test__/reset`);
   await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
 });
 
 // 面板打开会把它的「收起文件」挪到静止的指针下面：提示要等指针真的停住才出现，不能立刻盖住正下方的「更多选项」。

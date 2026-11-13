@@ -16,7 +16,7 @@
 
 生命周期：创建者负责 :meth:`finish`（``ExecuteTerminalTool`` 在作业收尾处统一封存，执行后端只喂入）。
 本类不打日志：它在 worker 读线程与作业线程里运行，那里没有日志上下文，写盘失败记进
-``CommandOutputSummary.log_error``，由调用方在带 Task / 调用标识的完成日志里一并报告。
+``CommandOutputSummary.log_error``，由调用方在带 Session / 调用标识的完成日志里一并报告。
 """
 
 from __future__ import annotations

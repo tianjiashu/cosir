@@ -6,7 +6,7 @@ import type { TransportActivity, TransportMessagePart } from "../../lib/assistan
 
 test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "模型活动" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "模型活动" } });
 });
 
 const state = (phase: NonNullable<TransportActivity["modelActivity"]>["phase"] | null, parts: TransportMessagePart[] = []) => transportState({
@@ -16,7 +16,7 @@ const state = (phase: NonNullable<TransportActivity["modelActivity"]>["phase"] |
 
 test("model status survives tools without exposing reasoning or a disclosure", async ({ page, request }) => {
   await seedState(request, 42, transportState({ activity: activity(1, "suspended") }));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await expect(page.locator('[data-slot="current-activity"]')).toHaveText("等待继续");
   await seedState(request, 42, state("waiting"));
   const status = page.locator('[data-slot="current-activity"]');
@@ -38,7 +38,7 @@ test("model status survives tools without exposing reasoning or a disclosure", a
 
 test("status exists without an assistant message", async ({ page, request }) => {
   await seedState(request, 42, transportState({ activity: activity(1, "suspended") }));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await expect(page.locator('[data-slot="current-activity"]')).toHaveText("等待继续");
   await seedState(request, 42, { ...state("reasoning"), messages: [] });
   await expect(page.locator('[data-slot="current-activity"]')).toHaveText("正在思考");
@@ -54,12 +54,12 @@ test("dark quiet waiting and reduced motion preserve status without a tool card"
       toolCallPart("bg", "execute_terminal", { status: "pending", background: { kind: "terminal_command", label: "验证", startedAt: new Date().toISOString(), endedAt: null } }),
     ])], activity: activity(1, "suspended"),
   }));
-  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { taskId: 42, entries: [{ toolCallId: "bg", kind: "terminal_command", label: "验证", status: "running", startedAt: new Date().toISOString(), endedAt: null }] } });
-  await page.goto("/tasks/42");
+  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { sessionId: 42, entries: [{ toolCallId: "bg", kind: "terminal_command", label: "验证", status: "running", startedAt: new Date().toISOString(), endedAt: null }] } });
+  await page.goto("/sessions/42");
   const status = page.locator('[data-slot="current-activity"]');
   await expect(status).toHaveText("后台执行：验证");
   await expect(page.locator('[data-tool-call-id="wait"]')).toHaveCount(0);
-  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { taskId: 42, entries: [] } });
+  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { sessionId: 42, entries: [] } });
   await seedState(request, 42, state("reasoning"));
   await expect(status).toHaveText("正在思考");
   expect(await status.locator("span").evaluate(el => getComputedStyle(el).animationName)).toBe("none");

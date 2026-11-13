@@ -51,7 +51,7 @@ export function registerHostIpc(supervisor: BackendSupervisor, browser: BrowserH
     nativeTheme.themeSource = source;
   });
   handle(HOST_CHANNEL.browserState, () => browser.state());
-  handle(HOST_CHANNEL.browserOpen, (_event, taskId, context) => browser.userOpen(parseTaskId(taskId), parseTabContext(context)));
+  handle(HOST_CHANNEL.browserOpen, (_event, sessionId, context) => browser.userOpen(parseSessionId(sessionId), parseTabContext(context)));
   handle(HOST_CHANNEL.browserPlace, (_event, tabId, placement) => {
     browser.place(parseTabId(tabId), placement === null ? null : parsePlacement(placement));
   });
@@ -79,15 +79,15 @@ function parseTabId(value: unknown): string {
   return value;
 }
 
-function parseTaskId(value: unknown): number {
-  if (!Number.isSafeInteger(value) || (value as number) <= 0) throw new HostUserError("任务标识不合法");
+function parseSessionId(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) throw new HostUserError("会话标识不合法");
   return value as number;
 }
 
-/** 标签上下文来自后端（`GET /tasks/{id}/browser-context`），渲染进程只转交；规则与工具请求同一份（`tabContextOf`）。 */
+/** 标签上下文来自后端（`GET /sessions/{id}/browser-context`），渲染进程只转交；规则与工具请求同一份（`tabContextOf`）。 */
 function parseTabContext(value: unknown): BrowserTabContext {
   const limits = isPlainObject(value) && isPlainObject(value.limits) ? value.limits : {};
-  const context = isPlainObject(value) ? tabContextOf(limits.perTask, limits.total, value.downloadDir) : null;
+  const context = isPlainObject(value) ? tabContextOf(limits.perSession, limits.total, value.downloadDir) : null;
   if (!context) throw new HostUserError("标签上下文不合法");
   return context;
 }

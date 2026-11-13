@@ -32,7 +32,7 @@ class ModelDiscoveryService:
             返回空列表。
 
         异常:
-            不向调用方抛出远端请求异常；仅调用任务被取消时保留 ``asyncio.CancelledError`` 语义。
+            不向调用方抛出远端请求异常；仅调用会话被取消时保留 ``asyncio.CancelledError`` 语义。
 
         副作用:
             发起一次带系统代理的外部 HTTP 请求，并写入不含 API Key 和响应正文的结构化日志。

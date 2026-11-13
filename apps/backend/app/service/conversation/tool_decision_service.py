@@ -9,12 +9,12 @@ from __future__ import annotations
 from typing import Literal
 
 from app.config.logging.logger import log
-from app.core.workflow.message_queue.task_message import DecisionBody, TaskMessage
-from app.models.errors.task_command_errors import TaskCommandConflictError
+from app.core.workflow.message_queue.session_message import DecisionBody, SessionMessage
+from app.models.errors.session_command_errors import SessionCommandConflictError
 from app.service import depends as service_depends
-from app.storage.store_engines import main_session_factory
+from app.storage.store_engines import main_db_factory
 from app.storage.write_transaction import begin_immediate
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
 
 class ToolDecisionService:
@@ -22,7 +22,7 @@ class ToolDecisionService:
 
     def submit(
             self,
-            task_id: int,
+            session_id: int,
             tool_call_id: str,
             decision: Literal["approve", "reject"],
             *,
@@ -38,33 +38,33 @@ class ToolDecisionService:
         「确认决定 + 占位推到 running」的事务互斥，两次读取看到的是同一时刻的事实。
 
         异常:
-            TaskCommandConflictError: ``DECISION_NOT_AWAITED`` / ``DECISION_ALREADY_SUBMITTED``。
-            KeyError: Task 不存在（入队时）。
+            SessionCommandConflictError: ``DECISION_NOT_AWAITED`` / ``DECISION_ALREADY_SUBMITTED``。
+            KeyError: Session 不存在（入队时）。
         """
-        context = service_depends.get_conversation_task_context_service()
-        queue = service_depends.get_task_message_queue()
-        with begin_immediate(main_session_factory()) as session:
-            tool_name = context.awaiting_decision_tool(task_id, tool_call_id, session=session)
+        context = service_depends.get_session_context_service()
+        queue = service_depends.get_session_message_queue()
+        with begin_immediate(main_db_factory()) as db:
+            tool_name = context.awaiting_decision_tool(session_id, tool_call_id, db=db)
             if tool_name is None:
-                raise TaskCommandConflictError("DECISION_NOT_AWAITED", "该操作已不在等待决定，请刷新后重试")
+                raise SessionCommandConflictError("DECISION_NOT_AWAITED", "该操作已不在等待决定，请刷新后重试")
             if any(
                     isinstance(message.body, DecisionBody) and message.body.tool_call_id == tool_call_id
-                    for message in queue.pending_nowait(task_id, session=session)
+                    for message in queue.pending_nowait(session_id, db=db)
             ):
-                raise TaskCommandConflictError("DECISION_ALREADY_SUBMITTED", "该决定已提交，正在处理")
+                raise SessionCommandConflictError("DECISION_ALREADY_SUBMITTED", "该决定已提交，正在处理")
             body = DecisionBody(
                 tool_call_id=tool_call_id,
                 tool_name=tool_name,
                 decision=decision,
                 feedback=feedback.strip() if feedback and feedback.strip() else None,
             )
-            task_runtime_spaces.enqueue(task_id, TaskMessage.of(body), session=session)
+            session_runtime_spaces.enqueue(session_id, SessionMessage.of(body), db=db)
         log.info(
             "tool_decision_enqueued",
             extra={
                 "msg": "决定已入队，等待工具执行或交给模型",
                 "data": {
-                    "task_id": task_id,
+                    "session_id": session_id,
                     "tool_call_id": tool_call_id,
                     "tool_name": tool_name,
                     "decision": decision,

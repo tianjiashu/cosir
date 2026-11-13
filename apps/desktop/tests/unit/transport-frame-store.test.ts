@@ -21,9 +21,9 @@ const running = (messages: TransportMessage[]): TransportState => transportState
 });
 
 const mutation = (mutations: TransportFrameEnvelope["mutations"]): TransportFrameEnvelope => ({
-  task_id: 1, kind: "mutation", mutations,
+  session_id: 1, kind: "mutation", mutations,
 });
-const full = (state: TransportState): TransportFrameEnvelope => ({ task_id: 1, kind: "full", mutations: [], state });
+const full = (state: TransportState): TransportFrameEnvelope => ({ session_id: 1, kind: "full", mutations: [], state });
 
 describe("增量与完整快照遵守同一当前契约", () => {
   const validTool = () => toolCallPart("c", "read_file");
@@ -172,9 +172,9 @@ describe("TransportFrameStore", () => {
   });
 
   it("rejects malformed wire frames before projection", () => {
-    expect(() => parseTransportFrame({ kind: "mutation", mutations: [] })).toThrow("task_id");
+    expect(() => parseTransportFrame({ kind: "mutation", mutations: [] })).toThrow("session_id");
     expect(() => parseTransportFrame({
-      task_id: 1,
+      session_id: 1,
       kind: "mutation",
       mutations: [{ kind: "append-text", path: ["messages", { invalid: true }], value: "x" }],
     })).toThrow("path");
@@ -245,7 +245,7 @@ describe("TransportFrameStore", () => {
   it("marks a slow connection for resync and ignores later mutations until a full frame", () => {
     const store = new TransportFrameStore(running([streaming("m-1", "old")]));
     const before = store.getSnapshot();
-    store.applyFrame({ task_id: 1, kind: "resync_required", mutations: [], resync_reason: "subscriber_backpressure" });
+    store.applyFrame({ session_id: 1, kind: "resync_required", mutations: [], resync_reason: "subscriber_backpressure" });
     expect(store.getSnapshot().resyncRequired).toBe(true);
     expect(store.getSnapshot().state).toBe(before.state);
 

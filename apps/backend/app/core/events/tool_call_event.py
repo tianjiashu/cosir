@@ -21,7 +21,7 @@ class ToolCallCreatedEvent(WorkflowEventEnvelope):
     工具真正跑起来之前就看到「模型打算做什么」。
 
     Attributes:
-        tool_call_id: 工具调用在 Task 内唯一的稳定标识（模型提供或由执行链生成）。
+        tool_call_id: 工具调用在 Session 内唯一的稳定标识（模型提供或由执行链生成）。
         tool_name: 被调用工具名。前端按它查工具目录表得到图标、动词与标题规则，后端不下发展示外壳。
         turn: 发起调用的响应所在的回合；投影按它找到（或建出）这一回合的回复。
 

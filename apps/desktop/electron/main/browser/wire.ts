@@ -1,5 +1,5 @@
 import type { BrowserDialog } from "../../shared/host-contract";
-import type { ActOutcome, EvaluateResult, LogsResult, PageHead, PageResult, ScreenshotResult, TaskTab } from "./browser-host";
+import type { ActOutcome, EvaluateResult, LogsResult, PageHead, PageResult, ScreenshotResult, SessionTab } from "./browser-host";
 
 /**
  * `browser.*` 方法的出站适配：领域结果（驼峰）→ 后端读取的线上形状（蛇形）。与入站的 `params.ts` 对称，线上形状
@@ -64,12 +64,12 @@ export function screenshotWire(shot: ScreenshotResult) {
   return { ...pageHeadWire(shot), image: shot.image };
 }
 
-export function tabsWire(tabs: TaskTab[]) {
+export function tabsWire(tabs: SessionTab[]) {
   return tabs.map((tab) => ({ tab_id: tab.tabId, title: tab.title, url: tab.url, current: tab.current, created_by: tab.createdBy, operation: tab.operation }));
 }
 
-export function taskIdsWire(taskIds: number[]) {
-  return { task_ids: taskIds };
+export function sessionIdsWire(sessionIds: number[]) {
+  return { session_ids: sessionIds };
 }
 
 function dialogWire(dialog: BrowserDialog | null) {

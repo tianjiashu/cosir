@@ -15,16 +15,16 @@ import { projectTurnHeading, TURN_HEADING_HEIGHT } from "./turn-heading";
  * 估计越接近真实高度，行首次挂载时虚拟列表对 scrollTop 的修正就越小：向上滚动时每条新挂载的行
  * 都会按「真实 − 估计」补偿滚动位置，固定常量（曾为 120px，而回答常见 700px 以上）会让补偿量
  * 达到数百像素，惯性滚动会因此被打断（最初在已移除的 WKWebView 宿主上观察到）。真实高度仍以测量为准，这里只逐行区分 Markdown
- * 的块类型（标题、列表、表格、代码、正文）与用户附件；过程区和工具组读取用户开合覆盖（未传 Task 时
+ * 的块类型（标题、列表、表格、代码、正文）与用户附件；过程区和工具组读取用户开合覆盖（未传 Session 时
  * 按默认值计），调用行展开体、公式与 Mermaid 不建模。正文常量用单一特性的消息在 `max-w-3xl` 对话列宽下逐项
  * 实测得出。
  */
-export function estimateMessageHeight(message: ThreadMessage | undefined, taskId?: number): number {
+export function estimateMessageHeight(message: ThreadMessage | undefined, sessionId?: number): number {
   if (!message) return ROW_GAP + ASSISTANT_CHROME;
-  // 内容计算按不可变消息版本缓存；开合仍实时读取，不能缓存依赖 Task 偏好的最终高度。
-  return Math.round(message.role !== "user" ? assistantHeight(message, taskId)
-    : isAgentMessage(message) ? ROW_GAP + agentRowHeight(message.id, message.content.map((part) => part.type === "text" ? part.text : "").join("\n"), taskId)
-      : userHeight(message, taskId));
+  // 内容计算按不可变消息版本缓存；开合仍实时读取，不能缓存依赖 Session 偏好的最终高度。
+  return Math.round(message.role !== "user" ? assistantHeight(message, sessionId)
+    : isAgentMessage(message) ? ROW_GAP + agentRowHeight(message.id, message.content.map((part) => part.type === "text" ? part.text : "").join("\n"), sessionId)
+      : userHeight(message, sessionId));
 }
 
 const userEstimates = new WeakMap<ThreadMessage, { fixed: number; text: number }>();
@@ -51,7 +51,7 @@ const IMAGE_STACK_HEIGHT = IMAGE_HEIGHT;
  * 气泡正文超过收起高度时按开合封顶（收起高度 + 「显示全部」一行，见 `UserMessageBubble`）。内容部分按
  * 消息版本缓存，开合每次实时读取；是否截断以渲染测量为准，这里的行数只是估计。
  */
-function userHeight(message: ThreadMessage, taskId?: number): number {
+function userHeight(message: ThreadMessage, sessionId?: number): number {
   let estimate = userEstimates.get(message);
   if (!estimate) {
     let text = "";
@@ -74,7 +74,7 @@ function userHeight(message: ThreadMessage, taskId?: number): number {
   }
   if (estimate.text === 0) return estimate.fixed;
   if (estimate.text <= USER_MESSAGE_CLAMP_HEIGHT) return estimate.fixed + USER_BUBBLE_PADDING + estimate.text;
-  const open = taskId !== undefined && resolveDisclosure(taskId, userMessageKey(message.id), false);
+  const open = sessionId !== undefined && resolveDisclosure(sessionId, userMessageKey(message.id), false);
   return estimate.fixed + USER_BUBBLE_PADDING + (open ? estimate.text : USER_MESSAGE_CLAMP_HEIGHT) + USER_MESSAGE_TOGGLE_HEIGHT;
 }
 
@@ -88,8 +88,8 @@ function isAgentMessage(message: ThreadMessage): boolean {
 }
 
 /** 来信默认收起，展开的才解析正文，不做缓存。不含行间距：独立行与回合内的片段间距不同。 */
-function agentRowHeight(id: string, text: string, taskId?: number): number {
-  const open = taskId !== undefined && resolveDisclosure(taskId, agentKey(id), false);
+function agentRowHeight(id: string, text: string, sessionId?: number): number {
+  const open = sessionId !== undefined && resolveDisclosure(sessionId, agentKey(id), false);
   return AGENT_LABEL + (open ? AGENT_PANEL_PADDING + markdownHeight(text) : 0);
 }
 
@@ -107,7 +107,7 @@ const CHANGES_CARD_CHROME = 40;
 const CHANGES_FILE_ROW = 28;
 const STANDALONE_ARTIFACT_CARD = 120;
 
-function assistantHeight(message: ThreadMessage, taskId?: number): number {
+function assistantHeight(message: ThreadMessage, sessionId?: number): number {
   let estimate = assistantEstimates.get(message);
   if (!estimate) {
     const outcome = (message.metadata?.custom?.outcome ?? null) as TransportOutcome | null;
@@ -116,7 +116,7 @@ function assistantHeight(message: ThreadMessage, taskId?: number): number {
     assistantEstimates.set(message, estimate);
   }
   const { layout, hasHeading, proseHeights } = estimate;
-  const open = taskId === undefined ? layout.defaultProcessOpen : resolveDisclosure(taskId, processKey(message.id), layout.defaultProcessOpen);
+  const open = sessionId === undefined ? layout.defaultProcessOpen : resolveDisclosure(sessionId, processKey(message.id), layout.defaultProcessOpen);
   const blocks: number[] = [];
   if (hasHeading) blocks.push(TURN_HEADING_HEIGHT);
   for (const block of layout.blocks) {
@@ -129,11 +129,11 @@ function assistantHeight(message: ThreadMessage, taskId?: number): number {
       }
       blocks.push(height);
     } else if (block.kind === "agent") {
-      blocks.push(agentRowHeight(block.part.id, block.part.text, taskId));
+      blocks.push(agentRowHeight(block.part.id, block.part.text, sessionId));
     } else if (block.kind === "standalone") {
       blocks.push(PROCESS_ITEM);
     } else if (block.calls.length || block.key === layout.current?.groupKey) {
-      const groupOpen = taskId !== undefined && resolveDisclosure(taskId, activityKey(message.id, block.key), false);
+      const groupOpen = sessionId !== undefined && resolveDisclosure(sessionId, activityKey(message.id, block.key), false);
       blocks.push(PROCESS_HEADER + (groupOpen ? block.calls.length : 0) * PROCESS_ITEM);
     }
   }

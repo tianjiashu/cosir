@@ -3,7 +3,7 @@ import { test as base, expect, type Page } from "@playwright/test";
 import { API_ORIGIN as origin } from "./e2e-env";
 
 const terminal = (status: string) => ["completed", "failed", "cancelled"].includes(status);
-/** Task 视角 snapshot：一轮回复 + 当前活动；终态时结局写在回复上。 */
+/** Session 视角 snapshot：一轮回复 + 当前活动；终态时结局写在回复上。 */
 function snapshot(turn: number | null, status = "completed", text = "阅读内容") {
   if (turn === null) return { title: "子 Agent", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [] };
   const ended = terminal(status);
@@ -42,30 +42,30 @@ const test = base.extend<{ agent: Fixture }>({
       push(id, state) {
         const before = fixture.states.get(id)?.activity?.status ?? null;
         fixture.states.set(id, state);
-        // Task 长订阅：活动到终态也不断开。
+        // Session 长订阅：活动到终态也不断开。
         for (const response of fixture.connections.get(id) ?? []) response.write(frame(id, state));
         const after = state.activity?.status ?? null;
         if (after !== before) {
           for (const response of fixture.statusConnections) {
-            response.write(`${JSON.stringify({ type: "changed", tasks: { [id]: { executionStatus: after, awaitingUserCalls: 0 } } })}\n`);
+            response.write(`${JSON.stringify({ type: "changed", sessions: { [id]: { executionStatus: after, awaitingUserCalls: 0 } } })}\n`);
           }
         }
       },
     };
     function frame(id: number, state: Snapshot) {
-      return `data: ${JSON.stringify({ kind: "full", task_id: id, state, mutations: [] })}\n\n`;
+      return `data: ${JSON.stringify({ kind: "full", session_id: id, state, mutations: [] })}\n\n`;
     }
     const server = createServer((req, res) => {
       res.setHeader("Access-Control-Allow-Origin", req.headers.origin ?? "*");
       res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Trace-Id");
       if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
-      if (req.url === "/task-feed/stream") {
+      if (req.url === "/session-feed/stream") {
         if (fixture.refuseStatus) { res.writeHead(503); res.end(); return; }
         res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
-        const tasks = Object.fromEntries([...fixture.states].map(([id, state]) => (
+        const sessions = Object.fromEntries([...fixture.states].map(([id, state]) => (
           [id, { executionStatus: state.activity?.status ?? null, awaitingUserCalls: 0 }]
         )));
-        res.write(`${JSON.stringify({ type: "full", tasks })}\n`);
+        res.write(`${JSON.stringify({ type: "full", sessions })}\n`);
         fixture.statusConnections.add(res);
         res.on("close", () => fixture.statusConnections.delete(res));
         return;
@@ -91,26 +91,26 @@ const test = base.extend<{ agent: Fixture }>({
     const address = server.address() as { port: number };
     await page.addInitScript(() => { localStorage.clear(); localStorage.setItem("cosir:last-workspace-id", "7"); });
     await page.route(`${origin}/workspaces`, route => route.fulfill({ json: [{ workspace_id: 7, name: "验收工作区", root_path: "/workspace", created_at: "", updated_at: "" }] }));
-    const task = (id: number) => ({ task_id: id, workspace_id: 7, title: `任务${id}`, task_type: id === 100 ? "user" : "agent_task",
+    const session = (id: number) => ({ session_id: id, workspace_id: 7, title: `会话${id}`, session_type: id === 100 ? "user" : "delegated",
       created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });
-    await page.route(`${origin}/workspaces/7/tasks`, route => route.fulfill({ json: [task(100)] }));
-    await page.route(`${origin}/tasks/*`, route => {
+    await page.route(`${origin}/workspaces/7/sessions`, route => route.fulfill({ json: [session(100)] }));
+    await page.route(`${origin}/sessions/*`, route => {
       const id = Number(route.request().url().split("/").at(-1));
-      return route.fulfill({ json: task(id) });
+      return route.fulfill({ json: session(id) });
     });
-    await page.route(`${origin}/task-feed/stream`, route => route.continue({ url: `http://127.0.0.1:${address.port}/task-feed/stream` }));
-    await page.route(`${origin}/tasks/*/assistant/attach`, route => route.continue({ url: route.request().url().replace(origin, `http://127.0.0.1:${address.port}`) }));
-    await page.goto("/tasks/100");
+    await page.route(`${origin}/session-feed/stream`, route => route.continue({ url: `http://127.0.0.1:${address.port}/session-feed/stream` }));
+    await page.route(`${origin}/sessions/*/assistant/attach`, route => route.continue({ url: route.request().url().replace(origin, `http://127.0.0.1:${address.port}`) }));
+    await page.goto("/sessions/100");
     await expect(page.getByRole("button", { name: "浏览工作区文件" })).toBeVisible();
     try { await use(fixture); }
     finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   },
 });
 async function open(page: Page, ids: number[]) {
-  await page.evaluate(async taskIds => {
+  await page.evaluate(async sessionIds => {
     const path = "/lib/workbench/workbench-store.ts";
     const { useWorkbenchStore } = await import(path);
-    for (const taskId of taskIds) useWorkbenchStore.getState().openAgent(7, { taskId, title: `Agent${taskId}` });
+    for (const sessionId of sessionIds) useWorkbenchStore.getState().openAgent(7, { sessionId, title: `Agent${sessionId}` });
   }, ids);
 }
 const tab = (page: Page, id: number) => page.getByRole("tab", { name: new RegExp(`Agent${id}`) });
@@ -148,7 +148,7 @@ test("挂起继续订阅，SSE 状态变化刷新标签，后续新 Run 经同�
   expect(agent.attaches.get(501)).toBe(1);
 });
 
-test("已停止的子 Task 也常驻订阅，恢复经同一订阅到达", async ({ page, agent }) => {
+test("已停止的子 Session 也常驻订阅，恢复经同一订阅到达", async ({ page, agent }) => {
   agent.push(501, snapshot(1, "cancelled", "已停止的内容"));
   await open(page, [501]);
   await expect(tab(page, 501)).toHaveAccessibleName("已停止 Agent501");
@@ -174,7 +174,7 @@ test("状态推送断开时标签保留上次状态并标为未同步，重连�
 test("意外 EOF 与主对话同一套有限重连，首帧原地对齐，手动重试恢复完整预算", async ({ page, agent }) => {
   agent.dropStreams = true;
   await open(page, [501]);
-  // 主 Task 页同样常驻订阅并会因断流给出自己的提示；这里只看工作台阅读页。
+  // 主 Session 页同样常驻订阅并会因断流给出自己的提示；这里只看工作台阅读页。
   const workbench = page.getByLabel("工作台", { exact: true });
   const exhausted = workbench.getByText("本机后端连接多次中断，请重新同步恢复对话。", { exact: true });
   await expect(workbench.getByText("阅读内容", { exact: true })).toBeVisible();

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const overrides = vi.hoisted(() => new Map<string, boolean>());
 vi.mock("@/lib/assistant/turn/disclosure-store", async (original) => ({
   ...await original<typeof import("@/lib/assistant/turn/disclosure-store")>(),
-  useDisclosure: (_taskId: number, key: string, defaultOpen: boolean) => [overrides.get(key) ?? defaultOpen, () => undefined],
+  useDisclosure: (_sessionId: number, key: string, defaultOpen: boolean) => [overrides.get(key) ?? defaultOpen, () => undefined],
 }));
 import { ProcessBlock } from "@/components/conversation/turn/process-block";
 import { projectTurn } from "@/lib/assistant/turn/turn-layout";
@@ -13,7 +13,7 @@ const call = (id: string, status: TransportToolCallPart["status"] = "completed")
 function render(status: TransportToolCallPart["status"] = "completed") {
   const group = projectTurn([call("a"), call("b", status)], "running").blocks[0];
   if (group.kind !== "activity") throw new Error("Expected activity interval");
-  return renderToStaticMarkup(<ProcessBlock taskId={1} messageId="m" group={group} renderCall={(item, visible) => <span data-call={item.part.toolCallId} data-visible={visible} />} />);
+  return renderToStaticMarkup(<ProcessBlock sessionId={1} messageId="m" group={group} renderCall={(item, visible) => <span data-call={item.part.toolCallId} data-visible={visible} />} />);
 }
 beforeEach(() => overrides.clear());
 describe("activity group", () => {

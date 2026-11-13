@@ -6,7 +6,7 @@ export function modelUnavailable({ status, catalog }: Pick<ModelCatalogSnapshot,
 }
 
 /**
- * 「开始对话」不可用的原因：只解释缺工作区 / 缺模型这类需要用户另行操作的前置条件；
+ * 「开始会话」不可用的原因：只解释缺工作区 / 缺模型这类需要用户另行操作的前置条件；
  * 草稿为空、提交中、模型目录仍在加载都是显而易见或短暂的，保持安静（返回 null）。
  */
 export function startBlockedReason({ hasWorkspaces, selectedWorkspaceId, modelMissing, modelReady }: {

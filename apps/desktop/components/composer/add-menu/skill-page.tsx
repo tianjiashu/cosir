@@ -20,7 +20,7 @@ const EMPTY_SKILLS: Skill[] = [];
  * 方向键选择、回车插入。
  */
 export function SkillPage({ workspaceId, onBack, onPicked }: {
-  /** `null` 时只列系统级（新对话页还没选工作区）。 */
+  /** `null` 时只列系统级（新会话页还没选工作区）。 */
   workspaceId: number | null;
   onBack: () => void;
   onPicked: () => void;

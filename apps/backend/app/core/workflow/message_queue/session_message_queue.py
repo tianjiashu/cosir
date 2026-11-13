@@ -1,0 +1,140 @@
+"""Session 外部消息队列：持久化、按 Session 分片的阻塞队列，是待并入消息的唯一事实源。
+
+消息行存在 SQLite（``session_messages``），阻塞只是进程内的唤醒：:meth:`SessionMessageQueue.pending`
+挂起到该 Session 出现水位之后的新消息，:meth:`SessionMessageQueue.put` 提交后唤醒同一 Session 的全部等待方。
+
+与 ``queue.Queue`` / ``asyncio.Queue`` 的区别是取出不删除：投递不删行，``prepare_input`` 写
+context 时在同一事务内 :meth:`SessionMessageQueue.ack` 删除；执行结束、取消或进程重启时 mailbox
+随之丢弃，未确认的行仍在这里，交接或下次投递时重新送达。因此 ``pending`` 按水位（调用方看过的
+最大消息 id）阻塞，而不是按「非空」：留在队列里尚未被消费的行（如运行中排队的 ``next_run``）
+否则会让它每次都立刻返回，调用方空转、重复投递。
+
+只负责入队、按序读取、原地更新、撤回与确认删除，不承载投递策略、输入解析或交接规则。唤醒器是进程内
+状态，不跨重启；重启后首次 ``pending`` 直接读到遗留的行。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import threading
+from collections.abc import Callable
+from typing import cast
+
+from sqlalchemy import event
+from sqlalchemy.orm import Session as DbSession
+
+from app.config.logging.logger import log
+from app.core.workflow.message_queue.session_message import SessionMessage
+from app.storage.crud.session_message_crud import SessionMessageCrud
+from app.storage.store_engines import main_db_factory
+
+# 一个等待方：所在事件循环与它的唤醒事件。put 可能在工作线程执行，只能经
+# ``loop.call_soon_threadsafe`` 置位 asyncio 事件。
+_Waiter = tuple[asyncio.AbstractEventLoop, asyncio.Event]
+
+
+class SessionMessageQueue:
+    def __init__(self) -> None:
+        self._messages = SessionMessageCrud()
+        # session_id → 正在 ``pending`` 里挂起的等待方；任意线程读写，由 ``_lock`` 保护。
+        self._waiters: dict[int, set[_Waiter]] = {}
+        self._lock = threading.Lock()
+
+    def put(self, session_id: int, message: SessionMessage, *, db: DbSession | None = None) -> int:
+        """持久化一条消息并唤醒该 Session 的等待方，返回消息身份；任意线程可调。
+
+        传入 ``db`` 时加入调用方事务（编辑的移出与入队），唤醒推迟到该事务提交之后：提交前
+        唤醒的话，等待方读不到这一行又会睡回去，这次唤醒就丢了；事务回滚则不唤醒。
+        """
+        if db is not None:
+            [message_id] = self._messages.append(db, [(session_id, message)])
+            event.listen(db, "after_commit", lambda _s: self._notify(session_id), once=True)
+        else:
+            with main_db_factory().begin() as own:
+                [message_id] = self._messages.append(own, [(session_id, message)])
+            self._notify(session_id)
+        log.info(
+            "session_message_enqueued",
+            extra={
+                "msg": "消息已持久化，等待投递",
+                "data": {
+                    "session_id": session_id,
+                    "message_id": message_id,
+                    "kind": message.kind,
+                    "delivery": message.delivery,
+                },
+            },
+        )
+        return message_id
+
+    async def pending(self, session_id: int, after_id: int = 0) -> list[SessionMessage]:
+        """按入队顺序返回该 Session 全部未确认的消息；还没有 id 大于 ``after_id`` 的消息时挂起，直到
+        ``put`` 唤醒。
+
+        返回的是全部未确认消息（含水位之前的），调用方按 id 区分新到达的部分；不删除返回的消息
+        （见模块 docstring）。先登记等待方、每轮读库前清唤醒标记再读：读库之后到达的 ``put`` 一定
+        会置位标记，不会丢唤醒；多次 ``put`` 合并为一次读库。调用方取消时等待方随之注销。
+        """
+        waiter: _Waiter = (asyncio.get_running_loop(), asyncio.Event())
+        with self._lock:
+            self._waiters.setdefault(session_id, set()).add(waiter)
+        try:
+            while True:
+                waiter[1].clear()
+                messages = await asyncio.to_thread(self.pending_nowait, session_id)
+                if any(cast(int, message.id) > after_id for message in messages):
+                    return messages
+                await waiter[1].wait()
+        finally:
+            with self._lock:
+                waiters = self._waiters.get(session_id)
+                if waiters is not None:
+                    waiters.discard(waiter)
+                    if not waiters:
+                        del self._waiters[session_id]
+
+    def pending_nowait(self, session_id: int, *, db: DbSession | None = None) -> list[SessionMessage]:
+        """不阻塞地按入队顺序读取该 Session 全部未确认的消息（可能为空）；传入 ``db`` 时在调用方
+        事务内读取。"""
+        if db is not None:
+            return self._messages.list_pending(db, session_id)
+        with main_db_factory()() as db:
+            return self._messages.list_pending(db, session_id)
+
+    def withdraw(self, db: DbSession, session_id: int, message_id: int) -> SessionMessage | None:
+        """在调用方事务内撤回一条仍在队列中的消息（用户删除、立即发送前的移出），返回撤回前的内容。
+
+        已被并入（行已删除）时返回 ``None``，由调用方定语义。与 ``prepare_input`` 的确认并发时由这一次
+        条件删除裁决；已投递进 mailbox 的副本无需撤回：确认时删不到这一行，``prepare_input`` 会跳过它。
+        不唤醒等待方：撤回不会产生需要推进的新消息。
+        """
+        return self._messages.delete_one_returning(db, session_id, message_id)
+
+    def withdraw_matching(
+        self, db: DbSession, session_id: int, matches: Callable[[SessionMessage], bool]
+    ) -> list[SessionMessage]:
+        """在调用方事务内撤回该 Session 队列中命中 ``matches`` 的全部消息（撤回回合时），返回
+        撤回的行。哪些行属于这一回合由调用方判定，本层只按条件删除；不唤醒等待方。"""
+        targets = [
+            cast(int, message.id)
+            for message in self._messages.list_pending(db, session_id)
+            if matches(message)
+        ]
+        if not targets:
+            return []
+        return list(self._messages.delete_returning(db, targets).values())
+
+    def ack(self, db: DbSession, ids: list[int]) -> dict[int, SessionMessage]:
+        """在调用方事务内确认（删除）已并入 context 的行，返回实际删除的行内容（按 id）。
+
+        与 context 写入同一事务提交，消息不会丢也不会被并入两次；不在返回值里的 id 已被别的
+        执行确认过，调用方应跳过对应消息。调用方应写入返回的内容而不是 mailbox 里的副本。
+        """
+        return self._messages.delete_returning(db, ids)
+
+    def _notify(self, session_id: int) -> None:
+        """唤醒该 Session 的全部等待方；在提交之后调用，等待方醒来一定读得到新行。"""
+        with self._lock:
+            waiters = list(self._waiters.get(session_id, ()))
+        for loop, wakeup in waiters:
+            loop.call_soon_threadsafe(wakeup.set)

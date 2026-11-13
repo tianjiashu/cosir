@@ -85,7 +85,7 @@ def resolve_chat_model(
 
     参数:
         model: ``AgentRuntimeConfig.model``；解析时已保证连接与能力字段完整。
-        tools: Task 固化的工具定义，保持顺序，不按当前 Run 禁用集合过滤。
+        tools: Session 固化的工具定义，保持顺序，不按当前 Run 禁用集合过滤。
 
     返回:
         已绑定模型连接配置的 ``ResolvedChatModel``，其中模型对象和能力字段来自同一个

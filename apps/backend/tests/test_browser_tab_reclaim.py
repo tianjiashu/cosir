@@ -1,4 +1,4 @@
-"""浏览器标签回收对账：链路连上时补发丢掉的 Task 删除通知。"""
+"""浏览器标签回收对账：链路连上时补发丢掉的 Session 删除通知。"""
 
 from __future__ import annotations
 
@@ -32,39 +32,39 @@ class _Link:
         self.notifications.append((method, params))
 
 
-class _Tasks:
+class _Sessions:
     def __init__(self, existing: set[int]) -> None:
         self.existing = existing
         self.asked: list[set[int]] = []
 
-    def existing_task_ids(self, task_ids: set[int]) -> set[int]:
-        self.asked.append(task_ids)
-        return task_ids & self.existing
+    def existing_session_ids(self, session_ids: set[int]) -> set[int]:
+        self.asked.append(session_ids)
+        return session_ids & self.existing
 
 
 def _install(
     monkeypatch: pytest.MonkeyPatch, outcome: object, existing: set[int]
-) -> tuple[_Link, _Tasks]:
-    link, tasks = _Link(outcome), _Tasks(existing)
+) -> tuple[_Link, _Sessions]:
+    link, sessions = _Link(outcome), _Sessions(existing)
     monkeypatch.setattr(service_depends, "get_host_link", lambda: link)
-    monkeypatch.setattr(service_depends, "get_task_service", lambda: tasks)
-    return link, tasks
+    monkeypatch.setattr(service_depends, "get_session_service", lambda: sessions)
+    return link, sessions
 
 
-def test_drops_tasks_the_host_still_holds_but_the_store_no_longer_has(
+def test_drops_sessions_the_host_still_holds_but_the_store_no_longer_has(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    link, tasks = _install(monkeypatch, {"task_ids": [2, 3, 5]}, existing={3, 9})
+    link, sessions = _install(monkeypatch, {"session_ids": [2, 3, 5]}, existing={3, 9})
 
     asyncio.run(reclaim_orphan_tabs())
 
-    assert link.calls == ["browser.taskIds"]
-    assert tasks.asked == [{2, 3, 5}]
-    assert link.notifications == [("browser.dropTasks", {"task_ids": [2, 5]})]
+    assert link.calls == ["browser.sessionIds"]
+    assert sessions.asked == [{2, 3, 5}]
+    assert link.notifications == [("browser.dropSessions", {"session_ids": [2, 5]})]
 
 
-def test_sends_nothing_when_every_held_task_still_exists(monkeypatch: pytest.MonkeyPatch) -> None:
-    link, _ = _install(monkeypatch, {"task_ids": [3]}, existing={3})
+def test_sends_nothing_when_every_held_session_still_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    link, _ = _install(monkeypatch, {"session_ids": [3]}, existing={3})
 
     asyncio.run(reclaim_orphan_tabs())
 
@@ -72,20 +72,20 @@ def test_sends_nothing_when_every_held_task_still_exists(monkeypatch: pytest.Mon
 
 
 def test_skips_the_store_when_the_host_holds_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    link, tasks = _install(monkeypatch, {"task_ids": []}, existing=set())
+    link, sessions = _install(monkeypatch, {"session_ids": []}, existing=set())
 
     asyncio.run(reclaim_orphan_tabs())
 
-    assert tasks.asked == []
+    assert sessions.asked == []
     assert link.notifications == []
 
 
 def test_a_host_that_went_away_again_is_left_for_the_next_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    link, tasks = _install(monkeypatch, HostCallError(UNAVAILABLE, "gone"), existing=set())
+    link, sessions = _install(monkeypatch, HostCallError(UNAVAILABLE, "gone"), existing=set())
 
     asyncio.run(reclaim_orphan_tabs())
 
-    assert tasks.asked == []
+    assert sessions.asked == []
     assert link.notifications == []

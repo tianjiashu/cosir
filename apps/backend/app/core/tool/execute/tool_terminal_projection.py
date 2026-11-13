@@ -98,7 +98,7 @@ def terminal_error_hint(event_status: str, display_data: object) -> str | None:
 def normalize_display_data(
     value: object,
     *,
-    task_id: int | None = None,
+    session_id: int | None = None,
     run_id: int | None = None,
     tool_call_id: str = "",
 ) -> dict[str, object] | None:
@@ -111,7 +111,7 @@ def normalize_display_data(
 
     参数:
         value: 待归一化的展示数据；可以是 ``None``、任意映射或任意其它对象。
-        task_id: 丢弃时的定位标识；调用方未知时可不传。
+        session_id: 丢弃时的定位标识；调用方未知时可不传。
         run_id: 丢弃时的定位标识；调用方未知时可不传。
         tool_call_id: 丢弃时的定位标识；调用方未知时可为空字符串。
 
@@ -142,7 +142,7 @@ def normalize_display_data(
             extra={
                 "msg": "工具展示数据不是可用映射或不可拷贝，已跳过展示字段更新",
                 "data": {
-                    "task_id": task_id,
+                    "session_id": session_id,
                     "run_id": run_id,
                     "tool_call_id": tool_call_id,
                     "display_data_type": type(value).__name__,
@@ -153,7 +153,7 @@ def normalize_display_data(
 
 
 def terminal_event(
-    observation: ToolObservation, *, task_id: int, run_id: int, step_id: str, tool_call_id: str
+    observation: ToolObservation, *, session_id: int, run_id: int, step_id: str, tool_call_id: str
 ) -> ToolCallStatusChangedEvent:
     """把一个已归一化的工具观察映射为 ``tool_call_id`` 的终态事件。
 
@@ -175,7 +175,7 @@ def terminal_event(
         else terminal_status(observation.status)
     )
     return ToolCallStatusChangedEvent(
-        task_id=task_id,
+        session_id=session_id,
         run_id=run_id,
         step_id=step_id,
         tool_call_id=tool_call_id,
@@ -183,7 +183,7 @@ def terminal_event(
         error=terminal_error_hint(status, observation.display_data),
         display_data=normalize_display_data(
             observation.display_data,
-            task_id=task_id,
+            session_id=session_id,
             run_id=run_id,
             tool_call_id=tool_call_id,
         ),

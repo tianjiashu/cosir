@@ -17,7 +17,7 @@ describe("method deadlines", () => {
     const methods = new HostMethodRegistry();
     vi.spyOn(methods, "register").mockImplementation((method) => void registered.push(method));
     registerBrowserMethods(methods, {} as BrowserHost);
-    expect(registered.filter((method) => method !== "browser.dropTasks").sort()).toEqual(Object.keys(deadlines).sort());
+    expect(registered.filter((method) => method !== "browser.dropSessions").sort()).toEqual(Object.keys(deadlines).sort());
   });
 
   it("answers DEADLINE_EXCEEDED when the work does not finish in time, and stops the work", async () => {

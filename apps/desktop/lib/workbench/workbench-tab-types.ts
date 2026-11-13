@@ -2,9 +2,9 @@ import type { AgentEditorSession } from "@/lib/agent-editor/agent-editor-session
 
 /** 标签按工作区分桶存放（见 store），标签自身不再记录所属工作区。 */
 type WorkbenchAgentTab = {
-  id: `agent-task:${number}`;
+  id: `agent-session:${number}`;
   kind: "agent";
-  taskId: number;
+  sessionId: number;
   title: string;
 };
 
@@ -12,8 +12,8 @@ type WorkbenchAgentTab = {
 export type WorkbenchAgentConfigurationDraftTab = {
   id: `agent-config-draft:${string}`;
   kind: "agent-configuration-draft";
-  /** 提出草稿的对话 Task；Task 删除时标签随之移除。 */
-  taskId: number;
+  /** 提出草稿的对话 Session；Session 删除时标签随之移除。 */
+  sessionId: number;
   toolCallId: string;
   title: string;
   session: AgentEditorSession;

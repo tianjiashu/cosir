@@ -22,7 +22,7 @@ const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
  * 订阅、重连与后端实例变化都归外壳持有的连接，这里不再处理；挂载时连接已收到首帧，当前状态一律读 store。
  */
 export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
-  taskId,
+  sessionId,
   workspaceId,
   workspaceRoot,
   connection,
@@ -51,14 +51,14 @@ export const AssistantRuntimeSession = memo(function AssistantRuntimeSession({
     : null;
 
   const context = useMemo<RuntimeSessionContext>(() => ({
-    taskId,
+    sessionId,
     workspaceId,
     workspaceRoot,
     traceId,
     performanceProbe,
     connection,
     store,
-  }), [connection, performanceProbe, store, taskId, traceId, workspaceId, workspaceRoot]);
+  }), [connection, performanceProbe, store, sessionId, traceId, workspaceId, workspaceRoot]);
 
   useRuntimeDiagnostics(context);
   const businessResume = useBusinessResume(context);

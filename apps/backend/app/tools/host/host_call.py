@@ -35,7 +35,7 @@ def call_host(
     meta: dict[str, Any] = {}
     if execution_context is not None:
         meta = {
-            "task_id": execution_context.task_id,
+            "session_id": execution_context.session_id,
             "tool_call_id": execution_context.tool_call_id,
         }
     future = service_depends.get_host_link().submit(method, params, meta)

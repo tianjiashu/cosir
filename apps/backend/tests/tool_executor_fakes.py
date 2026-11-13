@@ -17,7 +17,7 @@ def emit_running(call: ToolCall, execution_context: ToolExecutionContext) -> Non
 
     tool_executor_module.emit(
         ToolCallStatusChangedEvent(
-            task_id=execution_context.task_id,
+            session_id=execution_context.session_id,
             run_id=execution_context.run_id,
             step_id=execution_context.step_id,
             tool_call_id=execution_context.tool_call_id,

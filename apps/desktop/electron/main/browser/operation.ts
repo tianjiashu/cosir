@@ -174,12 +174,12 @@ export class BrowserOperation {
     this.tab.operationChanged();
   }
   private record(event: string): void {
-    logDesktopEvent("INFO", "browser", event, { task_id: this.tab.taskId, tab_id: this.tab.tabId, state: this.state });
+    logDesktopEvent("INFO", "browser", event, { session_id: this.tab.sessionId, tab_id: this.tab.tabId, state: this.state });
   }
 
   on<T>(method: string, handler: (params: T) => void): () => void { return this.tab.session.on(method, handler); }
   resolveRef(ref: string): PageNode { return this.tab.resolveRef(ref); }
-  frameOffset(sessionId: string | undefined) { return this.tab.frames.offset(sessionId, this.cdp); }
+  frameOffset(cdpSessionId: string | undefined) { return this.tab.frames.offset(cdpSessionId, this.cdp); }
   settle(): Promise<void> { return this.tab.settle(this.signal); }
   geometry() { return readGeometry(this.cdp); }
   toInput(point: { x: number; y: number }) { return this.tab.emulation.toInput(point); }

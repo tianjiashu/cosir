@@ -14,12 +14,12 @@ vi.mock("@/lib/browser/host-state-store", () => ({
 import { displayedTab, followTabChanges, revealBrowserTab, useBrowserPanelStore } from "@/lib/browser/panel-store";
 import { useDockStore } from "@/lib/layout/dock-store";
 
-function tab(tabId: string, taskId = 7, openerId: string | null = null): BrowserTabSummary {
-  return { tabId, taskId, openerId, createdBy: "agent", url: "https://example.com", title: "", loading: false, crashed: false, dialog: null, agentBusy: false, operation: null };
+function tab(tabId: string, sessionId = 7, openerId: string | null = null): BrowserTabSummary {
+  return { tabId, sessionId, openerId, createdBy: "agent", url: "https://example.com", title: "", loading: false, crashed: false, dialog: null, agentBusy: false, operation: null };
 }
 
 afterEach(() => {
-  useBrowserPanelStore.setState({ taskId: null, selected: {} });
+  useBrowserPanelStore.setState({ sessionId: null, selected: {} });
 });
 
 describe("displayedTab", () => {
@@ -33,7 +33,7 @@ describe("displayedTab", () => {
 });
 
 describe("followTabChanges", () => {
-  it("显示中的标签开出新标签时切过去，同一 Task 别的标签开出的不跟", () => {
+  it("显示中的标签开出新标签时切过去，同一 Session 别的标签开出的不跟", () => {
     const before = [tab("t1"), tab("t2")];
     const selected = { 7: "t1" };
     expect(followTabChanges(selected, before, [...before, tab("t3", 7, "t1")])).toEqual({ 7: "t3" });
@@ -72,7 +72,7 @@ describe("followTabChanges", () => {
     expect(followTabChanges(selected, before, [tab("t1"), tab("t2", 7, "t1"), tab("t5")])).toBe(selected);
   });
 
-  it("各 Task 独立判定", () => {
+  it("各 Session 独立判定", () => {
     const before = [tab("t1", 7), tab("t2", 8)];
     const after = [...before, tab("t3", 8, "t2")];
     expect(followTabChanges({ 7: "t1" }, before, after)).toEqual({ 7: "t1", 8: "t3" });
@@ -95,10 +95,10 @@ describe("panel store 订阅标签镜像", () => {
 
 describe("revealBrowserTab", () => {
   // 目的：工具卡片、交接、链接都用同一个动作把标签摆到面前；潜在缺陷：某处只选中不显示面板，或只显示面板不切标签。
-  it("selects the tab in its task and shows the browser panel", () => {
+  it("selects the tab in its session and shows the browser panel", () => {
     useDockStore.setState({ panel: null });
     revealBrowserTab(9, "t4");
-    expect(useBrowserPanelStore.getState()).toMatchObject({ taskId: 9, selected: { 9: "t4" } });
+    expect(useBrowserPanelStore.getState()).toMatchObject({ sessionId: 9, selected: { 9: "t4" } });
     expect(useDockStore.getState().panel).toBe("browser");
   });
 });

@@ -8,7 +8,7 @@
 3. 装配面：``build_tool_registry()`` 的注册清单不含该名字，且「注册集合 =
    规范集合 - 条件跳过的 Web 工具」这一不变式仍然成立。
 4. 兄弟面（对抗）：仍存在的三个 child 工具（send/status/wait）的 ``args_model`` /
-   ``to_definition()`` 契约。哪类 Task 能拿到它们见 ``test_task_tool_scope.py``。
+   ``to_definition()`` 契约。哪类 Session 能拿到它们见 ``test_session_tool_scope.py``。
 
 注明：本文件只做测试与事实固化，不修改任何生产代码。
 """
@@ -31,14 +31,14 @@ from app.core.tool.handler.wait_messages import (
     build_wait_messages_definition,
 )
 from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
-from app.core.tool.multi_agent.args.task_status_args import TaskStatusArgs
+from app.core.tool.multi_agent.args.session_status_args import SessionStatusArgs
 from app.core.tool.multi_agent.send_message import (
     SendMessageTool,
     build_send_message_definition,
 )
-from app.core.tool.multi_agent.task_status import (
-    TaskStatusTool,
-    build_task_status_definition,
+from app.core.tool.multi_agent.session_status import (
+    SessionStatusTool,
+    build_session_status_definition,
 )
 from app.core.tool.schemas import ALL_TOOL_NAMES, ToolName
 from app.service.depends import close_service_dependencies
@@ -66,10 +66,10 @@ _CHILD_TOOL_SPECS = [
         30.0,
     ),
     (
-        "task_status",
-        TaskStatusTool,
-        TaskStatusArgs,
-        build_task_status_definition,
+        "session_status",
+        SessionStatusTool,
+        SessionStatusArgs,
+        build_session_status_definition,
         10.0,
     ),
     (
@@ -270,7 +270,7 @@ def test_registry_exposes_three_remaining_child_tools(storage: None) -> None:
     """
 
     names = set(build_tool_registry().get_all_tool_names())
-    assert {"send_message", "task_status", "wait_messages"} <= names
+    assert {"send_message", "session_status", "wait_messages"} <= names
     assert "delegate_task" in names
 
 
@@ -395,36 +395,36 @@ def test_child_send_args_model_boundaries() -> None:
     潜在缺陷类型：删除改动误改参数约束，放宽/收紧合法输入区间。
     """
 
-    ok = SendMessageArgs(task_id=1, message="x")
-    assert ok.task_id == 1
+    ok = SendMessageArgs(session_id=1, message="x")
+    assert ok.session_id == 1
     assert ok.message == "x"
 
     for bad_id in (0, -1):
         with pytest.raises(ValidationError):
-            SendMessageArgs(task_id=bad_id, message="x")
+            SendMessageArgs(session_id=bad_id, message="x")
 
     with pytest.raises(ValidationError):
-        SendMessageArgs(task_id=1, message="")
+        SendMessageArgs(session_id=1, message="")
     with pytest.raises(ValidationError):
-        SendMessageArgs(task_id=1, message="x" * 8001)
+        SendMessageArgs(session_id=1, message="x" * 8001)
 
-    assert SendMessageArgs(task_id=1, message="x" * 8000).message == "x" * 8000
+    assert SendMessageArgs(session_id=1, message="x" * 8000).message == "x" * 8000
 
 
 def test_child_status_args_model_boundaries() -> None:
-    """目的：task_status 参数模型边界（id>0）未被破坏。
+    """目的：session_status 参数模型边界（id>0）未被破坏。
 
     潜在缺陷类型：边界约束丢失（允许 0/负数 id）。
     """
 
-    assert TaskStatusArgs(task_id=5).task_id == 5
+    assert SessionStatusArgs(session_id=5).session_id == 5
     for bad_id in (0, -1):
         with pytest.raises(ValidationError):
-            TaskStatusArgs(task_id=bad_id)
+            SessionStatusArgs(session_id=bad_id)
 
 
 def test_wait_messages_takes_no_arguments() -> None:
-    """目的：等待工具没有参数——等什么由挂起时 Task 上未完成的工作决定，模型不能指定超时。"""
+    """目的：等待工具没有参数——等什么由挂起时 Session 上未完成的工作决定，模型不能指定超时。"""
 
     WaitMessagesArgs()
     with pytest.raises(ValidationError):

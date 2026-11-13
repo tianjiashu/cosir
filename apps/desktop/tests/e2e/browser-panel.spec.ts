@@ -8,23 +8,23 @@ import { API_ORIGIN as api } from "./e2e-env";
  * 推送新状态，真实的标签、弹窗与下载行为由桌面 E2E 覆盖。
  */
 
-function tab(tabId: string, title: string, dialog: BrowserDialog | null, taskId = 100): BrowserTabSummary {
-  return { tabId, taskId, createdBy: "agent", openerId: null, url: `https://example.com/${tabId}`, title, loading: false, crashed: false, dialog, agentBusy: false, operation: null };
+function tab(tabId: string, title: string, dialog: BrowserDialog | null, sessionId = 100): BrowserTabSummary {
+  return { tabId, sessionId, createdBy: "agent", openerId: null, url: `https://example.com/${tabId}`, title, loading: false, crashed: false, dialog, agentBusy: false, operation: null };
 }
 
-function download(id: string, taskId: number, filename: string): BrowserDownload {
-  return { id, taskId, tabId: "t9", filename, path: `/ws/.cosir/downloads/${filename}`, state: "completed", stalled: false, receivedBytes: 10, totalBytes: 10 };
+function download(id: string, sessionId: number, filename: string): BrowserDownload {
+  return { id, sessionId, tabId: "t9", filename, path: `/ws/.cosir/downloads/${filename}`, state: "completed", stalled: false, receivedBytes: 10, totalBytes: 10 };
 }
 
 async function openBrowserPanel(page: Page, state: BrowserState, options: { failAnswer?: boolean } = {}) {
   await installFakeDesktopHost(page, { browser: { state, ...options } });
-  await page.goto("/tasks/100");
+  await page.goto("/sessions/100");
   await page.getByRole("button", { name: /^浏览器，/ }).click();
 }
 
 test.beforeEach(async ({ request }) => {
   await request.post(`${api}/__test__/reset`);
-  await request.post(`${api}/__test__/seed-task`, { data: { taskId: 100, title: "浏览器任务" } });
+  await request.post(`${api}/__test__/seed-session`, { data: { sessionId: 100, title: "浏览器会话" } });
 });
 
 test("弹窗提示条按弹窗 id 作答：prompt 接受带输入、取消只有 accept:false；confirm 可取消；alert 只有确定", async ({ page }) => {
@@ -69,9 +69,9 @@ test("作答失败时提示用户，提示条留着可以再答", async ({ page 
   await expect(banner.getByRole("button", { name: "确定" })).toBeEnabled();
 });
 
-test("下载条只显示面板所在 Task 的下载（触发标签已关闭也在），按下载 id 在文件夹中显示", async ({ page }) => {
+test("下载条只显示面板所在 Session 的下载（触发标签已关闭也在），按下载 id 在文件夹中显示", async ({ page }) => {
   await openBrowserPanel(page, {
-    tabs: [tab("t2", "别的任务", null, 101)],
+    tabs: [tab("t2", "别的会话", null, 101)],
     downloads: [download("d1", 100, "report.pdf"), download("d2", 101, "other.zip")],
   });
   const bar = page.getByRole("region", { name: "下载" });

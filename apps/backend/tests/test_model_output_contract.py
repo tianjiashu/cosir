@@ -13,7 +13,7 @@ import app.core.workflow.node_helper.model_stream_state_machine as streaming_mod
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.nodes import model_node as model_module
-from app.models.enums.conversation_run_status import RunTransition
+from app.models.enums.run_status import RunTransition
 from app.models.enums.react_route import ReactRoute
 from tests.runtime_context_stub import run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion, sdk_event
@@ -399,7 +399,7 @@ def test_intent_survives_model_stream_failure_or_cancellation(
     monkeypatch.setattr(model_module, "_message_context", lambda: harness.runtime_context)
     monkeypatch.setattr(
         model_module.service_depends,
-        "get_conversation_run_ledger",
+        "get_run_ledger",
         lambda: SimpleNamespace(transition=lambda *a, **kw: None),
     )
 

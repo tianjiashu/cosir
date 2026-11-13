@@ -16,10 +16,10 @@ def image_asset_id(path: str) -> str:
 
 
 class AgentReport(BaseModel):
-    """派生 Task 的一次汇报：它的某个 Run 以什么结局落定，落定时下游是否还有没了结的工作。
+    """派生 Session 的一次汇报：它的某个 Run 以什么结局落定，落定时下游是否还有没了结的工作。
 
     由编排在 Run 落定时生成（``core.tool.multi_agent.derived_report``），不是 Agent 写的；``intermediate``
-    为真表示这只是中间结果——它还有运行中的命令或活动的派生 Task，之后再落定时会再汇报一次。
+    为真表示这只是中间结果——它还有运行中的命令或活动的派生 Session，之后再落定时会再汇报一次。
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -28,17 +28,17 @@ class AgentReport(BaseModel):
 
 
 class MessageSource(BaseModel):
-    """Agent 消息的发送方：去哪儿看它（``task_id``）、叫它什么（``name``，发送时的显示名快照），以及
+    """Agent 消息的发送方：去哪儿看它（``session_id``）、叫它什么（``name``，发送时的显示名快照），以及
     这条消息是不是它的汇报（``report``）。
 
-    委派与追加消息的来源是父 Task，派生 Task 的汇报来源是它自己。名字是快照，来源改名或被删不回写
+    委派与追加消息的来源是父 Session，派生 Session 的汇报来源是它自己。名字是快照，来源改名或被删不回写
     已发出的消息。
     ``report`` 放在来源上而不是消息上：它说的是「谁以什么身份发来」，随来源一起持久化、投影，各条
     路径不必另带一个字段。
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    task_id: int
+    session_id: int
     name: str
     report: AgentReport | None = None
 

@@ -407,10 +407,10 @@ def test_real_worker_close_reaps_a_suspended_job(tmp_path: Path) -> None:
 
 @requires_terminal_worker
 @pytest.mark.asyncio
-async def test_task_shell_state_survives_run_completion_and_cancellation(
+async def test_session_shell_state_survives_run_completion_and_cancellation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """真实 PTY 经服务创建后跨 Run 保留：同一 Task 的下一 Run 读到的是同一个 shell 环境。
+    """真实 PTY 经服务创建后跨 Run 保留：同一 Session 的下一 Run 读到的是同一个 shell 环境。
 
     Agent 不能执行命令（只能读、列、填入），驱动 shell 的状态变化由用户原始输入完成。
     """
@@ -423,7 +423,7 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
     )
 
     from app.core.tool.schemas import ToolExecutionContext
-    from app.core.workflow.cancel.conversation_run_cancellation_registry import (
+    from app.core.workflow.cancel.run_cancellation_registry import (
         cancellation_registry,
     )
     from app.service import depends as service_depends
@@ -436,14 +436,14 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
         service_depends, "get_terminal_session_service", singleton_getter(lambda: terminal)
     )
     runtime = terminal.start(
-        task_id=1,
+        session_id=1,
         cwd=str(tmp_path),
         shell="cmd" if os.name == "nt" else "bash",
     )
     wait_for_integration(runtime)
-    session_id = runtime.session_id
+    terminal_session_id = runtime.terminal_session_id
     second = ToolExecutionContext(
-        step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=2
+        step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=2
     )
 
     def run_as_user(text: str) -> None:
@@ -464,13 +464,13 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
             else "export COSIR_TERMINAL_STATE=kept"
         )
         run_as_user(set_command)
-        # 第一个 Run 被停止（取消前的拦截归执行器，不在 handler）；执行释放取走 Task 信号后，同一 Task 的
+        # 第一个 Run 被停止（取消前的拦截归执行器，不在 handler）；执行释放取走 Session 信号后，同一 Session 的
         # 后续 Run 复用终端不受影响。
         cancellation_registry.request_cancel(1)
         cancellation_registry.consume(1)
         listed = TerminalListTool().execute(execution_context=second)
         session_line = listed.content.split("\n", 1)[0]
-        assert session_line.startswith(f"session {session_id}")
+        assert session_line.startswith(f"session {terminal_session_id}")
         assert " · running" in session_line
         command = (
             "echo STATE:%COSIR_TERMINAL_STATE%"
@@ -478,7 +478,7 @@ async def test_task_shell_state_survives_run_completion_and_cancellation(
             else 'printf "STATE:%s\\n" "$COSIR_TERMINAL_STATE"'
         )
         run_as_user(command)
-        result = terminal.require(session_id, 1).read(is_cancelled=lambda: False)
+        result = terminal.require(terminal_session_id, 1).read(is_cancelled=lambda: False)
         assert "STATE:kept" in result.text
     finally:
         cancellation_registry.consume(1)

@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.tool_handler.move_tool import (
     MOVE_FILE_DESCRIPTION,
     MoveTool,
@@ -32,7 +32,7 @@ from app.tools.tool_handler.security.path_resolver import PathResolver
 
 
 def _context(root: Path, run_id: int = 4242) -> ToolExecutionContext:
-    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
+    return ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
 
 
 # --- resolve_workspace_relative_path -------------------------------------------
@@ -306,13 +306,13 @@ def test_move_honours_run_cancellation(tmp_path: Path) -> None:
     source.write_text("s\n", encoding="utf-8")
     run_id = 7_700_001
     context = _context(tmp_path, run_id=run_id)
-    cancellation_registry.request_cancel(context.task_id)
+    cancellation_registry.request_cancel(context.session_id)
     try:
         observation = MoveTool().execute(
             context, source_path="s.txt", destination_path="d.txt"
         )
     finally:
-        cancellation_registry.consume(context.task_id)
+        cancellation_registry.consume(context.session_id)
 
     assert observation.status == "cancelled"
     assert source.exists()

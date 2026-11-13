@@ -6,7 +6,7 @@ from openai.types.chat import ChatCompletionUserMessageParam
 
 from app.core.workflow.message_queue.message_bodies.base import (
     EnqueuedMessageBody,
-    TaskMessageKind,
+    SessionMessageKind,
     WakeScope,
 )
 from app.core.workflow.message_queue.message_bodies.rendering import escape_tag, render_time
@@ -23,7 +23,7 @@ class DecisionBody(EnqueuedMessageBody):
     消息处理。用户主动作出的决定可以唤醒挂起的 Run，也能在 Run 已完成、取消或失败后开出新 Run。
     """
 
-    KIND: ClassVar[TaskMessageKind] = "user_decision"
+    KIND: ClassVar[SessionMessageKind] = "user_decision"
     TAG: ClassVar[str] = "user_decision"
     PROMPT_GUIDE: ClassVar[str | None] = (
         "the user's own decision on the call named by `tool_call_id`; `feedback`, if present, "

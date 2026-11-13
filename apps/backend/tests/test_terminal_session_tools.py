@@ -31,7 +31,7 @@ from app.tools.terminal_runtime.session.shell_resolver import (
 )
 from app.tools.tool_handler.terminal import build_terminal_definitions
 from app.tools.tool_handler.terminal.command_results import command_results
-from app.tools.tool_handler.terminal.task_terminals import find_terminal
+from app.tools.tool_handler.terminal.session_terminals import find_terminal
 from app.tools.tool_handler.terminal.terminal_list import TerminalListTool
 from app.tools.tool_handler.terminal.terminal_read import TerminalReadTool
 from app.tools.tool_handler.terminal.terminal_stop import TerminalStopTool
@@ -186,18 +186,18 @@ def tool_service(monkeypatch):
     for tool in ("terminal_read", "terminal_stop"):
         monkeypatch.setattr(
             f"app.tools.tool_handler.terminal.{tool}.should_stop_call",
-            lambda task_id, tool_call_id: False,
+            lambda session_id, tool_call_id: False,
         )
     yield service, workers
-    command_results.drop_task(1)
-    for command in running_commands.task_commands(1):
+    command_results.drop_session(1)
+    for command in running_commands.session_commands(1):
         running_commands.finish(1, command.terminal_id, None)
 
 
 def _context(tmp_path: Path) -> Any:
     return ToolExecutionContext(
         step_id="step-1",
-        task_id=1,
+        session_id=1,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=5,
@@ -207,16 +207,16 @@ def _context(tmp_path: Path) -> Any:
 
 def _start_session(service: Any, workers: Any, tmp_path: Path) -> str:
     runtime = service.start(  # noqa: S604 - 显式 shell 取值，测试不启动真实 shell
-        task_id=1, cwd=str(tmp_path), shell="auto"
+        session_id=1, cwd=str(tmp_path), shell="auto"
     )
     workers[0].screen(["$ "], cursor=(0, 2))
     workers[0].shell("shell_prompt", cwd="/workspace")
-    return runtime.session_id
+    return runtime.terminal_session_id
 
 
 def _start_running_command() -> str:
     running_commands.start(
-        task_id=1,
+        session_id=1,
         command_id="call-run",
         command="npm run dev",
         shell_kind="sh",
@@ -227,18 +227,18 @@ def _start_running_command() -> str:
 
 def test_tool_handlers_return_observation_text_and_display_data(tool_service, tmp_path) -> None:
     service, workers = tool_service
-    session_id = _start_session(service, workers, tmp_path)
+    terminal_session_id = _start_session(service, workers, tmp_path)
 
     filled = TerminalWriteTool().execute(
-        terminal_id=session_id, command="echo hi", execution_context=_context(tmp_path)
+        terminal_id=terminal_session_id, command="echo hi", execution_context=_context(tmp_path)
     )
     assert filled.status == "success" and not filled.suspend
     assert workers[0].writes == [{"type": "prefill", "text": "echo hi"}]
-    assert (filled.content or "").startswith(f"session {session_id} · zsh · running")
+    assert (filled.content or "").startswith(f"session {terminal_session_id} · zsh · running")
     assert "filled into the prompt" in (filled.content or "")
     assert filled.display_data == {
         "kind": "terminal-session",
-        "terminal_id": session_id,
+        "terminal_id": terminal_session_id,
         "lines": [1, 1],
         "screen": False,
         "wait_result": None,
@@ -247,19 +247,19 @@ def test_tool_handlers_return_observation_text_and_display_data(tool_service, tm
 
     # 同一提示符上第二次填入是受控错误，短提示为「无法填入」。
     again = TerminalWriteTool().execute(
-        terminal_id=session_id, command="echo again", execution_context=_context(tmp_path)
+        terminal_id=terminal_session_id, command="echo again", execution_context=_context(tmp_path)
     )
     assert again.status == "error" and "TERMINAL_PREFILL_REJECTED" in (again.content or "")
     assert again.display_data["status_hint"] == "无法填入"
 
     read = TerminalReadTool().execute(
-        terminal_id=session_id, execution_context=_context(tmp_path)
+        terminal_id=terminal_session_id, execution_context=_context(tmp_path)
     )
     assert read.display_data["lines"] == [1, 1] and "input_summary" not in read.display_data
 
     listed = TerminalListTool().execute(execution_context=_context(tmp_path))
     [session_line] = (listed.content or "").split("\n")
-    assert session_line.startswith(f"session {session_id} · zsh · running")
+    assert session_line.startswith(f"session {terminal_session_id} · zsh · running")
     assert listed.display_data == {"kind": "terminal-session", "terminal_count": 1}
 
 
@@ -271,9 +271,9 @@ def test_list_reports_no_terminals_when_nothing_is_open(tool_service, tmp_path) 
 
 def test_find_terminal_prefers_sessions_then_running_commands(tool_service, tmp_path) -> None:
     service, workers = tool_service
-    session_id = _start_session(service, workers, tmp_path)
-    session = find_terminal(1, session_id)
-    assert session.terminal_id == session_id and session.snapshot().status == "running"
+    terminal_session_id = _start_session(service, workers, tmp_path)
+    session = find_terminal(1, terminal_session_id)
+    assert session.terminal_id == terminal_session_id and session.snapshot().status == "running"
 
     command_id = _start_running_command()
     command = find_terminal(1, command_id)
@@ -282,7 +282,7 @@ def test_find_terminal_prefers_sessions_then_running_commands(tool_service, tmp_
 
     listed = TerminalListTool().execute(execution_context=_context(tmp_path))
     lines = (listed.content or "").split("\n")
-    assert lines[0].startswith(f"session {session_id}")
+    assert lines[0].startswith(f"session {terminal_session_id}")
     assert lines[1].startswith(f"command {command_id} · sh · running · executing `npm run dev`")
     assert listed.display_data == {"kind": "terminal-session", "terminal_count": 2}
 
@@ -298,9 +298,9 @@ def test_find_terminal_prefers_sessions_then_running_commands(tool_service, tmp_
 
 def test_stop_rejects_user_terminals_and_missing_commands(tool_service, tmp_path) -> None:
     service, workers = tool_service
-    session_id = _start_session(service, workers, tmp_path)
+    terminal_session_id = _start_session(service, workers, tmp_path)
     rejected = TerminalStopTool().execute(
-        terminal_id=session_id, execution_context=_context(tmp_path)
+        terminal_id=terminal_session_id, execution_context=_context(tmp_path)
     )
     assert rejected.status == "error"
     assert "is a terminal the user opened" in (rejected.content or "")
@@ -324,7 +324,7 @@ def test_stop_waits_for_the_command_to_exit(tool_service, tmp_path) -> None:
 
     assert stopped.status == "success"
     assert f"stopped command {command_id}" in (stopped.content or "")
-    wait_until(lambda: command_id not in [c.terminal_id for c in running_commands.task_commands(1)])
+    wait_until(lambda: command_id not in [c.terminal_id for c in running_commands.session_commands(1)])
 
 
 def test_stop_times_out_with_a_controlled_error(

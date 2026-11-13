@@ -8,9 +8,9 @@ from typing import Any, cast
 
 import pytest
 
-from app.assistant_transport.service import conversation_task_state_service as state_module
-from app.assistant_transport.service.conversation_task_state_service import (
-    ConversationTaskStateService,
+from app.assistant_transport.service import conversation_state_service as state_module
+from app.assistant_transport.service.conversation_state_service import (
+    ConversationStateService,
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import (
@@ -19,9 +19,9 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     validate_mutated,
 )
 from app.config.constant import Constant
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
-TASK_ID = 7
+SESSION_ID = 7
 
 
 def _message(index: int, role: str) -> dict[str, Any]:
@@ -41,21 +41,21 @@ def _history(count: int) -> ConversationStateSnapshot:
 @pytest.fixture(autouse=True)
 def _spaces(monkeypatch: pytest.MonkeyPatch, backend_env: None) -> Any:
     monkeypatch.setattr(
-        "app.task_runtime.task_runtime_space.get_task_service",
-        lambda: SimpleNamespace(get_task=lambda _id: SimpleNamespace(id=TASK_ID, workspace_id=3)),
+        "app.session_runtime.session_runtime_space.get_session_service",
+        lambda: SimpleNamespace(get_session=lambda _id: SimpleNamespace(id=SESSION_ID, workspace_id=3)),
     )
     monkeypatch.setattr(
-        "app.task_runtime.task_runtime_space.get_workspace_service",
+        "app.session_runtime.session_runtime_space.get_workspace_service",
         lambda: SimpleNamespace(get_workspace=lambda _id: SimpleNamespace(id=3)),
     )
-    task_runtime_spaces.close()
+    session_runtime_spaces.close()
     yield
-    task_runtime_spaces.close()
+    session_runtime_spaces.close()
 
 
-def _service_with(state: ConversationStateSnapshot) -> ConversationTaskStateService:
-    service = ConversationTaskStateService()
-    task_runtime_spaces.get_or_create(TASK_ID).get_working_snapshot(lambda: state)
+def _service_with(state: ConversationStateSnapshot) -> ConversationStateService:
+    service = ConversationStateService()
+    session_runtime_spaces.get_or_create(SESSION_ID).get_working_snapshot(lambda: state)
     return service
 
 
@@ -72,23 +72,23 @@ def test_read_copies_only_the_window_and_does_not_validate(monkeypatch: pytest.M
 
     monkeypatch.setattr(state_module.copy, "deepcopy", counting_deepcopy)
 
-    state = service.get_state(TASK_ID)
+    state = service.get_state(SESSION_ID)
 
     assert state["messageOffset"] > 0
     assert len(state["messages"]) <= Constant.Transport.HISTORY_WINDOW_MESSAGES + 1
     assert copied == [len(state["messages"])]  # 只拷贝了窗口
     state["messages"][-1]["parts"][0]["text"] = "被调用方改写"
-    assert service.get_state(TASK_ID)["messages"][-1]["parts"][0]["text"] != "被调用方改写"
+    assert service.get_state(SESSION_ID)["messages"][-1]["parts"][0]["text"] != "被调用方改写"
 
 
 def test_materialize_validates_the_rebuild_and_does_not_cache_a_violating_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = ConversationTaskStateService()
+    service = ConversationStateService()
     broken = _history(2)
     broken["title"] = ""
-    monkeypatch.setattr(service, "_rebuild", lambda _task_id: copy.deepcopy(broken))
+    monkeypatch.setattr(service, "_rebuild", lambda _session_id: copy.deepcopy(broken))
     with pytest.raises(ValueError):
-        service.get_state(TASK_ID)
-    assert not task_runtime_spaces.get_or_create(TASK_ID).has_snapshot()
+        service.get_state(SESSION_ID)
+    assert not session_runtime_spaces.get_or_create(SESSION_ID).has_snapshot()
 
 
 def test_validation_covers_only_what_a_change_touched() -> None:

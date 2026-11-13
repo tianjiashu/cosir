@@ -103,7 +103,7 @@ class ToolAccessGate:
 
         参数:
             call: 模型请求的工具调用，含工具名、原始参数串与调用 id。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。
+            execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）。
             allowed_tool_names: 当前 Agent profile 允许运行的工具名；为 None 表示
                 调用方不增加 Agent 级门禁。
 
@@ -133,8 +133,8 @@ class ToolAccessGate:
             return ToolGateOutcome(
                 denial=tool_error(
                     tool.name,
-                    # 准入拒绝只给「停止调用」这一个信号：禁用来源（Task 类型规则、派生深度、用户
-                    # 关掉的工具组）与持续范围（本 Task / 本轮）由工具准入通知向模型说明，门禁不
+                    # 准入拒绝只给「停止调用」这一个信号：禁用来源（Session 类型规则、派生深度、用户
+                    # 关掉的工具组）与持续范围（本 Session / 本轮）由工具准入通知向模型说明，门禁不
                     # 复述来源，也不承诺「本轮之后就能用」；可用工具集也不回灌——模型本就持有工具
                     # 声明，回灌只会放大提示面。
                     f"tool is not allowed: {tool.name}. "

@@ -25,7 +25,7 @@ from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 def _ctx(root: Path) -> ToolExecutionContext:
     """构造绑定到给定 workspace 根的执行上下文（与既有对抗性测试同一口径）。"""
 
-    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=1)
+    return ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=root, run_id=1)
 
 
 def _obs(content: str | None) -> ToolObservation:

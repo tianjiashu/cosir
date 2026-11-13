@@ -42,11 +42,11 @@ from app.core.events import RunStatusChangedEvent
 from app.core.workflow import run_driver
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
-from app.models.conversation_run_failure import (
+from app.models.run_failure import (
     run_failure_message,
 )
-from app.models.conversation_run_record import ConversationRunRecord
-from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
+from app.models.run_record import RunRecord
+from app.models.enums.run_status import RunStatus, RunTransition
 from app.models.enums.error_kind import ErrorKind
 
 _QUOTA_CODE = ErrorKind.MODEL_INSUFFICIENT_QUOTA.value
@@ -99,7 +99,7 @@ class _RecordingRunStateService:
         )
         if self._failure is not None:
             raise self._failure
-        return SimpleNamespace(id=run_id, task_id=3) if self._settles else None
+        return SimpleNamespace(id=run_id, session_id=3) if self._settles else None
 
 
 def _running_state() -> ConversationStateSnapshot:
@@ -178,7 +178,7 @@ def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) 
 
 def _drive_run(run_id: int) -> Awaitable[None]:
     """驱动一条 Run（本次执行的事实由 ``RuntimeContext.for_run`` 只凭 Run 装配）。"""
-    return run_driver.RunDriver().drive(SimpleNamespace(id=run_id, task_id=3), None)
+    return run_driver.RunDriver().drive(SimpleNamespace(id=run_id, session_id=3), None)
 
 
 def _make_runtime(
@@ -196,9 +196,9 @@ def _make_runtime(
 
     monkeypatch.setattr(
         run_driver,
-        "get_conversation_run_ledger",
+        "get_run_ledger",
         lambda: SimpleNamespace(
-            get_run=lambda run_id: SimpleNamespace(id=run_id, task_id=3),
+            get_run=lambda run_id: SimpleNamespace(id=run_id, session_id=3),
             transition=state_service.transition,
         ),
     )
@@ -219,10 +219,10 @@ def _make_runtime(
     )
     monkeypatch.setattr(
         run_driver,
-        "get_conversation_task_context_service",
+        "get_session_context_service",
         lambda: SimpleNamespace(
             close_unclosed_tool_calls_for_run=lambda *_args: [],
-            claimed_decisions=lambda _task_id: [],
+            claimed_decisions=lambda _session_id: [],
         ),
     )
     return SimpleNamespace(run_agent=_drive_run)
@@ -313,9 +313,9 @@ def test_status_changed_event_projects_controlled_error() -> None:
     state = _running_state()
     event = RunStatusChangedEvent(
         changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-        task_id=7,
+        session_id=7,
         run_id=1,
-        status=ConversationRunStatus.FAILED,
+        status=RunStatus.FAILED,
         end_reason=_QUOTA_CODE,
         error={
             "code": _QUOTA_CODE,
@@ -339,7 +339,7 @@ def test_non_terminal_transition_clears_previous_error() -> None:
         "code": _QUOTA_CODE,
         "message": run_failure_message(_QUOTA_CODE),
     }
-    event = RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), task_id=7, run_id=1, status=ConversationRunStatus.RUNNING)
+    event = RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), session_id=7, run_id=1, status=RunStatus.RUNNING)
 
     assert _error_mutation_values(state, event) == [None]
 
@@ -355,7 +355,7 @@ def test_build_run_error_projects_persisted_contract() -> None:
         },
     )
 
-    assert run_error(cast(ConversationRunRecord, run)) == {
+    assert run_error(cast(RunRecord, run)) == {
         "code": _SERVICE_ERROR_CODE,
         "message": run_failure_message(_SERVICE_ERROR_CODE),
     }
@@ -366,7 +366,7 @@ def test_build_run_error_returns_none_without_persisted_error() -> None:
 
     run = SimpleNamespace(id=3, error=None)
 
-    assert run_error(cast(ConversationRunRecord, run)) is None
+    assert run_error(cast(RunRecord, run)) is None
 
 
 @pytest.mark.parametrize(
@@ -389,7 +389,7 @@ def test_build_run_error_rejects_malformed_payload(payload: dict[str, object]) -
     run = SimpleNamespace(id=3, error=payload)
 
     with pytest.raises(ValueError):
-        run_error(cast(ConversationRunRecord, run))
+        run_error(cast(RunRecord, run))
 
 
 def test_validate_snapshot_rejects_malformed_run_error() -> None:
@@ -456,9 +456,9 @@ def test_a_broken_context_still_ends_claimed_decisions(monkeypatch: pytest.Monke
     cancelled: list[list[str]] = []
     monkeypatch.setattr(
         run_driver,
-        "get_conversation_task_context_service",
+        "get_session_context_service",
         lambda: SimpleNamespace(
-            close_unclosed_tool_calls_for_run=broken, claimed_decisions=lambda _task_id: ["h1"]
+            close_unclosed_tool_calls_for_run=broken, claimed_decisions=lambda _session_id: ["h1"]
         ),
     )
     monkeypatch.setattr(
@@ -466,9 +466,9 @@ def test_a_broken_context_still_ends_claimed_decisions(monkeypatch: pytest.Monke
         lambda: None,
     )
     monkeypatch.setattr(
-        run_driver, "cancel_placeholders", lambda _task, ids, _hint: cancelled.append(list(ids))
+        run_driver, "cancel_placeholders", lambda _session, ids, _hint: cancelled.append(list(ids))
     )
 
-    run_driver.RunDriver._close_tool_calls(object(), SimpleNamespace(id=1, task_id=7))
+    run_driver.RunDriver._close_tool_calls(object(), SimpleNamespace(id=1, session_id=7))
 
     assert cancelled == [["h1"]]

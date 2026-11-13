@@ -31,7 +31,7 @@ function BrowserPageMeta({ display }: { display: BrowserPageDisplay; }) {
 function OpenTabAction({ display }: { display: BrowserPageDisplay; }) {
   const liveTab = useBrowserTab(display.tabId);
   if (liveTab === undefined) return null;
-  return <CallOpenButton label={`在浏览器面板打开：${display.title || display.url}`} onClick={() => revealBrowserTab(liveTab.taskId, display.tabId)} />;
+  return <CallOpenButton label={`在浏览器面板打开：${display.title || display.url}`} onClick={() => revealBrowserTab(liveTab.sessionId, display.tabId)} />;
 }
 
 /** 截图按对话图片的统一外观显示缩略图，地址按消息附件同一规则解析。 */

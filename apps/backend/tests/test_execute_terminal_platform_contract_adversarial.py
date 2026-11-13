@@ -784,7 +784,7 @@ def test_execute_reports_unavailable_shell_before_any_execution(
     _patch_windows_environment(monkeypatch, cmd=True, powershell=False, pwsh=False)
     tool = ExecuteTerminalTool()
     context = ToolExecutionContext(
-        step_id="step-1", task_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1
+        step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1
     )
 
     obs = tool.execute(  # noqa: S604 - 显式 shell 取值，harness 不启动真实 shell

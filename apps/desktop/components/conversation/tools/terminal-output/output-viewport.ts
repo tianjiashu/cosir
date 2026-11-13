@@ -117,7 +117,7 @@ export class TerminalOutputView {
     this.options.onPositionChange?.(buffer.viewportY, buffer.viewportY >= buffer.baseY);
   }
 
-  /** 释放 xterm、插件、观察器与延迟的布局任务。 */
+  /** 释放 xterm、插件、观察器与延迟的布局会话。 */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;

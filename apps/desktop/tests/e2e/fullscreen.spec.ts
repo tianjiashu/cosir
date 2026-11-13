@@ -18,7 +18,7 @@ test.beforeEach(async ({ request }) => {
 
 test("Mermaid 全屏避开消息裁剪，窗口缩放与两种退出入口可用", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-mermaid`);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const diagram = page.locator('[data-streamdown="mermaid-block"]').last();
   await expect(diagram.locator('[aria-label="Mermaid chart"] > svg')).toBeVisible();
   const enter = diagram.getByRole("button", { name: "View fullscreen" });
@@ -48,7 +48,7 @@ test("消息图片放大避开消息裁剪，关闭后恢复焦点与滚动", as
     type: "image", image: `cosir-attachment://${"a".repeat(64)}`,
   }];
   await seedState(request, 42, snapshot);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const enter = page.getByRole("button", { name: /^预览图片 图片 \d+$/ });
   await enter.click();
   const surface = page.getByRole("dialog", { name: "放大的图片" });

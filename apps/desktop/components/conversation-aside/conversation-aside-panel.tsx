@@ -34,7 +34,7 @@ const ANNOUNCEMENTS: Announcements = {
 const FLOATING_MAX_HEIGHT_RATIO = 0.6;
 
 /**
- * 会话侧栏：当前对话 Task 的状态摘要卡片栈（目前只有「后台任务」），任何卡片都没有内容时不渲染。它是对话画布上的附注，不是窗格：
+ * 会话侧栏：当前会话的状态摘要卡片栈（目前只有「后台任务」），任何卡片都没有内容时不渲染。它是对话画布上的附注，不是窗格：
  * AppLayout 经 `ConversationAsideContext` 把它交给线程视口，放在与内容列同一个网格里、粘在顶部
  * （见 `conversation-aside.tsx`），所以滚动条在视口最外侧，底部终端也不必给它让宽度。
  *
@@ -45,12 +45,12 @@ const FLOATING_MAX_HEIGHT_RATIO = 0.6;
  * 拖动中按 Esc 是 dnd-kit 的取消拖动，不关闭侧栏；关闭后焦点交还页头按钮由调用方负责（见 `useConversationAside`）。
  * 高度按视口封顶，卡片多了在侧栏内部滚动。卡片顺序与折叠是全局偏好（`useConversationAsideStore`）。
  */
-export function ConversationAsidePanel({ taskId, viewport, onClose }: { taskId: number; viewport: ElementSize; onClose: () => void }) {
+export function ConversationAsidePanel({ sessionId, viewport, onClose }: { sessionId: number; viewport: ElementSize; onClose: () => void }) {
   const placement = conversationAsidePlacement(viewport.width);
   const floating = placement === "floating";
   const visible = useConversationAsideStore((state) => (floating ? state.floatOpen : state.open));
   const setFloating = useConversationAsideStore((state) => state.setFloating);
-  const hasContent = useConversationAsideHasContent(taskId);
+  const hasContent = useConversationAsideHasContent(sessionId);
   const order = useConversationAsideStore((state) => state.order);
   const setOrder = useConversationAsideStore((state) => state.setOrder);
   const [dragging, setDragging] = useState(false);
@@ -66,7 +66,7 @@ export function ConversationAsidePanel({ taskId, viewport, onClose }: { taskId: 
     if (!over || active.id === over.id) return;
     const next = arrayMove(order, order.indexOf(active.id as AsideCardId), order.indexOf(over.id as AsideCardId));
     setOrder(next);
-    void frontendLog("INFO", "conversation_aside_card_reordered", "会话侧栏卡片顺序已调整", { data: { taskId, order: next } });
+    void frontendLog("INFO", "conversation_aside_card_reordered", "会话侧栏卡片顺序已调整", { data: { sessionId, order: next } });
   };
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== "Escape" || !floating || dragging) return;
@@ -102,7 +102,7 @@ export function ConversationAsidePanel({ taskId, viewport, onClose }: { taskId: 
         onDragEnd={onDragEnd}
       >
         <SortableContext items={order} strategy={verticalListSortingStrategy}>
-          {order.map((id) => <AsideCard key={id} id={id} taskId={taskId} />)}
+          {order.map((id) => <AsideCard key={id} id={id} sessionId={sessionId} />)}
         </SortableContext>
       </DndContext>
     </aside>

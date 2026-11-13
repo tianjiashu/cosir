@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
 
-import { readComposerDraft, taskDraftKey } from "@/lib/assistant/composer/composer-drafts";
+import { readComposerDraft, sessionDraftKey } from "@/lib/assistant/composer/composer-drafts";
 import { moveMessageToComposer } from "@/lib/assistant/composer/move-to-composer";
 import type { TransportMessage } from "@/lib/assistant/contract";
 import { toThreadMessageWithRenderContext as toThreadMessage, type TransportMessageRenderContext } from "@/lib/assistant/transport-message-converter";
@@ -34,10 +34,10 @@ describe("moveMessageToComposer", () => {
     if (thread.role !== "user") throw new Error("expected user message");
     const remove = vi.fn(async () => {});
 
-    await moveMessageToComposer({ taskId: 99201, message: thread, canonical, remove });
+    await moveMessageToComposer({ sessionId: 99201, message: thread, canonical, remove });
 
     expect(remove).toHaveBeenCalledOnce();
-    const draft = readComposerDraft(taskDraftKey(99201));
+    const draft = readComposerDraft(sessionDraftKey(99201));
     expect(draft?.text).toBe('<file path="/tmp/m1.md" />看 和 <ref path="src/a.py" lines="1-2" />');
     expect(draft?.attachments.map((attachment) => attachment.id)).toEqual([imageLocator]);
   });
@@ -48,9 +48,9 @@ describe("moveMessageToComposer", () => {
     if (thread.role !== "user") throw new Error("expected user message");
 
     await expect(moveMessageToComposer({
-      taskId: 99202, message: thread, canonical, remove: async () => { throw new Error("409"); },
+      sessionId: 99202, message: thread, canonical, remove: async () => { throw new Error("409"); },
     })).rejects.toThrow("409");
 
-    expect(readComposerDraft(taskDraftKey(99202))).toBeUndefined();
+    expect(readComposerDraft(sessionDraftKey(99202))).toBeUndefined();
   });
 });

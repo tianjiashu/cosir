@@ -75,7 +75,7 @@ class BrowserScreenshotTool(HandlerBase):
                 "browser_screenshot_save_failed",
                 extra={
                     "msg": "浏览器截图保存为附件失败",
-                    "data": {"task_id": execution_context.task_id, "code": exc.code},
+                    "data": {"session_id": execution_context.session_id, "code": exc.code},
                 },
             )
             return tool_error(

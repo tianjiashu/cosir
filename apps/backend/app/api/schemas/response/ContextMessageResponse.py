@@ -8,8 +8,8 @@ from pydantic import BaseModel
 
 from app.core.llm_provider.message_codec import display_arguments
 from app.core.llm_provider.openai_model import usage_from_response
-from app.models.conversation_run_record import ConversationRunRecord
-from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.run_record import RunRecord
+from app.models.session_context import SessionContextRecord
 from app.models.message_metadata import AssistantMessageMetadata, ToolMessageMetadata
 
 
@@ -17,7 +17,7 @@ class ContextMessageResponse(BaseModel):
     """一条按消息角色投影的上下文持久化记录。"""
 
     id: int | None
-    task_id: int
+    session_id: int
     turn: int
     # 继承来的历史（分叉复制，没有本地 Run）。
     inherited: bool
@@ -34,13 +34,13 @@ class ContextMessageResponse(BaseModel):
     status: str | None = None
 
     @classmethod
-    def from_record(cls, record: ConversationTaskContextRecord) -> "ContextMessageResponse":
+    def from_record(cls, record: SessionContextRecord) -> "ContextMessageResponse":
         """将持久化记录投影为前端使用的角色字段。"""
 
         message = record.message
         values: dict[str, Any] = {
             "id": record.id,
-            "task_id": record.task_id,
+            "session_id": record.session_id,
             "turn": record.turn,
             "inherited": record.run_id is None and record.sequence > 0,
             "sequence": record.sequence,
@@ -73,7 +73,7 @@ class ContextMessageResponse(BaseModel):
 class ContextTurnRunResponse(BaseModel):
     """所选回合所属 Run 的状态事实；属于整个 Run，同一 Run 的其他回合看到的是同一份。
 
-    不带 Run 号：诊断按回合进入，排查日志时用 Task id 与这里的起止时间收窄范围。
+    不带 Run 号：诊断按回合进入，排查日志时用 Session id 与这里的起止时间收窄范围。
     """
 
     status: str
@@ -84,7 +84,7 @@ class ContextTurnRunResponse(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def from_record(cls, run: ConversationRunRecord) -> "ContextTurnRunResponse":
+    def from_record(cls, run: RunRecord) -> "ContextTurnRunResponse":
         return cls(
             status=run.status,
             end_reason=run.end_reason,

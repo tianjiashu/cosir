@@ -66,7 +66,7 @@ export type AssistantPerformanceProbe = {
 };
 
 /**
- * 创建一次 task 级的开发期性能探针。
+ * 创建一次 session 级的开发期性能探针。
  *
  * 探针累计 Transport 和 React commit 统计，并在一次流结束时通过回调
  * 输出一份聚合结果；它不写入业务状态、不改变渲染时序，也不在 token 粒度打印日志。

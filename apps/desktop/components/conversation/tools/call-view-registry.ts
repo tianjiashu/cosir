@@ -6,7 +6,7 @@ import { webExtractView, webSearchView } from "./call-views/web-views";
 import { contentSearchView, directoryListView, fileListView } from "./call-views/workspace-list-views";
 import { asRecord } from "./display-data-readers";
 import { browserPageView } from "./call-views/browser-page-view";
-import { agentTaskResultView, delegationView, forkTaskView } from "./call-views/child-task-views";
+import { agentSessionResultView, delegationView, forkSessionView } from "./call-views/child-session-views";
 import { fileChangesView } from "./call-views/file-changes-view";
 import { terminalResultView } from "./call-views/terminal-result-view";
 import { terminalSessionView } from "./call-views/terminal-session-view";
@@ -30,8 +30,8 @@ export const CALL_VIEWS: Readonly<Record<string, CallView>> = {
   "terminal-session": terminalSessionView,
   "file-changes": fileChangesView,
   "delegation-result": delegationView,
-  "fork-task-result": forkTaskView,
-  "agent-task-result": agentTaskResultView,
+  "fork-session-result": forkSessionView,
+  "agent-session-result": agentSessionResultView,
   "browser-page": browserPageView,
 };
 

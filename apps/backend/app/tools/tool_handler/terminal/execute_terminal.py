@@ -37,7 +37,7 @@ from app.core.tool.schemas import (
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.models.message_metadata import BackgroundWork
 from app.tools.display.terminal_display import (
     build_terminal_display_data,
@@ -64,7 +64,7 @@ from app.tools.tool_models.terminal.execute_terminal_args import (
 # 平台无关的工具描述：只写选用与调用决策需要的执行语义（无状态、无 stdin / 终端、前台占步、
 # 不能长驻）。其余各有唯一出处，不在此复述：平台 shell、命令语法、timeout、workdir 与后台回投在
 # 参数模型各字段；「读文件别用 shell」在系统提示词，只在 Agent 同时有文件工具时出现（没有文件
-# 工具的 Agent 只能用本工具读）。不点名 terminal_write：它只给侧栏对话；terminal_read /
+# 工具的 Agent 只能用本工具读）。不点名 terminal_write：它只给侧栏会话；terminal_read /
 # terminal_stop 在所有内置 Agent 里都与本工具同时出现，可以点名。
 # stdin 是 DEVNULL、POSIX 上命令在新会话里没有控制终端：读输入的程序立刻读到输入结束，要终端的
 # 程序（密码提示、全屏程序）打不开 /dev/tty，所以写「失败」而不是「挂起」。
@@ -283,13 +283,13 @@ class ExecuteTerminalTool(HandlerBase):
                 （``WindowsExecuteTerminalArgs`` / ``MacExecuteTerminalArgs``）校验，此处
                 再按本机实际检测结果复核。
             timeout: 命令级超时秒数；显式值钳制到 ``MAX_COMMAND_TIMEOUT_S``。缺省时前台为
-                ``DEFAULT_COMMAND_TIMEOUT_S``，后台不限时（开发服务器要常驻，后台工作属于 Task，
-                由单停、上游收回、删除、``terminal_stop`` 或后端退出结束，用户停止 Task 不结束它）。
+                ``DEFAULT_COMMAND_TIMEOUT_S``，后台不限时（开发服务器要常驻，后台工作属于 Session，
+                由单停、上游收回、删除、``terminal_stop`` 或后端退出结束，用户停止 Session 不结束它）。
                 前台转到后台时沿用启动时的时限。
             workdir: 工作目录；缺省 ``execution_context.workspace_root``；相对路径相对
                 该根解析；解析后须在该根内（绝对路径同样校验）。
             background: ``True`` 立即转后台；``None`` 与 False 均在前台等待。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。workdir 只是命令的
+            execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）。workdir 只是命令的
                 起点：命令自己可以 cd 或用绝对路径，文件系统副作用不受工作区约束
                 （命令级隔离待沙箱接管）。
 
@@ -353,7 +353,7 @@ class ExecuteTerminalTool(HandlerBase):
             channel.start(build_terminal_started_display_data(command=command, workdir=cwd))
         # 运行中可读：先把命令登记进登记表，再让输出收集点同时喂它（整理后的行）。
         running = running_commands.start(
-            task_id=execution_context.task_id,
+            session_id=execution_context.session_id,
             command_id=tool_call_id,
             command=command,
             shell_kind=shell_display_name(shell),
@@ -381,7 +381,7 @@ class ExecuteTerminalTool(HandlerBase):
                 output.finish()
                 if channel is not None:
                     channel.finish()
-                running_commands.finish(execution_context.task_id, tool_call_id, result)
+                running_commands.finish(execution_context.session_id, tool_call_id, result)
             summary = output.summary()
             # 输出日志写盘失败不影响结果（模型正文只是少了日志路径），但要能排查：此时升为 warning。
             report = log.warning if summary.log_error else log.info
@@ -390,7 +390,7 @@ class ExecuteTerminalTool(HandlerBase):
                 extra={
                     "msg": "终端命令执行完成",
                     "data": {
-                        "task_id": execution_context.task_id,
+                        "session_id": execution_context.session_id,
                         "tool_call_id": tool_call_id,
                         "end": result.end,
                         "exit_code": result.exit_code,
@@ -413,11 +413,11 @@ class ExecuteTerminalTool(HandlerBase):
         )
         detached = None if background else threading.Event()
         registered = command_results.register(
-            tool_call_id, task_id=execution_context.task_id, run_id=execution_context.run_id,
+            tool_call_id, session_id=execution_context.session_id, run_id=execution_context.run_id,
             label=execution_context.call_intent, job=job, detached=detached,
         )
         if registered is None:
-            # 拒收（Task 正被收回或后端关闭）：作业已停下，按它的取消结论返回，不留后台占位。
+            # 拒收（Session 正被收回或后端关闭）：作业已停下，按它的取消结论返回，不留后台占位。
             return self._result_observation(cast(CommandConclusion, job.wait(None)))
         if detached is None:
             return self._placeholder_observation(
@@ -432,17 +432,17 @@ class ExecuteTerminalTool(HandlerBase):
                 return self._placeholder_observation(
                     command, cwd, timeout_s, "detached", registered, tool_call_id
                 )
-            if cancellation_registry.is_cancelled(execution_context.task_id):
+            if cancellation_registry.is_cancelled(execution_context.session_id):
                 # Run 取消只停前台等待：与转后台在登记表的锁里裁决，已转后台的命令照常运行。
                 if command_results.cancel_foreground(
-                    execution_context.task_id, tool_call_id
+                    execution_context.session_id, tool_call_id
                 ) == "detached":
                     return self._placeholder_observation(
                         command, cwd, timeout_s, "detached", registered, tool_call_id
                     )
                 conclusion = cast(CommandConclusion, job.wait(None))
                 break
-        outcome = command_results.settle_foreground(execution_context.task_id, tool_call_id)
+        outcome = command_results.settle_foreground(execution_context.session_id, tool_call_id)
         if outcome == "detached" or (outcome == "gone" and detached.is_set()):
             # 转后台先于前台结算：结论已由登记表回投，即使随后被撤销，工具仍须返回后台占位。
             return self._placeholder_observation(

@@ -1,7 +1,7 @@
 """Run 生命周期事件。
 
 本模块只承载「一次 Run 自身的创建、状态迁移与终态后的结果更新」。状态词表直接复用
-``ConversationRunStatus``（领域枚举单一事实源）。
+``RunStatus``（领域枚举单一事实源）。
 
 不负责：消息内容与工具调用生命周期（分别见 ``message_event``、``tool_call_event``）。
 """
@@ -12,22 +12,22 @@ from typing import Literal
 from pydantic import Field, StrictInt, StrictStr
 
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
-from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.models import ConversationRunError
-from app.models.conversation_run_options import ConversationRunOptions
-from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
+from app.models import RunError
+from app.models.run_options import RunOptions
+from app.models.enums.run_status import RunStatus
 
 
 class RunInitializedEvent(WorkflowEventEnvelope):
-    """一个 Run 已被创建并绑定到 Task。
+    """一个 Run 已被创建并绑定到 Session。
 
-    事实语义：Run 已落库，消费方据此把它设为 Task 当前活动；用户输入及 assistant 消息由各自的
+    事实语义：Run 已落库，消费方据此把它设为 Session 当前活动；用户输入及 assistant 消息由各自的
     事件追加。Run 只前进：撤回后再发送新建 Run，不替换已有 Run。
 
     Attributes:
         created_at: Run 记录的创建时间，由领域侧从落库的记录填入；投影为 ``activity.startedAt``，
             前端据此做运行中的本地计时。投影器不读墙钟，所以必填。
-        context_window_total: 创建 Run 时冻结的窗口上限，随该 Run 而非 Task 投影。
+        context_window_total: 创建 Run 时冻结的窗口上限，随该 Run 而非 Session 投影。
         model_config_id / options: 创建 Run 时冻结的发起配置，供前端执行运行期配置锁定。
 
     异常:
@@ -39,7 +39,7 @@ class RunInitializedEvent(WorkflowEventEnvelope):
     created_at: datetime
     context_window_total: StrictInt | None = Field(default=None, ge=0)
     model_config_id: StrictStr | None = None
-    options: ConversationRunOptions = Field(default_factory=ConversationRunOptions)
+    options: RunOptions = Field(default_factory=RunOptions)
 
 
 class RunStatusChangedEvent(WorkflowEventEnvelope):
@@ -50,7 +50,7 @@ class RunStatusChangedEvent(WorkflowEventEnvelope):
     领域侧一处。
 
     Attributes:
-        status: 迁移后的 run 状态，取值受 ``ConversationRunStatus`` 约束。
+        status: 迁移后的 run 状态，取值受 ``RunStatus`` 约束。
         end_reason: 终态原因（如 ``"invalid_model_output"`` / ``"user_cancelled"`` /
             ``"backend_restarted"``）；非终态迁移为 ``None``。
         usage_stats: Run 终态时随事件附带的完整累计 token 用量；未获得 provider usage 时为
@@ -65,10 +65,10 @@ class RunStatusChangedEvent(WorkflowEventEnvelope):
     """
 
     type: Literal["run_status_changed"] = "run_status_changed"
-    status: ConversationRunStatus
+    status: RunStatus
     end_reason: str | None = None
-    usage_stats: ConversationRunUsageStats | None = None
-    error: ConversationRunError | None = None
+    usage_stats: RunUsageStats | None = None
+    error: RunError | None = None
     changed_at: datetime
     # 已提交的最终模型响应身份，仅用于事件投影，不另存 Run 字段。
     response_sequence: int | None = None
@@ -79,4 +79,4 @@ class RunResultUpdatedEvent(WorkflowEventEnvelope):
 
     type: Literal["run_result_updated"] = "run_result_updated"
     end_reason: str | None = None
-    usage_stats: ConversationRunUsageStats | None = None
+    usage_stats: RunUsageStats | None = None

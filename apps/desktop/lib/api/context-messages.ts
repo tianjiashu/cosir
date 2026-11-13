@@ -2,7 +2,7 @@ import { requestJson, type RequestOptions } from "@/lib/http/client";
 
 export type ContextMessage = {
   id: number | null;
-  task_id: number;
+  session_id: number;
   /** 所在回合（系统提示词为 0）。 */
   turn: number;
   /** 来自分叉继承的历史（没有本地运行）。 */
@@ -37,14 +37,14 @@ export type ContextObservation = {
 };
 
 export type ContextMessageQuery = {
-  taskId?: number;
+  sessionId?: number;
   turn?: number;
 };
 
-/** 读取 Task 的上下文记录，或只读一个回合；Task 必填（观测按 Task 与回合进入，前端看不到运行）。 */
+/** 读取 Session 的上下文记录，或只读一个回合；Session 必填（观测按 Session 与回合进入，前端看不到运行）。 */
 export function getContextMessages(query: ContextMessageQuery, options?: RequestOptions) {
   const params = new URLSearchParams();
-  if (query.taskId !== undefined) params.set("task_id", String(query.taskId));
+  if (query.sessionId !== undefined) params.set("session_id", String(query.sessionId));
   if (query.turn !== undefined) params.set("turn", String(query.turn));
   return requestJson<ContextObservation>(`/context-messages?${params.toString()}`, options);
 }

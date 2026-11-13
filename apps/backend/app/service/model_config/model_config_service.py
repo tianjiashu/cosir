@@ -13,7 +13,7 @@ from app.core.llm_provider.model_probe import (
     ModelProbeOutcome,
     probe_chat_model,
 )
-from app.models.conversation_run_options import ReasoningEffort
+from app.models.run_options import ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.model_config_file import ModelConfigFile, ModelConnectionEntry, ModelEntry
 from app.models.model_config_record import ModelConfigRecord
@@ -96,7 +96,7 @@ class ModelConfigService:
         异常:
             UserInputRejectedError: 模型不存在、配置文件无效，或不支持所选推理强度。
         """
-        # 模型缺失不是「寻址不到 Task」：接入层把 KeyError 统一映射为 404 task not found。
+        # 模型缺失不是「寻址不到 Session」：接入层把 KeyError 统一映射为 404 session not found。
         # 本层明确知道自己查的是什么，就地换成可读的输入拒绝，避免给出错误语义。
         try:
             config = self.get_config(model_config_id)

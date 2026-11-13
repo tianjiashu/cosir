@@ -20,7 +20,7 @@ def merge_log_context(**fields: str | None) -> Token[str]:
     """绑定入口提供的 trace_id，并返回可用于恢复的 ContextVar token。
 
     只消费 ``trace_id`` 字段；业务实体 ID 应由调用方放入日志 ``data``，不在日志层维护
-    run/task 到 trace 的全局映射。
+    run/session 到 trace 的全局映射。
     """
 
     trace_id = str(fields.get("trace_id") or "").strip() or current_log_context()

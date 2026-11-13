@@ -58,7 +58,7 @@ def wire_source(source: MessageSource) -> ConversationStateMessageSource:
     """领域来源 → wire 来源；开回合的消息与途中来信共用，两处展示一致。"""
     report = source.report
     return {
-        "taskId": source.task_id,
+        "sessionId": source.session_id,
         "name": source.name,
         "report": None
         if report is None

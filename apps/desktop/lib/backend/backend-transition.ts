@@ -1,7 +1,7 @@
 import type { BackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
 
 /**
- * 后端实例变化的边沿判定，供 Task 连接（`TaskTransportConnection`）与页面查询缓存
+ * 后端实例变化的边沿判定，供 Session 连接（`SessionTransportConnection`）与页面查询缓存
  * （useBackendQuerySync）共用，保证两处对「不可用 / 恢复」的理解一致。
  */
 export type BackendTransition =

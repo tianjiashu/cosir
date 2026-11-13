@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from typing import Any, Literal, get_args, get_origin, get_type_hints
 
-from app.models.conversation_run_options import ReasoningEffort
+from app.models.run_options import ReasoningEffort
 
 
 def _preference_fields() -> tuple[str, ...]:

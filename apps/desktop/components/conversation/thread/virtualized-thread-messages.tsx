@@ -16,8 +16,8 @@ import { useThreadHistoryPaging } from "@/components/conversation/thread/use-thr
 import { measureRenderedElement } from "@/lib/virtual/measure-rendered-element";
 
 type VirtualizedThreadMessagesProps = {
-  /** 行高缓存按 Task 分桶。 */
-  taskId: number;
+  /** 行高缓存按 Session 分桶。 */
+  sessionId: number;
   components: MessageComponents;
   performanceProbe?: AssistantPerformanceProbe | null;
 };
@@ -29,13 +29,13 @@ type VirtualizedThreadMessagesProps = {
  *
  * 屏幕外消息只由这里跳过，消息根节点不能再叠加 `content-visibility`：视口外但在 overscan 内的行会被
  * 浏览器按占位高度布局，虚拟列表量到假高度，行接近视口时再按真实高度修正一次 scrollTop，卸载后
- * 重新挂载又回到占位高度，于是每经过一次修正一次。行高的初始值依次取本 Task 记下的实测值
+ * 重新挂载又回到占位高度，于是每经过一次修正一次。行高的初始值依次取本 Session 记下的实测值
  * （`message-height-cache`）与按内容的估计（`estimateMessageHeight`），实测值以 TanStack 测量为准。
  *
  * 列表只含已加载的一段历史；往上翻页与插入后保持视口见 `useThreadHistoryPaging`。
  */
 export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = memo(function VirtualizedThreadMessages({
-  taskId,
+  sessionId,
   components,
   performanceProbe = null,
 }) {
@@ -74,14 +74,14 @@ export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = mem
       const messageId = messageIds[index];
       const width = containerRef.current?.clientWidth || null;
       const message = messagesById(aui.thread().getState().messages).get(messageId ?? "");
-      return (messageId === undefined ? undefined : rememberedMessageHeight(taskId, width, messageId, message))
-        ?? estimateMessageHeight(message, taskId);
+      return (messageId === undefined ? undefined : rememberedMessageHeight(sessionId, width, messageId, message))
+        ?? estimateMessageHeight(message, sessionId);
     },
     // 浏览器铺满时对话区被隐藏：隐藏期间的读数既不进虚拟列表缓存，也不进按列宽分桶的行高记忆
     // （列宽读成 0 会把整桶换掉）。
     measureElement: (element, entry, instance) => measureRenderedElement(element, entry, instance, (size) => {
       const messageId = messageIds[instance.indexFromElement(element)];
-      if (messageId !== undefined) rememberMessageHeight(taskId, element.clientWidth, messageId, size, messagesById(aui.thread().getState().messages).get(messageId));
+      if (messageId !== undefined) rememberMessageHeight(sessionId, element.clientWidth, messageId, size, messagesById(aui.thread().getState().messages).get(messageId));
     }),
     getItemKey,
     overscan: 8,

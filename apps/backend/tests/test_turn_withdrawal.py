@@ -12,19 +12,19 @@ from app.core.context.context_store import ContextStore
 from app.core.tool.handoff.handoff_registry import HandoffLease, handoff_registry
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, notices_to_context
 from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
-from app.core.workflow.message_queue.task_message import (
+from app.core.workflow.message_queue.session_message import (
     BackgroundResultBody,
     DecisionBody,
-    TaskMessage,
+    SessionMessage,
     UserInputBody,
 )
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
 from app.models.withdrawal_plan import WithdrawalPlan
 from app.service import depends
-from app.storage.crud.conversation_run_crud import ConversationRunCrud
-from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
-from app.storage.crud.task_crud import TaskCrud
+from app.storage.crud.run_crud import RunCrud
+from app.storage.crud.session_context_crud import SessionContextCrud
+from app.storage.crud.session_crud import SessionCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.tools.tool_handler.terminal.command_job import CommandConclusion
 from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
@@ -69,12 +69,12 @@ def history(isolated_storage, tmp_path):
     """两个回合：第一回合发起 ``call-early``，第二回合发起 ``call-late`` 与等用户决定的
     ``call-decide``。
 
-    第一回合那次调用的结论、一条 Task 级通知（与驱动内的续写提示合成一行）都在第二回合途中
+    第一回合那次调用的结论、一条 Session 级通知（与驱动内的续写提示合成一行）都在第二回合途中
     并入。
     """
     workspace = WorkspaceCrud().create("withdraw", str(tmp_path))
-    task = TaskCrud().create(workspace.id, "withdraw", tool_schemas=[])
-    run = ConversationRunCrud().create(task.id, status="completed")
+    session = SessionCrud().create(workspace.id, "withdraw", tool_schemas=[])
+    run = RunCrud().create(session.id, status="completed")
     notice_message, notice_metadata = notices_to_context(
         [
             NoticeBody(content="workspace instructions changed", notice_kind="system_prompt_delta"),
@@ -96,13 +96,13 @@ def history(isolated_storage, tmp_path):
     store = ContextStore()
     for sequence, (turn, message, metadata, message_id) in enumerate(rows, start=1):
         store.append(
-            task.id, run.id, message, sequence, metadata=metadata, message_id=message_id, turn=turn
+            session.id, run.id, message, sequence, metadata=metadata, message_id=message_id, turn=turn
         )
-    return SimpleNamespace(task_id=task.id, run_id=run.id, workspace_id=workspace.id)
+    return SimpleNamespace(session_id=session.id, run_id=run.id, workspace_id=workspace.id)
 
 
 def test_plan_withdraws_the_turn_and_keeps_late_results_of_earlier_calls(history) -> None:
-    rows = ConversationTaskContextCrud().get(history.task_id, include_in_context=False)
+    rows = SessionContextCrud().get(history.session_id, include_in_context=False)
 
     plan = WithdrawalPlan.plan_withdrawal(rows, from_turn=2)
 
@@ -110,7 +110,7 @@ def test_plan_withdraws_the_turn_and_keeps_late_results_of_earlier_calls(history
     excluded = {r.sequence for r in rows if r.id in plan.excluded_row_ids}
     # 第一回合调用的结论（序号 8）回答的是第一回合，保留；其余第二回合的行全部移出。
     assert excluded == {4, 5, 6, 7, 9, 10}
-    # 合成通知行整体移出：Task 级通知交给调用方重新投递，回合级的续写提示随之丢弃。
+    # 合成通知行整体移出：Session 级通知交给调用方重新投递，回合级的续写提示随之丢弃。
     assert [n.notice_kind for n in plan.redeliver] == ["system_prompt_delta"]
 
 
@@ -121,7 +121,7 @@ def side_effects(history):
     for call_id in ("call-late", "call-early"):
         command_results.register(
             call_id,
-            task_id=history.task_id,
+            session_id=history.session_id,
             run_id=history.run_id,
             label="t",
             job=FakeCommandJob(lambda call_id=call_id: revoked.append(call_id)),
@@ -129,41 +129,41 @@ def side_effects(history):
     handoff_registry.begin(
         HandoffLease(
             tool_call_id="call-late",
-            task_id=history.task_id,
+            session_id=history.session_id,
             tool_name="browser_handoff",
             resource_id="tab",
             reason="sign in",
         )
     )
-    queue = depends.get_task_message_queue()
+    queue = depends.get_session_message_queue()
 
-    def result(call_id: str) -> TaskMessage:
-        return TaskMessage.of(
+    def result(call_id: str) -> SessionMessage:
+        return SessionMessage.of(
             BackgroundResultBody(
                 tool_call_id=call_id, tool_name="terminal_command", tool_result="{}", ended_at="t"
             )
         )
 
-    queue.put(history.task_id, result("call-late"))
-    queue.put(history.task_id, result("call-early"))
+    queue.put(history.session_id, result("call-late"))
+    queue.put(history.session_id, result("call-early"))
     queue.put(
-        history.task_id,
-        TaskMessage.of(
+        history.session_id,
+        SessionMessage.of(
             DecisionBody(tool_call_id="call-decide", tool_name="browser_handoff", decision="approve")
         ),
     )
     queue.put(
-        history.task_id,
-        TaskMessage.of(NoticeBody(content="shell exited", notice_kind="backend_restarted")),
+        history.session_id,
+        SessionMessage.of(NoticeBody(content="shell exited", notice_kind="backend_restarted")),
     )
-    queued_input = queue.put(history.task_id, _input("排着的"))
+    queued_input = queue.put(history.session_id, _input("排着的"))
     yield SimpleNamespace(revoked=revoked, queued_input=queued_input)
-    command_results.withdraw_calls(history.task_id, ["call-early"])
-    handoff_registry.drop_task(history.task_id)
+    command_results.withdraw_calls(history.session_id, ["call-early"])
+    handoff_registry.drop_session(history.session_id)
 
 
-def _input(text: str) -> TaskMessage:
-    return TaskMessage.of(
+def _input(text: str) -> SessionMessage:
+    return SessionMessage.of(
         UserInputBody(
             text=text,
             launch=RunLaunch(model_config_id="test/m1"),
@@ -173,8 +173,8 @@ def _input(text: str) -> TaskMessage:
     )
 
 
-def _queued(task_id: int) -> list[tuple[str, object]]:
-    def describe(message: TaskMessage) -> tuple[str, object]:
+def _queued(session_id: int) -> list[tuple[str, object]]:
+    def describe(message: SessionMessage) -> tuple[str, object]:
         body = message.body
         if isinstance(body, NoticeBody):
             return ("notice", body.notice_kind)
@@ -183,58 +183,58 @@ def _queued(task_id: int) -> list[tuple[str, object]]:
         assert isinstance(body, UserInputBody)
         return (message.kind, body.text)
 
-    return [describe(m) for m in depends.get_task_message_queue().pending_nowait(task_id)]
+    return [describe(m) for m in depends.get_session_message_queue().pending_nowait(session_id)]
 
 
 def test_withdraw_gathers_every_side_effect_of_the_turn(history, side_effects) -> None:
-    depends.get_turn_withdrawal_service().withdraw(history.task_id, 12)
+    depends.get_turn_withdrawal_service().withdraw(history.session_id, 12)
 
     # 这一回合的后台作业被撤销，更早回合的照常进行。
     assert side_effects.revoked == ["call-late"]
     assert (
         command_results.complete(
-            history.task_id, "call-late", CommandConclusion({"ok": True})
+            history.session_id, "call-late", CommandConclusion({"ok": True})
         )
         is False
     )
-    assert handoff_registry.leases(history.task_id) == []
-    # 队列：这一回合调用的结论与决定被删；更早调用的结论、排队的通知与输入保留；移出的 Task 级
+    assert handoff_registry.leases(history.session_id) == []
+    # 队列：这一回合调用的结论与决定被删；更早调用的结论、排队的通知与输入保留；移出的 Session 级
     # 通知重新投递。撤回不入队新消息、不开新 Run。
-    assert _queued(history.task_id) == [
+    assert _queued(history.session_id) == [
         ("background_result", "call-early"),
         ("notice", "backend_restarted"),
         ("user_input", "排着的"),
         ("notice", "system_prompt_delta"),
     ]
-    included = ConversationTaskContextCrud().get(history.task_id, include_in_context=True)
+    included = SessionContextCrud().get(history.session_id, include_in_context=True)
     assert [r.sequence for r in included] == [1, 2, 3, 8]
 
 
 def test_withdraw_rejects_a_stale_target_before_touching_anything(history, side_effects) -> None:
-    from app.models.errors.task_command_errors import TaskCommandConflictError
+    from app.models.errors.session_command_errors import SessionCommandConflictError
 
-    with pytest.raises(TaskCommandConflictError) as caught:
-        depends.get_turn_withdrawal_service().withdraw(history.task_id, 11)
+    with pytest.raises(SessionCommandConflictError) as caught:
+        depends.get_turn_withdrawal_service().withdraw(history.session_id, 11)
 
     assert caught.value.code == "WITHDRAW_TARGET_STALE"
     assert side_effects.revoked == []
-    assert len(ConversationTaskContextCrud().get(history.task_id, include_in_context=True)) == 10
+    assert len(SessionContextCrud().get(history.session_id, include_in_context=True)) == 10
 
 
 def test_restart_sweep_does_not_settle_withdrawn_placeholders(history, side_effects) -> None:
-    depends.get_turn_withdrawal_service().withdraw(history.task_id, 12)
+    depends.get_turn_withdrawal_service().withdraw(history.session_id, 12)
 
-    unsettled = ConversationTaskContextCrud().list_unsettled_placeholders(history.task_id)
+    unsettled = SessionContextCrud().list_unsettled_placeholders(history.session_id)
 
     assert [r.message["tool_call_id"] for r in unsettled] == ["call-early"]
 
 
 def test_withdraw_waits_for_a_conclusion_already_leaving_the_registry(monkeypatch) -> None:
     """结论已出登记表、还在锁外写队列时撤回：撤回要等它写完，调用方随后删得到这一行。"""
-    task_id, call_id = 4242, "call-in-flight"
+    session_id, call_id = 4242, "call-in-flight"
     command_results.register(
         call_id,
-        task_id=task_id,
+        session_id=session_id,
         run_id=1,
         label="t",
         job=FakeCommandJob(),
@@ -249,13 +249,13 @@ def test_withdraw_waits_for_a_conclusion_already_leaving_the_registry(monkeypatc
     monkeypatch.setattr(CommandResultRegistry, "_enqueue_result", staticmethod(slow_delivery))
     delivering = threading.Thread(
         target=command_results.complete,
-        args=(task_id, call_id, CommandConclusion({"ok": True})),
+        args=(session_id, call_id, CommandConclusion({"ok": True})),
     )
     delivering.start()
     assert writing.wait(5)
     withdrawn = threading.Event()
     withdrawer = threading.Thread(
-        target=lambda: (command_results.withdraw_calls(task_id, {call_id}), withdrawn.set())
+        target=lambda: (command_results.withdraw_calls(session_id, {call_id}), withdrawn.set())
     )
     withdrawer.start()
     assert not withdrawn.wait(0.2), "撤回不能先于在途投递返回"
@@ -270,20 +270,20 @@ def test_the_runs_last_turn_counts_as_withdrawn_only_after_withdrawal(
 ) -> None:
     """恢复与「用户已停止」都据此判断：最后一个回合还在上下文里时不算撤回。"""
     store = ContextStore()
-    assert store.run_last_turn_withdrawn(history.task_id, history.run_id) is False
+    assert store.run_last_turn_withdrawn(history.session_id, history.run_id) is False
 
-    depends.get_turn_withdrawal_service().withdraw(history.task_id, 12)
+    depends.get_turn_withdrawal_service().withdraw(history.session_id, 12)
 
-    assert store.run_last_turn_withdrawn(history.task_id, history.run_id) is True
+    assert store.run_last_turn_withdrawn(history.session_id, history.run_id) is True
 
 
 def test_fork_cannot_cut_at_a_withdrawn_turn(history, side_effects) -> None:
     """撤回留下了更早调用在这一回合才并入的结果（仍带回合号 2），fork 也不能切到这一回合。"""
-    from app.service.task.fork_source import ForkSource
+    from app.service.session.fork_source import ForkSource
 
-    depends.get_turn_withdrawal_service().withdraw(history.task_id, 12)
-    rows = ConversationTaskContextCrud().get(history.task_id, include_in_context=False)
-    source = ForkSource(task=depends.get_task_crud().get(history.task_id), rows=rows, runs=[])
+    depends.get_turn_withdrawal_service().withdraw(history.session_id, 12)
+    rows = SessionContextCrud().get(history.session_id, include_in_context=False)
+    source = ForkSource(session=depends.get_session_crud().get(history.session_id), rows=rows, runs=[])
 
     assert any(r.turn == 2 and r.retained for r in rows)
     with pytest.raises(KeyError):
@@ -299,17 +299,17 @@ def test_cold_rebuild_is_not_resumable_once_the_last_turn_is_withdrawn(
     rebuild_snapshot,
 )
 
-    runs = ConversationRunCrud()
+    runs = RunCrud()
     run = runs.get(history.run_id)
-    task = TaskCrud().get(history.task_id)
-    task.current_run_id = run.id
+    session = SessionCrud().get(history.session_id)
+    session.current_run_id = run.id
     cancelled = replace(run, status="cancelled")
 
     def resumable() -> bool:
-        rows = ConversationTaskContextCrud().get(history.task_id, include_in_context=False)
-        state = rebuild_snapshot(task, [cancelled], rows, {})
+        rows = SessionContextCrud().get(history.session_id, include_in_context=False)
+        state = rebuild_snapshot(session, [cancelled], rows, {})
         return state["activity"]["resumable"]
 
     assert resumable() is True
-    depends.get_turn_withdrawal_service().withdraw(history.task_id, 12)
+    depends.get_turn_withdrawal_service().withdraw(history.session_id, 12)
     assert resumable() is False

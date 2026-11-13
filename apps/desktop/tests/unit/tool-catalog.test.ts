@@ -43,7 +43,7 @@ describe("toolHeading", () => {
     expect(toolHeading("mcp", { action: "call", server_name: "fs", tool_name: "read" })).toEqual({ title: "调用 MCP", target: "fs/read" });
     expect(toolHeading("mcp", { action: "list", server_name: "fs" }).target).toBe("fs");
     expect(toolHeading("skill", { action: "load", skill_name: "pdf", resource_path: "ref.md" }).target).toBe("pdf/ref.md");
-    expect(toolHeading("send_message", { task_id: 12 }).target).toBe("#12");
+    expect(toolHeading("send_message", { session_id: 12 }).target).toBe("#12");
   });
 
   it("目录里没有的工具退回工具名，没有图标", () => {

@@ -21,7 +21,7 @@ from app.core.tool.schemas.tool_names import (
     TOOL_DELETE_FILE,
     TOOL_EXECUTE_TERMINAL,
     TOOL_FIND_FILES,
-    TOOL_FORK_TASK,
+    TOOL_FORK_SESSION,
     TOOL_LIST_DIRECTORY,
     TOOL_MOVE_FILE,
     TOOL_READ_FILE,
@@ -46,7 +46,7 @@ _DEFAULT_STATUS_HINTS = {
     TOOL_WEB_SEARCH: "搜索失败",
     TOOL_WEB_EXTRACT: "提取失败",
     TOOL_DELEGATE_TASK: "委派失败",
-    TOOL_FORK_TASK: "分叉失败",
+    TOOL_FORK_SESSION: "分叉失败",
 }
 STATUS_HINT_MAX_LENGTH = 8
 

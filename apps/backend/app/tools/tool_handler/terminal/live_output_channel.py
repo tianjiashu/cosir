@@ -106,7 +106,7 @@ class LiveOutputChannel:
 
     def _log_data(self, **extra: object) -> dict[str, object]:
         return {
-            "task_id": self._context.task_id,
+            "session_id": self._context.session_id,
             "run_id": self._context.run_id,
             "tool_call_id": self._context.tool_call_id,
             **extra,
@@ -173,7 +173,7 @@ class LiveOutputChannel:
         try:
             self._sink(
                 ToolCallRuntimeUpdateEvent(
-                    task_id=self._context.task_id,
+                    session_id=self._context.session_id,
                     run_id=self._context.run_id,
                     tool_call_id=self._context.tool_call_id,
                     seq=seq,

@@ -13,7 +13,7 @@ const WAIT_END_REASON_LABELS: Record<string, string> = {
   elapsed: "等待结束",
   timeout: "等待超时",
   cancelled: "等待已取消",
-  session_ended: "会话已结束",
+  session_ended: "终端已结束",
   command_ended: "命令已结束",
 };
 
@@ -51,13 +51,13 @@ function TerminalMeta({ data }: { data: Record<string, unknown> }) {
  * 因此自然不显示这个按钮；会话是否还在读 snapshot 的实时会话列表（镜像尚未同步与会话已消失都按已失效
  * 处理：行挂载时镜像已由同一份 snapshot 同步好）。
  */
-function RevealTerminalAction({ data, taskId }: { data: Record<string, unknown>; taskId: number; }) {
+function RevealTerminalAction({ data, sessionId }: { data: Record<string, unknown>; sessionId: number; }) {
   const terminalId = text(data.terminal_id);
   const live = useTerminalWorkbenchStore((state) => (
-    terminalId !== undefined && (state.tasks[taskId]?.sessions?.some((session) => session.sessionId === terminalId) ?? false)
+    terminalId !== undefined && (state.bySession[sessionId]?.sessions?.some((session) => session.terminalSessionId === terminalId) ?? false)
   ));
   if (terminalId === undefined || !live) return null;
-  return <CallOpenButton label="在终端中打开" onClick={() => useTerminalWorkbenchStore.getState().reveal(taskId, terminalId)} />;
+  return <CallOpenButton label="在终端中打开" onClick={() => useTerminalWorkbenchStore.getState().reveal(sessionId, terminalId)} />;
 }
 
 /**
@@ -67,6 +67,6 @@ function RevealTerminalAction({ data, taskId }: { data: Record<string, unknown>;
 export const terminalSessionView: CallView = (data, context) => {
   return {
     meta: <TerminalMeta data={data} />,
-    actions: (context.interactive ? <RevealTerminalAction data={data} taskId={context.taskId} /> : null),
+    actions: (context.interactive ? <RevealTerminalAction data={data} sessionId={context.sessionId} /> : null),
   };
 };

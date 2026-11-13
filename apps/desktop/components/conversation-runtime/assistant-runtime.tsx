@@ -19,7 +19,7 @@ export function AssistantRuntime(props: AssistantRuntimeProps) {
     props.connection.resync();
   };
   return (
-    <AssistantRuntimeErrorBoundary key={sessionKey} taskId={props.taskId} onRetry={retry}>
+    <AssistantRuntimeErrorBoundary key={sessionKey} sessionId={props.sessionId} onRetry={retry}>
       <AssistantRuntimeSession {...props} />
     </AssistantRuntimeErrorBoundary>
   );

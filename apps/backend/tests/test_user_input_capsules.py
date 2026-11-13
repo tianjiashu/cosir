@@ -8,12 +8,12 @@ import pytest
 
 import app.service.user_input.user_input_service as user_input_module
 from app.core.user_input.capsules import FileCapsule, serialize_capsule
-from app.models.conversation_run_command import ConversationRunCommand
+from app.models.run_command import RunCommand
 from app.models.errors.input_errors import UserInputRejectedError
 from app.service.user_input.user_input_service import UserInputService
 from tests.model_config_fixtures import model_config_record, model_configs
 
-_TASK_ID = 7
+_SESSION_ID = 7
 
 
 @pytest.fixture
@@ -22,7 +22,7 @@ def workspace(tmp_path: Path) -> Path:
 
 
 def _service(monkeypatch: pytest.MonkeyPatch, workspace_root: Path) -> UserInputService:
-    """不触达存储的 ``UserInputService``：Task 归属 workspace 7，模型不支持图片。"""
+    """不触达存储的 ``UserInputService``：Session 归属 workspace 7，模型不支持图片。"""
     monkeypatch.setattr(
         user_input_module,
         "get_model_config_service",
@@ -38,12 +38,12 @@ def _service(monkeypatch: pytest.MonkeyPatch, workspace_root: Path) -> UserInput
         ),
     )
     service = UserInputService.__new__(UserInputService)
-    service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))
+    service._session = SimpleNamespace(get=lambda _session_id: SimpleNamespace(workspace_id=7))
     return service
 
 
 def _prepare(service: UserInputService, text: str):
-    return service.prepare(_TASK_ID, ConversationRunCommand(text=text), "test/m1", None, "main_agent")
+    return service.prepare(_SESSION_ID, RunCommand(text=text), "test/m1", None, "main_agent")
 
 
 def _write_skill(root: Path, name: str, *, enabled: list[str]) -> None:

@@ -7,10 +7,10 @@ import type { ActivityFeedback } from "@/lib/assistant/turn/current-activity";
 import { ActivityStatus } from "./thinking-label";
 
 /** 连续工具区间；摘要承担当前活动，展开才挂载普通调用，用户选择保持稳定。 */
-export const ProcessBlock = memo(function ProcessBlock({ taskId, messageId, group, feedback, renderCall, visible = true }: {
-  taskId: number; messageId: string; group: ActivityGroup; feedback?: ActivityFeedback; visible?: boolean; renderCall: (item: CallItem, visible: boolean) => React.ReactNode;
+export const ProcessBlock = memo(function ProcessBlock({ sessionId, messageId, group, feedback, renderCall, visible = true }: {
+  sessionId: number; messageId: string; group: ActivityGroup; feedback?: ActivityFeedback; visible?: boolean; renderCall: (item: CallItem, visible: boolean) => React.ReactNode;
 }) {
-  const [open, setOpen] = useDisclosure(taskId, activityKey(messageId, group.key), false);
+  const [open, setOpen] = useDisclosure(sessionId, activityKey(messageId, group.key), false);
   const ref = useRef<HTMLDivElement>(null);
   const lockScroll = useScrollLock(ref, 0);
   if (!group.calls.length) return feedback ? <ActivityStatus feedback={feedback} className="flex min-h-8 items-center text-2sm" /> : null;

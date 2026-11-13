@@ -1,7 +1,7 @@
 """用户输入解析边界：模型能力校验、胶囊指针校验与 Skill 路径补全，产出待入队的消息体。
 
-HTTP 发送使用；Agent 之间的输入走 ``agent_message``。只读 Task、模型配置、工作区与已发布图片的
-元数据，不写库、不入队、不创建 Run。投递方在入队之前调用（校验 IO 不占用 Task 闸门），输入不合法
+HTTP 发送使用；Agent 之间的输入走 ``agent_message``。只读 Session、模型配置、工作区与已发布图片的
+元数据，不写库、不入队、不创建 Run。投递方在入队之前调用（校验 IO 不占用 Session 闸门），输入不合法
 在这里同步拒绝，不让坏数据进外部队列。
 
 正文里的 ``<file>`` / ``<ref>`` / ``<skill>`` 是用户给的指针：这里校验指针可用、把 Skill 的
@@ -24,51 +24,51 @@ from app.core.user_input.capsules import (
     parse_capsules,
     serialize_segments,
 )
-from app.core.workflow.message_queue.task_message import RunLaunch, UserInputBody
-from app.models import ConversationRunCommand
+from app.core.workflow.message_queue.session_message import RunLaunch, UserInputBody
+from app.models import RunCommand
 from app.models.conversation_input import UserInputPresentation
-from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
+from app.models.run_options import RunOptions, ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.configuration.skill_catalog import SkillCatalog
 from app.service.configuration.skill_configuration import SkillConfigurationError
-from app.service.depends import get_model_config_service, get_task_crud, get_workspace_service
+from app.service.depends import get_model_config_service, get_session_crud, get_workspace_service
 
 
 class UserInputService:
     """进程级单例（``service.depends.get_user_input_service``），无进程内状态。"""
 
     def __init__(self) -> None:
-        self._task = get_task_crud()
+        self._session = get_session_crud()
 
     def prepare(
         self,
-        task_id: int,
-        command: ConversationRunCommand,
+        session_id: int,
+        command: RunCommand,
         model_config_id: str,
         reasoning_effort: ReasoningEffort | None,
         agent_id: str,
     ) -> UserInputBody:
         """校验模型能力与胶囊指针，组装成携带发起配置的用户输入消息体。
 
-        投递方式（``delivery``）是信封属性，由入队方按 Task 当时的阶段决定后自己包成 ``TaskMessage``。
+        投递方式（``delivery``）是信封属性，由入队方按 Session 当时的阶段决定后自己包成 ``SessionMessage``。
         空输入由请求模型在 HTTP 边界拒绝（文本 part 不能为空白，至少一个 part），这里不再重复。
 
         异常:
             UserInputRejectedError: 模型配置不存在、模型不支持所选能力、胶囊指向的文件 / 引用 /
                 Skill 不可用。
             ImageNormalizationError: 本次图片数量或总大小超过统一输入限制。
-            KeyError: Task 不存在（接入层映射为 404）。
+            KeyError: Session 不存在（接入层映射为 404）。
         """
-        task = self._task.get(task_id)
+        session = self._session.get(session_id)
         config = get_model_config_service().check_launch_config(model_config_id, reasoning_effort)
         if command.image_asset_ids and not config.model.supports_image:
             raise UserInputRejectedError(
                 "IMAGE_NOT_SUPPORTED", "当前模型不支持图片输入，请更换模型或移除图片"
             )
-        segments = self._validated_segments(command.text, task.workspace_id)
+        segments = self._validated_segments(command.text, session.workspace_id)
         text = serialize_segments(segments)
-        image_paths = self._resolve_image_assets(task.workspace_id, command.image_asset_ids)
+        image_paths = self._resolve_image_assets(session.workspace_id, command.image_asset_ids)
         counts = Counter(
             segment.capsule.kind for segment in segments if isinstance(segment, CapsuleSegment)
         )
@@ -77,7 +77,7 @@ class UserInputService:
             extra={
                 "msg": "用户输入胶囊已校验",
                 "data": {
-                    "task_id": task_id,
+                    "session_id": session_id,
                     "file": counts["file"],
                     "ref": counts["ref"],
                     "skill": counts["skill"],
@@ -90,7 +90,7 @@ class UserInputService:
             launch=RunLaunch(
                 agent_id=agent_id,
                 model_config_id=model_config_id,
-                options=ConversationRunOptions(
+                options=RunOptions(
                     disabled_tool_groups=command.disabled_tool_groups,
                     reasoning_effort=reasoning_effort,
                 ),
@@ -192,7 +192,7 @@ class UserInputService:
 
     @staticmethod
     def _skill_file(name: str, workspace_root: Path) -> str:
-        """按 Task 所在工作区解析用户选中的 Skill，返回 ``SKILL.md`` 的绝对路径。
+        """按 Session 所在工作区解析用户选中的 Skill，返回 ``SKILL.md`` 的绝对路径。
 
         名称按工作区解析（工作区同名覆盖系统级），不存在或已停用时同步拒绝，前端收回乐观消息
         并恢复草稿。模型从路径或 ``skill`` 工具读正文，不在这里把正文固化进上下文。

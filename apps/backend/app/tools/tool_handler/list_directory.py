@@ -99,7 +99,7 @@ class ListDirectoryTool(HandlerBase):
                 ``include_hidden`` 控制）。``os.scandir`` 仅列直接子项，故 glob 只按条目名
                 匹配（带目录前缀的模式无意义）。与 ``include_hidden`` 独立叠加
                 （先按可见性过滤，再按本参数白名单筛选）。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
+            execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）；
                 由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
                 本工具只读，但解析相对路径仍需工作区根，故消费其 ``workspace_root``。
 

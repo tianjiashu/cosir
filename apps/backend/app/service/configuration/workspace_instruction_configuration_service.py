@@ -63,7 +63,7 @@ class WorkspaceInstructionConfigurationService:
         """校验 token 预算并原子更新当前有效指令文件。
 
         没有既有候选时写入 workspace 根目录 ``AGENTS.md``；已有嵌套候选时保持其路径不变，
-        以保证配置页面与运行时的有效文件一致。写入后把变更以增量通知这个 workspace 里已装配的 Task。
+        以保证配置页面与运行时的有效文件一致。写入后把变更以增量通知这个 workspace 里已装配的 Session。
         """
 
         document = self.read()

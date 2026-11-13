@@ -47,12 +47,12 @@ from app.service.configuration.main_agent_prompt_configuration_service import (
 from app.service.depends import (
     close_service_dependencies,
     get_conversation_event_projector,
-    get_conversation_task_state_service,
+    get_conversation_state_service,
     get_host_link,
     get_recover_service,
     initialize_service_dependencies,
 )
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.tool_handler.terminal.command_results import command_results
 from app.tools.tool_registration import build_tool_registry
 from app.utils.json_utils import JsonFileError, read_json_object
@@ -60,9 +60,9 @@ from app.utils.path import system_cosir as paths
 from app.utils.path.system_cosir import system_cosir_dir
 
 
-def _on_background_changed(task_id: int) -> None:
+def _on_background_changed(session_id: int) -> None:
     """后台结果登记表的监听方：把看板与前台等待整表重投影进 Transport snapshot。"""
-    get_conversation_task_state_service().refresh_background_results(task_id)
+    get_conversation_state_service().refresh_background_results(session_id)
 
 
 @asynccontextmanager
@@ -108,7 +108,7 @@ async def _cleanup_startup_failure() -> None:
 
     try:
         # 启动中途失败时可能已有 actor 被拉起，先停下它们。
-        await task_runtime_spaces.aclose()
+        await session_runtime_spaces.aclose()
     except BaseException as exc:
         log.error(
             "lifespan_startup_actor_cleanup_failed",
@@ -185,7 +185,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     # 先接好运行时（事件循环、后台结果登记表与看板监听），再做重启恢复：恢复会物化 space、拉起
     # actor 并投递重启结论。恢复要消费已装配的工具系统，且须在后端 ready 前完成；步骤顺序见
     # ``RecoverService.recover_after_restart``。
-    task_runtime_spaces.bind_loop(asyncio.get_running_loop())
+    session_runtime_spaces.bind_loop(asyncio.get_running_loop())
     command_results.open()
     # core 经端口问后台命令（静止判定、wait_messages、收回）；core 不导入工具层。
     set_background_commands(command_results)
@@ -195,10 +195,10 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     command_results.set_listener(_on_background_changed)
     # 进行中的交接随登记表变化整表重投影进 snapshot 顶层 ``handoffs``。
     handoff_registry.set_listener(
-        lambda task_id: get_conversation_task_state_service().refresh_handoffs(task_id)
+        lambda session_id: get_conversation_state_service().refresh_handoffs(session_id)
     )
     get_recover_service().recover_after_restart()
-    # 宿主随后端 ready 连上链路；每次连上对账一次，补回收丢了删除通知的 Task 的浏览器标签。
+    # 宿主随后端 ready 连上链路；每次连上对账一次，补回收丢了删除通知的 Session 的浏览器标签。
     get_host_link().set_on_connected(schedule_tab_reclaim)
 
     _mark_boot_ready()
@@ -207,14 +207,14 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     finally:
         try:
             # 先禁止后台结果投递（撤销全部条目、等在途投递写完）：之后关闭终端会把会话结束为
-            # closed、唤醒等待线程与交接，它们不得在关闭期间写 task_messages。再停下全部 actor
+            # closed、唤醒等待线程与交接，它们不得在关闭期间写 session_messages。再停下全部 actor
             # （取消执行，不调度后续 Run），最后关闭服务依赖（终端服务随之关闭）。
             await asyncio.to_thread(command_results.close)
             command_results.set_listener(None)
             handoff_registry.set_listener(None)
             get_host_link().set_on_connected(None)
             handoff_registry.close()
-            await task_runtime_spaces.aclose()
+            await session_runtime_spaces.aclose()
             await asyncio.to_thread(close_service_dependencies)
             # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。
             _mark_boot_stopped()

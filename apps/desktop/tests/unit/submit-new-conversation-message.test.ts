@@ -8,7 +8,7 @@ import {
 import { HttpError } from "@/lib/http/http-error";
 
 const input: SubmitNewConversationMessageInput = {
-  taskId: 7,
+  sessionId: 7,
   workspaceId: 3,
   text: "hello",
   imageAttachments: [],
@@ -23,13 +23,13 @@ beforeEach(() => vi.stubGlobal("window", {}));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("submitNewConversationMessage", () => {
-  it("以 202 投递作为后端已受理的边界，发送到 Task 消息端点", async () => {
+  it("以 202 投递作为后端已受理的边界，发送到 Session 消息端点", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 202 })));
 
     await expect(submitNewConversationMessage(input)).resolves.toBeUndefined();
 
     const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit];
-    expect(url).toMatch(/\/tasks\/7\/messages$/);
+    expect(url).toMatch(/\/sessions\/7\/messages$/);
     expect(JSON.parse(String(init.body))).toMatchObject({
       message: { role: "user", parts: [{ type: "text", text: "hello" }] },
       modelConfigId: "c/m1",

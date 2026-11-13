@@ -1,6 +1,6 @@
-"""任务消息协议：每类消息的领域正文，以及它如何变成一条带标签的 context 消息。
+"""会话消息协议：每类消息的领域正文，以及它如何变成一条带标签的 context 消息。
 
-所有消息进模型时都是 user 角色，来源由 ``TaskMessage.kind`` 表达（由 body 类型决定，持久化时按
+所有消息进模型时都是 user 角色，来源由 ``SessionMessage.kind`` 表达（由 body 类型决定，持久化时按
 它还原 body），后端规则只读 ``kind``、不解析正文。何时并入只看 ``delivery``，是否投影只看
 ``project_to_transport``，投递方不做额外判断；两者的默认值由 body 类型决定，生产者可覆盖。能否
 推进（开新 Run、唤醒挂起的 Run）由消息体声明（``WAKE`` / ``wake_scope``），由 ``dispatch_policy`` 读取。
@@ -21,7 +21,7 @@ from app.core.workflow.message_queue.message_bodies.agent_message import AgentMe
 from app.core.workflow.message_queue.message_bodies.background_result import BackgroundResultBody
 from app.core.workflow.message_queue.message_bodies.base import (
     EnqueuedMessageBody,
-    TaskMessageKind,
+    SessionMessageKind,
     WakeScope,
 )
 from app.core.workflow.message_queue.message_bodies.decision import DecisionBody
@@ -43,7 +43,7 @@ __all__ = [
     "MessageBody",
     "NoticeBody",
     "RunLaunch",
-    "TaskMessageKind",
+    "SessionMessageKind",
     "ToolImageBody",
     "ToolResultBody",
     "UserInputBody",
@@ -80,8 +80,8 @@ _BODY_OF_KIND: dict[str, type[MessageBody]] = {
 }
 
 # 类型层面能推进 Run 的 kind（``WAKE`` 不是 ``none``）：外部队列里只有这些算「有待处理消息」。启动
-# 调度据此判断是否要拉起 Task 的 actor。通知不在其中：只唤醒活动 Run 的那几种，所在 Task 若有挂起
+# 调度据此判断是否要拉起 Session 的 actor。通知不在其中：只唤醒活动 Run 的那几种，所在 Session 若有挂起
 # 的 Run，启动调度本来就会为它拉起 actor。
-ADVANCING_KINDS: frozenset[TaskMessageKind] = frozenset(
+ADVANCING_KINDS: frozenset[SessionMessageKind] = frozenset(
     body.KIND for body in _BODY_OF_KIND.values() if body.WAKE != "none"
 )

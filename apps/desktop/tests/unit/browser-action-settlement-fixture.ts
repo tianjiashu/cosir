@@ -107,7 +107,7 @@ export function makeSession(config: FixtureConfig = {}): Fixture {
   };
 
   const tab = {
-    taskId: 1,
+    sessionId: 1,
     tabId: "t1",
     documentGeneration: 0,
     contents: { isDestroyed: () => false },

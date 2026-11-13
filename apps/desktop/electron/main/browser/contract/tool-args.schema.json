@@ -671,7 +671,7 @@
           }
         ],
         "default": null,
-        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this session's current tab.",
         "title": "Tab"
       }
     },
@@ -703,7 +703,7 @@
           }
         ],
         "default": null,
-        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this session's current tab.",
         "title": "Tab"
       }
     },
@@ -799,7 +799,7 @@
           }
         ],
         "default": null,
-        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this session's current tab.",
         "title": "Tab"
       }
     },
@@ -890,7 +890,7 @@
       },
       "new_tab": {
         "default": false,
-        "description": "Open the URL in a new tab of this task; tab is ignored when true.",
+        "description": "Open the URL in a new tab of this session; tab is ignored when true.",
         "title": "New Tab",
         "type": "boolean"
       },
@@ -905,7 +905,7 @@
           }
         ],
         "default": null,
-        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this session's current tab.",
         "title": "Tab"
       },
       "url": {
@@ -985,7 +985,7 @@
           }
         ],
         "default": null,
-        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this session's current tab.",
         "title": "Tab"
       }
     },
@@ -1050,7 +1050,7 @@
           }
         ],
         "default": null,
-        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab.",
+        "description": "Tab id such as t1, from an earlier browser result. Pass null to use this session's current tab.",
         "title": "Tab"
       }
     },
@@ -1067,7 +1067,7 @@
     "additionalProperties": false,
     "properties": {
       "action": {
-        "description": "list this task's tabs, select one as the current tab, or close one you no longer need.",
+        "description": "list this session's tabs, select one as the current tab, or close one you no longer need.",
         "enum": [
           "list",
           "select",

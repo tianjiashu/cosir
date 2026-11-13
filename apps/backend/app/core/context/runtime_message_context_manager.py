@@ -1,4 +1,4 @@
-"""Task context 的唯一运行时协调入口：SDK 负责模型聚合，本层负责 working copy、序号、回合与
+"""Session context 的唯一运行时协调入口：SDK 负责模型聚合，本层负责 working copy、序号、回合与
 协议闭合。
 
 行级持久化（追加、原地替换、固定系统提示词）经 ``ContextStore``，本层不直接碰存储。每一行所属的
@@ -17,14 +17,14 @@ from openai.types.chat import (
     ChatCompletionMessageParam,
     ParsedFunctionToolCall,
 )
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session as DbSession
 
 from app.config.logging.logger import log
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.context import SystemPromptBuilder
 from app.core.context.context_entry import ContextEntry
 from app.core.context.context_store import (
-    TASK_SYSTEM_PROMPT_SEQUENCE,
+    SESSION_SYSTEM_PROMPT_SEQUENCE,
     ContextStore,
 )
 from app.core.context.tool_call_closure import (
@@ -36,11 +36,11 @@ from app.core.context.tool_call_closure import (
 from app.core.context.vision_input import resolve_messages_for_model
 from app.core.llm_provider.message_codec import assistant_message
 from app.models import (
-    ConversationRunRecord,
+    RunRecord,
     WorkspaceRecord,
 )
-from app.models.conversation_task_context import (
-    ConversationTaskContextRecord,
+from app.models.session_context import (
+    SessionContextRecord,
 )
 from app.models.message_metadata import (
     TURN_INPUT_KINDS,
@@ -75,26 +75,26 @@ def _is_visible_reply(message: ChatCompletionMessageParam) -> bool:
 
 @dataclass
 class RuntimeMessageContextManager:
-    """一个 Task 的 Agent context 读写边界与内存消息列表 owner。
+    """一个 Session 的 Agent context 读写边界与内存消息列表 owner。
 
     内存消息列表（``_entries``）是模型请求的唯一来源，``load_message`` 只读它；每次
     :meth:`begin_run` 从数据库按 ``include_in_context`` 重建一次，撤回、fork 等改库用例因此
     不必通知或卸载本对象。列表与序号只经 :meth:`_track` 推进，且只接纳已写库的行。
     """
 
-    current_task_id: int
-    # 只用其身份与执行资源（角色、提示词）构建 Task 首个系统提示词，及供配置广播过滤。
+    current_session_id: int
+    # 只用其身份与执行资源（角色、提示词）构建 Session 首个系统提示词，及供配置广播过滤。
     agent: AgentRuntimeConfig
-    # Task 固化的工具名（``TaskRuntimeSpace.task_tool_names``），决定首个系统提示词的
+    # Session 固化的工具名（``SessionRuntimeSpace.session_tool_names``），决定首个系统提示词的
     # 工具目录层与工作方式层。
     tool_names: tuple[str, ...]
-    # 行级持久化边界：追加、原地替换、序号与 Task 固定系统提示词都经它读写。
+    # 行级持久化边界：追加、原地替换、序号与 Session 固定系统提示词都经它读写。
     context_store: ContextStore
     # 工作区记录：系统提示词取 ``root_path``，模型请求的附件解析取 ``id``。必填——缺工作区
-    # 会生成一份没有工作区事实的系统提示词并被持久化成 Task 固定前缀，属于不可逆的静默降级。
+    # 会生成一份没有工作区事实的系统提示词并被持久化成 Session 固定前缀，属于不可逆的静默降级。
     workspace: WorkspaceRecord
     current_run_id: int | None = None
-    # 固定持久化的 Task system prompt，不参与压缩；每次模型调用均位于消息前缀。
+    # 固定持久化的 Session system prompt，不参与压缩；每次模型调用均位于消息前缀。
     _system_entry: ContextEntry | None = field(default=None, init=False)
     _entries: list[ContextEntry] = field(default_factory=list, init=False)
     # 从持久化 context 恢复序号；每条新消息在成功落库后占用一个序号。
@@ -102,56 +102,56 @@ class RuntimeMessageContextManager:
     # 当前模型调用正在流式写入的响应行身份（``include_in_context`` 仍为 False）。
     # 只用于「同一次调用持续替换同一行」；提交或开始下一次调用即清空。
     _draft_response: ContextEntry | None = field(default=None, init=False)
-    # Task 内已用的调用 id，与本次响应按 SDK 位置冻结的规范 id（生命周期同 ``_draft_response``）。
+    # Session 内已用的调用 id，与本次响应按 SDK 位置冻结的规范 id（生命周期同 ``_draft_response``）。
     _used_call_ids: set[str] = field(default_factory=set, init=False)
     _response_call_ids: dict[int, str] = field(default_factory=dict, init=False)
-    # 回合判定的写入期状态（见 :meth:`_opens_turn`）：Task 已用的最大回合号、本 Run 当前回合（还没写
+    # 回合判定的写入期状态（见 :meth:`_opens_turn`）：Session 已用的最大回合号、本 Run 当前回合（还没写
     # 任何行时为 None）、本 Run 是否已有可见内容（开回合的输入或可见回复）。
     _max_turn: int = field(default=0, init=False)
     _run_turn: int | None = field(default=None, init=False)
     _run_shown: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        """恢复 Task 固定系统提示词；其余消息由 :meth:`begin_run` 加载。
+        """恢复 Session 固定系统提示词；其余消息由 :meth:`begin_run` 加载。
 
-        新 Task 使用当前配置构建并持久化完整 system prompt；已有 Task 始终恢复首次持久化的
-        内容，因此配置变化不会改写历史 Task 的模型消息前缀。
+        新 Session 使用当前配置构建并持久化完整 system prompt；已有 Session 始终恢复首次持久化的
+        内容，因此配置变化不会改写历史 Session 的模型消息前缀。
         """
         store = self.context_store
-        self._system_entry = store.get_system_prompt(self.current_task_id)
+        self._system_entry = store.get_system_prompt(self.current_session_id)
         if self._system_entry is None:
             system_prompt_text = SystemPromptBuilder.build(
                 self.agent, self.workspace.root_path, self.tool_names
             )
             self._system_entry = store.create_system_prompt(
-                self.current_task_id,
+                self.current_session_id,
                 {"role": "system", "content": system_prompt_text},
             )
 
-    def begin_run(self, run: ConversationRunRecord) -> None:
+    def begin_run(self, run: RunRecord) -> None:
         """绑定当前 Run，并从数据库重建内存消息列表与序号。
 
         每次都重建而不是沿用上一个 Run 的内存列表：撤回会把旧行移出上下文，fork、删除
         历史 Run 也会改库，无条件重建让这些用例无需卸载或刷新本对象。代价是每个 Run 多一次读库。
         """
 
-        if run.task_id != self.current_task_id:
-            raise ValueError(f"run {run.id} belongs to task {run.task_id}")
+        if run.session_id != self.current_session_id:
+            raise ValueError(f"run {run.id} belongs to session {run.session_id}")
 
         self.current_run_id = run.id
         # 草稿行属于上一个 Run 的调用栈，绑定新 Run 时不得沿用到本次调用。
         self._draft_response = None
         self._response_call_ids = {}
-        self._used_call_ids = self.context_store.tool_call_ids(self.current_task_id)
-        entries = self.context_store.entries_in_context(self.current_task_id)
+        self._used_call_ids = self.context_store.tool_call_ids(self.current_session_id)
+        entries = self.context_store.entries_in_context(self.current_session_id)
         self._entries = [
-            entry for entry in entries if entry.sequence != TASK_SYSTEM_PROMPT_SEQUENCE
+            entry for entry in entries if entry.sequence != SESSION_SYSTEM_PROMPT_SEQUENCE
         ]
-        self._message_sequence = self.context_store.max_sequence(self.current_task_id) + 1
+        self._message_sequence = self.context_store.max_sequence(self.current_session_id) + 1
         # 回合号不复用：编辑移出的回合也占号。回合按 Run 而不是按驱动：挂起后唤醒、取消后恢复都是
         # 同一个 Run 的新驱动，从它已写下的行接着判定，不另开回合。
-        self._max_turn = self.context_store.max_turn(self.current_task_id)
-        written = self.context_store.run_records(self.current_task_id, run.id)
+        self._max_turn = self.context_store.max_turn(self.current_session_id)
+        written = self.context_store.run_records(self.current_session_id, run.id)
         # 取最大值而不是最后一行：补给本 Run 早先调用的占位排在最后，却属于更早的回合。
         self._run_turn = max((r.turn for r in written), default=None)
         self._run_shown = any(
@@ -216,13 +216,13 @@ class RuntimeMessageContextManager:
         metadata: MessageMetadata | None = None,
         project_to_transport: bool = True,
         message_id: int | None = None,
-        session: Session | None = None,
+        db: DbSession | None = None,
     ) -> Literal["appended", "replaced"]:
         """写入完整 SDK 消息；工具结果必须属于当前最后一批调用的同一 Run。
 
         外部消息队列投递来的用户输入与通知也经本方法写入，不另设接纳入口。
         ``message_id`` 只有用户输入需要传：沿用队列行身份，排队与已消费阶段前端消息 id 不变；
-        其余消息没有身份。``session`` 让追加加入调用方事务（``prepare_input`` 把队列确认与写入放在
+        其余消息没有身份。``db`` 让追加加入调用方事务（``prepare_input`` 把队列确认与写入放在
         同一事务）；内存列表随即推进、不等提交——事务失败会经 Run 失败边界结束本次驱动，下个 Run
         的 :meth:`begin_run` 从库重建，不会留下错位的 working copy。
 
@@ -269,8 +269,8 @@ class RuntimeMessageContextManager:
             # 用 replace_message(...) 保留原来的 sequence 和 run_id、更新消息内容与 Transport
             # 元数据，库里始终只有一条结果，不会同一调用留两行。
             self.context_store.replace_message(
-                ConversationTaskContextRecord(
-                    task_id=self.current_task_id,
+                SessionContextRecord(
+                    session_id=self.current_session_id,
                     run_id=existing.run_id,
                     message_id=existing.message_id,
                     message=message,
@@ -288,7 +288,7 @@ class RuntimeMessageContextManager:
                 extra={
                     "msg": "同一工具调用的既有结果行已被真实结果覆盖",
                     "data": {
-                        "task_id": self.current_task_id,
+                        "session_id": self.current_session_id,
                         "run_id": existing.run_id,
                         "tool_call_id": tool_call_id,
                         "sequence": existing.sequence,
@@ -313,7 +313,7 @@ class RuntimeMessageContextManager:
             project_to_transport,
             turn=turn,
             message_id=message_id,
-            session=session,
+            db=db,
         )
         return "appended"
 
@@ -327,18 +327,18 @@ class RuntimeMessageContextManager:
         *,
         turn: int,
         message_id: int | None = None,
-        session: Session | None = None,
+        db: DbSession | None = None,
     ) -> ContextEntry:
         """调用方已验证结果归属并取好回合号；写库成功后才推进内存列表和序号。"""
         entry = self.context_store.append(
-            self.current_task_id,
+            self.current_session_id,
             run_id,
             message,
             self._message_sequence,
             include_in_context,
             metadata,
             project_to_transport=project_to_transport,
-            session=session,
+            db=db,
             turn=turn,
             message_id=message_id,
         )
@@ -388,14 +388,14 @@ class RuntimeMessageContextManager:
         return None
 
     def update_tool_result_metadata(
-        self, tool_call_id: str, metadata: ToolMessageMetadata, *, session: Session | None = None
+        self, tool_call_id: str, metadata: ToolMessageMetadata, *, db: DbSession | None = None
     ) -> ToolMessageMetadata:
         """只替换一条工具结果行的展示 metadata，模型可见正文不变；返回实际写入的 metadata。
 
         HITL 执行结果另行追加为消息，等待占位仍是模型协议上的结果；这里只把占位的卡片状态推到
         终态，历史前缀因此不变。结果没有带
         展示数据时沿用占位的（HITL 卡片由占位的展示数据决定，如交接的页面预览）。传入
-        ``session`` 时加入调用方事务（接收决定时与确认同一事务把占位推到 ``running``）。
+        ``db`` 时加入调用方事务（接收决定时与确认同一事务把占位推到 ``running``）。
 
         异常:
             KeyError: 上下文中没有该调用的结果行。
@@ -422,8 +422,8 @@ class RuntimeMessageContextManager:
                 background=metadata.background or previous.background,
             )
         self.context_store.replace_message(
-            ConversationTaskContextRecord(
-                task_id=self.current_task_id,
+            SessionContextRecord(
+                session_id=self.current_session_id,
                 run_id=entry.run_id,
                 message_id=entry.message_id,
                 message=entry.message,
@@ -433,7 +433,7 @@ class RuntimeMessageContextManager:
                 project_to_transport=True,
                 metadata=metadata,
             ),
-            session=session,
+            db=db,
         )
         entry.metadata = metadata
         return metadata
@@ -481,8 +481,8 @@ class RuntimeMessageContextManager:
             # 草稿首帧常是空的，正文与调用在后续帧才到；回合判定要知道本 Run 已有可见回复。
             self._run_shown = True
         self.context_store.replace_message(
-            ConversationTaskContextRecord(
-                task_id=self.current_task_id,
+            SessionContextRecord(
+                session_id=self.current_session_id,
                 run_id=draft.run_id,
                 message_id=draft.message_id,
                 message=message,
@@ -502,7 +502,7 @@ class RuntimeMessageContextManager:
         return draft
 
     def _freeze_tool_call_ids(self, calls: list[ParsedFunctionToolCall]) -> None:
-        """就地把快照里的调用 id 改成 Task 内唯一的规范 id，全部下游都从这里读到同一份身份。
+        """就地把快照里的调用 id 改成 Session 内唯一的规范 id，全部下游都从这里读到同一份身份。
 
         决定、取消、占位结算、看板和前端开合都按 id 寻址，而厂商可能跨响应甚至在同一响应里重复
         id。只在冲突时改写：表现正常的厂商字节不变（Kimi K2 等依赖自己的 id 形状，且会模仿历史
@@ -539,7 +539,7 @@ class RuntimeMessageContextManager:
             extra={
                 "msg": "上下文工具结果缺少可靠配对依据，保留事实并停止执行",
                 "data": {
-                    "task_id": self.current_task_id,
+                    "session_id": self.current_session_id,
                     "run_id": self.current_run_id,
                     **error.log_data(),
                 },
@@ -599,7 +599,7 @@ class RuntimeMessageContextManager:
                 extra={
                     "msg": "上下文中的工具调用结果已闭合或恢复到合法消息顺序",
                     "data": {
-                        "task_id": self.current_task_id,
+                        "session_id": self.current_session_id,
                         "created_placeholder_count": created,
                         "reordered_tool_count": reordered,
                     },

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.tool_handler.delete_tool import (
     DELETE_FILE_DESCRIPTION,
     DeleteTool,
@@ -22,7 +22,7 @@ from app.tools.tool_handler.delete_tool import (
 
 
 def _context(root: Path, run_id: int = 5150) -> ToolExecutionContext:
-    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
+    return ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
 
 
 # A blank / device / escape path must be rejected with an English reason and the file
@@ -50,11 +50,11 @@ def test_delete_honours_run_cancellation(tmp_path: Path) -> None:
     target.write_bytes(b"keep\n")
     run_id = 7_700_555
     context = _context(tmp_path, run_id=run_id)
-    cancellation_registry.request_cancel(context.task_id)
+    cancellation_registry.request_cancel(context.session_id)
     try:
         observation = DeleteTool().execute(context, path="keep.txt")
     finally:
-        cancellation_registry.consume(context.task_id)
+        cancellation_registry.consume(context.session_id)
 
     assert observation.status == "cancelled"
     assert target.exists()

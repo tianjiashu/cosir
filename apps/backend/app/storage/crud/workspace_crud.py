@@ -4,19 +4,19 @@
 
 职责边界：
 - 负责：workspace 单表读写、``WorkspaceModel``↔``WorkspaceRecord`` 转换。
-- 不负责：删除工作区时的跨表级联清理（task / turn / run / trace，由 ``WorkspaceService``
+- 不负责：删除工作区时的跨表级联清理（session / turn / run / trace，由 ``WorkspaceService``
   编排）、业务规则。
 
-依赖约定：构造时通过 ``main_session_factory()`` 取得主库共享 session 工厂，必须在
+依赖约定：构造时通过 ``main_db_factory()`` 取得主库共享 db 工厂，必须在
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
 from sqlalchemy import asc, delete, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session as DbSession
 
 from app.models import WorkspaceRecord
 from app.storage.model.workspace_model import WorkspaceModel
-from app.storage.store_engines import main_session_factory
+from app.storage.store_engines import main_db_factory
 from app.utils.datetime_utils import to_text, utc_now
 
 
@@ -24,11 +24,11 @@ class WorkspaceCrud:
     """``workspaces`` 表的纯 CRUD。
 
     仅负责单表读写与 model↔record 转换，不承担跨表级联；所有方法通过共享主库
-    session 工厂访问数据库。
+    db 工厂访问数据库。
     """
 
     def __init__(self) -> None:
-        """绑定主库共享 session 工厂。
+        """绑定主库共享 db 工厂。
 
         参数:
             无。
@@ -37,12 +37,12 @@ class WorkspaceCrud:
             无。
 
         异常:
-            RuntimeError: 如果 ``init_storage`` 尚未调用（主库 session 工厂不可用）。
+            RuntimeError: 如果 ``init_storage`` 尚未调用（主库 db 工厂不可用）。
 
         副作用:
-            无（仅复用已初始化的主库 session 工厂）。
+            无（仅复用已初始化的主库 db 工厂）。
         """
-        self._session_factory = main_session_factory()
+        self._db_factory = main_db_factory()
 
     def create(self, name: str, root_path: str) -> WorkspaceRecord:
         """新建一个工作区并落库。
@@ -70,15 +70,15 @@ class WorkspaceCrud:
         if not root_path.strip():
             raise ValueError("workspace root_path must not be blank")
         now = utc_now()
-        with self._session_factory.begin() as session:
+        with self._db_factory.begin() as db:
             model = WorkspaceModel(
                 name=name.strip(),
                 root_path=root_path.strip(),
                 created_at=to_text(now),
                 updated_at=to_text(now),
             )
-            session.add(model)
-            session.flush()
+            db.add(model)
+            db.flush()
             return WorkspaceRecord.from_model(model)
 
     def list_all(self) -> list[WorkspaceRecord]:
@@ -94,12 +94,12 @@ class WorkspaceCrud:
             sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
 
         副作用:
-            打开一次主库只读 session。
+            打开一次主库只读 db。
         """
 
-        with self._session_factory() as session:
+        with self._db_factory() as db:
             rows = (
-                session.execute(
+                db.execute(
                     select(WorkspaceModel).order_by(
                         asc(WorkspaceModel.created_at), asc(WorkspaceModel.id)
                     )
@@ -123,21 +123,21 @@ class WorkspaceCrud:
             sqlalchemy.exc.SQLAlchemyError: 如果查询失败。
 
         副作用:
-            打开一次主库只读 session。
+            打开一次主库只读 db。
         """
 
-        with self._session_factory() as session:
-            row: WorkspaceModel | None = session.get(WorkspaceModel, workspace_id)
+        with self._db_factory() as db:
+            row: WorkspaceModel | None = db.get(WorkspaceModel, workspace_id)
         if row is None:
             raise KeyError(workspace_id)
         return WorkspaceRecord.from_model(row)
 
     @staticmethod
-    def get_in_session(session: Session, workspace_id: int) -> WorkspaceRecord:
+    def get_in_db(db: DbSession, workspace_id: int) -> WorkspaceRecord:
         """在调用方事务内读取 workspace，缺失时抛出 ``KeyError``。
 
         参数:
-            session: 处于事务中的 SQLAlchemy session。
+            db: 处于事务中的 SQLAlchemy session。
             workspace_id: workspace 标识。
 
         返回:
@@ -150,7 +150,7 @@ class WorkspaceCrud:
             无；仅复用调用方事务读取数据库。
         """
 
-        row: WorkspaceModel | None = session.get(WorkspaceModel, workspace_id)
+        row: WorkspaceModel | None = db.get(WorkspaceModel, workspace_id)
         if row is None:
             raise KeyError(workspace_id)
         return WorkspaceRecord.from_model(row)
@@ -158,7 +158,7 @@ class WorkspaceCrud:
     def delete(self, workspace_id: int) -> None:
         """删除单个工作区记录。
 
-        仅删除 ``workspaces`` 表自身的行，不级联清理该工作区下的 task / turn / run / trace
+        仅删除 ``workspaces`` 表自身的行，不级联清理该工作区下的 session / turn / run / trace
         （级联由 ``WorkspaceService`` 编排）。
 
         参数:
@@ -174,15 +174,15 @@ class WorkspaceCrud:
             从 ``workspaces`` 表删除匹配的行；工作区不存在时静默无操作。
         """
 
-        with self._session_factory.begin() as session:
-            session.execute(delete(WorkspaceModel).where(WorkspaceModel.id == workspace_id))
+        with self._db_factory.begin() as db:
+            db.execute(delete(WorkspaceModel).where(WorkspaceModel.id == workspace_id))
 
     @staticmethod
-    def delete_in_session(session: Session, workspace_id: int) -> None:
+    def delete_in_db(db: DbSession, workspace_id: int) -> None:
         """在调用方事务内删除 workspace 行。
 
         参数:
-            session: 处于事务中的 SQLAlchemy session。
+            db: 处于事务中的 SQLAlchemy session。
             workspace_id: 待删除的 workspace 标识。
 
         返回:
@@ -195,4 +195,4 @@ class WorkspaceCrud:
             在当前事务中删除 workspace 行；不提交事务。
         """
 
-        session.execute(delete(WorkspaceModel).where(WorkspaceModel.id == workspace_id))
+        db.execute(delete(WorkspaceModel).where(WorkspaceModel.id == workspace_id))

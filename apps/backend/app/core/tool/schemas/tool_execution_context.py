@@ -10,12 +10,12 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from app.core.agents.agent_runtime_config import AgentRuntimeConfig
     from app.core.events import EventSink
-    from app.core.workflow.message_queue.task_message import DecisionBody
+    from app.core.workflow.message_queue.session_message import DecisionBody
 
 
 @dataclass(frozen=True)
 class ToolExecutionContext:
-    """一次工具调用所处的运行时边界：任务、工作区根、Run / step 与调用身份。
+    """一次工具调用所处的运行时边界：会话、工作区根、Run / step 与调用身份。
 
     由 ``run_tool_batch`` 的单次调用入口按调用构造，一次给齐 Run / step 事实与调用身份；
     ``ToolExecutor`` 准入后附加调用意图，下游直接消费。只承载 Run / step / 调用级事实；进程级单例（Agent registry、终端会话服务等）由 handler
@@ -35,7 +35,7 @@ class ToolExecutionContext:
             执行」。
     """
 
-    task_id: int
+    session_id: int
     workspace_id: int
     workspace_root: Path
     step_id: str

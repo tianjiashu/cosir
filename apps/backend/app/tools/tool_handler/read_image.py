@@ -101,7 +101,7 @@ class ReadImageTool(HandlerBase):
                     "read_image_rejected",
                     extra={
                         "msg": "read_image 有一张图片未通过校验",
-                        "data": {"task_id": execution_context.task_id, "code": exc.code},
+                        "data": {"session_id": execution_context.session_id, "code": exc.code},
                     },
                 )
                 continue

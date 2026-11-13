@@ -11,7 +11,7 @@ type IsolatedRegionProps = {
   region: string;
   /** 展示给用户的区域名称。 */
   label: string;
-  /** 变化时重置边界（例如切换 task / workspace）。 */
+  /** 变化时重置边界（例如切换 session / workspace）。 */
   resetKey: string;
   metadata?: Record<string, unknown>;
   fallbackClassName?: string;

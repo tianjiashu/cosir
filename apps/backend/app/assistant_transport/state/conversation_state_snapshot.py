@@ -1,4 +1,4 @@
-"""Conversation Transport Task snapshot 的中性 JSON 契约（Task 视角）。
+"""Conversation Transport Session snapshot 的中性 JSON 契约（Session 视角）。
 
 校验（:func:`validate_snapshot`）的字段集合取自各 TypedDict 声明，不另写键集合常量：契约改动只需
 改声明，校验跟着走。
@@ -10,7 +10,7 @@ from typing import Literal, NotRequired, cast, get_args
 from typing_extensions import TypedDict
 
 from app.assistant_transport.state.conversation_state_activity import (
-    ConversationRunLaunch,
+    ConversationStateLaunch,
     ConversationStateActivity,
     ModelActivity,
 )
@@ -60,15 +60,15 @@ from app.assistant_transport.state.wire_shape import (
 from app.config.constant import Constant
 from app.core.events.model_activity_event import ModelActivityPhase
 from app.core.tool.presentation import ToolPresentation
-from app.core.workflow.message_queue.task_message import Delivery
-from app.models.conversation_run_record import ConversationRunError
-from app.models.conversation_run_usage import ConversationRunUsage
-from app.models.enums.conversation_run_status import (
+from app.core.workflow.message_queue.session_message import Delivery
+from app.models.run_record import RunError
+from app.models.run_usage import RunUsage
+from app.models.enums.run_status import (
     TERMINAL_RUN_STATUSES,
-    ConversationRunStatus,
+    RunStatus,
 )
 
-_RUN_STATUSES = frozenset({status.value for status in ConversationRunStatus})
+_RUN_STATUSES = frozenset({status.value for status in RunStatus})
 _TERMINAL_RUN_STATUS_VALUES = frozenset({status.value for status in TERMINAL_RUN_STATUSES})
 _MESSAGE_ROLES = frozenset(get_args(MessageRole))
 _DELIVERIES = frozenset(get_args(Delivery))
@@ -82,21 +82,21 @@ _FORK_KINDS = frozenset(get_args(ForkKind))
 
 
 class ConversationStateFork(TypedDict):
-    sourceTaskId: int
+    sourceSessionId: int
     sourceTitle: str
-    taskType: ForkKind
-    initialLaunch: ConversationRunLaunch
+    sessionType: ForkKind
+    initialLaunch: ConversationStateLaunch
 
 
 class ConversationStateSnapshot(TypedDict):
-    """一个 Task 的完整 Transport state。
+    """一个 Session 的完整 Transport state。
 
-    对话界面只看 Task：``title`` 投影自 ``tasks.title``（事实源在 Task 表，snapshot 只是让
+    对话界面只看 Session：``title`` 投影自 ``sessions.title``（事实源在 Session 表，snapshot 只是让
     打开中的页面实时收到标题变化），``messages`` 按回合扁平排列（每个回合：开启它的输入 +
     一条回复），``activity`` 是最新 Run 的状态摘要。Run 身份不进 wire，历史回复的结局由消
     息上的 ``outcome`` 承载。命令被拒不进 snapshot，由命令的 HTTP 响应同步返回。
-    ``terminal_sessions`` 是本 Task 终端会话的进程内事实（不持久化），投影规则见
-    ``ConversationTaskStateService.refresh_terminal_sessions``。
+    ``terminal_sessions`` 是本 Session 终端会话的进程内事实（不持久化），投影规则见
+    ``ConversationStateService.refresh_terminal_sessions``。
     ``background_tasks`` 的历史来自持久化占位，活状态来自后台结果登记表；
     ``foreground_waits``（可转到后台的前台等待）是进程内事实，
     二者见 ``refresh_background_results``。
@@ -120,8 +120,8 @@ class ConversationStateSnapshot(TypedDict):
     handoffs: list[ConversationHandoff]
 
 
-def empty_snapshot(title: str = "新对话") -> ConversationStateSnapshot:
-    """返回新 Task 的空 snapshot 基线。"""
+def empty_snapshot(title: str = "新会话") -> ConversationStateSnapshot:
+    """返回新 Session 的空 snapshot 基线。"""
 
     return ConversationStateSnapshot(
         title=title,
@@ -137,7 +137,7 @@ def empty_snapshot(title: str = "新对话") -> ConversationStateSnapshot:
 
 
 def validate_snapshot(state: ConversationStateSnapshot) -> None:
-    """严格校验 Task snapshot 的结构与数值边界。"""
+    """严格校验 Session snapshot 的结构与数值边界。"""
 
     snapshot = as_shape(state, ConversationStateSnapshot, "snapshot")
     if "fork" in snapshot:
@@ -204,9 +204,9 @@ def _validate_optional_activity(value: object) -> None:
 
 def _validate_fork(value: object) -> None:
     fork = as_shape(value, ConversationStateFork, "snapshot fork")
-    require_int(fork["sourceTaskId"], "snapshot fork sourceTaskId", minimum=0)
+    require_int(fork["sourceSessionId"], "snapshot fork sourceSessionId", minimum=0)
     require_str(fork["sourceTitle"], "snapshot fork sourceTitle")
-    require_one_of(fork["taskType"], _FORK_KINDS, "snapshot fork taskType")
+    require_one_of(fork["sessionType"], _FORK_KINDS, "snapshot fork sessionType")
     _validate_launch(fork["initialLaunch"])
 
 
@@ -238,7 +238,7 @@ def _validate_model_activity(value: object, run_status: str) -> None:
     activity = as_shape(value, ModelActivity, "snapshot model activity")
     require_non_empty_str(activity["stepId"], "snapshot model activity stepId")
     require_one_of(activity["phase"], _MODEL_ACTIVITY_PHASES, "snapshot model activity phase")
-    if run_status != ConversationRunStatus.RUNNING.value:
+    if run_status != RunStatus.RUNNING.value:
         raise ValueError("snapshot model activity requires a running run")
 
 
@@ -299,7 +299,7 @@ def _validate_message_fields(
 
 def _validate_source(value: object) -> None:
     source = as_shape(value, ConversationStateMessageSource, "snapshot message source")
-    require_int(source["taskId"], "snapshot message source taskId", minimum=0)
+    require_int(source["sessionId"], "snapshot message source sessionId", minimum=0)
     require_str(source["name"], "snapshot message source name")
     report = source["report"]
     if report is not None:
@@ -311,14 +311,14 @@ def _validate_source(value: object) -> None:
 
 
 def _validate_launch(value: object) -> None:
-    launch = as_shape(value, ConversationRunLaunch, "snapshot launch")
+    launch = as_shape(value, ConversationStateLaunch, "snapshot launch")
     require_str(launch["modelConfigId"], "snapshot launch modelConfigId", nullable=True)
     require_str(launch["reasoningEffort"], "snapshot launch reasoningEffort", nullable=True)
     require_str_list(launch["disabledToolGroups"], "snapshot launch disabledToolGroups")
 
 
 def _validate_usage(value: object) -> None:
-    usage = as_shape(value, ConversationRunUsage, "snapshot usage")
+    usage = as_shape(value, RunUsage, "snapshot usage")
     for field, amount in usage.items():
         require_int(amount, f"snapshot usage {field}", minimum=0, nullable=True)
 
@@ -326,7 +326,7 @@ def _validate_usage(value: object) -> None:
 def _validate_error(value: object) -> None:
     # 错误契约只允许 code + message。
     # 两者都必须是**非空白**字符串：空白文案会让前端渲染出没有内容的错误气泡。
-    error = as_shape(value, ConversationRunError, "snapshot error")
+    error = as_shape(value, RunError, "snapshot error")
     require_non_empty_str(error["code"], "snapshot error code")
     require_non_empty_str(error["message"], "snapshot error message")
 
@@ -391,8 +391,8 @@ def _validate_tool_call_part(part: object) -> None:
         require_bool(tool_part["isError"], "snapshot tool isError")
     if "awaitingUser" in tool_part:
         require_bool(tool_part["awaitingUser"], "snapshot tool awaitingUser")
-    if "child_task_id" in tool_part:
-        require_int(tool_part["child_task_id"], "snapshot tool child_task_id", minimum=1)
+    if "child_session_id" in tool_part:
+        require_int(tool_part["child_session_id"], "snapshot tool child_session_id", minimum=1)
     if "agent_role" in tool_part:
         require_non_empty_str(tool_part["agent_role"], "snapshot tool agent_role")
     if "startedAt" in tool_part:

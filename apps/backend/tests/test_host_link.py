@@ -55,7 +55,7 @@ def _wait_connected(link: HostLink, connected: bool = True) -> None:
 
 def _context(tool_call_id: str = "call-1") -> ToolExecutionContext:
     return ToolExecutionContext(
-        task_id=7,
+        session_id=7,
         workspace_id=1,
         workspace_root=Path("."),
         step_id="step",
@@ -98,12 +98,12 @@ def test_requests_pair_with_out_of_order_replies(link: HostLink, client: TestCli
     with client.websocket_connect("/host/link") as ws:
         ws.send_json(_hello())
         _wait_connected(link)
-        first = link.submit("demo.echo", {"n": 1}, {"task_id": 7})
+        first = link.submit("demo.echo", {"n": 1}, {"session_id": 7})
         second = link.submit("demo.echo", {"n": 2}, {})
         requests = [ws.receive_json(), ws.receive_json()]
         by_n = {request["params"]["n"]: request for request in requests}
         assert by_n[1]["method"] == "demo.echo"
-        assert by_n[1]["meta"] == {"task_id": 7}
+        assert by_n[1]["meta"] == {"session_id": 7}
         ws.send_json({"id": by_n[2]["id"], "result": "two"})
         ws.send_json({"id": by_n[1]["id"], "result": "one"})
         assert first.result(timeout=2) == "one"
@@ -137,13 +137,13 @@ def test_cancelled_tool_call_sends_cancel_to_host(link: HostLink, client: TestCl
             call_host, "demo.slow", {}, execution_context=context, timeout_seconds=10
         )
         request = ws.receive_json()
-        tool_call_cancellation_registry.mark_cancelled(context.task_id, context.tool_call_id)
+        tool_call_cancellation_registry.mark_cancelled(context.session_id, context.tool_call_id)
         try:
             with pytest.raises(HostCallError) as exc:
                 pending.result(timeout=2)
             cancel = ws.receive_json()
         finally:
-            tool_call_cancellation_registry.clear(context.task_id, context.tool_call_id)
+            tool_call_cancellation_registry.clear(context.session_id, context.tool_call_id)
     assert exc.value.code == CANCELLED
     assert cancel == {"method": "$/cancel", "params": {"id": request["id"]}}
 
@@ -219,12 +219,12 @@ def test_each_new_connection_is_announced_before_replies_are_read(
 
 
 def test_notify_sends_without_waiting(link: HostLink, client: TestClient) -> None:
-    link.notify("demo.dropped", {"task_ids": [1]})  # 未连接：只记日志
+    link.notify("demo.dropped", {"session_ids": [1]})  # 未连接：只记日志
     with client.websocket_connect("/host/link") as ws:
         ws.send_json(_hello())
         _wait_connected(link)
-        link.notify("demo.dropped", {"task_ids": [1, 2]})
-        assert ws.receive_json() == {"method": "demo.dropped", "params": {"task_ids": [1, 2]}}
+        link.notify("demo.dropped", {"session_ids": [1, 2]})
+        assert ws.receive_json() == {"method": "demo.dropped", "params": {"session_ids": [1, 2]}}
 
 
 @pytest.mark.parametrize(

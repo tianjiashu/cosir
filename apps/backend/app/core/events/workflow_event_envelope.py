@@ -15,7 +15,7 @@ class WorkflowEventEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    task_id: int = Field(ge=1)
+    session_id: int = Field(ge=1)
     # 所有当前事件都属于某个 Run；保留可空类型以复用底层事件信封契约。
     run_id: int | None = None
     event_id: str = Field(default_factory=lambda: str(uuid4()), min_length=1)

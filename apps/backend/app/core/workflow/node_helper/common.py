@@ -40,7 +40,7 @@ def _message_context() -> RuntimeMessageContextManager:
 
 
 def emit(event: WorkflowEventEnvelope) -> None:
-    """把执行事件交给装配方注入的 sink；同步投影，线程安全由 Task snapshot 锁保证。
+    """把执行事件交给装配方注入的 sink；同步投影，线程安全由 Session snapshot 锁保证。
 
     事件是旁路：canonical facts 已由各自的持久化 owner 写入，sink 失败只记录降级，不能把异常
     传播回工作流节点（AGENTS.md：观测失败不得阻断 Agent 主流程）。
@@ -56,7 +56,7 @@ def emit(event: WorkflowEventEnvelope) -> None:
                 "msg": "执行事件 sink 处理失败，已降级继续执行",
                 "data": {
                     "event_type": type(event).__name__,
-                    "task_id": event.task_id,
+                    "session_id": event.session_id,
                     "run_id": event.run_id,
                 },
             },

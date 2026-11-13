@@ -1,4 +1,4 @@
-"""browser_tabs：列、选、关本 Task 的标签。"""
+"""browser_tabs：列、选、关本 Session 的标签。"""
 
 from typing import Literal
 
@@ -11,7 +11,7 @@ class BrowserTabsArgs(BaseModel):
 
     action: Literal["list", "select", "close"] = Field(
         description=(
-            "list this task's tabs, select one as the current tab, or close one you no longer need."
+            "list this session's tabs, select one as the current tab, or close one you no longer need."
         )
     )
     tab: str | None = Field(

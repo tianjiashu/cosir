@@ -36,7 +36,7 @@ class DelegateTaskArgs(BaseModel):
 
     @model_validator(mode="after")
     def _validate_budget(self) -> "DelegateTaskArgs":
-        """校验委派标题和任务正文的必填条件及长度预算。
+        """校验委派标题和会话正文的必填条件及长度预算。
 
         返回:
             校验通过的参数对象。
@@ -56,7 +56,7 @@ class DelegateTaskArgs(BaseModel):
                     "data": {"field": "agent_name"},
                 },
             )
-            raise ValueError("delegate_task.agent_name_required: 任务标题不能为空或纯空白。")
+            raise ValueError("delegate_task.agent_name_required: 会话标题不能为空或纯空白。")
         if len(self.agent_name) > AGENT_NAME_MAX:
             log.warning(
                 "delegate_task_args_over_budget",
@@ -70,7 +70,7 @@ class DelegateTaskArgs(BaseModel):
                 },
             )
             raise ValueError(
-                f"delegate_task.agent_name_over_budget: 任务标题不得超过 {AGENT_NAME_MAX} 个字符。"
+                f"delegate_task.agent_name_over_budget: 会话标题不得超过 {AGENT_NAME_MAX} 个字符。"
             )
         if not self.message or not self.message.strip():
             log.warning(
@@ -87,6 +87,6 @@ class DelegateTaskArgs(BaseModel):
                 },
             )
             raise ValueError(
-                f"delegate_task.message_over_budget: 任务 message 不得超过 {MESSAGE_MAX} 个字符。"
+                f"delegate_task.message_over_budget: 会话 message 不得超过 {MESSAGE_MAX} 个字符。"
             )
         return self

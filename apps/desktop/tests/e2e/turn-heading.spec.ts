@@ -12,13 +12,13 @@ const done = (parts: TransportMessagePart[], durationMs: number = 129000) => tra
 });
 test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "头部样式验证" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "头部样式验证" } });
 });
 
 for (const theme of ["light", "dark"]) test(`${theme}: duration is the only left-aligned disclosure; keyboard toggles preserve reply DOM`, async ({ page, request }) => {
   await page.addInitScript(theme => localStorage.setItem("cosir.theme-preference", theme), theme);
-  await seedState(request, 42, done([text("正在检查任务。"), toolCallPart("child", "read_file", { status: "cancelled" }), text(reply, true)]));
-  await page.goto("/tasks/42");
+  await seedState(request, 42, done([text("正在检查会话。"), toolCallPart("child", "read_file", { status: "cancelled" }), text(reply, true)]));
+  await page.goto("/sessions/42");
   await expect(page.locator(".backend-startup-screen")).toHaveCount(0);
   const header = page.locator('[data-slot="turn-status"]');
   const button = header.getByRole("button");
@@ -32,7 +32,7 @@ for (const theme of ["light", "dark"]) test(`${theme}: duration is the only left
   await button.focus();
   await page.keyboard.press("Enter");
   await expect(button).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByText("正在检查任务。", { exact: true })).toBeVisible();
+  await expect(page.getByText("正在检查会话。", { exact: true })).toBeVisible();
   await page.keyboard.press("Space");
   await expect(button).toHaveAttribute("aria-expanded", "false");
   await expect(prose).toBeVisible();
@@ -42,7 +42,7 @@ for (const theme of ["light", "dark"]) test(`${theme}: duration is the only left
 test("completed prose has no heading, divider or occupied space for any duration", async ({ page, request }) => {
   for (const duration of [129000, 0]) {
     await seedState(request, 42, done([text(reply, true)], duration));
-    if (duration === 129000) await page.goto("/tasks/42");
+    if (duration === 129000) await page.goto("/sessions/42");
     await expect(page.locator('[data-slot="turn-status"]')).toHaveCount(0);
     const prose = page.locator('[data-slot="prose-part"]');
     await expect(prose).toContainText(reply);
@@ -64,7 +64,7 @@ test("inherited prose has no process heading", async ({ page, request }) => {
     ],
     activity: activity(2, "completed"),
   }));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const inherited = page.locator('[data-slot="turn"][data-inherited="true"]');
   await expect(inherited.locator('[data-slot="prose-part"]')).toContainText(inheritedReply);
   await expect(inherited.locator('[data-slot="turn-status"]')).toHaveCount(0);
@@ -73,7 +73,7 @@ test("inherited prose has no process heading", async ({ page, request }) => {
 test("quiet successful tools do not create a heading, but quiet failures remain discoverable", async ({ page, request }) => {
   const quiet = toolCallPart("quiet", "wait", { presentation: "quiet", status: "completed" });
   await seedState(request, 42, done([quiet, text(reply, true)]));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await expect(page.getByText(reply, { exact: true })).toBeVisible();
   await expect(page.locator('[data-slot="turn-status"]')).toHaveCount(0);
   await seedState(request, 42, done([{ ...quiet, status: "failed", error: "等待失败" }, text(reply, true)]));
@@ -83,7 +83,7 @@ test("quiet successful tools do not create a heading, but quiet failures remain 
 });
 
 test("terminal problems remain visible without tools", async ({ page, request }) => {
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   for (const [status, endReason, label] of [
     ["failed", null, "运行失败"], ["cancelled", null, "已停止"],
     ["cancelled", "runtime_restarted", "运行已中断 · 后端已重启"],
@@ -97,9 +97,9 @@ test("terminal problems remain visible without tools", async ({ page, request })
 
 test("streaming prose preserves manual scrolling and settles at the bottom without remounting", async ({ page, request }) => {
   const body = Array.from({ length: 35 }, (_, i) => `第 ${i} 段：持续生成的回复。`).join("\n\n");
-  await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { taskId: 42, hold: true,
+  await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { sessionId: 42, hold: true,
     state: transportState({ messages: [userMessage("u", 1), assistantMessage("a", 1, [{ type: "text", text: body, status: "running" }])], activity: activity(1, "running", { startedAt: new Date().toISOString() }) }) } });
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const prose = page.locator('[data-slot="prose-part"]');
   await expect(prose).toContainText("第 34 段");
   // 只有正文时正文本身就是反馈：流式期间不出现计时标题，完成时也就没有标题消失的跳动。
@@ -112,7 +112,7 @@ test("streaming prose preserves manual scrolling and settles at the bottom witho
   await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(3);
   const beforeAppend = await viewport.evaluate(el => el.scrollTop);
   const suffix = "\n\n追加的末尾内容。";
-  await request.post(`${API_ORIGIN}/__test__/append-text`, { data: { taskId: 42, messageIndex: 1, partIndex: 0, text: suffix } });
+  await request.post(`${API_ORIGIN}/__test__/append-text`, { data: { sessionId: 42, messageIndex: 1, partIndex: 0, text: suffix } });
   await expect(prose).toContainText("追加的末尾内容。");
   // 项目显式 autoScroll=false；追加不追底，仍由用户选择何时回到底部。
   await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBeCloseTo(beforeAppend, 0);
@@ -129,7 +129,7 @@ test("streaming prose preserves manual scrolling and settles at the bottom witho
 
 test("zero duration remains explicit and tool failures stay visible", async ({ page, request }) => {
   await seedState(request, 42, done([toolCallPart("read", "read_file", { status: "failed", error: "读取失败" }), text(reply, true)], 0));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const button = page.locator('[data-slot="process-head"]');
   await expect(button).toHaveText("用时 0秒");
   await button.click();
@@ -140,7 +140,7 @@ test("long live tool labels truncate within the narrow column without duplicatin
   await page.setViewportSize({ width: 768, height: 900 });
   const parts = [toolCallPart("cmd", "execute_terminal", { status: "running", intent: "LongAction".repeat(16), args: { command: "echo ok" } })];
   await seedState(request, 42, transportState({ messages: [userMessage("u", 1), assistantMessage("a", 1, parts)], activity: activity(1, "suspended") }));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await page.locator('[data-slot="activity-head"]').click();
   const row = page.locator('[data-tool-call-id="cmd"]');
   await expect(row).toContainText("LongAction".repeat(16));

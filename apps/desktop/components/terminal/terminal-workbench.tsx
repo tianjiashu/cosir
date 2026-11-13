@@ -18,7 +18,7 @@ import {
   terminalTabs,
 } from "@/lib/terminal/terminal-sessions";
 import { TERMINAL_PANEL_HEIGHT } from "@/lib/layout/preferences";
-import { selectTerminalTask, useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
+import { selectTerminalSession, useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { cn } from "@/lib/utils";
 
 import { TerminalContextMenu, TerminalEndedMenu } from "./terminal-menus";
@@ -30,7 +30,7 @@ import { useTerminalPanelHeight } from "./use-terminal-panel-height";
 import { useTerminalSessionActions } from "./use-terminal-session-actions";
 
 /**
- * Task 级底部终端工作台：会话标签栏（含「+」与选 shell 下拉）、已结束会话菜单、展开、关闭（只收起，
+ * Session 级底部终端工作台：会话标签栏（含「+」与选 shell 下拉）、已结束会话菜单、展开、关闭（只收起，
  * 不结束会话），以及页头短提示与页头下方的常驻状态栏（规则见 `terminal-pane-status`）。本组件只做装配：标签栏与菜单、新建 / 关闭、面板高度各在同目录
  * 的组件与 hook 里。
  *
@@ -39,8 +39,8 @@ import { useTerminalSessionActions } from "./use-terminal-session-actions";
  * （活跃会话常驻、面板收起只隐藏；已结束会话只在查看时存在）。窗格卸载即销毁 xterm 与 WS，并删掉
  * 该会话的运行期状态。首次打开面板之前什么都不挂载。
  */
-export function TerminalWorkbench({ taskId }: { taskId: number }) {
-  const state = useTerminalWorkbenchStore(selectTerminalTask(taskId));
+export function TerminalWorkbench({ sessionId }: { sessionId: number }) {
+  const state = useTerminalWorkbenchStore(selectTerminalSession(sessionId));
   const { sessions, open, activeSessionId, focusToken, autoCreate } = state;
   const bridge = useReferenceBridge();
   const [everOpened, setEverOpened] = useState(open);
@@ -71,17 +71,17 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
   }, [open]);
 
   const tabs = useMemo(() => terminalTabs(sessions ?? [], activeSessionId), [activeSessionId, sessions]);
-  const { creating, notice, createSession, closeTab } = useTerminalSessionActions(taskId, sessions, tabs);
+  const { creating, notice, createSession, closeTab } = useTerminalSessionActions(sessionId, sessions, tabs);
 
   // 打开面板时没有活跃会话：等会话列表已知后自动新建一个默认 shell 终端（只在打开那一刻判定）。
   useEffect(() => {
     if (!open || !autoCreate || sessions === null) return;
-    useTerminalWorkbenchStore.getState().consumeAutoCreate(taskId);
+    useTerminalWorkbenchStore.getState().consumeAutoCreate(sessionId);
     if (!sessions.some(isActiveTerminalSession)) void createSession("auto");
-  }, [autoCreate, createSession, open, sessions, taskId]);
+  }, [autoCreate, createSession, open, sessions, sessionId]);
 
   const ended = useMemo(() => endedTerminalSessions(sessions ?? []), [sessions]);
-  const activeSession = sessions?.find((session) => session.sessionId === activeSessionId) ?? null;
+  const activeSession = sessions?.find((session) => session.terminalSessionId === activeSessionId) ?? null;
   const activeRuntime = activeSessionId ? runtimes[activeSessionId] : undefined;
 
   const shellsQuery = useQuery({
@@ -92,34 +92,34 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
   });
 
   // 窗格卸载（会话结束后不再查看、从 snapshot 消失）时同步删掉它的运行期状态，不留孤儿条目。
-  const registerView = useCallback((sessionId: string, view: TerminalView | null) => {
+  const registerView = useCallback((terminalSessionId: string, view: TerminalView | null) => {
     if (view) {
-      viewsRef.current.set(sessionId, view);
+      viewsRef.current.set(terminalSessionId, view);
       return;
     }
-    viewsRef.current.delete(sessionId);
+    viewsRef.current.delete(terminalSessionId);
     setRuntimes((current) => {
-      if (!(sessionId in current)) return current;
+      if (!(terminalSessionId in current)) return current;
       const next = { ...current };
-      delete next[sessionId];
+      delete next[terminalSessionId];
       return next;
     });
   }, []);
-  const handleRuntime = useCallback((sessionId: string, runtime: TerminalViewRuntime) => {
-    setRuntimes((current) => ({ ...current, [sessionId]: runtime }));
+  const handleRuntime = useCallback((terminalSessionId: string, runtime: TerminalViewRuntime) => {
+    setRuntimes((current) => ({ ...current, [terminalSessionId]: runtime }));
   }, []);
-  const handleSearchResults = useCallback((sessionId: string, result: { index: number; count: number }) => {
-    if (sessionId === useTerminalWorkbenchStore.getState().tasks[taskId]?.activeSessionId) setSearchResult(result);
-  }, [taskId]);
+  const handleSearchResults = useCallback((terminalSessionId: string, result: { index: number; count: number }) => {
+    if (terminalSessionId === useTerminalWorkbenchStore.getState().bySession[sessionId]?.activeSessionId) setSearchResult(result);
+  }, [sessionId]);
   const openSearch = useCallback(() => {
-    const sessionId = useTerminalWorkbenchStore.getState().tasks[taskId]?.activeSessionId ?? null;
+    const terminalSessionId = useTerminalWorkbenchStore.getState().bySession[sessionId]?.activeSessionId ?? null;
     // 已为同一会话打开时只重新聚焦：清掉结果而保留输入框里的词，摘要会误显示「无结果」。
-    if (sessionId !== searchSessionId) {
-      setSearchSessionId(sessionId);
+    if (terminalSessionId !== searchSessionId) {
+      setSearchSessionId(terminalSessionId);
       setSearchResult(null);
     }
     setSearchFocusKey((key) => key + 1);
-  }, [searchSessionId, taskId]);
+  }, [searchSessionId, sessionId]);
   const closeSearch = useCallback(() => {
     setSearchSessionId(null);
     setSearchResult(null);
@@ -128,10 +128,10 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
       viewsRef.current.get(activeSessionId)?.focus();
     }
   }, [activeSessionId]);
-  const links = useOpenLink("terminal", taskId);
+  const links = useOpenLink("terminal", sessionId);
 
-  const selectSession = (sessionId: string) => {
-    useTerminalWorkbenchStore.getState().select(taskId, sessionId);
+  const selectSession = (terminalSessionId: string) => {
+    useTerminalWorkbenchStore.getState().select(sessionId, terminalSessionId);
   };
 
   // 切换会话的路径有多条（点标签、卡片跳转、关闭后选相邻、snapshot 回落），不逐条关搜索，
@@ -189,7 +189,7 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
               <TooltipIconButton
                 tooltip="收起面板（会话保持运行）"
                 className="text-muted-foreground size-7"
-                onClick={() => useTerminalWorkbenchStore.getState().setOpen(taskId, false)}
+                onClick={() => useTerminalWorkbenchStore.getState().setOpen(sessionId, false)}
                 aria-label="关闭终端面板"
               >
                 <XIcon aria-hidden="true" />
@@ -223,12 +223,12 @@ export function TerminalWorkbench({ taskId }: { taskId: number }) {
               onOpenSearch={openSearch}
             >
               <div className="absolute inset-0" data-testid="terminal-panes">
-                {mounted.map((sessionId) => (
+                {mounted.map((terminalSessionId) => (
                   <TerminalSessionPane
-                    key={sessionId}
-                    taskId={taskId}
+                    key={terminalSessionId}
                     sessionId={sessionId}
-                    visible={open && sessionId === activeSessionId}
+                    terminalSessionId={terminalSessionId}
+                    visible={open && terminalSessionId === activeSessionId}
                     focusToken={focusToken}
                     workspaceRoot={bridge?.workspaceRoot || undefined}
                     onRuntime={handleRuntime}

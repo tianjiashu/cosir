@@ -44,7 +44,7 @@ def _user_stopped(rc: RuntimeContext) -> NoticeBody | None:
     if (
         preceding is None
         or preceding.end_reason != Constant.Run.RUN_END_REASON_USER_CANCELLED
-        or ContextStore().run_last_turn_withdrawn(rc.task.id, preceding.id)
+        or ContextStore().run_last_turn_withdrawn(rc.session.id, preceding.id)
     ):
         return None
     return NoticeBody(content=_USER_STOPPED, notice_kind="user_cancelled")
@@ -59,8 +59,8 @@ def _tool_availability(
     出自更早的 Run 或继承来的历史时，按 :func:`tool_availability_notice` 的规则说明（新 Run 的第一次
     驱动因此仍会提醒一次仍在禁用的工具）。
     """
-    task_banned, run_banned = rc.task_banned, rc.run_banned
-    banned = task_banned | run_banned
+    session_banned, run_banned = rc.session_banned, rc.run_banned
+    banned = session_banned | run_banned
     latest = context.latest_notice("tool_availability")
     announced = (
         None if latest is None else frozenset(cast(list[str], latest[1].banned_tools))
@@ -68,7 +68,7 @@ def _tool_availability(
     if latest is not None and latest[0] == rc.run.id and announced == banned:
         return None
     content = tool_availability_notice(
-        announced, task_banned, run_banned, all_banned=not rc.admitted_tools
+        announced, session_banned, run_banned, all_banned=not rc.admitted_tools
     )
     if content is None:
         return None
@@ -79,22 +79,22 @@ def _tool_availability(
 
 def tool_availability_notice(
     announced: frozenset[str] | None,
-    task_banned: frozenset[str],
+    session_banned: frozenset[str],
     run_banned: frozenset[str],
     *,
     all_banned: bool,
 ) -> str | None:
     """返回应投递的工具准入通知文本；``None`` 表示无需通知。
 
-    ``announced`` 是上次已告知模型的禁用集合，``task_banned`` / ``run_banned`` 是本 Run 两个来源的
-    禁用工具名（Task 级：Task 类型规则与派生深度；Run 级：本 Run 关掉的工具组），两者都只含该
-    Task 手里有的工具。``all_banned`` 表示这些禁用覆盖了该 Task 的全部工具。
+    ``announced`` 是上次已告知模型的禁用集合，``session_banned`` / ``run_banned`` 是本 Run 两个来源的
+    禁用工具名（Session 级：Session 类型规则与派生深度；Run 级：本 Run 关掉的工具组），两者都只含该
+    Session 手里有的工具。``all_banned`` 表示这些禁用覆盖了该 Session 的全部工具。
 
     比较用两个来源的并集——集合相同意味着可调用面相同，模型不需要知道原因换过；文本则按来源分组，
-    让模型读到「这个 Task 不能派生」，而不是笼统的「这次禁用、下次也许可用」。工具名一律排序，避免
+    让模型读到「这个 Session 不能派生」，而不是笼统的「这次禁用、下次也许可用」。工具名一律排序，避免
     同一集合跨进程产生不同文本（前缀缓存）。
 
-    只报禁用、不枚举可用：可用集合由 Task 固化的 schema 与系统提示词的工具目录表达，在通知里再列
+    只报禁用、不枚举可用：可用集合由 Session 固化的 schema 与系统提示词的工具目录表达，在通知里再列
     一遍既拉长这段 canonical 历史，又会紧跟在禁用清单后面被读成「这些都被禁用」。
 
     - ``announced`` 为 ``None``（模型从没被告知过）：完整说明。
@@ -103,13 +103,13 @@ def tool_availability_notice(
     - 未变化且全部可用：不通知。
     """
 
-    banned = task_banned | run_banned
+    banned = session_banned | run_banned
     if announced is None:
-        return _full_notice(task_banned, run_banned, all_banned)
+        return _full_notice(session_banned, run_banned, all_banned)
     if banned == announced:
         if not banned:
             return None
-        groups = _disabled_groups(task_banned, run_banned)
+        groups = _disabled_groups(session_banned, run_banned)
         return f"{_TOOL_NOTICE_PREFIX} still disabled ({groups})."
     changes = []
     if newly_banned := banned - announced:
@@ -121,26 +121,26 @@ def tool_availability_notice(
     elif not banned:
         current = "all tools are available now"
     else:
-        current = f"currently disabled ({_disabled_groups(task_banned, run_banned)})"
+        current = f"currently disabled ({_disabled_groups(session_banned, run_banned)})"
     return f"{_TOOL_NOTICE_PREFIX} changed since last round ({'; '.join(changes)}); {current}."
 
 
-def _full_notice(task_banned: frozenset[str], run_banned: frozenset[str], all_banned: bool) -> str:
+def _full_notice(session_banned: frozenset[str], run_banned: frozenset[str], all_banned: bool) -> str:
     """模型从没被告知过时的完整说明：按来源给当前禁用清单；全部被禁时只给一句结论。"""
 
     if all_banned:
         return f"{_TOOL_NOTICE_PREFIX} all tools are disabled."
-    if not task_banned and not run_banned:
+    if not session_banned and not run_banned:
         return f"{_TOOL_NOTICE_PREFIX} all tools are available."
-    return f"{_TOOL_NOTICE_PREFIX} disabled ({_disabled_groups(task_banned, run_banned)})."
+    return f"{_TOOL_NOTICE_PREFIX} disabled ({_disabled_groups(session_banned, run_banned)})."
 
 
-def _disabled_groups(task_banned: frozenset[str], run_banned: frozenset[str]) -> str:
-    """按来源给出禁用清单：``for this task: …; for this run: …``。"""
+def _disabled_groups(session_banned: frozenset[str], run_banned: frozenset[str]) -> str:
+    """按来源给出禁用清单：``for this session: …; for this run: …``。"""
 
     groups = []
-    if task_banned:
-        groups.append(f"for this task: {_names(task_banned)}")
+    if session_banned:
+        groups.append(f"for this session: {_names(session_banned)}")
     if run_banned:
         groups.append(f"for this run: {_names(run_banned)}")
     return "; ".join(groups)

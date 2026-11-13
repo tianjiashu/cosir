@@ -147,7 +147,7 @@ test("目录、只读预览、固定标签、未展开目录搜索与定位", as
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
-  await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
+  await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const surface = page.getByTestId("workspace-files-surface");
   await expect(surface.getByText("main.py", { exact: true })).toBeVisible();
@@ -189,7 +189,7 @@ test("Markdown、图片和 PDF.js 离线阅读器", async ({ page }) => {
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
-  await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
+  await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const surface = page.getByTestId("workspace-files-surface");
   await surface.getByText("README.md", { exact: true }).click();
@@ -232,7 +232,7 @@ test("阅读优先、每文件偏好、标签键盘和搜索恢复", async ({ pa
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
-  await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
+  await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const surface = page.getByTestId("workspace-files-surface");
   await surface.getByText("README.md", { exact: true }).click();
@@ -331,7 +331,7 @@ for (const theme of ["light", "dark"]) {
     await page.goto("/");
     // 行内「+」只在悬停时出现，先悬停工作区行。
     await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
-    await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
+    await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
     await page.getByRole("button", { name: "浏览工作区文件" }).click();
     const surface = page.getByTestId("workspace-files-surface");
     await surface
@@ -407,7 +407,7 @@ test("搜索停止重试、未扫描原因与编码变更重跑查找", async ({
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
-  await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
+  await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const surface = page.getByTestId("workspace-files-surface");
   await surface.getByRole("textbox", { name: "搜索工作区文件名" }).fill("main");
@@ -502,7 +502,7 @@ test("阅读工具栏在窄宽度保持单行，菜单与搜索焦点独立", as
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
-  await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
+  await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const surface = page.getByTestId("workspace-files-surface");
   await surface.getByRole("treeitem", { name: "README.md", exact: true }).click();
@@ -548,7 +548,7 @@ test("同名标签消歧、溢出菜单、临时替换和关闭后的目录入�
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
-  await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
+  await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const surface = page.getByTestId("workspace-files-surface");
   await page.evaluate(async () => {
@@ -587,7 +587,7 @@ test("文件菜单开关不锁定主对话，长消息滚动位置和节点保�
     { type: "text" as const, text: `第 ${i} 次读取终端输出。继续观察命令的执行过程，检查输出和状态是否符合预期。`, status: "completed" as const },
   ]).flat();
   await seedState(request, 42, state);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const trigger = page.getByRole("button", { name: "文件浏览器更多选项" });
   const viewport = page.locator(".aui-thread-root > div");
@@ -637,7 +637,7 @@ test("对话正文的文件链接在文件面板打开并定位到行，外部�
     status: "completed" as const,
   }];
   await seedState(request, 42, state);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
 
   const message = page.locator('main [data-index="1"]');
   await expect(message.getByText("链接", { exact: true })).not.toHaveAttribute("href");
@@ -659,11 +659,11 @@ test("对话正文的文件链接在文件面板打开并定位到行，外部�
 
 test("链接指向不存在的文件：不留坏标签，提到的文件名改为查找，已打开的文件被删后显示中性状态", async ({ page, request }) => {
   await mockFiles(page);
-  // task.ts 与 src/gone.ts 在工作区里不存在；main.py 先能读，之后模拟被删除。
+  // session.ts 与 src/gone.ts 在工作区里不存在；main.py 先能读，之后模拟被删除。
   let mainDeleted = false;
   await page.route("**/workspaces/*/files/info?*", async (route) => {
     const path = new URL(route.request().url()).searchParams.get("path");
-    if (path === "task.ts" || path === "src/gone.ts" || (path === "main.py" && mainDeleted))
+    if (path === "session.ts" || path === "src/gone.ts" || (path === "main.py" && mainDeleted))
       return route.fulfill({ status: 404, json: { detail: { code: "FILE_NOT_FOUND", message: "文件不存在" } } });
     return route.fallback();
   });
@@ -671,18 +671,18 @@ test("链接指向不存在的文件：不留坏标签，提到的文件名改�
   const state = await readState(request, 42);
   state.messages[1].parts = [{
     type: "text" as const,
-    text: "会话核心在 `task.ts`，入口见 [main](main.py)，旧文件 [gone](src/gone.ts)。",
+    text: "会话核心在 `session.ts`，入口见 [main](main.py)，旧文件 [gone](src/gone.ts)。",
     status: "completed" as const,
   }];
   await seedState(request, 42, state);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const message = page.locator('main [data-index="1"]');
   const surface = page.getByTestId("workspace-files-surface");
 
   // 裸文件名只提供显式查找入口，不探测根目录。
-  await message.getByRole("button", { name: "查找文件 task.ts" }).click();
-  await expect(surface.getByRole("textbox", { name: "搜索工作区文件名" })).toHaveValue("task.ts");
-  await expect(surface.getByRole("tab", { name: "task.ts" })).toHaveCount(0);
+  await message.getByRole("button", { name: "查找文件 session.ts" }).click();
+  await expect(surface.getByRole("textbox", { name: "搜索工作区文件名" })).toHaveValue("session.ts");
+  await expect(surface.getByRole("tab", { name: "session.ts" })).toHaveCount(0);
 
   // 明确的地址不存在：提示并提供查找，不开标签。
   await message.getByRole("link", { name: "gone" }).click();

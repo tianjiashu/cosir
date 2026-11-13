@@ -21,19 +21,19 @@ import { CallElapsed } from "./call-elapsed";
 import { ToolIcon } from "./tool-icons";
 
 export type CallRowProps = {
-  /** 拥有该调用的任务：工具取消、决定与面板都按 Task 寻址，开合状态也按 Task 分桶。 */
+  /** 拥有该调用的会话：工具取消、决定与面板都按 Session 寻址，开合状态也按 Session 分桶。 */
   /** 上层过程/分组是否可见，不影响独立弹层。 */
   visible?: boolean;
   inherited?: boolean;
-  taskId: number;
+  sessionId: number;
   toolCallId: string;
   toolName: string;
   args: Record<string, unknown>;
   artifact: ToolArtifact;
   /** 只读展示面（子 Agent 阅读器、后台看板）不提供写入交互。 */
   interactive?: boolean;
-  /** 用户已请求停止整个 Task 的当前活动，工具级停止入口随之收起。 */
-  taskCancelling?: boolean;
+  /** 用户已请求停止整个 Session 的当前活动，工具级停止入口随之收起。 */
+  sessionCancelling?: boolean;
 };
 
 const ROW_CLASS = "flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-1.5 -mx-1.5 py-0.5 text-left text-2sm";
@@ -55,21 +55,21 @@ export const CallRow = memo(function CallRow(props: CallRowProps) {
 
 /** 活调用才订阅后台执行；继承记录复用同一个行视图与折叠状态。 */
 function OwnedCallRow(props: CallRowProps) {
-  const workStatus = useBackgroundTasksStore(state => state.tasks[props.taskId]?.find(entry => entry.toolCallId === props.toolCallId)?.status);
+  const workStatus = useBackgroundTasksStore(state => state.sessions[props.sessionId]?.find(entry => entry.toolCallId === props.toolCallId)?.status);
   return <CallRowContent {...props} workStatus={workStatus} />;
 }
 
-function CallRowContent({ taskId, toolCallId, toolName, args, artifact, interactive = true, inherited = false, taskCancelling = false, visible = true, workStatus }: CallRowProps & Pick<CallViewContext, "workStatus">) {
+function CallRowContent({ sessionId, toolCallId, toolName, args, artifact, interactive = true, inherited = false, sessionCancelling = false, visible = true, workStatus }: CallRowProps & Pick<CallViewContext, "workStatus">) {
   const status = artifact.backendStatus;
   const unfinished = status === "pending" || status === "running";
   const failed = status === "failed";
   const cancelled = status === "cancelled";
-  const context: CallViewContext = { taskId, toolCallId, artifact, args, interactive, inherited, taskCancelling, workStatus };
+  const context: CallViewContext = { sessionId, toolCallId, artifact, args, interactive, inherited, sessionCancelling, workStatus };
   const resolved = resolveCallView(context);
   const detail = resolved?.detail;
   const expandable = detail !== undefined;
   const defaultOpen = detail?.defaultOpen ?? false;
-  const [open, setOpen] = useDisclosure(taskId, callKey(toolCallId), defaultOpen);
+  const [open, setOpen] = useDisclosure(sessionId, callKey(toolCallId), defaultOpen);
   const collapsibleRef = useRef<HTMLDivElement>(null);
   const lockScroll = useScrollLock(collapsibleRef, DISCLOSURE_ANIMATION_MS);
 
@@ -114,7 +114,7 @@ function CallRowContent({ taskId, toolCallId, toolName, args, artifact, interact
       type="button"
       data-slot="call-row"
       className={cn(ROW_CLASS, CLICKABLE_ROW_CLASS)}
-      onClick={() => useConversationAsideStore.getState().revealBackground(taskId, toolCallId)}
+      onClick={() => useConversationAsideStore.getState().revealBackground(sessionId, toolCallId)}
     >
       <span className="sr-only">在后台任务中查看：</span>
       {contents}

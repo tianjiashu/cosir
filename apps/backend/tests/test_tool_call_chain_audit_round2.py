@@ -33,14 +33,14 @@ from app.core.events import (
 )
 from app.core.tool.schemas import ToolObservation
 from app.models.conversation_input import UserInputPresentation
-from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.session_context import SessionContextRecord
 from app.models.message_metadata import ToolMessageMetadata
 from tests.transport_fixtures import consumed
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
 _RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
-_TASK_ID = 7
+_SESSION_ID = 7
 _RUN_ID = 9
 
 
@@ -103,7 +103,7 @@ class _MemorySnapshotOwner:
     def __init__(self, state: ConversationStateSnapshot) -> None:
         self.state = state
 
-    def get_state(self, _task_id: int) -> ConversationStateSnapshot:
+    def get_state(self, _session_id: int) -> ConversationStateSnapshot:
         return copy.deepcopy(self.state)
 
     def apply_planned(self, event: Any) -> TransportFrame:
@@ -112,7 +112,7 @@ class _MemorySnapshotOwner:
             mutation.apply_to(self.state)
         validate_snapshot(self.state)
         return TransportFrame(
-            task_id=event.task_id,
+            session_id=event.session_id,
             kind="mutation",
             mutations=mutations,
         )
@@ -124,21 +124,21 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
     state = empty_snapshot()
     projector = ConversationEventProjector(_MemorySnapshotOwner(state))
     projector.process(
-        RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=_RUN_ID)
+        RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=_SESSION_ID, run_id=_RUN_ID)
     )
     # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
-    projector.process(consumed(_TASK_ID, _RUN_ID, 1, UserInputPresentation(text="test")))
+    projector.process(consumed(_SESSION_ID, _RUN_ID, 1, UserInputPresentation(text="test")))
     projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             run_id=_RUN_ID,
             status="running",
         )
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             run_id=_RUN_ID,
             turn=_RUN_ID,
             tool_call_id=tool_call_id,
@@ -147,12 +147,12 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=_TASK_ID, run_id=_RUN_ID, tool_call_id=tool_call_id, status="running"
+            session_id=_SESSION_ID, run_id=_RUN_ID, tool_call_id=tool_call_id, status="running"
         )
     )
     projector.process(
         ToolCallRuntimeUpdateEvent(
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             run_id=_RUN_ID,
             tool_call_id=tool_call_id,
             seq=0,
@@ -164,7 +164,7 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
     )
     projector.process(
         ToolCallRuntimeUpdateEvent(
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             run_id=_RUN_ID,
             tool_call_id=tool_call_id,
             seq=0,
@@ -210,7 +210,7 @@ def test_p2_terminal_result_prefers_final_output() -> None:
 
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             run_id=_RUN_ID,
             tool_call_id="call-1",
             status="completed",
@@ -232,7 +232,7 @@ def test_p2_empty_display_data_keeps_streamed_terminal_output() -> None:
 
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             run_id=_RUN_ID,
             tool_call_id="call-1",
             status="cancelled",
@@ -252,7 +252,7 @@ def test_p2_explicit_kind_display_replaces_streamed_terminal_output() -> None:
 
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             run_id=_RUN_ID,
             tool_call_id="call-1",
             status="failed",
@@ -279,42 +279,42 @@ class _RecordingContextStore:
     def __init__(self, max_sequence: int = 0) -> None:
         self.max_sequence_value = max_sequence
         self.appended: list[tuple[int, int | None, Any, int, bool]] = []
-        self.replaced: list[ConversationTaskContextRecord] = []
+        self.replaced: list[SessionContextRecord] = []
         self.loaded: list[ContextEntry] = []
 
-    def max_sequence(self, task_id: int) -> int:
+    def max_sequence(self, session_id: int) -> int:
         return self.max_sequence_value
 
-    def entries_in_context(self, task_id: int) -> list[ContextEntry]:
+    def entries_in_context(self, session_id: int) -> list[ContextEntry]:
         return list(self.loaded)
 
-    def max_turn(self, _task_id: int) -> int:
+    def max_turn(self, _session_id: int) -> int:
         return 0
 
-    def run_records(self, _task_id: int, _run_id: int) -> list:
+    def run_records(self, _session_id: int, _run_id: int) -> list:
         return []
 
-    def get_system_prompt(self, task_id: int) -> ContextEntry | None:
+    def get_system_prompt(self, session_id: int) -> ContextEntry | None:
         return None
 
-    def create_system_prompt(self, task_id: int, message: Any) -> ContextEntry:
+    def create_system_prompt(self, session_id: int, message: Any) -> ContextEntry:
         return ContextEntry(message, None, -1, turn=1)
 
     def append(
         self,
-        task_id: int,
+        session_id: int,
         run_id: int | None,
         message: Any,
         sequence: int,
         include_in_context: bool,
         metadata: Any = None,
         project_to_transport: bool = True,
-        session: object = None,
+        db: object = None,
         *,
         turn: int,
         message_id: int | None = None,
     ) -> None:
-        self.appended.append((task_id, run_id, message, sequence, include_in_context))
+        self.appended.append((session_id, run_id, message, sequence, include_in_context))
         return ContextEntry(message, run_id, sequence, turn=turn)
 
     def replace_message(self, record: Any) -> None:
@@ -334,7 +334,7 @@ def _memory_manager(
     manager._used_call_ids = set()
 
     manager._response_call_ids = {}
-    manager.current_task_id = _TASK_ID
+    manager.current_session_id = _SESSION_ID
     manager.agent_profile = SimpleNamespace()
     manager.workspace = SimpleNamespace(id=7, root_path="")
     manager.context_store = context_store

@@ -18,15 +18,15 @@ from app.assistant_transport.projection.user_input_projection import plan_input_
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.events import InputConsumedEvent
 from app.core.tool.multi_agent import agent_message as agent_message_module
-from app.core.workflow.message_queue.task_message import AgentMessageBody, RunLaunch
+from app.core.workflow.message_queue.session_message import AgentMessageBody, RunLaunch
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.conversation_run_record import ConversationRunRecord
-from app.models.conversation_task_context import ConversationTaskContextRecord
+from app.models.run_record import RunRecord
+from app.models.session_context import SessionContextRecord
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import UserMessageMetadata
-from app.models.task_record import TaskRecord
+from app.models.session_record import SessionRecord
 
-_SOURCE = MessageSource(task_id=4, name='主任务 "A"')
+_SOURCE = MessageSource(session_id=4, name='主会话 "A"')
 # 形如胶囊标签的文字：用户输入会去校验指针，Agent 消息只当文字。
 _CAPSULE_LOOKALIKE = '参考 <file path="/missing.md" /> 这一段'
 
@@ -40,7 +40,7 @@ def test_render_tags_the_sender_and_escapes_the_text() -> None:
 
     content = message["content"]
     assert content.startswith('<agent_message time="')
-    assert 'source_task_id="4"' in content and "from=\"主任务 'A'\"" in content
+    assert 'source_session_id="4"' in content and "from=\"主会话 'A'\"" in content
     assert content.count("</agent_message>") == 1
     assert metadata.kind == "agent_message"
     assert metadata.source == _SOURCE
@@ -84,7 +84,7 @@ def test_prepare_carries_launch_and_rejects_empty_text(monkeypatch: pytest.Monke
 def test_consumed_agent_message_projects_plain_text_with_its_source() -> None:
     state = {"messages": [], "queued_messages": [], "activity": None}
     event = InputConsumedEvent(
-        task_id=7,
+        session_id=7,
         run_id=2,
         message_id=11,
         presentation=UserInputPresentation(text=_CAPSULE_LOOKALIKE),
@@ -96,7 +96,7 @@ def test_consumed_agent_message_projects_plain_text_with_its_source() -> None:
 
     user = mutations[0].value
     assert user["role"] == "user" and user["id"] == "11"
-    assert user["source"] == {"taskId": 4, "name": '主任务 "A"', "report": None}
+    assert user["source"] == {"sessionId": 4, "name": '主会话 "A"', "report": None}
     assert user["parts"] == [{"type": "text", "text": _CAPSULE_LOOKALIKE, "status": "completed"}]
 
 
@@ -130,7 +130,7 @@ def _reply_state(parts: list) -> dict:
 def _consumed(message_id: int = 11) -> InputConsumedEvent:
     """途中来信：写入方把它记在当前回合（3），这一回合已有回复。"""
     return InputConsumedEvent(
-        task_id=7,
+        session_id=7,
         run_id=2,
         message_id=message_id,
         presentation=UserInputPresentation(text=_CAPSULE_LOOKALIKE),
@@ -149,12 +149,12 @@ def test_agent_message_arriving_mid_run_joins_the_current_reply() -> None:
         "type": "agent-message",
         "id": "11",
         "text": _CAPSULE_LOOKALIKE,
-        "source": {"taskId": 4, "name": '主任务 "A"', "report": None},
+        "source": {"sessionId": 4, "name": '主会话 "A"', "report": None},
     }
 
 
 def test_consuming_a_mid_run_agent_message_twice_changes_nothing() -> None:
-    source = {"taskId": 4, "name": "A", "report": None}
+    source = {"sessionId": 4, "name": "A", "report": None}
     part = {"type": "agent-message", "id": "11", "text": "x", "source": source}
 
     assert plan_input_consumed(_consumed(), _reply_state([part])) == []  # type: ignore[arg-type]
@@ -162,16 +162,16 @@ def test_consuming_a_mid_run_agent_message_twice_changes_nothing() -> None:
 
 def test_rebuild_projects_agent_messages_as_turns_with_source() -> None:
     timestamp = datetime(2026, 9, 12, tzinfo=UTC)
-    task = TaskRecord(
+    session = SessionRecord(
         id=7, workspace_id=3, title="child", created_at=timestamp, updated_at=timestamp
     )
-    run = ConversationRunRecord(
-        id=2, task_id=7, status="completed", created_at=timestamp, updated_at=timestamp
+    run = RunRecord(
+        id=2, session_id=7, status="completed", created_at=timestamp, updated_at=timestamp
     )
     rows = [
-        ConversationTaskContextRecord(
+        SessionContextRecord(
             id=1,
-            task_id=7,
+            session_id=7,
             run_id=2,
             message={"role": "user", "content": "<agent_message>…</agent_message>"},
             metadata=_body(_CAPSULE_LOOKALIKE).render()[1],
@@ -180,9 +180,9 @@ def test_rebuild_projects_agent_messages_as_turns_with_source() -> None:
             message_id=11,
             turn=1,
         ),
-        ConversationTaskContextRecord(
+        SessionContextRecord(
             id=2,
-            task_id=7,
+            session_id=7,
             run_id=2,
             message={"role": "assistant", "content": "好的"},
             include_in_context=True,
@@ -191,10 +191,10 @@ def test_rebuild_projects_agent_messages_as_turns_with_source() -> None:
         ),
     ]
 
-    state = rebuild_snapshot(task, [run], rows, {})
+    state = rebuild_snapshot(session, [run], rows, {})
 
     user, reply = state["messages"]
-    assert user["source"] == {"taskId": 4, "name": '主任务 "A"', "report": None}
+    assert user["source"] == {"sessionId": 4, "name": '主会话 "A"', "report": None}
     assert user["parts"] == [{"type": "text", "text": _CAPSULE_LOOKALIKE, "status": "completed"}]
     assert (reply["id"], reply["source"]) == ("assistant-turn-1", None)
     validate_snapshot(state)
@@ -211,7 +211,7 @@ def test_snapshot_rejects_a_source_on_assistant_messages() -> None:
                 "turn": 1,
                 "inherited": False,
                 "outcome": None,
-                "source": {"taskId": 1, "name": "x", "report": None},
+                "source": {"sessionId": 1, "name": "x", "report": None},
             }
         ],
         "messageOffset": 0,

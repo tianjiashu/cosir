@@ -21,7 +21,7 @@ export function currentActivity(activity: TransportActivity | null, calls: reado
   }
   if (jobs.length) {
     const allSettling = jobs.every(job => job.status === "settling");
-    const label = jobs.length === 1 ? jobs[0].label : `${jobs.length} 项任务`;
+    const label = jobs.length === 1 ? jobs[0].label : `${jobs.length} 项会话`;
     return { label: `${allSettling ? "等待并入后台结果" : "后台执行"}：${label}`, animated: !allSettling && activity.status === "running" };
   }
   return activity.status === "suspended" ? { label: "等待继续", animated: false } : { label: "正在处理", animated: true };

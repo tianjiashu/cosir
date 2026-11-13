@@ -14,7 +14,7 @@ from app.tools.tool_handler.terminal.live_output_channel import LiveOutputChanne
 def _context(loop: asyncio.AbstractEventLoop, sink) -> ToolExecutionContext:
     return ToolExecutionContext(
         step_id="step-1",
-        task_id=7,
+        session_id=7,
         workspace_id=1,
         workspace_root=Path("."),
         run_id=9,

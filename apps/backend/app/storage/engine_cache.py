@@ -24,7 +24,7 @@ from pathlib import Path
 from threading import Lock
 
 from sqlalchemy import Engine, create_engine, event
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session as DbSession, sessionmaker
 from sqlalchemy.pool import QueuePool
 
 
@@ -87,14 +87,14 @@ def create_sqlite_engine(database_path: Path) -> Engine:
     return engine
 
 
-def create_session_factory(engine: Engine) -> sessionmaker[Session]:
+def create_db_factory(engine: Engine) -> sessionmaker[DbSession]:
     """创建 SQLAlchemy Session 工厂。
 
     参数:
         engine: 目标数据库 Engine。
 
     返回:
-        绑定该 Engine 的 Session 工厂。
+        绑定该 Engine 的 db 工厂。
 
     异常:
         无。

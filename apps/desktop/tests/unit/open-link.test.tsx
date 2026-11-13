@@ -21,7 +21,7 @@ vi.mock("@/lib/notify", () => ({ notify: { info: notifyInfo, error: vi.fn(), suc
 
 import { ExternalLinkRow } from "@/components/conversation/tools/call-views/detail-parts";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
-import { LinkTaskContext, useOpenLink, type LinkOpener } from "@/components/links/use-open-link";
+import { LinkSessionContext, useOpenLink, type LinkOpener } from "@/components/links/use-open-link";
 import { markdownRehypePlugins } from "@/components/markdown/markdown-rendering-config";
 import { ReferenceBridgeProvider } from "@/components/workspace-references/reference-bridge";
 import { useDockStore } from "@/lib/layout/dock-store";
@@ -40,13 +40,13 @@ function inWorkspace(node: React.ReactNode) {
   );
 }
 
-function captureOpener(taskId: number | null): LinkOpener {
+function captureOpener(sessionId: number | null): LinkOpener {
   let opener: LinkOpener | null = null;
   function Probe() {
     opener = useOpenLink("message");
     return null;
   }
-  renderToStaticMarkup(inWorkspace(<LinkTaskContext.Provider value={taskId}><Probe /></LinkTaskContext.Provider>));
+  renderToStaticMarkup(inWorkspace(<LinkSessionContext.Provider value={sessionId}><Probe /></LinkSessionContext.Provider>));
   return opener!;
 }
 
@@ -76,8 +76,8 @@ describe("useOpenLink", () => {
 
   it("filename searches never probe root files; missing addresses notify", async () => {
     const opener = captureOpener(3);
-    opener.open({ kind: "filename-search", query: "task.ts", lines: { start: 42, end: 42 } });
-    await vi.waitFor(() => expect(useFilesStore.getState().sessions[7]?.searchRequest?.query).toBe("task.ts"));
+    opener.open({ kind: "filename-search", query: "session.ts", lines: { start: 42, end: 42 } });
+    await vi.waitFor(() => expect(useFilesStore.getState().sessions[7]?.searchRequest?.query).toBe("session.ts"));
     expect(getFileInfo).not.toHaveBeenCalled();
     expect(useFilesStore.getState().sessions[7].searchRequest?.navigation?.lines).toEqual({ start: 42, end: 42 });
     opener.open(opener.resolve("src/gone.ts")!);
@@ -85,7 +85,7 @@ describe("useOpenLink", () => {
     expect(useFilesStore.getState().sessions[7].tabs).toEqual([]);
   });
 
-  it("opens local servers in the task's built-in browser without confirmation", async () => {
+  it("opens local servers in the session's built-in browser without confirmation", async () => {
     openUserTab.mockResolvedValue("tab-1");
     const opener = captureOpener(3);
     opener.open(opener.resolve("http://localhost:5173")!);
@@ -95,7 +95,7 @@ describe("useOpenLink", () => {
     expect(windowOpen).not.toHaveBeenCalled();
   });
 
-  it("hands local servers to the system browser when there is no task", async () => {
+  it("hands local servers to the system browser when there is no session", async () => {
     const opener = captureOpener(null);
     opener.open(opener.resolve("http://localhost:5173")!);
     await vi.waitFor(() => expect(windowOpen).toHaveBeenCalledWith("http://localhost:5173", "_blank", "noopener,noreferrer"));
@@ -104,7 +104,7 @@ describe("useOpenLink", () => {
 
   // 目的：Agent 写的 report.html 点开就是渲染结果，局域网设备与本机开发服务同等对待；潜在缺陷：只能看源码、工作区外
   // 点不了，或局域网地址弹外链确认后交给系统浏览器。
-  it("opens local HTML files and LAN servers in the task's built-in browser", async () => {
+  it("opens local HTML files and LAN servers in the session's built-in browser", async () => {
     openUserTab.mockResolvedValue("tab-1");
     const opener = captureOpener(3);
     opener.open(opener.resolve("out/report.html")!);
@@ -118,8 +118,8 @@ describe("useOpenLink", () => {
     expect(useDockStore.getState().panel).toBeNull();
   });
 
-  // 目的：没有所属 Task 的界面不给点了没反应的入口；潜在缺陷：file 地址交给系统浏览器被宿主拦下，静默失败。
-  it("falls back to the file panel for local HTML when there is no task", () => {
+  // 目的：没有所属 Session 的界面不给点了没反应的入口；潜在缺陷：file 地址交给系统浏览器被宿主拦下，静默失败。
+  it("falls back to the file panel for local HTML when there is no session", () => {
     const opener = captureOpener(null);
     expect(opener.resolve("out/report.html")).toEqual({ kind: "workspace", path: "out/report.html", directory: false });
     expect(opener.resolve("/Users/x/a.html")).toBeNull();
@@ -154,13 +154,13 @@ describe("markdown links", () => {
   });
 
   it("titles local HTML links by where they open", () => {
-    // 文件面板的 Markdown 没有所属 Task，本机网页退回文件面板。
+    // 文件面板的 Markdown 没有所属 Session，本机网页退回文件面板。
     expect(renderMarkdown("[r](out/report.html)")).toContain('title="在文件面板打开 out/report.html"');
-    function InTask() {
+    function InSession() {
       const components = useMarkdownLinkComponents("message");
       return <Streamdown mode="static" rehypePlugins={markdownRehypePlugins} components={components}>{"[r](out/report.html)"}</Streamdown>;
     }
-    const html = renderToStaticMarkup(inWorkspace(<LinkTaskContext.Provider value={3}><InTask /></LinkTaskContext.Provider>));
+    const html = renderToStaticMarkup(inWorkspace(<LinkSessionContext.Provider value={3}><InSession /></LinkSessionContext.Provider>));
     expect(html).toContain('title="在内置浏览器打开 /repo/out/report.html"');
   });
 
