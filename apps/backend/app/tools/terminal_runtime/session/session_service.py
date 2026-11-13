@@ -1,14 +1,14 @@
 """终端会话集合的唯一所有者：归属、容量、创建 / 关闭、终态历史与副作用线程。
 
-单会话操作（输入、读取、交接、订阅、用户输入）由调用方经 ``require`` 取到 runtime 后直接调用，
-本服务不做转发；Agent 专属策略（新建后等集成就绪、列表摘要）在工具里。Agent 工具与用户路径
-（工作台 HTTP、终端 WS）共用这里的容量与生命周期规则，所以集合管理不能放进任何一侧。活会话与
-有限终态历史只存在当前后端进程，不持久化、不跨重启恢复。
+单会话操作（读取、填入、订阅、用户输入）由调用方经 ``require`` 取到 runtime 后直接调用，本服务
+不做转发。会话只由用户新建（工作台 HTTP），Agent 工具只列出、读取与填入；两侧共用这里的归属与
+生命周期规则，所以集合管理不能放进任何一侧。活会话与有限终态历史只存在当前后端进程，不持久化、
+不跨重启恢复。
 
 线程边界：
 - worker 读线程只做内存更新；会话终态的 worker 清理在独立线程完成，不阻塞读线程；
-- 会话变化的 snapshot 重投影经单线程副作用执行器在锁外串行执行，因此调用方（工具线程、HTTP、
-  WS 所在事件循环）都不会被外部副作用阻塞。
+- 会话变化经装配时注入的 ``on_sessions_changed`` 交给应用层重投影 snapshot，由单线程副作用执行器
+  在锁外串行执行，因此调用方（工具线程、HTTP、WS）都不会被外部副作用阻塞，运行时也不认识应用层。
 """
 
 from __future__ import annotations
@@ -17,12 +17,10 @@ import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.tools.terminal_runtime.errors import (
-    TerminalError,
     TerminalSessionCapacityError,
     TerminalSessionNotFoundError,
     TerminalSessionOwnershipError,
@@ -32,14 +30,15 @@ from app.tools.terminal_runtime.session.session_runtime import (
     SessionSnapshot,
     TerminalSessionRuntime,
 )
-from app.tools.terminal_runtime.session.shell_resolver import ShellResolver
-from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.terminal_runtime.session.shell_resolver import resolve_session_shell
 
 
 class TerminalSessionService:
     """终端归 Task 所有，Run 结束不关闭；Task 删除及后端退出负责资源兜底。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, on_sessions_changed: Callable[[int], None]) -> None:
+        """``on_sessions_changed(task_id)`` 在副作用线程、锁外调用：该 Task 的会话条目变了。"""
+        self._on_sessions_changed = on_sessions_changed
         self._registry: dict[str, TerminalSessionRuntime] = {}
         self._ended: OrderedDict[str, TerminalSessionRuntime] = OrderedDict()
         self._registry_lock = threading.RLock()
@@ -53,13 +52,13 @@ class TerminalSessionService:
         self,
         *,
         task_id: int,
-        workspace_root: str,
+        cwd: str,
         shell: str = "auto",
         integration: str = "auto",
     ) -> TerminalSessionRuntime:
-        """在工作区根创建会话并完成 worker 握手；容量受全进程活跃会话上限约束。"""
-        cwd_path = self._resolve_workspace_root(workspace_root)
-        spec = ShellResolver.resolve(shell, integration=integration)
+        """在 ``cwd``（调用方已确认存在的目录，用户会话是工作区根）创建会话并完成 worker 握手；
+        容量受全进程活跃会话上限约束。"""
+        spec = resolve_session_shell(shell, integration=integration)
         with self._registry_lock:
             if not self._accepting:
                 raise TerminalSessionStateError("terminal session service is shutting down")
@@ -70,9 +69,9 @@ class TerminalSessionService:
                 raise TerminalSessionCapacityError("maximum active terminal session count reached")
             runtime = TerminalSessionRuntime(
                 task_id=task_id,
-                initial_cwd=str(cwd_path),
+                initial_cwd=cwd,
                 spec=spec,
-                schedule=self._schedule,
+                notify_sessions_changed=self._notify_sessions_changed,
             )
             session_id = runtime.session_id
             # 先登记、后握手：握手期间的会话列表刷新已带上新会话，前端按 HTTP 返回的 id 选中时
@@ -158,7 +157,8 @@ class TerminalSessionService:
         return runtime
 
     def task_runtimes(self, task_id: int) -> list[TerminalSessionRuntime]:
-        """活跃会话按创建时间在前，随后是最多 ``MAX_ENDED_SESSIONS_PER_TASK`` 个最近结束的会话。
+        """活跃会话按创建时间在前，随后是最近结束的会话（入历史时已按 Task 裁到
+        ``MAX_ENDED_SESSIONS_PER_TASK`` 个，见 :meth:`_retire_runtime`）。
 
         结束的会话也列出，让 Agent 与前端知道它已退出。
         """
@@ -166,7 +166,6 @@ class TerminalSessionService:
             active = [r for r in self._registry.values() if r.task_id == task_id]
             ended = [r for r in self._ended.values() if r.task_id == task_id]
         active.sort(key=lambda runtime: runtime.created_at)
-        ended = ended[-Constant.Terminal.MAX_ENDED_SESSIONS_PER_TASK :]
         return [*active, *ended]
 
     def active_session_count(self) -> int:
@@ -240,10 +239,10 @@ class TerminalSessionService:
             while len(self._ended) > Constant.Terminal.MAX_TERMINAL_HISTORY_SESSIONS:
                 self._ended.popitem(last=False)
 
-    def _schedule(self, effect: Callable[[], None]) -> None:
-        """副作用串行执行；关闭后的提交直接丢弃（进程正在退出，通知已无接收方）。"""
+    def _notify_sessions_changed(self, task_id: int) -> None:
+        """会话条目变化的通知串行交给副作用线程；关闭后的提交直接丢弃（进程正在退出，已无接收方）。"""
         try:
-            self._effects.submit(self._run_effect, effect)
+            self._effects.submit(self._run_effect, lambda: self._on_sessions_changed(task_id))
         except RuntimeError:
             log.info(
                 "terminal_effect_dropped_after_shutdown",
@@ -264,13 +263,3 @@ class TerminalSessionService:
         """活会话或保留的终态会话。"""
         with self._registry_lock:
             return self._registry.get(session_id) or self._ended.get(session_id)
-
-    @staticmethod
-    def _resolve_workspace_root(workspace_root: str) -> Path:
-        """会话从工作区根启动；工作区目录可能已被移走，这里给出明确错误而不是让 worker 启动失败。"""
-        resolved, error = PathResolver(workspace_root).resolve_within_workspace(
-            ".", allow_reserved=True
-        )
-        if resolved is None or not resolved.is_dir():
-            raise TerminalError(f"invalid terminal cwd: {error or workspace_root}")
-        return resolved

@@ -2,11 +2,11 @@
 
 终端归 Task 所有：会话只由用户在终端面板创建和关闭，Agent 只能列出、读取、停止自己的命令，以及把一行命令填进空提示符（不执行，回车只能由用户按）。「终端」在读取与停止时同时指用户的交互会话（id 形如 `term_…`）与 Agent 自己仍在运行的 `execute_terminal` 命令（id 是那次调用的 `tool_call_id`）。本文只记稳定契约与职责边界，具体参数以代码为准。会话、运行中命令、填入准入与等待都是进程内协调状态，不持久化、不跨后端重启。
 
-## Agent 工具（3 个）
+## Agent 工具（4 个）
 
 - `terminal_list()`：纯文本，一行一个终端：先是用户会话（当前状态与最近命令结果，状态措辞与 read / write header 同源；活跃在前、随后是最近结束的会话），再是 Agent 自己运行中的命令。`terminal_list` / `terminal_read` / `terminal_stop` 开放给所有 Agent（子 Agent 与 Team 节点也能读、停自己的命令）；`terminal_write` 只给侧栏对话。
 - `terminal_read(terminal_id, start_line, limit, tail, pattern, wait)`：按绝对行号读取；默认尾部 40 行，`limit ≤ 400`。`pattern`（Python 正则，不与 `tail` 同用）把读取变成搜索：从 `start_line`（缺省最早保留行）扫到末行，只返回命中行，`limit` 限制命中数，超出时提示续搜的 `start_line`；搜索总按逻辑行。无变化、无等待且涉及可变区的重复读取只返回一行提示。
-- `terminal_stop(terminal_id)`：停止 Agent 自己仍在运行的命令（连同它启动的进程），结束原因与结论仍以 `<background_result>` 回投；用户打开的终端不能停。前台命令与后台命令都走这条（`background_registry.request_cancel`）。
+- `terminal_stop(terminal_id)`：停止 Agent 自己仍在运行的命令（连同它启动的进程），结束原因与结论仍以 `<background_result>` 回投；用户打开的终端不能停。前台命令与后台命令都走这条（`command_results.request_cancel`）。
 - `terminal_write(terminal_id, command)`：把**一行**命令填进用户终端的提示符，**不执行、不等待**；参数模型与 worker 两侧都拒绝空串、回车与控制字符。只有 shell 集成就绪、停在提示符、且这个提示符出现后还没有任何输入时才允许（见「Agent 填入」）。返回填入后的尾部观察；用户是否按回车、之后发生了什么，由 `terminal_read` 观察。
 
 ## Agent 填入
@@ -28,39 +28,39 @@ worker 交出物理行：滚出的 `history`（软换行行不带 `\n`）与当�
 
 头部一两行：会话、shell、状态、正在执行的命令、集成状态、cwd、用户是否在打字（用户启动的命令标 `started by user`）；`result:` 行给填入摘要、等待结束原因、最近命令的退出码与 `output lines a-b`；范围行给 `lines a-b of first-last (live from L) · cursor line C · user typed lines x-y`。正文为 `行号│文本`。条件等待返回的新增行超预算保留头 20 + 尾 60 并标出 `--- omitted lines a-b ---`；尾部读取从前裁，按 start_line 读取从后截并提示续读行号。总量受 `Tools.MAX_OUTPUT_CHARS` 约束；`terminal_list` 返回的一行摘要由同一份状态措辞投影。全屏程序期间 read 与后台结论（`screen` 字段代替 `tail`）给屏幕视图：整屏以 `s<行>│文本` 返回，屏幕行号与逻辑行号分属两套编号；带 start_line 的 read 仍读冻结的主屏逻辑行；`match` 等待扫描整屏，命中记 `matched_screen_row`；用户在全屏程序里的输入只标「有输入」，不标行号。
 
-## Shell 集成与命令区间（`observation.py`）
+## Shell 集成与命令区间（`observation/terminal_observation.py`）
 
-命令只由集成事件创建。worker 保证语义事件前的输出与屏幕快照先到，因此 `command_started` 时光标所在逻辑行为输出起点；`command_returned` 时光标在行首取上一行为终点，否则取光标行；PowerShell / pwsh 在下一次读取输入时才报告返回，终点恒为光标行 − 1。zsh、bash、PowerShell、pwsh 有集成；cmd、fish、自定义路径降级。
+命令只由集成事件创建。worker 保证语义事件前的输出与屏幕快照先到，因此 `command_started` 时光标所在逻辑行为输出起点；`command_returned` 时光标在行首取上一行为终点，否则取光标行；PowerShell / pwsh 在下一次读取输入时才报告返回，终点恒为光标行 − 1。zsh、bash、PowerShell、pwsh 有集成；cmd、fish 与其他可执行文件降级；会话的 `shell_kind` 一律取可执行文件名（`/opt/homebrew/bin/bash` 即 `bash`，集成照常可用）。
 
 ## 运行中的命令（`running_command.py` / `running_command_registry.py`）
 
-一条 `execute_terminal` 命令在运行期间被建模成可观察的终端：`CommandOutput` 把整理后的完成行与当前未完成行喂给它，行缓冲 / 等待 / 渲染复用会话的底座（`observed_terminal.py`）。命令在 `execute_terminal` 启动前按 `(task_id, tool_call_id)` 登记，结束即移除（结论仍由 `background_registry` 回投）；开始与结束沿用 shell 集成同一套事件词表（`ready`、`command_started`、`command_returned` / `end_tracking`）。读取的表头写 `command <id>`，用户会话写 `session <id>`。停止不经这里：`terminal_stop` 经 `background_registry.request_cancel` 让作业撤销回调结束命令进程。
+一条 `execute_terminal` 命令在运行期间被建模成可观察的终端：`CommandOutput` 把整理后的完成行与当前未完成行喂给它，行缓冲 / 等待 / 渲染复用会话的底座（`observed_terminal.py`）。命令在 `execute_terminal` 启动前按 `(task_id, tool_call_id)` 登记，结束即移除（结论仍由 `command_results` 回投）；开始与结束沿用 shell 集成同一套事件词表（`ready`、`command_started`、`command_returned` / `end_command` / `end_tracking`）。读取的表头写 `command <id>`，用户会话写 `session <id>`。停止不经这里：`terminal_stop` 经 `command_results.request_cancel` 让作业撤销回调结束命令进程。
 
 ## 条件等待（`wait.py`）
 
-`wait{until: command_returned|output_quiet|match|elapsed, pattern, quiet_ms, timeout_ms}`。判定在会话锁内由 worker 事件 `notify_all` 唤醒；`WAIT_CANCEL_CHECK_SECONDS` 时间片只复查取消（Task 停止或用户取消这次调用），不轮询条件。结束原因：条件名（`matched` 带 `matched_line`）、`timeout`、`elapsed`、`cancelled`、`session_ended` / `command_ended`（来源结束时条件仍不成立；来源结束那一刻已成立的条件优先，命令结束本身让 `command_returned` 成立）；read 的 `command_returned` 在无执行中命令时返回 `idle`。无集成时 `command_returned` 在参数边界报 `TERMINAL_INTEGRATION_REQUIRED`。
+`wait{until: command_returned|output_quiet|match|elapsed, pattern, quiet_ms, timeout_ms}`。判定在会话锁内由 worker 事件 `notify_all` 唤醒；`WAIT_CANCEL_CHECK_SECONDS` 时间片只复查取消（Task 停止或用户取消这次调用），不轮询条件。结束原因：条件名（`matched` 带 `matched_line`）、`timeout`、`elapsed`、`cancelled`、`session_ended` / `command_ended`（来源结束时条件仍不成立；来源结束那一刻已成立的条件优先）。`command_returned` 只认确知结束的命令：shell 报告返回、提示符回来或又开了新命令、Agent 的命令被停止或超时；会话结束、集成不可用或 worker 失联时只是跟丢了命令（状态 `tracking_ended`），不算返回；read 的 `command_returned` 在无执行中命令时返回 `idle`。无集成时 `command_returned` 在参数边界报 `TERMINAL_INTEGRATION_REQUIRED`。
 
-等待只在前台、在工具线程里持会话锁进行，不登记后台结果，总超时上限 30s（`WAIT_MAX_TIMEOUT_MS`）：交互终端只服务短交互，长构建与测试交给 `execute_terminal` 的后台执行。后端关闭前 lifespan 先结束会话，唤醒的等待以 `session_ended` 返回。`match` 从光标行开始扫描（全屏程序扫描整屏）。
+等待只在前台、在工具线程里持会话锁进行，不登记后台结果，总超时上限 30s（`WAIT_MAX_TIMEOUT_MS`）：交互终端只服务短交互，长构建与测试交给 `execute_terminal` 的后台执行。后端关闭时 lifespan 先停 actor（进行中的等待随 Run 取消以 `cancelled` 返回），再关闭终端服务（仍在等的以 `session_ended` 返回）。`match` 从光标行开始扫描（全屏程序扫描整屏）。
 
 ## service 与线程边界（`session_service.py` / `session_runtime.py`）
 
 - service 拥有会话集合、Task 归属、容量与终态历史（每 Task 最多 10 个已结束会话）；runtime 持单会话锁、观察、填入准入、等待与唯一终态迁移。
-- worker 读线程只做内存更新；终态收尾（`worker.close`）在独立线程。worker 握手不持会话锁（启动期间快照投影、订阅不被阻塞），握手与关闭由每会话启动互斥串行化；`starting` 期间用户输入与 resize 照常入队、握手后按序补发，Agent 填入只在 `running` 且集成 ready 后接受。用户输入先入队，成功后才记录按键时间、来源与标注。会话变化的 snapshot 重投影经单线程副作用执行器在锁外串行执行。
-- 会话列表 snapshot 条目：`TerminalSessionService.task_runtimes` 顺序（活跃在前按创建时间、已结束最多 10 个）下各会话的 `snapshot()`，由 `assistant_transport` 的 `to_terminal_session` 映射成 camelCase；`label` 缺省为空串。
+- worker 读线程只做内存更新；终态收尾（`worker.close`）在独立线程。worker 握手不持会话锁（启动期间快照投影、订阅不被阻塞），握手与关闭由每会话启动互斥串行化；`starting` 期间用户输入与 resize 照常入队、握手后按序补发，Agent 填入只在 `running` 且集成 ready 后接受。用户输入先入队，成功后才记录按键时间、来源与标注。会话变化经装配时注入的回调交给应用层重投影 snapshot，由单线程副作用执行器在锁外串行执行；运行时不导入应用层（`test_terminal_runtime_import_boundary.py` 守卫）。
+- 会话列表 snapshot 条目：`TerminalSessionService.task_runtimes` 顺序（活跃在前按创建时间、已结束最多 10 个）下各会话的 `snapshot()`，由 `assistant_transport` 的 `to_terminal_session` 映射成 camelCase。
 
 ## 交互通道（`stream.py`，`api/terminal_stream_api.py`，`terminal-v2`）
 
 每会话一条 WS。订阅绑定事件循环与 `asyncio.Queue`，发布经 `loop.call_soon_threadsafe`；背压按帧数与字节数计量，溢出投递一次 `subscriber_overflow`，WS 转为 `resync_required` 并以 1013 关闭；事件循环已关闭时在订阅边界吞掉并记日志。
 
 - 客户端帧：`attach{after_seq}`（首帧）、`input{data_base64}`（用户原始按键，≤ 64 KiB；客户端把大段输入切成多帧按序发送，一次粘贴总量上限 256 KiB，超过整段拒绝而不截断）、`resize{rows 2..500, cols 10..1000}`。
-- 服务端帧（带 `protocol`、`session_id`、`generation`）：`attached{rows, columns, status, first_available_seq, next_seq}`、`output{seq, data_base64}`、`geometry{rows, columns}`、`input_mark{by:"agent"}`（只在 Agent 填入时出现）、`input_rejected{reason: session_ended|backpressure}`、`exit{}`（只标记流结束）、`resync_required`、`protocol_error{code, message}`（`code` 与 HTTP 错误体同源：领域错误的稳定码，控制帧非法为 `TERMINAL_STREAM_PROTOCOL_ERROR`；客户端按 `code` 分支，`message` 只供排查）。
+- 服务端帧（带 `protocol`、`session_id`，身份只由 `stream_identity` 产生；一个会话一生只有一个输出窗口、不跨重启，所以没有窗口代次）：`attached{rows, columns, status, first_available_seq, next_seq}`、`output{seq, data_base64}`、`geometry{rows, columns}`、`input_mark{by:"agent"}`（只在 Agent 填入时出现）、`input_rejected{reason: session_ended|backpressure}`、`exit{}`（只标记流结束）、`resync_required`、`protocol_error{code, message}`（`code` 与 HTTP 错误体同源：领域错误的稳定码，控制帧非法为 `TERMINAL_STREAM_PROTOCOL_ERROR`；客户端按 `code` 分支，`message` 只供排查）。
 - 终态与退出码只经 snapshot `terminal_sessions` 投影，WS 不重复推送（两条通道无顺序保证，双推会合并出过期值）。
 - 连接时按 Task 归属取到会话 runtime，之后对它的调用（输入、resize、订阅）一律经 `asyncio.to_thread`：它们要拿会话锁，而工具线程在同一把锁里执行 Agent 给的正则，事件循环不能碰这把锁。断开只移除订阅，不关闭会话、不取消 Run。
 - 终端查询（设备属性、状态与光标位置、模式查询等）只由 worker 应答：有没有面板都要有人答，前端 xterm 在解析器处吞掉这些查询、不应答，否则程序收到两份应答，多余的一份还会被当成用户输入。
 
 ## Worker 协议
 
-用户命令进程只由 Terminal Worker 启动与清理：本文的交互会话，以及 `execute_terminal` 的一次性命令（`terminal_runtime/command/local_backend.py`）。4 字节大端长度 + JSON。首帧定模式、之后不换：`start_session{shell, shell_kind, cwd, integration}` 或 `start_exec{program, args, raw_args, cwd}`（管道、无 stdin、无 PTY；先握手再启动）。握手带 `mode`，只有会话模式带 `pty_kind` 与尺寸，客户端按模式校验。`exit{reason, exit_code?, signal?, message?}` 是握手之后唯一的终态事件，每条结束路径恰好一次（只有 worker 的 stdout 已断开时发不出）：`reason` 为 `exited`（命令或 shell 自己结束，带退出码或信号）、`stopped`（后端要求停止且先于命令自己结束生效）、`heartbeat_timeout`、`start_failed`（执行模式命令没能启动）或 `failed`（worker 自身故障）；停止请求与子进程退出谁先到只由 worker 的 `LifecycleArbiter` 裁决，后端不按自己的标志推断。`error` 帧从不代表终态，只是非致命拒绝或诊断（如 `cleanup_failed`）。worker 没发 `exit` 就断开时，后端读线程补发 `disconnected`。`shutdown` 要求结束；后端关闭 stdin 等同 `shutdown`，15 秒收不到心跳时 worker 自行停止（`heartbeat_timeout`）。worker 由后端以独立会话拉起（POSIX），宿主强杀后端整组时不被波及，读到 stdin EOF 后自行清理再退出。
+用户命令进程只由 Terminal Worker 启动与清理：本文的交互会话，以及 `execute_terminal` 的一次性命令（`terminal_runtime/command/local_backend.py`）。4 字节大端长度 + JSON。首帧定模式、之后不换：`start_session{shell, shell_kind, cwd, integration}` 或 `start_exec{program, args, raw_args, cwd}`（管道、无 stdin、无 PTY；先握手再启动）。握手带 `mode`，只有会话模式带 `pty_kind` 与尺寸，客户端按模式校验。`exit{reason, exit_code?, signal?, message?}` 是握手之后唯一的终态事件，每条结束路径恰好一次（只有 worker 的 stdout 已断开时发不出）：`reason` 为 `exited`（命令或 shell 自己结束，带退出码或信号）、`stopped`（后端要求停止且先于命令自己结束生效）、`heartbeat_timeout`、`start_failed`（执行模式命令没能启动）或 `failed`（worker 自身故障）；停止请求与子进程退出谁先到只由 worker 的 `LifecycleArbiter` 裁决，后端不按自己的标志推断。`error` 帧从不代表终态，只是非致命拒绝或诊断（如 `cleanup_failed`）。worker 没发 `exit` 就断开时，后端读线程补发 `disconnected`。`output{data_base64}` 在后端读线程解码并校验一次（非空、≤ 16 KiB），消费方拿到字节；不合法与其他协议违约一样按断开收敛。`shutdown` 要求结束；后端关闭 stdin 等同 `shutdown`，15 秒收不到心跳时 worker 自行停止（`heartbeat_timeout`）。worker 由后端以独立会话拉起（POSIX），宿主强杀后端整组时不被波及，读到 stdin EOF 后自行清理再退出。
 
 进程清理只在 worker 一处（`containment.rs`）：会话模式的归属是与 shell 同一个会话（shell 先退出时控制终端已被内核摘掉，会话号仍在，所以照样找得到它留下的进程），执行模式是命令的进程组，Windows 两种都挂 Job Object。顺序 HUP → TERM → 宽限 1 秒 → KILL，没有残留立即返回。归属按首进程 PID（即组号、会话号）认成员：POSIX 上首进程退出后只被观察（`waitid(WNOWAIT)`）、清理之后才回收，清理期间 PID 不会被复用。会话模式在会话结束（关闭、shell 自己退出、后端断开）时清理，会话里一条命令结束不清理；执行模式在命令结束、超时或取消时清理。主动 `setsid` 脱离会话的进程不在范围内。
 

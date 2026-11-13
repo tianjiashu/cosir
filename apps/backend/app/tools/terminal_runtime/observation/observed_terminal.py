@@ -99,7 +99,9 @@ class ObservedTerminal(ABC):
                 tail,
                 pattern,
             )
-            touches_live = screen_view or last >= buffer.live_from_line
+            # 读到当前末行就算触及正在变化的部分：会话的可变区总含光标行；管道输出以换行结尾时可变区
+            # 为空，末行已定稿，但轮询末尾同样该被劝去用 wait。只有回看更早历史的区间不计重复。
+            touches_live = screen_view or last >= min(buffer.live_from_line, buffer.last_line)
             if (
                 wait is None
                 and touches_live
@@ -135,8 +137,10 @@ class ObservedTerminal(ABC):
         """不持锁调用：在工具线程里持来源锁等条件（来源写入 ``notify_all`` 唤醒），返回等待结果。
 
         时间片只为复查取消。来源结束时两种终端同一条规则：先复查一次条件，成立就按条件结算（结束前
-        最后一批输出可能已经满足等待，命令结束本身就让 ``command_returned`` 成立），否则以
-        ``<kind>_ended``（``session_ended`` / ``command_ended``）收尾。条件名只说等待为什么结束，
+        最后一批输出可能已经满足等待；Agent 的命令被停止或超时也确知结束，让 ``command_returned``
+        成立），否则以 ``<kind>_ended``（``session_ended`` / ``command_ended``）收尾。会话结束时正在执行
+        的命令只是跟丢、不算返回（见 ``CommandStatus``），所以等它的 ``command_returned`` 报
+        ``session_ended``。条件名只说等待为什么结束，
         终端的真实结局（退出码、被停止、shell 退出）以表头的 ``ended · <end_reason>`` 为准。
         """
         with self._condition:

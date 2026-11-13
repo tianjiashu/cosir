@@ -5,15 +5,15 @@
 没有线程池轮询。背压在发布侧按帧数与原始字节数计量，溢出后只投递一次 ``subscriber_overflow``，
 由 WS 转为 ``resync_required``；慢客户端不阻塞 PTY 读线程，也不影响其他订阅。
 
-输出在 worker 边界解码校验一次，这里保存已知字节数，不反复解码 Base64。
+输出字节已在 worker 边界解码校验，这里只编码一次 Base64 供 wire 与回放复用，并按原始字节数计量窗口。
 ``TerminalStreamBuffer`` 的访问由所属会话锁串行化；订阅计数各自加锁。
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import threading
-import uuid
 from collections import deque
 from dataclasses import dataclass
 
@@ -25,6 +25,15 @@ StreamEvent = dict[str, object]
 PROTOCOL = "terminal-v2"
 OVERFLOW_EVENT_TYPE = "subscriber_overflow"
 _METADATA_SIZE = 128
+
+
+def stream_identity(session_id: str) -> StreamEvent:
+    """每个服务端帧都带的身份字段；本模块与 WS 路由（``input_rejected``、``protocol_error``）共用。
+
+    一个 session_id 一生只有一个输出窗口、会话也不跨重启，所以没有窗口代次：后端重启后旧会话在
+    attach 时直接得到 ``TERMINAL_SESSION_NOT_FOUND``。
+    """
+    return {"protocol": PROTOCOL, "session_id": session_id}
 
 
 @dataclass(frozen=True)
@@ -107,12 +116,7 @@ class TerminalStreamBuffer:
 
     def __init__(self, session_id: str, limit: int) -> None:
         self._session_id = session_id
-        # generation 区分同一 session_id 的输出窗口实例，客户端据此判断 after_seq 是否仍可续接。
-        self._identity: StreamEvent = {
-            "protocol": PROTOCOL,
-            "session_id": session_id,
-            "generation": f"gen_{uuid.uuid4().hex}",
-        }
+        self._identity = stream_identity(session_id)
         self._limit = limit
         self._frames: deque[_OutputFrame] = deque()
         self._bytes = 0
@@ -126,12 +130,9 @@ class TerminalStreamBuffer:
     def first_available_seq(self) -> int:
         return self._frames[0].seq if self._frames else self._next_seq
 
-    @property
-    def next_seq(self) -> int:
-        return self._next_seq
-
-    def append(self, encoded: str, size: int) -> None:
-        frame = _OutputFrame(self._next_seq, encoded, size)
+    def append(self, data: bytes) -> None:
+        size = len(data)
+        frame = _OutputFrame(self._next_seq, base64.b64encode(data).decode("ascii"), size)
         self._next_seq += 1
         self._frames.append(frame)
         self._bytes += size
@@ -144,7 +145,7 @@ class TerminalStreamBuffer:
     def publish(self, event_type: str, **fields: object) -> None:
         """推送尺寸、输入标记等与画面绑定的帧，和输出同通道保证顺序。
 
-        交接、退出码属于会话事实，只经 snapshot ``terminal_sessions`` 投影，不在 WS 上
+        终态与退出码属于会话事实，只经 snapshot ``terminal_sessions`` 投影，不在 WS 上
         重复推送：两条通道之间没有顺序保证，双推会让前端合并出过期值。
         """
         event = {**self._identity, "type": event_type, **fields}

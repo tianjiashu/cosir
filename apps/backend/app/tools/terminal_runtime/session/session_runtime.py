@@ -1,9 +1,9 @@
 """单会话执行协调：会话锁保护观察、条件等待、Agent 填入与唯一终态迁移。
 
-service 拥有会话集合、Task 归属与容量；本对象不访问 registry。会话锁内只做内存操作：外部副作用
-（snapshot 重投影）经 service 注入的 ``schedule`` 交给 service 的单线程副作用执行器；终态迁移的赢家
-由 service 在锁外调用 ``dispose_worker`` 清理 worker。因此 worker 读线程回调本对象时只会短暂持锁，
-不做阻塞 IO。
+service 拥有会话集合、Task 归属与容量；本对象不访问 registry，也不认识应用层。会话锁内只做内存
+操作：会话条目的变化经 service 注入的 ``notify_sessions_changed`` 报出（service 交给单线程副作用执行器
+在锁外重投影）；终态迁移的赢家由 service 在锁外调用 ``dispose_worker`` 清理 worker。因此 worker 读线程
+回调本对象时只会短暂持锁，不做阻塞 IO。
 
 并发约定：
 - 等待都在 ``self._condition`` 上进行：worker 事件 ``notify_all`` 唤醒，
@@ -11,7 +11,7 @@ service 拥有会话集合、Task 归属与容量；本对象不访问 registry�
 - Agent 只能把一行命令填进空提示符（不执行、不等输出），准入只读 shell 集成给出的事实：集成 ready、
   停在提示符、且这个提示符出现后还没有任何输入。用户输入从不被拒，也从不经过准入；
 - worker 握手（最多数秒）不在会话锁内进行：启动期间快照投影、订阅与 WS 输入都要拿会话锁，
-  其中 snapshot 刷新持有全局投影锁、WS 在事件循环里调用，长持会话锁会拖住所有 Task 与事件循环。
+  其中 snapshot 刷新持有全局投影锁，长持会话锁会拖住所有 Task 的投影。
   握手与 worker 关闭由独立的启动互斥 ``_start_lock`` 串行化。``starting`` 期间用户按键与尺寸照常
   进入 worker 的有序输入队列，握手后按序发出（与真实终端的预输入一致）；Agent 填入的准入先判会话
   状态，只在 ``running`` 后接受。
@@ -56,7 +56,6 @@ from app.tools.terminal_runtime.worker_client import (
     WorkerEventCallback,
 )
 
-EffectScheduler = Callable[[Callable[[], None]], None]
 UserInputResult = Literal["accepted", "session_ended"]
 
 _ACTIVE = frozenset({"starting", "running"})
@@ -69,17 +68,6 @@ _WORKER_EXIT_FAILURES = {
 }
 
 
-def refresh_task_sessions(task_id: int) -> None:
-    """影响会话条目的变化（生命周期、集成）后整表重投影该 Task 的终端会话列表。
-
-    终端运行时只关心会话本身；触达应用层的动作在函数内导入，避免终端包导入时拉起应用层。
-    由 service 的单线程副作用执行器在会话锁外调用，失败由执行器记录，不影响会话。
-    """
-    from app.service import depends
-
-    depends.get_conversation_task_state_service().refresh_terminal_sessions(task_id)
-
-
 @dataclass(frozen=True)
 class SessionSnapshot:
     """会话在某一时刻的只读事实，取自同一次会话锁内。
@@ -90,7 +78,6 @@ class SessionSnapshot:
 
     session_id: str
     shell_kind: str
-    initial_cwd: str
     created_at: datetime
     status: str
     end_reason: str | None
@@ -125,10 +112,8 @@ class _UserInputMarks:
 
 
 class TerminalSessionRuntime(ObservedTerminal):
-    """单会话的状态与并发边界；不访问会话集合。
-
-    读取、条件等待与结果渲染在 ``ObservedTerminal``；本类只提供会话的事实快照、活跃判定与交付后
-    清空用户输入标注。
+    """单会话的状态与并发边界：握手与终态迁移、worker 事件、Agent 填入准入、用户输入、快照与订阅；
+    不访问会话集合。读取、条件等待与结果渲染在 ``ObservedTerminal``。
     """
 
     def __init__(
@@ -137,7 +122,7 @@ class TerminalSessionRuntime(ObservedTerminal):
         task_id: int,
         initial_cwd: str,
         spec: ShellSpec,
-        schedule: EffectScheduler,
+        notify_sessions_changed: Callable[[int], None],
     ) -> None:
         """只建内存状态与 worker 句柄（解析 worker 路径，未配置时抛
         ``TerminalWorkerUnavailableError``），不启动子进程；握手见 :meth:`start`。"""
@@ -149,7 +134,7 @@ class TerminalSessionRuntime(ObservedTerminal):
         self.initial_cwd: Final = initial_cwd
         self.spec: Final = spec
         self.created_at: Final = datetime.now(UTC)
-        self._schedule = schedule
+        self._notify_sessions_changed = notify_sessions_changed
         self._status = "starting"
         self._end_reason: str | None = None
         self._exit_code: int | None = None
@@ -359,19 +344,10 @@ class TerminalSessionRuntime(ObservedTerminal):
         self.notify_changed()
 
     def _output(self, event: Mapping[str, Any]) -> bool:
-        # 缺失或非字符串的 ``data_base64`` 与解码失败同属 worker 协议违约，一律收敛会话。
-        encoded = event.get("data_base64")
-        if not isinstance(encoded, str):
-            return self.finish("failed", "invalid_worker_output")
-        try:
-            data = base64.b64decode(encoded, validate=True)
-        except ValueError:
-            return self.finish("failed", "invalid_worker_output")
-        if not data or len(data) > Constant.Terminal.MAX_WORKER_OUTPUT_CHUNK_BYTES:
-            return self.finish("failed", "worker_output_chunk_too_large")
+        # 字节已在 worker 边界解码并校验（见 ``ProcessTerminalWorker._read_events``）。
         with self._condition:
             if self._status in _ACTIVE:
-                self._stream.append(encoded, len(data))
+                self._stream.append(event["data"])
                 self._observation.output_arrived()
                 self._condition.notify_all()
         return False
@@ -393,12 +369,13 @@ class TerminalSessionRuntime(ObservedTerminal):
         """
         preview = command[:200]
         with self._condition:
+            # 准入、入队与记账在同一把锁里：与 :meth:`user_input` 同一口径，入队成功后才记下「提示符上已有
+            # 输入」并发标注；入队失败（背压、worker 已不在）时异常上抛、状态不变，也不会有用户按键插进准入
+            # 与入队之间、和填入的命令拼在一起。入队非阻塞、不与读线程交互，可在锁内进行。
             self._admit_prefill()
+            self._worker.write({"type": "prefill", "text": command})
             self._observation.note_input()
             self._stream.publish("input_mark", by="agent")
-            worker = self._worker
-        worker.write({"type": "prefill", "text": command})
-        with self._condition:
             self._last_read = None
             log.info(
                 "terminal_agent_prefill_accepted",
@@ -419,9 +396,8 @@ class TerminalSessionRuntime(ObservedTerminal):
             )
 
     def notify_changed(self) -> None:
-        """影响 snapshot 会话条目的变化：经副作用线程整表重投影该 Task 的会话列表。"""
-        task_id = self.task_id
-        self._schedule(lambda: refresh_task_sessions(task_id))
+        """影响 snapshot 会话条目的变化（生命周期、集成）：交给 service 在锁外整表重投影该 Task。"""
+        self._notify_sessions_changed(self.task_id)
 
     # ------------------------------------------------------------------ 输入仲裁
 
@@ -455,7 +431,8 @@ class TerminalSessionRuntime(ObservedTerminal):
             )
 
     def user_input(self, data: bytes) -> UserInputResult:
-        """用户原始按键：可在事件循环里直接调用，只做内存更新与非阻塞入队；从不因 Agent 被拒。
+        """用户原始按键：只做内存更新与非阻塞入队；从不因 Agent 被拒。要拿会话锁，WS 路由经
+        ``asyncio.to_thread`` 调用（工具线程可能在同一把锁里跑 Agent 的正则）。
 
         先入队、成功后才记录按键时间、来源与输入标注：背压（``TerminalWorkerBackpressureError``，
         抛给调用方提示）或 worker 已不在时按键没有送达，状态必须保持原样。入队非阻塞、不与读线程
@@ -514,7 +491,6 @@ class TerminalSessionRuntime(ObservedTerminal):
             return SessionSnapshot(
                 session_id=self.session_id,
                 shell_kind=self.spec.kind,
-                initial_cwd=self.initial_cwd,
                 created_at=self.created_at,
                 status=self._status,
                 end_reason=self._end_reason,

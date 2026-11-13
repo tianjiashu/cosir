@@ -15,7 +15,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config.constant import Constant
-from app.tools.terminal_runtime.observation.terminal_observation import TerminalObservation
+from app.tools.terminal_runtime.observation.terminal_observation import (
+    COMMAND_FINISHED,
+    TerminalObservation,
+)
 
 WaitUntil = Literal["command_returned", "output_quiet", "match", "elapsed"]
 
@@ -135,9 +138,13 @@ class WaitEvaluator:
         command = observation.latest_command
         if command is None:
             return False
+        # 只认确知结束的命令；跟丢（会话结束、集成不可用、worker 失联）不算返回。
         if self.baseline.active is not None:
-            return not (command.number == self.baseline.active and command.status == "executing")
-        return command.number > self.baseline.counter and command.status != "executing"
+            if command.number != self.baseline.active:
+                # 等的那条之后又开过新命令，说明它已经结束。
+                return True
+            return command.status in COMMAND_FINISHED
+        return command.number > self.baseline.counter and command.status in COMMAND_FINISHED
 
     def _match(self, observation: TerminalObservation) -> bool:
         assert self._pattern is not None

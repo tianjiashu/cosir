@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import platform
@@ -39,7 +41,7 @@ _STDERR_LINE_MAX_CHARS = 4096
 
 @dataclass(frozen=True)
 class ShellSpec:
-    """worker 会话模式启动 shell 的不可变描述；由交互终端的 ``ShellResolver`` 产出。
+    """worker 会话模式启动 shell 的不可变描述；由交互终端的 ``resolve_session_shell`` 产出。
 
     放在 worker 边界而不是会话侧：它是 ``start`` 的入参契约，worker 不依赖会话域。
     """
@@ -54,9 +56,12 @@ class ProcessTerminalWorker:
     """基于长度前缀 JSON 控制帧的 Terminal Worker client。
 
     Worker 进程必须先返回 ``handshake``，之后发送 ``output``、``screen``、``shell``、``error``、
-    ``exit`` 事件。二进制 PTY 数据使用 base64 字段；shell/PTY 资源由 worker 管理。``exit`` 是唯一的
-    终态事件（``reason`` 说明结局），``error`` 从不代表终态；worker 没发 ``exit`` 就断开时，本对象
-    补发 ``disconnected``。
+    ``exit`` 事件；shell/PTY 资源由 worker 管理。``exit`` 是唯一的终态事件（``reason`` 说明结局），
+    ``error`` 从不代表终态；worker 没发 ``exit`` 就断开时，本对象补发 ``disconnected``。
+
+    本对象是进程信任边界：输出帧的 base64 在读线程里解码并校验一次（非空、不超过
+    ``MAX_WORKER_OUTPUT_CHUNK_BYTES``），回调拿到的 ``output`` 事件只带字节 ``data``；违约与其他
+    协议错误一样按断开收敛，会话与执行两种模式的消费方都不再做协议判定。
 
     事件回调在本对象的读线程内同步执行：回调方不得在其中做阻塞 IO（会话收尾、外部通知由
     service 移到其他线程）。
@@ -74,7 +79,7 @@ class ProcessTerminalWorker:
             log.warning(
                 "terminal_worker_not_configured",
                 extra={
-                    "msg": "未配置 Terminal Worker 可执行文件，终端 session 无法创建",
+                    "msg": "未配置 Terminal Worker 可执行文件，交互终端与终端命令都无法启动",
                     "data": {
                         "env_var": Constant.Terminal.WORKER_ENV,
                         "instance_id": instance_id,
@@ -221,7 +226,7 @@ class ProcessTerminalWorker:
             log.warning(
                 "terminal_worker_spawn_failed",
                 extra={
-                    "msg": "Terminal Worker 启动失败，终端 session 无法创建",
+                    "msg": "Terminal Worker 启动失败",
                     "data": {
                         "executable": self._executable,
                         "instance_id": self.instance_id,
@@ -389,8 +394,9 @@ class ProcessTerminalWorker:
         """后台读取 worker 事件并转发给 session service。
 
         结局只以 worker 自己发出的 ``exit`` 为准（worker 的每条退出路径都恰好发一次）。读线程在未被
-        ``close`` 时结束，说明 worker 异常断开、协议违约或事件回调出错，一律补发 ``disconnected``，
-        由消费方收敛为失败；不能伪装成 ``exit``，否则崩溃会被记成正常结束。worker 已发 exit 后 EOF
+        ``close`` 时结束，说明 worker 异常断开、协议违约（含输出帧不合法，见 :meth:`_decode_output`）
+        或事件回调出错，一律补发 ``disconnected``，由消费方收敛为失败；不能伪装成 ``exit``，否则崩溃
+        会被记成正常结束。worker 已发 exit 后 EOF
         也会补发，消费方的终态已定、迁移幂等，不改写结果。
         握手前断开不补发：由 ``start`` 抛错、service 记为启动失败，只此一处。
         """
@@ -409,6 +415,8 @@ class ProcessTerminalWorker:
                 event = json.loads(payload.decode("utf-8"))
                 if not isinstance(event, dict):
                     raise TerminalWorkerProtocolError("terminal worker event is not an object")
+                if event.get("type") == "output":
+                    event = {"type": "output", "data": self._decode_output(event)}
                 if event.get("type") == "handshake":
                     # 保留原始握手内容：校验不通过时由 start() 输出期望/实际字段对照与日志。
                     self._handshake_payload = dict(event)
@@ -449,6 +457,23 @@ class ProcessTerminalWorker:
             self._handshake_event.set()
             if not self._stop_event.is_set() and self._handshake_valid:
                 on_event({"type": "disconnected"})
+
+    @staticmethod
+    def _decode_output(event: Mapping[str, object]) -> bytes:
+        """解码输出帧的 ``data_base64``；缺失、非法、为空或超过块上限都是协议违约。"""
+
+        encoded = event.get("data_base64")
+        if not isinstance(encoded, str):
+            raise TerminalWorkerProtocolError("terminal worker output has no data_base64")
+        try:
+            data = base64.b64decode(encoded, validate=True)
+        except binascii.Error as exc:
+            raise TerminalWorkerProtocolError("terminal worker output is not valid base64") from exc
+        if not data or len(data) > Constant.Terminal.MAX_WORKER_OUTPUT_CHUNK_BYTES:
+            raise TerminalWorkerProtocolError(
+                f"terminal worker output chunk has invalid size: {len(data)}"
+            )
+        return data
 
     def _validate_handshake(self, event: Mapping[str, object], process_pid: int) -> bool:
         """校验进程外握手的身份与模式；会话模式另校验 PTY 类型与正整数逻辑尺寸。"""
@@ -503,7 +528,7 @@ class ProcessTerminalWorker:
         log.warning(
             "terminal_worker_handshake_failed",
             extra={
-                "msg": "Terminal Worker 握手失败，终端 session 无法启动",
+                "msg": "Terminal Worker 握手失败",
                 "data": {
                     "reason": reason,
                     "executable": self._executable,

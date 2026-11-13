@@ -3,8 +3,6 @@
 格式与 ``read_file`` 一致（行号 + 文本），不用逐行 JSON。预算按字符数计，沿用
 ``Tools.MAX_OUTPUT_CHARS`` 并预留 handler 包装余量；超预算时：
 
-- ``both``（write / 条件等待的新增行）：先按头 20 + 尾 60 取窗，再在预算内优先保留尾部，
-  中间以 ``--- omitted lines a-b ---`` 标出，Agent 可按行号补读；
 - ``tail``（默认读取尾部）：从前端裁掉旧行；
 - ``head``（按 start_line 读取）：从后端截断，并提示下次的 start_line。
 
@@ -27,7 +25,7 @@ from app.config.constant import Constant
 from app.tools.terminal_runtime.observation.terminal_observation import TerminalObservation
 
 Line = tuple[int, str]
-KeepMode = Literal["both", "tail", "head"]
+KeepMode = Literal["tail", "head"]
 
 _SEPARATOR = "│"
 # 填入后告诉 Agent 命令没有执行：回车只能由用户按。
@@ -36,12 +34,11 @@ _PREFILL_NOTE = "filled into the prompt; it runs only if the user presses Enter"
 
 @dataclass(frozen=True)
 class RenderedLines:
-    """渲染结果：正文行、实际返回的首末行号与省略区间。"""
+    """渲染结果：正文行、实际返回的首末行号，以及 ``head`` 截断后下一次的起始行。"""
 
     body: tuple[str, ...]
     first: int | None
     last: int | None
-    omitted: tuple[int, int] | None
     truncated_after: int | None
 
 
@@ -65,12 +62,10 @@ def render_lines(
 ) -> RenderedLines:
     """在 ``budget`` 字符内渲染行；``lines`` 已按行号升序且连续。
 
-    ``prefix`` 区分编号体系：逻辑行无前缀，屏幕视图为 ``s``（只用于 tail / head）。
+    ``prefix`` 区分编号体系：逻辑行无前缀，屏幕视图为 ``s``。
     """
     if not lines:
-        return RenderedLines((), None, None, None, None)
-    if mode == "both":
-        return _render_both(lines, budget)
+        return RenderedLines((), None, None, None)
     rows = [_row(line, prefix) for line in lines]
     used = 0
     if mode == "tail":
@@ -79,46 +74,14 @@ def render_lines(
             start -= 1
             used += len(rows[start]) + 1
         start = min(start, len(rows) - 1)  # 至少保留最后一行（单行已由 clip 限长）
-        return RenderedLines(tuple(rows[start:]), lines[start][0], lines[-1][0], None, None)
+        return RenderedLines(tuple(rows[start:]), lines[start][0], lines[-1][0], None)
     end = 0
     while end < len(rows) and used + len(rows[end]) + 1 <= budget:
         used += len(rows[end]) + 1
         end += 1
     end = max(end, 1)
     truncated = lines[end][0] if end < len(lines) else None
-    return RenderedLines(tuple(rows[:end]), lines[0][0], lines[end - 1][0], None, truncated)
-
-
-def _render_both(lines: Sequence[Line], budget: int) -> RenderedLines:
-    head_n = Constant.Terminal.OBSERVATION_HEAD_LINES
-    tail_n = Constant.Terminal.OBSERVATION_TAIL_LINES
-    rows = [_row(line) for line in lines]
-    if len(rows) <= head_n + tail_n and sum(len(row) + 1 for row in rows) <= budget:
-        return RenderedLines(tuple(rows), lines[0][0], lines[-1][0], None, None)
-    # 头部候选是前 head_n 行，尾部候选是后 tail_n 行（行数不足 head_n + tail_n 时两者重叠，
-    # 由下面「尾部先取、头部取到尾部起点为止」消解）。尾部候选不能为空：行数少但超预算时若把预算
-    # 全给头部，会丢掉最该看的结尾（报错通常在那里）。
-    head_end = min(head_n, len(rows))
-    tail_start = max(0, len(rows) - tail_n)
-    # 报错通常在尾部、上下文在头部：尾部优先占用预算（约七成），剩余给头部。
-    used = 0
-    tail_budget = budget * 7 // 10
-    start = len(rows)
-    while start > tail_start and used + len(rows[start - 1]) + 1 <= tail_budget:
-        start -= 1
-        used += len(rows[start]) + 1
-    end = 0
-    while end < min(head_end, start) and used + len(rows[end]) + 1 <= budget:
-        used += len(rows[end]) + 1
-        end += 1
-    if end == 0 and start == len(rows):
-        start = len(rows) - 1
-    omitted = (lines[end][0], lines[start - 1][0]) if end < start else None
-    body = rows[:end]
-    if omitted is not None:
-        body.append(f"--- omitted lines {omitted[0]}-{omitted[1]} (read with start_line) ---")
-    body.extend(rows[start:])
-    return RenderedLines(tuple(body), lines[0][0], lines[-1][0], omitted, None)
+    return RenderedLines(tuple(rows[:end]), lines[0][0], lines[end - 1][0], truncated)
 
 
 @dataclass(frozen=True)
