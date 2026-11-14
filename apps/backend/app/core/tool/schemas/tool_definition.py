@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from app.core.tool.call_intent import model_parameters_with_intent
 from app.core.tool.presentation import ToolPresentation
+from app.core.tool.schemas.decision_payload import DecisionPayload
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 
 
@@ -51,9 +52,16 @@ class ToolDefinition:
     # ``"execute"`` 批准或驳回后都由 prepare_input 绕过模型、带着决定再次执行同一调用（如交接：
     # 用户交还即作出决定，重放时取回登记并报告资源状态，执行结果让等待占位收尾）；
     # ``"reply"`` 用户的回答作为消息交给模型（如意图澄清）；``None`` 不需要用户决定。
-    # 非 None 的工具一批里只能单独调用（见 ``tool_batch_runner``），每个 Session 同时最多一个等待中的
-    # 调用由工具自己的事实源保证。
+    # 非 None 的工具一批里只能单独调用（见 ``tool_batch_runner``），呈现类别必须是 ``standalone``：
+    # 等待时前端在调用的原位置画成卡片，收在工具组里会被折叠的组藏住（注册表守卫核对）。
     user_decision: Literal["execute", "reply"] | None = None
+    # 决定携带的结构化载荷（见 :class:`DecisionPayload`）；``None`` 表示决定只有批准 / 驳回与附言。
+    # 只对 ``reply`` 类有意义：载荷渲染成给模型的正文，并进等待占位的展示数据。
+    decision_model: type[DecisionPayload] | None = None
+    # 等待中的决定何时作废：``"turn"`` 只在发起它的回合内有效——并入一条开启新回合的输入、或同类
+    # 的新等待写下时作废（提问问的是「此刻做不做」，见 ``turn_decision_expiry``）；``"open"`` 一直
+    # 等到用户决定（交接要等到交还）。两者都随撤回所在回合、Session 删除结束。
+    decision_lifetime: Literal["turn", "open"] = "open"
     # 产出图片给模型看（观察的 ``images``）：本次 Run 的模型不支持图片输入时，准入门禁直接拒绝，
     # 不进 handler——判定只在 ``ToolAccessGate`` 一处，各工具不再各写一遍。
     returns_images: bool = False

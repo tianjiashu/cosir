@@ -12,8 +12,6 @@ TOOL_READ_IMAGE: Final[str] = "read_image"
 TOOL_WRITE_FILE: Final[str] = "write_file"
 TOOL_REPLACE: Final[str] = "patch_write"
 TOOL_APPLY_PATCH: Final[str] = "apply_patch"
-TOOL_DELETE_FILE: Final[str] = "delete_file"
-TOOL_MOVE_FILE: Final[str] = "move_file"
 TOOL_SEARCH_CONTENT: Final[str] = "search_content"
 TOOL_FIND_FILES: Final[str] = "find_files"
 TOOL_LIST_DIRECTORY: Final[str] = "list_directory"
@@ -38,6 +36,7 @@ TOOL_SEND_MESSAGE: Final[str] = "send_message"
 TOOL_SESSION_STATUS: Final[str] = "session_status"
 TOOL_WAIT_MESSAGES: Final[str] = "wait_messages"
 TOOL_PROPOSE_AGENT_CONFIGURATION: Final[str] = "propose_agent_configuration"
+TOOL_ASK_USER: Final[str] = "ask_user"
 TOOL_MCP: Final[str] = "mcp"
 TOOL_SKILL: Final[str] = "skill"
 
@@ -47,8 +46,6 @@ ToolName: TypeAlias = Literal[
     "write_file",
     "patch_write",
     "apply_patch",
-    "delete_file",
-    "move_file",
     "search_content",
     "find_files",
     "list_directory",
@@ -73,6 +70,7 @@ ToolName: TypeAlias = Literal[
     "session_status",
     "wait_messages",
     "propose_agent_configuration",
+    "ask_user",
     "mcp",
     "skill",
 ]
@@ -83,8 +81,6 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_WRITE_FILE,
     TOOL_REPLACE,
     TOOL_APPLY_PATCH,
-    TOOL_DELETE_FILE,
-    TOOL_MOVE_FILE,
     TOOL_SEARCH_CONTENT,
     TOOL_FIND_FILES,
     TOOL_LIST_DIRECTORY,
@@ -109,6 +105,7 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_SESSION_STATUS,
     TOOL_WAIT_MESSAGES,
     TOOL_PROPOSE_AGENT_CONFIGURATION,
+    TOOL_ASK_USER,
     TOOL_MCP,
     TOOL_SKILL,
 )
