@@ -6,7 +6,7 @@
   A. ``cosir_paths`` 边界绕过：``.cosir2`` / 大小写 / ``./.cosir`` / 尾随分隔符 / ``..`` /
      深层 ``a/../../.cosir`` / 绝对路径 / ``\\`` 分隔符 / NUL / 空串 / ``None``。
   B. 符号链接与 reparse point 双向绕过。
-  C. ``PathResolver.resolve_within_workspace`` 的保留区判定与穿越。
+  C. ``PathResolver.resolve_for_write`` 的保留区判定与穿越。
   D. 五个文件工具指向 ``.cosir`` 必须失败且磁盘不变（含 ``.cosir`` 目录本身）。
   E. 只读工具读 ``.cosir`` 必须成功。
   F. 终端 cwd 豁免。
@@ -262,7 +262,7 @@ def test_resolver_rejects_all_cosir_variants(tmp_path: Path, variant: str) -> No
     root = tmp_path / "ws"
     (root / "sub").mkdir(parents=True)
     (root / ".cosir").mkdir()
-    resolved, error = PathResolver(root).resolve_within_workspace(variant)
+    resolved, error = PathResolver(root).resolve_for_write(variant)
     assert resolved is None, variant
     assert error != ""
 
@@ -273,7 +273,7 @@ def test_resolver_rejects_blank_inputs(tmp_path: Path, variant: str) -> None:
 
     root = tmp_path / "ws"
     root.mkdir()
-    resolved, error = PathResolver(root).resolve_within_workspace(variant)
+    resolved, error = PathResolver(root).resolve_for_write(variant)
     assert resolved is None
     assert error
 
@@ -283,7 +283,7 @@ def test_resolver_rejects_nul_input(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     root.mkdir()
-    resolved, error = PathResolver(root).resolve_within_workspace(".cosir\x00/x")
+    resolved, error = PathResolver(root).resolve_for_write(".cosir\x00/x")
     assert resolved is None
     assert "NUL" in error or error
 
@@ -293,7 +293,7 @@ def test_absolute_path_into_cosir_is_rejected(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     (root / ".cosir").mkdir(parents=True)
-    resolved, error = PathResolver(root).resolve_within_workspace(
+    resolved, error = PathResolver(root).resolve_for_write(
         str((root / ".cosir" / "x.txt").resolve())
     )
     assert resolved is None
@@ -307,7 +307,7 @@ def test_absolute_path_outside_workspace_rejected(tmp_path: Path) -> None:
     root.mkdir()
     outside = tmp_path / "outside"
     outside.mkdir()
-    resolved, error = PathResolver(root).resolve_within_workspace(str(outside / "x.txt"))
+    resolved, error = PathResolver(root).resolve_for_write(str(outside / "x.txt"))
     assert resolved is None
     assert error
 
@@ -392,7 +392,7 @@ def test_resolver_allows_cosir_dotdot_escaping_reserved_zone(tmp_path: Path) -> 
 
     root = tmp_path / "ws"
     (root / ".cosir").mkdir(parents=True)
-    resolved, error = PathResolver(root).resolve_within_workspace(".cosir/../outside.txt")
+    resolved, error = PathResolver(root).resolve_for_write(".cosir/../outside.txt")
     assert resolved == root / "outside.txt"
     assert error == ""
 
@@ -403,7 +403,7 @@ def test_resolver_rejects_traversal_ending_inside_cosir(tmp_path: Path) -> None:
     root = tmp_path / "ws"
     (root / "sub").mkdir(parents=True)
     (root / ".cosir").mkdir()
-    resolved, error = PathResolver(root).resolve_within_workspace("sub/../.cosir/x")
+    resolved, error = PathResolver(root).resolve_for_write("sub/../.cosir/x")
     assert resolved is None
     assert error != ""
 
@@ -414,7 +414,7 @@ def test_resolver_rejects_cosir_via_deep_traversal(tmp_path: Path) -> None:
     root = tmp_path / "ws"
     (root / "a" / "b").mkdir(parents=True)
     (root / ".cosir").mkdir()
-    resolved, error = PathResolver(root).resolve_within_workspace("a/b/../../.cosir/x")
+    resolved, error = PathResolver(root).resolve_for_write("a/b/../../.cosir/x")
     assert resolved is None
     assert error != ""
 
@@ -424,7 +424,7 @@ def test_resolver_rejects_cosir_prefix_with_dotdot_out(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     (root / ".cosir").mkdir(parents=True)
-    resolved, error = PathResolver(root).resolve_within_workspace(".cosir/../.cosir/x")
+    resolved, error = PathResolver(root).resolve_for_write(".cosir/../.cosir/x")
     assert resolved is None
     assert error != ""
 
@@ -665,10 +665,10 @@ def test_no_coding_agent_literal_in_backend_app() -> None:
     assert hits == [], f"仍引用 .coding-agent 的文件：{hits}"
 
 
-def test_resolve_within_workspace_has_no_reserved_bypass() -> None:
+def test_resolve_for_write_has_no_reserved_bypass() -> None:
     """保留区没有放行开关：终端 cwd 不经 ``PathResolver``，后端自拼路径靠 ``containment_root``。"""
 
-    assert "allow_reserved" not in inspect.signature(PathResolver.resolve_within_workspace).parameters
+    assert "allow_reserved" not in inspect.signature(PathResolver.resolve_for_write).parameters
 
 
 # --- J. 磁盘实机证据（可选：真实 git 状态不动） --------------------------------
@@ -729,7 +729,7 @@ def test_resolve_read_scope_returns_error_on_resolve_failure(
         monkeypatch.setattr(Path, "resolve", original_resolve)
 
 
-def test_resolve_within_workspace_returns_error_on_resolve_failure(
+def test_resolve_for_write_returns_error_on_resolve_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """写路径解析在 Path.resolve 抛 OSError 时必须归一化为「escapes project root」。"""
@@ -745,7 +745,7 @@ def test_resolve_within_workspace_returns_error_on_resolve_failure(
 
     monkeypatch.setattr(Path, "resolve", _boom)
     try:
-        resolved, error = resolver.resolve_within_workspace("a.txt")
+        resolved, error = resolver.resolve_for_write("a.txt")
         assert resolved is None
         assert "escapes project root" in error
     finally:
@@ -894,7 +894,7 @@ def test_resolver_rejects_nested_cosir_prefix_sibling(tmp_path: Path) -> None:
         ("a/.cosir2/x.txt", root / "a" / ".cosir2" / "x.txt"),
         ("a/.cosirx/x.txt", root / "a" / ".cosirx" / "x.txt"),
     ):
-        resolved, error = PathResolver(root).resolve_within_workspace(variant)
+        resolved, error = PathResolver(root).resolve_for_write(variant)
         assert resolved == expected, variant
         assert error == ""
 

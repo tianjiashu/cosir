@@ -2,7 +2,7 @@
 
 覆盖四层：
 
-1. ``PathResolver.resolve_within_workspace`` 的保留区判定（含 ``.cosir`` 目录本身、
+1. ``PathResolver.resolve_for_write`` 的保留区判定（含 ``.cosir`` 目录本身、
    同前缀兄弟目录不误判）；
 2. 三个文件工具（write_file / patch_write / apply_patch）端到端被拒绝，
    且**磁盘状态不变**；
@@ -34,7 +34,7 @@ def test_write_path_inside_cosir_is_rejected(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     root.mkdir()
-    resolved, error = PathResolver(root).resolve_within_workspace(".cosir/Attachment/a.png")
+    resolved, error = PathResolver(root).resolve_for_write(".cosir/Attachment/a.png")
     assert resolved is None
     assert ".cosir" in error
 
@@ -44,7 +44,7 @@ def test_cosir_directory_itself_is_rejected(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     root.mkdir()
-    resolved, error = PathResolver(root).resolve_within_workspace(".cosir")
+    resolved, error = PathResolver(root).resolve_for_write(".cosir")
     assert resolved is None
     assert error
 
@@ -54,7 +54,7 @@ def test_path_outside_cosir_still_resolves(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     (root / "src").mkdir(parents=True)
-    resolved, error = PathResolver(root).resolve_within_workspace("src/a.py")
+    resolved, error = PathResolver(root).resolve_for_write("src/a.py")
     assert resolved == root / "src" / "a.py"
     assert error == ""
 
@@ -64,7 +64,7 @@ def test_cosir_prefixed_sibling_directory_is_not_reserved(tmp_path: Path) -> Non
 
     root = tmp_path / "ws"
     (root / ".cosir2").mkdir(parents=True)
-    resolved, error = PathResolver(root).resolve_within_workspace(".cosir2/a.txt")
+    resolved, error = PathResolver(root).resolve_for_write(".cosir2/a.txt")
     assert resolved == root / ".cosir2" / "a.txt"
     assert error == ""
 

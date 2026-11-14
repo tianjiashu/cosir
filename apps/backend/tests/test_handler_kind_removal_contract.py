@@ -48,6 +48,7 @@ from app.core.tool.schemas import (
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
+from app.models.session_extra import SessionExtra
 from tests.runtime_context_stub import runtime_stub
 from tests.tool_executor_fakes import emit_running
 
@@ -160,7 +161,7 @@ def _operations_with_executor(
             name: SimpleNamespace(parallel_mode=mode, user_decision=None)
             for name, mode in (parallel_modes or {}).items()
         },
-        session=SimpleNamespace(id=1),
+        session=SimpleNamespace(id=1, extra=SessionExtra()),
     )
 
 
@@ -869,7 +870,7 @@ def test_is_cancelled_reads_session_signal() -> None:
     )
     from app.core.workflow.execution_state.runtime_context import RuntimeContext
 
-    context = SimpleNamespace(session=SimpleNamespace(id=9_100_001))
+    context = SimpleNamespace(session=SimpleNamespace(id=9_100_001, extra=SessionExtra()))
     assert RuntimeContext.is_cancelled(context) is False
     cancellation_registry.request_cancel(9_100_001)
     try:

@@ -22,6 +22,7 @@ from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.run_usage_stats import (
     RunUsageStats,
 )
+from app.models.session_extra import SessionExtra
 from app.service import depends as service_depends
 
 
@@ -108,7 +109,9 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
             id=2, session_id=1, execution_data=ReactExecutionState(), usage=None
         ),
         # 默认不是侧栏会话：不触发标题支线，需要它的用例显式覆盖 session。
-        session=SimpleNamespace(id=1, session_type="delegated", title="测试对话"),
+        session=SimpleNamespace(
+            id=1, session_type="delegated", title="测试对话", extra=SessionExtra()
+        ),
         workspace=SimpleNamespace(id=1, root_path="."),
         agent=SimpleNamespace(
             structured_output=None,

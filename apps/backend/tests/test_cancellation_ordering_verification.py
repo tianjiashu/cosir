@@ -50,6 +50,7 @@ from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_c
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import tool_batch_runner
 from app.models.conversation_input import UserInputPresentation
+from app.models.session_extra import SessionExtra
 from tests.runtime_context_stub import runtime_stub
 from tests.transport_fixtures import consumed
 
@@ -151,7 +152,7 @@ def _batch_runtime(
 
     return runtime_stub(
         run=SimpleNamespace(id=_RUN_ID, session_id=_SESSION_ID),
-        session=SimpleNamespace(id=_SESSION_ID),
+        session=SimpleNamespace(id=_SESSION_ID, extra=SessionExtra()),
         workspace=SimpleNamespace(id=1, root_path=str(workspace_root)),
         event_sink=event_sink or (lambda _event: None),
         tool_executor=executor,

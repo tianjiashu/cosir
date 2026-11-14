@@ -7,6 +7,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.core.permission.writable_root import absolute as absolute_writable_root
+
 if TYPE_CHECKING:
     from app.core.agents.agent_runtime_config import AgentRuntimeConfig
     from app.core.events import EventSink
@@ -47,6 +49,14 @@ class ToolExecutionContext:
     user_decision: DecisionBody | None = None
     # 准入时从原始调用提取；仅供展示，绝不能用作执行/授权依据。
     call_intent: str = ""
+    # Session 的可写根事实（``SessionExtra.writable_root``）；消费方读 :attr:`writable_root`。
+    writable_subpath: str | None = None
+
+    @property
+    def writable_root(self) -> Path:
+        """写类文件工具的边界与终端的缺省工作目录；未收窄时就是工作区根。"""
+
+        return absolute_writable_root(self.workspace_root, self.writable_subpath)
 
     def for_process_execution(self) -> ToolExecutionContext:
         """返回可安全传入隔离子进程的副本：清空父进程专属的 Run 级对象，保留调用身份。"""

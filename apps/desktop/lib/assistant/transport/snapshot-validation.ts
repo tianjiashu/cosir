@@ -57,19 +57,21 @@ function requireOptionalNonEmptyString(value: unknown, path: string): void {
 function validateDelegationDisplayData(data: Record<string, unknown>, path: string): void {
   const allowed = [
     "kind", "title", "child_agent_id", "delegation_id", "child_session_id",
-    "status", "role",
+    "status", "role", "writable_root",
   ];
   if (Object.keys(data).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
   if (typeof data.title !== "string" || data.title.trim() === "") throw new TransportSnapshotValidationError(`${path}.title`, "非空字符串");
   requireOptionalNonEmptyString(data.child_agent_id, `${path}.child_agent_id`);
   requireOptionalNonEmptyString(data.role, `${path}.role`);
+  requireOptionalNonEmptyString(data.writable_root, `${path}.writable_root`);
   if (data.delegation_id !== undefined) requirePositiveInteger(data.delegation_id, `${path}.delegation_id`);
   if (data.child_session_id !== undefined) requirePositiveInteger(data.child_session_id, `${path}.child_session_id`);
   if (data.status !== undefined) requireKnownChildStatus(data.status, `${path}.status`);
 }
 
 function validateForkDisplayData(data: Record<string, unknown>, path: string): void {
-  requireExactKeys(data, ["kind", "title", "child_session_id"], path);
+  requireExactKeys(data, ["kind", "title", "child_session_id", ...("writable_root" in data ? ["writable_root"] : [])], path);
+  requireOptionalNonEmptyString(data.writable_root, `${path}.writable_root`);
   if (typeof data.title !== "string" || data.title.trim() === "") throw new TransportSnapshotValidationError(`${path}.title`, "非空字符串");
   requirePositiveInteger(data.child_session_id, `${path}.child_session_id`);
 }

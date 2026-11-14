@@ -17,6 +17,7 @@ import json
 from typing import Any, ClassVar, cast
 
 from app.config.logging.logger import log
+from app.core.permission.writable_root import WritableRootError, narrow
 from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.args.fork_session_args import ForkSessionArgs
 from app.core.tool.multi_agent.derivation import child_depth
@@ -45,6 +46,13 @@ _HANDOVER_NOTICE = (
     "time you finish working on it, your final reply is reported to session {source_id} "
     "automatically, so do not send it with send_message. If the user later talks to you here, "
     "follow the user; what you do for the user is not reported."
+)
+# 分叉沿用来源的系统提示词（接缓存），可写根只能在这里告知；来源自己也收窄过时以这一条为准。
+_WRITABLE_ROOT_NOTICE = (
+    " Your writable root is {writable_root} (relative to the workspace root): file-writing tools "
+    "are refused outside it and commands start there by default. This replaces any writable "
+    "area stated earlier. Do not change files outside it by other means; report what needs to "
+    "change there instead."
 )
 
 
@@ -76,6 +84,7 @@ class ForkSessionTool(HandlerBase):
         title: str,
         message: str,
         execution_context: ToolExecutionContext,
+        writable_root: str | None = None,
     ) -> ToolObservation:
         """复制当前会话、投递交接通知与任务说明，返回已启动的观察。
 
@@ -90,12 +99,18 @@ class ForkSessionTool(HandlerBase):
             # 模型配置必然还在，``from_run`` 不会返回 None）。
             run = self._ledger.get_run(execution_context.run_id)
             launch = cast(RunLaunch, RunLaunch.from_run(run))
+            narrowed_root = (
+                narrow(execution_context.workspace_root, parent_session.extra.writable_root, writable_root)
+                if writable_root
+                else None
+            )
             fork = self._session_service.fork_for_agent(
                 parent_session.id,
                 run_id=execution_context.run_id,
                 tool_call_id=execution_context.tool_call_id,
                 title=title,
                 derivation_depth=child_depth(parent_session, "fork"),
+                narrowed_root=narrowed_root,
             )
 
             assignment = prepare_agent_message(
@@ -107,6 +122,9 @@ class ForkSessionTool(HandlerBase):
             )
             # 通知先入队：不唤醒、不开 Run，随任务说明开出的第一个 Run 写在它前面。
             handover = _HANDOVER_NOTICE.format(fork_id=fork.id, source_id=parent_session.id)
+            fork_root = fork.extra.writable_root
+            if fork_root is not None:
+                handover += _WRITABLE_ROOT_NOTICE.format(writable_root=fork_root)
             session_runtime_spaces.enqueue(
                 fork.id, SessionMessage.of(NoticeBody(content=handover, notice_kind="fork_handover"))
             )
@@ -118,8 +136,12 @@ class ForkSessionTool(HandlerBase):
                     ensure_ascii=False,
                     separators=(",", ":"),
                 ),
-                display_data=self._fork_display_data(title=title, child_session_id=fork.id),
+                display_data=self._fork_display_data(
+                    title=title, child_session_id=fork.id, writable_root=fork_root
+                ),
             )
+        except WritableRootError as exc:
+            return tool_error(self.name, f"could not fork this conversation: {exc}")
         except SessionForkConflictError as exc:
             log.warning(
                 "fork_session_conflict",
@@ -148,14 +170,23 @@ class ForkSessionTool(HandlerBase):
             return tool_error(self.name, "An error occurred while forking the conversation.")
 
     @staticmethod
-    def _fork_display_data(*, title: str, child_session_id: int) -> dict[str, Any]:
+    def _fork_display_data(
+        *, title: str, child_session_id: int, writable_root: str | None = None
+    ) -> dict[str, Any]:
         """分叉卡片：只带分叉会话的定位与标题。
 
         分叉的运行状态不在这里：展示数据不是事实源，前端按 ``child_session_id`` 读应用级会话状态推送；
         分叉是侧栏会话，前端「打开」跳到它的路由，而不是像委派那样在工作台打开。
         """
 
-        return {"kind": "fork-session-result", "title": title, "child_session_id": child_session_id}
+        data: dict[str, Any] = {
+            "kind": "fork-session-result",
+            "title": title,
+            "child_session_id": child_session_id,
+        }
+        if writable_root is not None:
+            data["writable_root"] = writable_root
+        return data
 
     def to_definition(self) -> ToolDefinition:
         """工具级 ``parallel``：同一回复里的多个分叉并发建出（复制由 workspace 闸门串行化）。"""

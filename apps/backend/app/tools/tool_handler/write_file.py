@@ -93,7 +93,7 @@ class WriteFileTool(HandlerBase):
             content: 待写入的内容。
             execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）；
                 由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
-                破坏性操作以其 ``workspace_root`` 作为路径 containment 的唯一事实源。
+                相对路径按其 ``workspace_root`` 解析，写入边界是其 ``writable_root``。
 
         返回:
             ``ToolObservation``；成功时 content 为空，除非语法检查发现问题并返回
@@ -106,15 +106,14 @@ class WriteFileTool(HandlerBase):
         副作用:
             可能创建父目录并原子写入目标文件。
         """
-        workspace_root = execution_context.workspace_root
-        resolver = PathResolver(workspace_root)
+        resolver = PathResolver(execution_context.workspace_root, execution_context.writable_root)
         device_error = resolver.blocked_device_reason(path)
         if device_error:
             return tool_error(
                 self.name,
                 device_error,
             )
-        resolved, error = resolver.resolve_within_workspace(path)
+        resolved, error = resolver.resolve_for_write(path)
         if resolved is None:
             return tool_error(
                 self.name,
@@ -153,7 +152,7 @@ class WriteFileTool(HandlerBase):
             atomic_write_text(
                 resolved,
                 content,
-                containment_root=workspace_root,
+                containment_root=resolver.writable_root,
             )
         except OSError as exc:
             return tool_error(

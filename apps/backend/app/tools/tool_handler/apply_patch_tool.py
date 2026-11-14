@@ -66,8 +66,8 @@ class ApplyPatchTool(HandlerBase):
         """完成格式、路径与内容校验后应用补丁 hunk。
 
         参数:
-            execution_context: 本次执行的运行时边界；``workspace_root`` 决定全部目标的路径
-                边界，``run_id`` 用于应用前的取消检查。
+            execution_context: 本次执行的运行时边界；相对路径按 ``workspace_root`` 解析，
+                全部目标须在 ``writable_root`` 内，``run_id`` 用于应用前的取消检查。
             patch: Git 风格 unified diff 文本；每个 section 只能修改一个已存在的文件。
 
         返回:
@@ -101,7 +101,7 @@ class ApplyPatchTool(HandlerBase):
                 ),
             )
         operations = outcome.operations
-        resolver = PathResolver(execution_context.workspace_root)
+        resolver = PathResolver(execution_context.workspace_root, execution_context.writable_root)
         validation_errors = validate_all(operations, resolver)
         if validation_errors:
             return tool_error(
@@ -142,7 +142,7 @@ class ApplyPatchTool(HandlerBase):
         display_data = build_file_change_display_data(results)
         diagnostics: list[SyntaxDiagnostic] = []
         for result in results:
-            resolved, error = resolver.resolve_within_workspace(result.path)
+            resolved, error = resolver.resolve_for_write(result.path)
             if resolved is None or error:
                 continue
             check = check_source_syntax(str(resolved), result.after)

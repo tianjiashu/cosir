@@ -6,7 +6,8 @@
 设计边界：
 - 只解析与拦截路径，不读不写文件。
 - 三个入口，均返回 ``(Path | None, str)`` 二元组，错误为面向模型的英文短句：
-  - ``resolve_within_workspace``：写/改/删等破坏性工具。强制项目根 containment，拒绝 workspace
+  - ``resolve_for_write``：写/改等破坏性工具。相对路径按工作区根解析，目标必须落在可写根内
+    （未收窄的 Session 即工作区根，见 ``core.permission.writable_root``），拒绝 workspace
     ``.cosir`` 保留区与受保护路径，没有放行开关。
   - ``resolve_for_read``：读一份文件（``read_file`` / ``read_image`` / 浏览器上传）。不强制
     containment，解析前后各拦一次设备路径，拒绝禁读的受保护路径。
@@ -25,7 +26,7 @@ from typing import ClassVar
 from app.config.logging.logger import log
 from app.core.permission.protected_paths import ProtectedPaths
 from app.utils.path.relative_path import has_nul
-from app.utils.path.validation import is_within_cosir
+from app.utils.path.validation import is_within, is_within_cosir
 
 
 class PathResolver:
@@ -114,62 +115,38 @@ class PathResolver:
         "/dev",
     )
 
-    def __init__(self, workspace_root: str | Path) -> None:
-        """初始化解析器并固化项目根目录。
+    def __init__(self, workspace_root: str | Path, writable_root: str | Path | None = None) -> None:
+        """固化工作区根与可写根；不读文件系统。
 
-        参数:
-            workspace_root: 解析器允许访问的项目根目录。
-
-        返回:
-            无。
-
-        异常:
-            无。
-
-        副作用:
-            仅保存 ``workspace_root``，不执行文件系统读取。
+        ``writable_root`` 只有写入口用，读类工具不传；缺省即工作区根。
         """
 
         self.workspace_root = Path(workspace_root)
+        self.writable_root = self.workspace_root if writable_root is None else Path(writable_root)
 
-    def resolve_within_workspace(self, path: str) -> tuple[Path | None, str]:
-        """解析用户路径，确认仍在项目根目录内，并拒绝 workspace ``.cosir`` 保留区。
+    def resolve_for_write(self, path: str) -> tuple[Path | None, str]:
+        """解析写入目标：相对路径按工作区根解析，目标须在可写根内，并拒绝保留区与受保护路径。
 
-        参数:
-            path: 模型传入的路径字符串。
-
-        返回:
-            ``(resolved_path, "")`` 表示成功；``(None, error)`` 表示路径非法（越界或落入
-            ``.cosir`` 保留区）。``error`` 为面向模型的英文短句。
-
-        异常:
-            不向上抛出。解析失败会被转换成错误字符串。
-
-        副作用:
-            无。
+        返回 ``(resolved_path, "")`` 或 ``(None, error)``，``error`` 为面向模型的英文短句；不向上抛出。
+        两边都跟随符号链接后再比较，指向边界外的链接因此被拒。
         """
 
         input_error = self._validate_path(path)
         if input_error:
             return None, input_error
         try:
-            # 把 workspace 根目录解析成一个「真实、规范化、绝对」的 Path 对象，
-            # 作为后续边界比较的基准
-            # 转成绝对路径：如果原本是相对路径（比如"myproject"），就以当前工作
-            # 目录为基准补成绝对路径。
-            # 规范化：展开所有的..（上级目录）和.（当前目录），消除多余分隔符。
-            # 解析符号链接：在文件系统里跟随符号链接，得到链接指向的真实物理路径。
             root = self.workspace_root.resolve()
             raw = Path(path)
-            target = raw if raw.is_absolute() else root / raw
-
-            # 把用户传入的路径 target 解析成一个「真实、规范化、绝对」的路径，存进 resolved
-            resolved = target.resolve()
-
-            # 尝试把 resolved 表示为相对于 root 的路径,resolved 是不是 root 的子路径
+            resolved = (raw if raw.is_absolute() else root / raw).resolve()
             resolved.relative_to(root)
         except (OSError, RuntimeError, ValueError) as exc:
             return None, f"path escapes project root: {path} ({exc})"
+        if not is_within(resolved, self.writable_root):
+            return None, (
+                f"path is outside this session's writable root {self.writable_root}: {path}. "
+                "This session may only write inside that directory; leave other files alone "
+                "and report what needs to change there"
+            )
         if is_within_cosir(resolved, self.workspace_root):
             return None, (
                 f"path is inside the reserved '.cosir' metadata area: {path}. That area is "

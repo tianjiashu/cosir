@@ -89,6 +89,11 @@ function childSessionIdOf(context: CallViewContext, fromDisplay: number | undefi
   return context.artifact.childSessionId ?? fromDisplay;
 }
 
+/** 行上的可写范围：只在子会话被收窄时出现。 */
+function writableRootMeta(writableRoot: string | undefined): string | undefined {
+  return writableRoot === undefined ? undefined : `可写 ${writableRoot}`;
+}
+
 /** 子 Agent 的名字：展示数据里的优先，排队时参数里的 `agent_name` 也行。 */
 function rowTitle(context: CallViewContext, fromDisplay: string | undefined): string {
   const fromArgs = typeof context.args.agent_name === "string" && context.args.agent_name.trim() ? context.args.agent_name : undefined;
@@ -100,6 +105,7 @@ export const delegationView: CallView = (data, context) => {
   const display = readDelegationDisplay(data);
   if (!display) return null;
   return {
+    meta: writableRootMeta(display.writableRoot),
     detail: typeof context.args.message === "string" ? { render: () => <DetailSurface className="text-muted-foreground whitespace-pre-wrap break-words">{context.args.message as string}</DetailSurface> } : undefined,
     status: context.inherited ? null : <ChildSessionProblem childSessionId={childSessionIdOf(context, display.childSessionId)} />,
     actions: context.inherited ? null : <DelegationActions childSessionId={childSessionIdOf(context, display.childSessionId)} title={rowTitle(context, display.title)} context={context} />,
@@ -153,6 +159,7 @@ export const forkSessionView: CallView = (data, context) => {
   if (!display) return null;
   const childSessionId = childSessionIdOf(context, display.childSessionId)!;
   return {
+    meta: writableRootMeta(display.writableRoot),
     detail: typeof context.args.message === "string" ? { render: () => <DetailSurface className="text-muted-foreground whitespace-pre-wrap break-words">{context.args.message as string}</DetailSurface> } : undefined,
     status: context.inherited ? null : <ChildSessionProblem childSessionId={childSessionId} />,
     actions: context.inherited ? null : (

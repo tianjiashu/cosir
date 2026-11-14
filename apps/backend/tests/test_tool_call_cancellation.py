@@ -40,6 +40,7 @@ from app.core.workflow.cancel.run_cancellation_registry import cancellation_regi
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import tool_batch_runner
+from app.models.session_extra import SessionExtra
 from tests.runtime_context_stub import runtime_stub
 
 # 同步用例没有运行中的事件循环；只有进程工具的实时输出与子 Run 调度会用到它。
@@ -392,7 +393,7 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
     )
     rc = runtime_stub(
         run=SimpleNamespace(id=_RUN_A, session_id=_SESSION_ID),
-        session=SimpleNamespace(id=_SESSION_ID),
+        session=SimpleNamespace(id=_SESSION_ID, extra=SessionExtra()),
         tool_executor=executor,
         admitted_tools=frozenset({"probe_tool"}),
     )

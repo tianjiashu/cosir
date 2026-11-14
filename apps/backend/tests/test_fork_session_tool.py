@@ -15,6 +15,7 @@ from app.config.settings import Settings
 from app.core.tool.multi_agent import fork_session as fork_module
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.errors.session_fork_errors import SessionForkConflictError
+from app.models.session_extra import SessionExtra
 
 
 def _context(tmp_path: Path) -> ToolExecutionContext:
@@ -32,20 +33,26 @@ def _context(tmp_path: Path) -> ToolExecutionContext:
 @pytest.fixture
 def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
-    state = SimpleNamespace(parent_depth=0, forked=[], prepared=[], enqueued=[], conflict=None)
+    state = SimpleNamespace(
+        parent_depth=0, parent_root=None, forked=[], prepared=[], enqueued=[], conflict=None
+    )
 
     def fork_for_agent(source_session_id: int, **kwargs: Any):
         if state.conflict is not None:
             raise state.conflict
         state.forked.append({"source_session_id": source_session_id, **kwargs})
-        return SimpleNamespace(id=41)
+        return SimpleNamespace(
+            id=41,
+            extra=SessionExtra(writable_root=kwargs["narrowed_root"] or state.parent_root),
+        )
 
     monkeypatch.setattr(
         fork_module,
         "get_session_service",
         lambda: SimpleNamespace(
             get_session=lambda session_id: SimpleNamespace(
-                id=session_id, title="主对话", derivation_depth=state.parent_depth
+                id=session_id, title="主对话", derivation_depth=state.parent_depth,
+                extra=SessionExtra(writable_root=state.parent_root),
             ),
             fork_for_agent=fork_for_agent,
         ),
@@ -89,7 +96,7 @@ def test_fork_keeps_the_parents_identity_and_completes_once_assigned(env, tmp_pa
     [forked] = env.forked
     assert forked == {
         "source_session_id": 7, "run_id": 70, "tool_call_id": "call-fork",
-        "title": "前端部分", "derivation_depth": 1,
+        "title": "前端部分", "derivation_depth": 1, "narrowed_root": None,
     }
     # 分叉不换身份：模型与推理强度都沿用发起它的 Run；任务说明以 Agent 消息投递。
     [prepared] = env.prepared
@@ -102,6 +109,33 @@ def test_fork_keeps_the_parents_identity_and_completes_once_assigned(env, tmp_pa
     assert assignment == (41, "agent-message")
     assert handover_session == 41 and handover.body.notice_kind == "fork_handover"
     assert "session 41" in handover.body.content and "session 7" in handover.body.content
+
+
+def test_fork_narrows_or_inherits_the_writable_root(env, tmp_path) -> None:
+    """可写根只能收窄：给出时按来源校验后交给分叉，不给即继承；分叉沿用来源的系统提示词，范围写在交接通知里。"""
+    (tmp_path / "pkg" / "web").mkdir(parents=True)
+    (tmp_path / "docs").mkdir()
+    env.parent_root = "pkg"
+    tool = fork_module.ForkSessionTool()
+
+    def fork(writable_root: str | None):
+        return tool.execute(
+            title="x", message="y", writable_root=writable_root, execution_context=_context(tmp_path)
+        )
+
+    narrowed = fork("pkg/web")
+    assert env.forked[-1]["narrowed_root"] == "pkg/web"
+    assert narrowed.display_data["writable_root"] == "pkg/web"
+    assert "Your writable root is pkg/web" in env.enqueued[-2][1].body.content
+
+    inherited = fork(None)
+    assert env.forked[-1]["narrowed_root"] is None
+    assert inherited.display_data["writable_root"] == "pkg"
+    assert "Your writable root is pkg " in env.enqueued[-2][1].body.content
+
+    widened = fork("docs")
+    assert widened.status == "error" and "only be narrowed" in (widened.content or "")
+    assert len(env.forked) == 2
 
 
 def test_fork_conflicts_become_tool_errors(env, tmp_path) -> None:

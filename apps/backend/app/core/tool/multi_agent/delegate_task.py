@@ -14,6 +14,7 @@ from app.core.agents.agent_profile import (
     AgentProfile,
     AgentProfileType,
 )
+from app.core.permission.writable_root import WritableRootError, narrow
 from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
 from app.core.tool.multi_agent.derivation import child_depth
@@ -88,6 +89,7 @@ class DelegateTaskTool(HandlerBase):
             agent_name: str,
             message: str,
             execution_context: ToolExecutionContext,
+            writable_root: str | None = None,
     ) -> ToolObservation:
         """委派一个自由文本子会话给指定 child Agent，投递任务说明后返回已启动的观察。
 
@@ -95,6 +97,8 @@ class DelegateTaskTool(HandlerBase):
             child_agent_id: 要运行的 child agent profile 标识。
             agent_name: Agent 名称，用作 child Session 标题（展示与可追溯）。
             message: 面向子 Agent 的自由文本任务契约，原样作为 child turn 的输入。
+            writable_root: 子 Session 的可写根；缺省继承本 Session 的，给出时只能收窄
+                （``core.permission.writable_root.narrow``）。
             execution_context: 父工具执行边界，提供工作区根与父事件循环。
 
         返回:
@@ -152,6 +156,11 @@ class DelegateTaskTool(HandlerBase):
             parent_run = self._ledger.get_run(execution_context.run_id)
             parent_session = self._session_service.get_session(execution_context.session_id)
             depth = child_depth(parent_session, "delegate")
+            child_writable_root = parent_session.extra.writable_root
+            if writable_root:
+                child_writable_root = narrow(
+                    execution_context.workspace_root, child_writable_root, writable_root
+                )
             child_session_tools = child_agent_profile.select_tools(
                 get_tool_registry().get_all_definitions()
             )
@@ -162,7 +171,10 @@ class DelegateTaskTool(HandlerBase):
                 title=agent_name,
                 session_type=SessionType.DELEGATED,
                 parent_session_id=execution_context.session_id,
-                extra=SessionExtra(deriving_call_id=execution_context.tool_call_id),
+                extra=SessionExtra(
+                    deriving_call_id=execution_context.tool_call_id,
+                    writable_root=child_writable_root,
+                ),
                 tool_schemas=[
                     copy.deepcopy(definition.to_model_tool_definition())
                     for definition in child_final_session_tools
@@ -203,9 +215,12 @@ class DelegateTaskTool(HandlerBase):
                     child_agent_id=child_agent_id,
                     child_session_id=child_session.id,
                     role=child_agent_profile.role,
+                    writable_root=child_writable_root,
                 ),
             )
 
+        except WritableRootError as e:
+            return tool_error(self.name, f"could not delegate the task: {e}")
         except Exception as e:
             log.exception(
                 "delegate_task_exception",
@@ -230,6 +245,7 @@ class DelegateTaskTool(HandlerBase):
         delegation_id: int | None = None,
         child_session_id: int | None = None,
         role: str | None = None,
+        writable_root: str | None = None,
     ) -> dict[str, Any]:
         """构造父级委派展示数据，不携带 prompt 或 child 正文。
 
@@ -249,6 +265,8 @@ class DelegateTaskTool(HandlerBase):
             data["delegation_id"] = delegation_id
         if child_session_id is not None:
             data["child_session_id"] = child_session_id
+        if writable_root is not None:
+            data["writable_root"] = writable_root
         return data
 
     def to_definition(self) -> ToolDefinition:

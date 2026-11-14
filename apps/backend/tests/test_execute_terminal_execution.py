@@ -28,7 +28,8 @@ class _Command:
         self.error: Exception | None = None
         self.timeout: float | None = None
 
-    def execute(self, command, _cwd, timeout, output, **_kwargs) -> ExecutionResult:
+    def execute(self, command, cwd, timeout, output, **_kwargs) -> ExecutionResult:
+        self.cwd = cwd
         self.timeout = timeout
         self.thread = threading.current_thread()
         self.started.set()
@@ -129,6 +130,27 @@ def test_foreground_returns_result_without_delivery(tmp_path, command, pool, del
     assert observation.status == "success" and observation.background is None
     assert observation.content == "[exit_code=0]\ncall-1\n"
     assert delivered == [] and not registered(command_results, 1, "call-1")
+
+
+def test_commands_start_in_the_writable_root_unless_a_workdir_is_given(tmp_path, command, pool):
+    """缺省工作目录是 Session 的可写根；显式 workdir 仍按工作区根解析，可以落在可写根之外。"""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "docs").mkdir()
+    command.release.set()
+
+    def run(workdir):
+        return ExecuteTerminalTool().execute(
+            command="pwd", workdir=workdir,
+            execution_context=ToolExecutionContext(
+                session_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
+                step_id="step-1", tool_call_id="call-1", writable_subpath="pkg",
+            ),
+        )
+
+    assert pool.submit(run, None).result(timeout=2).status == "success"
+    assert Path(command.cwd) == (tmp_path / "pkg").resolve()
+    assert pool.submit(run, "docs").result(timeout=2).status == "success"
+    assert Path(command.cwd) == (tmp_path / "docs").resolve()
 
 
 def test_background_returns_placeholder_and_delivers_later(tmp_path, command, delivered):

@@ -93,6 +93,8 @@ class RuntimeMessageContextManager:
     # 工作区记录：系统提示词取 ``root_path``，模型请求的附件解析取 ``id``。必填——缺工作区
     # 会生成一份没有工作区事实的系统提示词并被持久化成 Session 固定前缀，属于不可逆的静默降级。
     workspace: WorkspaceRecord
+    # Session 的可写根事实，只在首次生成系统提示词时用。
+    writable_root: str | None = None
     current_run_id: int | None = None
     # 固定持久化的 Session system prompt，不参与压缩；每次模型调用均位于消息前缀。
     _system_entry: ContextEntry | None = field(default=None, init=False)
@@ -121,7 +123,7 @@ class RuntimeMessageContextManager:
         self._system_entry = store.get_system_prompt(self.current_session_id)
         if self._system_entry is None:
             system_prompt_text = SystemPromptBuilder.build(
-                self.agent, self.workspace.root_path, self.tool_names
+                self.agent, self.workspace.root_path, self.tool_names, self.writable_root
             )
             self._system_entry = store.create_system_prompt(
                 self.current_session_id,

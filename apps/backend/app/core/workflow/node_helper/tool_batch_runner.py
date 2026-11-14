@@ -176,6 +176,7 @@ def _execution_context(
         event_sink=rc.event_sink,
         tool_call_id=call.call_id,
         user_decision=decision,
+        writable_subpath=rc.session.extra.writable_root,
     )
 
 

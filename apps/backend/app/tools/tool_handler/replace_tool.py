@@ -103,7 +103,7 @@ class ReplaceTool(HandlerBase):
         参数:
             execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）；
                 由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
-                破坏性操作以其 ``workspace_root`` 作为路径 containment 的唯一事实源。
+                相对路径按其 ``workspace_root`` 解析，写入边界是其 ``writable_root``。
             path: 目标文件相对路径（必填）。
             old_string: 待查找文本（必填）。
             new_string: 替换文本（必填，空串表示删除匹配文本）。
@@ -120,7 +120,7 @@ class ReplaceTool(HandlerBase):
         副作用:
             命中时原子回写目标文件。
         """
-        resolver = PathResolver(execution_context.workspace_root)
+        resolver = PathResolver(execution_context.workspace_root, execution_context.writable_root)
         if not path or old_string is None or new_string is None:
             return tool_error(
                 self.name,
@@ -139,7 +139,7 @@ class ReplaceTool(HandlerBase):
                 self.name,
                 device_error,
             )
-        resolved, error = resolver.resolve_within_workspace(path)
+        resolved, error = resolver.resolve_for_write(path)
         if resolved is None:
             return tool_error(
                 self.name,
@@ -186,7 +186,7 @@ class ReplaceTool(HandlerBase):
             atomic_write_text(
                 resolved,
                 new_content,
-                containment_root=resolver.workspace_root,
+                containment_root=resolver.writable_root,
             )
         except OSError as exc:
             return tool_error(

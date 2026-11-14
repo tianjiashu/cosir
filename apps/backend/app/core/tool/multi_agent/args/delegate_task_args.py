@@ -34,6 +34,16 @@ class DelegateTaskArgs(BaseModel):
         )
     )
 
+    writable_root: str | None = Field(
+        default=None,
+        description=(
+            "Optional. An existing directory inside the workspace, relative to the workspace root, "
+            "that the child may write to: its file-writing tools are refused elsewhere and its "
+            "commands start there. It can only narrow your own writable area, never widen it. "
+            "Omit to give the child the same writable area as you."
+        ),
+    )
+
     @model_validator(mode="after")
     def _validate_budget(self) -> "DelegateTaskArgs":
         """校验委派标题和会话正文的必填条件及长度预算。

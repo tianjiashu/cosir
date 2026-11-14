@@ -672,7 +672,7 @@ def test_syntax_stage_resolution_failure_is_skipped_not_raised(
 
     (tmp_path / "m.py").write_bytes(b"def f():\n    return 1\n")
     patch = _section("m.py", "@@ -2,1 +2,1 @@", "-    return 1", "+    return 2") + "\n"
-    real_resolve = PathResolver.resolve_within_workspace
+    real_resolve = PathResolver.resolve_for_write
     calls = {"count": 0}
 
     # 写前校验/应用各用一次解析；写后 syntax 阶段是最后一次解析——让它失败，
@@ -683,11 +683,11 @@ def test_syntax_stage_resolution_failure_is_skipped_not_raised(
             return None, "simulated post-write resolution failure"
         return real_resolve(self, path)
 
-    monkeypatch.setattr(PathResolver, "resolve_within_workspace", flaky_resolve)
+    monkeypatch.setattr(PathResolver, "resolve_for_write", flaky_resolve)
     try:
         observation = _execute(tmp_path, patch, 4800)
     finally:
-        monkeypatch.setattr(PathResolver, "resolve_within_workspace", real_resolve)
+        monkeypatch.setattr(PathResolver, "resolve_for_write", real_resolve)
 
     assert (
         observation.status == "success"

@@ -40,6 +40,7 @@ from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservatio
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import BackgroundWork
+from app.models.session_extra import SessionExtra
 from app.tools.display.terminal_display import build_terminal_display_data
 from app.tools.terminal_runtime.command.command_output import CommandOutput
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
@@ -360,7 +361,7 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
             "execute_terminal": SimpleNamespace(parallel_mode="serial", user_decision=None)
         },
         run=SimpleNamespace(id=9, session_id=7),
-        session=SimpleNamespace(id=7),
+        session=SimpleNamespace(id=7, extra=SessionExtra()),
         workspace=SimpleNamespace(id=2, root_path=str(tmp_path)),
         agent=agent,
         event_sink=sink,

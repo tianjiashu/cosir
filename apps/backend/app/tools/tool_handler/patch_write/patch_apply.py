@@ -28,7 +28,7 @@ def _resolve_patch_path(resolver: PathResolver, path: str) -> tuple[Path | None,
     device_error = resolver.blocked_device_reason(path)
     if device_error:
         return None, device_error
-    resolved, error = resolver.resolve_within_workspace(path)
+    resolved, error = resolver.resolve_for_write(path)
     if resolved is None:
         return None, error
     device_error = resolver.blocked_device_reason(path, resolved)
@@ -165,13 +165,13 @@ def apply_all_with_diff(
                 raise RuntimeError(f"{operation.file_path}: {error}")
             before = _normalize_text(resolved.read_bytes().decode("utf-8"))
             after = _apply_hunks(before, operation)
-            current, current_error = resolver.resolve_within_workspace(operation.file_path)
+            current, current_error = resolver.resolve_for_write(operation.file_path)
             if current is None or current_error or current != resolved:
                 raise RuntimeError(f"{operation.file_path}: path changed before mutation")
             atomic_write_text(
                 resolved,
                 after,
-                containment_root=resolver.workspace_root,
+                containment_root=resolver.writable_root,
             )
             results.append(
                 FileDiffResult(

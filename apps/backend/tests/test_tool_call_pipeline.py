@@ -23,6 +23,7 @@ from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import observation_node, prepare_input_node, tools_node
 from app.models.enums.react_route import ReactRoute
 from app.models.enums.run_status import RunTransition
+from app.models.session_extra import SessionExtra
 from tests.runtime_context_stub import install_runtime_singletons, runtime_stub
 from tests.sdk_fixtures import sdk_completion
 from tests.tool_executor_fakes import emit_running
@@ -95,7 +96,7 @@ def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -
         ]
 
     runtime = runtime_stub(
-        session=SimpleNamespace(id=3),
+        session=SimpleNamespace(id=3, extra=SessionExtra()),
         run=SimpleNamespace(id=4, session_id=3),
         tool_definitions={"read_file": SimpleNamespace(name="read_file", need_HIL=False)},
     )
@@ -127,7 +128,7 @@ def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
 
     banned = {**_raw("banned"), "function": {"name": "write_file", "arguments": "{}"}}
     runtime = runtime_stub(
-        session=SimpleNamespace(id=3),
+        session=SimpleNamespace(id=3, extra=SessionExtra()),
         run=SimpleNamespace(id=4, session_id=3),
         tool_definitions={
             "read_file": SimpleNamespace(name="read_file", need_HIL=False),
@@ -167,7 +168,7 @@ class _StartingExecutor:
 
 def _batch_runtime(executor):
     return runtime_stub(
-        session=SimpleNamespace(id=3),
+        session=SimpleNamespace(id=3, extra=SessionExtra()),
         run=SimpleNamespace(id=4, session_id=3),
         tool_definitions={
             "read_file": SimpleNamespace(
@@ -271,7 +272,7 @@ def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
         ]
 
     runtime = runtime_stub(
-        session=SimpleNamespace(id=3),
+        session=SimpleNamespace(id=3, extra=SessionExtra()),
         run=SimpleNamespace(id=4, session_id=3),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
@@ -336,7 +337,7 @@ def _gate_runtime(
         mailbox.notify(NoticeBody(content=text, notice_kind="model_continuation"))
     runtime = SimpleNamespace(
         run=SimpleNamespace(id=4, session_id=3),
-        session=SimpleNamespace(id=3),
+        session=SimpleNamespace(id=3, extra=SessionExtra()),
         usage_stats=None,
         mailbox=mailbox,
         is_cancelled=lambda: cancelled,
@@ -455,7 +456,7 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
         return []
 
     runtime = runtime_stub(
-        session=SimpleNamespace(id=3),
+        session=SimpleNamespace(id=3, extra=SessionExtra()),
         run=SimpleNamespace(id=4, session_id=3),
         tool_definitions={"read_file": SimpleNamespace(name="read_file", need_HIL=False)},
     )

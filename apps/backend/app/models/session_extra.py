@@ -50,6 +50,9 @@ class SessionExtra(BaseModel):
     # 派生出本 Session 的那次调用（委派或 Agent fork 在发起方 Session 里的 ``tool_call_id``）；发起方是
     # ``SessionRecord.deriver_id()``。撤回发起方的一个回合时，按它找出这一回合派生的 Session 一并收回。
     deriving_call_id: str | None = None
+    # 可写根：相对工作区根的 POSIX 路径，``None`` 为整个工作区。创建时定、之后不变；派生时只能收窄，
+    # 手动分叉原样继承（规则与消费方见 ``core.permission.writable_root``）。
+    writable_root: str | None = None
 
     def validate_session_type(self, session_type: SessionType) -> None:
         """在持久化读取边界一次校验类型与附属数据，错误数据直接失败。"""
@@ -58,3 +61,6 @@ class SessionExtra(BaseModel):
         # 只有 Agent 派生出的 Session 能带；委派与 Agent fork 两个入口总会写上。
         if self.deriving_call_id is not None and session_type not in _AGENT_DERIVED_TYPES:
             raise ValueError(f"{session_type} carries invalid deriving call metadata")
+        # 用户新建的会话恒为整个工作区；可写根只来自派生或从已收窄的会话分叉。
+        if self.writable_root is not None and session_type is SessionType.USER:
+            raise ValueError(f"{session_type} carries invalid writable root")

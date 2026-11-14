@@ -100,6 +100,7 @@ class SystemPromptBuilder:
         agent: AgentRuntimeConfig,
         workspace_root: str,
         tool_names: Collection[str],
+        writable_root: str | None = None,
     ) -> str:
         """构建完整系统提示词文本。
 
@@ -109,6 +110,7 @@ class SystemPromptBuilder:
             tool_names: Session 固化的工具名（``SessionRuntimeSpace.session_tool_names``）；决定工具层
                 的公共声明与能力目录，不读 Agent 定义里的 ``allowed_tools``——那是固化前的配置，
                 之后可能已被用户改过。
+            writable_root: Session 的可写根（``SessionExtra.writable_root``）；``None`` 为整个工作区。
 
         返回:
             由层块拼接出的系统提示词（空层块不参与拼接）；Layer T 按可用工具裁剪公共声明与
@@ -122,7 +124,7 @@ class SystemPromptBuilder:
             读取系统级全局指令文件与 workspace 指令文件（失败均容错）；按可用工具读取对应的
             Agent、MCP 和 Skill 本机目录；Agent 系统提示词已在 profile 装配阶段载入。
         """
-        layer1 = SystemPromptBuilder._build_message_context(workspace_root)
+        layer1 = SystemPromptBuilder._build_message_context(workspace_root, writable_root)
         layer2 = SystemPromptBuilder._build_agent_layer(agent)
         tool_layer = SystemPromptBuilder._build_tool_layer(workspace_root, tool_names)
         work_layer = SystemPromptBuilder._build_work_layer()
@@ -134,13 +136,13 @@ class SystemPromptBuilder:
 
     # --- Layer 1: 动态变量层（运行期事实，不读文件） ---
     @staticmethod
-    def _build_message_context(workspace_root: str) -> str:
+    def _build_message_context(workspace_root: str, writable_root: str | None = None) -> str:
         """构建动态变量层：身份、输入消息协议、操作系统、工作区根目录与写入边界。
 
         文案为英文（读者是模型，与工具描述、子 Agent 选择指南保持同一语言）。本层只承载
         当前实现确认的运行期事实：路径边界的说法对应 ``PathResolver`` 的入口——读类工具走
         ``resolve_for_read`` / ``resolve_read_scope``（可读工作区外，系统数据目录除外），写类工具走
-        ``resolve_within_workspace``（限制在工作区内且拒绝 ``.cosir/``）；系统数据目录取
+        ``resolve_for_write``（限制在可写根内且拒绝 ``.cosir/``；Session 收窄过可写根时多写一行）；系统数据目录取
         ``system_cosir_dir()``，规则见 ``app.core.permission.protected_paths``。这里不点名工具，因为
         本层不按工具名裁剪。
 
@@ -172,8 +174,15 @@ class SystemPromptBuilder:
                 "they are given, including paths outside the workspace and .cosir/, so never "
                 "modify either."
             ),
-            "</runtime_context>",
         ]
+        if writable_root is not None:
+            lines.append(
+                f"- Writable root: {writable_root} (relative to the workspace root). This session "
+                "was narrowed to it: tools that write or edit files are refused outside it, and "
+                "commands start there by default. Do not change files outside it by other means; "
+                "report what needs to change there instead."
+            )
+        lines.append("</runtime_context>")
         text = "\n".join(lines)
         return text
 

@@ -307,8 +307,8 @@ class ExecuteTerminalTool(HandlerBase):
                 ``DEFAULT_COMMAND_TIMEOUT_S``，后台不限时（开发服务器要常驻，后台工作属于 Session，
                 由单停、上游收回、删除、``terminal_stop`` 或后端退出结束，用户停止 Session 不结束它）。
                 前台转到后台时沿用启动时的时限。
-            workdir: 工作目录；缺省 ``execution_context.workspace_root``；相对路径相对
-                该根解析；解析后须在该根内（绝对路径同样校验）。
+            workdir: 工作目录；缺省 ``execution_context.writable_root``（未收窄的 Session 即工作区根）；
+                相对路径相对工作区根解析，解析后须在工作区根内（绝对路径同样校验）。
             background: ``True`` 立即转后台；``None`` 与 False 均在前台等待。
             execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）。workdir 只是命令的
                 起点：命令自己可以 cd 或用绝对路径，文件系统副作用不受工作区约束
@@ -343,8 +343,11 @@ class ExecuteTerminalTool(HandlerBase):
                 f"Choose one of the available shell values: {', '.join(self._available_shells)}",
             )
 
-        execution_root = execution_context.workspace_root
-        cwd, err = self._resolve_workdir(workdir, execution_root)
+        # 缺省在 Session 的可写根里执行；显式 workdir 仍按工作区根解析与限制（读、跑测试要去可写根之外）。
+        if workdir:
+            cwd, err = self._resolve_workdir(workdir, execution_context.workspace_root)
+        else:
+            cwd, err = execution_context.writable_root.resolve(), ""
         if err:
             return self._workdir_error_observation(err)
 

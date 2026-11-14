@@ -319,6 +319,22 @@ def test_agent_forks_from_the_previous_reply_excluding_the_current_turn(fork_sto
     assert s.runs.list_by_session(child.id) == []
 
 
+def test_fork_carries_the_writable_root_and_manual_forks_inherit_it(fork_store):
+    """可写根随上下文继承：Agent 分叉写入收窄后的值，从它手动分叉出的会话原样带上。"""
+    s = fork_store
+    earlier = append_run(s, "completed")
+    run = append_run(s, "running")
+    call(s, run)
+    child = s.service.fork_for_agent(
+        s.session.id, run_id=run.id, tool_call_id="fork-call", title="Child",
+        derivation_depth=1, narrowed_root="pkg",
+    )
+    assert child.extra.writable_root == "pkg"
+    grandchild = s.service._fork_at_turn(child.id, turn_of_input(s, earlier.input_id))
+    assert grandchild.extra.writable_root == "pkg"
+    assert agent_fork(s, run, "fork-call").extra.writable_root is None
+
+
 def test_agent_fork_publishes_the_catalog_change_after_commit(fork_store, monkeypatch):
     """Agent 分叉在父 Run 运行中建出，侧栏只能经目录失效推送得知。"""
     from app.service import depends

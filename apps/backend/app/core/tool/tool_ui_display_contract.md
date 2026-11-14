@@ -74,8 +74,8 @@
 | web-search-results | query、results[{title,url}]，不含网页正文 |
 | web-extract-urls | partial（必有 boolean）、urls[{url}]；URL 可能包含失败页面，URL 数不是成功页数；全部失败走错误观察，不出现此 kind |
 | browser-page | tab_id/url/title；可含 screenshot（asset ID）、handoff_reason、steps[{action,target,status,hint}]；步骤 status 为 done/failed/skipped/unknown；done 只表示输入执行完成，unknown 表示可能生效、须观察后决定，skipped 不算执行失败 |
-| delegation-result | title、child_agent_id；可含 role/delegation_id/child_session_id |
-| fork-session-result | title、child_session_id |
+| delegation-result | title、child_agent_id；可含 role/delegation_id/child_session_id/writable_root（子会话被收窄时的可写根，相对工作区根） |
+| fork-session-result | title、child_session_id；可含 writable_root（同上） |
 | agent-session-result | send: operation/session_id/agent_name；status 另带 final_output/end_reason；当前 Session 状态由既有 Session 读取路径提供 |
 | agent-configuration-draft | status=draft、agent_id、role、description、system_prompt；保存和编辑属于 Workbench，遵守调用方只读限制 |
 | user-question | questions[{question,header,options[{label,description,preview?}],multi_select}]（参数原样）；作答后补 decision（approve / reject）、answers{问题原文: label 或自由文字，多选为列表}、annotations{问题原文: {notes}}；全部跳过只有 decision=reject；作废（未作答）不补字段，状态为 cancelled |

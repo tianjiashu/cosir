@@ -251,8 +251,12 @@ class SessionService:
         tool_call_id: str,
         title: str,
         derivation_depth: int,
+        narrowed_root: str | None = None,
     ) -> SessionRecord:
-        """切在调用所在回合的开头：继承到上一条回复，当前回合交给新的任务说明。"""
+        """切在调用所在回合的开头：继承到上一条回复，当前回合交给新的任务说明。
+
+        ``narrowed_root`` 是调用方已按来源校验过的可写根；``None`` 即继承来源的。
+        """
         return self._fork(
             source_session_id,
             lambda source: source.cut_before_call(run_id, tool_call_id),
@@ -260,6 +264,7 @@ class SessionService:
             session_type=SessionType.AGENT_FORK,
             depth=derivation_depth,
             deriving_call_id=tool_call_id,
+            narrowed_root=narrowed_root,
         )
 
     def _fork(
@@ -271,6 +276,7 @@ class SessionService:
         session_type: SessionType,
         depth: int,
         deriving_call_id: str | None = None,
+        narrowed_root: str | None = None,
     ) -> SessionRecord:
         """两种分叉共用的编排：工作区闸门内一个写事务里定切点、建目标 Session、复制切点之前的历史。
 
@@ -309,7 +315,9 @@ class SessionService:
                         source_title=source.title,
                         tree_parent_session_id=source.id,
                         initial_launch=fork_cut.launch,
-                    ), deriving_call_id=deriving_call_id),
+                    ), deriving_call_id=deriving_call_id,
+                        # 可写根随上下文一起继承：上下文里写明了范围，事实要与它一致。
+                        writable_root=narrowed_root or source.extra.writable_root),
                     # 工具列表是请求前缀的一部分，改了就接不上源的缓存；派生限制由运行期准入执行。
                     tool_schemas=deepcopy(source.tool_schemas),
                     db=db,

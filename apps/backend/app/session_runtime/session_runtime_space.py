@@ -324,6 +324,7 @@ class SessionRuntimeSpace:
                     agent=self.agent,
                     tool_names=self.session_tool_names,
                     workspace=self.current_workspace,
+                    writable_root=self.current_task.extra.writable_root,
                     context_store=ContextStore(),
                 )
                 self._context_manager = _weak_ref(manager)

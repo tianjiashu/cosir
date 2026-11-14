@@ -83,7 +83,8 @@ class WindowsExecuteTerminalArgs(BaseModel):
         default=None,
         description=(
             "Directory to run in, e.g. C:\\repo\\src or src: absolute inside the workspace, or "
-            "relative to the workspace root (the default). It must already exist."
+            "relative to the workspace root. Omitted, the command runs in the workspace root, or in "
+            "this session's writable root when it was given one. It must already exist."
         ),
     )
     background: bool | None = Field(default=None, description=_BACKGROUND_DESCRIPTION)
@@ -116,7 +117,8 @@ class MacExecuteTerminalArgs(BaseModel):
         default=None,
         description=(
             "Directory to run in, e.g. /Users/me/repo/src or src: absolute inside the workspace, "
-            "or relative to the workspace root (the default). It must already exist."
+            "or relative to the workspace root. Omitted, the command runs in the workspace root, or in "
+            "this session's writable root when it was given one. It must already exist."
         ),
     )
     background: bool | None = Field(default=None, description=_BACKGROUND_DESCRIPTION)

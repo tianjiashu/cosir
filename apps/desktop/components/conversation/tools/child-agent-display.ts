@@ -8,6 +8,8 @@ export type DelegationDisplay = {
   childAgentId?: string;
   childSessionId?: number;
   status?: TransportRunStatus;
+  /** 子会话的可写根（相对工作区根）；没有即整个工作区。 */
+  writableRoot?: string;
 };
 
 /** `agent-session-result`：`send_message`与 `session_status`。 */
@@ -60,10 +62,11 @@ export function readDelegationDisplay(value: unknown): DelegationDisplay | null 
     childAgentId: readText(data.child_agent_id),
     childSessionId: positiveId(data.child_session_id),
     status: statusValue,
+    writableRoot: readText(data.writable_root),
   };
 }
 
-export type ForkDisplay = { title: string; childSessionId: number };
+export type ForkDisplay = { title: string; childSessionId: number; writableRoot?: string };
 
 /** `fork-session-result`（`fork_session`）：分叉会话的标题与定位。 */
 export function readForkDisplay(value: unknown): ForkDisplay | null {
@@ -72,7 +75,7 @@ export function readForkDisplay(value: unknown): ForkDisplay | null {
   const title = readText(data.title);
   const childSessionId = positiveId(data.child_session_id);
   if (title === undefined || childSessionId === undefined) return null;
-  return { title, childSessionId };
+  return { title, childSessionId, writableRoot: readText(data.writable_root) };
 }
 
 /** 读 `agent-session-result` 的白名单字段；对方 Run 的状态不在这里，读会话状态推送。 */

@@ -159,8 +159,17 @@ def test_delegate_writes_the_child_depth(
     tmp_path: Path,
     parent_depth: int,
 ) -> None:
-    """子 Session 写成父深度 + 1；到上限时不给派生工具由 ``tools_for_session`` 决定（见其测试）。"""
+    """子 Session 写成父深度 + 1；到上限时不给派生工具由 ``tools_for_session`` 决定（见其测试）。
+
+    可写根缺省继承父 Session 的，给出时只能收窄；越出父的可写根在建 Session 之前就被拒。
+    """
     from types import SimpleNamespace
+
+    from app.models.session_extra import SessionExtra
+
+    (tmp_path / "pkg" / "web").mkdir(parents=True)
+    (tmp_path / "docs").mkdir()
+    parent_root = "pkg"
 
     from app.config.settings import Settings
 
@@ -169,7 +178,10 @@ def test_delegate_writes_the_child_depth(
 
     class _Sessions:
         def get_session(self, session_id: int):
-            return SimpleNamespace(id=session_id, title="父会话", derivation_depth=parent_depth)
+            return SimpleNamespace(
+                id=session_id, title="父会话", derivation_depth=parent_depth,
+                extra=SessionExtra(writable_root=parent_root),
+            )
 
         def create_session(self, **kwargs):
             created.append(kwargs)
@@ -205,6 +217,19 @@ def test_delegate_writes_the_child_depth(
     assert result.status == "error"
     [kwargs] = created
     assert kwargs["derivation_depth"] == parent_depth + 1
+    assert kwargs["extra"].writable_root == "pkg"
+
+    def delegate_to(writable_root: str):
+        return delegate_task.DelegateTaskTool().execute(
+            child_agent_id="general-assistant", agent_name="Scope", message="Do it.",
+            writable_root=writable_root, execution_context=context,
+        )
+
+    delegate_to("pkg/web")
+    assert created[-1]["extra"].writable_root == "pkg/web"
+    widened = delegate_to("docs")
+    assert widened.status == "error" and "only be narrowed" in (widened.content or "")
+    assert len(created) == 2
 
 
 def test_workspace_config_error_is_not_silently_merged(
