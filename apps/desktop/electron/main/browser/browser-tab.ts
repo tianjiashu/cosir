@@ -1,7 +1,7 @@
 import { WebContentsView, type Rectangle, type WebContents, type WindowOpenHandlerResponse } from "electron";
 
 import { logDesktopEvent } from "../desktop-log";
-import type { HostMethodError } from "../host-link/method-registry";
+import { HostMethodError } from "../host-link/method-registry";
 import { browserPageWebPreferences } from "./browser-partition";
 import { CdpSession } from "./cdp-session";
 import { browserError } from "./errors";
@@ -21,7 +21,7 @@ import { RefRegistry, type PageNode } from "./ref-registry";
 import { buildOutline, type Outline } from "./snapshot/outline";
 import { readSnapshot } from "./snapshot/read";
 import { TabEmulation, type Applied, type Emulation, type EmulationRequest } from "./tab-emulation";
-import { CANCELED_FAILURE, TabLog, type ConsoleLevel } from "./tab-log";
+import { BODY_LIMITS, CANCELED_FAILURE, TabLog, type ConsoleLevel } from "./tab-log";
 import { isPageUrl } from "./page-url";
 import { abortable } from "./abortable";
 
@@ -34,8 +34,8 @@ const ACTION_SETTLE_TIMEOUT_MS = 15_000;
 const USER_ACTIVE_WINDOW_MS = 2_000;
 /** 动作结束后多久内到达的输入事件仍算 Agent 的（合成按键的事件可能稍晚才派发）。 */
 const AGENT_INPUT_GRACE_MS = 500;
-/** 网络请求的响应体留在渲染进程里的上限：日志只记元数据、从不取响应体，给个最小值免得白占内存。 */
-const NETWORK_BUFFER_BYTES = 1024;
+/** 采集一条响应体最多等多久：后台读取，等不到就记为没采到，不拖住别的事。 */
+const BODY_CAPTURE_TIMEOUT_MS = 5_000;
 /** 开发期 Electron 往每个页面的 console 注入的安全警告：与网页无关，不进日志。 */
 const ELECTRON_NOISE = /^%cElectron Security Warning/;
 
@@ -62,7 +62,7 @@ export type TabEvents = {
   onGone: () => void;
   /** 本标签弹窗了：整个渲染进程停住，`BrowserHost` 让同进程标签在途的 CDP 立即失败。 */
   onDialogOpened: () => void;
-  /** 本标签的弹窗答完或被取消了：`BrowserHost` 让同进程标签补设弹窗期间被闸住的设备模拟。 */
+  /** 本标签的弹窗答完或被取消了：`BrowserHost` 让同进程标签接着做弹窗期间被闸住的事（`resumeAfterDialog`）。 */
   onDialogClosed: () => void;
   /** 页面为什么停着（本标签或同进程别的标签有待答弹窗）；没停时为 null。由 `BrowserHost` 按进程判断。 */
   pausedBy: () => HostMethodError | null;
@@ -91,7 +91,7 @@ export type TabOptions = {
 /**
  * 一个标签页：一个 `WebContentsView`，组合几个各管一件事的部件——CDP 会话（`CdpSession`，命令唯一出口与闸门、
  * 事件唯一入口）、跨进程子框架（`PageFrames`：子会话与坐标偏移）、弹窗（`PageDialogs`）、设备模拟与显示缩放
- * （`TabEmulation`）、页面日志（`TabLog`：备注、console、网络，「上次以来」的唯一事实源）、ref 登记（`RefRegistry`）、
+ * （`TabEmulation`）、页面日志（`TabLog`：备注、console、网络与响应体，「上次以来」的唯一事实源）、ref 登记（`RefRegistry`）、
  * 给人看的高亮框（`TabHighlight`）。本类负责生命周期、把页面事件接到这些部件上，以及需要多个部件配合的操作（导航、
  * 快照、动作、执行 JS、截图与元素截图）。
  *
@@ -249,7 +249,7 @@ export class BrowserTab {
     this.session.attach();
     await this.session.send("Page.enable", {}, { signal });
     await this.session.send("Page.setInterceptFileChooserDialog", { enabled: true }, { signal });
-    await this.session.send("Network.enable", { maxTotalBufferSize: NETWORK_BUFFER_BYTES, maxResourceBufferSize: NETWORK_BUFFER_BYTES }, { signal });
+    await this.session.send("Network.enable", { maxTotalBufferSize: BODY_LIMITS.rendererTotalBytes, maxResourceBufferSize: BODY_LIMITS.rendererResourceBytes }, { signal });
     await this.frames.start(signal);
     // 没挂过窗口的视图收不到 CDP 合成的鼠标事件（实测：点击不触发、每个事件空等约 1.8 秒），开焦点模拟后正常。
     // Playwright 接管页面时自己会开它，所以桌面 E2E 测不出缺了这一步（见 browser-initialization 单测）。
@@ -412,10 +412,28 @@ export class BrowserTab {
     this.events.onDialogClosed();
   }
 
-  /** 期望与已生效的设备模拟不一致时补设（同进程的弹窗答完后由 `BrowserHost` 调用：弹窗期间的设置会被闸住）。 */
-  resyncEmulation(): void {
+  /**
+   * 弹窗之后的恢复（同进程的弹窗答完后由 `BrowserHost` 调用）：弹窗期间被闸住的三件事在这里接着做——补设设备模拟、
+   * 继续当前操作的收尾、补采被挡住的响应体。
+   */
+  resumeAfterDialog(): void {
     this.emulation.resync();
     this.operation?.resumeCleanup();
+    for (const { seq, requestId } of this.log.takeDeferred()) this.captureBody(seq, requestId);
+  }
+
+  /**
+   * 采一条响应体写回日志。后台读取，不归属任何修改操作（`untracked`，否则 Agent 动作期间结束的请求会拖住动作收尾）。
+   * 页面停在弹窗时被闸门拒绝或打断：记为 deferred，弹窗答完后补采；其余失败（页面已离开、资源已不在、超时）如实记下原因。
+   */
+  private captureBody(seq: number, requestId: string): void {
+    this.session.send<{ body: string; base64Encoded: boolean }>("Network.getResponseBody", { requestId }, { untracked: true, timeoutMs: BODY_CAPTURE_TIMEOUT_MS }).then(
+      ({ body, base64Encoded }) => this.log.bodyCaptured(seq, base64Encoded ? Buffer.from(body, "base64").toString("utf8") : body),
+      (error: unknown) => {
+        if (error instanceof HostMethodError && error.code === "DIALOG_OPEN") this.log.bodyDeferred(seq, requestId);
+        else this.log.bodyUnavailable(seq, `the browser no longer had the body (${error instanceof Error ? error.message : String(error)}); the page may have moved on`);
+      },
+    );
   }
 
   /** 页面下一次停住（弹窗）时中止的信号：等初始化的调用方据它提前返回（回答弹窗不需要调试器）。 */
@@ -535,11 +553,12 @@ export class BrowserTab {
       if (redirectResponse) this.log.responseReceived(requestId, redirectResponse.status, timestamp, true);
       this.log.requestStarted(requestId, { method: request.method, url: request.url, resourceType: type ?? "Other", timestamp });
     });
-    session.on("Network.responseReceived", ({ requestId, timestamp, response }: { requestId: string; timestamp: number; response: { status: number } }) => {
-      this.log.responseReceived(requestId, response.status, timestamp);
+    session.on("Network.responseReceived", ({ requestId, timestamp, response }: { requestId: string; timestamp: number; response: { status: number; mimeType?: string } }) => {
+      this.log.responseReceived(requestId, response.status, timestamp, false, response.mimeType ?? null);
     });
-    session.on("Network.loadingFinished", ({ requestId, timestamp }: { requestId: string; timestamp: number }) => {
-      this.log.requestFinished(requestId, timestamp);
+    session.on("Network.loadingFinished", ({ requestId, timestamp, encodedDataLength }: { requestId: string; timestamp: number; encodedDataLength: number }) => {
+      const seq = this.log.requestFinished(requestId, timestamp, encodedDataLength);
+      if (seq !== null) this.captureBody(seq, requestId);
     });
     session.on("Network.loadingFailed", ({ requestId, timestamp, errorText, canceled }: { requestId: string; timestamp: number; errorText: string; canceled?: boolean }) => {
       this.log.requestFailed(requestId, canceled ? CANCELED_FAILURE : errorText, timestamp);

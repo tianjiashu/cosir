@@ -555,9 +555,9 @@ export class BrowserHost implements BrowserSessionEvents {
     for (const tab of this.sameProcess(opener)) tab.interruptCdp(this.pausedBy(tab)!);
   }
 
-  /** `owner` 的弹窗答完或被取消了：同进程标签（含它自己）补设弹窗期间被闸住的设备模拟。 */
+  /** `owner` 的弹窗答完或被取消了：同进程标签（含它自己）接着做弹窗期间被闸住的事（见 `BrowserTab.resumeAfterDialog`）。 */
   private resumeProcess(owner: BrowserTab): void {
-    for (const tab of this.sameProcess(owner)) tab.resyncEmulation();
+    for (const tab of this.sameProcess(owner)) tab.resumeAfterDialog();
   }
 
   /** 与 `tab` 同一渲染进程的已登记标签（含它自己；正在注销、已不在登记里的标签不再操作）。 */

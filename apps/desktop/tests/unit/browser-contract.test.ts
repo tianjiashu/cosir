@@ -89,9 +89,9 @@ describe("wire samples", () => {
       ...head(200, defaultEmulation),
       kind: "network",
       entries: [
-        { seq: 20, method: "GET", url: "http://127.0.0.1:5173/api/me", status: 401, resourceType: "Fetch", failure: null, durationMs: 31 },
-        { seq: 21, method: "POST", url: "http://127.0.0.1:5173/api/login", status: null, resourceType: "XHR", failure: "net::ERR_CONNECTION_REFUSED", durationMs: null },
-        { seq: 22, method: "GET", url: "http://127.0.0.1:5173/api/stream", status: null, resourceType: "Fetch", failure: null, durationMs: null },
+        { seq: 20, method: "GET", url: "http://127.0.0.1:5173/api/me", status: 401, resourceType: "Fetch", failure: null, durationMs: 31, body: { state: "text", mime: "application/json", size: 27 } },
+        { seq: 21, method: "POST", url: "http://127.0.0.1:5173/api/login", status: null, resourceType: "XHR", failure: "net::ERR_CONNECTION_REFUSED", durationMs: null, body: null },
+        { seq: 22, method: "GET", url: "http://127.0.0.1:5173/api/stream", status: null, resourceType: "Fetch", failure: null, durationMs: null, body: { state: "pending", mime: null, size: null } },
       ],
       next: 23,
       moreBefore: false,

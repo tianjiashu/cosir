@@ -15,6 +15,11 @@ export type SendOptions = {
   onDispatch?: () => void;
   timeoutMs?: number;
   browserSide?: boolean;
+  /**
+   * 不交给标签级的命令追踪（构造参数 `onCommand`，即当前修改操作的记账）：只给不改页面的后台读取用（响应体采集）。
+   * 记了账的命令会推迟操作收尾、改变输入释放条件，而这类命令与 Agent 的动作无关。闸门与时限照常生效。
+   */
+  untracked?: boolean;
   /** 跨进程子框架的子会话（`page-frames.ts`）；省略即页面的主会话。 */
   sessionId?: string;
 };
@@ -86,7 +91,7 @@ export class CdpSession {
     const gate = browserSide ? new AbortController().signal : this.gate.signal;
     options.onDispatch?.();
     const command = this.contents.debugger.sendCommand(method, params, sessionId) as Promise<T>;
-    this.onCommand(command);
+    if (!options.untracked) this.onCommand(command);
     options.onCommand?.(command);
     return new Promise<T>((resolve, reject) => {
       const clear = () => {
