@@ -29,7 +29,7 @@
               }
             ],
             "default": null,
-            "description": "Viewport x in CSS pixels, the same as the pixels of a viewport screenshot. Use x and y instead of ref for spots without a ref, e.g. on a canvas or map.",
+            "description": "Viewport x in CSS pixels, the same as the pixels of a viewport screenshot. Use x and y instead of ref for spots without a ref, e.g. on a canvas or map; take them from a screenshot of the page as it is now, since positions move when the page changes.",
             "title": "X"
           },
           "y": {
@@ -132,7 +132,7 @@
               }
             ],
             "default": null,
-            "description": "Viewport x in CSS pixels, the same as the pixels of a viewport screenshot. Use x and y instead of ref for spots without a ref, e.g. on a canvas or map.",
+            "description": "Viewport x in CSS pixels, the same as the pixels of a viewport screenshot. Use x and y instead of ref for spots without a ref, e.g. on a canvas or map; take them from a screenshot of the page as it is now, since positions move when the page changes.",
             "title": "X"
           },
           "y": {
@@ -271,7 +271,7 @@
               }
             ],
             "default": null,
-            "description": "Viewport x in CSS pixels, the same as the pixels of a viewport screenshot. Use x and y instead of ref for spots without a ref, e.g. on a canvas or map.",
+            "description": "Viewport x in CSS pixels, the same as the pixels of a viewport screenshot. Use x and y instead of ref for spots without a ref, e.g. on a canvas or map; take them from a screenshot of the page as it is now, since positions move when the page changes.",
             "title": "X"
           },
           "y": {
@@ -936,7 +936,7 @@
           }
         ],
         "default": null,
-        "description": "Fix the tab's viewport before loading, e.g. 390x844 mobile to check a phone layout; it stays until changed again. auto goes back to the default: the viewport follows the size of the user's browser panel. null keeps the current one.",
+        "description": "Fix the tab's viewport before loading, e.g. 390x844 mobile to check a phone layout; it stays until changed again. auto goes back to the default: the viewport follows the size of the user's browser panel; set it back to auto once you are done checking. null keeps the current one.",
         "title": "Viewport"
       }
     },

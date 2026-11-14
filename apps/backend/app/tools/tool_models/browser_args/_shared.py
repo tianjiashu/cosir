@@ -25,13 +25,14 @@ POINT_REF_DESCRIPTION = (
 )
 
 # 鼠标动作也可以给视口坐标，覆盖快照里没有的东西（画布、地图、滑块上的某一点）；
-# 坐标与视口截图的像素一致（截图按 CSS 像素出图）。
+# 坐标与视口截图的像素一致（截图按 CSS 像素出图）；页面一变坐标就过时，所以要求先重新截图。
 X_FIELD = Field(
     default=None,
     ge=0,
     description=(
         "Viewport x in CSS pixels, the same as the pixels of a viewport screenshot. Use x and y "
-        "instead of ref for spots without a ref, e.g. on a canvas or map."
+        "instead of ref for spots without a ref, e.g. on a canvas or map; take them from a "
+        "screenshot of the page as it is now, since positions move when the page changes."
     ),
 )
 Y_FIELD = Field(default=None, ge=0, description="Viewport y in CSS pixels; see x.")

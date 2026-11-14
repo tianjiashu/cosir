@@ -48,7 +48,8 @@ class BrowserNavigateArgs(BaseModel):
         description=(
             "Fix the tab's viewport before loading, e.g. 390x844 mobile to check a phone layout; "
             "it stays until changed again. auto goes back to the default: the viewport follows "
-            "the size of the user's browser panel. null keeps the current one."
+            "the size of the user's browser panel; set it back to auto once you are done checking. "
+            "null keeps the current one."
         ),
     )
     color_scheme: Literal["light", "dark", "auto"] | None = Field(
