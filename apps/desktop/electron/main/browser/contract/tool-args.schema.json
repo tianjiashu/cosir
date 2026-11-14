@@ -717,6 +717,20 @@
   "browser_logs": {
     "additionalProperties": false,
     "properties": {
+      "body": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "network only: read the response body of the request with this sequence number (the #N of a listed request) instead of listing. Leave since, level and pattern null and failed_only false.",
+        "title": "Body"
+      },
       "failed_only": {
         "default": false,
         "description": "network only: only requests that failed or got a status of 400 or more.",
@@ -753,7 +767,7 @@
       },
       "limit": {
         "default": 50,
-        "description": "Maximum number of entries.",
+        "description": "Maximum number of entries; ignored when reading a body.",
         "maximum": 200,
         "minimum": 1,
         "title": "Limit",
@@ -804,6 +818,7 @@
       }
     },
     "required": [
+      "body",
       "failed_only",
       "kind",
       "level",

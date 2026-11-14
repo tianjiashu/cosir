@@ -102,6 +102,18 @@ describe("wire samples", () => {
     expect(logsWire(networkLogs)).toEqual(samples.network_logs);
   });
 
+  // 目的：读正文的结果是独立的形状；潜在缺陷：沿用列表的翻页字段，或漏了 reason，后端渲染时 KeyError。
+  it("response bodies", () => {
+    const entry = { seq: 20, method: "GET", url: "http://127.0.0.1:5173/api/me", status: 401, resourceType: "Fetch", failure: null, durationMs: 31, body: { state: "text" as const, mime: "application/json", size: 27 } };
+    const base = { ...head(200, defaultEmulation), kind: "response_body" as const };
+    expect(logsWire({ ...base, entry, body: { ...entry.body, text: '{"error":"not signed in"}', truncated: false, reason: null } })).toEqual(samples.response_body);
+    const big = { ...entry, seq: 24, url: "http://127.0.0.1:5173/api/export", status: 200, body: { state: "text" as const, mime: "application/json", size: 300000 } };
+    expect(logsWire({ ...base, entry: big, body: { ...big.body, text: '[{"id":1}', truncated: true, reason: null } })).toEqual(samples.response_body_truncated);
+    const gone = { ...entry, seq: 25, url: "http://127.0.0.1:5173/api/save", status: 500, body: { state: "deferred" as const, mime: "application/json", size: null } };
+    const reason = "the page was paused by a dialog; the body is captured after the dialog is answered";
+    expect(logsWire({ ...base, entry: gone, body: { ...gone.body, text: null, truncated: false, reason } })).toEqual(samples.response_body_unavailable);
+  });
+
   it("evaluate results", () => {
     const ok: EvaluateResult = { ...head(200, defaultEmulation), value: "{\"user\":null,\"items\":3}", truncated: false, error: null, dialog: null };
     const failed: EvaluateResult = { ...head(200, defaultEmulation), value: null, truncated: false, error: "ReferenceError: foo is not defined", dialog: null };
@@ -145,8 +157,8 @@ describe("argument keys the host reads", () => {
     ["browser_snapshot", parseSnapshot, { tab: "t9", scope: "viewport", find: "needle", from_line: 37 }],
     ["browser_screenshot", parseScreenshot, { tab: "t9", full_page: false, ref: "e4" }],
     ["browser_tabs", parseTabs, { tab: "t9", action: "close" }],
-    ["browser_logs", parseLogs, { kind: "console", since: 41, level: "warning", failed_only: false, pattern: "needle", limit: 7, tab: "t9" }],
-    ["browser_logs", parseLogs, { kind: "network", since: 41, level: null, failed_only: true, pattern: "needle", limit: 7, tab: "t9" }],
+    ["browser_logs", parseLogs, { kind: "console", since: 41, level: "warning", failed_only: false, pattern: "needle", limit: 7, body: null, tab: "t9" }],
+    ["browser_logs", parseLogs, { kind: "network", since: 41, level: null, failed_only: true, pattern: "needle", limit: 7, body: null, tab: "t9" }],
     ["browser_evaluate", parseEvaluate, { tab: "t9", expression: "document.title" }],
   ];
   it.each(cases)("%s", (tool, parse, args) => {
@@ -158,6 +170,16 @@ describe("argument keys the host reads", () => {
       if (value === null || value === false) continue;
       expect(parsed).toContain(JSON.stringify(value));
     }
+  });
+
+
+  // 目的：读正文与列一页是两种请求；潜在缺陷：给了 body 仍按列表解析，宿主读到的仍是一页日志。
+  it("browser_logs with body", () => {
+    const args = { kind: "network", since: null, level: null, failed_only: false, pattern: null, limit: 50, body: 20, tab: "t9" };
+    expect(Object.keys(args).sort()).toEqual(Object.keys(schemas.browser_logs.properties).sort());
+    const parsed = parseLogs({ ...host, ...args });
+    expect(parsed).toMatchObject({ body: 20, tab: "t9" });
+    expect(parsed).not.toHaveProperty("query");
   });
 
   it("browser_act", () => {

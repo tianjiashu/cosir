@@ -48,7 +48,8 @@ export type SnapshotRequest = TabRequest & { view: SnapshotView };
 /** 截哪里：视口、整页（`fullPage`），或单个元素（`ref`，与 `fullPage` 互斥，后端校验过）。 */
 export type ScreenshotRequest = TabRequest & { fullPage: boolean; ref?: string };
 export type TabsRequest = TabRequest & { action: "list" | "select" | "close" };
-export type LogsRequest = TabRequest & { query: LogQuery };
+/** 列一页日志，或按序号读一条网络请求的响应体（`body`，后端已保证其余过滤条件为空）。 */
+export type LogsRequest = TabRequest & ({ query: LogQuery } | { body: number });
 export type EvaluateRequest = TabRequest & { expression: string };
 
 /** `ControlOrMeta` 在 macOS 上是 Meta、其他平台是 Control（与 Playwright 同名约定），模型不必知道宿主平台。 */
@@ -114,6 +115,7 @@ export function parseAct(params: unknown): ActRequest {
 
 export function parseLogs(params: unknown): LogsRequest {
   const { request, args } = toolRequest("browser_logs", params);
+  if (args.body !== null) return { ...request, body: args.body as number };
   const common = { since: given(args.since as number | null), pattern: given(args.pattern as string | null), limit: args.limit as number };
   const query: LogQuery = args.kind === "console"
     ? { kind: "console", ...common, level: given(args.level as ConsoleLevel | null) }

@@ -41,7 +41,21 @@ class BrowserLogsArgs(BaseModel):
         max_length=200,
         description="Only entries whose text or URL contains this, ignoring case.",
     )
-    limit: int = Field(default=50, ge=1, le=200, description="Maximum number of entries.")
+    limit: int = Field(
+        default=50,
+        ge=1,
+        le=200,
+        description="Maximum number of entries; ignored when reading a body.",
+    )
+    body: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "network only: read the response body of the request with this sequence number "
+            "(the #N of a listed request) instead of listing. Leave since, level and pattern null "
+            "and failed_only false."
+        ),
+    )
     tab: str | None = tab_field()
 
     @model_validator(mode="after")
@@ -50,4 +64,11 @@ class BrowserLogsArgs(BaseModel):
             raise ValueError("level applies to console logs only")
         if self.kind == "console" and self.failed_only:
             raise ValueError("failed_only applies to network logs only")
+        if self.body is not None:
+            if self.kind != "network":
+                raise ValueError("body applies to network logs only")
+            if self.since is not None or self.pattern is not None or self.failed_only:
+                raise ValueError(
+                    "body reads one request; leave since and pattern null and failed_only false"
+                )
         return self

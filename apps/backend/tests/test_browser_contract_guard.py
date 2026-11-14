@@ -190,14 +190,34 @@ def test_network_logs_sample_renders_outcomes_drops_and_more_after(
 
     fenced = content.split("<network_requests>\n")[1].split("\n</network_requests>")[0]
     assert fenced.splitlines() == [
-        "#20 GET http://127.0.0.1:5173/api/me → 401 (Fetch, 31 ms)",
+        "#20 GET http://127.0.0.1:5173/api/me → 401 (Fetch, 31 ms) · body: application/json, 27 B",
         "#21 POST http://127.0.0.1:5173/api/login → failed: net::ERR_CONNECTION_REFUSED (XHR)",
-        "#22 GET http://127.0.0.1:5173/api/stream → no response yet (Fetch)",
+        "#22 GET http://127.0.0.1:5173/api/stream → no response yet (Fetch) · body: capturing",
     ]
     assert "entries before #18 were dropped" in content
     assert "more matching entries follow; pass since=23 to read on." in content
     assert "read browser_logs without since later to see their final state." in content
     assert "older matching entries" not in content
+
+
+def test_response_body_samples_render_the_body_or_why_there_is_none(
+    samples: dict[str, Any],
+) -> None:
+    content = logs_text(samples["response_body"])
+    assert "request: #20 GET http://127.0.0.1:5173/api/me → 401 (Fetch, 31 ms)" in content
+    assert "response body (application/json, 27 B):" in content
+    assert '<response_body>\n{"error":"not signed in"}\n</response_body>' in content
+    assert "next" not in content.split("response body")[0].split("request:")[1]
+
+    truncated = logs_text(samples["response_body_truncated"])
+    assert "response body (application/json, 293.0 KB; only the first 9 B were kept):" in truncated
+
+    unavailable = logs_text(samples["response_body_unavailable"])
+    assert (
+        "no body: the page was paused by a dialog; the body is captured after the dialog is "
+        "answered" in unavailable
+    )
+    assert "<response_body>" not in unavailable
 
 
 def test_evaluate_samples_render_each_outcome(samples: dict[str, Any]) -> None:

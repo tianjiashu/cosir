@@ -20,7 +20,7 @@ import { browserError } from "./errors";
 import type { ActResult } from "./input/actions";
 import type { ActRequest, EvaluateRequest, LogsRequest, NavigateRequest, ScreenshotRequest, SnapshotRequest, TabRequest, TabsRequest } from "./params";
 import type { Emulation } from "./tab-emulation";
-import type { ConsoleEntry, LogPage, NetworkEntry, PageDigest } from "./tab-log";
+import type { ConsoleEntry, LogPage, NetworkEntry, PageDigest, ResponseBody } from "./tab-log";
 import { abortable } from "./abortable";
 import { budgetSignal, deadlineMs, withinDeadline } from "./deadlines";
 import type { Outline } from "./snapshot/outline";
@@ -43,7 +43,7 @@ export type PageResult = PageHead & PageDigest & {
 /** 一次动作序列的结果：执行到哪一步、停在哪（若有），以及之后的页面。 */
 export type ActOutcome = PageHead & { execution: ActResult; observation: PageResult | null; observationError: { code: string; message: string } | null };
 
-export type LogsResult = PageHead & ({ kind: "console" } & LogPage<ConsoleEntry> | { kind: "network" } & LogPage<NetworkEntry>);
+export type LogsResult = PageHead & ({ kind: "console" } & LogPage<ConsoleEntry> | { kind: "network" } & LogPage<NetworkEntry> | { kind: "response_body"; entry: NetworkEntry; body: ResponseBody });
 
 export type EvaluateResult = PageHead & EvaluateOutcome;
 
@@ -183,10 +183,18 @@ export class BrowserHost implements BrowserSessionEvents {
     });
   }
 
-  /** 读标签的 console 或网络日志：只读缓冲，不发 CDP，页面停住时照样能读。 */
+  /**
+   * 读标签的 console 或网络日志，或一条网络请求的响应体：只读缓冲，不发 CDP，页面停住时照样能读（响应体在请求
+   * 结束时已采下，见 `TabLog`）。序号不在网络日志里时报 `INVALID_PARAMS`：调用方给了不存在的请求。
+   */
   async logs(request: LogsRequest, signal: AbortSignal): Promise<LogsResult> {
     return this.operate(this.agentEntry(request), signal, async (tab) => {
       const head = this.head(tab);
+      if ("body" in request) {
+        const read = tab.log.readBody(request.body);
+        if (!read) throw browserError("INVALID_PARAMS", `this tab's log has no network request #${request.body}; it may have been dropped to make room for newer ones`);
+        return { ...head, kind: "response_body", ...read };
+      }
       return request.query.kind === "console"
         ? { ...head, kind: "console", ...tab.log.read(request.query) }
         : { ...head, kind: "network", ...tab.log.read(request.query) };

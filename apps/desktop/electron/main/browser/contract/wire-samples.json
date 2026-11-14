@@ -154,7 +154,12 @@
         "status": 401,
         "resource_type": "Fetch",
         "failure": null,
-        "duration_ms": 31
+        "duration_ms": 31,
+        "body": {
+          "state": "text",
+          "mime": "application/json",
+          "size": 27
+        }
       },
       {
         "seq": 21,
@@ -163,7 +168,8 @@
         "status": null,
         "resource_type": "XHR",
         "failure": "net::ERR_CONNECTION_REFUSED",
-        "duration_ms": null
+        "duration_ms": null,
+        "body": null
       },
       {
         "seq": 22,
@@ -172,7 +178,12 @@
         "status": null,
         "resource_type": "Fetch",
         "failure": null,
-        "duration_ms": null
+        "duration_ms": null,
+        "body": {
+          "state": "pending",
+          "mime": null,
+          "size": null
+        }
       }
     ],
     "next": 23,
@@ -364,6 +375,117 @@
     "observation_error": {
       "code": "DIALOG_OPEN",
       "message": "the page is paused: it is showing a confirm dialog (#7)"
+    }
+  },
+  "response_body": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null,
+      "follows_panel": true
+    },
+    "kind": "response_body",
+    "entry": {
+      "seq": 20,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/api/me",
+      "status": 401,
+      "resource_type": "Fetch",
+      "failure": null,
+      "duration_ms": 31,
+      "body": {
+        "state": "text",
+        "mime": "application/json",
+        "size": 27
+      }
+    },
+    "body": {
+      "state": "text",
+      "mime": "application/json",
+      "size": 27,
+      "text": "{\"error\":\"not signed in\"}",
+      "truncated": false,
+      "reason": null
+    }
+  },
+  "response_body_truncated": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null,
+      "follows_panel": true
+    },
+    "kind": "response_body",
+    "entry": {
+      "seq": 24,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/api/export",
+      "status": 200,
+      "resource_type": "Fetch",
+      "failure": null,
+      "duration_ms": 31,
+      "body": {
+        "state": "text",
+        "mime": "application/json",
+        "size": 300000
+      }
+    },
+    "body": {
+      "state": "text",
+      "mime": "application/json",
+      "size": 300000,
+      "text": "[{\"id\":1}",
+      "truncated": true,
+      "reason": null
+    }
+  },
+  "response_body_unavailable": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null,
+      "follows_panel": true
+    },
+    "kind": "response_body",
+    "entry": {
+      "seq": 25,
+      "method": "GET",
+      "url": "http://127.0.0.1:5173/api/save",
+      "status": 500,
+      "resource_type": "Fetch",
+      "failure": null,
+      "duration_ms": 31,
+      "body": {
+        "state": "deferred",
+        "mime": "application/json",
+        "size": null
+      }
+    },
+    "body": {
+      "state": "deferred",
+      "mime": "application/json",
+      "size": null,
+      "text": null,
+      "truncated": false,
+      "reason": "the page was paused by a dialog; the body is captured after the dialog is answered"
     }
   }
 }

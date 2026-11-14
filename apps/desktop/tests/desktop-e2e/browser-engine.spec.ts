@@ -90,6 +90,14 @@ const PAGES: Record<string, string> = {
     <a href="/second" target="_blank">Popup</a>
     <script>document.querySelector('select').addEventListener('change', (e) => { document.title = 'color:' + e.target.value; });</script>`,
   "/done": `<title>Done</title><p>Search finished</p>`,
+  "/api-calls": `<title>Calls</title><script>
+    new EventSource("/sse");
+    Promise.all([fetch("/api/save", { method: "POST" }), fetch("/api/bin"), fetch("/api/redirect"), fetch("/api/big")])
+      .then((responses) => Promise.all(responses.map((r) => r.arrayBuffer()))).then(() => { document.title = "done"; });
+  </script>`,
+  "/save-fail": `<title>Save</title><script>
+    fetch("/api/save", { method: "POST" }).then((r) => r.json()).then(() => { alert("保存失败"); document.title = "after alert"; });
+  </script>`,
   "/rich": `<title>Rich</title>
     <button onmouseenter="document.getElementById('items').hidden = false">Menu</button>
     <div id="items" hidden><a href="#picked">Hidden item</a></div>
@@ -122,6 +130,38 @@ test.beforeAll(async () => {
     if (request.url === "/moved") {
       response.writeHead(302, { location: "/responsive" });
       response.end();
+      return;
+    }
+    if (request.url === "/api/save") {
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "quota exceeded" }));
+      return;
+    }
+    if (request.url === "/api/bin") {
+      response.writeHead(200, { "content-type": "image/png" });
+      response.end(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+      return;
+    }
+    if (request.url === "/api/redirect") {
+      response.writeHead(302, { location: "/api/ok" });
+      response.end();
+      return;
+    }
+    if (request.url === "/api/big") {
+      // 比宿主单条上限（256 KB）大、比渲染进程单条缓冲（1 MB）小：取得到，存的时候截断。
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ rows: "x".repeat(300 * 1024) }));
+      return;
+    }
+    if (request.url === "/sse") {
+      // 一条事件后结束；retry 很长，免得 EventSource 在测试期间反复重连。
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end("retry: 600000\ndata: hello\n\n");
+      return;
+    }
+    if (request.url === "/api/ok") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"ok":true}');
       return;
     }
     if (request.url === "/no-content") {
@@ -189,7 +229,7 @@ const WIRE_DEFAULTS: Record<string, Record<string, unknown>> = {
   "browser.navigate": { url: null, action: null, tab: null, new_tab: false, viewport: null, color_scheme: null },
   "browser.snapshot": { tab: null, scope: "page", find: null, from_line: null },
   "browser.act": { tab: null },
-  "browser.logs": { since: null, level: null, failed_only: false, pattern: null, limit: 50, tab: null },
+  "browser.logs": { since: null, level: null, failed_only: false, pattern: null, limit: 50, body: null, tab: null },
   "browser.evaluate": { tab: null },
   "browser.screenshot": { tab: null, full_page: false, ref: null },
   "browser.tabs": { tab: null },
@@ -886,6 +926,51 @@ test("captures console messages, uncaught errors and failed requests, and pages 
   const all = valueOf(await link("browser.logs", 51, { kind: "console", since: 0 }));
   const fresh = valueOf(await link("browser.logs", 51, { kind: "console", since: all.next as number }));
   expect(fresh.entries).toEqual([]);
+});
+
+type WireEntry = { seq: number; url: string; status: number | null; body: { state: string; mime: string | null; size: number | null } | null };
+
+// 目的：调试自己的应用时看得到接口实际返回了什么；潜在缺陷：渲染进程不保留正文（缓冲太小）、二进制被当文本、
+// 重定向的正文串到上一跳，或换页后正文就读不到了。
+test("captures response bodies when requests end and keeps them readable after navigating", async () => {
+  await link("browser.navigate", 70, { url: `${origin}/api-calls` });
+  await expect.poll(async () => valueOf(await link("browser.snapshot", 70, {})).title).toBe("done");
+  const listed = () => link("browser.logs", 70, { kind: "network", since: 0 }).then((outcome) => valueOf(outcome).entries as WireEntry[]);
+  await expect.poll(async () => (await listed()).find((entry) => entry.url.endsWith("/api/save"))?.body?.state).toBe("text");
+  const entries = await listed();
+  const byPath = (path: string) => entries.filter((entry) => entry.url === `${origin}${path}`);
+  expect(byPath("/api/bin")[0].body).toMatchObject({ state: "binary", mime: "image/png" });
+  expect(byPath("/api/redirect").map((entry) => entry.body)).toEqual([null]);
+  expect(byPath("/api/ok")[0].body).toMatchObject({ state: "text", mime: "application/json" });
+  expect(byPath("/sse")[0].body).toMatchObject({ state: "streaming" });
+  await expect.poll(async () => (await listed()).find((entry) => entry.url.endsWith("/api/big"))?.body?.state).toBe("text");
+  const big = (await listed()).find((entry) => entry.url.endsWith("/api/big"))!;
+  const bigBody = valueOf(await link("browser.logs", 70, { kind: "network", body: big.seq })).body as { size: number; truncated: boolean; text: string };
+  expect(bigBody.truncated).toBe(true);
+  expect(bigBody.size).toBeGreaterThan(300 * 1024);
+  expect(Buffer.byteLength(bigBody.text)).toBeLessThanOrEqual(256 * 1024);
+  const save = byPath("/api/save")[0];
+  const read = valueOf(await link("browser.logs", 70, { kind: "network", body: save.seq }));
+  expect(read).toMatchObject({ kind: "response_body", entry: { seq: save.seq, status: 500 }, body: { state: "text", text: '{"error":"quota exceeded"}', truncated: false } });
+
+  await link("browser.navigate", 70, { url: `${origin}/second` });
+  expect(valueOf(await link("browser.logs", 70, { kind: "network", body: save.seq }))).toMatchObject({ body: { state: "text", text: '{"error":"quota exceeded"}' } });
+  expect(await link("browser.logs", 70, { kind: "network", body: 999_999 })).toMatchObject({ ok: false, code: "INVALID_PARAMS" });
+});
+
+// 目的：核心场景「拿到响应就 alert」也读得到正文；潜在缺陷：采集抢不过弹窗，被闸门拒绝后永久丢失。
+test("reads the body of a request whose response opened a dialog, once the dialog is answered", async () => {
+  await link("browser.navigate", 71, { url: `${origin}/save-fail` });
+  let dialog: { id: number } | null = null;
+  await expect.poll(async () => { dialog = valueOf(await link("browser.snapshot", 71, {})).dialog as { id: number } | null; return dialog; }).not.toBeNull();
+  // 页面停着时日志照样能读；正文这时可能已采下，也可能在等弹窗答完。
+  const paused = valueOf(await link("browser.logs", 71, { kind: "network" })).entries as WireEntry[];
+  const save = paused.find((entry) => entry.url.endsWith("/api/save"))!;
+  expect(["text", "deferred"]).toContain(save.body?.state);
+
+  await link("browser.act", 71, { actions: [{ type: "dialog", accept: true, id: dialog!.id }] });
+  await expect.poll(async () => (valueOf(await link("browser.logs", 71, { kind: "network", body: save.seq })).body as { state: string }).state).toBe("text");
+  expect(valueOf(await link("browser.logs", 71, { kind: "network", body: save.seq }))).toMatchObject({ body: { text: '{"error":"quota exceeded"}' } });
 });
 
 // 目的：执行 JS 拿到值或错误，脚本弹窗时页面停住要报出来；潜在缺陷：抛错被当作调用失败，或弹窗让调用挂到超时。

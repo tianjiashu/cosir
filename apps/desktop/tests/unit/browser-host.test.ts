@@ -109,6 +109,23 @@ describe("BrowserHost 资源生命周期", () => {
     await expect(snapshot).resolves.toMatchObject({ tabId: "t1", snapshot: "- text 'page'" });
   });
 
+
+  // 目的：读正文按序号找请求、交接中照样能读；潜在缺陷：找不到时静默返回空正文，或交接把只读的日志读取也拦下。
+  it("reads a response body by sequence number, also during a handoff, and rejects an unknown number", async () => {
+    const host = new BrowserHost(() => null);
+    const opening = host.userOpen(1, limits);
+    tab().finish();
+    await opening;
+    const entry = { seq: 20, method: "POST", url: "http://a/api/save", status: 500, resourceType: "Fetch", failure: null, durationMs: 3, body: { state: "text", mime: "application/json", size: 2 } };
+    const body = { ...entry.body, text: "{}", truncated: false, reason: null };
+    Object.assign(tab().log, { readBody: vi.fn((seq: number) => (seq === 20 ? { entry, body } : null)) });
+
+    const read = await host.logs({ sessionId: 1, context: limits, handoffTabs: ["t1"], body: 20 }, new AbortController().signal);
+    expect(read).toMatchObject({ tabId: "t1", kind: "response_body", entry: { seq: 20 }, body: { text: "{}" } });
+    await expect(host.logs({ sessionId: 1, context: limits, body: 99 }, new AbortController().signal))
+      .rejects.toMatchObject({ code: "INVALID_PARAMS", message: expect.stringContaining("#99") });
+  });
+
   // 目的：面板能标出「Agent 此刻正在执行」；潜在缺陷：计数在失败或取消时没减回去，标记一直亮着。
   it("标签在 Agent 操作执行期间标为忙碌，结束（含失败）后恢复并推送", async () => {
     const host = new BrowserHost(() => null);

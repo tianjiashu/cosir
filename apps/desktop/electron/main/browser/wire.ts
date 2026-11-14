@@ -1,5 +1,6 @@
 import type { BrowserDialog } from "../../shared/host-contract";
 import type { ActOutcome, EvaluateResult, LogsResult, PageHead, PageResult, ScreenshotResult, SessionTab } from "./browser-host";
+import type { NetworkEntry } from "./tab-log";
 
 /**
  * `browser.*` 方法的出站适配：领域结果（驼峰）→ 后端读取的线上形状（蛇形）。与入站的 `params.ts` 对称，线上形状
@@ -39,12 +40,18 @@ export function actWire(outcome: ActOutcome) {
   return { ...pageHeadWire(outcome), execution: outcome.execution, observation: outcome.observation ? pageWire(outcome.observation) : null, observation_error: outcome.observationError };
 }
 
+function networkEntryWire({ seq, method, url, status, resourceType, failure, durationMs, body }: NetworkEntry) {
+  return { seq, method, url, status, resource_type: resourceType, failure, duration_ms: durationMs, body: body && { state: body.state, mime: body.mime, size: body.size } };
+}
+
 export function logsWire(logs: LogsResult) {
+  if (logs.kind === "response_body") {
+    const { state, mime, size, text, truncated, reason } = logs.body;
+    return { ...pageHeadWire(logs), kind: logs.kind, entry: networkEntryWire(logs.entry), body: { state, mime, size, text, truncated, reason } };
+  }
   const entries = logs.kind === "console"
     ? logs.entries.map(({ seq, level, text, source, frame }) => ({ seq, level, text, source, frame }))
-    : logs.entries.map(({ seq, method, url, status, resourceType, failure, durationMs }) => ({
-      seq, method, url, status, resource_type: resourceType, failure, duration_ms: durationMs,
-    }));
+    : logs.entries.map(networkEntryWire);
   return {
     ...pageHeadWire(logs),
     kind: logs.kind,

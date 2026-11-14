@@ -25,6 +25,7 @@ DIALOG_TAG = "dialog_message"
 SCRIPT_RESULT_TAG = "script_result"
 SCRIPT_ERROR_TAG = "script_error"
 LOG_TAGS = {"console": "console_messages", "network": "network_requests"}
+BODY_TAG = "response_body"
 _LOG_NOUNS = {"console": "console message", "network": "network request"}
 
 
@@ -194,7 +195,31 @@ def _console_entry(entry: dict[str, Any]) -> str:
     return line.replace("\n", "\n    ")
 
 
-def _network_entry(entry: dict[str, Any]) -> str:
+def _size(size: int) -> str:
+    return f"{size} B" if size < 1024 else f"{size / 1024:.1f} KB"
+
+
+def _body_label(body: dict[str, Any]) -> str:
+    """列表行上的响应体状态（方案「响应体状态表」）：模型据此决定读哪一条，不必挨个试。"""
+
+    state, mime, size = body["state"], body["mime"], body["size"]
+    if state == "text":
+        return f"body: {mime or 'text'}, {_size(size)}"
+    if state == "binary":
+        return f"body: {mime or 'binary'}, {_size(size)} transferred, not text"
+    if state == "too_large":
+        return f"body: too large to keep ({_size(size)} transferred)"
+    return {
+        "pending": "body: capturing",
+        "deferred": "body: waits for the dialog to be answered",
+        "empty": "body: empty",
+        "evicted": "body: dropped for newer ones",
+        "streaming": "body: stream, none",
+        "unavailable": "body: not captured",
+    }[state]
+
+
+def _network_line(entry: dict[str, Any]) -> str:
     if entry["failure"] is not None:
         outcome = f"failed: {entry['failure']}"
     elif entry["status"] is not None:
@@ -207,10 +232,34 @@ def _network_entry(entry: dict[str, Any]) -> str:
     return f"#{entry['seq']} {entry['method']} {entry['url']} → {outcome} ({', '.join(details)})"
 
 
+def _network_entry(entry: dict[str, Any]) -> str:
+    line = _network_line(entry)
+    return line if entry["body"] is None else f"{line} · {_body_label(entry['body'])}"
+
+
+def response_body_text(result: dict[str, Any]) -> str:
+    """``browser_logs`` 读正文：页头、请求本身，再是正文（边界标签内）或没有正文的原因。"""
+
+    lines = header_lines(result)
+    lines.append(f"request: {_network_line(result['entry'])}")
+    body = result["body"]
+    if body["text"] is None:
+        lines.append(f"no body: {body['reason']}")
+        return "\n".join(lines)
+    described = f"{body['mime'] or 'text'}, {_size(body['size'])}"
+    if body["truncated"]:
+        described += f"; only the first {_size(len(body['text'].encode('utf-8')))} were kept"
+    lines.append(f"response body ({described}):")
+    lines.append(fenced(body["text"], BODY_TAG))
+    return "\n".join(lines)
+
+
 def logs_text(result: dict[str, Any]) -> str:
-    """``browser_logs``：页头、条目（边界标签内）与游标说明。"""
+    """``browser_logs``：页头、条目（边界标签内）与游标说明；读正文的结果交给 ``response_body_text``。"""
 
     kind = result["kind"]
+    if kind == "response_body":
+        return response_body_text(result)
     noun = _LOG_NOUNS[kind]
     lines = header_lines(result)
     entries = result["entries"]
