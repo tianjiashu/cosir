@@ -382,7 +382,7 @@ describe("回执页面事实与投影语义", () => {
       return execution;
     });
     tab().snapshot.mockRejectedValueOnce(new Error("the page is paused"));
-    const outcome = await host.act({ sessionId: 1, context: limits, actions: [{ type: "click", target: { ref: "e2" }, button: "left", clickCount: 1, modifiers: [] }] }, new AbortController().signal);
+    const outcome = await host.act({ sessionId: 1, context: limits, actions: [{ type: "click", target: { ref: "e2" }, button: "left", clickCount: 1, repeat: 1, modifiers: [] }] }, new AbortController().signal);
     expect(outcome).toMatchObject({ url: "https://after.example/new", title: "after", loading: false, execution, observation: null, observationError: { code: "ACTION_FAILED" } });
     host.closeAll();
   });
@@ -399,7 +399,7 @@ describe("回执页面事实与投影语义", () => {
       return execution;
     });
     tab().snapshot.mockRejectedValueOnce(new HostMethodError("TAB_NOT_FOUND", "tab t1 was closed"));
-    const outcome = await host.act({ sessionId: 1, context: limits, actions: [{ type: "click", target: { x: 1, y: 1 }, button: "left", clickCount: 1, modifiers: [] }] }, new AbortController().signal);
+    const outcome = await host.act({ sessionId: 1, context: limits, actions: [{ type: "click", target: { x: 1, y: 1 }, button: "left", clickCount: 1, repeat: 1, modifiers: [] }] }, new AbortController().signal);
     expect(outcome).toMatchObject({ url: "https://before.example/old", title: "before", execution, observation: null, observationError: { code: "TAB_NOT_FOUND" } });
     host.closeAll();
   });
@@ -447,7 +447,7 @@ describe("回执页面事实与投影语义", () => {
     const opening = host.userOpen(1, limits);
     tab().finish(); await opening;
     tab().url = "https://after.example/new"; tab().title = "after"; tab().act.mockResolvedValue(execution);
-    const outcome = await host.act({ sessionId: 1, context: limits, actions: [{ type: "click", target: { x: 1, y: 1 }, button: "left", clickCount: 1, modifiers: [] }] }, new AbortController().signal);
+    const outcome = await host.act({ sessionId: 1, context: limits, actions: [{ type: "click", target: { x: 1, y: 1 }, button: "left", clickCount: 1, repeat: 1, modifiers: [] }] }, new AbortController().signal);
     expect(outcome.observation).not.toBeNull();
     expect({ url: outcome.url, title: outcome.title, status: outcome.status, emulation: outcome.emulation })
       .toEqual({ url: outcome.observation!.url, title: outcome.observation!.title, status: outcome.observation!.status, emulation: outcome.observation!.emulation });

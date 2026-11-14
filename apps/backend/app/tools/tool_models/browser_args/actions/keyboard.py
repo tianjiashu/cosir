@@ -4,7 +4,12 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.tools.tool_models.browser_args._shared import MODIFIERS, REF_FIELD, REF_PATTERN
+from app.tools.tool_models.browser_args._shared import (
+    MODIFIERS,
+    REF_FIELD,
+    REF_PATTERN,
+    repeat_field,
+)
 
 _KEY_BY_KEY_MAX_CHARS = 500
 
@@ -45,7 +50,7 @@ class TypeAction(BaseModel):
         ),
     )
 
-    # 逐键输入每个字符两条 CDP 命令：限长让一次动作的耗时可预期（宿主时限按动作数估算）。
+    # 逐键输入每个字符两条 CDP 命令：限长让一次动作的耗时可预期（宿主的方法总时限是固定的，动作要在它之内收尾）。
     @model_validator(mode="after")
     def _key_by_key_length(self) -> "TypeAction":
         if self.key_by_key and len(self.text) > _KEY_BY_KEY_MAX_CHARS:
@@ -74,3 +79,4 @@ class PressAction(BaseModel):
         pattern=REF_PATTERN,
         description="Focus this element before pressing; null presses on the focused element.",
     )
+    repeat: int = repeat_field("Press it")

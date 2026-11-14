@@ -98,7 +98,7 @@ BROWSER_ERRORS: dict[str, tuple[str, str]] = {
     "SCROLL_END": (
         "Nothing further that way. If the page loads more as you scroll, wait briefly and "
         "scroll again.",
-        "已到底",
+        "已到尽头",
     ),
     "ACTION_FAILED": ("Check the latest snapshot before trying again.", "执行失败"),
 }

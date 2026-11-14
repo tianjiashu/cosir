@@ -1,6 +1,7 @@
 import { browserError } from "../errors";
 import { actionable, callOn, element, evaluate, mutateOn, onNode } from "./element";
 import { certainNoEffect, type BrowserOperation } from "../operation";
+import type { ScrollDirection } from "../params";
 
 /**
  * 在页面里执行的固定函数（滚动、清空字段、选择下拉项）与用它们实现的动作。函数体是本模块里写死的字符串，
@@ -11,16 +12,21 @@ import { certainNoEffect, type BrowserOperation } from "../operation";
  * 从元素往上找最近的可滚动区域（含自身），找不到就滚整页。`behavior: "instant"` 绕过页面的平滑滚动：
  * 否则滚动异步进行，立刻比较位置会误判为滚不动。
  */
-const SCROLL_AREA = `function (down) {
-  const scrollable = (node) =>
-    /(auto|scroll|overlay)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight;
-  // 根元素/视口的可滚性不能用 overflowY 谓词：标准模式下 html 的 overflowY 常是 visible，但视口仍随内容滚动。
+const SCROLL_AREA = `function (direction) {
+  // 按方向取轴：左右滚横轴（overflowX / scrollWidth / scrollLeft），上下滚纵轴；两轴的判定规则相同。
+  const sideways = direction === "left" || direction === "right";
+  const forward = direction === "down" || direction === "right";
+  const overflow = (node) => getComputedStyle(node)[sideways ? "overflowX" : "overflowY"];
+  const extent = (node) => sideways ? node.scrollWidth > node.clientWidth : node.scrollHeight > node.clientHeight;
+  const offset = (node) => sideways ? node.scrollLeft : node.scrollTop;
+  const scrollable = (node) => /(auto|scroll|overlay)/.test(overflow(node)) && extent(node);
+  // 根元素/视口的可滚性不能用 overflow 谓词：标准模式下 html 的 overflow 常是 visible，但视口仍随内容滚动。
   // html overflow hidden/clip 会把视口锁死；怪异模式下 scrollingElement 不是视口滚动的可靠来源。
   const viewportScroller = () => {
     const root = document.scrollingElement;
     if (!root) return null;
-    if (/(hidden|clip)/.test(getComputedStyle(document.documentElement).overflowY)) return null;
-    return root.scrollHeight > root.clientHeight ? root : null;
+    if (/(hidden|clip)/.test(overflow(document.documentElement))) return null;
+    return extent(root) ? root : null;
   };
   const viewport = viewportScroller();
   const bodyScrollable = scrollable(document.body);
@@ -29,13 +35,17 @@ const SCROLL_AREA = `function (down) {
   while (target && target !== document.body && target !== document.documentElement && !scrollable(target)) target = target.parentElement;
   if (!target || target === document.body || target === document.documentElement || !scrollable(target)) target = page;
   const isPage = target === document.scrollingElement || target === document.body || target === document.documentElement;
-  const before = target.scrollTop;
-  const height = isPage ? (target.clientHeight || innerHeight) : target.clientHeight;
-  target.scrollBy({ top: (down ? 1 : -1) * Math.round(height * 0.8), behavior: "instant" });
-  if (target.scrollTop !== before) return "";
+  const before = offset(target);
+  const size = sideways
+    ? (isPage ? (target.clientWidth || innerWidth) : target.clientWidth)
+    : (isPage ? (target.clientHeight || innerHeight) : target.clientHeight);
+  const amount = (forward ? 1 : -1) * Math.round(size * 0.8);
+  target.scrollBy({ [sideways ? "left" : "top"]: amount, behavior: "instant" });
+  if (offset(target) !== before) return "";
   // 只有「视口和 body 都不是滚动器」才是页面不可滚；否则不能滚说明已到边界。
-  if (isPage && !viewport && !bodyScrollable) return "the page cannot scroll (no scrollable area)";
-  return (isPage ? "the page" : "this area") + " is already at the " + (down ? "bottom" : "top");
+  if (isPage && !viewport && !bodyScrollable) return sideways ? "the page cannot scroll sideways (no scrollable area)" : "the page cannot scroll (no scrollable area)";
+  const edge = { down: "bottom", up: "top", left: "left edge", right: "right edge" }[direction];
+  return (isPage ? "the page" : "this area") + " is already at the " + edge;
 }`;
 
 export const CLEAR_FIELD = `function () {
@@ -62,20 +72,19 @@ const SELECT_OPTIONS = `function (values) {
 }`;
 
 /**
- * 有方向时滚动一屏左右：带 ref 滚动包含该元素的可滚动区域（虚拟列表只渲染可见部分，只有滚它才有后面的
+ * 有方向时滚动一屏左右（上下滚纵轴，左右滚横轴）：带 ref 滚动包含该元素的可滚动区域（虚拟列表只渲染可见部分，只有滚它才有后面的
  * 内容），不带 ref 滚动整页；滚不动报 `SCROLL_END`，让无限滚动的批次停下而不是空转。只有 ref 时把元素滚入
  * 视野（截图前定位用；点击与输入会自己滚）。不用 CDP 滚轮：视图不挂在窗口上时它永远不返回（实测）。
  */
-export async function scroll(session: BrowserOperation, direction: "up" | "down" | undefined, ref: string | undefined): Promise<void> {
+export async function scroll(session: BrowserOperation, direction: ScrollDirection | undefined, ref: string | undefined): Promise<void> {
   if (direction === undefined) {
     await onNode(session, await element(session, ref!), "DOM.scrollIntoViewIfNeeded");
     return;
   }
-  const down = direction === "down";
-  // 页面函数确认 scrollTop 未变（problem 非空）时页面一定没有滚动：结算 failed，而不是 unknown。
+  // 页面函数确认滚动位置未变（problem 非空）时页面一定没有滚动：结算 failed，而不是 unknown。
   const problem = ref
-    ? await mutateOn(session, await element(session, ref), SCROLL_AREA, [down])
-    : await session.effect(() => evaluate(session, `(${SCROLL_AREA}).call(document.documentElement, ${down})`));
+    ? await mutateOn(session, await element(session, ref), SCROLL_AREA, [direction])
+    : await session.effect(() => evaluate(session, `(${SCROLL_AREA}).call(document.documentElement, ${JSON.stringify(direction)})`));
   if (problem) throw certainNoEffect(browserError("SCROLL_END", problem));
 }
 

@@ -65,7 +65,7 @@ function run(session: BrowserOperation, action: PageAction, signal: AbortSignal,
     case "type":
       return typeText(session, action.ref, action.text, action);
     case "press":
-      return pressKey(session, action.key, action.modifiers, action.ref);
+      return pressKey(session, action.key, action.modifiers, action.repeat, action.ref);
     case "select":
       return select(session, action.ref, action.values);
     case "scroll":

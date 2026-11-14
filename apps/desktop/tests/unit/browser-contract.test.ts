@@ -190,12 +190,12 @@ describe("argument keys the host reads", () => {
 
   it("browser_act", () => {
     const actions = {
-      click: { type: "click", ref: null, x: 4, y: 8, button: "right", click_count: 2, modifiers: ["Alt"] },
+      click: { type: "click", ref: null, x: 4, y: 8, button: "right", click_count: 3, repeat: 1, modifiers: ["Alt"] },
       hover: { type: "hover", ref: "e6", x: null, y: null },
       drag: { type: "drag", start: { ref: "e7", x: null, y: null }, end: { ref: null, x: 1, y: 2 } },
       type: { type: "type", ref: "e1", text: "hello", clear: true, submit: true, key_by_key: true },
-      press: { type: "press", key: "Enter", modifiers: ["Shift"], ref: "e2" },
-      scroll: { type: "scroll", direction: "up", ref: "e3" },
+      press: { type: "press", key: "Enter", modifiers: ["Shift"], ref: "e2", repeat: 5 },
+      scroll: { type: "scroll", direction: "left", ref: "e3" },
       wait_for: { type: "wait_for", text: null, text_gone: "Loading", seconds: 3 },
       dialog: { type: "dialog", accept: true, text: "Ada", id: 4 },
       select: { type: "select", ref: "e5", values: ["b"] },
@@ -203,12 +203,12 @@ describe("argument keys the host reads", () => {
     };
     const parsed = parseAct({ ...host, tab: "t9", actions: Object.values(actions) }).actions;
     expect(parsed).toEqual([
-      { type: "click", target: { x: 4, y: 8 }, button: "right", clickCount: 2, modifiers: ["Alt"] },
+      { type: "click", target: { x: 4, y: 8 }, button: "right", clickCount: 3, repeat: 1, modifiers: ["Alt"] },
       { type: "hover", target: { ref: "e6" } },
       { type: "drag", start: { ref: "e7" }, end: { x: 1, y: 2 } },
       { type: "type", ref: "e1", text: "hello", clear: true, submit: true, keyByKey: true },
-      { type: "press", key: "Enter", modifiers: ["Shift"], ref: "e2" },
-      { type: "scroll", direction: "up", ref: "e3" },
+      { type: "press", key: "Enter", modifiers: ["Shift"], repeat: 5, ref: "e2" },
+      { type: "scroll", direction: "left", ref: "e3" },
       { type: "wait_for", text: undefined, textGone: "Loading", seconds: 3 },
       { type: "dialog", accept: true, text: "Ada", id: 4 },
       { type: "select", ref: "e5", values: ["b"] },

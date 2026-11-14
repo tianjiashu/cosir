@@ -60,15 +60,18 @@ export type Modifier = "Alt" | "Control" | "Meta" | "Shift" | "ControlOrMeta";
 /** 鼠标落点：快照里的元素（取中心），或视口坐标（CSS 像素，与视口截图的像素一致）。 */
 export type PointerTarget = { ref: string } | { x: number; y: number };
 
+export type ScrollDirection = "up" | "down" | "left" | "right";
+
 export type PageAction =
-  | { type: "click"; target: PointerTarget; button: "left" | "right"; clickCount: 1 | 2; modifiers: Modifier[] }
+  /** `clickCount` 是一次多击手势（双击、三击）；`repeat` 是连续独立点击几次（后端保证两者不同时大于 1）。 */
+  | { type: "click"; target: PointerTarget; button: "left" | "right"; clickCount: 1 | 2 | 3; repeat: number; modifiers: Modifier[] }
   | { type: "hover"; target: PointerTarget }
   | { type: "drag"; start: PointerTarget; end: PointerTarget }
   | { type: "type"; ref: string; text: string; clear: boolean; submit: boolean; keyByKey: boolean }
-  | { type: "press"; key: string; modifiers: Modifier[]; ref?: string }
+  | { type: "press"; key: string; modifiers: Modifier[]; repeat: number; ref?: string }
   | { type: "select"; ref: string; values: string[] }
   /** 有方向：滚动整页，或（带 ref）滚动包含该元素的可滚动区域；只有 ref：把元素滚入视野。 */
-  | { type: "scroll"; direction?: "up" | "down"; ref?: string }
+  | { type: "scroll"; direction?: ScrollDirection; ref?: string }
   /** `text` 与 `textGone` 至多一个；三者至少一个。 */
   | { type: "wait_for"; text?: string; textGone?: string; seconds?: number }
   /** 路径是后端解析好的本机绝对路径；省略 ref 即回答 Agent 的动作让页面打开的选文件框。 */
@@ -156,7 +159,8 @@ type WirePoint = { ref?: string | null; x?: number | null; y?: number | null };
 type WireAction = WirePoint & {
   type: PageAction["type"];
   button?: "left" | "right";
-  click_count?: 1 | 2;
+  click_count?: 1 | 2 | 3;
+  repeat?: number;
   start?: WirePoint;
   end?: WirePoint;
   text?: string | null;
@@ -167,7 +171,7 @@ type WireAction = WirePoint & {
   modifiers?: Modifier[] | null;
   values?: string[];
   paths?: string[];
-  direction?: "up" | "down" | null;
+  direction?: ScrollDirection | null;
   text_gone?: string | null;
   seconds?: number | null;
   accept?: boolean;
@@ -178,7 +182,7 @@ type WireAction = WirePoint & {
 function toAction(action: WireAction): PageAction {
   switch (action.type) {
     case "click":
-      return { type: "click", target: pointer(action), button: action.button!, clickCount: action.click_count!, modifiers: action.modifiers ?? [] };
+      return { type: "click", target: pointer(action), button: action.button!, clickCount: action.click_count!, repeat: action.repeat!, modifiers: action.modifiers ?? [] };
     case "hover":
       return { type: "hover", target: pointer(action) };
     case "drag":
@@ -186,7 +190,7 @@ function toAction(action: WireAction): PageAction {
     case "type":
       return { type: "type", ref: action.ref!, text: action.text!, clear: action.clear!, submit: action.submit!, keyByKey: action.key_by_key! };
     case "press":
-      return { type: "press", key: action.key!, modifiers: action.modifiers ?? [], ...(action.ref ? { ref: action.ref } : {}) };
+      return { type: "press", key: action.key!, modifiers: action.modifiers ?? [], repeat: action.repeat!, ...(action.ref ? { ref: action.ref } : {}) };
     case "select":
       return { type: "select", ref: action.ref!, values: action.values! };
     case "scroll":

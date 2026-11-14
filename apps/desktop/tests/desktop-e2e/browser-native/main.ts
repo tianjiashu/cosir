@@ -49,7 +49,7 @@ const ref = (snapshot: string, label: string) => {
   assert.ok(line, `${label} not in ${snapshot}`);
   return /\[ref=(e\d+)\]/.exec(line)![1];
 };
-const click = (id: string) => ({ type: "click" as const, target: { ref: id }, button: "left" as const, clickCount: 1 as const, modifiers: [] });
+const click = (id: string) => ({ type: "click" as const, target: { ref: id }, button: "left" as const, clickCount: 1 as const, repeat: 1, modifiers: [] });
 const until = async (check: () => boolean) => { const end = Date.now() + 5_000; while (!check()) { assert.ok(Date.now() < end, "condition timed out"); await new Promise(r => setTimeout(r, 20)); } };
 async function check(name: string, run: () => Promise<void>) { await run(); passed.push(name); console.log(`PASS ${name}`); }
 

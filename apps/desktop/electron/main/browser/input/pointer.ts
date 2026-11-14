@@ -1,4 +1,4 @@
-import { browserError } from "../errors";
+import { browserError, repeated } from "../errors";
 import type { Modifier, PointerTarget } from "../params";
 import { actionable, element } from "./element";
 import { modifierBits } from "./modifiers";
@@ -15,16 +15,19 @@ const DRAG_STEPS = 5;
 export async function click(
   session: BrowserOperation,
   target: PointerTarget,
-  options: { button: "left" | "right"; clickCount: 1 | 2; modifiers: readonly Modifier[] },
+  options: { button: "left" | "right"; clickCount: 1 | 2 | 3; repeat: number; modifiers: readonly Modifier[] },
 ): Promise<void> {
   const { x, y } = session.toInput(await point(session, target));
   const modifiers = modifierBits(options.modifiers);
   await session.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, modifiers });
-  // 双击是两次完整的按下与松开、第二次的 clickCount 为 2，与真实输入一致：页面的 click 与 dblclick 都照常触发。
-  for (let clickCount = 1; clickCount <= options.clickCount; clickCount++) {
-    const event = { x, y, button: options.button, clickCount, modifiers };
-    await session.inputUnit("Input.dispatchMouseEvent", { type: "mousePressed", ...event }, { type: "mouseReleased", ...event });
-  }
+  // 多击是几次完整的按下与松开、clickCount 依次递增，与真实输入一致：页面的 click 与 dblclick 都照常触发。
+  // 连点（repeat）是几次独立的单击：落点只取一次、中间不结算，每次 clickCount 都从 1 起。
+  await repeated(options.repeat, async () => {
+    for (let clickCount = 1; clickCount <= options.clickCount; clickCount++) {
+      const event = { x, y, button: options.button, clickCount, modifiers };
+      await session.inputUnit("Input.dispatchMouseEvent", { type: "mousePressed", ...event }, { type: "mouseReleased", ...event });
+    }
+  });
 }
 
 /** 悬停状态留到下一次鼠标移动；之后的 click 会移走指针，靠延迟收起的菜单一般能容忍。 */

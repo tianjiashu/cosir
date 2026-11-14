@@ -37,8 +37,8 @@ describe("params", () => {
   const snapshot = (args: Record<string, unknown>) => ({ ...base, tab: null, scope: "page", find: null, from_line: null, ...args });
   const wire = {
     hover: (ref: string) => ({ type: "hover", ref, x: null, y: null }),
-    click: (args: Record<string, unknown>) => ({ type: "click", ref: null, x: null, y: null, button: "left", click_count: 1, modifiers: null, ...args }),
-    press: (args: Record<string, unknown>) => ({ type: "press", modifiers: null, ref: null, ...args }),
+    click: (args: Record<string, unknown>) => ({ type: "click", ref: null, x: null, y: null, button: "left", click_count: 1, repeat: 1, modifiers: null, ...args }),
+    press: (args: Record<string, unknown>) => ({ type: "press", modifiers: null, ref: null, repeat: 1, ...args }),
     scroll: (args: Record<string, unknown>) => ({ type: "scroll", direction: null, ref: null, ...args }),
     waitFor: (args: Record<string, unknown>) => ({ type: "wait_for", text: null, text_gone: null, seconds: null, ...args }),
     dialog: (args: Record<string, unknown>) => ({ type: "dialog", text: null, id: null, ...args }),
@@ -97,10 +97,10 @@ describe("params", () => {
     ));
     expect(actions).toEqual([
       { type: "hover", target: { ref: "e3" } },
-      { type: "click", target: { x: 12.5, y: 40 }, button: "right", clickCount: 2, modifiers: ["Shift"] },
+      { type: "click", target: { x: 12.5, y: 40 }, button: "right", clickCount: 2, repeat: 1, modifiers: ["Shift"] },
       { type: "drag", start: { ref: "e1" }, end: { x: 3, y: 4 } },
-      { type: "press", key: "k", modifiers: ["ControlOrMeta"], ref: "e4" },
-      { type: "press", key: "Enter", modifiers: [] },
+      { type: "press", key: "k", modifiers: ["ControlOrMeta"], repeat: 1, ref: "e4" },
+      { type: "press", key: "Enter", modifiers: [], repeat: 1 },
       { type: "scroll", direction: "down", ref: "e5" },
       { type: "scroll", direction: undefined, ref: "e5" },
       { type: "wait_for", text: undefined, textGone: "Loading", seconds: undefined },
@@ -123,6 +123,15 @@ describe("params", () => {
     expect(codeOf(one(wire.click({ x: -1, y: 0 })))).toBe("INVALID_PARAMS");
     expect(codeOf(one(wire.click({ ref: "e1", button: "middle" })))).toBe("INVALID_PARAMS");
     expect(codeOf(one({ type: "upload", paths: ["report.pdf"], ref: null }))).toBe("INVALID_PARAMS");
+    // 连点、连按与多击的上限同样在契约里：越界或缺了 repeat 都到不了执行器。
+    expect(codeOf(one(wire.click({ ref: "e1", repeat: 21 })))).toBe("INVALID_PARAMS");
+    expect(codeOf(one(wire.click({ ref: "e1", repeat: 0 })))).toBe("INVALID_PARAMS");
+    expect(codeOf(one(wire.click({ ref: "e1", click_count: 4 })))).toBe("INVALID_PARAMS");
+    expect(codeOf(one(wire.press({ key: "a", repeat: 21 })))).toBe("INVALID_PARAMS");
+    const withoutRepeat: Record<string, unknown> = wire.click({ ref: "e1" });
+    delete withoutRepeat.repeat;
+    expect(codeOf(one(withoutRepeat))).toBe("INVALID_PARAMS");
+    expect(codeOf(one(wire.scroll({ direction: "sideways" })))).toBe("INVALID_PARAMS");
   });
 });
 
@@ -496,7 +505,7 @@ function fakeSession(
 
 const mouse = (type: string) => (method: string, params: Record<string, unknown>) => method === "Input.dispatchMouseEvent" && params.type === type;
 
-const clickOn = (ref: string): PageAction => ({ type: "click", target: { ref }, button: "left", clickCount: 1, modifiers: [] });
+const clickOn = (ref: string): PageAction => ({ type: "click", target: { ref }, button: "left", clickCount: 1, repeat: 1, modifiers: [] });
 
 const run = (session: BrowserOperation, ...actions: PageAction[]) => runActions(session, actions, new AbortController().signal);
 
@@ -598,7 +607,7 @@ describe("runActions", () => {
   // click，或坐标不经缩放换算就点到别处。
   it("clicks at viewport coordinates with the button, count and modifiers asked for", async () => {
     const { session, calls } = fakeSession({}, { scale: 0.5 });
-    await run(session, { type: "click", target: { x: 40, y: 20 }, button: "right", clickCount: 2, modifiers: ["Shift"] });
+    await run(session, { type: "click", target: { x: 40, y: 20 }, button: "right", clickCount: 2, repeat: 1, modifiers: ["Shift"] });
     const mouse = calls.filter(([method]) => method === "Input.dispatchMouseEvent").map(([, params]) => params);
     expect(mouse).toEqual([
       { type: "mouseMoved", x: 20, y: 10, modifiers: 8 },
@@ -610,11 +619,48 @@ describe("runActions", () => {
     expect(calls.some(([method]) => method === "DOM.resolveNode")).toBe(false);
   });
 
+  // 目的：三击是一次多击手势，连点是几次独立单击；潜在缺陷：连点沿用递增的 clickCount 被页面当成双击、三击，或每次都重新
+  // 取落点、移动鼠标，连点之间多出停顿。
+  it("triple-clicks with rising click counts and repeats single clicks from one point", async () => {
+    const triple = fakeSession();
+    await run(triple.session, { type: "click", target: { x: 4, y: 6 }, button: "left", clickCount: 3, repeat: 1, modifiers: [] });
+    const tripleEvents = triple.calls.filter(([method]) => method === "Input.dispatchMouseEvent").map(([, params]) => `${params.type}:${params.clickCount ?? ""}`);
+    expect(tripleEvents).toEqual(["mouseMoved:", "mousePressed:1", "mouseReleased:1", "mousePressed:2", "mouseReleased:2", "mousePressed:3", "mouseReleased:3"]);
+
+    const repeated = fakeSession();
+    await run(repeated.session, { type: "click", target: { ref: "e2" }, button: "left", clickCount: 1, repeat: 3, modifiers: [] });
+    const repeatedEvents = repeated.calls.filter(([method]) => method === "Input.dispatchMouseEvent").map(([, params]) => `${params.type}:${params.clickCount ?? ""}`);
+    expect(repeatedEvents).toEqual(["mouseMoved:", "mousePressed:1", "mouseReleased:1", "mousePressed:1", "mouseReleased:1", "mousePressed:1", "mouseReleased:1"]);
+    const single = fakeSession();
+    await run(single.session, { type: "click", target: { ref: "e2" }, button: "left", clickCount: 1, repeat: 1, modifiers: [] });
+    const boxReads = (calls: typeof single.calls) => calls.filter(([method]) => method === "DOM.getBoxModel").length;
+    expect(boxReads(repeated.calls)).toBe(boxReads(single.calls));
+  });
+
+  // 目的：连按只聚焦一次；潜在缺陷：每按一次都重新聚焦，打断依赖焦点的控件（自动补全、选项列表）。
+  it("presses a key repeatedly after focusing once", async () => {
+    const { session, calls } = fakeSession();
+    await run(session, { type: "press", key: "ArrowDown", modifiers: [], repeat: 4, ref: "e2" });
+    expect(calls.filter(([method]) => method === "DOM.focus")).toHaveLength(1);
+    expect(calls.filter(([method, params]) => method === "Input.dispatchKeyEvent" && params.type === "keyDown").map(([, params]) => params.key)).toEqual(["ArrowDown", "ArrowDown", "ArrowDown", "ArrowDown"]);
+  });
+
+  // 目的：横向滚动把方向交给同一个页面函数；潜在缺陷：左右被当成上下，或不带 ref 时整页的调用拼错了参数。
+  it("scrolls sideways with the same page function", async () => {
+    const area = fakeSession();
+    await run(area.session, { type: "scroll", direction: "right", ref: "e9" });
+    const scrolled = area.calls.find(([method, params]) => method === "Runtime.callFunctionOn" && String(params.functionDeclaration).includes("scrollBy"));
+    expect(scrolled?.[1].arguments).toEqual([{ value: "right" }]);
+    const page = fakeSession();
+    await run(page.session, { type: "scroll", direction: "left" });
+    expect(String(page.calls.find(([method]) => method === "Runtime.evaluate")![1].expression)).toContain('.call(document.documentElement, "left")');
+  });
+
   // 目的：跨进程 iframe 里的元素能点中、能输入；潜在缺陷：框架内坐标当主视口坐标点到别处，或按节点的命令发到主会话、
   // 找到的是主框架里同号的另一个节点。
   it("routes node commands to the element's frame session and offsets its coordinates", async () => {
     const { session, calls } = fakeSession();
-    await run(session, { type: "click", target: { ref: "f3" }, button: "left", clickCount: 1, modifiers: [] });
+    await run(session, { type: "click", target: { ref: "f3" }, button: "left", clickCount: 1, repeat: 1, modifiers: [] });
     expect(calls.find(([method]) => method === "Input.dispatchMouseEvent")).toEqual(["Input.dispatchMouseEvent", { type: "mouseMoved", x: 105, y: 210, modifiers: 0 }]);
     expect(calls.filter(([method]) => method.startsWith("DOM.") || method.startsWith("Runtime.")).every(([, , sessionId]) => sessionId === "S1")).toBe(true);
 
@@ -628,7 +674,7 @@ describe("runActions", () => {
   // 确认再做一遍，或高亮量不到位置时把动作本身弄失败、吞掉动作该报的错。
   it("highlights each action's target before it runs, only when the tab is shown", async () => {
     const shown = fakeSession({}, { shown: true });
-    await run(shown.session, clickOn("e2"), { type: "click", target: { x: 50, y: 30 }, button: "left", clickCount: 1, modifiers: [] }, { type: "wait_for", seconds: 0.01 });
+    await run(shown.session, clickOn("e2"), { type: "click", target: { x: 50, y: 30 }, button: "left", clickCount: 1, repeat: 1, modifiers: [] }, { type: "wait_for", seconds: 0.01 });
     expect(shown.highlighted).toEqual([{ x: 0, y: 0, width: 10, height: 20 }, { x: 38, y: 18, width: 24, height: 24 }]);
     // 元素还在不在页面上只由动作确认一次，高亮不再确认一遍。
     expect(shown.calls.filter(([method, params]) => method === "Runtime.callFunctionOn" && String(params.functionDeclaration).includes("isConnected"))).toHaveLength(2);
@@ -676,7 +722,7 @@ describe("runActions", () => {
 
   it("presses shortcuts with modifier bits and no character, after focusing the ref", async () => {
     const { session, calls } = fakeSession();
-    await run(session, { type: "press", key: "k", modifiers: ["ControlOrMeta", "Shift"], ref: "e3" });
+    await run(session, { type: "press", key: "k", modifiers: ["ControlOrMeta", "Shift"], repeat: 1, ref: "e3" });
     const keys = calls.filter(([method]) => method === "Input.dispatchKeyEvent").map(([, params]) => params);
     const meta = process.platform === "darwin" ? 4 : 2;
     expect(keys[0]).toMatchObject({ type: "keyDown", key: "K", code: "KeyK", modifiers: meta | 8 });
@@ -684,7 +730,7 @@ describe("runActions", () => {
     expect(calls.findIndex(([method]) => method === "DOM.focus")).toBeLessThan(calls.findIndex(([method]) => method === "Input.dispatchKeyEvent"));
 
     const typed = fakeSession();
-    await run(typed.session, { type: "press", key: "a", modifiers: ["Shift"] });
+    await run(typed.session, { type: "press", key: "a", modifiers: ["Shift"], repeat: 1 });
     expect(typed.calls.find(([method]) => method === "Input.dispatchKeyEvent")![1]).toMatchObject({ key: "A", text: "A", modifiers: 8 });
   });
 
@@ -724,11 +770,11 @@ describe("runActions", () => {
     const outcome = await run(session, { type: "scroll", direction: "down", ref: "e9" }, clickOn("e1"));
     expect(outcome).toMatchObject({ interruption: { code: "SCROLL_END", message: "this area is already at the bottom" } });
     const scrolled = calls.find(([method, params]) => method === "Runtime.callFunctionOn" && String(params.functionDeclaration).includes("scrollBy"));
-    expect(scrolled?.[1].arguments).toEqual([{ value: true }]);
+    expect(scrolled?.[1].arguments).toEqual([{ value: "down" }]);
 
     const page = fakeSession();
     expect(await run(page.session, { type: "scroll", direction: "up" })).toMatchObject({ interruption: null });
-    expect(String(page.calls.find(([method]) => method === "Runtime.evaluate")![1].expression)).toContain(".call(document.documentElement, false)");
+    expect(String(page.calls.find(([method]) => method === "Runtime.evaluate")![1].expression)).toContain('.call(document.documentElement, "up")');
 
     const into = fakeSession();
     await run(into.session, { type: "scroll", ref: "e9" });
@@ -749,7 +795,7 @@ describe("describeTarget", () => {
   // 目的：工具卡片写清每一步点的是哪个元素；潜在缺陷：只写 e12 这种用户看不懂的编号，或坐标、拖动没有说明。
   it("names elements by their snapshot label, and shows coordinates and drags", () => {
     const label = (ref: string) => (ref === "e2" ? 'button "Add"' : undefined);
-    expect(describeTarget({ type: "click", target: { ref: "e2" }, button: "left", clickCount: 1, modifiers: [] }, label)).toBe('button "Add"');
+    expect(describeTarget({ type: "click", target: { ref: "e2" }, button: "left", clickCount: 1, repeat: 1, modifiers: [] }, label)).toBe('button "Add"');
     expect(describeTarget({ type: "type", ref: "e9", text: "x", clear: false, submit: false, keyByKey: false }, label)).toBe("e9");
     expect(describeTarget({ type: "drag", start: { ref: "e2" }, end: { x: 10.4, y: 20.6 } }, label)).toBe('button "Add" → (10, 21)');
     expect(describeTarget({ type: "wait_for", seconds: 1 }, label)).toBeNull();

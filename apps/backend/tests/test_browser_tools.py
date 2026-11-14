@@ -509,6 +509,12 @@ def test_act_answering_the_wrong_dialog_explains_how_to_pick_it(
     "action",
     [
         {"type": "scroll", "direction": None, "ref": None},
+        {"type": "scroll", "direction": "sideways", "ref": None},
+        {"type": "click", "ref": "e1", "click_count": 2, "repeat": 2},
+        {"type": "click", "ref": "e1", "click_count": 4},
+        {"type": "click", "ref": "e1", "repeat": 0},
+        {"type": "click", "ref": "e1", "repeat": 21},
+        {"type": "press", "key": "Enter", "repeat": 21},
         {"type": "dialog", "accept": "yes", "text": None},
         {"type": "dialog", "text": "Ada"},
         {"type": "wait_for", "text": "a", "text_gone": "b", "seconds": None},
@@ -527,6 +533,30 @@ def test_act_answering_the_wrong_dialog_explains_how_to_pick_it(
 def test_action_models_reject_meaningless_combinations(action: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         BrowserActArgs.model_validate({"actions": [action], "tab": None})
+
+
+# 目的：三击、连点、连按与横向滚动都是合法输入；默认只做一次。
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"type": "click", "ref": "e1", "click_count": 3},
+        {"type": "click", "ref": "e1", "repeat": 20},
+        {"type": "press", "key": "ArrowDown", "repeat": 5},
+        {"type": "scroll", "direction": "left", "ref": None},
+        {"type": "scroll", "direction": "right", "ref": "e2"},
+    ],
+)
+def test_action_models_accept_repeats_triple_clicks_and_sideways_scrolls(
+    action: dict[str, Any],
+) -> None:
+    BrowserActArgs.model_validate({"actions": [action], "tab": None})
+
+
+def test_repeat_defaults_to_once() -> None:
+    parsed = BrowserActArgs.model_validate(
+        {"actions": [{"type": "click", "ref": "e1"}, {"type": "press", "key": "a"}], "tab": None}
+    )
+    assert [action.repeat for action in parsed.actions] == [1, 1]  # type: ignore[union-attr]
 
 
 def test_screenshot_takes_full_page_or_an_element_not_both() -> None:
@@ -1278,3 +1308,9 @@ def test_a_binary_entry_lists_only_its_type_and_size() -> None:
     content = logs_text({**HEAD, "kind": "network", **page, "dropped_before": None})
     expected = "body: image/png, 2.0 KB transferred, not text"
     assert f"#31 GET http://a/logo.png → 200 (Fetch, 5 ms) · {expected}" in content
+
+
+def test_scroll_end_hint_does_not_assume_a_direction() -> None:
+    from app.tools.tool_handler.browser.errors import BROWSER_ERRORS
+
+    assert BROWSER_ERRORS["SCROLL_END"][1] == "已到尽头"

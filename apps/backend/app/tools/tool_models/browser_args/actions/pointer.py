@@ -15,6 +15,7 @@ from app.tools.tool_models.browser_args._shared import (
     X_FIELD,
     Y_FIELD,
     one_point,
+    repeat_field,
 )
 
 
@@ -28,8 +29,12 @@ class ClickAction(BaseModel):
     button: Literal["left", "right"] = Field(
         default="left", description="right opens the page's context menu."
     )
-    click_count: Literal[1, 2] = Field(
-        default=1, description="2 for a double click, e.g. to select a word or open an item."
+    click_count: Literal[1, 2, 3] = Field(
+        default=1,
+        description=(
+            "2 for a double click (select a word, open an item), 3 for a triple click (select "
+            "a whole paragraph or line)."
+        ),
     )
     modifiers: MODIFIERS | None = Field(
         default=None,
@@ -40,9 +45,16 @@ class ClickAction(BaseModel):
         ),
     )
 
+    # 多击手势与连点不叠加：N 次多击没有场景，两者叠加后语义也含糊。
+    repeat: int = repeat_field("Click")
+
     @model_validator(mode="after")
     def _point(self) -> "ClickAction":
         one_point(self.ref, self.x, self.y)
+        if self.click_count > 1 and self.repeat > 1:
+            raise ValueError(
+                "use click_count for a double or triple click, or repeat for separate clicks, not both"
+            )
         return self
 
 

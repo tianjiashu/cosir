@@ -26,12 +26,13 @@ class ScrollAction(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     type: Literal["scroll"]
-    direction: Literal["up", "down"] | None = Field(
+    direction: Literal["up", "down", "left", "right"] | None = Field(
         default=None,
         description=(
-            "Scroll by about one screenful. Without ref this scrolls the page; with ref it "
-            "scrolls the scrollable area containing that element (lists, chat logs, panels). "
-            "Fails with SCROLL_END when it cannot move further."
+            "Scroll by about one screenful; left and right scroll sideways (wide tables, boards). "
+            "Without ref this scrolls the page; with ref it scrolls the scrollable area "
+            "containing that element (lists, chat logs, panels). Fails with SCROLL_END when it "
+            "cannot move further."
         ),
     )
     ref: str | None = Field(

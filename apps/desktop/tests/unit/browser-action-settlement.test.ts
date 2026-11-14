@@ -31,13 +31,13 @@ type Case = {
 };
 
 const click = (target: { ref: string } | { x: number; y: number }): PageAction =>
-  ({ type: "click", target, button: "left", clickCount: 1, modifiers: [] });
+  ({ type: "click", target, button: "left", clickCount: 1, repeat: 1, modifiers: [] });
 const hover = (target: { ref: string } | { x: number; y: number }): PageAction => ({ type: "hover", target });
 const drag = (start: { ref: string } | { x: number; y: number }, end: { ref: string } | { x: number; y: number }): PageAction =>
   ({ type: "drag", start, end });
 const type = (ref: string, extra: Partial<Extract<PageAction, { type: "type" }>> = {}): PageAction =>
   ({ type: "type", ref, text: "x", clear: false, submit: false, keyByKey: false, ...extra });
-const press = (key: string, ref?: string): PageAction => ({ type: "press", key, modifiers: [], ...(ref ? { ref } : {}) });
+const press = (key: string, ref?: string): PageAction => ({ type: "press", key, modifiers: [], repeat: 1, ...(ref ? { ref } : {}) });
 const select = (ref: string, values: string[]): PageAction => ({ type: "select", ref, values });
 const scroll = (direction: "up" | "down" | undefined, ref?: string): PageAction => ({ type: "scroll", direction, ...(ref ? { ref } : {}) });
 const waitFor = (target: { text?: string; textGone?: string; seconds?: number }): PageAction => ({ type: "wait_for", ...target });
@@ -184,4 +184,44 @@ describe("browser_act 动作结算矩阵（failed=确定未生效 / unknown=可�
       if (testCase.code) expect(code).toBe(testCase.code);
     });
   }
+});
+
+describe("连点与连按的结算（repeat）", () => {
+  /** 第 n 次（从 1 起）派发某类输入后失败。 */
+  const failOnNth = (type: string, n: number) => {
+    let seen = 0;
+    return (method: string, params: Record<string, unknown>) => {
+      if ((method === "Input.dispatchMouseEvent" || method === "Input.dispatchKeyEvent") && params.type === type && ++seen === n) return new Error("boom");
+      return undefined;
+    };
+  };
+
+  // 目的：中途失败要说清做完了几次；潜在缺陷：只报失败、Agent 不知道已经点了几次，补做时重复下单。
+  it("reports how many clicks were done when a later one fails, as unknown", async () => {
+    const fixture = makeSession({ failAfterDispatch: failOnNth("mousePressed", 2) });
+    const outcome = await runActions(fixture.session, [{ ...click({ ref: "e9" }), repeat: 3 } as PageAction], fixture.signal);
+    expect(outcome.steps[0]).toMatchObject({ status: "unknown", error: { code: "ACTION_FAILED", message: "boom (stopped after 1 of 3)" } });
+  });
+
+  // 目的：后一次被闸门拦下时仍是「可能已生效」；潜在缺陷：只看这一次没派发就报 failed，Agent 以为一次都没点。
+  it("stays unknown when a later click is refused by the dialog gate", async () => {
+    let seen = 0;
+    const fixture = makeSession({ rejectBeforeDispatch: (m, p) => (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" && ++seen === 2 ? new HostMethodError("DIALOG_OPEN", "paused") : undefined) });
+    const outcome = await runActions(fixture.session, [{ ...click({ ref: "e9" }), repeat: 3 } as PageAction], fixture.signal);
+    expect(outcome.steps[0]).toMatchObject({ status: "unknown", error: { code: "DIALOG_OPEN", message: "paused (stopped after 1 of 3)" } });
+  });
+
+  // 目的：第一次就没派发时如实报 failed、不加次数说明；潜在缺陷：一次都没做也写「做完 0 次」并误报 unknown。
+  it("fails without a progress note when the first click is refused before dispatch", async () => {
+    const fixture = makeSession({ rejectBeforeDispatch: (m, p) => (m === "Input.dispatchMouseEvent" && p.type === "mousePressed" ? new HostMethodError("DIALOG_OPEN", "paused") : undefined) });
+    const outcome = await runActions(fixture.session, [{ ...click({ ref: "e9" }), repeat: 3 } as PageAction], fixture.signal);
+    expect(outcome.steps[0]).toMatchObject({ status: "failed", error: { code: "DIALOG_OPEN" } });
+    expect(outcome.steps[0].error!.message).toBe("paused");
+  });
+
+  it("reports how many presses were done when a later keyDown fails", async () => {
+    const fixture = makeSession({ failAfterDispatch: failOnNth("keyDown", 3) });
+    const outcome = await runActions(fixture.session, [{ ...press("ArrowDown"), repeat: 5 } as PageAction], fixture.signal);
+    expect(outcome.steps[0]).toMatchObject({ status: "unknown", error: { message: "boom (stopped after 2 of 5)" } });
+  });
 });

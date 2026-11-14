@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { _electron as electron, expect, test, type ElectronApplication } from "@playwright/test";
+import type { BrowserHost } from "@/electron/main/browser/browser-host";
+import type { PageAction } from "@/electron/main/browser/params";
+import type { BrowserNavigation } from "@/electron/shared/host-contract";
 
 /** 与 `global-setup.mjs` 的打包位置一致。 */
 const browserHarnessBundle = path.resolve(__dirname, "..", "..", "..", "..", "target", "electron-browser-harness", "main.cjs");
@@ -90,6 +93,13 @@ const PAGES: Record<string, string> = {
     <a href="/second" target="_blank">Popup</a>
     <script>document.querySelector('select').addEventListener('change', (e) => { document.title = 'color:' + e.target.value; });</script>`,
   "/done": `<title>Done</title><p>Search finished</p>`,
+  "/wide-table": `<title>Wide table</title><body style="margin:0">
+    <div id="grid" style="width:600px;overflow-x:auto"><table style="width:3000px"><tr>${Array.from({ length: 30 }, (_, i) => `<td><button>Col ${i + 1}</button></td>`).join("")}</tr></table></div></body>`,
+  "/locked": `<title>Locked</title><style>html,body{overflow-x:hidden;margin:0}</style><div style="width:3000px">wide</div>`,
+  "/clicks": `<title>Clicks</title>
+    <button id="b" onclick="window.c = (window.c || 0) + 1" ondblclick="window.d = (window.d || 0) + 1">Tap</button>
+    <button id="once" onclick="window.orders = (window.orders || 0) + 1; this.disabled = true">Place order</button>
+    <p id="para" style="font-size:20px">Alpha beta gamma.</p>`,
   "/chart": `<title>Chart</title><body style="margin:0;background:#fff">
     <div style="height:1000px"></div>
     <canvas id="c" width="400" height="300"></canvas>
@@ -199,7 +209,7 @@ type Page = {
 type Outcome = { ok: true; value: Page } | { ok: false; code: string; message: string };
 
 /** 宿主内部形状的左键单击（`call` 直接调用 `BrowserHost`，不经线上适配）。 */
-const clickOn = (ref: string | undefined) => ({ type: "click", target: { ref }, button: "left", clickCount: 1, modifiers: [] });
+const clickOn = (ref: string): PageAction => ({ type: "click", target: { ref }, button: "left", clickCount: 1, repeat: 1, modifiers: [] });
 
 /** 断言调用成功并取出页面结果。 */
 function pageOf(outcome: Outcome): Page {
@@ -212,8 +222,20 @@ function pageOf(outcome: Outcome): Page {
   return value;
 }
 
+type HostMethod = "navigate" | "snapshot" | "act" | "screenshot" | "manageTabs";
+/**
+ * `call` 的请求就是宿主方法的请求类型（`context` 由 `call` 补上）：请求经 `app.evaluate` 序列化进 main 进程，
+ * 不写成宿主的类型，宿主内部形状新增必填字段时漏改的用例就会静默按缺省执行（例如 `repeat` 缺了点零次）。
+ */
+type HostRequestOf<M extends HostMethod> = Parameters<BrowserHost[M]>[0];
+/** `call` 替用例补上的字段：标签上下文，以及宿主请求里用例通常不关心的视图与「新开标签」。动作的形状不在此列，照宿主类型写全。 */
+const CALL_DEFAULTS = { navigate: { newTab: false }, snapshot: { view: {} } } as const;
+type Filled<M extends HostMethod> = Extract<keyof HostRequestOf<M>, "context" | keyof (typeof CALL_DEFAULTS)[M & keyof typeof CALL_DEFAULTS]>;
+type HostRequest<M extends HostMethod> = Omit<HostRequestOf<M>, Filled<M>> & Partial<Pick<HostRequestOf<M>, Filled<M>>>;
+
 /** 在 main 进程里调用 `BrowserHost` 的方法，把 `HostMethodError` 转成可序列化的结果。 */
-function call(method: "navigate" | "snapshot" | "act" | "screenshot" | "manageTabs", request: Record<string, unknown>): Promise<Outcome> {
+function call<M extends HostMethod>(method: M, request: HostRequest<M>): Promise<Outcome> {
+  const defaults = (CALL_DEFAULTS as Record<string, object>)[method] ?? {};
   return app.evaluate(async (_electron, { method, request, downloadDir }) => {
     const { host } = (globalThis as unknown as { browserHarness: { host: Record<string, (...args: unknown[]) => Promise<unknown>> } }).browserHarness;
     try {
@@ -224,7 +246,7 @@ function call(method: "navigate" | "snapshot" | "act" | "screenshot" | "manageTa
       const failure = error as { code?: string; message?: string };
       return { ok: false as const, code: failure.code ?? "UNKNOWN", message: failure.message ?? String(error) };
     }
-  }, { method, request, downloadDir: DOWNLOAD_DIR });
+  }, { method, request: { ...defaults, ...(request as object) }, downloadDir: DOWNLOAD_DIR });
 }
 
 type LinkOutcome = { ok: true; value: Record<string, unknown> } | { ok: false; code: string; message: string };
@@ -244,7 +266,9 @@ const ACTION_DEFAULTS: Record<string, Record<string, unknown>> = {
   upload: { ref: null },
   type: { clear: false, submit: false, key_by_key: false },
   dialog: { text: null, id: null },
-  click: { ...POINT_DEFAULTS, button: "left", click_count: 1, modifiers: null },
+  click: { ...POINT_DEFAULTS, button: "left", click_count: 1, repeat: 1, modifiers: null },
+  press: { modifiers: null, ref: null, repeat: 1 },
+  scroll: { direction: null, ref: null },
   hover: POINT_DEFAULTS,
 };
 
@@ -288,7 +312,7 @@ function observedValueOf(outcome: LinkOutcome): Record<string, unknown> {
   return { ...value, ...value.observation as Record<string, unknown> };
 }
 
-const navigate = (sessionId: number, target: Record<string, unknown>, tab?: string) => call("navigate", { sessionId, tab, target, context: context(LIMITS) });
+const navigate = (sessionId: number, target: BrowserNavigation, tab?: string) => call("navigate", { sessionId, tab, target, context: context(LIMITS) });
 
 test("opens a tab on first navigation and returns a snapshot with refs", async () => {
   const page = pageOf(await navigate(1, { url: `${origin}/form` }));
@@ -320,7 +344,7 @@ test("pauses on JavaScript dialogs until the agent or the user answers", async (
   expect(shown).toMatchObject({ type: "confirm", message: "Continue?", defaultText: "" });
   expect(await call("screenshot", { sessionId: 1, fullPage: false })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
   expect(await call("screenshot", { sessionId: 1, fullPage: false, region: { x: 0, y: 0, width: 50, height: 50 } })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
-  expect(await call("act", { sessionId: 1, actions: [{ type: "press", key: "Tab" }] })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
+  expect(await call("act", { sessionId: 1, actions: [{ type: "press", key: "Tab", modifiers: [], repeat: 1 }] })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
   // 调用开始时已有的弹窗必须按编号作答。
   expect(await call("act", { sessionId: 1, actions: [{ type: "dialog", accept: true }] })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
   const answered = pageOf(await call("act", { sessionId: 1, actions: [{ type: "dialog", accept: true, id: shown!.id }] })) as ActPage;
@@ -549,7 +573,7 @@ test("pages long snapshots with stable refs, then hovers, presses shortcuts and 
   const acted = pageOf(await call("act", { sessionId: 24, actions: [
     { type: "wait_for", textGone: "Loading", seconds: 5 },
     { type: "hover", target: { ref: menu } },
-    { type: "press", key: "k", modifiers: ["ControlOrMeta"] },
+    { type: "press", key: "k", modifiers: ["ControlOrMeta"], repeat: 1 },
     { type: "scroll", direction: "down", ref: inside },
     { type: "scroll", direction: "down" },
     { type: "scroll", ref: last },
@@ -654,7 +678,7 @@ test("refuses to act while the user is typing in the page", async () => {
   }, page.url);
   // sendInputEvent 异步派发：等事件到达页面，再让 Agent 动手。
   await new Promise((resolve) => setTimeout(resolve, 200));
-  const refused = await call("act", { sessionId: 22, actions: [{ type: "press", key: "Tab" }] });
+  const refused = await call("act", { sessionId: 22, actions: [{ type: "press", key: "Tab", modifiers: [], repeat: 1 }] });
   expect(refused).toMatchObject({ ok: false, code: "USER_ACTIVE" });
 });
 
@@ -1066,7 +1090,7 @@ test("gives refs to elements that only look clickable, once per card, and shows 
   expect(page.snapshot.match(/\[cursor=pointer\]/g)).toHaveLength(1);
   expect(page.snapshot).toMatch(/link "Next" \[ref=e\d+\] url="\/second\?q=1"/);
   expect(page.snapshot).toContain('url="https://example.com/x"');
-  const clicked = pageOf(await call("act", { sessionId: 60, actions: [clickOn(card)] }));
+  const clicked = pageOf(await call("act", { sessionId: 60, actions: [clickOn(card!)] }));
   expect(clicked.title).toBe("card");
 });
 
@@ -1089,6 +1113,42 @@ test("clicks, double clicks and drags at viewport coordinates", async () => {
   expect(await act({ type: "drag", start: { x: 50, y: 320 }, end: { x: 350, y: 320 } })).toMatchObject({ execution: { interruption: null }, title: "dropped a" });
 });
 
+// 目的：宽表格、看板能横着滚；潜在缺陷：左右被当成上下、滚了外层整页，或滚到头时空转不报。
+test("scrolls a wide area sideways and reports its edges", async () => {
+  const page = valueOf(await link("browser.navigate", 73, { url: `${origin}/wide-table` }));
+  const cell = refOf(page.snapshot as string, "button", "Col 1");
+  const scrollLeft = async () => Number(JSON.parse(valueOf(await link("browser.evaluate", 73, { expression: "document.getElementById('grid').scrollLeft" })).value as string));
+  expect(observedValueOf(await link("browser.act", 73, { actions: [{ type: "scroll", direction: "right", ref: cell }] }))).toMatchObject({ execution: { interruption: null } });
+  expect(await scrollLeft()).toBeGreaterThan(0);
+  expect(valueOf(await link("browser.evaluate", 73, { expression: "scrollY" })).value).toBe("0");
+  await link("browser.act", 73, { actions: [{ type: "scroll", direction: "left", ref: cell }] });
+  expect(await scrollLeft()).toBe(0);
+  expect(observedValueOf(await link("browser.act", 73, { actions: [{ type: "scroll", direction: "left", ref: cell }] })))
+    .toMatchObject({ execution: { interruption: { code: "SCROLL_END", message: "this area is already at the left edge" } } });
+
+  await link("browser.navigate", 73, { url: `${origin}/locked` });
+  expect(observedValueOf(await link("browser.act", 73, { actions: [{ type: "scroll", direction: "right" }] })))
+    .toMatchObject({ execution: { interruption: { code: "SCROLL_END", message: "the page cannot scroll sideways (no scrollable area)" } } });
+});
+
+// 目的：测连点要真的连着点；潜在缺陷：连点被浏览器当成双击、提交后禁用的按钮仍被多点一次，或三击选不中整段。
+test("repeats separate clicks without pause, keeps double clicks distinct, and triple-clicks a paragraph", async () => {
+  const page = valueOf(await link("browser.navigate", 74, { url: `${origin}/clicks` }));
+  // 返回值是 JSON 编码过的；页面里先 stringify 成字符串，这里要解两次。
+  const counts = async () => JSON.parse(JSON.parse(valueOf(await link("browser.evaluate", 74, { expression: "JSON.stringify({ c: window.c || 0, d: window.d || 0, orders: window.orders || 0 })" })).value as string));
+  const tap = refOf(page.snapshot as string, "button", "Tap");
+  await link("browser.act", 74, { actions: [{ type: "click", ref: tap, repeat: 2 }] });
+  expect(await counts()).toMatchObject({ c: 2, d: 0 });
+  await link("browser.act", 74, { actions: [{ type: "click", ref: tap, click_count: 2 }] });
+  expect(await counts()).toMatchObject({ c: 4, d: 1 });
+  await link("browser.act", 74, { actions: [{ type: "click", ref: refOf(page.snapshot as string, "button", "Place order"), repeat: 3 }] });
+  expect(await counts()).toMatchObject({ orders: 1 });
+
+  const box = JSON.parse(valueOf(await link("browser.evaluate", 74, { expression: "(() => { const r = document.getElementById('para').getBoundingClientRect(); return { x: r.x + 10, y: r.y + r.height / 2 }; })()" })).value as string);
+  await link("browser.act", 74, { actions: [{ type: "click", x: box.x, y: box.y, click_count: 3 }] });
+  expect(JSON.parse(valueOf(await link("browser.evaluate", 74, { expression: "getSelection().toString().trim()" })).value as string)).toBe("Alpha beta gamma.");
+});
+
 // 目的：按键盘事件工作的控件（自动补全、验证码格子）收得到每个按键；潜在缺陷：一次写入只触发 input，keyup 一个都没有；
 // 中文等键盘上没有的字符逐键时丢掉或变成别的字。
 test("types key by key so the page sees a key event per character", async () => {
@@ -1096,6 +1156,9 @@ test("types key by key so the page sees a key event per character", async () => 
   const field = refOf(page.snapshot as string, "textbox", "Code");
   const typed = observedValueOf(await link("browser.act", 62, { actions: [{ type: "type", ref: field, text: "a1中", key_by_key: true }] }));
   expect(typed).toMatchObject({ execution: { interruption: null }, title: "3 a1中" });
+  // 连按：一个动作里按 3 次，页面收到 3 个 keyup。
+  const pressed = observedValueOf(await link("browser.act", 62, { actions: [{ type: "press", key: "ArrowLeft", ref: field, repeat: 3 }] }));
+  expect(pressed).toMatchObject({ execution: { interruption: null }, title: "6 a1中" });
 });
 
 // 目的：iframe 里的元素也能看到、能操作（同源与跨站的跨进程 iframe）；潜在缺陷：只读主框架的树，嵌入的表单看不见；

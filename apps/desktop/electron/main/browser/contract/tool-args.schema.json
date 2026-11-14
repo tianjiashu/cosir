@@ -70,10 +70,11 @@
           },
           "click_count": {
             "default": 1,
-            "description": "2 for a double click, e.g. to select a word or open an item.",
+            "description": "2 for a double click (select a word, open an item), 3 for a triple click (select a whole paragraph or line).",
             "enum": [
               1,
-              2
+              2,
+              3
             ],
             "title": "Click Count",
             "type": "integer"
@@ -116,6 +117,14 @@
             "description": "Element ref such as e12 from a snapshot of the current page; its center is used. Leave null when using x and y.",
             "title": "Ref"
           },
+          "repeat": {
+            "default": 1,
+            "description": "Click this many times in a row with no pause between, e.g. to test a double submit or a debounce. A failure says how many were done.",
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Repeat",
+            "type": "integer"
+          },
           "type": {
             "const": "click",
             "title": "Type",
@@ -155,6 +164,7 @@
           "click_count",
           "modifiers",
           "ref",
+          "repeat",
           "type",
           "x",
           "y"
@@ -368,6 +378,14 @@
             "description": "Focus this element before pressing; null presses on the focused element.",
             "title": "Ref"
           },
+          "repeat": {
+            "default": 1,
+            "description": "Press it this many times in a row with no pause between, e.g. to test a double submit or a debounce. A failure says how many were done.",
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Repeat",
+            "type": "integer"
+          },
           "type": {
             "const": "press",
             "title": "Type",
@@ -378,6 +396,7 @@
           "key",
           "modifiers",
           "ref",
+          "repeat",
           "type"
         ],
         "title": "PressAction",
@@ -391,7 +410,9 @@
               {
                 "enum": [
                   "up",
-                  "down"
+                  "down",
+                  "left",
+                  "right"
                 ],
                 "type": "string"
               },
@@ -400,7 +421,7 @@
               }
             ],
             "default": null,
-            "description": "Scroll by about one screenful. Without ref this scrolls the page; with ref it scrolls the scrollable area containing that element (lists, chat logs, panels). Fails with SCROLL_END when it cannot move further.",
+            "description": "Scroll by about one screenful; left and right scroll sideways (wide tables, boards). Without ref this scrolls the page; with ref it scrolls the scrollable area containing that element (lists, chat logs, panels). Fails with SCROLL_END when it cannot move further.",
             "title": "Direction"
           },
           "ref": {

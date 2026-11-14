@@ -39,6 +39,25 @@ export function browserError(code: BrowserErrorCode, message: string): HostMetho
 }
 
 /**
+ * 连点与连按（`repeat`）：把一次输入连续做 `total` 次，第 k+1 次（k ≥ 1）失败时在错误消息末尾写明做完了几次，Agent 据此决定
+ * 要不要补做（不自动重放）。错误的类型与码不变：步骤结算按它们与有没有派发过命令判断（`input/actions.ts`）。
+ */
+export async function repeated(total: number, once: () => Promise<void>): Promise<void> {
+  for (let done = 0; done < total; done++) {
+    try {
+      await once();
+    } catch (error) {
+      // 一次都没做完时如实报失败本身，不加次数（与单次动作的报法一致）。
+      if (total === 1 || done === 0) throw error;
+      const note = ` (stopped after ${done} of ${total})`;
+      // 换一个同类的新错误，不改原对象：页面停住时同一个原因对象会交给所有在途命令。
+      if (error instanceof HostMethodError) throw new (error.constructor as typeof HostMethodError)(error.code, error.message + note);
+      throw browserError("ACTION_FAILED", (error instanceof Error ? error.message : String(error)) + note);
+    }
+  }
+}
+
+/**
  * 每个码给用户看的说法（浏览器面板里的操作失败时显示）。按码写全：新增错误码时编译期就要求补上文案；具体原因
  * （英文的消息正文）只给 Agent 与日志。
  */

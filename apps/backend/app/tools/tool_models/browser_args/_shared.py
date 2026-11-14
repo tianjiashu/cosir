@@ -40,6 +40,24 @@ Y_FIELD = Field(default=None, ge=0, description="Viewport y in CSS pixels; see x
 MODIFIERS = list[Literal["Alt", "Control", "Meta", "Shift", "ControlOrMeta"]]
 
 
+# 连点与连按：一个动作里连续做 N 次、中间不结算（测重复提交、防抖、计数）。上限让一次动作的耗时可预期。
+REPEAT_MAX = 20
+
+
+def repeat_field(what: str) -> Any:
+    """``click`` 与 ``press`` 共用的 ``repeat``：同名同义，只有说的是点击还是按键不同。"""
+
+    return Field(
+        default=1,
+        ge=1,
+        le=REPEAT_MAX,
+        description=(
+            f"{what} this many times in a row with no pause between, e.g. to test a double "
+            "submit or a debounce. A failure says how many were done."
+        ),
+    )
+
+
 def tab_field() -> Any:
     """本 Session 的标签；模型不能指定别的 Session。每次返回新的字段定义，不在模型之间共享实例。"""
 

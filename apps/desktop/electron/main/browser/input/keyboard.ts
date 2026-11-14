@@ -1,3 +1,4 @@
+import { repeated } from "../errors";
 import type { Modifier } from "../params";
 import type { PageNode } from "../ref-registry";
 import { actionable, element, mutateOn, onNode } from "./element";
@@ -52,8 +53,8 @@ export async function typeText(
   if (options.submit) await stroke(session, keySpec("Enter", false));
 }
 
-/** 按一个键（可带修饰键）；给了 ref 时先聚焦它，否则按在当前焦点上。 */
-export async function pressKey(session: BrowserOperation, key: string, modifiers: readonly Modifier[], ref: string | undefined): Promise<void> {
+/** 按一个键（可带修饰键），连按 `repeat` 次、中间不结算；给了 ref 时先聚焦它（只聚焦一次），否则按在当前焦点上。 */
+export async function pressKey(session: BrowserOperation, key: string, modifiers: readonly Modifier[], repeat: number, ref: string | undefined): Promise<void> {
   if (ref) {
     const node = await element(session, ref);
     await actionable(session, node, false, false);
@@ -62,7 +63,7 @@ export async function pressKey(session: BrowserOperation, key: string, modifiers
   const spec = keySpec(key, modifiers.includes("Shift"));
   // 按住 Alt / Control / Meta 时是快捷键，不产生字符；只按 Shift 时照常产生（大写）字符。
   const shortcut = modifiers.some((modifier) => modifier !== "Shift");
-  await stroke(session, shortcut ? { ...spec, text: undefined } : spec, modifierBits(modifiers));
+  await repeated(repeat, () => stroke(session, shortcut ? { ...spec, text: undefined } : spec, modifierBits(modifiers)));
 }
 
 /** 聚焦发到节点所在的会话；之后的按键与输入发主会话，落在有焦点的框架里（跨进程子框架也一样，实测）。 */
