@@ -365,3 +365,39 @@ describe("终端卡片", () => {
     expect(html).toContain("正在停止…");
   });
 });
+
+describe("CallRow 等你操作：就地画成卡片", () => {
+  const handoff = { kind: "browser-page", tab_id: "t1", url: "https://a.test/login", title: "登录", handoff_reason: "在页面上完成登录后交还" };
+  const question = { kind: "user-question", questions: [{ question: "用哪种存储？", header: "存储", options: [{ label: "Cookie", description: "后端下发" }, { label: "本地", description: "实现最快" }], multi_select: false }] };
+  const awaiting = (display_data: Record<string, unknown>): Partial<ToolArtifact> => ({ presentation: "standalone", backendStatus: "pending", awaitingUser: true, display_data });
+
+  it("交接：卡片取代调用行，标题按工具目录、说明取交接原因，可交还；是对话流里唯一用信息蓝边框的容器", () => {
+    const html = render(awaiting(handoff), { toolName: "browser_handoff", args: { tab: "t1", reason: "完成登录" } });
+    expect(html).toContain('data-slot="awaiting-card"');
+    expect(html).not.toContain('data-slot="call-row"');
+    expect(html).toContain("交给你操作网页");
+    expect(html).toContain("在页面上完成登录后交还");
+    expect(html).toContain(">交还<");
+    expect(html).toContain("border-[color-mix(in_oklab,var(--info)_38%,transparent)]");
+  });
+
+  it("只读面不提供交还", () => {
+    expect(render(awaiting(handoff), { toolName: "browser_handoff", interactive: false })).not.toContain(">交还<");
+  });
+
+  it("提问：画成提问卡片", () => {
+    const html = render(awaiting(question), { toolName: "ask_user", args: { questions: question.questions } });
+    expect(html).toContain('data-slot="question-card"');
+    expect(html).toContain("用哪种存储？");
+    expect(html).not.toContain('data-slot="call-row"');
+  });
+
+  it("决定之后变回一行；没有等待卡片的 kind 等待时仍是一行、标「等你操作」", () => {
+    const settled = render({ presentation: "standalone", display_data: { ...question, decision: "approve", answers: { "用哪种存储？": "Cookie" } } }, { toolName: "ask_user" });
+    expect(settled).toContain('data-slot="call-row"');
+    expect(settled).toContain("已作答");
+    const generic = render(awaiting({ kind: "future-decision" }), { toolName: "future_tool" });
+    expect(generic).toContain('data-slot="call-row"');
+    expect(generic).toContain("等你操作");
+  });
+});

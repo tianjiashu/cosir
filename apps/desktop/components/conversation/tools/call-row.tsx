@@ -44,6 +44,7 @@ const CLICKABLE_ROW_CLASS = "hover:bg-muted cursor-pointer";
  * 行只说「在做什么」和「出了问题」：运行中标题扫光（`projectCallStatus`），跑过 3 秒标题后出现时长，成功不说话，异常按工具失败、取消、
  * 等你操作、实体异常（视图的 `status`）的优先级出现在元信息。
  *
+ * 等你操作时例外：视图给了等待卡片（`CallPresentation.awaiting`，交接、提问）就原地画成卡片，决定之后变回这一行。
  * 元信息与展开体由 kind 视图注册表按 `display_data.kind` 给出（没有 kind 时只有标题与状态）；已有结构化部分
  * 结果仍可展开。归侧栏的后台工作没有详情与操作，整行是定位到看板的按钮。
  * 可展开时整行是折叠按钮，视图给的行尾动作渲染在按钮之外（避免按钮嵌套），悬停范围因此放在外层；开合记在
@@ -64,7 +65,7 @@ function CallRowContent({ sessionId, toolCallId, toolName, args, artifact, inter
   const unfinished = status === "pending" || status === "running";
   const failed = status === "failed";
   const cancelled = status === "cancelled";
-  const context: CallViewContext = { sessionId, toolCallId, artifact, args, interactive, inherited, sessionCancelling, workStatus };
+  const context: CallViewContext = { sessionId, toolCallId, toolName, artifact, args, interactive, inherited, sessionCancelling, workStatus };
   const resolved = resolveCallView(context);
   const detail = resolved?.detail;
   const expandable = detail !== undefined;
@@ -72,6 +73,11 @@ function CallRowContent({ sessionId, toolCallId, toolName, args, artifact, inter
   const [open, setOpen] = useDisclosure(sessionId, callKey(toolCallId), defaultOpen);
   const collapsibleRef = useRef<HTMLDivElement>(null);
   const lockScroll = useScrollLock(collapsibleRef, DISCLOSURE_ANIMATION_MS);
+
+  // 等你操作且视图给了卡片：就地画卡片，取代这一行。
+  if (artifact.awaitingUser && resolved?.awaiting) {
+    return <div data-tool-call-id={toolCallId} data-tool-status={status} className="min-w-0">{resolved.awaiting()}</div>;
+  }
 
   // 标题与 `turn-layout.callTitle` 同源：都按工具目录从参数算出。
   const { title, target } = toolHeading(toolName, args, artifact.intent);

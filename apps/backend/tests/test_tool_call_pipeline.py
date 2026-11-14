@@ -351,6 +351,12 @@ def _gate_runtime(
             or SimpleNamespace(id=run_id)
         ),
     )
+    # 并入前要问 context「这批消息里有没有会开新回合的输入」；这里的消息都不是输入。
+    monkeypatch.setattr(
+        prepare_input_node,
+        "_message_context",
+        lambda: SimpleNamespace(input_opens_turn=lambda *, from_agent: True),
+    )
     drained: list[object] = []
     monkeypatch.setattr(
         prepare_input_node, "_write_message", lambda message, **_: drained.append(message) or True

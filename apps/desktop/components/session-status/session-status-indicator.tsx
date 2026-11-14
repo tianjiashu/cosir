@@ -9,8 +9,9 @@ import { cn } from "@/lib/utils";
  *
  * 侧栏、命令面板、页头、工作台标签与派生调用行共用，保证同一状态在各处的文案、图标与语气一致。
  * 「等你操作」优先占据状态位：它是唯一必须由你动手才能往下走的状态，Run 已完成或被停下时审批仍可能
- * 在等你。图标与色调沿用对话里的调用行与等待卡（暂停、info），用户不必再学一套。`suspended` 只表示
- * Agent 在等结果（后台命令、子会话），不是在叫你，所以是中性的。
+ * 在等你。图标与色调沿用对话里的调用行与等待卡（暂停、info），用户不必再学一套。`suspended` 单独出现时表示
+ * Agent 在等结果（后台命令、子会话），不是在叫你，所以是中性的；和「等你操作」同时成立时它等的就是你，
+ * 页头只留「等你操作」。
  * 侧栏与页面头部默认隐藏已完成与无 Run；工作台标签可显式展示完成态。
  */
 type Presentation = { label: string; tone: BadgeTone; active: boolean };
@@ -80,7 +81,8 @@ export function SessionStatusMarker({ sessionId, dotClassName }: { sessionId: nu
 export function SessionStatusBadges({ sessionId }: { sessionId: number }) {
   const status = useSessionExecutionStatus(sessionId);
   const awaiting = useSessionAwaitingUserCalls(sessionId);
-  const presentation = executionStatusPresentation(status);
+  // 挂起且有事等你：Agent 等的就是你，「等待结果」与「等你操作」并列会互相矛盾，只留后者。
+  const presentation = awaiting > 0 && status === "suspended" ? null : executionStatusPresentation(status);
   return (
     <>
       {awaiting > 0 && (

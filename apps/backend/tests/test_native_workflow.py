@@ -22,11 +22,16 @@ def loop(monkeypatch):
     context = SimpleNamespace(
         begin_run=lambda *args: None,
         latest_notice=lambda _kind: None,
+        # 驱动开始时推导未了结事项要问的两件事；这里没有等用户决定的调用。
+        awaiting_decision_calls=lambda: [],
+        input_opens_turn=lambda *, from_agent: True,
         load_message=lambda: [
             {"role": "user", "content": "问题"},
             {"role": "assistant", "content": "自然回答"},
         ],
     )
+    # 未了结事项的另一个来源（派生 Session）要读库；本文件不涉及派生。
+    monkeypatch.setattr("app.core.workflow.drive_notices.open_derived_titles", lambda _id: [])
     model = SimpleNamespace(close=AsyncMock())
     run = SimpleNamespace(id=1, session_id=2, execution_data=ReactExecutionState(), usage=None)
     operations = runtime_stub(

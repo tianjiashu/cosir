@@ -89,10 +89,9 @@ def test_builtin_child_profiles_are_code_defined_and_complete(
     assert {
         "write_file",
         "apply_patch",
-        "delete_file",
-        "move_file",
         "read_file",
     } <= set(general.allowed_tools)
+    assert not {"delete_file", "move_file"} & set(general.allowed_tools)
 
 
 def test_system_registry_contains_only_code_defined_children(

@@ -344,16 +344,12 @@ const ComposerAction: FC = () => {
     );
   }
 
+  // 一个按钮位：有草稿就是发送，停止只在草稿为空时出现（见 `deriveComposerAction`）。Run 活动期间
+  // 发出去是排队还是立即处理由后端定（挂着提问时会立即处理），这里不预告，去向看输入框上方的队列区。
   return (
-    <div className="flex items-center gap-2">
-      {isRunning && <StopButton sessionId={sessionId} />}
-      <ComposerSendButton
-        aria-label={isRunning ? "加入队列" : "发送"}
-        title={isRunning ? "加入队列：当前运行结束后依次处理，可在队列里改为立即发送" : undefined}
-      >
-        <ArrowUpIcon className="size-4" />
-      </ComposerSendButton>
-    </div>
+    <ComposerSendButton aria-label="发送">
+      <ArrowUpIcon className="size-4" />
+    </ComposerSendButton>
   );
 };
 

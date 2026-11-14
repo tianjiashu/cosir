@@ -10,7 +10,6 @@ import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 import { AgentMessageRow } from "@/components/conversation/thread/agent-message";
 import { visibleTurnBlock, type TurnLayout, type CallItem } from "@/lib/assistant/turn/turn-layout";
 import { ArtifactZone } from "./artifact-zone";
-import { AttentionCard } from "./attention-card";
 import { TEXT_PART_COMPONENTS } from "./markdown-part";
 import { processKey, useDisclosure } from "@/lib/assistant/turn/disclosure-store";
 import { ProcessBlock } from "./process-block";
@@ -57,31 +56,9 @@ const CallRowByIndex = memo(function CallRowByIndex({ index, sessionId, interact
   );
 });
 
-const AttentionByIndex = memo(function AttentionByIndex({ index, sessionId, interactive }: { index: number; sessionId: number; interactive: boolean }) {
-  const part = useAuiState((state) => state.message.parts[index]);
-  if (part?.type !== "tool-call") return null;
-  return (
-    <RenderIsolationBoundary
-      scope="part"
-      resetKey={`attention:${part.toolCallId}`}
-      metadata={{ partId: part.toolCallId, partIndex: index, partType: "tool-call", renderer: "attention-card", toolName: part.toolName }}
-      fallback={({ onRetry }) => <RenderErrorCard scope="tool" label={part.toolName} onRetry={onRetry} />}
-    >
-      <AttentionCard
-        sessionId={sessionId}
-        toolCallId={part.toolCallId}
-        toolName={part.toolName}
-        args={(part.args ?? {}) as Record<string, unknown>}
-        artifact={readToolArtifact(part.artifact)}
-        interactive={interactive}
-      />
-    </RenderIsolationBoundary>
-  );
-});
-
 /**
  * 助手消息按原始 part 顺序保留稳定槽位，工具区间摘要与正文交替。正常完成且有最终回复时隐藏过程，
- * 不移动正文 DOM；需要操作的卡与文件结果独立保留。布局由 projectTurn 给出，活动计时读取 startedAt，
+ * 不移动正文 DOM；等你操作的调用在原位置常显（就地画成卡片，见 `CallRow`），文件结果独立保留。布局由 projectTurn 给出，活动计时读取 startedAt，
  * 终态读取 outcome.durationMs，不创造挂起原因或猜测模型最终答复。
  */
 export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProps) {
@@ -131,9 +108,6 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
       {/* 输出正文时没有活动槽位，停止反馈不能跟着消失。 */}
       {cancelling && phase === "running" && !layout.current && <ActivityStatus feedback={STOPPING_FEEDBACK} className="block text-2sm" />}
       {stopped && <p data-slot="partial-reply" className="text-muted-foreground text-2sm">{answerText.trim() ? "回复可能尚未完成。" : "尚未生成回复。"}</p>}
-      {layout.attention.length > 0 && <div data-slot="attention-zone" className="flex flex-col gap-2">
-        {layout.attention.map((item) => <AttentionByIndex key={item.part.toolCallId} index={item.index} sessionId={sessionId} interactive={interactive} />)}
-      </div>}
       <ArtifactZone inherited={inherited} sessionId={sessionId} artifacts={layout.artifacts} interactive={interactive} sessionCancelling={cancelling} />
       <TurnError />
       {!layout.intro && <div>

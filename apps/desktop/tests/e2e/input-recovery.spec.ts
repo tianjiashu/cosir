@@ -30,7 +30,7 @@ test("发送在途时切走 Session，被拒后内容回到原 Session 的输入
   await expect(page.getByText("正在处理", { exact: true })).toBeVisible();
   await page.getByLabel("消息输入").fill("这是一段写了很久的消息");
   const sent = page.waitForRequest((req) => req.method() === "POST" && new URL(req.url()).pathname === `/sessions/${SESSION}/messages`);
-  await page.getByRole("button", { name: "加入队列", exact: true }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await sent;
   await page.getByRole("treeitem").filter({ hasText: "乙会话" }).click();
   await expect(page).toHaveURL(/\/sessions\/43$/);

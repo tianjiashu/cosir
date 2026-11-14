@@ -108,6 +108,13 @@ class _Context:
         self.loads += 1
         return [{"role": "user", "content": "帮我重构登录"}]
 
+    # 并入前的回合作废步骤要问这两件事；这里没有等待中的提问。
+    def input_opens_turn(self, *, from_agent: bool) -> bool:
+        return True
+
+    def awaiting_decision_calls(self) -> list[tuple[str, str]]:
+        return []
+
 
 def _user_input(message_id: int) -> SessionMessage:
     body = UserInputBody(

@@ -1,4 +1,4 @@
-import type { TransportOutcome } from "../contract";
+import type { TransportOutcome, TransportToolCallPart } from "../contract";
 import { resolveDisclosure, processKey, activityKey, agentKey, userMessageKey } from "./disclosure-store";
 import { USER_MESSAGE_CLAMP_HEIGHT, USER_MESSAGE_TOGGLE_HEIGHT } from "./user-message-clamp";
 import type { ThreadMessage } from "@assistant-ui/react";
@@ -6,6 +6,8 @@ import type { ThreadMessage } from "@assistant-ui/react";
 import { capsuleTextToPlainText } from "@/lib/assistant/capsules";
 import { IMAGE_TILE_GAP, IMAGE_TILE_SIZE } from "@/lib/image/tile-size";
 import { IMAGES_PER_ROW, shouldStackImages } from "./image-stack-policy";
+import { questionCardHeight, readUserQuestionDisplay } from "@/lib/assistant/tools/user-question";
+import { useQuestionDraftStore } from "./question-draft-store";
 import { visibleTurnBlock, type TurnLayout } from "./turn-layout";
 import { projectTurnHeading, TURN_HEADING_HEIGHT } from "./turn-heading";
 
@@ -102,10 +104,18 @@ const ASSISTANT_CHROME = 24;
 const ZONE_GAP = 16;
 const PROCESS_HEADER = 33;
 const PROCESS_ITEM = 28;
-const ATTENTION_CARD = 96;
+const AWAITING_CARD = 96;
 const CHANGES_CARD_CHROME = 40;
 const CHANGES_FILE_ROW = 28;
 const STANDALONE_ARTIFACT_CARD = 120;
+
+/** 等你操作的调用就地画成卡片：提问卡片随当前那一题的选项数变化，其余等待卡是固定的一两行。 */
+function awaitingHeight(part: TransportToolCallPart, sessionId?: number): number {
+  const display = readUserQuestionDisplay(part.display_data);
+  if (!display) return AWAITING_CARD;
+  const index = sessionId === undefined ? 0 : useQuestionDraftStore.getState().sessions[sessionId]?.[part.toolCallId]?.index ?? 0;
+  return questionCardHeight(display.questions[Math.min(index, display.questions.length - 1)]);
+}
 
 function assistantHeight(message: ThreadMessage, sessionId?: number): number {
   let estimate = assistantEstimates.get(message);
@@ -131,13 +141,12 @@ function assistantHeight(message: ThreadMessage, sessionId?: number): number {
     } else if (block.kind === "agent") {
       blocks.push(agentRowHeight(block.part.id, block.part.text, sessionId));
     } else if (block.kind === "standalone") {
-      blocks.push(PROCESS_ITEM);
+      blocks.push(block.part.awaitingUser ? awaitingHeight(block.part, sessionId) : PROCESS_ITEM);
     } else if (block.calls.length || block.key === layout.current?.groupKey) {
       const groupOpen = sessionId !== undefined && resolveDisclosure(sessionId, activityKey(message.id, block.key), false);
       blocks.push(PROCESS_HEADER + (groupOpen ? block.calls.length : 0) * PROCESS_ITEM);
     }
   }
-  for (let index = 0; index < layout.attention.length; index++) blocks.push(ATTENTION_CARD);
   for (const card of layout.artifacts) blocks.push(card.kind === "changes" ? CHANGES_CARD_CHROME + card.files.length * CHANGES_FILE_ROW : STANDALONE_ARTIFACT_CARD);
   if (layout.intro) return ROW_GAP + blocks.reduce((sum, block) => sum + block, 0) + Math.max(0, blocks.length - 1) * ZONE_GAP;
   return ROW_GAP + ASSISTANT_CHROME + blocks.reduce((sum, block) => sum + block + ZONE_GAP, 0);

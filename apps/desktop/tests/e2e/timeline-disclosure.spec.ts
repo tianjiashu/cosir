@@ -97,9 +97,9 @@ test("A10 automatic folding hands focus from the hidden process to its heading",
   await expect(page.locator('[data-slot="activity-head"]')).toBeVisible();
 });
 
-test("A10 a block losing its always-visible reason hands focus to the heading", async ({ page, request }) => {
+test("A10 a call awaiting the user stays visible in place, then folds with the process once decided", async ({ page, request }) => {
   const waiting = toolCallPart("hand", "browser_handoff", {
-    status: "pending", awaitingUser: true, args: { reason: "完成登录" },
+    presentation: "standalone", status: "pending", awaitingUser: true, args: { reason: "完成登录" },
     display_data: { kind: "browser-page", tab_id: "t1", url: "https://example.test/login", title: "登录", handoff_reason: "完成登录后交还" },
   });
   const final = text("结论", true);
@@ -107,9 +107,16 @@ test("A10 a block losing its always-visible reason hands focus to the heading", 
   await page.goto("/sessions/42");
   const head = page.locator('[data-slot="process-head"]');
   await expect(head).toHaveAttribute("aria-expanded", "false");
-  await page.locator('[data-slot="activity-head"]').focus();
+  // 过程收起，等你操作的调用仍在原位置，是一张卡片。
+  const card = page.locator('[data-tool-call-id="hand"] [data-slot="awaiting-card"]');
+  await expect(card).toBeVisible();
+  // 焦点在卡片的按钮上时作出决定：卡片原地变回一行并随过程收起，卸载的按钮不拦着折叠。
+  await card.getByRole("button", { name: "交还" }).focus();
   await seedState(request, 42, state([{ ...waiting, status: "completed", awaitingUser: false }, final], outcome("completed", { durationMs: 8000 })));
-  await expect(head).toBeFocused();
+  await expect(card).toHaveCount(0);
+  await expect(page.locator('[data-tool-call-id="hand"]')).toBeHidden();
+  await head.click();
+  await expect(page.locator('[data-tool-call-id="hand"] [data-slot="call-row"]')).toBeVisible();
 });
 
 test("A10 a focused control unmounting with its tool never blocks automatic folding", async ({ page, request }) => {

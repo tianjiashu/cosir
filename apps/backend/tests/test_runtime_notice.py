@@ -9,11 +9,15 @@ from app.core.workflow.execution_state.react_execution_state import ReactExecuti
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.message_queue.session_message import (
     BackgroundResultBody,
+    DecisionBody,
     NoticeBody,
+    RunLaunch,
     SessionMessage,
+    UserInputBody,
 )
 from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.nodes import prepare_input_node
+from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import NoticeEntry
 from app.models.session_kind import SessionType
 from tests.runtime_context_stub import runtime_stub
@@ -73,13 +77,42 @@ def _announced(run_id: int | None, *banned: str) -> tuple[int | None, NoticeEntr
     )
 
 
+def _context(
+    latest: tuple[int | None, NoticeEntry] | None = None,
+    awaiting: tuple[tuple[str, str], ...] = (),
+) -> SimpleNamespace:
+    """上下文替身：``latest`` 是上下文里最近一条通知（按它自己的种类查得到），``awaiting`` 是仍在
+    等用户决定的调用「id、工具名」。"""
+    return SimpleNamespace(
+        latest_notice=lambda kind: latest
+        if latest is not None and latest[1].notice_kind == kind
+        else None,
+        awaiting_decision_calls=lambda: list(awaiting),
+        input_opens_turn=lambda *, from_agent: True,
+    )
+
+
+@pytest.fixture(autouse=True)
+def open_sources(monkeypatch):
+    """未了结事项的另外两个事实来源：后台命令与派生 Session，默认都没有。"""
+    from app.core.workflow import drive_notices as module
+
+    sources = SimpleNamespace(commands=[], derived=[])
+    monkeypatch.setattr(
+        module, "background_commands", lambda: SimpleNamespace(pending=lambda _id: sources.commands)
+    )
+    monkeypatch.setattr(module, "open_derived_titles", lambda _id: sources.derived)
+    return sources
+
+
 def _notices(monkeypatch, space, banned, latest=None, *, run_id: int = 7) -> list[NoticeBody]:
     """装配一次驱动并推导通知；``latest`` 是上下文里最近一条准入通知（没有为 ``None``）。"""
     from app.core.workflow.drive_notices import drive_notices
 
     rc = _for_run(monkeypatch, space, banned, run_id=run_id)
-    context = SimpleNamespace(latest_notice=lambda kind: latest)
-    return [n for n in drive_notices(rc, context) if n.notice_kind == "tool_availability"]
+    return [
+        n for n in drive_notices(rc, _context(latest)) if n.notice_kind == "tool_availability"
+    ]
 
 
 @pytest.mark.parametrize("banned", [[], ["read_file"], ["read_file", "write_file"]])
@@ -195,10 +228,97 @@ def test_user_stopped_is_derived_from_how_the_preceding_run_ended(
 
     kinds = [
         n.notice_kind
-        for n in module.drive_notices(rc, SimpleNamespace(latest_notice=lambda kind: None))
+        for n in module.drive_notices(rc, _context())
     ]
 
     assert ("user_cancelled" in kinds) is told
+
+
+# ---------------------------------------------------------------------------
+# 未了结事项：驱动开始时告诉模型它手上还有哪些事没了结
+# ---------------------------------------------------------------------------
+
+
+def _open(monkeypatch, context, mailbox: RunMailbox | None = None, *, run_id: int = 7):
+    from app.core.workflow.drive_notices import drive_notices
+
+    rc = _for_run(monkeypatch, _space(mailbox or RunMailbox()), [], run_id=run_id)
+    return [n for n in drive_notices(rc, context) if n.notice_kind == "open_items"]
+
+
+def _told(run_id: int | None, *items: str) -> tuple[int | None, NoticeEntry]:
+    return run_id, NoticeEntry(notice_kind="open_items", content="...", open_items=sorted(items))
+
+
+def _answer(call_id: str, message_id: int) -> SessionMessage:
+    body = DecisionBody(tool_call_id=call_id, tool_name="ask_user", decision="approve")
+    return SessionMessage.of(body, message_id=message_id)
+
+
+def test_nothing_open_says_nothing(monkeypatch) -> None:
+    assert _open(monkeypatch, _context()) == []
+
+
+def test_open_items_lists_each_source_and_records_what_it_said(monkeypatch, open_sources) -> None:
+    """被别的消息唤醒时，模型读到三类没了结的事各一行；清单随通知落库，作为下一次的比对基准。"""
+    open_sources.commands, open_sources.derived = ["cargo check"], ["审查"]
+
+    [notice] = _open(monkeypatch, _context(awaiting=(("call-ask", "ask_user"),)))
+
+    assert notice.open_items == ["command:cargo check", "decision:call-ask", "session:审查"]
+    assert "ask_user (tool_call_id=call-ask)" in notice.content
+    assert "Do not repeat these calls" in notice.content
+    assert "cargo check" in notice.content and "审查" in notice.content
+    assert notice.wake_scope() == "none"
+
+
+def test_open_items_is_said_once_per_run_until_the_list_changes(monkeypatch, open_sources) -> None:
+    awaiting = (("call-ask", "ask_user"),)
+
+    # 本 Run 说过、清单没变：不重复。
+    assert _open(monkeypatch, _context(_told(7, "decision:call-ask"), awaiting)) == []
+    # 上次是更早的 Run 说的：再提醒一次，防止长对话里遗忘。
+    assert len(_open(monkeypatch, _context(_told(6, "decision:call-ask"), awaiting))) == 1
+    # 清单变了（后台命令结束了，提问还在）：只说还剩下的。
+    [notice] = _open(
+        monkeypatch, _context(_told(7, "command:cargo check", "decision:call-ask"), awaiting)
+    )
+    assert notice.open_items == ["decision:call-ask"]
+    assert "Background commands" not in notice.content
+
+
+def test_decisions_this_drive_is_about_to_settle_are_not_open(monkeypatch, open_sources) -> None:
+    """回答已在 mailbox 里的提问不算在等：否则模型先读到「还在等」再读到回答。"""
+    from app.core.workflow import drive_notices as module
+
+    registry = SimpleNamespace(
+        get_tool_definition=lambda name: SimpleNamespace(
+            decision_lifetime="turn" if name == "ask_user" else "open"
+        )
+    )
+    monkeypatch.setattr("app.core.tool.placeholder_settlement.get_tool_registry", lambda: registry)
+    awaiting = (("call-ask", "ask_user"), ("call-hand", "browser_handoff"))
+
+    answered = RunMailbox()
+    answered.post(_answer("call-ask", 3))
+    [notice] = _open(monkeypatch, _context(awaiting=awaiting), answered)
+    assert notice.open_items == ["decision:call-hand"]
+
+    # 新回合会让提问作废（另有「提问未被回答」的通知），交接照常等交还。
+    new_turn = RunMailbox()
+    new_turn.post(
+        SessionMessage.of(
+            UserInputBody(
+                text="换个做法",
+                launch=RunLaunch(model_config_id="test/m1"),
+                presentation=UserInputPresentation(text="换个做法"),
+            ),
+            message_id=4,
+        )
+    )
+    [notice] = _open(monkeypatch, _context(awaiting=awaiting), new_turn)
+    assert notice.open_items == ["decision:call-hand"]
+    assert module._OPEN_ITEMS_PREFIX in notice.content
 
 
 def _notice(

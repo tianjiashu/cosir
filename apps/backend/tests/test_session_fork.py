@@ -482,7 +482,7 @@ def test_pending_history_is_inert_and_source_deletion_does_not_remove_it(fork_st
     )
     input_message(s, run, "later")
     child = fork(s, run.input_id)
-    assert s.context_service.awaiting_decision_tool(child.id, "pending") is None
+    assert s.context_service.awaiting_decision_calls(child.id) == {}
     assert s.contexts.list_unsettled_placeholders(child.id) == []
     part = snapshot(s, child)["messages"][-1]["parts"][-1]
     assert part["status"] == "cancelled" and part["awaitingUser"] is False

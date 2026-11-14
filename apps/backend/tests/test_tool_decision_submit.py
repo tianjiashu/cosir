@@ -23,7 +23,11 @@ _CALL_ID = "call-hitl"
 
 
 @pytest.fixture
-def awaiting(tmp_path: Path, isolated_storage):
+def awaiting(tmp_path: Path, isolated_storage, monkeypatch: pytest.MonkeyPatch):
+    # 探针工具没有注册：决定不带载荷，按「工具没声明载荷」处理。
+    monkeypatch.setattr(
+        module, "get_tool_registry", lambda: SimpleNamespace(get_tool_definition=lambda _name: None)
+    )
     workspace = depends.get_workspace_crud().create("ws", str(tmp_path))
     session = depends.get_session_crud().create(workspace.id, "session")
     run = depends.get_run_crud().create(session.id, "suspended")

@@ -2,8 +2,7 @@
 export type FileChange = Readonly<{
   index: number;
   path: string;
-  new_path: string | null;
-  status: "added" | "modified" | "moved" | "deleted";
+  status: "added" | "modified";
   patch: string | null;
   insertions: number;
   deletions: number;
@@ -27,8 +26,7 @@ export function readFileChanges(value: unknown): readonly FileChange[] {
     const change = item as Record<string, unknown>;
     changes.push({
       index, path: item.path,
-      new_path: typeof change.new_path === "string" ? change.new_path : null,
-      status: change.status === "added" || change.status === "deleted" || change.status === "moved" ? change.status : "modified",
+      status: change.status === "added" ? "added" : "modified",
       patch: typeof change.patch === "string" ? change.patch : null,
       insertions: count(change.insertions), deletions: count(change.deletions),
     });

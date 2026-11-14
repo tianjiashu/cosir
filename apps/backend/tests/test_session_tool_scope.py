@@ -18,7 +18,7 @@ from app.models.session_kind import SESSION_KINDS, USER_FACING_SESSION_TYPES, Se
 pytestmark = pytest.mark.usefixtures("backend_env")
 
 # 只能给用户能操作的对话：需要用户作答的 HITL / 交接与配置草稿。
-_USER_SURFACE_ONLY = {"browser_handoff", "propose_agent_configuration"}
+_USER_SURFACE_ONLY = {"browser_handoff", "propose_agent_configuration", "ask_user"}
 
 
 def _names(session_type: str, depth: int = 0) -> set[str]:

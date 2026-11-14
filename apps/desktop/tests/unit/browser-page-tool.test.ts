@@ -35,7 +35,7 @@ describe("browser-page display", () => {
     ];
     expect(readBrowserPageDisplay({ ...PAGE, steps })?.steps).toEqual(steps);
     expect(readBrowserPageDisplay({ ...PAGE, steps: [{ action: "click", target: 3, status: "done" }] })?.steps).toBeUndefined();
-    const context = { sessionId: 1, toolCallId: "c", artifact: {} as ToolArtifact, args: {}, interactive: true, sessionCancelling: false };
+    const context = { sessionId: 1, toolCallId: "c", toolName: "browser_act", artifact: {} as ToolArtifact, args: {}, interactive: true, sessionCancelling: false };
     expect(browserPageView({ ...PAGE, steps }, context)?.detail?.defaultOpen).toBe(true);
     expect(browserPageView({ ...PAGE, steps: steps.slice(3) }, context)?.detail?.defaultOpen).toBe(true);
     expect(browserPageView({ ...PAGE, steps: steps.slice(0, 1) }, context)?.detail?.defaultOpen).toBe(false);

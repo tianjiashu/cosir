@@ -30,10 +30,8 @@ import pytest
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.delete_tool import DeleteTool
 from app.tools.tool_handler.find_files import FindFilesTool
 from app.tools.tool_handler.list_directory import ListDirectoryTool
-from app.tools.tool_handler.move_tool import MoveTool
 from app.tools.tool_handler.read_file import ReadFileTool
 from app.tools.tool_handler.replace_tool import ReplaceTool
 from app.tools.tool_handler.search_content import SearchContentTool
@@ -269,34 +267,6 @@ def test_resolver_rejects_all_cosir_variants(tmp_path: Path, variant: str) -> No
     assert error != ""
 
 
-def test_cosir_dir_itself_rejected_as_delete_target(tmp_path: Path) -> None:
-    """`.cosir` 目录本身不能被当作删除目标（delete_file 必须拒绝且目录存活）。"""
-
-    root = tmp_path / "ws"
-    (root / ".cosir" / "keep.txt").parent.mkdir(parents=True)
-    (root / ".cosir" / "keep.txt").write_text("keep", encoding="utf-8")
-    observation = DeleteTool().execute(execution_context=_ctx(root), path=".cosir")
-    assert observation.status == "error"
-    assert (root / ".cosir").is_dir()
-
-
-def test_move_destination_cosir_dir_itself_rejected(tmp_path: Path) -> None:
-    """move_file 目标为 `.cosir` 目录本身（非其子文件）必须被拒绝。"""
-
-    root = tmp_path / "ws"
-    root.mkdir()
-    src = root / "src.txt"
-    src.write_text("a", encoding="utf-8")
-    (root / ".cosir").mkdir()
-    observation = MoveTool().execute(
-        execution_context=_ctx(root),
-        source_path="src.txt",
-        destination_path=".cosir",
-    )
-    assert observation.status == "error"
-    assert src.exists()
-
-
 @pytest.mark.parametrize("variant", ["", "   ", "\t"])
 def test_resolver_rejects_blank_inputs(tmp_path: Path, variant: str) -> None:
     """空串 / 纯空白输入必须被拒绝。"""
@@ -402,52 +372,6 @@ def test_apply_patch_into_cosir_no_disk_change(tmp_path: Path) -> None:
     obs = ApplyPatchTool().execute(execution_context=_ctx(root), patch=patch)
     assert obs.status == "error"
     assert target.read_text(encoding="utf-8") == "hello\n"
-
-
-def test_delete_file_in_cosir_no_disk_change(tmp_path: Path) -> None:
-    """delete_file 指向 `.cosir` 子文件：error 且文件存活。"""
-
-    root = tmp_path / "ws"
-    target = root / ".cosir" / "Attachment" / "a.png"
-    target.parent.mkdir(parents=True)
-    target.write_bytes(b"x")
-    obs = DeleteTool().execute(execution_context=_ctx(root), path=".cosir/Attachment/a.png")
-    assert obs.status == "error"
-    assert target.exists()
-
-
-def test_move_file_out_of_cosir_no_disk_change(tmp_path: Path) -> None:
-    """move_file 源在 `.cosir`：error 且文件存活。"""
-
-    root = tmp_path / "ws"
-    source = root / ".cosir" / "src.txt"
-    source.parent.mkdir(parents=True)
-    source.write_text("a", encoding="utf-8")
-    obs = MoveTool().execute(
-        execution_context=_ctx(root),
-        source_path=".cosir/src.txt",
-        destination_path="src.txt",
-    )
-    assert obs.status == "error"
-    assert source.exists()
-
-
-def test_move_file_into_cosir_no_disk_change(tmp_path: Path) -> None:
-    """move_file 目标在 `.cosir`：error 且源存活、目标不存在。"""
-
-    root = tmp_path / "ws"
-    root.mkdir()
-    source = root / "src.txt"
-    source.write_text("a", encoding="utf-8")
-    (root / ".cosir").mkdir(parents=True)
-    obs = MoveTool().execute(
-        execution_context=_ctx(root),
-        source_path="src.txt",
-        destination_path=".cosir/src.txt",
-    )
-    assert obs.status == "error"
-    assert source.exists()
-    assert not (root / ".cosir" / "src.txt").exists()
 
 
 def test_write_file_via_dotdot_into_cosir_blocked(tmp_path: Path) -> None:
@@ -880,23 +804,6 @@ def test_junction_pointing_into_cosir_is_reserved(tmp_path: Path) -> None:
     obs = WriteFileTool().execute(path="junc/pwn.txt", content="x", execution_context=_ctx(root))
     assert obs.status == "error"
     assert not (root / ".cosir" / "pwn.txt").exists()
-
-
-def test_delete_symlink_pointing_into_cosir_is_rejected(tmp_path: Path) -> None:
-    """delete_file 删一个指向 `.cosir` 的符号链接（词法在区外）：必须拒绝且目标存活。"""
-
-    if not _symlinks_supported(tmp_path):
-        pytest.skip("当前环境不支持创建符号链接")
-    root = tmp_path / "ws"
-    root.mkdir()
-    (root / ".cosir").mkdir()
-    target = root / ".cosir" / "target.txt"
-    target.write_text("keep-me", encoding="utf-8")
-    link = root / "link.txt"
-    link.symlink_to(target)
-    obs = DeleteTool().execute(execution_context=_ctx(root), path="link.txt")
-    assert obs.status == "error"
-    assert target.exists()
 
 
 def test_workspace_root_itself_a_symlink_still_protects_cosir(tmp_path: Path) -> None:

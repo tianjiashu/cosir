@@ -10,6 +10,7 @@ import { useBrowserTab } from "@/lib/browser/host-state-store";
 import { revealBrowserTab } from "@/lib/browser/panel-store";
 import { cn } from "@/lib/utils";
 import { readBrowserPageDisplay, type BrowserActStep, type BrowserPageDisplay } from "../browser-page-display";
+import { HandoffCard } from "../awaiting/handoff-card";
 import { CallOpenButton } from "../call-open-button";
 import type { CallView } from "../call-view";
 import { DetailSurface } from "./detail-parts";
@@ -62,8 +63,8 @@ function ActSteps({ steps }: { steps: BrowserActStep[]; }) {
 
 /**
  * `browser-page`（`browser_navigate` / `browser_snapshot` / `browser_act` / `browser_screenshot` / `browser_handoff`）：
- * 元信息是页面标题（或地址），截图或动作步骤是展开体（有一步停下时默认展开）。交接要用户做的事（`handoff_reason`）
- * 由等待卡展示并承载交还。
+ * 元信息是页面标题（或地址），截图或动作步骤是展开体（有一步停下时默认展开）。交接等待交还时就地是
+ * 交接卡（`HandoffCard`）：展示要用户做的事（`handoff_reason`）并承载交还。
  */
 export const browserPageView: CallView = (data, context) => {
   const display = readBrowserPageDisplay(data);
@@ -71,6 +72,7 @@ export const browserPageView: CallView = (data, context) => {
   return {
     meta: context.inherited ? tabLabel(display.title, display.url) : <BrowserPageMeta display={display} />,
     actions: context.inherited ? null : <OpenTabAction display={display} />,
+    awaiting: () => <HandoffCard {...context} />,
     detail: display.screenshot || display.steps?.length ? {
       defaultOpen: display.steps?.some(step => step.status === "failed" || step.status === "unknown") ?? false,
       render: () => display.screenshot ? <Screenshot assetId={display.screenshot} /> : <ActSteps steps={display.steps!} />,

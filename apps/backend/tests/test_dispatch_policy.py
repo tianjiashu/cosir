@@ -216,3 +216,20 @@ def test_agent_message_and_user_input_share_the_one_input_per_run_channel() -> N
     pending = [_agent(1), _user(2), _notice(3)]
     assert dispatch_policy.next_input(pending) is pending[0]
     assert dispatch_policy.initial_messages(pending, fresh_run=True) == [pending[0], pending[2]]
+
+
+@pytest.mark.parametrize(
+    ("phase", "awaits", "expected"),
+    [
+        ("idle", False, "immediate"),
+        ("idle", True, "immediate"),
+        ("driving", False, "next_run"),
+        ("driving", True, "next_run"),
+        # 只在等后台结果的挂起：消息排队，不唤醒。
+        ("suspended", False, "next_run"),
+        # 挂着提问：用户直接说话就是回应，消息唤醒同一个 Run。
+        ("suspended", True, "immediate"),
+    ],
+)
+def test_send_delivery(phase, awaits: bool, expected: str) -> None:
+    assert dispatch_policy.send_delivery(phase, awaits_turn_decision=awaits) == expected

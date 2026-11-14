@@ -175,7 +175,7 @@
 > `old_string` must match the file exactly, including indentation, and be unique — the edit fails otherwise.
 > `replace_all: true` replaces every occurrence instead.
 
-- **cosir 现状**：三个编辑工具各自说明自己（`patch_write` 有唯一匹配与 `replace_all`；`apply_patch` 说了只改已有文件），但没有一处讲「该选哪个」。
+- **cosir 现状**：三个编辑工具各自说明自己（`patch_write` 有唯一匹配与 `replace_all`；`apply_patch` 说了只改已有文件），但没有一处讲「该选哪个」。删除、移动工具已于 2026-11-14 删掉，改走终端，与 Claude Code 一致。
 - **建议**：工具层加一句：小范围替换用 `patch_write`，多处、多段改动用 `apply_patch`，新建或整体重写用 `write_file`。
 
 ### 18. 委派的成本与纪律 ◐ P0

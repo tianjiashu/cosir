@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 import pytest
@@ -6,12 +5,8 @@ import pytest
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.delete_tool import DELETE_FILE_DESCRIPTION, DeleteTool
-from app.tools.tool_handler.move_tool import MOVE_FILE_DESCRIPTION, MoveTool
 from app.tools.tool_handler.patch_write import parse_git_unified_diff
 from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
-from app.tools.tool_models.delete_file_args import DeleteFileArgs
-from app.tools.tool_models.move_file_args import MoveFileArgs
 from app.tools.tool_registration import build_tool_registry
 
 # 工具描述的事实源已从模块级常量 ``APPLY_PATCH_DESCRIPTION`` 迁移为类属性
@@ -39,25 +34,16 @@ def _patch(path: str = "existing.txt") -> str:
 
 def test_file_tool_descriptions_and_arguments_express_separate_responsibilities() -> None:
     patch_description = ApplyPatchArgs.model_fields["patch"].description or ""
-    delete_description = DeleteFileArgs.model_fields["path"].description or ""
-    move_source_description = MoveFileArgs.model_fields["source_path"].description or ""
-    move_destination_description = MoveFileArgs.model_fields["destination_path"].description or ""
 
     # 工具描述只讲「这个工具做什么 / 不能做什么 / 该换哪个工具」。
     assert "existing UTF-8 text files" in APPLY_PATCH_DESCRIPTION
     assert "cannot create, delete, or move" in APPLY_PATCH_DESCRIPTION
     assert "write_file" in APPLY_PATCH_DESCRIPTION
-    assert "delete_file" in APPLY_PATCH_DESCRIPTION
-    assert "move_file" in APPLY_PATCH_DESCRIPTION
+    # 删除与移动没有专门工具，指向终端。
+    assert "execute_terminal" in APPLY_PATCH_DESCRIPTION
     # 参数描述只讲「这个值要填什么格式」。
     assert "unified diff" in patch_description
     assert "'diff --git' header" in patch_description
-    assert "Directories are not supported" in DELETE_FILE_DESCRIPTION
-    assert "Directories" in delete_description
-    assert "directories" in move_source_description.lower()
-    assert "must not already exist" in MOVE_FILE_DESCRIPTION
-    assert "parent directory must already exist" in MOVE_FILE_DESCRIPTION
-    assert "parent directory" in move_destination_description
 
 
 # 模型可见契约必须自带可用样例与行数规则；2026-09-21 的真实故障正是模型在无样例时
@@ -102,12 +88,12 @@ def test_patch_count_rule_is_stated_only_in_the_parameter_description() -> None:
 @pytest.mark.usefixtures("backend_env")
 def test_handlers_inherit_base_and_new_tools_are_registered() -> None:
     assert all(
-        issubclass(handler, HandlerBase) for handler in (ApplyPatchTool, DeleteTool, MoveTool)
+        issubclass(handler, HandlerBase) for handler in (ApplyPatchTool,)
     )
     names = set(build_tool_registry().get_all_tool_names())
 
-    assert {"apply_patch", "delete_file", "move_file", "write_file"} <= names
-    assert "delete" not in names
+    assert {"apply_patch", "write_file"} <= names
+    assert not {"delete", "delete_file", "move_file"} & names
 
 
 def test_apply_patch_modifies_existing_file_and_emits_file_changes(tmp_path: Path) -> None:
@@ -241,91 +227,3 @@ def test_apply_patch_rejects_legacy_patch_markers_and_prevalidates_all_files(
     assert first.read_text(encoding="utf-8") == "before first\n"
     assert second.read_text(encoding="utf-8") == "before second\n"
 
-
-def test_delete_tool_unlinks_one_text_file_but_refuses_a_directory(tmp_path: Path) -> None:
-    target = tmp_path / "old.txt"
-    target.write_text("removed\n", encoding="utf-8")
-    folder = tmp_path / "folder"
-    folder.mkdir()
-
-    deleted = DeleteTool().execute(_context(tmp_path), path="old.txt")
-    rejected = DeleteTool().execute(_context(tmp_path), path="folder")
-
-    assert deleted.status == "success"
-    assert deleted.display_data["changes"][0]["status"] == "deleted"
-    assert not target.exists()
-    assert rejected.status == "error"
-    assert folder.is_dir()
-
-
-def test_move_tool_moves_one_text_file_without_overwriting_or_creating_parents(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "old.txt"
-    source.write_text("kept\n", encoding="utf-8")
-    destination = tmp_path / "new.txt"
-    destination.write_text("existing\n", encoding="utf-8")
-
-    rejected_existing = MoveTool().execute(
-        _context(tmp_path), source_path="old.txt", destination_path="new.txt"
-    )
-    rejected_parent = MoveTool().execute(
-        _context(tmp_path), source_path="old.txt", destination_path="missing/new.txt"
-    )
-    moved = MoveTool().execute(
-        _context(tmp_path), source_path="old.txt", destination_path="renamed.txt"
-    )
-
-    assert rejected_existing.status == "error"
-    assert rejected_parent.status == "error"
-    assert destination.read_text(encoding="utf-8") == "existing\n"
-    assert moved.status == "success"
-    assert moved.display_data["changes"][0]["status"] == "moved"
-    assert moved.display_data["changes"][0]["new_path"] == "renamed.txt"
-    assert not source.exists()
-    assert (tmp_path / "renamed.txt").read_text(encoding="utf-8") == "kept\n"
-
-
-def test_move_tool_does_not_overwrite_destination_created_during_move(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    source = tmp_path / "old.txt"
-    source.write_text("kept\n", encoding="utf-8")
-    destination = tmp_path / "new.txt"
-    original_move = os.rename if os.name == "nt" else os.link
-
-    def create_destination_then_move(source_path, destination_path) -> None:
-        destination.write_text("concurrent\n", encoding="utf-8")
-        original_move(source_path, destination_path)
-
-    monkeypatch.setattr(os, "rename" if os.name == "nt" else "link", create_destination_then_move)
-
-    rejected = MoveTool().execute(
-        _context(tmp_path), source_path="old.txt", destination_path="new.txt"
-    )
-
-    assert rejected.status == "error"
-    assert source.read_text(encoding="utf-8") == "kept\n"
-    assert destination.read_text(encoding="utf-8") == "concurrent\n"
-
-
-def test_delete_and_move_reject_final_symbolic_link_paths(tmp_path: Path) -> None:
-    target = tmp_path / "target.txt"
-    target.write_text("kept\n", encoding="utf-8")
-    alias = tmp_path / "alias.txt"
-    try:
-        alias.symlink_to(target)
-    except (OSError, NotImplementedError):
-        pytest.skip("the current platform does not permit creating file symbolic links")
-
-    deleted = DeleteTool().execute(_context(tmp_path), path="alias.txt")
-    moved = MoveTool().execute(
-        _context(tmp_path), source_path="alias.txt", destination_path="moved.txt"
-    )
-
-    assert deleted.status == "error"
-    assert moved.status == "error"
-    assert alias.is_symlink()
-    assert target.read_text(encoding="utf-8") == "kept\n"
-    assert not (tmp_path / "moved.txt").exists()

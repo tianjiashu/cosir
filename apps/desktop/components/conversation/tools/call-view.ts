@@ -12,6 +12,8 @@ export type CallViewContext = {
   inherited?: boolean;
   sessionId: number;
   toolCallId: string;
+  /** 只用于查工具目录（图标与标题）；视图不按它分支。 */
+  toolName: string;
   artifact: ToolArtifact;
   args: Record<string, unknown>;
   /** 只读展示面（子 Agent 阅读器、后台看板）不提供写入交互（停止、交还、转到后台）。 */
@@ -41,6 +43,11 @@ export type CallPresentation = {
   /** 独立弹层随调用存活，不随行内详情的开合卸载。 */
   overlay?: ReactNode;
   detail?: { defaultOpen?: boolean; render: () => ReactNode };
+  /**
+   * 等你操作（`awaitingUser`）时就地取代调用行的卡片：怎么画、怎么作出决定都在这里。同一调用始终在
+   * 同一个位置——等待时是卡片，决定之后变回一行。没给的 kind 等待时仍是一行（带边框、标「等你操作」）。
+   */
+  awaiting?: () => ReactNode;
 };
 
 /** kind 的纯解析器；无效专用载荷返回 null。不要调用 hooks，状态订阅由返回的组件拥有。 */

@@ -82,18 +82,20 @@ class _Ledger:
             agent_id=launch.agent_id,
             model_config_id=launch.model_config_id,
             options=launch.options,
+            end_reason=None,
         )
         self.runs[run.id] = run
         self.current = run
         self.created.append(run)
         return run
 
-    def transition(self, run_id: int, transition: RunTransition, **_kw: Any):
+    def transition(self, run_id: int, transition: RunTransition, **kw: Any):
         run = self.runs[run_id]
         sources, target, _ = transition.value
         if run.status not in {source.value for source in sources}:
             return None
         run.status = target.value
+        run.end_reason = kw.get("end_reason")
         return run
 
     def get_run(self, run_id: int) -> SimpleNamespace:
@@ -191,6 +193,15 @@ def harness(monkeypatch):
         lambda session_id, ids, _hint, **_kw: settled.append((session_id, list(ids)))
         or frozenset({session_id}),
     )
+    # Run 落定时作废回合类等待决定要读库；记下调用，``expiring`` 里的调用视为被作废
+    # （结算本身见 test_turn_decision_after_run）。
+    expiring: list[str] = []
+    expired: list[tuple[int, str]] = []
+    monkeypatch.setattr(
+        actor_module,
+        "expire_turn_decisions_after_run",
+        lambda session_id, hint: expired.append((session_id, hint)) or list(expiring),
+    )
     space = SimpleNamespace(
         session_id=_SESSION_ID,
         async_operation=contextlib.nullcontext,
@@ -205,6 +216,8 @@ def harness(monkeypatch):
         refreshed=refreshed,
         settled=settled,
         missing_models=missing,
+        expiring=expiring,
+        expired=expired,
     )
 
 
@@ -720,4 +733,55 @@ async def test_completed_run_keeps_background_entries(harness) -> None:
     await _finish(run.id, "suspended")
     assert command_results.pending(_SESSION_ID) == ["terminal:t3"]
     command_results.drop_session(_SESSION_ID)
+    await harness.actor.abort()
+
+
+# ---------------------------------------------------------------------------
+# Run 落定：回合类等待决定（提问）一并作废
+# ---------------------------------------------------------------------------
+
+
+async def test_stopping_a_run_suspended_on_a_question_expires_it_and_tells_the_model(
+    harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """提问挂着时用户停止：卡片收敛为「已停止」，模型在下一次驱动得知这次提问没等到回答。
+
+    不作废的话卡片还能答，回答会开新 Run、落进新回合，被停下的 Run 还会先读到「用户已停止」。
+    """
+    notices: list[tuple[int, SessionMessage]] = []
+    monkeypatch.setattr(
+        harness.queue, "put", lambda session_id, message: notices.append((session_id, message))
+    )
+    harness.expiring.append("call-ask")
+    run = harness.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
+    run.status = "suspended"
+
+    await harness.actor.cancel("user")
+
+    assert run.status == "cancelled"
+    assert harness.expired == [(_SESSION_ID, "已停止")]
+    [(session_id, notice)] = notices
+    assert session_id == _SESSION_ID and notice.kind == "system_notice"
+    assert "tool_call_id=call-ask" in notice.body.content
+    assert "stopped you instead of answering" in notice.body.content
+    # 通知不开新 Run：恢复或下一条消息到来时才并入。
+    assert notice.wakes(None) is False
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [("failed", [(_SESSION_ID, "未作答")]), ("completed", []), ("suspended", [])],
+)
+async def test_only_a_run_that_fails_or_is_stopped_expires_its_questions(
+    harness, status: str, expected: list[tuple[int, str]]
+) -> None:
+    """失败的 Run 收尾提问，标「未作答」。正常完成不作废：提问挂着时被别的消息唤醒、说完话就完成是
+    正常路径，卡片不该在用户没操作时消失；挂起不是落定，提问照常等回答。"""
+    harness.actor.start()
+    harness.queue.put(_user())
+    await _settle()
+
+    await _finish(harness.ledger.created[-1].id, status)
+
+    assert harness.expired == expected
     await harness.actor.abort()

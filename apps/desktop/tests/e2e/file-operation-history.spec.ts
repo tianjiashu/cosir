@@ -11,8 +11,8 @@ test("一次调用中的同路径操作在汇总与过程详情中都逐条保�
   await seedState(request, 49, transportState({
     messages: [userMessage("u", 1), assistantMessage("a", 1, [toolCallPart("changes", "apply_patch", {
       status: "completed", display_data: { kind: "file-changes", changes: [
-        { path: "a.ts", new_path: "b.ts", status: "moved" },
-        { path: "a.ts", new_path: "b.ts", status: "moved" },
+        { path: "a.ts", status: "modified", insertions: 1, deletions: 1, patch: "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b\n" },
+        { path: "a.ts", status: "modified", insertions: 1, deletions: 1, patch: "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-b\n+c\n" },
       ] },
     })], outcome("completed"))], activity: activity(1, "completed"),
   }));
@@ -20,9 +20,12 @@ test("一次调用中的同路径操作在汇总与过程详情中都逐条保�
   const card = page.locator('[data-slot="changes-card"]');
   await expect(card).toContainText("2 次操作");
   await card.getByRole("button").click();
-  await expect(card.getByText("移动 → b.ts", { exact: true })).toHaveCount(2);
+  await expect(card.locator("ol > li")).toHaveCount(2);
   await page.locator('[data-slot="activity-head"]').click();
   const call = page.locator('[data-tool-call-id="changes"]');
-  await expect(call.locator('[data-slot="call-row"]')).not.toHaveAttribute("aria-expanded");
+  const row = call.locator('[data-slot="call-row"]');
+  await expect(row).toHaveAttribute("aria-expanded", "false");
+  await row.click();
+  await expect(call.locator("section")).toHaveCount(2);
   expect(keyErrors).toEqual([]);
 });

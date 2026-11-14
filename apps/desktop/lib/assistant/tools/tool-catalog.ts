@@ -90,6 +90,12 @@ function skillTarget(args: ToolArgs): string | null {
   return skill && resource ? `${skill}/${resource}` : skill;
 }
 
+/** 提问的目标：第一题的短标签，多题时带 `+N`。 */
+function questionHeaders(args: ToolArgs): string | null {
+  if (!Array.isArray(args.questions)) return null;
+  return withMore(args.questions.map((question) => (question && typeof question === "object" ? (question as ToolArgs).header : null)));
+}
+
 /** `browser_act` 动作类型 → 动词：调用行的目标与卡片的每一步共用这一张表。 */
 const BROWSER_ACTION_VERBS: Readonly<Record<string, string>> = {
   click: "点击", hover: "悬停", drag: "拖动", type: "输入", press: "按键", select: "选择",
@@ -119,8 +125,6 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   write_file: { verb: "写入文件", icon: "git-compare", target: path },
   patch_write: { verb: "替换文本", icon: "git-compare", target: path },
   apply_patch: { verb: "应用补丁", icon: "git-compare", target: patchTargets },
-  delete_file: { verb: "删除文件", icon: "file-x", target: path },
-  move_file: { verb: "移动文件", icon: "file-symlink", target: (args) => joined(str(args.source_path), " → ", str(args.destination_path)) },
   execute_terminal: { verb: "执行命令", icon: "terminal" },
   terminal_list: { verb: "列出终端", icon: "terminal" },
   terminal_read: { verb: "读取终端", icon: "terminal", target: terminalId },
@@ -143,6 +147,7 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   send_message: { verb: "发送消息", icon: "send", target: sessionRef },
   session_status: { verb: "读取会话状态", icon: "info", target: sessionRef },
   wait_messages: { verb: "等待结果", icon: "clock" },
+  ask_user: { verb: "向你提问", icon: "circle-help", target: questionHeaders },
   propose_agent_configuration: { verb: "生成子 Agent 配置草稿", icon: "bot", target: (args) => str(args.agent_id) },
 };
 

@@ -116,7 +116,7 @@ function backgroundCallView(sessionId: number, part: TransportToolCallPart, work
   const converted = toToolCallPart(part);
   if (converted.type !== "tool-call") return null;
   const artifact = readToolArtifact(converted.artifact);
-  return resolveCallView({ sessionId, toolCallId: part.toolCallId, artifact, args: part.args ?? {}, interactive: false, sessionCancelling: false, surface: "details", workStatus });
+  return resolveCallView({ sessionId, toolCallId: part.toolCallId, toolName: part.toolName, artifact, args: part.args ?? {}, interactive: false, sessionCancelling: false, surface: "details", workStatus });
 }
 
 /**

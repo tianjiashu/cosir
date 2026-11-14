@@ -35,11 +35,6 @@ export function parseFileDiff(change: FileChange): ParsedFileDiff {
   }
 }
 
-/** 删除与移动没有文本差异可看：被删内容不进入工具展示，行上的目标已说清移动去向。 */
-export function hasTextDiff(change: FileChange): boolean {
-  return change.status !== "deleted" && change.status !== "moved";
-}
-
 /** 一个文件的 diff 正文；调用行展开体与「本轮改动」卡点开文件时共用。 */
 export function FileDiff({ change }: { change: FileChange; }) {
   const parsed = useMemo(() => parseFileDiff(change), [change]);
@@ -81,14 +76,12 @@ function ParsedDiff({ file }: { file: FileData; }) {
   );
 }
 
-const STATUS_LABELS: Record<string, string> = { added: "新建", deleted: "删除", moved: "移动" };
-
-/** 新建 / 删除 / 移动的灰字标签；修改是常态，不标。 */
+/** 新建的灰字标签；修改是常态，不标。删除与移动走终端，不进文件变更卡片。 */
 export function fileChangeTag(status: string | undefined): string | null {
-  return status === undefined ? null : STATUS_LABELS[status] ?? null;
+  return status === "added" ? "新建" : null;
 }
 
-/** 行内 `+a −b`；只有删除时不显示计数（被删内容不进展示）。 */
+/** 行内 `+a −b`；没有增删时不显示。 */
 export function DiffStat({ insertions, deletions, className }: { insertions: number; deletions: number; className?: string; }) {
   if (insertions <= 0 && deletions <= 0) return null;
   return (
@@ -117,27 +110,25 @@ function FileChangeSection({ change, single }: { change: FileChange; single: boo
 }
 
 /**
- * `file-changes`（`write_file` / `patch_write` / `apply_patch` / `delete_file` / `move_file`）：元信息是 `+a −b`
+ * `file-changes`（`write_file` / `patch_write` / `apply_patch`）：元信息是 `+a −b`
  * 或文件数，展开体逐文件给 diff。回合结束后同一批改动还会按文件聚合进「本轮改动」卡，这里是过程视角。
  */
 export const fileChangesView: CallView = (data) => {
   const changes = readFileChanges(data.changes);
-  const textual = changes.filter(hasTextDiff);
   const stats = asRecord(data.diff_stats);
   const insertions = typeof stats.total_insertions === "number" ? stats.total_insertions : changes.reduce((sum, item) => sum + item.insertions, 0);
   const deletions = typeof stats.total_deletions === "number" ? stats.total_deletions : changes.reduce((sum, item) => sum + item.deletions, 0);
-  // 全是删除 / 移动时没有增删可数，改用文件数与动作标签。
-  const onlyOperations = changes.length > 0 && changes.every((change) => change.status === "deleted" || change.status === "moved");
+  // 没有增删可数（如写入相同内容）时改用文件数或动作标签。
   const count = typeof stats.total_files === "number" ? stats.total_files : changes.length;
-  const meta = onlyOperations || (insertions <= 0 && deletions <= 0)
+  const meta = insertions <= 0 && deletions <= 0
     ? count > 1 ? `${count} 个文件` : fileChangeTag(changes[0]?.status) ?? null
     : <DiffStat insertions={insertions} deletions={deletions} />;
   return {
     meta,
-    detail: textual.length > 0 ? {
+    detail: changes.length > 0 ? {
       render: () => (
         <div className="space-y-1 py-1">
-          {textual.map((change) => <FileChangeSection key={change.index} change={change} single={textual.length === 1} />)}
+          {changes.map((change) => <FileChangeSection key={change.index} change={change} single={changes.length === 1} />)}
         </div>
       ),
     } : undefined,

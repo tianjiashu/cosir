@@ -41,10 +41,14 @@ export type SessionMessageRequest = {
   disabledToolGroups: readonly string[];
 };
 
-/** 用户对一次等待决定的工具调用（HITL）的决定；驳回可带 `feedback`。 */
+/**
+ * 用户对一次等待决定的工具调用（HITL）的决定；驳回可带 `feedback`。`data` 是工具声明的结构化回答
+ * （如提问的各题答案），形状由后端按工具校验（400 `DECISION_DATA_INVALID`），这里原样带上。
+ */
 export type ToolDecision = {
   decision: "approve" | "reject";
   feedback?: string;
+  data?: Record<string, unknown>;
 };
 
 type CommandInit = Pick<HttpRequestInit, "signal" | "traceId">;

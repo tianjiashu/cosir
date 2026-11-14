@@ -84,12 +84,19 @@ def test_decision_carries_no_tool_specific_address() -> None:
     assert (decision.decision, decision.feedback) == ("reject", "换个分工")
 
 
+def test_decision_carries_the_tool_declared_payload_as_is() -> None:
+    """载荷的形状归工具声明，请求模型只收原样 JSON，由决定入口按工具校验。"""
+    decision = DecisionRequest.model_validate({"decision": "approve", "data": {"answers": {}}})
+
+    assert decision.data == {"answers": {}}
+
+
 @pytest.mark.parametrize(
     "payload",
     [
         {"decision": "force_reject"},
         {"decision": "abort"},
-        {"decision": "approve", "data": {"goal": "ok"}},
+        {"decision": "approve", "tool_call_id": "c1"},
     ],
 )
 def test_decision_rejects_unknown_shapes(payload: dict[str, object]) -> None:

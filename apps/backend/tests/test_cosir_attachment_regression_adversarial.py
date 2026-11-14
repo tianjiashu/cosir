@@ -39,10 +39,8 @@ from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.attachment.image_normalizer import ImageNormalizationError
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.delete_tool import DeleteTool
 from app.tools.tool_handler.find_files import FindFilesTool
 from app.tools.tool_handler.list_directory import ListDirectoryTool
-from app.tools.tool_handler.move_tool import MoveTool
 from app.tools.tool_handler.read_file import ReadFileTool
 from app.tools.tool_handler.replace_tool import ReplaceTool
 from app.tools.tool_handler.search_content import SearchContentTool
@@ -471,32 +469,6 @@ def test_apply_patch_into_cosir_no_disk_change(tmp_path: Path) -> None:
     obs = ApplyPatchTool().execute(execution_context=_ctx(root), patch=patch)
     assert obs.status == "error"
     assert target.read_text(encoding="utf-8") == "hello\n"
-
-
-def test_delete_file_in_cosir_no_disk_change(tmp_path: Path) -> None:
-    """delete_file 指向 ``.cosir`` 子文件：error 且文件存活。"""
-
-    root = tmp_path / "ws"
-    target = root / ".cosir" / "Attachment" / "a.png"
-    target.parent.mkdir(parents=True)
-    target.write_bytes(b"x")
-    obs = DeleteTool().execute(execution_context=_ctx(root), path=".cosir/Attachment/a.png")
-    assert obs.status == "error"
-    assert target.exists()
-
-
-def test_move_file_out_of_cosir_no_disk_change(tmp_path: Path) -> None:
-    """move_file 源在 ``.cosir``：error 且文件存活。"""
-
-    root = tmp_path / "ws"
-    source = root / ".cosir" / "src.txt"
-    source.parent.mkdir(parents=True)
-    source.write_text("a", encoding="utf-8")
-    obs = MoveTool().execute(
-        execution_context=_ctx(root), source_path=".cosir/src.txt", destination_path="src.txt"
-    )
-    assert obs.status == "error"
-    assert source.exists()
 
 
 def test_read_file_reads_cosir(tmp_path: Path) -> None:

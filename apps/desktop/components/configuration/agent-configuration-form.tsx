@@ -23,8 +23,8 @@ import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 import { modelOptionId, unknownModelName, useModelCatalog, type ModelCatalogModel } from "@/lib/model/catalog";
 import type { ModelSettingsForm } from "@/lib/model/settings-form";
 
-/** 子 Agent 仍不可授予交互终端会话和配置生成能力。 */
-const NON_ASSIGNABLE_TOOL_GROUPS = new Set(["交互终端工具", "配置生成工具"]);
+/** 子 Agent 仍不可授予交互终端会话、配置生成和向用户提问的能力（都要在用户能操作的界面里才用得了）。 */
+const NON_ASSIGNABLE_TOOL_GROUPS = new Set(["交互终端工具", "配置生成工具", "提问工具"]);
 
 const NO_AGENT_MODEL = "__agent_model_default__";
 

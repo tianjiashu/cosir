@@ -4,7 +4,7 @@
 
 1. ``PathResolver.resolve_within_workspace`` 的保留区判定（含 ``.cosir`` 目录本身、
    同前缀兄弟目录不误判）；
-2. 五个文件工具（write_file / patch_write / apply_patch / delete_file / move_file）端到端被拒绝，
+2. 三个文件工具（write_file / patch_write / apply_patch）端到端被拒绝，
    且**磁盘状态不变**；
 3. 只读工具仍可读取 ``.cosir``（产品要求「允许读」）；
 4. 调度期资源路径解析（路径锁 / revision 登记入口）与终端 cwd 的豁免边界。
@@ -14,8 +14,6 @@ from pathlib import Path
 
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.delete_tool import DeleteTool
-from app.tools.tool_handler.move_tool import MoveTool
 from app.tools.tool_handler.read_file import ReadFileTool
 from app.tools.tool_handler.replace_tool import ReplaceTool
 from app.tools.tool_handler.security.path_resolver import PathResolver
@@ -120,51 +118,6 @@ def test_apply_patch_cannot_patch_inside_cosir(tmp_path: Path) -> None:
     observation = ApplyPatchTool().execute(execution_context=_context(tmp_path), patch=patch)
     assert observation.status == "error"
     assert target.read_text(encoding="utf-8") == "hello\n"
-
-
-def test_delete_file_cannot_delete_inside_cosir(tmp_path: Path) -> None:
-    """delete_file 指向 ``.cosir`` 时返回 error，文件必须存活。"""
-
-    target = tmp_path / ".cosir" / "Attachment" / "a.png"
-    target.parent.mkdir(parents=True)
-    target.write_bytes(b"x")
-    observation = DeleteTool().execute(
-        execution_context=_context(tmp_path),
-        path=".cosir/Attachment/a.png",
-    )
-    assert observation.status == "error"
-    assert target.exists()
-
-
-def test_move_file_cannot_move_into_cosir(tmp_path: Path) -> None:
-    """move_file 目标落在 ``.cosir`` 时返回 error，源文件必须存活。"""
-
-    source = tmp_path / "src.txt"
-    source.write_text("a", encoding="utf-8")
-    (tmp_path / ".cosir").mkdir()
-    observation = MoveTool().execute(
-        execution_context=_context(tmp_path),
-        source_path="src.txt",
-        destination_path=".cosir/src.txt",
-    )
-    assert observation.status == "error"
-    assert source.exists()
-    assert not (tmp_path / ".cosir" / "src.txt").exists()
-
-
-def test_move_file_cannot_move_out_of_cosir(tmp_path: Path) -> None:
-    """move_file 源落在 ``.cosir`` 时同样被拒绝，文件必须存活。"""
-
-    source = tmp_path / ".cosir" / "src.txt"
-    source.parent.mkdir()
-    source.write_text("a", encoding="utf-8")
-    observation = MoveTool().execute(
-        execution_context=_context(tmp_path),
-        source_path=".cosir/src.txt",
-        destination_path="src.txt",
-    )
-    assert observation.status == "error"
-    assert source.exists()
 
 
 # --- 3. 只读工具仍可读 ---------------------------------------------------------

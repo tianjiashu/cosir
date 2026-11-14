@@ -112,9 +112,10 @@ describe("estimateMessageHeight", () => {
   });
 
   it("artifact and decision heights are independent of folded history", () => {
-    const plain = assistant(call("c"));
-    const waiting = assistant(call("c", "pending", { awaitingUser: true }));
-    expect(estimateMessageHeight(waiting)).toBeGreaterThan(estimateMessageHeight(plain) + 96);
+    // 等你操作的独立调用就地画成卡片：比同一位置的一行调用高。
+    const settled = assistant(call("c", "completed", { presentation: "standalone" }));
+    const waiting = assistant(call("c", "pending", { presentation: "standalone", awaitingUser: true }));
+    expect(estimateMessageHeight(waiting)).toBeGreaterThan(estimateMessageHeight(settled) + 60);
     const changes = (paths: string[]) => assistant(call("w", "completed", { display_data: { kind: "file-changes", changes: paths.map((path) => ({ path, status: "modified" })) } }));
     expect(estimateMessageHeight(changes(["a", "b", "c"])) - estimateMessageHeight(changes(["a"]))).toBe(56);
   });

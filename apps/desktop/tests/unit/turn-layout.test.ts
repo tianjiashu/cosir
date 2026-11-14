@@ -68,12 +68,12 @@ describe("stable conversation projection", () => {
     expect(firstGroupSummary(after).failedCount).toBe(1);
     expect(projectTurn([wait], "suspended").process.items).toEqual([]);
   });
-  it("body and reasoning delimit tool groups; background/decision facts stay independent", () => {
-    const pending = call("decision", { awaitingUser: true, status: "pending" });
+  it("body and standalone calls delimit tool groups; a call awaiting the user stays in its own slot", () => {
+    const pending = call("decision", { awaitingUser: true, status: "pending", presentation: "standalone" });
     const parts = [call("a"), text("说明"), pending, call("b")];
     const layout = projectTurn(parts, "suspended");
-    expect(layout.blocks.map((item) => item.kind)).toEqual(["activity", "narration", "activity"]);
-    expect(layout.attention).toEqual([{ index: 2, part: pending }]);
+    expect(layout.blocks.map((item) => item.kind)).toEqual(["activity", "narration", "standalone", "activity"]);
+    expect(layout.blocks[2]).toMatchObject({ index: 2, part: pending });
   });
   it("completed result warnings are counted per call, not per failed item", () => {
     const layout = projectTurn([
@@ -91,18 +91,20 @@ describe("stable conversation projection", () => {
     const layout = projectTurn([call("future", { toolName: "future_tool", status: "completed", display_data: { kind: "future-result" } })], "settled");
     expect(firstGroupSummary(layout).verbCounts).toEqual([{ label: "future_tool", count: 1 }]);
   });
-  it("keeps every file operation in order, including deletion then recreation", () => {
+  it("keeps every file operation in order, including repeated edits of one path", () => {
     const change = (id: string, status: string, insertions: number) => call(id, { display_data: { kind: "file-changes", changes: [{ path: "a", status, insertions }] } });
-    const card = aggregateChanges([{ index: 0, part: change("delete", "deleted", 0) }, { index: 1, part: change("new", "added", 12) }]);
+    const card = aggregateChanges([{ index: 0, part: change("edit", "modified", 3) }, { index: 1, part: change("new", "added", 12) }]);
     expect(card.totals).toEqual({ files: 1, calls: 2 });
-    expect(card.files[0].operations.map((op) => [op.toolCallId, op.change.status, op.change.insertions])).toEqual([["delete", "deleted", 0], ["new", "added", 12]]);
+    expect(card.files[0].operations.map((op) => [op.toolCallId, op.change.status, op.change.insertions])).toEqual([["edit", "modified", 3], ["new", "added", 12]]);
   });
   it("keeps artifacts and required decisions available independently of process folding", () => {
-    const handoff = call("handoff", { toolName: "browser_handoff", awaitingUser: true, status: "pending", display_data: { kind: "browser-page" } });
+    const handoff = call("handoff", { toolName: "browser_handoff", presentation: "standalone", awaitingUser: true, status: "pending", display_data: { kind: "browser-page" } });
     const draft = call("draft", { display_data: { kind: "agent-configuration-draft" } });
     const layout = projectTurn([handoff, draft, text("回复", true)], "settled", outcome("completed"));
     expect(layout.defaultProcessOpen).toBe(false);
-    expect(layout.attention).toHaveLength(1);
+    // 过程收起时，等你操作的调用仍在原位置常显；决定之后随过程开合。
+    expect(visibleTurnBlock(layout.blocks[0], false)).toBe(true);
+    expect(visibleTurnBlock({ ...layout.blocks[0], part: { ...handoff, awaitingUser: false } } as typeof layout.blocks[0], false)).toBe(false);
     expect(layout.artifacts.map((item) => item.kind)).toEqual(["agent-configuration-draft"]);
   });
 });

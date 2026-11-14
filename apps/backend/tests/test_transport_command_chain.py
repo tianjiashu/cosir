@@ -195,6 +195,13 @@ async def chain(monkeypatch):
             run_last_turn_withdrawn=lambda _session_id, run_id: run_id in chain_withdrawn
         ),
     )
+    # 挂起时发送要问「有没有提问在等用户」；默认没有，需要的用例把 question 置真。
+    waiting = SimpleNamespace(question=False)
+    monkeypatch.setattr(
+        service_module.service_depends,
+        "get_tool_decision_service",
+        lambda: SimpleNamespace(awaits_turn_decision=lambda _session_id: waiting.question),
+    )
     # 推进前交出「队列变了」；本文件不验证投影（见 test_session_actor_loop 的「先刷新再投递」）。
     set_event_sink(lambda _event: None)  # 下一个用例由 conftest 的 autouse 夹具换回
     # 开新 Run 前 actor 查模型是否还在；本文件的模型总在（悬空 id 见 test_session_actor_loop）。
@@ -251,6 +258,7 @@ async def chain(monkeypatch):
         service=service,
         child_cancels=child_cancels,
         withdrawn=chain_withdrawn,
+        waiting=waiting,
     )
     await actor.abort()
     tool_call_cancellation_registry.clear_session(_SESSION_ID)
@@ -343,6 +351,20 @@ async def test_queued_inputs_wait_after_cancel_and_a_new_send_runs_first(chain) 
         "queued"
     ]
     await _finish(chain.ledger.current.id, "completed")
+
+
+async def test_send_wakes_a_run_suspended_on_a_question(chain) -> None:
+    """挂着提问时用户直接发消息：以 immediate 入队，唤醒同一个 Run，不开新的。"""
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
+    run.status = "suspended"
+    chain.waiting.question = True
+
+    await chain.service.send(_SESSION_ID, _send_request("直接说"))
+    await _settle()
+
+    assert chain.actor.driving
+    assert chain.ledger.current.id == run.id and run.status == "running"
+    await _finish(run.id, "completed")
 
 
 async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) -> None:

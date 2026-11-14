@@ -32,8 +32,8 @@
 | 分类器只看用户消息、工具调用与 CLAUDE.md，剥掉工具结果 | 用户输入、提问回答、AGENTS.md、派生方任务说明、工具调用参数（§6.2） | 一致；子 Agent 另带根会话用户原话（照 Codex） |
 | 连续 3 次 / 累计 20 次拦截 → 暂停 auto、回落逐次确认 | 同阈值 → 中断回合、告诉用户（§6.2） | 偏离：没有审批卡片可回落（§11） |
 | 受保护路径（`.git`、`.vscode`、`.idea`、`.husky`、`.claude`、shell rc 等）；沙箱禁写配置与 `.mcp.json` | 信任根 + 「下次自动执行」两类（§7） | 一致；`.git` 本身可写，只锁 hooks 与 config |
-| `AskUserQuestion`：1–4 题、选项（可带预览）、多选、「其他」与批注；问题一直等；子 Agent 没有 | `ask_user`：描述、参数、卡片、回执照搬（§6.3） | 一致；用户不理会提问直接发新消息时旧提问作废（§6.4） |
-| 安全规则（指令来源边界、动作三级、隐私、版权），写在系统提示词里 | 同一份文本进系统提示词，并作审查器的判定标准（§6.5） | 一致；审查器复用是本稿加的 |
+| `AskUserQuestion`：1–4 题、翻页、选项（可带预览）、多选、「Other」与批注、Skip；用户直接发消息即视为不答；子 Agent 没有 | `ask_user`（独立设计稿 `ask-user-design.md`） | 一致；回答走用户决定而不是写回调用输入 |
+| 安全规则（指令来源边界、动作三级、隐私、版权），写在系统提示词里 | 同一份文本进系统提示词，并作审查器的判定标准（§6.4） | 一致；审查器复用是本稿加的 |
 | 子 Agent 继承父级模式与规则；后台子 Agent 的弹窗冒泡到主会话 | 同一策略、工作区范围只能收窄；被拒即被拒（§4、§6.3） | 偏离：无弹窗可冒泡；范围收窄是本稿加的 |
 
 ## 3. 策略：一份固定策略
@@ -68,7 +68,7 @@
 | 通道 | 执行点 | 规则 |
 |---|---|---|
 | 读类文件工具（`read_file` / `search_content` / `find_files` / `list_directory` / `read_image`） | 工具自身 | 受保护读路径一律拒绝；从上层目录遍历时跳过受保护子树 |
-| 写类文件工具（`write_file` / `patch_write` / `apply_patch` / `delete_file` / `move_file`） | **准入门禁** | 按下面的判定顺序 |
+| 写类文件工具（`write_file` / `patch_write` / `apply_patch`；删除与移动走终端） | **准入门禁** | 按下面的判定顺序 |
 | `execute_terminal` | **OS 沙箱** | 按策略起进程；申请 `escalated` 时先审查 |
 | MCP 工具、浏览器、`web_search` / `web_extract` | — | 本期不受策略约束，说明里写明；MCP 服务进程本身不进沙箱 |
 | 读用户终端、`terminal_write` 填入、回复里的命令块 | — | 都不执行任何东西（执行由人触发） |
@@ -95,7 +95,7 @@
 - **只审越界的调用**（照 Codex）：沙箱内照常执行的调用不审。不学 DSH 每次调用都审、并以完全权限替代沙箱：每次多一次模型请求，误放行也没有兜底。
 - **一次独立模型调用、不给工具**（照 DSH）：门禁之后、执行之前同步进行，不建子会话、不写进被审 Session 的上下文，调用行显示「审查中」。Codex 用只读子会话加工具让审查器自己查证，对本项目太重；误拒多了再考虑给只读工具。
 - **按来源决定谁能授权**：审查上下文只放能构成授权或约束的输入——本 Session 的用户输入、`ask_user` 里用户的回答（§6.3）、AGENTS.md 指令、派生方交来的任务说明与追加消息，以及历史工具调用的名字与参数；**助手正文、推理与工具结果一律不放**，压缩后只剩摘要的部分不继承原文的授权。子 Agent 另带根侧栏会话里用户的原话作授权证据（照 Codex），上级 Agent 的转述不算用户授权。
-- **输出协议收严**（照 DSH）：严格 JSON `{risk_level, user_authorization, outcome, rationale?}`，`risk_level` 取 low / medium / high / critical，`user_authorization` 取 high / medium / low / unknown；允许的组合是固定的（如 low 必须放行、critical 必须拒绝、放行不带理由），不合法即审查失败，不做宽松解析。判定标准是安全规则（§6.5）加风险分级：low / medium 放行，high 只在用户授权至少 medium 且范围收窄时放行，critical 拒绝（分级照 Codex）；用户的许可必须覆盖动作、目标与范围；纠偏条目照搬（「工作区外不等于高风险」「沙箱被拦后提权重试不可疑」）。
+- **输出协议收严**（照 DSH）：严格 JSON `{risk_level, user_authorization, outcome, rationale?}`，`risk_level` 取 low / medium / high / critical，`user_authorization` 取 high / medium / low / unknown；允许的组合是固定的（如 low 必须放行、critical 必须拒绝、放行不带理由），不合法即审查失败，不做宽松解析。判定标准是安全规则（§6.4）加风险分级：low / medium 放行，high 只在用户授权至少 medium 且范围收窄时放行，critical 拒绝（分级照 Codex）；用户的许可必须覆盖动作、目标与范围；纠偏条目照搬（「工作区外不等于高风险」「沙箱被拦后提权重试不可疑」）。
 - **审查失败与审查拒绝分开**：
   - 审查失败（超时、模型报错、解析不了）：一律拒绝，观察写明「这是审查失败，不是安全判定」；有时限（Codex 默认 90 秒）。用户的许可救不了失败；模型应如实告诉用户，用户可以在自己的终端里执行（回复里的命令块）。
   - 审查拒绝：观察写明拒绝理由与「不得绕路达成同样效果；确需这样做，用 `ask_user` 向用户说明风险、征得许可后重试」（照 Codex）。
@@ -105,75 +105,14 @@
 - **留痕**：每次结论（含放行）、熔断、失败都落结构化日志，调用行可回看。
 - **审查模型**：先用本次 Run 的模型，审查消息排布成只追加、吃前缀缓存（照 DSH）；是否换成固定的审查模型（Claude Code 固定用 Sonnet，Codex 用专用模型、低推理强度）以后再定。
 
-### 6.3 拒绝之后：通用提问工具 `ask_user`
+### 6.3 拒绝之后：用 `ask_user` 征得许可
 
-审查拒绝不弹审批卡片，由模型自己决定要不要问用户。问用户用**通用提问工具** `ask_user`：澄清需求、在几个方案里选一个、确认取舍，征得越界许可只是用途之一。工具描述、参数、卡片与回执都照 Claude Code 的 `AskUserQuestion`（根目录 [`claude-code-system-prompt.md`](../../claude-code-system-prompt.md) 的 AskUserQuestion 一节，含参数说明与回执）。
-
-**工具描述**（给模型，英文原文照录；删去 Plan mode 一段，cosir 没有 plan 模式；`codebase` 改 `workspace`，`dialog` 改 `card`，参数名按 cosir 蛇形命名）：
-
-```text
-Use this tool only when you are blocked on a decision that is genuinely the user's to make: one you cannot resolve from the request, the workspace, or sensible defaults.
-
-Usage notes:
-- Users will always be able to select "Other" to provide custom text input
-- Use multi_select: true to allow multiple answers to be selected for a question
-- If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label
-
-Reserve this for decisions where the user's answer changes what you do next — not for choices with a conventional default or facts you can verify in the workspace yourself. In those cases pick the obvious option, mention it in your response, and proceed.
-
-The user may see only the question card: tool results and text you wrote earlier in this turn may not be on their screen while it is open. Make each question stand on its own: if it depends on something you found, say so briefly, and name the items you are asking about in the question itself.
-```
-
-**参数**（各字段说明照录 Claude Code 的参数说明）：
-
-| 字段 | 约束 |
-|---|---|
-| `questions` | 1–4 个；`question` 在本次调用内不重复（回答按问题原文作键） |
-| `questions[].question` | 完整问句，以问号结尾 |
-| `questions[].header` | 不超过 12 字，卡片上的页签 |
-| `questions[].options` | 2–4 个，同一题内 `label` 不重复；不写「其他」（卡片自动提供） |
-| `options[].label` / `description` | 必填；`label` 1–5 个词 |
-| `options[].preview` | 可选；选项聚焦时显示的预览（界面草图、代码片段、对比） |
-| `questions[].multi_select` | 缺省 `false` |
-
-Claude Code 的 `answers`、`annotations` 由对话框写回调用输入，`metadata` 是它的统计字段；cosir 的回答走用户决定（见下），三者都不进模型能填的参数。
-
-**卡片**（展示数据就是参数原样）：每题一页，`header` 作页签；选项显示 `label` 与 `description`，单选或多选；带 `preview` 的选项聚焦时在旁边按等宽文本显示预览；每题固定多一个「其他」自由输入，并可附一段批注；全部作答后提交，关掉即不答。
-
-**回答怎么回到模型**：走现有「回复类」用户决定——首次调用返回等待占位、Run 挂起，用户的回答作为决定消息交给模型。现在的决定只有「批准 / 驳回」加一句附言，要扩展成能携带结构化回答。
-
-- **回答**照 Claude Code：`answers` 以问题原文为键，值为所选 `label`（多选为列表）或「其他」里填的文字；`annotations` 以问题原文为键，带批注与所选项的预览。
-- **校验**：每题都答了；单选只能一个值；所选 `label` 属于该题选项（「其他」的文字不校验）。
-- **交给模型的文字**照 Claude Code 较新的那版回执，批注附在对应回答后：
-
-  ```text
-  The user answered: "<question>"="<answer>", "<question>"="<answer>". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.
-  ```
-
-- **关掉不答**记为驳回，告诉模型「The user declined to answer.」；按 Claude Code 的读法，被拒就调整做法，不原样再问。
-
-**其余规则**：
+审查拒绝不弹审批卡片，由模型自己决定要不要问用户。问用户用通用提问工具 `ask_user`，它的工具描述、参数、卡片、回执与生命周期（提问属于回合、挂起同一个 Run、用户直接发消息即作废）都在独立设计稿 [`ask-user-design.md`](ask-user-design.md)，这里只写与越界审查相关的两条：
 
 - **征得越界许可时**：模型写明要做的动作、为什么、审查器给的风险，选项如「允许」「不允许」。用户的回答连同提问内容一起进审查上下文；模型重试时，审查器据此把授权提到 high 并判断是否覆盖本次动作。critical 即使用户允许也拒。没有授权缓存，下一次越界照常审。
-- **只给侧栏会话**：子 Agent 的工具列表里没有它（Claude Code 同样不给子 Agent）。
 - **子 Agent 被拒即被拒**：拒绝观察对子 Agent 写明「需要用户许可，这一步没有做」，由它在结论里如实交代；上级要做，自己越界、自己走审查与提问（DSH 子 Agent 同样拒绝即终局）。
-- 提问工具与沙箱无关，可以先于沙箱单独交付。
 
-### 6.4 提问的有效期：到下一回合
-
-现状用户决定的等待在 Run 停止、失败、完成、重启后仍可决定。提问问的是「此刻做不做这件事」，过时的许可不该在之后的回合里生效；挂着提问时用户的新消息也会被卡住（等待让 Run 挂起，而挂起的 Run 不被排队的新消息唤醒）。
-
-决定的有效期由工具声明，不按工具名分支，也不按 Run 算（Run 对用户不可见）：
-
-| 有效期 | 适用 | 何时结束 |
-|---|---|---|
-| 到下一回合 | `ask_user` | 用户作答；撤回所在回合；**下一回合开启**。Run 停止、失败、重启不结束 |
-| 到交还 | `browser_handoff`——一段租约，用户可能边登录边发消息 | 交还、撤回所在回合、删除 Session（现状不变） |
-
-- **新回合开启时**：更早回合里仍在等待的提问一律结算为「用户未作答，发了新消息」，模型在新回合看到；迟到的回答被拒。
-- **新消息即答复**：Run 挂起、且只在等提问时，用户输入唤醒同一个 Run、开启新回合。现规则「挂起时排队消息不唤醒」是有意定的，先查清原因（Q8）。
-
-### 6.5 安全规则：复用 Claude Code
+### 6.4 安全规则：复用 Claude Code
 
 主 Agent 的系统提示词与审查器的判定标准共用一份安全规则文本，照搬 Claude Code 的安全规则（根目录 [`claude-code-system-prompt.md`](../../claude-code-system-prompt.md) 第 12 节，2026-11-14 版），英文原文不改措辞，只按 cosir 改写下列几处，以便跟进它的版本更新。
 
@@ -223,7 +162,7 @@ Claude Code 的 `answers`、`annotations` 由对话框写回调用输入，`meta
 
 系统提示词现在写的是「Shell commands are not sandboxed」，改为：
 
-- 安全规则（§6.5）；
+- 安全规则（§6.4）；
 - 能力说明：可写范围、受保护路径、越界怎么申请（`sandbox: "escalated"` + 理由）、越界会经智能审查、被拒后可用 `ask_user` 向用户征得许可且不得绕路；
 - `ask_user` 也用于澄清需求与选方案；加入 Claude Code 的「信息够了就动手，权衡时给建议而不是罗列」一句，免得提问被滥用；
 - 沙箱不可用的平台如实说明「命令不在沙箱里运行，每条都先审查」。
@@ -262,7 +201,7 @@ Claude Code 的 `answers`、`annotations` 由对话框写回调用输入，`meta
 | Q5 | Windows 受限令牌做不到禁读 | 平台 | 高；选定前按不可用处理 |
 | Q6 | 包管理器缓存清单是否够用（npm / pip / uv / cargo / pnpm 位置各异） | 取舍 | 中；用真实项目校准 |
 | Q7 | 命令自己调 `sandbox-exec` 时嵌套失败（如 `swift build` 的 manifest 沙箱） | 平台 | 中；提权过审，或提示词引导 `--disable-sandbox` |
-| Q8 | 挂起中的 Run 不被用户排队的新消息唤醒，提问挂着时新消息干等 | 设计缺口 | 高（现象）；当初「挂起时不唤醒」的理由待查，等后台结果的挂起是否一并放开待定（§6.4） |
+| Q8 | 挂起中的 Run 不被用户排队的新消息唤醒，提问挂着时新消息干等 | 设计缺口 | 已定（见 `ask-user-design.md` §5.4）：只在等回合级提问时由用户输入唤醒；等后台结果的挂起维持现状 |
 | Q9 | 工作区范围之外的上级目录里有子 Agent 需要写的构建产物（如 monorepo 根的 `node_modules`、lockfile） | 取舍 | 中；子 Agent 越界过审（被拒即被拒），或派生时范围给到仓库根 |
 | Q10 | 审查是同步模型调用，越界调用会多等一次模型往返 | 取舍 | 中；只审越界，量可控；观测耗时再决定是否换小模型 |
 

@@ -138,7 +138,11 @@ function stateWithExchange(previous, text, turn, assistantText, status) {
 
 /** 把当前活动收敛到终态：结局写到 `activity.turn` 那一回合的回复上。 */
 function settle(state, status, overrides = {}) {
-  const next = structuredClone(state);
+  // 与后端一致：Run 被停下或失败时，还在等回答的提问一并作废（用户停止标「已停止」，失败标「未作答」）；
+  // 正常完成不作废，提问照常等回答。
+  const next = structuredClone(status === "completed" ? state : settleAwaiting(state, (part) => part.display_data?.kind === "user-question", (part) => ({
+    ...part, status: "cancelled", awaitingUser: false, error: status === "cancelled" ? "已停止" : "未作答",
+  })));
   next.activity = { ...next.activity, ...activityOf(next.activity.turn, status), usage: next.activity.usage, contextWindowTotal: next.activity.contextWindowTotal, ...overrides };
   const last = [...next.messages].reverse().find((message) => message.role === "assistant" && message.turn === next.activity.turn);
   if (last) {
@@ -234,7 +238,7 @@ function toolTraceState() {
 function alternatingSequenceState(phase) {
   const turn = 79;
   // 图标、动词与标题由前端工具目录按工具名 + 参数算出，夹具只给真实形状的参数。
-  const call = (toolCallId, toolName, args, status, extra = {}) => ({presentation: ["delegate_task", "fork_session"].includes(toolName) ? "standalone" : toolName === "wait_messages" ? "quiet" : "activity",
+  const call = (toolCallId, toolName, args, status, extra = {}) => ({presentation: ["delegate_task", "fork_session", "browser_handoff", "ask_user"].includes(toolName) ? "standalone" : toolName === "wait_messages" ? "quiet" : "activity",
     type: "tool-call", awaitingUser: false, toolCallId, toolName, args, status, error: null,
     display_data: null, isError: false, ...extra,
   });
@@ -407,6 +411,17 @@ function wireState(sessionId, state = states.get(sessionId)) {
   };
 }
 
+/** 改写仍在等用户决定、且满足 `match` 的工具 part，其余原样。 */
+function settleAwaiting(state, match, change) {
+  return {
+    ...state,
+    messages: state.messages.map((message) => ({
+      ...message,
+      parts: message.parts.map((part) => part.type === "tool-call" && part.awaitingUser && match(part) ? change(part) : part),
+    })),
+  };
+}
+
 /** 向 Session 的全部订阅推送一帧，并记入最近一轮的流日志。 */
 function publish(sessionId, frame) {
   const encoded = `data: ${JSON.stringify(frame)}\n\n`;
@@ -576,7 +591,10 @@ function handleMessage(res, body, sessionId) {
     reasoningEffort: body.reasoningEffort ?? null,
     disabledToolGroups: body.disabledToolGroups ?? [],
   };
-  const base = states.get(sessionId) ?? emptyState();
+  // 与后端一致：新回合开启时，有效期为回合的等待（提问）作废为「未作答」；交接不受影响。
+  const base = settleAwaiting(states.get(sessionId) ?? emptyState(), (part) => part.display_data?.kind === "user-question", (part) => ({
+    ...part, status: "cancelled", awaitingUser: false, error: "未作答",
+  }));
   accepted(res);
 
   if (text.startsWith("tool-lifecycle")) {
@@ -941,6 +959,8 @@ const server = createServer(async (req, res) => {
     const body = await readJson(req);
     executors.delete(Number(body.sessionId));
     if (body.hold) executors.set(Number(body.sessionId), { cancelled: false, drop: false });
+    // 回合号在 Session 内不复用：之后发送开出的回合要排在种入的回合后面。
+    nextTurn = Math.max(nextTurn, ...body.state.messages.map((message) => message.turn + 1));
     commit(Number(body.sessionId), body.state);
     jsonResponse(res, 200, { ok: true });
     return;
@@ -1176,6 +1196,26 @@ const server = createServer(async (req, res) => {
       publishSessionStatus(sessionId);
     }
     if (states.has(sessionId)) commit(sessionId, states.get(sessionId));
+    jsonResponse(res, 200, {});
+    return;
+  }
+  const decisionRoute = url.pathname.match(/^\/sessions\/(\d+)\/tool-calls\/([^/]+)\/decision$/);
+  if (req.method === "POST" && decisionRoute) {
+    // 与后端一致：只认仍在等待的调用（否则 409）；回复类决定把占位推到 completed，载荷并进展示数据。
+    const sessionId = Number(decisionRoute[1]);
+    const toolCallId = decodeURIComponent(decisionRoute[2]);
+    const body = await readJson(req);
+    telemetry.requestBodies.push({ ...body, sessionId, toolCallId });
+    const state = states.get(sessionId);
+    const awaiting = state?.messages.some((message) => message.parts.some((part) => part.type === "tool-call" && part.toolCallId === toolCallId && part.awaitingUser));
+    if (!awaiting) {
+      jsonResponse(res, 409, { error: { code: "DECISION_NOT_AWAITED", message: "该操作已不在等待决定，请刷新后重试", retryable: true } });
+      return;
+    }
+    commit(sessionId, settleAwaiting(state, (part) => part.toolCallId === toolCallId, (part) => ({
+      ...part, status: "completed", awaitingUser: false,
+      display_data: { ...part.display_data, decision: body.decision, ...(body.data ?? {}) },
+    })));
     jsonResponse(res, 200, {});
     return;
   }

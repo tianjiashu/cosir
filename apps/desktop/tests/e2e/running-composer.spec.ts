@@ -61,7 +61,7 @@ for (const via of ["button", "enter"] as const) {
     const sent = page.waitForRequest(isCommand(/^\/sessions\/42\/messages$/, "POST"));
     if (via === "button") {
       // 运行中发送一律排队，按钮据此标注。
-      await page.getByRole("button", { name: "加入队列", exact: true }).click();
+      await page.getByRole("button", { name: "发送", exact: true }).click();
     } else {
       await input.press("Enter");
     }
@@ -138,7 +138,7 @@ test("迟到的发送失败并入当前草稿，不覆盖请求期间的新输�
   const input = page.getByLabel("消息输入");
   await input.fill("请求失败的内容");
   const sent = page.waitForRequest(isCommand(/^\/sessions\/42\/messages$/, "POST"));
-  await page.getByRole("button", { name: "加入队列", exact: true }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await sent;
   await input.fill("用户新写的内容");
   release();
