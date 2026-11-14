@@ -155,7 +155,7 @@ describe("argument keys the host reads", () => {
   const cases: [keyof typeof schemas, (params: unknown) => unknown, Record<string, unknown>][] = [
     ["browser_navigate", parseNavigate, { url: "https://example.com/z", action: null, tab: "t9", new_tab: true, viewport: { width: 391, height: 845, mobile: true }, color_scheme: "dark" }],
     ["browser_snapshot", parseSnapshot, { tab: "t9", scope: "viewport", find: "needle", from_line: 37 }],
-    ["browser_screenshot", parseScreenshot, { tab: "t9", full_page: false, ref: "e4" }],
+    ["browser_screenshot", parseScreenshot, { tab: "t9", full_page: false, ref: "e4", region: null }],
     ["browser_tabs", parseTabs, { tab: "t9", action: "close" }],
     ["browser_logs", parseLogs, { kind: "console", since: 41, level: "warning", failed_only: false, pattern: "needle", limit: 7, body: null, tab: "t9" }],
     ["browser_logs", parseLogs, { kind: "network", since: 41, level: null, failed_only: true, pattern: "needle", limit: 7, body: null, tab: "t9" }],
@@ -172,6 +172,12 @@ describe("argument keys the host reads", () => {
     }
   });
 
+  // 目的：区域原样交给截图；潜在缺陷：宿主读漏 region，静默截了整个视口。
+  it("browser_screenshot with region", () => {
+    const args = { tab: null, full_page: false, ref: null, region: { x: 11, y: 22, width: 333, height: 44 } };
+    expect(Object.keys(args).sort()).toEqual(Object.keys(schemas.browser_screenshot.properties).sort());
+    expect(parseScreenshot({ ...host, ...args })).toMatchObject({ fullPage: false, region: { x: 11, y: 22, width: 333, height: 44 } });
+  });
 
   // 目的：读正文与列一页是两种请求；潜在缺陷：给了 body 仍按列表解析，宿主读到的仍是一页日志。
   it("browser_logs with body", () => {

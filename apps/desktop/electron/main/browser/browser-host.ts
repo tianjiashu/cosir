@@ -175,10 +175,11 @@ export class BrowserHost implements BrowserSessionEvents {
     const entry = this.agentEntry(request);
     if (request.ref) this.assertAgentMayModify(request, entry.tab);
     return this.operate(entry, signal, async (tab, scoped) => {
-      // JPEG：同样的视口，体积比 PNG 小得多，更不容易碰到附件的单图大小上限。
+      // JPEG：同样的视口，体积比 PNG 小得多，更不容易碰到附件的单图大小上限。区域截图不滚动页面，与视口截图一样
+      // 是纯观察，不占修改槽位；元素截图要先把元素滚进视野，按修改处理。
       const image = request.ref
         ? await tab.modify(scoped, (operation) => tab.elementScreenshot(request.ref!, operation))
-        : await tab.screenshot("jpeg", { quality: 85, fullPage: request.fullPage });
+        : await tab.screenshot("jpeg", { quality: 85, fullPage: request.fullPage, region: request.region });
       return { ...this.head(tab), image };
     });
   }

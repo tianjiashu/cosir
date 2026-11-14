@@ -7,6 +7,7 @@ import { pageUrl } from "./page-url";
 import toolArgsSchemas from "./contract/tool-args.schema.json";
 import type { BrowserNavigation, BrowserTabContext } from "../../shared/host-contract";
 import type { EmulationRequest } from "./tab-emulation";
+import type { Box } from "./input/element";
 import type { SnapshotView } from "./snapshot/views";
 import type { ConsoleLevel, LogQuery } from "./tab-log";
 
@@ -46,7 +47,8 @@ export type NavigateRequest = TabRequest & {
 };
 export type SnapshotRequest = TabRequest & { view: SnapshotView };
 /** 截哪里：视口、整页（`fullPage`），或单个元素（`ref`，与 `fullPage` 互斥，后端校验过）。 */
-export type ScreenshotRequest = TabRequest & { fullPage: boolean; ref?: string };
+/** 截哪里：视口、整页（`fullPage`）、一个元素（`ref`），或视口里的一块（`region`，视口 CSS 坐标）；后端已保证至多一种。 */
+export type ScreenshotRequest = TabRequest & { fullPage: boolean; ref?: string; region?: Box };
 export type TabsRequest = TabRequest & { action: "list" | "select" | "close" };
 /** 列一页日志，或按序号读一条网络请求的响应体（`body`，后端已保证其余过滤条件为空）。 */
 export type LogsRequest = TabRequest & ({ query: LogQuery } | { body: number });
@@ -100,7 +102,8 @@ export function parseSnapshot(params: unknown): SnapshotRequest {
 export function parseScreenshot(params: unknown): ScreenshotRequest {
   const { request, args } = toolRequest("browser_screenshot", params);
   const ref = given(args.ref as string | null);
-  return { ...request, fullPage: args.full_page as boolean, ...(ref ? { ref } : {}) };
+  const region = given(args.region as Box | null);
+  return { ...request, fullPage: args.full_page as boolean, ...(ref ? { ref } : {}), ...(region ? { region } : {}) };
 }
 
 export function parseTabs(params: unknown): TabsRequest {

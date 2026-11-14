@@ -1,5 +1,6 @@
 import type { CdpSession } from "./cdp-session";
 import type { Box } from "./input/element";
+import { browserError } from "./errors";
 import { readGeometry } from "./page-geometry";
 
 /** 整页截图的最大高度（CSS 像素）：再长的页面模型也看不清，按需滚动后再截。 */
@@ -11,8 +12,12 @@ const ELEMENT_MARGIN = 8;
 const ELEMENT_MIN_SIDE = 160;
 const ELEMENT_MAX_ZOOM = 4;
 
-/** `element`：只截这块（主视口的 CSS 像素，`input/element.ts` 的 `box`），与 `fullPage` 互斥。 */
-export type CaptureOptions = { quality?: number; fullPage?: boolean; element?: Box; devicePixels?: boolean; timeoutMs?: number };
+/**
+ * `element`：只截这个元素（主视口的 CSS 像素，`input/element.ts` 的 `box`），四周加边。`region`：只截 Agent 给的
+ * 这一块（同一坐标系），不加边，必须整块落在可视视口内（否则 `OUT_OF_VIEWPORT`：裁剪后的图与给的坐标对不上）。
+ * 三者互斥；小的两种按同一规则放大。
+ */
+export type CaptureOptions = { quality?: number; fullPage?: boolean; element?: Box; region?: Box; devicePixels?: boolean; timeoutMs?: number };
 
 /**
  * 截图，返回 data URL。用 CDP 而不是 `capturePage`：视图摘离窗口时后者不可用（§8）。截区（`clip`）是文档坐标：
@@ -28,10 +33,12 @@ export async function captureScreenshot(send: CdpSession["send"], format: "jpeg"
   const { visual, content, deviceRatio } = await readGeometry((method, params) => send(method, params, timing));
   const clip = options.element
     ? elementClip(options.element, visual)
-    : options.fullPage
-      ? { x: 0, y: 0, width: visual.width, height: Math.min(content.height, FULL_PAGE_MAX_HEIGHT) }
-      : visual;
-  const zoom = options.element ? Math.min(ELEMENT_MAX_ZOOM, Math.max(1, ELEMENT_MIN_SIDE / Math.min(clip.width, clip.height))) : 1;
+    : options.region
+      ? regionClip(options.region, visual)
+      : options.fullPage
+        ? { x: 0, y: 0, width: visual.width, height: Math.min(content.height, FULL_PAGE_MAX_HEIGHT) }
+        : visual;
+  const zoom = options.element || options.region ? Math.min(ELEMENT_MAX_ZOOM, Math.max(1, ELEMENT_MIN_SIDE / Math.min(clip.width, clip.height))) : 1;
   const { data } = await send<{ data: string }>("Page.captureScreenshot", {
     format,
     ...(options.quality === undefined ? {} : { quality: options.quality }),
@@ -40,6 +47,14 @@ export async function captureScreenshot(send: CdpSession["send"], format: "jpeg"
     captureBeyondViewport: Boolean(options.fullPage || options.element),
   }, timing);
   return `data:image/${format};base64,${data}`;
+}
+
+/** 区域（视口坐标）换到文档坐标；任何一部分在可视视口外都拒绝。 */
+function regionClip(region: Box, visual: Box): Box {
+  if (region.x + region.width > visual.width || region.y + region.height > visual.height) {
+    throw browserError("OUT_OF_VIEWPORT", `the region reaches outside the ${Math.round(visual.width)}×${Math.round(visual.height)} viewport; scroll first or give a smaller region`);
+  }
+  return { x: visual.x + region.x, y: visual.y + region.y, width: region.width, height: region.height };
 }
 
 /** 元素（视口坐标）换到文档坐标，四周加一圈边，不越过页面左上角，高度与整页截图同一上限。 */

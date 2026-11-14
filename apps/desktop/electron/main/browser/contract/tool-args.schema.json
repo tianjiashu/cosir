@@ -967,6 +967,46 @@
     "type": "object"
   },
   "browser_screenshot": {
+    "$defs": {
+      "BrowserRegion": {
+        "additionalProperties": false,
+        "description": "视口里的一块（CSS 像素，与视口截图的像素、动作坐标同一坐标系）；是否落在视口内由宿主按几何判断。",
+        "properties": {
+          "height": {
+            "description": "Height in CSS pixels.",
+            "exclusiveMinimum": 0,
+            "title": "Height",
+            "type": "number"
+          },
+          "width": {
+            "description": "Width in CSS pixels.",
+            "exclusiveMinimum": 0,
+            "title": "Width",
+            "type": "number"
+          },
+          "x": {
+            "description": "Left edge in viewport CSS pixels.",
+            "minimum": 0,
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "description": "Top edge in viewport CSS pixels.",
+            "minimum": 0,
+            "title": "Y",
+            "type": "number"
+          }
+        },
+        "required": [
+          "height",
+          "width",
+          "x",
+          "y"
+        ],
+        "title": "BrowserRegion",
+        "type": "object"
+      }
+    },
     "additionalProperties": false,
     "properties": {
       "full_page": {
@@ -986,8 +1026,20 @@
           }
         ],
         "default": null,
-        "description": "Capture only this element (with a small margin; small ones are enlarged), e.g. an icon, chart or captcha. Null for the viewport or the whole page.",
+        "description": "Capture only this element (with a small margin; small ones are enlarged), e.g. an icon, a button or a captcha. Null for the viewport, the whole page or a region.",
         "title": "Ref"
+      },
+      "region": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BrowserRegion"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Capture only this part of the viewport, e.g. a chart drawn on a canvas or part of a table that has no ref; take its coordinates from a viewport screenshot. It must lie inside the viewport (scroll first); small regions are enlarged. Null otherwise."
       },
       "tab": {
         "anyOf": [
@@ -1007,6 +1059,7 @@
     "required": [
       "full_page",
       "ref",
+      "region",
       "tab"
     ],
     "title": "BrowserScreenshotArgs",

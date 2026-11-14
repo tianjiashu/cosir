@@ -535,6 +535,34 @@ def test_screenshot_takes_full_page_or_an_element_not_both() -> None:
     assert BrowserScreenshotArgs.model_validate({"ref": "e3"}).ref == "e3"
 
 
+_REGION = {"x": 0, "y": 0, "width": 10, "height": 10}
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"region": _REGION, "full_page": True},
+        {"region": _REGION, "ref": "e3"},
+        {"region": {**_REGION, "width": 0}},
+        {"region": {**_REGION, "height": -1}},
+        {"region": {**_REGION, "x": -1}},
+        {"region": {"x": 0, "y": 0, "width": 10}},
+        {"region": {**_REGION, "width": float("inf")}},
+        {"region": {**_REGION, "x": float("nan")}},
+    ],
+)
+def test_screenshot_region_is_exclusive_and_well_formed(arguments: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        BrowserScreenshotArgs.model_validate(arguments)
+
+
+def test_screenshot_region_and_ref_descriptions() -> None:
+    region = BrowserScreenshotArgs.model_validate({"region": _REGION}).region
+    assert region is not None and region.width == 10
+    ref_description = BrowserScreenshotArgs.model_fields["ref"].description or ""
+    assert "chart" not in ref_description
+
+
 @pytest.mark.parametrize("dialog_id", [0, -1, "3", 1.5])
 def test_dialog_id_must_be_a_positive_integer(dialog_id: object) -> None:
     definition = BrowserActTool().to_definition()
@@ -809,7 +837,9 @@ def test_screenshot_is_stored_as_attachment_and_handed_to_the_model(
     )
     monkeypatch.setattr(screenshot_module, "AttachmentService", lambda: service)
 
-    observation = BrowserScreenshotTool().execute(False, None, None, execution_context=context)
+    observation = BrowserScreenshotTool().execute(
+        full_page=False, ref=None, region=None, tab=None, execution_context=context
+    )
 
     _assert_wire_shape("browser_screenshot", link.calls[0])
     assert observation.status == "success"
@@ -823,10 +853,24 @@ def test_screenshot_is_stored_as_attachment_and_handed_to_the_model(
     assert BrowserScreenshotTool().to_definition().returns_images is True
 
     # 元素截图：只截那个元素，正文说明截的是哪个（图上的像素与视口坐标对不上）。
-    element = BrowserScreenshotTool().execute(False, "e7", None, execution_context=context)
+    element = BrowserScreenshotTool().execute(
+        full_page=False, ref="e7", region=None, tab=None, execution_context=context
+    )
     assert link.calls[1][1]["ref"] == "e7"
     _assert_wire_shape("browser_screenshot", link.calls[1])
-    assert "screenshot of element e7 (the image follows)." in element.content
+    assert (
+        "screenshot of element e7; its pixels are not viewport coordinates (the image follows)."
+        in element.content
+    )
+
+    # 区域截图：原样转发区域，正文同样提醒坐标别从图上量。
+    box = {"x": 10.0, "y": 20.0, "width": 300.0, "height": 200.0}
+    region = BrowserScreenshotTool().execute(
+        full_page=False, ref=None, region=box, tab=None, execution_context=context
+    )
+    assert link.calls[2][1]["region"] == box
+    _assert_wire_shape("browser_screenshot", link.calls[2])
+    assert "screenshot of the given region; its pixels are not viewport coordinates" in region.content
 
 
 def test_tabs_lists_with_the_current_tab_marked(

@@ -335,11 +335,16 @@ def tabs_text(tabs: list[dict[str, Any]]) -> str:
     return "\n".join(lines) or "this session has no open tabs"
 
 
-def screenshot_text(shot: dict[str, Any], ref: str | None = None) -> str:
-    """``browser_screenshot``：页头（视口截图的像素尺寸就是视口尺寸），图片随后附上。元素截图的像素与
-    视口坐标对不上（带边距、小元素放大），所以说明截的是哪个元素。"""
+def screenshot_text(shot: dict[str, Any], ref: str | None = None, region: bool = False) -> str:
+    """``browser_screenshot``：页头（视口截图的像素尺寸就是视口尺寸），图片随后附上。元素与区域截图的像素
+    与视口坐标对不上（元素带边距、小的会放大），所以说明截的是什么、坐标别从图上量。"""
 
-    what = f"screenshot of element {ref}" if ref else "screenshot of this tab"
+    if ref:
+        what = f"screenshot of element {ref}; its pixels are not viewport coordinates"
+    elif region:
+        what = "screenshot of the given region; its pixels are not viewport coordinates"
+    else:
+        what = "screenshot of this tab"
     return "\n".join([*header_lines(shot), f"{what} (the image follows)."])
 
 

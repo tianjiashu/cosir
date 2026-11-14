@@ -109,6 +109,22 @@ describe("BrowserHost 资源生命周期", () => {
     await expect(snapshot).resolves.toMatchObject({ tabId: "t1", snapshot: "- text 'page'" });
   });
 
+  // 目的：区域截图与视口截图一样是纯观察；潜在缺陷：区域截图误走修改槽位，交接中被拒、或把标签标成 Agent 正忙。
+  it("takes a region screenshot as an observation, also during a handoff", async () => {
+    const host = new BrowserHost(() => null);
+    const opening = host.userOpen(1, limits);
+    tab().finish();
+    await opening;
+    const screenshot = vi.fn(async () => "data:image/jpeg;base64,AAAA");
+    Object.assign(tab(), { screenshot });
+    const region = { x: 10, y: 20, width: 300, height: 200 };
+    await expect(host.screenshot({ sessionId: 1, context: limits, handoffTabs: ["t1"], fullPage: false, region }, new AbortController().signal))
+      .resolves.toMatchObject({ tabId: "t1", image: "data:image/jpeg;base64,AAAA" });
+    expect(screenshot).toHaveBeenCalledWith("jpeg", { quality: 85, fullPage: false, region });
+    expect(tab().modify).not.toHaveBeenCalled();
+    await expect(host.screenshot({ sessionId: 1, context: limits, handoffTabs: ["t1"], fullPage: false, ref: "e1" }, new AbortController().signal))
+      .rejects.toMatchObject({ code: "HANDED_OFF" });
+  });
 
   // 目的：读正文按序号找请求、交接中照样能读；潜在缺陷：找不到时静默返回空正文，或交接把只读的日志读取也拦下。
   it("reads a response body by sequence number, also during a handoff, and rejects an unknown number", async () => {

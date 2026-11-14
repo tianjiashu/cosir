@@ -90,6 +90,11 @@ const PAGES: Record<string, string> = {
     <a href="/second" target="_blank">Popup</a>
     <script>document.querySelector('select').addEventListener('change', (e) => { document.title = 'color:' + e.target.value; });</script>`,
   "/done": `<title>Done</title><p>Search finished</p>`,
+  "/chart": `<title>Chart</title><body style="margin:0;background:#fff">
+    <div style="height:1000px"></div>
+    <canvas id="c" width="400" height="300"></canvas>
+    <div style="height:1000px"></div>
+    <script>const g = document.getElementById("c").getContext("2d"); g.fillStyle = "#f00"; g.fillRect(0, 0, 200, 300); g.fillStyle = "#00f"; g.fillRect(200, 0, 200, 300);</script></body>`,
   "/api-calls": `<title>Calls</title><script>
     new EventSource("/sse");
     Promise.all([fetch("/api/save", { method: "POST" }), fetch("/api/bin"), fetch("/api/redirect"), fetch("/api/big")])
@@ -231,7 +236,7 @@ const WIRE_DEFAULTS: Record<string, Record<string, unknown>> = {
   "browser.act": { tab: null },
   "browser.logs": { since: null, level: null, failed_only: false, pattern: null, limit: 50, body: null, tab: null },
   "browser.evaluate": { tab: null },
-  "browser.screenshot": { tab: null, full_page: false, ref: null },
+  "browser.screenshot": { tab: null, full_page: false, ref: null, region: null },
   "browser.tabs": { tab: null },
 };
 const POINT_DEFAULTS = { ref: null, x: null, y: null };
@@ -314,6 +319,7 @@ test("pauses on JavaScript dialogs until the agent or the user answers", async (
   const shown = opened.dialog ?? pageOf(await call("snapshot", { sessionId: 1 })).dialog;
   expect(shown).toMatchObject({ type: "confirm", message: "Continue?", defaultText: "" });
   expect(await call("screenshot", { sessionId: 1, fullPage: false })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
+  expect(await call("screenshot", { sessionId: 1, fullPage: false, region: { x: 0, y: 0, width: 50, height: 50 } })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
   expect(await call("act", { sessionId: 1, actions: [{ type: "press", key: "Tab" }] })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
   // 调用开始时已有的弹窗必须按编号作答。
   expect(await call("act", { sessionId: 1, actions: [{ type: "dialog", accept: true }] })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
@@ -1154,6 +1160,34 @@ test("returns only what changed after an action, and the whole page after it nav
   expect(moved).toMatchObject({ title: "Clickable" });
   expect(moved.snapshot as string).not.toContain("changes since");
   expect(moved.snapshot as string).toContain("[cursor=pointer]");
+});
+
+// 目的：ref 覆盖不到的画布也能截一块放大看；潜在缺陷：区域没加滚动截到别处、小区域不放大，或越界时静默裁剪。
+test("captures a region of the viewport, enlarging small ones, and rejects one reaching outside", async () => {
+  await link("browser.navigate", 72, { url: `${origin}/chart` });
+  // 画布在首屏之下：先滚到它，区域按滚动后的视口坐标给。
+  await link("browser.evaluate", 72, { expression: "window.scrollTo(0, 1000)" });
+  const pixelAt = (image: string, x: number, y: number) => app.evaluate(({ nativeImage }, { data, x, y }) => {
+    const picture = nativeImage.createFromDataURL(data);
+    const { width } = picture.getSize();
+    const bitmap = picture.toBitmap();
+    const at = (y * width + x) * 4;
+    return { blue: bitmap[at], green: bitmap[at + 1], red: bitmap[at + 2] };
+  }, { data: image, x, y });
+  const sizeOf = (image: string) => app.evaluate(({ nativeImage }, data) => nativeImage.createFromDataURL(data).getSize(), image);
+  const region = async (box: { x: number; y: number; width: number; height: number }) => valueOf(await link("browser.screenshot", 72, { region: box })).image as string;
+
+  const red = await region({ x: 20, y: 20, width: 100, height: 50 });
+  // 较短边 50 放大到 160：3.2 倍。
+  expect(await sizeOf(red)).toEqual({ width: 320, height: 160 });
+  const redPixel = await pixelAt(red, 10, 10);
+  expect(redPixel.red).toBeGreaterThan(200);
+  expect(redPixel.blue).toBeLessThan(60);
+  const blue = await region({ x: 250, y: 20, width: 100, height: 50 });
+  const bluePixel = await pixelAt(blue, 10, 10);
+  expect(bluePixel.blue).toBeGreaterThan(200);
+  expect(bluePixel.red).toBeLessThan(60);
+  expect(await link("browser.screenshot", 72, { region: { x: 1200, y: 0, width: 500, height: 10 } })).toMatchObject({ ok: false, code: "OUT_OF_VIEWPORT" });
 });
 
 // 目的：只关心一个元素时截那个元素，图更小更清楚；潜在缺陷：截区没加滚动、跨进程 iframe 没加框架偏移而截到别处，
