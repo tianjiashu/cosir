@@ -65,13 +65,13 @@ describe("command palette model", () => {
     expect(model.actions).toEqual([expect.objectContaining({ kind: "new-conversation", label: "新会话", shortcut: "newConversation" })]);
     expect(model.settings.map((command) => command.kind === "navigate" && command.path)).toEqual([
       ...SYSTEM_SETTINGS_TABS.map((tab) => `/settings/${tab.id}`),
-      "/context-observer",
+      "/session-observer",
     ]);
   });
 
   it("filters commands by label and keywords", () => {
     expect(buildCommandPaletteModel([], "mcp").settings.map((command) => command.label)).toEqual(["MCP 服务"]);
-    expect(buildCommandPaletteModel([], "context").settings.map((command) => command.label)).toEqual(["上下文观测"]);
+    expect(buildCommandPaletteModel([], "context").settings.map((command) => command.label)).toEqual(["会话观测"]);
     const settingsKeyword = buildCommandPaletteModel([], "设置");
     expect(settingsKeyword.settings).toHaveLength(SYSTEM_SETTINGS_TABS.length);
     expect(settingsKeyword.actions).toEqual([]);

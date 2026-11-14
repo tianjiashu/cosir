@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { ContextMessage } from "@/lib/api/context-messages";
+import type { ObservedMessage } from "@/lib/api/session-observation";
 import {
   filterMessages,
   indexMessages,
@@ -10,7 +10,7 @@ import {
 export type ListScroll = { sequence: number } | { offset: number };
 
 /** 查询范围变化由页面 key 重建；同范围刷新只替换数据，保留筛选、定位与滚动意图。 */
-export function useMessageNavigation(messages: ContextMessage[]) {
+export function useMessageNavigation(messages: ObservedMessage[]) {
   const [filters, setFilters] = useState<MessageFilters>(INITIAL_FILTERS);
   const [chosen, setChosen] = useState<number | null>(null);
   const [reveal, setReveal] = useState(false);

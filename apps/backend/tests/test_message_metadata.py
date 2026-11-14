@@ -101,7 +101,7 @@ def _running_state(part: dict) -> dict:
             "usage": None,
             "contextWindowTotal": None,
             "startedAt": "2026-01-01T00:00:00+00:00",
-            "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
+            "launch": {"modelConfigId": None, "reasoningEffort": None},
         },
         "error": None,
     }

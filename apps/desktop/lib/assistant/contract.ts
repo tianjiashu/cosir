@@ -155,8 +155,6 @@ export type TransportTerminalRunStatus = Extract<TransportRunStatus, "completed"
 export type TransportRunLaunch = {
   modelConfigId: string | null;
   reasoningEffort: string | null;
-  /** 冻结的是用户关掉的工具组名（不是工具名），composer 锁定期直接按组回显。 */
-  disabledToolGroups: string[];
 };
 
 /**
@@ -194,7 +192,7 @@ export type TransportMessage = {
   id: string;
   role: "user" | "assistant";
   parts: TransportMessagePart[];
-  /** 所在回合号：诊断与上下文观测按它进入；回复 id 也由它编码（前端不解析 id）。 */
+  /** 所在回合号：诊断与会话观测按它进入；回复 id 也由它编码（前端不解析 id）。 */
   turn: number;
   /** 来自分叉继承的历史：不可交互、不可撤回。 */
   inherited: boolean;

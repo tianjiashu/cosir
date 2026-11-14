@@ -6,7 +6,6 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from app.config.configuration import get_tool_registry
 from app.core.events import EventSink
 from app.core.events.event_sink import event_sink
 from app.core.tool.multi_agent.session_tool_scope import banned_derivation_tools
@@ -44,9 +43,8 @@ class RuntimeContext:
     agent: AgentRuntimeConfig
     # 本 Run 准入的工具名；只在模型返回调用后拦截，模型绑定仍用 Session 固化的完整 schema。
     admitted_tools: frozenset[str]
-    # 两个禁用来源（Session 级、Run 级）分开保留：工具准入通知要按来源说清「为什么不能用」。
-    session_banned: frozenset[str]
-    run_banned: frozenset[str]
+    # Session 固化工具里本 Run 不准入的那部分；工具准入通知据此告诉模型「为什么不能用」。
+    banned_tools: frozenset[str]
     # 这次驱动之前 Session 的当前 Run 是什么样：新 Run 是上一个 Run，恢复是本 Run 迁回 running 前的
     # 记录（恢复会清空结束原因），唤醒为 None。只供驱动开始时推导通知（``drive_notices``）。
     preceding_run: RunRecord | None
@@ -74,10 +72,8 @@ class RuntimeContext:
         重复读库）；Agent 配置由 ``AgentRuntimeConfig.for_run`` 合成，事件回调经
         ``app.service.depends`` 取 projector——core 因此不直接依赖 Assistant Transport。
 
-        ``admitted_tools`` 以 Session 固化的工具名为基准，减去两个来源：Session 级（这类 Session 不允许的
-        派生方式、派生深度已到上限）与 Run 级（本 Run 冻结的工具组按注册表展开，组名是用户意图的
-        事实，展开在这里现算，前端不换算）。两者都按本 Run 现算，所以改
-        ``AGENT_MAX_DERIVATION_DEPTH`` 对下一次 Run 即时生效——但只对 schema 里仍有派生工具的 Session
+        ``admitted_tools`` 以 Session 固化的工具名为基准，减去这类 Session 不允许的派生方式与派生深度已到
+        上限的派生工具。禁用集合按本 Run 现算，所以改 ``AGENT_MAX_DERIVATION_DEPTH`` 对下一次 Run 即时生效——但只对 schema 里仍有派生工具的 Session
         （fork）有效，schema 已固化的子 Session 在创建时就没有那些工具声明（见 ``session_tool_scope``
         模块说明）。准入只供工具执行层在
         模型返回调用后拦截。模型绑定始终使用 Session 固化的完整 schema，不得按准入过滤，否则会改变同一
@@ -90,22 +86,15 @@ class RuntimeContext:
         session_space = session_runtime_spaces.get_or_create(run.session_id)
         session = session_space.current_task
         session_tools = frozenset(session_space.session_tool_names)
-        # 两者都先与 ``session_tools`` 求交——模型手里没有的工具不算「被禁」，通知不该提它。
-        session_banned = banned_derivation_tools(session.session_type, session.derivation_depth) & session_tools
-        run_banned = (
-            frozenset(
-                get_tool_registry().tool_groups_to_tool_names(run.options.disabled_tool_groups)
-            )
-            & session_tools
-        )
+        # 先与 ``session_tools`` 求交——模型手里没有的工具不算「被禁」，通知不该提它。
+        banned = banned_derivation_tools(session.session_type, session.derivation_depth) & session_tools
         return cls(
             run=run,
             session=session,
             workspace=session_space.current_workspace,
             agent=AgentRuntimeConfig.for_run(run),
-            admitted_tools=session_tools - session_banned - run_banned,
-            session_banned=session_banned,
-            run_banned=run_banned,
+            admitted_tools=session_tools - banned,
+            banned_tools=banned,
             preceding_run=preceding_run,
             session_space=session_space,
             event_sink=event_sink(),

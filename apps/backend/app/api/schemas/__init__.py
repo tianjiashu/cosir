@@ -14,11 +14,6 @@ from app.api.schemas.request.EnvironmentUpdateRequest import EnvironmentUpdateRe
 from app.api.schemas.request.ForkSessionRequest import ForkSessionRequest
 from app.api.schemas.request.GlobalInstructionUpdateRequest import GlobalInstructionUpdateRequest
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
-from app.api.schemas.response.ContextMessageResponse import (
-    ContextMessageResponse,
-    ContextObservationResponse,
-    ContextTurnRunResponse,
-)
 from app.api.schemas.response.DeleteSessionResponse import DeleteSessionResponse
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse
 from app.api.schemas.response.EnvironmentResponse import (
@@ -29,6 +24,7 @@ from app.api.schemas.response.EnvironmentResponse import (
 )
 from app.api.schemas.response.GlobalInstructionResponse import GlobalInstructionResponse
 from app.api.schemas.response.HealthResponse import HealthResponse
+from app.api.schemas.response.SessionObservationResponse import SessionObservationResponse
 from app.api.schemas.response.SessionResponse import SessionResponse
 from app.api.schemas.response.WorkspaceFileIgnoreResponse import WorkspaceFileIgnoreResponse
 from app.api.schemas.response.WorkspaceInstructionResponse import WorkspaceInstructionResponse
@@ -37,9 +33,6 @@ from app.api.schemas.response.WorkspaceResponse import WorkspaceResponse
 __all__ = [
     "AgentConfigurationRequest",
     "AgentConfigurationResponse",
-    "ContextMessageResponse",
-    "ContextObservationResponse",
-    "ContextTurnRunResponse",
     "CreateSessionRequest",
     "CreateWorkspaceRequest",
     "DeleteSessionResponse",
@@ -54,6 +47,7 @@ __all__ = [
     "GlobalInstructionResponse",
     "GlobalInstructionUpdateRequest",
     "HealthResponse",
+    "SessionObservationResponse",
     "SessionResponse",
     "WorkspaceFileIgnoreResponse",
     "WorkspaceInstructionResponse",

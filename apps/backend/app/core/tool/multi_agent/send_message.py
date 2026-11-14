@@ -22,7 +22,6 @@ from app.core.workflow.message_queue.session_message import LaunchInputBody, Run
 from app.models import RunRecord, SessionRecord
 from app.models.conversation_input import MessageSource
 from app.models.errors.input_errors import UserInputRejectedError
-from app.models.run_options import RunOptions
 from app.models.session_kind import SessionType
 from app.service.depends import (
     get_session_message_queue,
@@ -74,8 +73,7 @@ class SendMessageTool(HandlerBase):
                         source=MessageSource(session_id=sender.id, name=sender.title),
                         agent_id=launch.agent_id,
                         model_config_id=launch.model_config_id,
-                        reasoning_effort=launch.options.reasoning_effort,
-                        disabled_tool_groups=launch.options.disabled_tool_groups,
+                        reasoning_effort=launch.reasoning_effort,
                     ),
                 )
         except KeyError:
@@ -158,7 +156,7 @@ class SendMessageTool(HandlerBase):
             agent_id=current_run.agent_id or "",
             model_config_id=current_profile.model_config_id
             or cast(str, current_run.model_config_id),
-            options=RunOptions(reasoning_effort=reasoning_effort),
+            reasoning_effort=reasoning_effort,
         )
 
     def to_definition(self) -> ToolDefinition:

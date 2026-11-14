@@ -14,7 +14,7 @@ import type {
   TransportUsage,
 } from "@/lib/assistant/contract";
 
-const EMPTY_LAUNCH: TransportRunLaunch = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
+const EMPTY_LAUNCH: TransportRunLaunch = { modelConfigId: null, reasoningEffort: null };
 
 /** 单测共用的 Session 视角 snapshot 构造器：只填契约必填字段，调用方覆盖需要的部分。 */
 export function transportState(overrides: Partial<TransportState> = {}): TransportState {

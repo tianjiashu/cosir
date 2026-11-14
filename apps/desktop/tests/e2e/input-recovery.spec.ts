@@ -18,7 +18,7 @@ test("发送在途时切走 Session，被拒后内容回到原 Session 的输入
       { id: "u-1", role: "user", turn: 1, inherited: false, source: null, outcome: null, parts: [{ type: "text", text: "第一个问题", status: "completed" }] },
       { id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, source: null, outcome: null, parts: [{ type: "text", text: "正在处理", status: "running" }] },
     ],
-    activity: { modelActivity: null, turn: 1, resumable: false, status: "suspended", endReason: null, error: null, usage: null, contextWindowTotal: null, launch: { modelConfigId: "demo/demo-model", reasoningEffort: null, disabledToolGroups: [] }, startedAt: "2026-10-27T00:00:00.000Z" },
+    activity: { modelActivity: null, turn: 1, resumable: false, status: "suspended", endReason: null, error: null, usage: null, contextWindowTotal: null, launch: { modelConfigId: "demo/demo-model", reasoningEffort: null }, startedAt: "2026-10-27T00:00:00.000Z" },
   });
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });

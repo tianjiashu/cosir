@@ -12,7 +12,6 @@ import pytest
 
 from app.core.tool.multi_agent import send_message
 from app.core.tool.schemas import ToolExecutionContext
-from app.models.run_options import RunOptions
 from app.models.session_record import SessionRecord
 from app.tools.tool_handler.terminal.command_results import command_results
 from tests.session_extra_fixtures import fork_extra
@@ -54,7 +53,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         if _SESSIONS[session_id].current_run_id is None:
             return None
         return SimpleNamespace(agent_id="main_agent", model_config_id="test/m3",
-                               options=RunOptions(reasoning_effort="high"))
+                               reasoning_effort="high")
     monkeypatch.setattr(send_message, "get_session_service", lambda: SimpleNamespace(
         get_session=_SESSIONS.__getitem__, require_current_run=current,
     ))

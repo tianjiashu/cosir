@@ -87,13 +87,6 @@ test("新建会话请求、Assistant Transport 流和增量 UI 均正常工作",
     JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
   );
   expect(await page.evaluate(() => window.localStorage.getItem("cosir:model-config-selection:default"))).toBeNull();
-  await page.getByRole("button", { name: "工具", exact: true }).click();
-  const fileToolGroup = page.getByRole("switch", { name: "文件", exact: true });
-  await expect(fileToolGroup).toBeChecked();
-  await fileToolGroup.click();
-  await expect(fileToolGroup).not.toBeChecked();
-  await expect(page.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
-  await page.keyboard.press("Escape");
   await page.getByLabel("新会话内容").fill("你好");
   await expect(page.getByRole("button", { name: "开始会话" })).toBeEnabled();
   await page.getByRole("button", { name: "开始会话" }).click();
@@ -108,10 +101,7 @@ test("新建会话请求、Assistant Transport 流和增量 UI 均正常工作",
   expect(assistantRequests[0]?.body).toMatchObject({
     message: { role: "user", parts: [{ type: "text", text: "你好" }] },
     modelConfigId: "demo/demo-model",
-    disabledToolGroups: ["文件"],
   });
-  // 会话页的工具组取自首条消息冻结进 Run 的配置（快照 activity.launch），不另存本地。
-  await expect(page.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
   await expect(page.locator('[data-role="user"]').getByText("你好", { exact: true })).toBeVisible();
   await expect(page.getByText("streaming response", { exact: true }).first()).toBeVisible();
   await expect(page.locator('[data-slot="prose-part"]').first()).toContainText("streaming response");
@@ -133,7 +123,6 @@ test("新建会话请求、Assistant Transport 流和增量 UI 均正常工作",
   expect(assistantRequests[1]?.status).toBe(200);
   expect(assistantRequests[1]?.url).toMatch(/\/sessions\/42\/messages$/);
   expect(assistantRequests[1]?.body.state).toBeUndefined();
-  expect(assistantRequests[1]?.body.disabledToolGroups).toEqual(["文件"]);
   expect(streamBody).toContain('"kind":"mutation"');
   expect(streamBody).toContain('"kind":"append-text"');
   expect(streamBody).toContain("streaming response");
@@ -147,10 +136,6 @@ test("新建会话请求、Assistant Transport 流和增量 UI 均正常工作",
   const settled = logs.filter((entry) => entry.event === "assistant_activity_settled");
   expect(settled.length).toBeGreaterThanOrEqual(1);
   expect(settled.at(-1)?.data?.status).toBe("completed");
-  const restoredPage = await page.context().newPage();
-  await restoredPage.goto("/sessions/42");
-  await expect(restoredPage.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
-  await restoredPage.close();
 });
 
 test("会话页面重挂载时自动恢复未结束的 run", async ({ page, request }) => {

@@ -19,7 +19,6 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentEditorSession } from "@/lib/agent-editor/agent-editor-session";
 import type { ConfigurationScope } from "@/lib/api/configuration";
-import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 import { modelOptionId, unknownModelName, useModelCatalog, type ModelCatalogModel } from "@/lib/model/catalog";
 import type { ModelSettingsForm } from "@/lib/model/settings-form";
 
@@ -146,7 +145,7 @@ export function AgentConfigurationForm({
   scopeEditable = false,
 }: {
   session: AgentEditorSession;
-  toolGroups: ToolGroupCatalog[];
+  toolGroups: string[];
   /** 工作台草稿可选择保存到工作区或系统级；配置页的范围由所在页面决定。 */
   scopeEditable?: boolean;
 }) {
@@ -184,7 +183,7 @@ export function AgentConfigurationForm({
         <div className="space-y-1.5 text-sm">
           <span className="text-muted-foreground">允许的工具组</span>
           <div className="border-border/70 bg-muted/20 grid gap-2 rounded-xl border p-3 @md:grid-cols-2">
-            {toolGroups.map(({ group }) => {
+            {toolGroups.map((group) => {
               const locked = NON_ASSIGNABLE_TOOL_GROUPS.has(group);
               return (
                 <label

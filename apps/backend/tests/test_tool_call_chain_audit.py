@@ -23,7 +23,6 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.tool_registry import ToolRegistry
-from app.models.run_options import RunOptions
 from app.models.session_context import SessionContextRecord
 from app.models.session_extra import SessionExtra
 from app.tools.tool_handler.read_file import ReadFileTool
@@ -327,7 +326,7 @@ def test_t4_rebuild_snapshot_materializes_all_tool_results(
         text="",
         context_window_total=None,
         model_config_id=None,
-        options=RunOptions(),
+        reasoning_effort=None,
         image_paths=None,
         extra=SessionExtra(),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),

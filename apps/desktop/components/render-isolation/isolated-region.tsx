@@ -26,7 +26,7 @@ type IsolatedRegionProps = {
 };
 
 /**
- * 页面级区域的渲染隔离：配置页、上下文观测、工作台、终端面板任一渲染崩溃只降级该区域，
+ * 页面级区域的渲染隔离：配置页、会话观测、工作台、终端面板任一渲染崩溃只降级该区域，
  * 侧栏与正在运行的 Assistant 会话照常可用。消息与工具片段级别的隔离见 PartRenderBoundary。
  */
 export function IsolatedRegion({

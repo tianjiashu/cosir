@@ -62,7 +62,7 @@ const SETTINGS_COMMANDS: readonly SearchableCommand[] = [
     keywords: ["配置", "设置", "系统配置", "settings", tab.id],
   })),
   {
-    command: { kind: "navigate", id: "page:context-observer", label: "上下文观测", path: "/context-observer", icon: ActivityIcon },
+    command: { kind: "navigate", id: "page:session-observer", label: "会话观测", path: "/session-observer", icon: ActivityIcon },
     keywords: ["上下文", "观测", "context", "observer"],
   },
 ];

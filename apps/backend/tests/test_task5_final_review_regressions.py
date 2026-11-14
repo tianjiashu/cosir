@@ -101,14 +101,13 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[object] = []
-    from app.models.run_options import RunOptions
 
     run = SimpleNamespace(
         id=11,
         session_id=7,
         context_window_total=128_000,
         model_config_id="test/m1",
-        options=RunOptions(),
+        reasoning_effort=None,
         created_at=_RUN_CREATED_AT,
     )
 

@@ -44,10 +44,6 @@ test("窗口宽高与面板开关不重新执行会话和线程，也不重连�
   });
   await page.getByRole("treeitem").filter({ hasText: "布局隔离" }).click();
   await expect(page.getByText("布局隔离回复", { exact: true })).toBeVisible();
-  // 工具目录加载完成也是合法会话更新，先等它完成再测纯布局变化。
-  await page.getByRole("button", { name: "工具", exact: true }).click();
-  await expect(page.getByRole("switch").first()).toBeEnabled();
-  await page.keyboard.press("Escape");
   await expect.poll(() => openedSubscriptionCount(page, { sessionId: 42 })).toBe(1);
   await settleLayout(page);
   const counts = () => page.evaluate(() => (window as unknown as { layoutRenderCounts: RenderCounts }).layoutRenderCounts);

@@ -21,7 +21,6 @@ from app.models.conversation_input import UserInputPresentation
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import ToolMessageMetadata
 from app.models.run_command import RunCommand
-from app.models.run_options import RunOptions
 from app.models.run_record import RunRecord
 from app.models.session_context import SessionContextRecord
 from app.models.session_extra import SessionExtra
@@ -215,13 +214,12 @@ def test_input_preparation_keeps_run_options_out_of_message(monkeypatch, tmp_pat
     service = _input_service(monkeypatch, tmp_path, supports_reasoning_effort=True)
     queued = service.prepare(
         7,
-        RunCommand(text="检查项目", disabled_tool_groups=["终端工具"]),
+        RunCommand(text="检查项目"),
         "test/m3",
         "high",
         "main_agent",
     )
-    assert queued.launch.options.disabled_tool_groups == ["终端工具"]
-    assert queued.launch.options.reasoning_effort == "high"
+    assert queued.launch.reasoning_effort == "high"
     assert queued.launch.model_config_id == "test/m3"
     # Run 的配置只随 ``launch`` 走；消息体自身没有散落的执行选项或附件字段。
     assert set(queued.model_dump()) == {"text", "presentation", "launch"}
@@ -299,7 +297,6 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
                     id=11,
                     session_id=7,
                     status="running",
-                    options=RunOptions().model_dump(mode="json"),
                     execution_data=ReactExecutionState().model_dump(mode="json"),
                 )
             )

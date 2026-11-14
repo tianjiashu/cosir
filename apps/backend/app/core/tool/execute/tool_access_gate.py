@@ -130,9 +130,8 @@ class ToolAccessGate:
             return ToolGateOutcome(
                 denial=tool_error(
                     tool.name,
-                    # 准入拒绝只给「停止调用」这一个信号：禁用来源（Session 类型规则、派生深度、用户
-                    # 关掉的工具组）与持续范围（本 Session / 本轮）由工具准入通知向模型说明，门禁不
-                    # 复述来源，也不承诺「本轮之后就能用」；可用工具集也不回灌——模型本就持有工具
+                    # 准入拒绝只给「停止调用」这一个信号：禁用来源（Session 类型规则、派生深度）与
+                    # 持续范围由工具准入通知向模型说明，门禁不复述来源，也不承诺「之后就能用」；可用工具集也不回灌——模型本就持有工具
                     # 声明，回灌只会放大提示面。
                     f"tool is not allowed: {tool.name}. "
                     "This tool is not available. Do not call it again.",

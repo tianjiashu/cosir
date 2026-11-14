@@ -12,11 +12,9 @@ import asyncio
 from fastapi import Depends, HTTPException, Query
 
 from app.api.schemas import (
-    ContextMessageResponse,
-    ContextObservationResponse,
-    ContextTurnRunResponse,
     DeleteSessionResponse,
     ForkSessionRequest,
+    SessionObservationResponse,
     SessionResponse,
 )
 from app.app import app
@@ -35,24 +33,21 @@ from app.service.depends import (
 from app.service.session.session_service import SessionService
 
 
-@app.get("/context-messages", response_model=ContextObservationResponse)
-async def list_context_messages(
-    session_id: int = Query(gt=0),
+@app.get("/sessions/{session_id}/observation", response_model=SessionObservationResponse)
+async def observe_session(
+    session_id: int,
     turn: int | None = Query(default=None, gt=0),
     context_service: SessionContextService = Depends(
         get_session_context_service
     ),
-) -> ContextObservationResponse:
-    """读取 Session 的全部 Agent 上下文消息，或只读一个回合（附它所属 Run 的状态事实）。"""
+) -> SessionObservationResponse:
+    """会话观测：Session 的全部消息行与运行节点，或只看一个回合。"""
 
     try:
-        records, run = context_service.list_observable_messages(session_id, turn=turn)
+        observation = context_service.observe_session(session_id, turn=turn)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
-    return ContextObservationResponse(
-        messages=[ContextMessageResponse.from_record(record) for record in records],
-        run=ContextTurnRunResponse.from_record(run) if run is not None else None,
-    )
+    return SessionObservationResponse.from_observation(observation)
 
 
 @app.get("/sessions/{session_id}")

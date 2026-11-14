@@ -7,7 +7,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.assistant_transport.request.assistant_user_message import (
     AssistantImagePart,
@@ -15,7 +15,7 @@ from app.assistant_transport.request.assistant_user_message import (
     AssistantUserMessage,
 )
 from app.models import RunCommand
-from app.models.run_options import ReasoningEffort
+from app.models.enums.reasoning_effort import ReasoningEffort
 
 
 class SendMessageRequest(BaseModel):
@@ -30,17 +30,6 @@ class SendMessageRequest(BaseModel):
     # 模型名由后端配置事实读取，请求只携带配置身份。
     modelConfigId: str = Field(min_length=1)
     reasoningEffort: ReasoningEffort | None = None
-    # 用户关掉的工具组名；后端在运行时按注册表展开为工具名，前端不做换算。
-    disabledToolGroups: list[StrictStr] = Field(default_factory=list)
-
-    @field_validator("disabledToolGroups")
-    @classmethod
-    def _validate_disabled_tool_groups(cls, value: list[str]) -> list[str]:
-        if any(not name.strip() for name in value):
-            raise ValueError("disabledToolGroups entries must not be blank")
-        if len(value) != len(set(value)):
-            raise ValueError("disabledToolGroups entries must be unique")
-        return value
 
     def to_run_command(self) -> RunCommand:
         """text part 按出现顺序用换行连成胶囊正文；图片只携带已上传附件 id。"""
@@ -56,7 +45,6 @@ class SendMessageRequest(BaseModel):
                     if isinstance(part, AssistantImagePart)
                 )
             ),
-            disabled_tool_groups=list(self.disabledToolGroups),
         )
 
 

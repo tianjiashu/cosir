@@ -31,7 +31,6 @@ from app.core.workflow.message_queue.session_message import (
     UserInputBody,
 )
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.run_options import RunOptions
 from app.models.run_record import RunRecord
 from app.models.session_record import SessionRecord
 from app.service import depends
@@ -198,11 +197,10 @@ class LiveColdEnv:
         *,
         delivery: str | None = None,
         session_id: int | None = None,
-        options: RunOptions | None = None,
     ) -> None:
         kwargs = {"delivery": delivery} if delivery else {}
         launch = RunLaunch(
-            model_config_id=self.model_config.id, options=options or RunOptions()
+            model_config_id=self.model_config.id
         )
         body = UserInputBody(
             text=text, launch=launch, presentation=UserInputPresentation(text=text)

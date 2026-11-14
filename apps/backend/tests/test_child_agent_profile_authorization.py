@@ -10,7 +10,6 @@ from app.config import configuration
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.tool.multi_agent import send_message
 from app.core.tool.schemas import ToolExecutionContext
-from app.models.run_options import RunOptions
 
 
 @pytest.fixture(autouse=True)
@@ -102,7 +101,7 @@ def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
     )
     monkeypatch.setattr(send_message, "get_workspace_service", lambda: None)
     run = SimpleNamespace(id=11, status="completed", agent_id="main_agent", model_config_id="test/m3",
-                          options=RunOptions(reasoning_effort="high", disabled_tool_groups=["浏览器工具"]))
+                          reasoning_effort="high")
     monkeypatch.setattr(
         configuration, "get_agent_registry", lambda: pytest.fail("resolved a child profile")
     )
@@ -136,5 +135,4 @@ def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
     [kwargs] = prepared
     assert (kwargs["agent_id"], kwargs["model_config_id"]) == ("main_agent", "test/m3")
     assert kwargs["reasoning_effort"] == "high"
-    assert kwargs["disabled_tool_groups"] == ["浏览器工具"]
     assert enqueued == [(41, "agent-message")]

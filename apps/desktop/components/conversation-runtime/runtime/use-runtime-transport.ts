@@ -20,7 +20,6 @@ import { UserFacingError } from "@/lib/errors/user-facing-error";
  */
 export function useRuntimeTransport(
   context: RuntimeSessionContext,
-  selectedToolGroups: readonly string[],
 ): ReturnType<typeof useSessionAssistantTransportRuntime> {
   const attachmentAdapter = useMemo(
     () => context.workspaceId == null ? null : createAttachmentAdapter(context.workspaceId),
@@ -62,7 +61,6 @@ export function useRuntimeTransport(
       const launch = runLaunch ?? {
         modelConfigId: selection?.modelConfigId ?? state.fork?.initialLaunch.modelConfigId ?? null,
         reasoningEffort: selection ? selection.reasoningEffort ?? null : state.fork?.initialLaunch.reasoningEffort ?? null,
-        disabledToolGroups: [...selectedToolGroups],
       };
       // 正文里的胶囊标签就是机器可读的指针，命令原样发送，不在前端改写 parts。
       const message = command.message as SessionMessageRequest["message"];
@@ -73,7 +71,6 @@ export function useRuntimeTransport(
         message,
         modelConfigId: launch.modelConfigId,
         reasoningEffort: launch.reasoningEffort,
-        disabledToolGroups: launch.disabledToolGroups,
       };
       void frontendLog("INFO", "assistant_session_command_prepared", "Session 命令已准备发送", {
         traceId: context.traceId,

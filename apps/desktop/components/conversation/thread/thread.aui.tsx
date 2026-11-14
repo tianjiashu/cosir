@@ -17,7 +17,6 @@ import { SessionContextUsage } from "@/components/conversation-runtime/usage-dis
 import { ComposerAddMenu } from "@/components/composer/add-menu/add-menu";
 import { ModelSelector } from "@/components/composer/composer-model-selector";
 import { ComposerToolbar } from "@/components/composer/composer-toolbar";
-import { ToolGroupSelector } from "@/components/composer/tool-group-selector";
 import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
@@ -34,9 +33,7 @@ import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-s
 import { isActiveRunStatus, type InputDelivery, type TransportActivity, type TransportMessageSource } from "@/lib/assistant/contract";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
-import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
-import type { TransportRunLaunch } from "@/lib/assistant/contract";
-import { RUN_LAUNCH_LOCKED_HINT, useActiveRunLaunch } from "@/lib/assistant/run-launch";
+import { useActiveRunLaunch } from "@/lib/assistant/run-launch";
 import { AttachmentWorkspaceContext } from "@/components/conversation/thread/attachment-context";
 import { VirtualizedThreadMessages } from "@/components/conversation/thread/virtualized-thread-messages";
 import { ConversationAsideSlot } from "@/components/conversation/thread/conversation-aside";
@@ -67,11 +64,6 @@ export type ThreadProps = {
   readonly?: boolean;
   sessionId: number;
   workspaceId: number;
-  toolGroups?: ToolGroupCatalog[];
-  selectedToolGroups?: string[];
-  onSelectedToolGroupsChange?: (groups: string[]) => void;
-  toolGroupsLoading?: boolean;
-  toolGroupsError?: string | null;
   workspaceRoot?: string;
   /** 正在分叉的回复 id。 */
   forkingMessageId?: string | null;
@@ -84,7 +76,7 @@ export type ThreadProps = {
 };
 
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
-type ThreadContextValue = Pick<ThreadProps, "forkingMessageId" | "onForkMessage" | "onResumeBusiness" | "workspaceRoot" | "cancelling" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "sessionId" | "workspaceId">;
+type ThreadContextValue = Pick<ThreadProps, "forkingMessageId" | "onForkMessage" | "onResumeBusiness" | "workspaceRoot" | "cancelling" | "readonly" | "sessionId" | "workspaceId">;
 const ThreadContext = createContext<ThreadContextValue | null>(null);
 
 /** 线程内部组件只在 Thread 下渲染；缺 Provider 是装配错误，直接暴露。 */
@@ -96,11 +88,11 @@ function useThreadContext(): ThreadContextValue {
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, sessionId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId = null, onForkMessage, onResumeBusiness, cancelling = false, performanceProbe = null }) {
+export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, sessionId, workspaceId, workspaceRoot, forkingMessageId = null, onForkMessage, onResumeBusiness, cancelling = false, performanceProbe = null }) {
   const isEmpty = useAuiState(isNewChatView);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
-    <ThreadContext.Provider value={{ sessionId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, cancelling, readonly }}>
+    <ThreadContext.Provider value={{ sessionId, workspaceId, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, cancelling, readonly }}>
       <AttachmentWorkspaceContext.Provider value={workspaceId}>
       <LinkSessionContext.Provider value={sessionId}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
@@ -189,7 +181,7 @@ const ComposerBoundary = memo(function ComposerBoundary({
 });
 
 const Composer = memo(function Composer() {
-  // 运行期配置锁定：活动 Run 期间模型与工具显示 Run 冻结的配置且只读，发送也用这份配置。
+  // 运行期配置锁定：活动 Run 期间模型显示 Run 冻结的配置且只读，发送也用这份配置。
   const runLaunch = useActiveRunLaunch();
   // 运行中照常可以发送（后端排进队列，当前 Run 结束后依次处理）；只有停止请求在途时不提交，避免与停止交错。
   const { cancelling = false, sessionId, workspaceRoot } = useThreadContext();
@@ -210,12 +202,7 @@ const Composer = memo(function Composer() {
           </div>
           <ComposerToolbar
             add={<ThreadComposerAddMenu workspaceRoot={workspaceRoot} />}
-            config={(
-              <>
-                <ThreadToolGroupSelector lockedLaunch={runLaunch} />
-                <ModelSelector scope={{ kind: "session", id: sessionId }} runtimeModelContext locked={runLaunch} />
-              </>
-            )}
+            config={<ModelSelector scope={{ kind: "session", id: sessionId }} runtimeModelContext locked={runLaunch} />}
             status={<SessionContextUsage />}
             action={<ComposerAction />}
           />
@@ -226,32 +213,11 @@ const Composer = memo(function Composer() {
   );
 });
 
-const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
-
 /** 会话页的「+」菜单：图片交给 assistant-ui composer，Skill 按 Session 所在工作区列出。 */
 const ThreadComposerAddMenu: FC<{ workspaceRoot?: string }> = ({ workspaceRoot }) => {
   const composer = unstable_useComposerInput();
   const { workspaceId } = useThreadContext();
   return <ComposerAddMenu images={useComposerImageSink()} workspaceRoot={workspaceRoot} workspaceId={workspaceId} disabled={composer.isDisabled} />;
-};
-
-/** `lockedLaunch` 为活动 Run 冻结的配置：工具组按它冻结的组名回显、只读。 */
-const ThreadToolGroupSelector: FC<{ lockedLaunch?: TransportRunLaunch | null }> = ({ lockedLaunch = null }) => {
-  const composer = unstable_useComposerInput();
-  const context = useThreadContext();
-  const toolGroups = context.toolGroups ?? EMPTY_TOOL_GROUPS;
-  const lockedGroups = lockedLaunch?.disabledToolGroups ?? null;
-  return (
-    <ToolGroupSelector
-      toolGroups={toolGroups}
-      selectedToolGroups={lockedGroups ?? context.selectedToolGroups ?? []}
-      onSelectedToolGroupsChange={lockedLaunch === null ? context.onSelectedToolGroupsChange : undefined}
-      loading={context.toolGroupsLoading}
-      error={context.toolGroupsError}
-      disabled={composer.isDisabled}
-      lockedHint={lockedGroups === null ? undefined : RUN_LAUNCH_LOCKED_HINT}
-    />
-  );
 };
 
 const ComposerAction: FC = () => {

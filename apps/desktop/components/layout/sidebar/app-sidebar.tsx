@@ -48,7 +48,7 @@ type AppSidebarProps = {
 };
 
 /**
- * 应用侧栏：新会话、「工作区」区头（搜索、添加工作区）、工作区 / 会话树、底部的系统配置与上下文观测入口。
+ * 应用侧栏：新会话、「工作区」区头（搜索、添加工作区）、工作区 / 会话树、底部的系统配置与会话观测入口。
  *
  * 铺在窗口底色（canvas）上，不画边线：与主区的分隔靠两者明度差，底部入口靠 mt-auto 的留白。
  *
@@ -173,7 +173,7 @@ export function AppSidebar({
 
       <div className="mt-auto flex shrink-0 flex-col gap-1 p-3">
         <SidebarLink active={section === "settings"} icon={<Settings2Icon className="size-4" />} label="系统配置" shortcut="openSettings" onClick={onOpenSettings} />
-        <SidebarLink active={section === "observer"} icon={<SearchIcon className="size-4" />} label="上下文观测" onClick={onOpenObserver} />
+        <SidebarLink active={section === "observer"} icon={<SearchIcon className="size-4" />} label="会话观测" onClick={onOpenObserver} />
       </div>
     </div>
   );

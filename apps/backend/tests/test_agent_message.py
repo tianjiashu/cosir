@@ -74,7 +74,7 @@ def test_prepare_carries_launch_and_rejects_empty_text(monkeypatch: pytest.Monke
     body = message.body
     assert isinstance(body, AgentMessageBody)
     assert (body.launch.agent_id, body.launch.model_config_id) == ("child_a", "test/m3")
-    assert body.launch.options.reasoning_effort == "high"
+    assert body.launch.reasoning_effort == "high"
     with pytest.raises(UserInputRejectedError):
         agent_message_module.prepare_agent_message(
             "  ", source=_SOURCE, agent_id="child_a", model_config_id="test/m3"

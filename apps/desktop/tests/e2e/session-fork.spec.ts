@@ -4,7 +4,7 @@ import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
 import { API_ORIGIN as origin } from "./e2e-env";
 
-const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
+const LAUNCH = { modelConfigId: null, reasoningEffort: null };
 /** 两轮回复：第一轮已结束（带结局），第二轮处于 `status`。 */
 const snapshot = (status: "completed" | "running" | "suspended"): TransportState => {
   const ended = (runStatus: string) => runStatus === "completed";

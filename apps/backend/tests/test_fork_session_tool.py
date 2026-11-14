@@ -15,7 +15,6 @@ from app.config.settings import Settings
 from app.core.tool.multi_agent import fork_session as fork_module
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.errors.session_fork_errors import SessionForkConflictError
-from app.models.run_options import RunOptions
 
 
 def _context(tmp_path: Path) -> ToolExecutionContext:
@@ -58,9 +57,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
             get_run=lambda _run_id: SimpleNamespace(
                 agent_id="main_agent",
                 model_config_id="test/m3",
-                options=RunOptions(
-                    reasoning_effort="high", disabled_tool_groups=["浏览器工具"]
-                ),
+                reasoning_effort="high",
             )
         ),
     )
@@ -94,13 +91,12 @@ def test_fork_keeps_the_parents_identity_and_completes_once_assigned(env, tmp_pa
         "source_session_id": 7, "run_id": 70, "tool_call_id": "call-fork",
         "title": "前端部分", "derivation_depth": 1,
     }
-    # 分叉不换身份：模型、推理强度与关掉的工具组都沿用发起它的 Run；任务说明以 Agent 消息投递。
+    # 分叉不换身份：模型与推理强度都沿用发起它的 Run；任务说明以 Agent 消息投递。
     [prepared] = env.prepared
     assert prepared["text"] == "只做前端"
     assert prepared["source"].session_id == 7
     assert (prepared["agent_id"], prepared["model_config_id"]) == ("main_agent", "test/m3")
     assert prepared["reasoning_effort"] == "high"
-    assert prepared["disabled_tool_groups"] == ["浏览器工具"]
     # 交接通知排在任务说明之前：写清身份与会话归属，模型读到会话时已经知道自己是谁。
     [(handover_session, handover), assignment] = env.enqueued
     assert assignment == (41, "agent-message")

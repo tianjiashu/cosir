@@ -15,7 +15,6 @@ export type SubmitNewConversationMessageInput = {
   /** 正文原文；机器可读的 `<file>` / `<ref>` / `<skill>` 标签原样交给后端解析。 */
   text: string;
   imageAttachments: readonly NewConversationImageAttachment[];
-  disabledToolGroups: readonly string[];
   modelConfigId: string;
   reasoningEffort: string | null;
   /** 同一次提交的上传与发送请求共用的 trace id。 */
@@ -77,7 +76,6 @@ export async function submitNewConversationMessage(
       message,
       modelConfigId: input.modelConfigId,
       reasoningEffort: input.reasoningEffort,
-      disabledToolGroups: [...input.disabledToolGroups],
     }, { traceId: input.traceId });
   } catch (error) {
     if (error instanceof HttpError) throw error;

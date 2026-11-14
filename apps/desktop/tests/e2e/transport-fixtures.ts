@@ -4,7 +4,7 @@ import type { TransportMessagePart, TransportState } from "@/lib/assistant/contr
 import { API_ORIGIN } from "./e2e-env";
 
 /** E2E 共用的 Session 视角 snapshot 构造器，与 tests/e2e/test-server.mjs 的契约一致。 */
-const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
+const LAUNCH = { modelConfigId: null, reasoningEffort: null };
 
 /** 一个已完成回合的快照；第一个参数是回合号（回复 id 按它编码）。 */
 export function completedState(

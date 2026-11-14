@@ -14,16 +14,18 @@
 
 import json
 
-from sqlalchemy import asc, delete, select, update
+from sqlalchemy import asc, delete, func, select, update
 from sqlalchemy.orm import Session as DbSession
 
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models import RunError, RunRecord
+from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.enums.run_status import RunStatus
-from app.models.run_options import RunOptions
+from app.models.run_extra import RunExtra, RunStatusChange
 from app.models.run_usage import RunUsage
 from app.storage.model.run_model import RunModel
 from app.storage.store_engines import main_db_factory
+from app.utils.datetime_utils import to_text, utc_now
 
 
 def _serialize_typed_json(value: object | None) -> str | None:
@@ -122,7 +124,7 @@ class RunCrud:
         agent_id: str | None = None,
         model_config_id: str | None = None,
         context_window_total: int | None = None,
-        options: RunOptions | None = None,
+        reasoning_effort: ReasoningEffort | None = None,
         usage: RunUsage | None = None,
         error: RunError | None = None,
         db: DbSession | None = None,
@@ -136,7 +138,7 @@ class RunCrud:
                 agent_id=agent_id,
                 model_config_id=model_config_id,
                 context_window_total=context_window_total,
-                options=options,
+                reasoning_effort=reasoning_effort,
                 usage=usage,
                 error=error,
             )
@@ -148,7 +150,7 @@ class RunCrud:
                 agent_id=agent_id,
                 model_config_id=model_config_id,
                 context_window_total=context_window_total,
-                options=options,
+                reasoning_effort=reasoning_effort,
                 usage=usage,
                 error=error,
             )
@@ -162,7 +164,7 @@ class RunCrud:
         agent_id: str | None,
         model_config_id: str | None,
         context_window_total: int | None,
-        options: RunOptions | None,
+        reasoning_effort: ReasoningEffort | None,
         usage: RunUsage | None,
         error: RunError | None,
     ) -> RunRecord:
@@ -178,7 +180,7 @@ class RunCrud:
             agent_id: agent 标识或 None。
             model_config_id: 厂商标识或 None。
             context_window_total: 本次 Run 使用的模型上下文窗口上限。
-            options: 本次执行配置。
+            reasoning_effort: 本次 Run 选定的推理强度或 None。
             usage: 初始 token 用量或 None。
             error: 初始结构化错误或 None。
 
@@ -192,13 +194,20 @@ class RunCrud:
         副作用:
             向 db 追加一行 ``RunModel`` 并 flush。
         """
+        # 历史第一条与行的时间戳取同一个值，观测页据此把「开始」对到 Run 的创建时刻。
+        now = to_text(utc_now())
         model = RunModel(
             session_id=session_id,
             status=status,
+            created_at=now,
+            updated_at=now,
+            extra=RunExtra(
+                status_history=[RunStatusChange(at=now, status=status)]
+            ).model_dump(mode="json"),
             agent_id=agent_id,
             model_config_id=model_config_id,
             context_window_total=context_window_total,
-            options=(options or RunOptions()).model_dump(mode="json"),
+            reasoning_effort=reasoning_effort,
             execution_data=ReactExecutionState().model_dump(mode="json"),
             usage_json=_serialize_typed_json(usage),
             error_json=_serialize_typed_json(error),
@@ -401,9 +410,21 @@ class RunCrud:
         error: RunError | None = None,
         clear_terminal_fields: bool = False,
     ) -> RunRecord | None:
-        """事务内条件更新 Run 状态与结果字段；只返回真正命中的记录。执行状态只经 ``save_execution`` 写。"""
+        """事务内条件更新 Run 状态与结果字段；只返回真正命中的记录。执行状态只经 ``save_execution`` 写。
 
-        values: dict[str, object] = {"status": target_status}
+        迁移历史在同一条 UPDATE 里追加（``extra.status_history``），所以命中才记、落空不记，
+        不会与 ``status`` 对不上；历史只供观测，见 ``RunExtra``。
+        """
+
+        now = to_text(utc_now())
+        change = RunStatusChange(at=now, status=target_status, end_reason=end_reason)
+        values: dict[str, object] = {
+            "status": target_status,
+            "updated_at": now,
+            "extra": func.json_insert(
+                RunModel.extra, "$.status_history[#]", func.json(change.model_dump_json())
+            ),
+        }
         if clear_terminal_fields:
             values.update(
                 end_reason=None,

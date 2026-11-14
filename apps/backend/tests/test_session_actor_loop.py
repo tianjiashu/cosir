@@ -81,7 +81,7 @@ class _Ledger:
             status="running",
             agent_id=launch.agent_id,
             model_config_id=launch.model_config_id,
-            options=launch.options,
+            reasoning_effort=launch.reasoning_effort,
             end_reason=None,
         )
         self.runs[run.id] = run

@@ -66,17 +66,14 @@ def _tool_availability(
     出自更早的 Run 或继承来的历史时，按 :func:`tool_availability_notice` 的规则说明（新 Run 的第一次
     驱动因此仍会提醒一次仍在禁用的工具）。
     """
-    session_banned, run_banned = rc.session_banned, rc.run_banned
-    banned = session_banned | run_banned
+    banned = rc.banned_tools
     latest = context.latest_notice("tool_availability")
     announced = (
         None if latest is None else frozenset(cast(list[str], latest[1].banned_tools))
     )
     if latest is not None and latest[0] == rc.run.id and announced == banned:
         return None
-    content = tool_availability_notice(
-        announced, session_banned, run_banned, all_banned=not rc.admitted_tools
-    )
+    content = tool_availability_notice(announced, banned)
     if content is None:
         return None
     return NoticeBody(
@@ -139,72 +136,47 @@ def _open_items(rc: RuntimeContext, context: RuntimeMessageContextManager) -> No
 
 
 def tool_availability_notice(
-    announced: frozenset[str] | None,
-    session_banned: frozenset[str],
-    run_banned: frozenset[str],
-    *,
-    all_banned: bool,
+    announced: frozenset[str] | None, banned: frozenset[str]
 ) -> str | None:
     """返回应投递的工具准入通知文本；``None`` 表示无需通知。
 
-    ``announced`` 是上次已告知模型的禁用集合，``session_banned`` / ``run_banned`` 是本 Run 两个来源的
-    禁用工具名（Session 级：Session 类型规则与派生深度；Run 级：本 Run 关掉的工具组），两者都只含该
-    Session 手里有的工具。``all_banned`` 表示这些禁用覆盖了该 Session 的全部工具。
-
-    比较用两个来源的并集——集合相同意味着可调用面相同，模型不需要知道原因换过；文本则按来源分组，
-    让模型读到「这个 Session 不能派生」，而不是笼统的「这次禁用、下次也许可用」。工具名一律排序，避免
-    同一集合跨进程产生不同文本（前缀缓存）。
+    ``announced`` 是上次已告知模型的禁用集合，``banned`` 是本 Run 的禁用工具名（Session 类型规则与
+    派生深度，只含该 Session 手里有的工具）。文本标明 ``for this session``，让模型读到「这个 Session
+    不能派生」，而不是笼统的「这次禁用、下次也许可用」；集合仍可能跨 Run 变化（派生深度上限按 Run
+    现读配置）。工具名一律排序，避免同一集合跨进程产生不同文本（前缀缓存）。
 
     只报禁用、不枚举可用：可用集合由 Session 固化的 schema 与系统提示词的工具目录表达，在通知里再列
     一遍既拉长这段 canonical 历史，又会紧跟在禁用清单后面被读成「这些都被禁用」。
 
     - ``announced`` 为 ``None``（模型从没被告知过）：完整说明。
-    - 集合有变化：说明新禁用 / 恢复的工具，并附当前禁用清单（按来源），使单条通知自洽。
+    - 集合有变化：说明新禁用 / 恢复的工具，并附当前禁用清单，使单条通知自洽。
     - 未变化但仍有禁用：简短提醒，防止模型在长对话里遗忘。
     - 未变化且全部可用：不通知。
     """
 
-    banned = session_banned | run_banned
     if announced is None:
-        return _full_notice(session_banned, run_banned, all_banned)
+        if not banned:
+            return f"{_TOOL_NOTICE_PREFIX} all tools are available."
+        return f"{_TOOL_NOTICE_PREFIX} disabled ({_disabled(banned)})."
     if banned == announced:
         if not banned:
             return None
-        groups = _disabled_groups(session_banned, run_banned)
-        return f"{_TOOL_NOTICE_PREFIX} still disabled ({groups})."
+        return f"{_TOOL_NOTICE_PREFIX} still disabled ({_disabled(banned)})."
     changes = []
     if newly_banned := banned - announced:
         changes.append(f"newly disabled: {_names(newly_banned)}")
     if re_enabled := announced - banned:
         changes.append(f"re-enabled: {_names(re_enabled)}")
-    if all_banned:
-        current = "all tools are disabled now"
-    elif not banned:
-        current = "all tools are available now"
-    else:
-        current = f"currently disabled ({_disabled_groups(session_banned, run_banned)})"
+    current = (
+        "all tools are available now" if not banned else f"currently disabled ({_disabled(banned)})"
+    )
     return f"{_TOOL_NOTICE_PREFIX} changed since last round ({'; '.join(changes)}); {current}."
 
 
-def _full_notice(session_banned: frozenset[str], run_banned: frozenset[str], all_banned: bool) -> str:
-    """模型从没被告知过时的完整说明：按来源给当前禁用清单；全部被禁时只给一句结论。"""
+def _disabled(banned: frozenset[str]) -> str:
+    """当前禁用清单：``for this session: …``。"""
 
-    if all_banned:
-        return f"{_TOOL_NOTICE_PREFIX} all tools are disabled."
-    if not session_banned and not run_banned:
-        return f"{_TOOL_NOTICE_PREFIX} all tools are available."
-    return f"{_TOOL_NOTICE_PREFIX} disabled ({_disabled_groups(session_banned, run_banned)})."
-
-
-def _disabled_groups(session_banned: frozenset[str], run_banned: frozenset[str]) -> str:
-    """按来源给出禁用清单：``for this session: …; for this run: …``。"""
-
-    groups = []
-    if session_banned:
-        groups.append(f"for this session: {_names(session_banned)}")
-    if run_banned:
-        groups.append(f"for this run: {_names(run_banned)}")
-    return "; ".join(groups)
+    return f"for this session: {_names(banned)}"
 
 
 def _names(tools: frozenset[str]) -> str:

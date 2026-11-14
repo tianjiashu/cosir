@@ -7,7 +7,7 @@ import app.api.tools_api as tools_api
 
 
 @pytest.mark.asyncio
-async def test_tool_groups_returns_only_main_agent_tools_grouped_and_sorted(monkeypatch) -> None:
+async def test_tool_groups_returns_sorted_group_names_of_main_agent_tools(monkeypatch) -> None:
     class Profile:
         allowed_tools: ClassVar[tuple[str, ...]] = ("read_file", "web_search")
 
@@ -32,9 +32,4 @@ async def test_tool_groups_returns_only_main_agent_tools_grouped_and_sorted(monk
 
     response = await tools_api.get_tool_groups()
 
-    assert response == {
-        "groups": [
-            {"group": "文件", "tools": [{"name": "read_file", "description": "read"}]},
-            {"group": "联网", "tools": [{"name": "web_search", "description": "search"}]},
-        ]
-    }
+    assert response == {"groups": ["文件", "联网"]}

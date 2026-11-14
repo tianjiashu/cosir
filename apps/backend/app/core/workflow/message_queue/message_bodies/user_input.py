@@ -8,7 +8,7 @@
 from typing import TYPE_CHECKING, ClassVar
 
 from openai.types.chat import ChatCompletionUserMessageParam
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from app.core.workflow.message_queue.message_bodies.base import (
     EnqueuedMessageBody,
@@ -21,8 +21,8 @@ from app.core.workflow.message_queue.message_bodies.rendering import (
     user_message_with_images,
 )
 from app.models.conversation_input import UserInputPresentation
+from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.message_metadata import UserMessageMetadata
-from app.models.run_options import RunOptions
 
 if TYPE_CHECKING:
     from app.models import RunRecord, SessionRecord
@@ -35,7 +35,7 @@ class RunLaunch(BaseModel):
     # 交接新 Run 时的 Agent 身份；Session 不绑定 Agent，身份随发起配置走。
     agent_id: str = "main_agent"
     model_config_id: str
-    options: RunOptions = Field(default_factory=RunOptions)
+    reasoning_effort: ReasoningEffort | None = None
 
     @classmethod
     def from_run(cls, run: "RunRecord | None") -> "RunLaunch | None":
@@ -49,7 +49,7 @@ class RunLaunch(BaseModel):
         return cls(
             agent_id=run.agent_id,
             model_config_id=run.model_config_id,
-            options=run.options,
+            reasoning_effort=run.reasoning_effort,
         )
 
     @classmethod
@@ -67,7 +67,9 @@ class RunLaunch(BaseModel):
         if launch.agent_id is None or launch.model_config_id is None:
             return None
         return cls(
-            agent_id=launch.agent_id, model_config_id=launch.model_config_id, options=launch.options
+            agent_id=launch.agent_id,
+            model_config_id=launch.model_config_id,
+            reasoning_effort=launch.reasoning_effort,
         )
 
 

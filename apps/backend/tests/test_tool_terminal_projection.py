@@ -1193,7 +1193,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
         "usage": None,
         "contextWindowTotal": None,
         "startedAt": "2026-01-01T00:00:00+00:00",
-        "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
+        "launch": {"modelConfigId": None, "reasoningEffort": None},
     }
     session_runtime_spaces.get_or_create(session_id).get_working_snapshot(lambda: state)
 

@@ -25,8 +25,8 @@ from app.models.message_metadata import (
     ToolMessageMetadata,
     UserMessageMetadata,
 )
-from app.models.run_record import RunRecord
 from app.models.session_context import SessionContextRecord
+from app.service.conversation.session_observation import SessionObservation
 from app.storage.crud.run_crud import RunCrud
 from app.storage.crud.session_context_crud import SessionContextCrud
 from app.storage.crud.session_crud import SessionCrud
@@ -55,22 +55,21 @@ class SessionContextService:
         self._run_crud = RunCrud()
         self._store = ContextStore()
 
-    def list_observable_messages(
-        self, session_id: int, *, turn: int | None = None
-    ) -> tuple[list[SessionContextRecord], RunRecord | None]:
-        """读取观测页消息（保留全部存储标记状态）；指定回合时只读这一回合，并给出所属的 Run。
+    def observe_session(self, session_id: int, *, turn: int | None = None) -> SessionObservation:
+        """读取会话观测页的内容：全部消息行（保留全部存储标记状态）与运行节点；指定回合时只看这一回合。
 
-        回合不跨 Run，所以这一回合的本地行属于同一个 Run；继承来的回合没有 Run，返回 ``None``。
+        总是读整个 Session 再裁剪：工具名要从发起调用的那一行取，回合的时间窗要看下一个回合的
+        第一行，两者都可能不在所选回合里。
 
         异常:
             KeyError: Session 不存在（映射 404）。
         """
-        self._session_crud.get(session_id)
-        rows = self._crud.get_for_observation(session_id, turn)
-        run_id = next((row.run_id for row in rows if row.run_id is not None), None)
-        if turn is None or run_id is None:
-            return rows, None
-        return rows, self._run_crud.get(run_id)
+        return SessionObservation.build(
+            self._session_crud.get(session_id).title,
+            self._crud.get_for_observation(session_id),
+            self._run_crud.list_by_session(session_id),
+            turn,
+        )
 
     def claimed_decisions(self, session_id: int) -> list[str]:
         """决定已认领、还在执行的 HITL 调用（占位 ``running``）；后台占位是 ``pending``，不在其中。"""

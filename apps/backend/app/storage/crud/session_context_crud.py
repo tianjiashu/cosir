@@ -116,22 +116,17 @@ class SessionContextCrud:
                 rows = db.scalars(stmt).all()
         return [SessionContextRecord._from_model(row) for row in rows]
 
-    def get_for_observation(
-        self,
-        session_id: int,
-        turn: int | None = None,
-    ) -> list[SessionContextRecord]:
-        """读取观测页所需的全量消息，不按上下文或流式标记过滤；指定回合时只取这一回合的行。
+    def get_for_observation(self, session_id: int) -> list[SessionContextRecord]:
+        """读取观测页所需的全量消息，不按上下文或流式标记过滤。
 
         时间戳由完整持久化记录映射保留。
         """
 
-        statement = select(SessionContextModel).where(
-            SessionContextModel.session_id == session_id
+        statement = (
+            select(SessionContextModel)
+            .where(SessionContextModel.session_id == session_id)
+            .order_by(SessionContextModel.sequence.asc())
         )
-        if turn is not None:
-            statement = statement.where(SessionContextModel.turn == turn)
-        statement = statement.order_by(SessionContextModel.sequence.asc())
         with self._db_factory.begin() as db:
             rows = db.scalars(statement).all()
         return [SessionContextRecord._from_model(row) for row in rows]

@@ -4,7 +4,7 @@ import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
 import { API_ORIGIN as origin } from "./e2e-env";
 
-const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
+const LAUNCH = { modelConfigId: null, reasoningEffort: null };
 
 /** 子会话的一轮：任务说明是父 Agent 发来的 Agent 消息，不是用户说的话。 */
 const snapshot: TransportState = {

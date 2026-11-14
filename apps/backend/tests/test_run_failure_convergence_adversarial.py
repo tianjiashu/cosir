@@ -161,7 +161,7 @@ def _record_state() -> ConversationStateSnapshot:
         usage=None,
         contextWindowTotal=None,
         startedAt="2026-01-01T00:00:00+00:00",
-        launch={"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
+        launch={"modelConfigId": None, "reasoningEffort": None},
     )
     return state
 

@@ -3,7 +3,7 @@
 from typing_extensions import TypedDict
 
 from app.core.events.model_activity_event import ModelActivityPhase
-from app.models.run_options import RunOptions
+from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.run_record import RunError
 from app.models.run_usage import RunUsage
 
@@ -24,17 +24,12 @@ class ConversationStateLaunch(TypedDict):
 
     modelConfigId: str | None
     reasoningEffort: str | None
-    disabledToolGroups: list[str]
 
 
 def run_launch_snapshot(
-    model_config_id: str | None, options: RunOptions
+    model_config_id: str | None, reasoning_effort: ReasoningEffort | None
 ) -> ConversationStateLaunch:
-    return ConversationStateLaunch(
-        modelConfigId=model_config_id,
-        reasoningEffort=options.reasoning_effort,
-        disabledToolGroups=list(options.disabled_tool_groups),
-    )
+    return ConversationStateLaunch(modelConfigId=model_config_id, reasoningEffort=reasoning_effort)
 
 
 class ConversationStateActivity(TypedDict):

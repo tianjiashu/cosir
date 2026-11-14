@@ -37,8 +37,6 @@ export type SessionMessageRequest = {
   message: SessionUserMessage;
   modelConfigId: string;
   reasoningEffort: string | null;
-  /** 用户关掉的工具组名；后端按注册表展开为工具名。 */
-  disabledToolGroups: readonly string[];
 };
 
 /**

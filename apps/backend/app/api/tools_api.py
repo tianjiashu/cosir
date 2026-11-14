@@ -10,15 +10,13 @@ from app.core.tool.tool_grouping import DEFAULT_TOOL_GROUP
 
 @app.get("/tools/groups")
 async def get_tool_groups() -> dict[str, object]:
-    """返回主 Agent 可用的注册工具，并按 ``ToolDefinition.group`` 聚合为目录。
+    """返回主 Agent 可用工具的分组名（``ToolDefinition.group``），供配置中心勾选子 Agent 允许的工具组。
 
-    前端工具组选择器与配置中心共用本接口：调用方需要「分组 + 组内工具的名称与描述」（选择器显示
-    每个分组的工具数量，配置页由分组反推工具名），因此返回分组目录而非分组名列表。
+    只给组名：组名与工具名的换算由配置 API 在后端完成（``AgentConfigurationRequest``），前端不需要
+    组内工具清单。
 
     返回:
-        ``{"groups": [{"group": 分组名, "tools": [{"name": 工具名, "description": 描述}]}, ...]}``；
-        其中 ``...`` 表示更多组内工具或更多分组。分组按组名字典序排列，组内工具按名称字典序排列；
-        未声明分组的工具归入 ``其他工具``。
+        ``{"groups": [分组名, ...]}``，按组名字典序排列；未声明分组的工具归入 ``其他工具``。
 
     异常:
         HTTPException: 主 Agent profile 尚未初始化时抛出 503。
@@ -34,14 +32,4 @@ async def get_tool_groups() -> dict[str, object]:
     if profile is None:
         raise HTTPException(status_code=503, detail="main agent profile is unavailable")
     definitions = profile.select_tools(get_tool_registry().get_all_definitions())
-    groups: dict[str, list[dict[str, str]]] = {}
-    for definition in definitions:
-        groups.setdefault(definition.group or DEFAULT_TOOL_GROUP, []).append(
-            {"name": definition.name, "description": definition.description}
-        )
-    return {
-        "groups": [
-            {"group": group, "tools": sorted(tools, key=lambda tool: tool["name"])}
-            for group, tools in sorted(groups.items())
-        ]
-    }
+    return {"groups": sorted({definition.group or DEFAULT_TOOL_GROUP for definition in definitions})}

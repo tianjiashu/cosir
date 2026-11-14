@@ -38,7 +38,7 @@ def _run(status: str, launch: RunLaunch = _LAUNCH) -> RunRecord:
         updated_at=now,
         agent_id=launch.agent_id,
         model_config_id=launch.model_config_id,
-        options=launch.options,
+        reasoning_effort=launch.reasoning_effort,
     )
 
 

@@ -11,7 +11,7 @@ import { API_ORIGIN as origin, OUTPUT_DIR } from "./e2e-env";
 
 const SESSION_ID = 42;
 const CALL_ID = "call-ask";
-const LAUNCH = { modelConfigId: "demo/demo-model", reasoningEffort: null, disabledToolGroups: [] };
+const LAUNCH = { modelConfigId: "demo/demo-model", reasoningEffort: null };
 const STORE = "登录态要保存在哪里？";
 const EXPIRY = "哪些情况下要让登录态失效？";
 const MIGRATE = "旧会话怎么处理？";

@@ -14,8 +14,8 @@ from pydantic import Field, StrictInt, StrictStr
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
 from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
 from app.models import RunError
+from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.enums.run_status import RunStatus
-from app.models.run_options import RunOptions
 
 
 class RunInitializedEvent(WorkflowEventEnvelope):
@@ -28,7 +28,7 @@ class RunInitializedEvent(WorkflowEventEnvelope):
         created_at: Run 记录的创建时间，由领域侧从落库的记录填入；投影为 ``activity.startedAt``，
             前端据此做运行中的本地计时。投影器不读墙钟，所以必填。
         context_window_total: 创建 Run 时冻结的窗口上限，随该 Run 而非 Session 投影。
-        model_config_id / options: 创建 Run 时冻结的发起配置，供前端执行运行期配置锁定。
+        model_config_id / reasoning_effort: 创建 Run 时冻结的发起配置，供前端执行运行期配置锁定。
 
     异常:
         pydantic.ValidationError: 信封字段非法或出现未声明字段时抛出。
@@ -39,7 +39,7 @@ class RunInitializedEvent(WorkflowEventEnvelope):
     created_at: datetime
     context_window_total: StrictInt | None = Field(default=None, ge=0)
     model_config_id: StrictStr | None = None
-    options: RunOptions = Field(default_factory=RunOptions)
+    reasoning_effort: ReasoningEffort | None = None
 
 
 class RunStatusChangedEvent(WorkflowEventEnvelope):

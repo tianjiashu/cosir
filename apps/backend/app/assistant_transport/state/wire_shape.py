@@ -104,13 +104,6 @@ def require_list(value: object, label: str) -> list[object]:
     return value
 
 
-def require_str_list(value: object, label: str) -> None:
-    """要求 ``value`` 是字符串数组。"""
-
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"{label} must be an array of strings")
-
-
 def require_one_of(value: object, allowed: frozenset[str], label: str) -> None:
     """要求 ``value`` 落在 ``allowed`` 之内。"""
 

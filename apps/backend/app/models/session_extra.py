@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, ConfigDict
 
-from app.models.run_options import RunOptions
+from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.run_record import RunRecord
 from app.models.session_kind import FORK_SESSION_TYPES, SessionType
 
@@ -17,13 +17,17 @@ class SessionForkLaunch(BaseModel):
 
     agent_id: str | None
     model_config_id: str | None
-    options: RunOptions
+    reasoning_effort: ReasoningEffort | None
 
     @classmethod
     def from_run(cls, run: RunRecord) -> "SessionForkLaunch":
         """冻结某个 Run 的发起配置作为分支的初始配置。"""
 
-        return cls(agent_id=run.agent_id, model_config_id=run.model_config_id, options=run.options)
+        return cls(
+            agent_id=run.agent_id,
+            model_config_id=run.model_config_id,
+            reasoning_effort=run.reasoning_effort,
+        )
 
 
 class SessionFork(BaseModel):

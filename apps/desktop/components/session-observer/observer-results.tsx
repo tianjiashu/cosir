@@ -3,15 +3,17 @@ import { useElementSize } from "@/hooks/use-element-size";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/state-panel";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
-import type { ContextMessage } from "@/lib/api/context-messages";
+import type { ObservedMessage, ObservedRun } from "@/lib/api/session-observation";
 import { MessageList } from "./message-list";
 import { MessageDetail } from "./message-detail";
 import { useMessageNavigation } from "./use-message-navigation";
 
 export function ObserverResults({
   messages,
+  runs,
 }: {
-  messages: ContextMessage[];
+  messages: ObservedMessage[];
+  runs: ObservedRun[];
 }) {
   const nav = useMessageNavigation(messages);
   const [host, { width }] = useElementSize<HTMLDivElement>();
@@ -81,6 +83,7 @@ export function ObserverResults({
           >
             <MessageList
               messages={messages}
+              runs={runs}
               navigation={nav}
               visible={listVisible}
             />

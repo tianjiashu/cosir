@@ -9,16 +9,15 @@ import asyncio
 import pytest
 
 from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
-from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
 from app.core.workflow.message_queue.session_message import NoticeBody, SessionMessage
-from app.models.run_options import RunOptions
 from app.service.conversation.tool_decision_service import ToolDecisionService
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces as spaces
 from tests.live_cold_support import LiveColdEnv, tool_call, tool_parts
 from tests.sdk_fixtures import sdk_events
 
 _READ = {"intent": "看文件", "path": "a.txt"}
-_DISABLE_SEARCH = RunOptions(disabled_tool_groups=[TOOL_GROUP_SEARCH])
+# 准入拒绝的来源与投影无关：用派生规则禁掉 read_file，代表任一 Session 级禁用。
+_BAN_READ = frozenset({"read_file"})
 
 _SCENARIOS = {
     "plain": ([([{"content": "hello "}, {"content": "world"}], "stop")], None),
@@ -57,7 +56,7 @@ _SCENARIOS = {
             ([{"tool_calls": [tool_call("c1", "read_file", _READ)]}], "tool_calls"),
             ([{"content": "结论"}], "stop"),
         ],
-        _DISABLE_SEARCH,
+        _BAN_READ,
     ),
     "continuation": ([([{"content": "半截"}], None), ([{"content": "完整"}], "stop")], None),
     "stream_failure": (
@@ -76,11 +75,16 @@ _SCENARIOS = {
 
 @pytest.mark.parametrize("name", list(_SCENARIOS))
 async def test_run_outcomes_agree(backend_env, tmp_path, monkeypatch, name):
-    steps, options = _SCENARIOS[name]
+    steps, banned = _SCENARIOS[name]
+    if banned is not None:
+        monkeypatch.setattr(
+            "app.core.workflow.execution_state.runtime_context.banned_derivation_tools",
+            lambda _type, _depth: banned,
+        )
     (tmp_path / "a.txt").write_text("x")
     env = LiveColdEnv(tmp_path, monkeypatch, steps)
     try:
-        env.send(options=options)
+        env.send()
         await env.parked()
         env.assert_parity()
     finally:

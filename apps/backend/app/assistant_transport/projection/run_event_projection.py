@@ -102,7 +102,7 @@ def plan_run_initialized(
                 error=None,
                 usage=None,
                 contextWindowTotal=event.context_window_total,
-                launch=run_launch_snapshot(event.model_config_id, event.options),
+                launch=run_launch_snapshot(event.model_config_id, event.reasoning_effort),
             ),
         )
     ]

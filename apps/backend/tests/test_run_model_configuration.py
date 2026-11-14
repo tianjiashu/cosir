@@ -7,8 +7,9 @@ from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.model_settings import ModelSettings, ModelSettingsError
 from app.core.agents.resolved_model import ResolvedModel
 from app.core.llm_provider import model_factory
+from app.core.workflow.message_queue.session_message import RunLaunch
+from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.model_config_record import ModelConfigRecord
-from app.models.run_options import ReasoningEffort, RunOptions
 from app.models.run_record import RunRecord
 from tests.model_config_fixtures import model_config_record
 
@@ -22,9 +23,7 @@ def _run(*, reasoning_effort: ReasoningEffort | None) -> RunRecord:
         created_at=now,
         updated_at=now,
         model_config_id="test/m7",
-        options=RunOptions(
-            reasoning_effort=reasoning_effort,
-        ),
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -47,18 +46,6 @@ def _model_config() -> ModelConfigRecord:
         supports_reasoning_effort=True,
         supports_image=False,
     )
-
-
-def test_run_options_serializes_explicit_reasoning_effort_without_capability_snapshot() -> None:
-    extra = RunOptions(
-        reasoning_effort="low",
-    )
-
-    assert extra.model_dump() == {
-        "disabled_tool_groups": [],
-        "reasoning_effort": "low",
-    }
-    assert RunOptions.model_validate(extra.model_dump()) == extra
 
 
 def test_run_reasoning_effort_overrides_agent_profile(monkeypatch) -> None:
@@ -101,9 +88,8 @@ def test_run_reasoning_effort_overrides_agent_profile(monkeypatch) -> None:
 @pytest.mark.parametrize("effort", ["low", "high", "max"])
 def test_profile_reasoning_effort_survives_configuration_and_run_round_trip(effort):
     settings = ModelSettings.from_json({"reasoning_effort": effort, "temperature": 0.2})
-    extra = RunOptions(reasoning_effort=settings.reasoning_effort)
-    restored = RunOptions.model_validate(extra.model_dump())
-    assert restored.reasoning_effort == effort
+    launch = RunLaunch(model_config_id="test/m7", reasoning_effort=settings.reasoning_effort)
+    assert RunLaunch.model_validate(launch.model_dump()).reasoning_effort == effort
     assert settings.to_dict() == {"reasoning_effort": effort, "temperature": 0.2}
 
 

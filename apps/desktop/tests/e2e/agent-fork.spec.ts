@@ -4,7 +4,7 @@ import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
 import { API_ORIGIN as origin } from "./e2e-env";
 
-const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
+const LAUNCH = { modelConfigId: null, reasoningEffort: null };
 
 /** 主对话的一轮：Agent 调用 fork_session 分出一条侧栏会话，卡片带分叉的标题与 Session id。 */
 const parentState: TransportState = {
@@ -95,7 +95,7 @@ test("手动分叉的历史可读、截图可查看，但不操作来源会话",
   await page.getByRole("button", { name: /查看已保存网页/ }).click();
   await expect(page.getByRole("img", { name: "网页截图", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /在浏览器面板打开|打开分叉会话|停止子会话|继续运行/ })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "在上下文观测中查看本回合" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "在会话观测中查看本回合" })).toBeVisible();
   expect(sourceRequests).toEqual([]);
 });
 

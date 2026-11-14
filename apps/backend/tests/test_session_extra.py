@@ -35,7 +35,7 @@ def test_session_kind_and_typed_extra_round_trip(kind, tmp_path):
     if extra.fork is not None:
         assert response["extra"]["fork"] == {"tree_parent_session_id": 123}
         assert RunLaunch.from_fork(loaded) is None  # absent model does not prevent history fork
-        assert loaded.extra.fork.initial_launch.options.reasoning_effort == "low"
+        assert loaded.extra.fork.initial_launch.reasoning_effort == "low"
 
 
 @pytest.mark.parametrize(

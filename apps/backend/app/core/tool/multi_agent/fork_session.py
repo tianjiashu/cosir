@@ -86,7 +86,7 @@ class ForkSessionTool(HandlerBase):
             return tool_cancelled(tool_name=self.name)
         try:
             parent_session = self._session_service.get_session(execution_context.session_id)
-            # 分叉不换身份：模型、推理强度与关掉的工具组都沿用发起它的这个 Run（它正在运行，
+            # 分叉不换身份：模型与推理强度都沿用发起它的这个 Run（它正在运行，
             # 模型配置必然还在，``from_run`` 不会返回 None）。
             run = self._ledger.get_run(execution_context.run_id)
             launch = cast(RunLaunch, RunLaunch.from_run(run))
@@ -103,8 +103,7 @@ class ForkSessionTool(HandlerBase):
                 source=MessageSource(session_id=parent_session.id, name=parent_session.title),
                 agent_id=launch.agent_id,
                 model_config_id=launch.model_config_id,
-                reasoning_effort=launch.options.reasoning_effort,
-                disabled_tool_groups=launch.options.disabled_tool_groups,
+                reasoning_effort=launch.reasoning_effort,
             )
             # 通知先入队：不唤醒、不开 Run，随任务说明开出的第一个 Run 写在它前面。
             handover = _HANDOVER_NOTICE.format(fork_id=fork.id, source_id=parent_session.id)

@@ -9,7 +9,7 @@ import { isTerminalRunStatus } from "@/lib/assistant/contract";
 export type TurnDiagnosticsActionsProps = {
   /** 当前会话所属的 Session 标识，由 Thread 页面上下文提供。 */
   sessionId: number;
-  /** 这条回复所在的回合：诊断与上下文观测都按回合进入，前端看不到 Run。 */
+  /** 这条回复所在的回合：诊断与会话观测都按回合进入，前端看不到 Run。 */
   turn: number;
   /** 继承来的回合：只能查看上下文，没有本地运行的结局可复制。 */
   inherited: boolean;
@@ -41,7 +41,7 @@ export function formatTurnDiagnostics({ sessionId, turn, status, endReason, erro
 }
 
 /**
- * 回复操作栏里的诊断入口：复制诊断信息、跳转上下文观测。
+ * 回复操作栏里的诊断入口：复制诊断信息、跳转会话观测。
  *
  * 本地回复只在它带着运行的终态结局时提供（中间态不是最终诊断信息）；继承来的回复只能跳转观测、查看
  * 那一回合的上下文。本组件不请求后端，跳转时携带来源路由供观测页返回。
@@ -54,12 +54,12 @@ export function TurnDiagnosticsActions({ sessionId, turn, inherited, status, end
 
   const openObserver = () => {
     const query = new URLSearchParams({ session_id: String(sessionId), turn: String(turn) }).toString();
-    navigate(`/context-observer?${query}`, { state: { returnTo: `${location.pathname}${location.search}` } });
+    navigate(`/session-observer?${query}`, { state: { returnTo: `${location.pathname}${location.search}` } });
   };
   const observer = (
     <TooltipIconButton
-      tooltip="在上下文观测中查看本回合"
-      aria-label="在上下文观测中查看本回合"
+      tooltip="在会话观测中查看本回合"
+      aria-label="在会话观测中查看本回合"
       size="sm"
       data-testid="turn-diagnostics-observer"
       onClick={openObserver}

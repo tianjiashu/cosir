@@ -9,12 +9,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from typing_extensions import TypedDict
 
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.models.run_options import RunOptions
+from app.models.enums.reasoning_effort import ReasoningEffort
+from app.models.run_extra import RunExtra
 from app.models.run_usage import RunUsage
 from app.utils.datetime_utils import from_text, to_text
 
@@ -40,17 +41,18 @@ class RunRecord:
     id: int
     session_id: int
     status: str
-    created_at: datetime
-    updated_at: datetime
     execution_data: ReactExecutionState = field(default_factory=ReactExecutionState)
     end_reason: str | None = None
     final_output: str | None = None
     agent_id: str | None = None
     model_config_id: str | None = None
     context_window_total: int | None = None
-    options: RunOptions = field(default_factory=RunOptions)
+    reasoning_effort: ReasoningEffort | None = None
     usage: RunUsage | None = None
     error: RunError | None = None
+    extra: RunExtra = field(default_factory=RunExtra)
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
 
     def to_dict(self) -> dict[str, object]:
         """将轮次状态转换为可序列化为 JSON 的字典。
@@ -78,16 +80,17 @@ class RunRecord:
             "agent_id": self.agent_id,
             "model_config_id": self.model_config_id,
             "context_window_total": self.context_window_total,
-            "options": self.options.model_dump(mode="json"),
+            "reasoning_effort": self.reasoning_effort,
             "usage": self.usage,
             "error": self.error,
+            "extra": self.extra.model_dump(mode="json"),
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }
 
     @classmethod
     def from_model(cls, row: RunModel) -> RunRecord:
-        """在持久化读取边界校验选项与执行进度，非法结构抛 ValidationError。
+        """在持久化读取边界校验执行进度，非法结构抛 ValidationError。
 
         时间戳还原为 datetime；usage/error 解析为 JSON，非法文本抛 JSONDecodeError。
         不读取旧输入字段，也不从消息推导 Run 配置。
@@ -104,9 +107,11 @@ class RunRecord:
             agent_id=row.agent_id,
             model_config_id=row.model_config_id,
             context_window_total=row.context_window_total,
-            options=RunOptions.model_validate(row.options),
+            # 取值由表约束 ``ck_runs_reasoning_effort`` 守住，读出时不再校验。
+            reasoning_effort=cast("ReasoningEffort | None", row.reasoning_effort),
             usage=(json.loads(row.usage_json) if row.usage_json is not None else None),
             error=(json.loads(row.error_json) if row.error_json is not None else None),
+            extra=RunExtra.model_validate(row.extra),
         )
 
     def to_model(self) -> RunModel:
@@ -123,7 +128,7 @@ class RunRecord:
             "agent_id": self.agent_id,
             "model_config_id": self.model_config_id,
             "context_window_total": self.context_window_total,
-            "options": self.options.model_dump(mode="json"),
+            "reasoning_effort": self.reasoning_effort,
             "usage_json": json.dumps(
                 self.usage, ensure_ascii=False, sort_keys=True, allow_nan=False
             ),
@@ -132,6 +137,7 @@ class RunRecord:
                 if self.error is not None
                 else None
             ),
+            "extra": self.extra.model_dump(mode="json"),
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }

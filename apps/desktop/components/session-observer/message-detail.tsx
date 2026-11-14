@@ -4,12 +4,13 @@ import { copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ReadonlyTextViewer } from "@/components/text-viewer/readonly-text-viewer";
-import type { ContextMessage } from "@/lib/api/context-messages";
+import type { ObservedMessage } from "@/lib/api/session-observation";
 import {
   cacheUsage,
+  contextState,
   formatTime,
+  messageTitle,
   relatedMessages,
-  roleLabel,
   toolStatus,
   valueText,
 } from "./message-model";
@@ -28,8 +29,8 @@ export function MessageDetail({
   onBack,
   narrow,
 }: {
-  message: ContextMessage;
-  messages: ContextMessage[];
+  message: ObservedMessage;
+  messages: ObservedMessage[];
   onLocate: (sequence: number) => void;
   onBack: () => void;
   narrow: boolean;
@@ -37,13 +38,17 @@ export function MessageDetail({
   const [preferredTab, setTab] = useState<DetailTab>("content");
   const [wrap, setWrap] = useState(true);
   const scrollPositions = useRef(new Map<string, number>());
-  const hasTools =
-    message.role === "tool" ||
-    Boolean(message.tool_calls?.length);
+
+  const related = useMemo(
+    () => relatedMessages(message, messages),
+    [message, messages],
+  );
   const tabs: { value: DetailTab; label: string }[] = [
     { value: "content", label: "内容" },
     ...(message.reasoning_content ? [{ value: "reasoning" as const, label: "思考内容" }] : []),
-    ...(hasTools ? [{ value: "tools" as const, label: "工具调用" }] : []),
+    ...(related.length || message.tool_calls?.length
+      ? [{ value: "tools" as const, label: "关联调用" }]
+      : []),
     ...(message.role === "assistant"
       ? [{ value: "usage" as const, label: "用量" }]
       : []),
@@ -53,10 +58,6 @@ export function MessageDetail({
     ? preferredTab
     : "content";
   const readingKey = `${message.sequence}:${tab}`;
-  const related = useMemo(
-    () => relatedMessages(message, messages),
-    [message, messages],
-  );
   const text = useMemo(
     () =>
       tab === "reasoning" ? message.reasoning_content ?? "" : tab === "json"
@@ -66,10 +67,11 @@ export function MessageDetail({
           : tab === "usage"
             ? valueText(message.usage_metadata ?? null)
             : valueText(
-                message.role === "tool"
+                message.tool_call_id
                   ? {
                       tool_call_id: message.tool_call_id,
-                      status: message.status,
+                      tool_name: message.tool_name ?? null,
+                      status: message.status ?? null,
                       content: message.content,
                     }
                   : {
@@ -98,34 +100,39 @@ export function MessageDetail({
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-semibold">
             <span className="mr-2 font-mono">#{message.sequence}</span>
-            {roleLabel(message.role)}
+            {messageTitle(message)}
           </h2>
         </div>
-        <details className="text-xs" key={message.sequence}>
-          <summary className="w-fit cursor-pointer text-muted-foreground focus-ring">
-            消息元信息
-          </summary>
-          <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 break-all">
-            <dt className="text-muted-foreground">Session / sequence</dt>
-            <dd className="font-mono">
-              {message.session_id} / {message.sequence}
-            </dd>
-            <dt className="text-muted-foreground">创建时间</dt>
-            <dd>{formatTime(message.created_at, true)}</dd>
-            <dt className="text-muted-foreground">更新时间</dt>
-            <dd>{formatTime(message.updated_at, true)}</dd>
-            {message.role === "tool" && (
-              <>
-                <dt className="text-muted-foreground">调用 ID</dt>
-                <dd className="font-mono">
-                  {message.tool_call_id ?? "未记录"}
-                </dd>
-                <dt className="text-muted-foreground">工具状态</dt>
-                <dd>{toolStatus(message.status)}</dd>
-              </>
-            )}
-          </dl>
-        </details>
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 break-all text-xs">
+          <dt className="text-muted-foreground">回合</dt>
+          <dd>
+            {message.sequence === 0
+              ? "会话系统提示词"
+              : `${message.inherited ? "继承 · " : ""}回合 ${message.turn}`}
+          </dd>
+          <dt className="text-muted-foreground">模型角色</dt>
+          <dd className="font-mono">{message.role}</dd>
+          <dt className="text-muted-foreground">模型上下文</dt>
+          <dd>{contextState(message).label}</dd>
+          <dt className="text-muted-foreground">对话界面</dt>
+          <dd>{message.project_to_transport ? "显示" : "不显示"}</dd>
+          <dt className="text-muted-foreground">创建时间</dt>
+          <dd>{formatTime(message.created_at, true)}</dd>
+          <dt className="text-muted-foreground">更新时间</dt>
+          <dd>{formatTime(message.updated_at, true)}</dd>
+          {message.tool_call_id && (
+            <>
+              <dt className="text-muted-foreground">调用 ID</dt>
+              <dd className="font-mono">{message.tool_call_id}</dd>
+            </>
+          )}
+          {message.role === "tool" && (
+            <>
+              <dt className="text-muted-foreground">工具状态</dt>
+              <dd>{toolStatus(message.status)}</dd>
+            </>
+          )}
+        </dl>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <SegmentedControl
             size="sm"
@@ -153,9 +160,9 @@ export function MessageDetail({
       </div>
       {tab === "tools" && (
         <div className="max-h-44 shrink-0 space-y-2 overflow-auto border-b px-5 py-3 text-xs">
-          {message.role === "tool" ? (
+          {!message.tool_calls?.length ? (
             <>
-              <p className="text-muted-foreground">对应的 Assistant 调用记录</p>
+              <p className="text-muted-foreground">发起这次调用的模型回复，以及同一调用的其他记录</p>
               {related.length ? (
                 related.map((item) => (
                   <Button
@@ -164,7 +171,7 @@ export function MessageDetail({
                     variant="outline"
                     onClick={() => onLocate(item.sequence)}
                   >
-                    查看调用 #{item.sequence}
+                    {item.role === "assistant" ? "查看调用" : "查看记录"} #{item.sequence}
                   </Button>
                 ))
               ) : (
@@ -227,7 +234,7 @@ export function MessageDetail({
       )}
       <div
         className="min-h-0 flex-1 text-xs"
-        data-testid="context-detail-content"
+        data-testid="observer-detail-content"
       >
         <ReadonlyTextViewer
           key={readingKey}

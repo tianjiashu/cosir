@@ -117,10 +117,9 @@ const USAGE_KEYS = [
 
 function validateLaunch(value: unknown, path: string): void {
   const launch = requireRecord(value, path);
-  requireExactKeys(launch, ["modelConfigId", "reasoningEffort", "disabledToolGroups"], path);
+  requireExactKeys(launch, ["modelConfigId", "reasoningEffort"], path);
   if (launch.modelConfigId !== null && (typeof launch.modelConfigId !== "string" || !launch.modelConfigId)) throw new TransportSnapshotValidationError(`${path}.modelConfigId`, "非空字符串或 null");
   if (launch.reasoningEffort !== null && typeof launch.reasoningEffort !== "string") throw new TransportSnapshotValidationError(`${path}.reasoningEffort`, "字符串或 null");
-  if (!Array.isArray(launch.disabledToolGroups) || !launch.disabledToolGroups.every((name) => typeof name === "string")) throw new TransportSnapshotValidationError(`${path}.disabledToolGroups`, "字符串数组");
 }
 
 function requireExactKeys(value: Record<string, unknown>, keys: readonly string[], path: string): void {

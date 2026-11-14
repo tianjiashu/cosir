@@ -19,7 +19,7 @@ const PAIRS = 60;
 const ACTIVITY_OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
 // `durationMs` 只属于结局；activity 是固定字段的白名单。
 const OUTCOME = { ...ACTIVITY_OUTCOME, durationMs: 0 };
-const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
+const LAUNCH = { modelConfigId: null, reasoningEffort: null };
 
 function answer(index: number): string {
   const lines = [`## 第 ${index} 轮回答`, "", "这是一段较长的说明文字，用来撑开消息高度。".repeat(4 + (index % 4)), ""];

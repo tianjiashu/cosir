@@ -126,8 +126,7 @@ class SessionRuntimeSpace:
         """Session 工具面的唯一出口：固化 schema 里的工具名，顺序沿用 schema。
 
         系统提示词的工具目录与工作方式层、目录更新广播都按它判断「这个 Session 能用什么」；Agent
-        配置之后再改不影响它。本轮准入（再减去 Run 禁用的工具组）见
-        ``RuntimeContext.admitted_tools``。
+        配置之后再改不影响它。本 Run 准入（再减去派生限制）见 ``RuntimeContext.admitted_tools``。
         """
         return tuple(schema["name"] for schema in self.session_tool_schemas)
 

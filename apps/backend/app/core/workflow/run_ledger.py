@@ -61,7 +61,7 @@ class RunLedger:
                 agent_id=launch.agent_id,
                 model_config_id=launch.model_config_id,
                 context_window_total=config.model.context_window_k * 1000,
-                options=launch.options,
+                reasoning_effort=launch.reasoning_effort,
                 db=db,
             )
             self._session.set_current_run_id(session_id, run.id, db=db)
@@ -72,7 +72,7 @@ class RunLedger:
                 created_at=run.created_at,
                 context_window_total=run.context_window_total,
                 model_config_id=run.model_config_id,
-                options=run.options,
+                reasoning_effort=run.reasoning_effort,
             ),
         )
         return run

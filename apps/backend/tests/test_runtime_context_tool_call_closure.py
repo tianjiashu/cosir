@@ -126,7 +126,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNames
             id=record.id,
             context_window_total=record.context_window_total,
             model_config_id=record.model_config_id,
-            options=record.options,
+            reasoning_effort=record.reasoning_effort,
             status=status,
             end_reason=None,
             usage=None,

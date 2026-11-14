@@ -55,7 +55,6 @@ from app.assistant_transport.state.wire_shape import (
     require_non_empty_str,
     require_one_of,
     require_str,
-    require_str_list,
 )
 from app.config.constant import Constant
 from app.core.events.model_activity_event import ModelActivityPhase
@@ -314,7 +313,6 @@ def _validate_launch(value: object) -> None:
     launch = as_shape(value, ConversationStateLaunch, "snapshot launch")
     require_str(launch["modelConfigId"], "snapshot launch modelConfigId", nullable=True)
     require_str(launch["reasoningEffort"], "snapshot launch reasoningEffort", nullable=True)
-    require_str_list(launch["disabledToolGroups"], "snapshot launch disabledToolGroups")
 
 
 def _validate_usage(value: object) -> None:

@@ -211,7 +211,7 @@ def rebuild_snapshot(
                 error=error,
                 usage=run.usage,
                 contextWindowTotal=run.context_window_total,
-                launch=run_launch_snapshot(run.model_config_id, run.options),
+                launch=run_launch_snapshot(run.model_config_id, run.reasoning_effort),
             )
     fork = session.extra.fork
     if fork:
@@ -220,7 +220,7 @@ def rebuild_snapshot(
             "sourceTitle": fork.source_title,
             "sessionType": cast(ForkKind, session.session_type),
             "initialLaunch": run_launch_snapshot(
-                fork.initial_launch.model_config_id, fork.initial_launch.options
+                fork.initial_launch.model_config_id, fork.initial_launch.reasoning_effort
             ),
         }
     return snapshot

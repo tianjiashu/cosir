@@ -44,7 +44,7 @@ export type UserAddMessageCommand = {
  *   否则 null。
  */
 export type TransportMessageRenderContext = {
-  /** 所在回合；排队与乐观消息还没有回合，为 null。诊断与上下文观测按它进入。 */
+  /** 所在回合；排队与乐观消息还没有回合，为 null。诊断与会话观测按它进入。 */
   turn: number | null;
   /** 来自分叉继承的历史：不可交互。 */
   inherited: boolean;

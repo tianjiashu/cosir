@@ -13,10 +13,10 @@ from app.core.llm_provider.model_probe import (
     ModelProbeOutcome,
     probe_chat_model,
 )
+from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.model_config_file import ModelConfigFile, ModelConnectionEntry, ModelEntry
 from app.models.model_config_record import ModelConfigRecord
-from app.models.run_options import ReasoningEffort
 from app.service.configuration.file_store import ConfigurationFileStore
 from app.service.model_config.connection_test_result import ModelConfigTestResult
 from app.service.model_config.probe_failure_messages import probe_failure_message

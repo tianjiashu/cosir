@@ -3009,7 +3009,7 @@
     "/tools/groups": {
       "get": {
         "summary": "Get Tool Groups",
-        "description": "返回主 Agent 可用的注册工具，并按 ``ToolDefinition.group`` 聚合为目录。\n\n前端工具组选择器与配置中心共用本接口：调用方需要「分组 + 组内工具的名称与描述」（选择器显示\n每个分组的工具数量，配置页由分组反推工具名），因此返回分组目录而非分组名列表。\n\n返回:\n    ``{\"groups\": [{\"group\": 分组名, \"tools\": [{\"name\": 工具名, \"description\": 描述}]}, ...]}``；\n    其中 ``...`` 表示更多组内工具或更多分组。分组按组名字典序排列，组内工具按名称字典序排列；\n    未声明分组的工具归入 ``其他工具``。\n\n异常:\n    HTTPException: 主 Agent profile 尚未初始化时抛出 503。\n\n副作用:\n    无；只读进程内 profile 与工具注册表，不修改运行时状态。",
+        "description": "返回主 Agent 可用工具的分组名（``ToolDefinition.group``），供配置中心勾选子 Agent 允许的工具组。\n\n只给组名：组名与工具名的换算由配置 API 在后端完成（``AgentConfigurationRequest``），前端不需要\n组内工具清单。\n\n返回:\n    ``{\"groups\": [分组名, ...]}``，按组名字典序排列；未声明分组的工具归入 ``其他工具``。\n\n异常:\n    HTTPException: 主 Agent profile 尚未初始化时抛出 503。\n\n副作用:\n    无；只读进程内 profile 与工具注册表，不修改运行时状态。",
         "operationId": "get_tool_groups_tools_groups_get",
         "responses": {
           "200": {
@@ -6079,13 +6079,6 @@
               }
             ],
             "title": "Reasoningeffort"
-          },
-          "disabledToolGroups": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Disabledtoolgroups"
           }
         },
         "additionalProperties": false,

@@ -7,8 +7,7 @@
 
 本模块只定义取值集合，不定义分组语义、成员归属与消费方式：谁属于哪个分组由各 handler 自己声明
 （``group = TOOL_GROUP_XXX``）。分组名与工具名的相互换算由 ``ToolRegistry``
-（``tool_groups_to_tool_names`` / ``tool_names_to_tool_groups``）承担，目录聚合（分组 + 组内工具
-名称与描述）由消费方按需完成；工具注册、权限判断与执行同样不在本模块职责内。
+（``tool_groups_to_tool_names`` / ``tool_names_to_tool_groups``）承担；工具注册、权限判断与执行同样不在本模块职责内。
 """
 
 from typing import Final

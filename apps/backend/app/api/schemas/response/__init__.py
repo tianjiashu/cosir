@@ -4,7 +4,6 @@
 """
 
 from app.api.schemas.response.BrowserVisibilityResponse import BrowserVisibilityResponse
-from app.api.schemas.response.ContextMessageResponse import ContextMessageResponse
 from app.api.schemas.response.DirectoryResponse import DirectoryResponse
 from app.api.schemas.response.EnvironmentResponse import (
     EnvironmentFieldResponse,
@@ -20,7 +19,6 @@ from app.api.schemas.response.WorkspaceResourceResponse import WorkspaceResource
 
 __all__ = [
     "BrowserVisibilityResponse",
-    "ContextMessageResponse",
     "DirectoryResponse",
     "EnvironmentFieldResponse",
     "EnvironmentGroupResponse",

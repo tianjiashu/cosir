@@ -58,7 +58,7 @@ def _activity(run_id: int, status: str) -> dict[str, object]:
         "usage": None,
         "contextWindowTotal": None,
         "startedAt": "2026-01-01T00:00:00+00:00",
-        "launch": {"modelConfigId": None, "reasoningEffort": None, "disabledToolGroups": []},
+        "launch": {"modelConfigId": None, "reasoningEffort": None},
     }
 
 

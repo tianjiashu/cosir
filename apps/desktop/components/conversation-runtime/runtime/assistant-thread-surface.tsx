@@ -8,7 +8,6 @@ import type {
   AssistantRuntimeProps,
 } from "@/components/conversation-runtime/runtime/runtime-types";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
-import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 
 type AssistantThreadSurfaceProps = Pick<
   AssistantRuntimeProps,
@@ -18,11 +17,6 @@ type AssistantThreadSurfaceProps = Pick<
   | "forkingMessageId"
   | "onForkMessage"
 > & {
-  toolGroups: ToolGroupCatalog[];
-  selectedToolGroups: string[];
-  onSelectedToolGroupsChange: (groups: string[]) => void;
-  toolGroupsLoading: boolean;
-  toolGroupsError: string | null;
   onResumeBusiness: () => Promise<void>;
   cancelling: boolean;
   performanceProbe: AssistantPerformanceProbe | null;
@@ -41,11 +35,6 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
   workspaceRoot,
   forkingMessageId,
   onForkMessage,
-  toolGroups,
-  selectedToolGroups,
-  onSelectedToolGroupsChange,
-  toolGroupsLoading,
-  toolGroupsError,
   onResumeBusiness,
   cancelling,
   performanceProbe,
@@ -57,11 +46,6 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
         <Thread
           sessionId={sessionId}
           workspaceId={workspaceId}
-          toolGroups={toolGroups}
-          selectedToolGroups={selectedToolGroups}
-          onSelectedToolGroupsChange={onSelectedToolGroupsChange}
-          toolGroupsLoading={toolGroupsLoading}
-          toolGroupsError={toolGroupsError}
           workspaceRoot={workspaceRoot}
           forkingMessageId={forkingMessageId}
           onForkMessage={onForkMessage}

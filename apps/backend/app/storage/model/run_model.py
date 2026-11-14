@@ -1,10 +1,14 @@
 """Conversation Run 持久化模型。"""
 
+from typing import get_args
+
 from pydantic import JsonValue
 from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.enums.run_status import RunStatus
+from app.models.run_extra import RunExtra
 from app.storage.model.base import StorageBase
 
 
@@ -25,6 +29,12 @@ class RunModel(StorageBase):
             ),
             name="ck_runs_status",
         ),
+        CheckConstraint(
+            "reasoning_effort IS NULL OR reasoning_effort IN ({})".format(
+                ", ".join(repr(effort) for effort in get_args(ReasoningEffort))
+            ),
+            name="ck_runs_reasoning_effort",
+        ),
     )
 
     session_id: Mapped[int] = mapped_column(Integer, ForeignKey("sessions.id"), nullable=False)
@@ -34,9 +44,14 @@ class RunModel(StorageBase):
     model_config_id: Mapped[str | None] = mapped_column(Text)
     # 与本次 Run 的 usage 配对，避免 Session 后续切换模型后改变历史占用比例。
     context_window_total: Mapped[int | None] = mapped_column(Integer)
-    options: Mapped[dict[str, JsonValue]] = mapped_column(JSON, nullable=False)
+    # 本 Run 选定的推理强度；None 表示交给 Agent 偏好与模型默认值。
+    reasoning_effort: Mapped[str | None] = mapped_column(String(8))
     end_reason: Mapped[str | None] = mapped_column(Text)
     final_output: Mapped[str | None] = mapped_column(Text)
     usage_json: Mapped[str | None] = mapped_column(Text)
     error_json: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    # 严格结构见 ``RunExtra``；状态迁移历史由 ``RunCrud`` 用 SQLite JSON 函数原地追加。
+    extra: Mapped[dict[str, JsonValue]] = mapped_column(
+        JSON, nullable=False, default=lambda: RunExtra().model_dump(mode="json")
+    )

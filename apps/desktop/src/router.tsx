@@ -1,7 +1,7 @@
 import { createBrowserRouter, Navigate, useMatches } from "react-router-dom";
 
 import { AppLayout, useAppOutlet, type RouteHandle } from "@/components/layout/app-layout";
-import { ContextObserverPage } from "@/components/context-observer/context-observer-page";
+import { SessionObserverPage } from "@/components/session-observer/session-observer-page";
 import { NewConversation } from "@/components/new-conversation/new-conversation";
 import {
   findSettingsTab,
@@ -84,7 +84,7 @@ export function createAppRouter() {
         { path: "settings/:tab", element: <SystemSettingsRoute />, handle: settings },
         { path: "workspaces/:workspaceId/settings", element: <WorkspaceSettingsRoute />, handle: workspaceSettings },
         { path: "workspaces/:workspaceId/settings/:tab", element: <WorkspaceSettingsRoute />, handle: workspaceSettings },
-        { path: "context-observer", element: <ContextObserverPage />, handle: observer },
+        { path: "session-observer", element: <SessionObserverPage />, handle: observer },
         { path: "*", element: <NotFoundRoute />, handle: { section: "conversation" } },
       ],
     },

@@ -82,7 +82,7 @@ function resetTestState() {
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
 const isActive = (status) => status === "running" || status === "suspended";
 // 与 /model-connections 唯一的模型一致：运行期配置锁定下，运行中发送沿用这份配置。
-const DEFAULT_LAUNCH = { modelConfigId: "demo/demo-model", reasoningEffort: null, disabledToolGroups: [] };
+const DEFAULT_LAUNCH = { modelConfigId: "demo/demo-model", reasoningEffort: null };
 
 const emptyState = () => ({ title: "新会话", messages: [], activity: null });
 
@@ -190,7 +190,7 @@ function usageFixture(secondRun) {
 }
 
 function completedFixture(turn, userMessage, assistantParts) {
-  const activity = activityOf(turn, "completed", { launch: { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] } });
+  const activity = activityOf(turn, "completed", { launch: { modelConfigId: null, reasoningEffort: null } });
   return {
     title: "测试对话",
     messages: [
@@ -589,7 +589,6 @@ function handleMessage(res, body, sessionId) {
   const launch = {
     modelConfigId: body.modelConfigId ?? DEFAULT_LAUNCH.modelConfigId,
     reasoningEffort: body.reasoningEffort ?? null,
-    disabledToolGroups: body.disabledToolGroups ?? [],
   };
   // 与后端一致：用户发了新消息，等用户回应的等待（提问）作废为「未作答」；交接不受影响。
   const base = settleAwaiting(states.get(sessionId) ?? emptyState(), (part) => part.display_data?.kind === "user-question", (part) => ({
@@ -898,13 +897,7 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (req.method === "GET" && url.pathname === "/tools/groups") {
-    jsonResponse(res, 200, {
-      groups: [
-        { group: "文件", tools: [{ name: "read_file", description: "读取文件" }] },
-        { group: "交互终端工具", tools: [{ name: "terminal_read", description: "读取终端输出" }] },
-        { group: "子Agent工具", tools: [{ name: "delegate_task", description: "委派子会话" }] },
-      ],
-    });
+    jsonResponse(res, 200, { groups: ["文件", "交互终端工具", "子Agent工具"] });
     return;
   }
   if (req.method === "GET" && url.pathname === "/__test__/last-stream") {

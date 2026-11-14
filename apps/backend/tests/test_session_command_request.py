@@ -17,11 +17,8 @@ def _send(**overrides: object) -> SendMessageRequest:
 
 
 def test_send_maps_command() -> None:
-    request = _send(disabledToolGroups=["联网工具"])
-
-    command = request.to_run_command()
+    command = _send().to_run_command()
     assert command.text == "hello"
-    assert command.disabled_tool_groups == ["联网工具"]
 
 
 def test_text_parts_are_joined_and_images_map_to_asset_ids() -> None:
@@ -53,8 +50,6 @@ def test_text_parts_are_joined_and_images_map_to_asset_ids() -> None:
     "overrides",
     [
         {"delivery": "immediate"},
-        {"disabledToolGroups": ["联网工具", "联网工具"]},
-        {"disabledToolGroups": [" "]},
         {"runId": 1},
         {"modelConfigId": ""},
         # 附件不再有独立字段：本机文件与工作区引用是正文里的胶囊。

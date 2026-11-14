@@ -3,7 +3,6 @@ import type { ComponentProps, SetStateAction } from "react";
 
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLocation } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import { ArrowUpIcon, Loader2Icon } from "lucide-react";
 
 import { ComposerAddMenu } from "@/components/composer/add-menu/add-menu";
@@ -15,14 +14,12 @@ import type { ComposerImageSink } from "@/components/composer/assistant-composer
 import { ModelSelector } from "@/components/composer/composer-model-selector";
 import { ComposerSurface } from "@/components/composer/composer-surface";
 import { ComposerToolbar } from "@/components/composer/composer-toolbar";
-import { ToolGroupSelector } from "@/components/composer/tool-group-selector";
 import { WorkspacePicker } from "@/components/new-conversation/workspace-picker";
 import { NewConversationBackdrop } from "@/components/new-conversation/backdrop";
 import { NewConversationKeyHints } from "@/components/new-conversation/key-hints";
 import { modelUnavailable, startBlockedReason } from "@/components/new-conversation/start-readiness";
 import { Button } from "@/components/ui/button";
 import { createWorkspaceSession, deleteSession, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
-import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 import { useModelCatalog } from "@/lib/model/catalog";
 import { cn } from "@/lib/utils";
 import { readStoredSelection, writeStoredSelection } from "@/lib/model/selection-storage";
@@ -37,7 +34,6 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { notify } from "@/lib/notify";
 import { newTraceId } from "@/lib/logging/trace-id";
-import { toolGroupsQueryOptions } from "@/lib/query/query-options";
 
 /** 新会话页的待发图片：提交时才上传，草稿里只保存 File 本身。 */
 type ImageDraftAttachment = { id: string; name: string; file: File };
@@ -108,8 +104,6 @@ type NewSessionDraft = { text: string; attachments: ImageDraftAttachment[] };
 const emptyDraft: NewSessionDraft = { text: "", attachments: [] };
 const useNewSessionDrafts = create<{ drafts: Record<number, NewSessionDraft>; update: (id: number, update: (draft: NewSessionDraft) => NewSessionDraft) => void }>(set => ({ drafts: {}, update: (id, update) => set(state => ({ drafts: { ...state.drafts, [id]: update(state.drafts[id] ?? emptyDraft) } })) }));
 
-const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
-
 export function NewConversation({
   workspaces,
   selectedWorkspaceId,
@@ -136,14 +130,6 @@ export function NewConversation({
   const [modelReady, setModelReady] = useState(false);
   const attachments = draft.attachments;
   const setAttachments = (value: SetStateAction<ImageDraftAttachment[]>) => updateDraft(draftId, current => ({ ...current, attachments: typeof value === "function" ? value(current.attachments) : value }));
-  const [selectedToolGroups, setSelectedToolGroups] = useState<string[]>([]);
-  const toolGroupsQuery = useQuery({
-    ...toolGroupsQueryOptions(),
-  });
-  const toolGroups = toolGroupsQuery.data?.groups ?? EMPTY_TOOL_GROUPS;
-  const toolGroupsError = toolGroupsQuery.isError
-    ? userErrorMessage(toolGroupsQuery.error, "工具组加载失败")
-    : null;
   const selectedWorkspace = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
   const images: ComposerImageSink = {
     add: (file) => setAttachments((current) => [...current, imageAttachment(file)]),
@@ -195,8 +181,6 @@ export function NewConversation({
         workspaceId: selectedWorkspaceId,
         text: trimmedText,
         imageAttachments: sendAttachments.map((attachment) => ({ file: attachment.file, name: attachment.name })),
-        // 首条消息冻结进 Run 的 launch；会话页的工具组默认值从快照取，不另存本地。
-        disabledToolGroups: selectedToolGroups,
         modelConfigId: selection.modelConfigId,
         reasoningEffort: selection.reasoningEffort ?? null,
         traceId,
@@ -283,20 +267,10 @@ export function NewConversation({
           <ComposerToolbar
             add={<ComposerAddMenu images={images} workspaceRoot={selectedWorkspace?.root_path} workspaceId={selectedWorkspaceId ?? null} disabled={submitting} />}
             config={(
-              <>
-                <ToolGroupSelector
-                  toolGroups={toolGroups}
-                  selectedToolGroups={selectedToolGroups}
-                  onSelectedToolGroupsChange={setSelectedToolGroups}
-                  loading={toolGroupsQuery.isPending}
-                  error={toolGroupsError}
-                  disabled={submitting}
-                />
-                <ModelSelector
-                  scope={selectedWorkspaceId ? { kind: "workspace", id: selectedWorkspaceId } : undefined}
-                  onReadyChange={setModelReady}
-                />
-              </>
+              <ModelSelector
+                scope={selectedWorkspaceId ? { kind: "workspace", id: selectedWorkspaceId } : undefined}
+                onReadyChange={setModelReady}
+              />
             )}
             action={(
               <>

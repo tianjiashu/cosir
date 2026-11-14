@@ -397,7 +397,7 @@ def test_legacy_input_wrapper_is_rejected() -> None:
 
 
 def test_reasoning_stays_in_context_observation_but_not_cold_conversation() -> None:
-    from app.api.schemas.response.ContextMessageResponse import ContextMessageResponse
+    from app.api.schemas.response.SessionObservationResponse import ObservedMessageResponse
 
     timestamp = _timestamp()
     run = RunRecord(
@@ -425,7 +425,7 @@ def test_reasoning_stays_in_context_observation_but_not_cold_conversation() -> N
         }
     ]
     assert "推理原文" not in json.dumps(state, ensure_ascii=False)
-    assert ContextMessageResponse.from_record(row).reasoning_content == "推理原文"
+    assert ObservedMessageResponse.from_record(row, {}).reasoning_content == "推理原文"
     assert row.message["reasoning_content"] == "推理原文"
 
 

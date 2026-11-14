@@ -9,7 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
-import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 import { configurationScope, createAgentConfiguration, deleteAgentConfiguration, updateAgentConfiguration, type AgentConfiguration } from "@/lib/api/configuration";
 import { modelOptionId, unknownModelName, useModelCatalog, type ModelCatalog } from "@/lib/model/catalog";
 import { createAgentEditorSession } from "@/lib/agent-editor/agent-editor-session";
@@ -42,7 +41,7 @@ function AgentEditor({
   onClose,
 }: {
   initial: AgentConfiguration | null;
-  toolGroups: ToolGroupCatalog[];
+  toolGroups: string[];
   workspaceId: number | null;
   onClose: () => void;
 }) {

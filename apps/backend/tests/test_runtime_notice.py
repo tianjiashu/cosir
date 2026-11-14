@@ -48,26 +48,24 @@ def _stub_for_run_deps(monkeypatch, agent) -> None:
         lambda: SimpleNamespace(process=print,
     ),
     )
-    # 测试里每个「组」只含同名工具，断言仍按工具名写。
-    monkeypatch.setattr(
-        runtime_context_module,
-        "get_tool_registry",
-        lambda: SimpleNamespace(tool_groups_to_tool_names=lambda groups: list(groups)),
-    )
 
 
-def _for_run(monkeypatch, space, banned, *, run_id: int = 7, preceding=None):
+def _for_run(monkeypatch, space, banned=None, *, run_id: int = 7, preceding=None):
+    """装配一次驱动；``banned`` 给出时替换派生规则的禁用结果，``None`` 时走真实的 Session 类型规则。"""
     from app.core.workflow.execution_state import runtime_context as runtime_context_module
 
     _stub_for_run_deps(monkeypatch, agent=SimpleNamespace())
     monkeypatch.setattr(
         runtime_context_module.session_runtime_spaces, "get_or_create", lambda _id: space
     )
+    if banned is not None:
+        monkeypatch.setattr(
+            runtime_context_module,
+            "banned_derivation_tools",
+            lambda _type, _depth: frozenset(banned),
+        )
     return runtime_context_module.RuntimeContext.for_run(
-        SimpleNamespace(
-            id=run_id, session_id=1, options=SimpleNamespace(disabled_tool_groups=banned)
-        ),
-        preceding,
+        SimpleNamespace(id=run_id, session_id=1), preceding
     )
 
 
@@ -105,7 +103,7 @@ def open_sources(monkeypatch):
     return sources
 
 
-def _notices(monkeypatch, space, banned, latest=None, *, run_id: int = 7) -> list[NoticeBody]:
+def _notices(monkeypatch, space, banned=None, latest=None, *, run_id: int = 7) -> list[NoticeBody]:
     """装配一次驱动并推导通知；``latest`` 是上下文里最近一条准入通知（没有为 ``None``）。"""
     from app.core.workflow.drive_notices import drive_notices
 
@@ -116,15 +114,14 @@ def _notices(monkeypatch, space, banned, latest=None, *, run_id: int = 7) -> lis
 
 
 @pytest.mark.parametrize("banned", [[], ["read_file"], ["read_file", "write_file"]])
-def test_for_run_splits_admission_by_source_without_notifying(monkeypatch, banned) -> None:
-    """装配只算准入边界：两个禁用来源分开保留，通知留给 ``begin_run`` 之后推导。"""
+def test_for_run_computes_admission_without_notifying(monkeypatch, banned) -> None:
+    """装配只算准入边界，通知留给 ``begin_run`` 之后推导。"""
     mailbox = RunMailbox()
     rc = _for_run(monkeypatch, _space(mailbox), banned)
 
     assert rc.mailbox is mailbox
     assert rc.admitted_tools == {"read_file", "write_file"} - set(banned)
-    assert rc.run_banned == frozenset(banned)
-    assert rc.session_banned == frozenset()
+    assert rc.banned_tools == frozenset(banned)
     assert mailbox.take_notices() == []
 
 
@@ -134,7 +131,7 @@ def test_agent_fork_is_told_and_refused_fork_session_without_changing_its_schema
     space.session_tool_names = ("read_file", "fork_session", "delegate_task")
     space.current_task = SimpleNamespace(id=1, session_type=SessionType.AGENT_FORK, derivation_depth=1)
 
-    [notice] = _notices(monkeypatch, space, [])
+    [notice] = _notices(monkeypatch, space)
 
     assert notice.banned_tools == ["fork_session"]
     # 禁用来源是 Session 类型规则：说清「这个 Session 不能用」，而不是「这次不能用」。
@@ -149,7 +146,7 @@ def test_derivation_rules_do_not_announce_tools_the_session_never_had(monkeypatc
     space = _space(RunMailbox())
     space.current_task = SimpleNamespace(id=1, session_type=SessionType.DELEGATED, derivation_depth=1)
 
-    [notice] = _notices(monkeypatch, space, [])
+    [notice] = _notices(monkeypatch, space)
 
     assert notice.banned_tools == []
     assert "all tools are available" in notice.content
@@ -183,24 +180,12 @@ def test_locked_derivation_is_announced_per_session_and_never_re_enabled(monkeyp
     space.session_tool_names = ("read_file", "fork_session")
     space.current_task = SimpleNamespace(id=1, session_type=SessionType.AGENT_FORK, derivation_depth=1)
 
-    [first] = _notices(monkeypatch, space, [])
+    [first] = _notices(monkeypatch, space)
     assert "disabled (for this session: fork_session)" in first.content
 
-    [second] = _notices(monkeypatch, space, [], _announced(6, "fork_session"))
+    [second] = _notices(monkeypatch, space, None, _announced(6, "fork_session"))
     assert "still disabled (for this session: fork_session)" in second.content
     assert "re-enabled" not in second.content
-
-
-def test_tool_groups_only_report_tools_the_session_has(monkeypatch) -> None:
-    """用户关掉的组里若有该 Session 从未拥有的工具，通知不提它（模型手里没有的工具不算被禁）。"""
-    space = _space(RunMailbox())
-    space.session_tool_names = ("read_file", "list_directory")
-
-    [notice] = _notices(monkeypatch, space, ["read_file", "write_file"])
-
-    assert "for this run: read_file" in notice.content
-    assert "write_file" not in notice.content
-    assert notice.banned_tools == ["read_file"]
 
 
 @pytest.mark.parametrize(
@@ -224,7 +209,7 @@ def test_user_stopped_is_derived_from_how_the_preceding_run_ended(
         lambda: SimpleNamespace(run_last_turn_withdrawn=lambda _session, _run: withdrawn),
     )
     preceding = SimpleNamespace(id=6, end_reason=end_reason)
-    rc = _for_run(monkeypatch, _space(RunMailbox()), [], preceding=preceding)
+    rc = _for_run(monkeypatch, _space(RunMailbox()), preceding=preceding)
 
     kinds = [
         n.notice_kind
@@ -242,7 +227,7 @@ def test_user_stopped_is_derived_from_how_the_preceding_run_ended(
 def _open(monkeypatch, context, mailbox: RunMailbox | None = None, *, run_id: int = 7):
     from app.core.workflow.drive_notices import drive_notices
 
-    rc = _for_run(monkeypatch, _space(mailbox or RunMailbox()), [], run_id=run_id)
+    rc = _for_run(monkeypatch, _space(mailbox or RunMailbox()), run_id=run_id)
     return [n for n in drive_notices(rc, context) if n.notice_kind == "open_items"]
 
 
@@ -336,50 +321,27 @@ def test_decisions_this_drive_is_about_to_settle_are_not_open(monkeypatch, open_
     assert notice.open_items == ["decision:call-ask", "decision:call-hand"]
 
 
-def _notice(
-    announced: frozenset[str] | None,
-    session_banned: frozenset[str],
-    run_banned: frozenset[str],
-    *,
-    all_banned: bool = False,
-) -> str | None:
-    """按本 Run 的准入边界取通知文本；规则是纯函数，无需装配上下文。"""
-    from app.core.workflow.drive_notices import tool_availability_notice
-
-    return tool_availability_notice(announced, session_banned, run_banned, all_banned=all_banned)
-
-
 def test_tool_availability_notice_rules() -> None:
+    """规则是纯函数：按上次告知的集合与本 Run 的禁用集合取通知文本，无需装配上下文。"""
+    from app.core.workflow.drive_notices import tool_availability_notice as notice
+
     def f(*names: str) -> frozenset[str]:
         return frozenset(names)
 
-    # 未知：完整说明，且按来源分组（Session 级 / Run 级不混成一句）。
-    assert _notice(None, f(), f()) == "Tool availability notice: all tools are available."
-    assert _notice(None, f("fork_session"), f()) == (
-        "Tool availability notice: disabled (for this session: fork_session)."
+    # 未知：完整说明，禁用清单标明是 Session 级。
+    assert notice(None, f()) == "Tool availability notice: all tools are available."
+    assert notice(None, f("fork_session", "delegate_task")) == (
+        "Tool availability notice: disabled (for this session: delegate_task, fork_session)."
     )
-    assert _notice(None, f("fork_session"), f("write_file")) == (
-        "Tool availability notice: disabled "
-        "(for this session: fork_session; for this run: write_file)."
-    )
-    # 全部工具都被禁时只给结论，不逐个列名。
-    assert _notice(None, f("fork_session"), f("write_file"), all_banned=True) == (
-        "Tool availability notice: all tools are disabled."
-    )
-    # 未变化：全部可用时不通知；仍有禁用时按来源重复提醒。
-    assert _notice(f(), f(), f()) is None
-    assert _notice(f("a", "b"), f("a"), f("b")) == (
-        "Tool availability notice: still disabled (for this session: a; for this run: b)."
-    )
-    # 变化：增量（不带来源）+ 当前状态（按来源）。
-    assert _notice(f("a"), f("b"), f()) == (
+    # 未变化：全部可用时不通知；仍有禁用时重复提醒。
+    assert notice(f(), f()) is None
+    assert notice(f("a"), f("a")) == "Tool availability notice: still disabled (for this session: a)."
+    # 变化：增量 + 当前状态。
+    assert notice(f("a"), f("b")) == (
         "Tool availability notice: changed since last round "
         "(newly disabled: b; re-enabled: a); currently disabled (for this session: b)."
     )
-    assert _notice(f("a"), f(), f()).endswith("(re-enabled: a); all tools are available now.")
-    assert _notice(f(), f("a"), f("b"), all_banned=True).endswith(
-        "(newly disabled: a, b); all tools are disabled now."
-    )
+    assert notice(f("a"), f()).endswith("(re-enabled: a); all tools are available now.")
 
 
 def test_mailbox_dedupes_persisted_rows_within_one_execution() -> None:

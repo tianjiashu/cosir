@@ -12,36 +12,68 @@ import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/state-panel";
-import type { ContextMessage } from "@/lib/api/context-messages";
+import type { ObservedMessage, ObservedRun } from "@/lib/api/session-observation";
 import {
   cacheChanges,
   cacheUsage,
+  contextState,
   formatTime,
   INITIAL_FILTERS,
+  kindLabel,
+  MESSAGE_KINDS,
   messagePreview,
-  roleLabel,
+  messageTitle,
+  messageTools,
   toolStatus,
   type MessageFilters,
 } from "./message-model";
+import { mergeTimeline, nodeNotes, nodeTitle, nodeTone, runNodes, type TimelineItem } from "./run-nodes";
 import type { MessageNavigation } from "./use-message-navigation";
+
+const NODE_TONE_CLASS = {
+  neutral: "text-muted-foreground",
+  warning: "text-warning",
+  destructive: "text-destructive",
+} as const;
 
 export function MessageList({
   messages,
+  runs,
   navigation: nav,
   visible,
 }: {
-  messages: ContextMessage[];
+  messages: ObservedMessage[];
+  runs: ObservedRun[];
   navigation: MessageNavigation;
   visible: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const changes = useMemo(() => cacheChanges(messages), [messages]);
+  const nodes = useMemo(() => runNodes(runs), [runs]);
+  // 节点解释的是时间上的先后：只在列表按时间顺序完整展示时插入；按更新时间排序、搜索或筛选出的
+  // 子集里，行之间已不相邻，插进去会误读。
+  const { filters } = nav;
+  const timelineOrdered =
+    nav.reveal ||
+    (filters.sort !== "updated_at" && !filters.search.trim() && filters.kind === "all" && filters.inclusion === "all");
+  const items = useMemo<TimelineItem[]>(
+    () =>
+      timelineOrdered
+        ? mergeTimeline(nav.rows, nodes, nav.reveal || filters.ascending)
+        : nav.rows.map((message) => ({ type: "message", message })),
+    [filters.ascending, nav.reveal, nav.rows, nodes, timelineOrdered],
+  );
+  const indexOf = (sequence: number | undefined) =>
+    items.findIndex((item) => item.type === "message" && item.message.sequence === sequence);
   const virtualizer = useVirtualizer({
-    count: nav.rows.length,
+    count: items.length,
     getScrollElement: () => host.current,
-    estimateSize: () => 104,
+    estimateSize: (index) => (items[index].type === "node" ? 36 : 104),
     overscan: 6,
-    getItemKey: (index) => nav.rows[index].sequence,
+    getItemKey: (index) => {
+      const item = items[index];
+      return item.type === "node" ? item.node.key : item.message.sequence;
+    },
     // 窄窗口打开详情时列表被隐藏，隐藏期间的 0 高度不能进缓存，否则返回列表时整体下跳。
     measureElement: measureRenderedElement,
   });
@@ -50,23 +82,22 @@ export function MessageList({
     const intent = nav.scroll;
     const frame = requestAnimationFrame(() => {
       if ("sequence" in intent) {
-        const index = nav.rows.findIndex(
-          (row) => row.sequence === intent.sequence,
-        );
+        const index = indexOf(intent.sequence);
         if (index >= 0) virtualizer.scrollToIndex(index, { align: "center" });
       } else virtualizer.scrollToOffset(intent.offset);
       nav.clearScroll();
     });
     return () => cancelAnimationFrame(frame);
     // 滚动命令只在可见列表中消费；刷新消息不会重新发出定位命令。
-  }, [nav.scroll, nav.rows, visible, virtualizer]);
+  }, [nav.scroll, nav.rows, items, visible, virtualizer]);
   const selectedIndex = nav.rows.findIndex(
     (row) => row.sequence === nav.selected?.sequence,
   );
+  const selectedItemIndex = indexOf(nav.selected?.sequence);
   return (
     <section
       className="flex h-full min-h-0 flex-col"
-      aria-label="上下文消息列表"
+      aria-label="会话消息列表"
     >
       <div className="shrink-0 space-y-3 border-b px-4 py-3">
         <div className="flex items-center justify-between gap-2">
@@ -106,17 +137,18 @@ export function MessageList({
               <NativeSelect
                 size="sm"
                 wrapperClassName="w-auto"
-                aria-label="按角色筛选"
-                value={nav.filters.role}
+                aria-label="按种类筛选"
+                value={nav.filters.kind}
                 onChange={(event) =>
-                  nav.updateFilters({ role: event.target.value })
+                  nav.updateFilters({ kind: event.target.value })
                 }
               >
-                <option value="all">全部角色</option>
-                <option value="system">System</option>
-                <option value="user">User</option>
-                <option value="assistant">Assistant</option>
-                <option value="tool">Tool</option>
+                <option value="all">全部种类</option>
+                {MESSAGE_KINDS.map(([kind, label]) => (
+                  <option key={kind} value={kind}>
+                    {label}
+                  </option>
+                ))}
               </NativeSelect>
               <NativeSelect
                 size="sm"
@@ -131,8 +163,8 @@ export function MessageList({
                 }
               >
                 <option value="all">全部记录</option>
-                <option value="included">已纳入上下文</option>
-                <option value="excluded">未纳入上下文</option>
+                <option value="included">进了上下文</option>
+                <option value="excluded">没进上下文</option>
               </NativeSelect>
               <NativeSelect
                 size="sm"
@@ -184,8 +216,8 @@ export function MessageList({
         aria-activedescendant={
           virtualizer
             .getVirtualItems()
-            .some((row) => row.index === selectedIndex) && nav.selected
-            ? `context-message-${nav.selected.sequence}`
+            .some((row) => row.index === selectedItemIndex) && nav.selected
+            ? `observer-message-${nav.selected.sequence}`
             : undefined
         }
         onScroll={(event) => {
@@ -240,21 +272,50 @@ export function MessageList({
           style={{ height: virtualizer.getTotalSize() }}
         >
           {virtualizer.getVirtualItems().map((row) => {
-            const message = nav.rows[row.index];
+            const item = items[row.index];
+            if (item.type === "node") {
+              const { change } = item.node;
+              const notes = nodeNotes(item.node);
+              return (
+                <div
+                  key={item.node.key}
+                  ref={virtualizer.measureElement}
+                  data-index={row.index}
+                  role="separator"
+                  aria-label={`运行节点：${nodeTitle(change)}`}
+                  data-testid="observer-run-node"
+                  className="absolute left-0 top-0 flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 border-b bg-muted/40 px-4 py-2 text-xs tabular-nums text-muted-foreground"
+                  style={{ transform: `translateY(${row.start}px)` }}
+                >
+                  <span className={`font-medium ${NODE_TONE_CLASS[nodeTone(change)]}`}>
+                    {nodeTitle(change)}
+                  </span>
+                  {notes.map((note) => (
+                    <span key={note}>· {note}</span>
+                  ))}
+                  <time className="ml-auto" dateTime={change.at} title={formatTime(change.at, true)}>
+                    {formatTime(change.at)}
+                  </time>
+                </div>
+              );
+            }
+            const { message } = item;
             const active = message.sequence === nav.selected?.sequence;
             const cache =
               message.role === "assistant" ? cacheUsage(message) : null;
             const change = changes.get(message.sequence);
+            const context = contextState(message);
+            const tools = messageTools(message);
             return (
               <div
                 key={message.sequence}
-                id={`context-message-${message.sequence}`}
+                id={`observer-message-${message.sequence}`}
                 ref={virtualizer.measureElement}
                 data-index={row.index}
                 role="option"
                 aria-selected={active}
-                aria-label={`#${message.sequence} ${roleLabel(message.role)}`}
-                data-testid={`context-row-${message.sequence}`}
+                aria-label={`#${message.sequence} ${messageTitle(message)}`}
+                data-testid={`observer-row-${message.sequence}`}
                 className={`absolute left-0 top-0 w-full cursor-pointer border-b border-l px-4 py-3 ${active ? "border-l-primary bg-accent" : "border-l-transparent hover:bg-muted/50"}`}
                 style={{ transform: `translateY(${row.start}px)` }}
                 onClick={() => {
@@ -267,9 +328,12 @@ export function MessageList({
                   <span className="font-mono text-muted-foreground">
                     #{message.sequence}
                   </span>
-                  <span className="font-semibold">
-                    {roleLabel(message.role)}
-                  </span>
+                  <span className="font-semibold">{kindLabel(message)}</span>
+                  {tools.length > 0 && (
+                    <span className="min-w-0 truncate font-mono text-muted-foreground">
+                      {tools.join("、")}
+                    </span>
+                  )}
                   {message.role === "tool" && (
                     <Badge
                       shape="tag"
@@ -285,11 +349,21 @@ export function MessageList({
                       {toolStatus(message.status)}
                     </Badge>
                   )}
-                  {!message.include_in_context && (
-                    <span className="ml-auto text-xs text-muted-foreground">
-                      未纳入
-                    </span>
-                  )}
+                  <span className="ml-auto flex flex-wrap justify-end gap-1">
+                    {!message.project_to_transport && !message.withdrawn && (
+                      <Badge shape="tag" size="sm" variant="outline" tone="neutral">
+                        对话中不显示
+                      </Badge>
+                    )}
+                    <Badge
+                      shape="tag"
+                      size="sm"
+                      variant="outline"
+                      tone={context.included ? "neutral" : "warning"}
+                    >
+                      {context.label}
+                    </Badge>
+                  </span>
                 </div>
                 <p className="mt-1.5 line-clamp-2 break-words text-sm leading-5">
                   {messagePreview(message)}

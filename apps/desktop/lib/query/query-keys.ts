@@ -28,5 +28,5 @@ export const queryKeys = {
   skill: (workspaceId: number | null, name: string) => ["cosir", "skills", workspaceId ?? "system", "document", name] as const,
   toolGroups: () => ["cosir", "tool-groups"] as const,
   modelConnections: () => ["cosir", "model-connections"] as const,
-  contextMessages: (query: unknown) => ["cosir", "context-messages", query] as const,
+  sessionObservation: (query: unknown) => ["cosir", "session-observation", query] as const,
 };

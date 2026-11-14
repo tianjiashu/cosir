@@ -12,7 +12,6 @@ const input: SubmitNewConversationMessageInput = {
   workspaceId: 3,
   text: "hello",
   imageAttachments: [],
-  disabledToolGroups: [],
   modelConfigId: "c/m1",
   reasoningEffort: "high",
   traceId: "0".repeat(32),

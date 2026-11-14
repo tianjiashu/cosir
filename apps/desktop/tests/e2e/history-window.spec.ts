@@ -12,7 +12,7 @@ import { API_ORIGIN as origin } from "./e2e-env";
 const SESSION_ID = 4501;
 const PAIRS = 160;
 const OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 };
-const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
+const LAUNCH = { modelConfigId: null, reasoningEffort: null };
 
 type SeedState = Omit<TransportState, "messageOffset" | "terminal_sessions" | "background_tasks" | "foreground_waits" | "handoffs">;
 

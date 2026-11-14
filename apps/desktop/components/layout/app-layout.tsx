@@ -73,7 +73,7 @@ function parsePositiveId(value: string | undefined): number | null {
  * 应用的唯一页面骨架（布局路由）：侧栏 + 页面头部 + 主区域 + 工作台。
  *
  * 关键约束：
- * - 会话保活。离开对话去看配置或上下文观测时，最近的会话页保持挂载（被内容层覆盖并设为
+ * - 会话保活。离开对话去看配置或会话观测时，最近的会话页保持挂载（被内容层覆盖并设为
  *   inert），回来时 Assistant 会话、草稿与运行中的订阅都还在；只有进入另一个会话或新会话才替换。
  *   会话页始终由这里渲染（不经 Outlet），因此路由切换不会重建它。
  * - 未保存修改。离开配置路由（含切换配置标签）前统一经 useBlocker 询问，页面内不再各自确认。
@@ -203,7 +203,7 @@ export function AppLayout() {
         { label: tab?.label ?? "未知分类" },
       ];
     }
-    if (section === "observer") return [{ label: "上下文观测" }];
+    if (section === "observer") return [{ label: "会话观测" }];
     if (routeSessionId === null) return [{ label: "新会话" }];
     return [
       { label: catalog.activeWorkspace?.name ?? "工作区" },
@@ -226,7 +226,7 @@ export function AppLayout() {
       onSelectSession={selectSession}
       onOpenSettings={() => navigate("/settings")}
       onOpenWorkspaceSettings={(workspaceId) => navigate(`/workspaces/${workspaceId}/settings`)}
-      onOpenObserver={() => navigate("/context-observer", { state: { returnTo: focusedSessionId ? `/sessions/${focusedSessionId}` : undefined } })}
+      onOpenObserver={() => navigate(focusedSessionId ? `/session-observer?session_id=${focusedSessionId}` : "/session-observer", { state: { returnTo: focusedSessionId ? `/sessions/${focusedSessionId}` : undefined } })}
       onOpenSearch={() => setPaletteOpen(true)}
       onAddWorkspace={() => void actions.addWorkspaceFromFolder()}
       addingWorkspace={actions.addingWorkspace}
