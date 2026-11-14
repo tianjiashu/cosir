@@ -2,6 +2,7 @@ import { memo } from "react";
 import { useAuiState } from "@assistant-ui/react";
 
 import { AgentConfigurationDraftTool } from "@/components/conversation/tools/configuration-draft/agent-configuration-draft-tool";
+import { DeliverablesCard } from "@/components/conversation/tools/reply-presentation/deliverables-card";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
 import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
@@ -23,7 +24,7 @@ function ChangesArtifact({ card, sessionId }: { card: Extract<ArtifactCard, { ki
 }
 
 /**
- * 配置草稿卡：各自读自己那次调用的 artifact；等用户决定期间不显示。
+ * 配置草稿卡与交付物卡：各自读自己那次调用的 artifact；等用户决定期间不显示。
  */
 function StandaloneArtifact({ card, sessionId, interactive, sessionCancelling, inherited }: { inherited?: boolean; card: StandaloneArtifactCard; sessionId: number; interactive: boolean; sessionCancelling: boolean }) {
   const part = useAuiState((state) => state.message.parts[card.index]);
@@ -34,10 +35,12 @@ function StandaloneArtifact({ card, sessionId, interactive, sessionCancelling, i
   switch (card.kind) {
     case "agent-configuration-draft":
       return <AgentConfigurationDraftTool {...props} />;
+    case "deliverables":
+      return <DeliverablesCard {...props} />;
   }
 }
 
-/** 产物区：本轮改动（聚合）排在前，其余草稿卡按调用顺序；每张卡各自隔离渲染错误。 */
+/** 产物区：本轮改动（聚合）排在前，其余卡片按调用顺序；每张卡各自隔离渲染错误。 */
 export const ArtifactZone = memo(function ArtifactZone({ inherited, sessionId, artifacts, interactive, sessionCancelling }: ArtifactZoneProps) {
   if (artifacts.length === 0) return null;
   return (

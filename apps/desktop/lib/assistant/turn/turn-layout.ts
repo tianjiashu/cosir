@@ -11,7 +11,8 @@ export function turnPhaseOf(activity: TransportActivity | null): TurnPhase {
   return activity?.status === "running" ? "running" : activity?.status === "suspended" ? "suspended" : "settled";
 }
 export const CHANGES_KIND = "file-changes";
-export const STANDALONE_ARTIFACT_KINDS = ["agent-configuration-draft"] as const;
+export const STANDALONE_ARTIFACT_KINDS = ["agent-configuration-draft", "deliverables"] as const;
+export const NEXT_STEP_KIND = "next-step";
 export type StandaloneArtifactKind = (typeof STANDALONE_ARTIFACT_KINDS)[number];
 /**
  * `inProcess`：这段正文已定性为过程（不是最终回复，且 Run 已有结局），随过程开合。Run 运行中、挂起时
@@ -49,6 +50,11 @@ export type TurnLayout = {
   /** 过程里的全部条目（标题据此判断能否展开）。 */
   process: { items: ProcessItem[] };
   artifacts: ArtifactCard[];
+  /**
+   * 这一回合最后一次成功的 `offer_next_step`（同一回合多次调用只认最后一次）。这里只说「有这个建议」；
+   * 是否还有效（会话最后一条回复、Run 正常完成）由回合组件按消息位置与结局判断，不存状态。
+   */
+  nextStep: { index: number; part: TransportToolCallPart } | null;
   answer: AnswerItem[];
   hasFinalReply: boolean;
   defaultProcessOpen: boolean;
@@ -96,6 +102,7 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
   const changes: CallItem[] = [];
   const previousArtifacts = new Map(previous?.artifacts.flatMap(card => card.kind === "changes" ? [] : [[card.index, card] as const]));
   let group: ActivityGroup | null = null;
+  let nextStep: TurnLayout["nextStep"] = null;
   for (const [index, part] of parts.entries()) {
     if (part.type === "text") {
       group = null;
@@ -119,6 +126,7 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
       if (visibleCall(part)) { group.calls.push(item); items.push(item); calls.push(item); }
       const kind = part.display_data?.kind;
       if (kind === CHANGES_KIND) changes.push(item);
+      else if (kind === NEXT_STEP_KIND) nextStep = previous?.nextStep?.part === part ? previous.nextStep : { index, part };
       else if (STANDALONE_ARTIFACT_KINDS.includes(kind as StandaloneArtifactKind)) {
         const old = previousArtifacts.get(index);
         artifacts.push(old?.part === part ? old : { kind: kind as StandaloneArtifactKind, index, part });
@@ -159,7 +167,7 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
   // request is not observable here, so it must not be inferred from the absence of visible cards.
   const intro = phase === "running" && !outcome && parts.every((part) => part.type === "text" && !part.text.trim())
     ? "waiting" : null;
-  return { parts, phase, current, intro, blocks, process: { items }, artifacts: previous?.artifacts.length === artifacts.length && artifacts.every((card, i) => card === previous.artifacts[i]) ? previous.artifacts : artifacts, answer, hasFinalReply,
+  return { parts, phase, current, intro, blocks, process: { items }, artifacts: previous?.artifacts.length === artifacts.length && artifacts.every((card, i) => card === previous.artifacts[i]) ? previous.artifacts : artifacts, nextStep, answer, hasFinalReply,
     defaultProcessOpen: !hasFinalReply };
 }
 

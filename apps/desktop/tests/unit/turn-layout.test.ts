@@ -122,3 +122,32 @@ it("reuses unchanged tool groups and file aggregation across prose versions, but
   const updated = projectTurn([{ ...change, display_data: { kind: "file-changes", changes: [{ path: "b.ts", status: "added" }] } }], "settled", null, failed);
   expect(updated.artifacts[0]).toMatchObject({ files: [{ path: "b.ts" }] });
 });
+
+describe("回复呈现工具", () => {
+  const files = call("files", { toolName: "present_files", presentation: "quiet", display_data: { kind: "deliverables", files: [{ path: "a.md", absolute_path: "/w/a.md", caption: null }] } });
+  const offer = (id: string, ask: string, overrides: Partial<TransportToolCallPart> = {}) =>
+    call(id, { toolName: "offer_next_step", presentation: "quiet", display_data: { kind: "next-step", ask, replies: ["好"] }, ...overrides });
+
+  // 目的：卡片就是这两个工具的呈现；潜在缺陷：静默调用又在过程里多出一行，或交付物卡随过程折叠消失。
+  it("交付物进产物区、建议单独给出，两者都不在过程里留调用行", () => {
+    const layout = projectTurn([files, offer("o1", "继续吗？"), text("做完了", true)], "settled", outcome("completed"));
+    expect(layout.artifacts.map((item) => item.kind)).toEqual(["deliverables"]);
+    expect(layout.nextStep?.part.toolCallId).toBe("o1");
+    expect(layout.process.items).toHaveLength(0);
+  });
+
+  it("同一回合多次建议只认最后一次，失败的调用没有展示数据、不算", () => {
+    const failed = offer("o3", "", { status: "failed", display_data: null });
+    const layout = projectTurn([offer("o1", "先问"), offer("o2", "后问"), failed, text("完", true)], "settled", outcome("completed"));
+    expect(layout.nextStep?.part.toolCallId).toBe("o2");
+    // 失败的静默调用照常露出，让人看得到出了问题。
+    expect(layout.process.items).toHaveLength(1);
+    expect(projectTurn([text("完", true)], "settled", outcome("completed")).nextStep).toBeNull();
+  });
+
+  it("正文流式追加时建议对象保持同一引用", () => {
+    const part = offer("o1", "继续吗？");
+    const first = projectTurn([part, text("a")], "running");
+    expect(projectTurn([part, text("ab")], "running", null, first).nextStep).toBe(first.nextStep);
+  });
+});

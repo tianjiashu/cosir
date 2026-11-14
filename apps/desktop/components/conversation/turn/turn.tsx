@@ -2,6 +2,8 @@ import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type Rea
 import { MessagePrimitive, useAuiState, useScrollLock } from "@assistant-ui/react";
 
 import { CallRow } from "@/components/conversation/tools/call-row";
+import { NextStepCard } from "@/components/conversation/tools/reply-presentation/next-step-card";
+import { readNextStep } from "@/components/conversation/tools/reply-presentation/reply-presentation-display";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
 import type { TransportActivity, TransportOutcome } from "@/lib/assistant/contract";
@@ -87,6 +89,12 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
   });
   const lockScroll = useScrollLock(root, 0);
   const stopped = outcome?.status === "cancelled" || outcome?.status === "failed";
+  // 下一步建议只在「会话最后一条回复、Run 正常完成」时有效：用户发了任何消息、或又有新回复，它就过期。
+  const isLast = useAuiState((state) => state.message.isLast);
+  const nextStep = useMemo(
+    () => (layout.nextStep && isLast && interactive && outcome?.status === "completed" ? readNextStep(layout.nextStep.part.display_data) : null),
+    [layout.nextStep, isLast, interactive, outcome?.status],
+  );
 
   return (
     <div ref={root}
@@ -109,6 +117,7 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
       {cancelling && phase === "running" && !layout.current && <ActivityStatus feedback={STOPPING_FEEDBACK} className="block text-2sm" />}
       {stopped && <p data-slot="partial-reply" className="text-muted-foreground text-2sm">{answerText.trim() ? "回复可能尚未完成。" : "尚未生成回复。"}</p>}
       <ArtifactZone inherited={inherited} sessionId={sessionId} artifacts={layout.artifacts} interactive={interactive} sessionCancelling={cancelling} />
+      {nextStep && <NextStepCard offer={nextStep} sessionId={sessionId} />}
       <TurnError />
       {!layout.intro && <div>
         <TurnFooter

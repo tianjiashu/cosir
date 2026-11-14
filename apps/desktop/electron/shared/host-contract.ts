@@ -26,6 +26,7 @@ export const HOST_CHANNEL = {
   browserClose: "cosir:browser.close",
   browserAnswerDialog: "cosir:browser.answer-dialog",
   browserRevealDownload: "cosir:browser.reveal-download",
+  filesReveal: "cosir:files.reveal",
 } as const;
 
 /**
@@ -213,5 +214,10 @@ export type CosirHost = {
      * 渲染进程只能对自己手里的 `File` 取路径，无法借它探测任意路径。
      */
     pathOf(file: File): string;
+    /**
+     * 在系统文件管理器里显示一个本机文件（交付物卡片用）。路径来自后端工具结果里的绝对路径；宿主只确认它是
+     * 存在的绝对路径，不读内容、不打开文件。文件已不在时抛出给用户看的错误。
+     */
+    reveal(absolutePath: string): Promise<void>;
   };
 };

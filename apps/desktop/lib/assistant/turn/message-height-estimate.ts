@@ -108,6 +108,12 @@ const AWAITING_CARD = 96;
 const CHANGES_CARD_CHROME = 40;
 const CHANGES_FILE_ROW = 28;
 const STANDALONE_ARTIFACT_CARD = 120;
+const DELIVERABLES_CARD_CHROME = 8;
+const DELIVERABLE_ROW = 44;
+function deliverableCount(part: { display_data?: Record<string, unknown> | null }): number {
+  const files = part.display_data?.files;
+  return Array.isArray(files) ? files.length : 0;
+}
 
 /** 等你操作的调用就地画成卡片：提问卡片随当前那一题的选项数变化，其余等待卡是固定的一两行。 */
 function awaitingHeight(part: TransportToolCallPart, sessionId?: number): number {
@@ -147,7 +153,11 @@ function assistantHeight(message: ThreadMessage, sessionId?: number): number {
       blocks.push(PROCESS_HEADER + (groupOpen ? block.calls.length : 0) * PROCESS_ITEM);
     }
   }
-  for (const card of layout.artifacts) blocks.push(card.kind === "changes" ? CHANGES_CARD_CHROME + card.files.length * CHANGES_FILE_ROW : STANDALONE_ARTIFACT_CARD);
+  for (const card of layout.artifacts) {
+    blocks.push(card.kind === "changes" ? CHANGES_CARD_CHROME + card.files.length * CHANGES_FILE_ROW
+      : card.kind === "deliverables" ? DELIVERABLES_CARD_CHROME + deliverableCount(card.part) * DELIVERABLE_ROW
+        : STANDALONE_ARTIFACT_CARD);
+  }
   if (layout.intro) return ROW_GAP + blocks.reduce((sum, block) => sum + block, 0) + Math.max(0, blocks.length - 1) * ZONE_GAP;
   return ROW_GAP + ASSISTANT_CHROME + blocks.reduce((sum, block) => sum + block + ZONE_GAP, 0);
 }

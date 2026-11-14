@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>交付物与文件预览 · 界面设计稿</title>
+<style>
+/* 令牌照抄 apps/desktop/styles/globals.css，设计稿与产品同源 */
+:root{
+  --background:oklch(1 0 0);--foreground:oklch(0.145 0 0);--card:oklch(1 0 0);
+  --muted:oklch(0.97 0 0);--muted-foreground:oklch(0.556 0 0);--primary:oklch(0.205 0 0);--primary-foreground:oklch(0.985 0 0);
+  --border:oklch(0.922 0 0);--destructive:oklch(0.577 0.245 27.325);--warning:oklch(0.555 0.163 48.998);
+  --link:oklch(0.45 0.13 255);--canvas:oklch(0.97 0.002 90);--radius:0.625rem;
+  --surface:color-mix(in oklab,var(--muted) 70%,transparent);
+  --shadow-xs:0 1px 2px oklch(0 0 0 / .05);--page:oklch(1 0 0);--page-ink:oklch(0.8 0 0);
+  --sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+:root[data-theme="dark"]{
+  --background:oklch(0.145 0 0);--foreground:oklch(0.985 0 0);--card:oklch(0.205 0 0);
+  --muted:oklch(0.269 0 0);--muted-foreground:oklch(0.708 0 0);--primary:oklch(0.922 0 0);--primary-foreground:oklch(0.205 0 0);
+  --border:oklch(1 0 0 / 10%);--destructive:oklch(0.704 0.191 22.216);--warning:oklch(0.828 0.189 84.429);
+  --link:oklch(0.76 0.1 250);--canvas:oklch(0.115 0 0);--surface:var(--card);
+  --page:oklch(0.9 0 0);--page-ink:oklch(0.6 0 0);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--foreground);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+main{max-width:1080px;margin:0 auto;padding:28px 16px 80px}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:15px;margin:44px 0 4px}
+.lede,.note{color:var(--muted-foreground);font-size:13px;margin:0 0 14px;max-width:70ch}
+.bar{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;align-items:start}
+.frame{background:var(--background);border:1px solid var(--border);border-radius:12px;padding:16px;min-width:0}
+.frame>.cap{font-size:12px;color:var(--muted-foreground);margin:0 0 10px}
+.spec{font-size:12px;color:var(--muted-foreground);margin:10px 0 0;padding-left:16px}
+.spec li{margin:2px 0}
+button{font:inherit;color:inherit;cursor:pointer}
+.btn{height:28px;padding:0 10px;border-radius:8px;border:1px solid var(--border);background:var(--background);font-size:13px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn.primary{background:var(--primary);color:var(--primary-foreground);border-color:transparent}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn.ghost:hover,.btn:not(.primary):hover{background:var(--muted)}
+svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
+.muted{color:var(--muted-foreground)}
+.reply{font-size:15px;line-height:1.75;margin:0 0 12px}
+
+/* —— 交付物：胶囊与方块（对标截图 01 / 05 / 11 / 17） —— */
+.dlv{display:flex;flex-direction:column;gap:8px}
+.chips,.tiles{display:flex;flex-wrap:wrap;gap:8px}
+.chip{height:36px;max-width:100%;display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);box-shadow:var(--shadow-xs);min-width:0;position:relative}
+.chip:hover,.chip:focus-within,.chip.hover{background:var(--muted)}
+.chip .main{height:100%;display:inline-flex;align-items:center;gap:8px;padding:0 12px 0 8px;border:0;background:transparent;border-radius:inherit;text-align:left;min-width:0}
+.chip .main:focus-visible,.chip .reveal:focus-visible{outline:2px solid var(--ring,oklch(0.708 0 0));outline-offset:-2px}
+.chip .main:disabled{cursor:default;color:inherit}
+.badge{flex:none;height:20px;min-width:20px;padding:0 6px;border:1px solid var(--border);border-radius:999px;display:inline-grid;place-items:center;font:600 9.5px/1 var(--sans);letter-spacing:.04em;color:var(--muted-foreground);text-transform:uppercase}
+.badge svg{width:12px;height:12px}
+.chip .name{font-size:14px;font-weight:500;display:flex;min-width:0;max-width:260px}
+.name .head{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.name .tail{flex:none;white-space:nowrap}
+.chip .meta{flex:none;font-size:12px;color:var(--muted-foreground);font-variant-numeric:tabular-nums;display:inline-flex}
+.chip .reveal{display:none;flex:none;width:28px;height:28px;margin:0 4px 0 -8px;border:0;border-radius:6px;background:transparent;color:var(--muted-foreground);place-items:center}
+.chip .reveal:hover{color:var(--foreground);background:color-mix(in oklab,var(--foreground) 8%,transparent)}
+.chip:hover .reveal,.chip:focus-within .reveal,.chip.hover .reveal,.chip.denied .reveal{display:inline-grid}
+.chip:hover .meta.swap,.chip:focus-within .meta.swap,.chip.hover .meta.swap{display:none}
+.chip.gone{border-style:dashed;box-shadow:none;background:transparent;height:36px;gap:8px;padding:0 12px 0 8px}
+.chip.gone .name{color:var(--muted-foreground);font-weight:400;text-decoration:line-through}
+.warn{color:var(--warning)}
+.tip{position:relative}
+.tip .bubble{position:absolute;left:0;top:42px;z-index:2;background:var(--primary);color:var(--primary-foreground);font-size:12px;line-height:1.4;padding:5px 8px;border-radius:6px;white-space:nowrap}
+.tile{width:120px;height:96px;border-radius:8px;border:1px solid var(--border);overflow:hidden;position:relative;background:var(--card);box-shadow:var(--shadow-xs);padding:0;flex:none}
+.tile i{position:absolute;inset:0}
+.tile .badge{position:absolute;left:6px;top:6px;background:var(--card)}
+.tile .cap2{position:absolute;left:0;right:0;bottom:0;padding:4px 7px 5px;background:color-mix(in oklab,var(--card) 92%,transparent);border-top:1px solid var(--border);text-align:left}
+.tile .cap2 b{display:block;font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tile .cap2 span{font-size:11px;color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.tile .doc{position:absolute;inset:0 0 34px;display:grid;place-items:center;background:var(--muted)}
+.audio{display:flex;flex-direction:column;gap:3px}
+.audio small{font-size:12px;color:var(--muted-foreground);padding-left:4px}
+.player{display:flex;align-items:center;gap:10px;height:36px;padding:0 14px;border-radius:999px;background:var(--muted);font-size:12px;font-variant-numeric:tabular-nums;max-width:320px}
+.player .track{flex:1;height:3px;border-radius:2px;background:color-mix(in oklab,var(--foreground) 14%,transparent);position:relative}
+.player .track::after{content:"";position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:2px;background:var(--foreground)}
+.player svg{width:14px;height:14px}
+.next{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:14px}
+.next p{margin:0;font-size:13px;color:var(--muted-foreground)}
+/* 文档缩略图占位（真实实现用系统缩略图） */
+.page{width:26px;height:34px;background:var(--page);border-radius:2px;box-shadow:0 0 0 1px oklch(0 0 0 / .12);padding:4px 3px;display:flex;flex-direction:column;gap:2px}
+.page b{height:2px;background:var(--page-ink);border-radius:1px}.page b:nth-child(2){width:70%}.page b:nth-child(4){width:50%}
+.vid{position:absolute;inset:0;background:linear-gradient(135deg,oklch(0.55 0.08 240),oklch(0.35 0.06 280))}
+.play{position:absolute;inset:0;margin:auto;width:18px;height:18px;border-radius:50%;background:oklch(0 0 0 / .55);display:grid;place-items:center}
+.play::after{content:"";border-left:6px solid #fff;border-top:4px solid transparent;border-bottom:4px solid transparent;margin-left:2px}
+.ft{font:600 9px/1 var(--mono);letter-spacing:.02em}
+.c-md{color:oklch(0.5 0.13 250)}.c-csv{color:oklch(0.5 0.12 150)}.c-pdf{color:oklch(0.55 0.2 27)}.c-doc{color:oklch(0.5 0.14 255)}.c-html{color:oklch(0.58 0.17 50)}
+:root[data-theme="dark"] .c-md,:root[data-theme="dark"] .c-doc{color:oklch(0.75 0.11 250)}
+:root[data-theme="dark"] .c-csv{color:oklch(0.78 0.14 155)}:root[data-theme="dark"] .c-pdf{color:oklch(0.72 0.17 25)}:root[data-theme="dark"] .c-html{color:oklch(0.78 0.14 60)}
+
+/* —— 文件面板 —— */
+.panel{border:1px solid var(--border);border-radius:12px;background:var(--background);overflow:hidden;display:flex;flex-direction:column;min-width:0}
+.tabs{display:flex;gap:2px;padding:6px 6px 0;border-bottom:1px solid var(--border);font-size:13px}
+.tab{padding:5px 10px;border-radius:6px 6px 0 0;color:var(--muted-foreground);display:flex;gap:6px;align-items:center;white-space:nowrap}
+.tab.on{background:var(--muted);color:var(--foreground)}
+.tool{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);font-size:12px;color:var(--muted-foreground);min-width:0}
+.tool .path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono)}
+.tool input{height:26px;border:1px solid var(--border);border-radius:6px;background:transparent;color:inherit;padding:0 8px;font:inherit;width:150px;min-width:0}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:5px 10px;border-bottom:1px solid var(--border);white-space:nowrap;text-align:left}
+th{position:sticky;top:0;background:var(--background);font-weight:500;font-size:12px;color:var(--muted-foreground);cursor:pointer;user-select:none}
+th.sorted{color:var(--foreground)}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+td.idx{color:var(--muted-foreground);font-size:11px;width:1%;text-align:right;font-variant-numeric:tabular-nums}
+tbody tr:hover{background:var(--muted)}
+.foot{padding:5px 10px;font-size:12px;color:var(--muted-foreground);border-top:1px solid var(--border)}
+.empty{padding:36px 20px;display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px}
+.bigpage{width:104px;height:136px;background:var(--page);border-radius:4px;box-shadow:0 0 0 1px oklch(0 0 0 / .1),0 8px 24px oklch(0 0 0 / .12);padding:14px 12px;display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.bigpage b{height:4px;border-radius:2px;background:var(--page-ink)}.bigpage b:nth-child(1){width:60%;height:6px}.bigpage b:nth-child(3){width:80%}.bigpage b:nth-child(5){width:45%}
+.empty .title{font-size:14px;font-weight:500}
+.empty .acts{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:12px}
+.empty a{font-size:12px;color:var(--muted-foreground);margin-top:10px;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.stage{background:#000;aspect-ratio:16/9;position:relative;display:grid;place-items:center}
+.stage .big{width:44px;height:44px;border-radius:50%;background:oklch(1 0 0 / .18);display:grid;place-items:center}
+.stage .big::after{content:"";border-left:14px solid #fff;border-top:9px solid transparent;border-bottom:9px solid transparent;margin-left:4px}
+.ctl{display:flex;align-items:center;gap:8px;padding:8px 10px;font-size:12px;color:var(--muted-foreground);font-variant-numeric:tabular-nums}
+.ctl .track{flex:1;height:3px;border-radius:2px;background:var(--muted)}
+
+/* —— 侧栏 —— */
+.aside{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:12px;box-shadow:var(--shadow-xs);font-size:14px;max-width:280px}
+.aside .hd{display:flex;align-items:center;gap:6px;font-weight:500}
+.aside .hd span{margin-left:auto;font-size:12px;color:var(--muted-foreground);font-weight:400}
+.aside ul{list-style:none;margin:8px -4px 0;padding:0}
+.aside li{display:flex;align-items:center;gap:8px;padding:4px;border-radius:6px;font-size:13px;min-width:0}
+.aside li:hover{background:var(--muted)}
+.aside li>span:not(.ft){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.aside li>.ft,.aside li>svg{width:22px;flex:none;text-align:center}
+.aside li.gone{color:var(--muted-foreground);text-decoration:line-through}
+.aside li em{font-style:normal;font-size:11px;color:var(--muted-foreground)}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.500 0 18M12 3c-3 3.500-3 14.500 0 18"/></symbol>
+    <symbol id="reveal" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H3z"/><path d="M3 10h18l-2 9H5z"/></symbol>
+    <symbol id="out" viewBox="0 0 24 24"><path d="M7 17 17 7M9 7h8v8"/></symbol>
+    <symbol id="eye" viewBox="0 0 24 24"><path d="M2 12s3.500-7 10-7 10 7 10 7-3.500 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="play" viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></symbol>
+    <symbol id="file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+    <symbol id="note" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></symbol>
+    <symbol id="lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="pkg" viewBox="0 0 24 24"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/></symbol>
+  </defs>
+</svg>
+<main>
+  <div class="bar">
+    <div>
+      <h1>交付物与文件预览 · 界面设计稿</h1>
+      <p class="lede">配套 <code>deliverables-and-file-preview-design.md</code> 第 11 节。颜色、圆角、字号照抄产品的设计令牌；文档与视频的缩略图是占位画法，实现时换成系统缩略图。</p>
+    </div>
+    <button class="btn" id="theme">切换深浅色</button>
+  </div>
+
+  <h2>1. 对话里的交付物</h2>
+  <p class="note">照对标截图的做法：一个文件一枚胶囊（类型角标 · 文件名 · 大小），横排、放不下换行；有画面的文件用方块。没有外层卡片，直接跟在正文下面。</p>
+  <div class="grid">
+    <div class="frame">
+      <p class="cap">A · 常见情形：几个文件、一个目录、一个网址</p>
+      <p class="reply">报告和数据都整理好了，预览页也已经跑起来。</p>
+      <div class="dlv"><div class="chips">
+        <div class="chip "><button class="main"><span class="badge">MD</span><span class="name"><span class="head">季度复盘报告</span><span class="tail">.md</span></span><span class="meta swap">12 KB</span></button><button class="reveal" title="在文件夹中显示" aria-label="在文件夹中显示"><svg class="i"><use href="#reveal"/></svg></button></div>
+        <div class="chip "><button class="main"><span class="badge">SQL</span><span class="name"><span class="head">query</span><span class="tail">.sql</span></span><span class="meta swap">2 KB</span></button><button class="reveal" title="在文件夹中显示" aria-label="在文件夹中显示"><svg class="i"><use href="#reveal"/></svg></button></div>
+        <div class="chip"><button class="main"><span class="badge"><svg class="i"><use href="#folder"/></svg></span><span class="name"><span class="head">dist</span></span><span class="meta swap">文件夹</span></button><button class="reveal" title="在文件夹中显示" aria-label="在文件夹中显示"><svg class="i"><use href="#reveal"/></svg></button></div>
+        <div class="chip"><button class="main"><span class="badge"><svg class="i"><use href="#globe"/></svg></span><span class="name"><span class="head">本地预览</span></span><span class="meta">localhost:5173</span><span class="meta"><svg class="i" style="width:13px;height:13px"><use href="#out"/></svg></span></button></div>
+        <span class="tip"><div class="chip hover"><button class="main"><span class="badge">CSV</span><span class="name"><span class="head">达人投放明细_2026Q3_去重后_含退款订单</span><span class="tail">_v2.csv</span></span><span class="meta swap">318 KB</span></button><button class="reveal" title="在文件夹中显示" aria-label="在文件夹中显示"><svg class="i"><use href="#reveal"/></svg></button></div><span class="bubble">1,240 行，已去重<br>data/达人投放明细_2026Q3_去重后_含退款订单_v2.csv</span></span>
+      </div></div>
+      <ul class="spec" style="margin-top:64px">
+        <li>胶囊高 36、圆角 <code>--radius</code>、细边框加极浅投影；角标是描边的大写后缀。胶囊是容器，里面并列主按钮与「在文件夹中显示」两个按钮</li>
+        <li>最后一枚是悬停态：底色变灰，大小换成「在文件夹中显示」，提示条显示说明与完整路径</li>
+        <li>文件名最宽 260，从中间截断，扩展名与结尾始终可见</li>
+        <li>目录与网址是同一种胶囊，角标换成图标；网址在大小的位置显示主机名</li>
+      </ul>
+    </div>
+
+    <div class="frame">
+      <p class="cap">B · 有画面的文件、音频</p>
+      <p class="reply">效果图、合同、录屏和配音在这里。</p>
+      <div class="dlv">
+        <div class="tiles">
+          <button class="tile"><i style="background:linear-gradient(160deg,oklch(0.8 0.1 80),oklch(0.6 0.15 30))"></i></button>
+          <button class="tile"><i style="background:linear-gradient(160deg,oklch(0.75 0.1 200),oklch(0.5 0.12 260))"></i></button>
+          <button class="tile"><span class="doc"><span class="page"><b></b><b></b><b></b><b></b></span></span><span class="badge">PDF</span><span class="cap2"><b>合同终稿.pdf</b><span>2.1 MB</span></span></button>
+          <button class="tile"><span class="doc" style="background:none"><span class="vid"></span><span class="play"></span></span><span class="badge">MOV</span><span class="cap2"><b>操作录屏.mov</b><span>9.0 MB</span></span></button>
+        </div>
+        <div class="audio"><small>旁白终版.mp3</small><div class="player"><svg class="i" style="fill:currentColor;stroke:none"><use href="#play"/></svg><span>0:12 / 0:31</span><span class="track"></span></div></div>
+      </div>
+      <ul class="spec">
+        <li>图片：只有画面的方块，不写文件名（对标做法），尺寸沿用对话里已有的 120×96，点开进灯箱</li>
+        <li>PDF、Office、视频：对标是空白方块，这里填上系统缩略图；左上角标、底部文件名与大小照对标</li>
+        <li>音频：小字文件名在上，下面一条胶囊形播放条（对标做法）</li>
+        <li>顺序固定：方块一行 → 胶囊 → 音频</li>
+      </ul>
+    </div>
+
+    <div class="frame">
+      <p class="cap">C · 异常状态</p>
+      <div class="dlv"><div class="chips">
+        <span class="chip gone"><span class="badge">DOCX</span><span class="name"><span class="head">草稿_旧版</span><span class="tail">.docx</span></span><span class="meta">已不存在</span></span>
+        <span class="chip gone"><span class="badge">MD</span><span class="name"><span class="head">notes</span><span class="tail">.md</span></span><span class="meta">链接已失效</span></span>
+        <div class="chip denied"><button class="main" disabled><span class="badge warn" style="border-color:currentColor"><svg class="i"><use href="#lock"/></svg></span><span class="name"><span class="head">桌面截图</span><span class="tail">.png</span></span><span class="meta warn">无访问权限</span></button><button class="reveal" title="在文件夹中显示" aria-label="在文件夹中显示"><svg class="i"><use href="#reveal"/></svg></button></div>
+        <div class="chip "><button class="main"><span class="badge">XLSX</span><span class="name"><span class="head">供应商报价单</span><span class="tail">.xlsx</span></span><span class="meta swap">46 KB</span></button><button class="reveal" title="在文件夹中显示" aria-label="在文件夹中显示"><svg class="i"><use href="#reveal"/></svg></button></div>
+      </div></div>
+      <ul class="spec">
+        <li>不存在：虚线边框、划线、不可点，不用警示色（文件被移走是正常事）</li>
+        <li>链接已失效（第二枚）：链接越出工作区或记录，与不存在同样处理，不用锁</li>
+        <li>没有权限：锁形角标加警示色文字，主按钮不可用，「在文件夹中显示」常显</li>
+        <li>工作区外（第四枚）：外观与普通胶囊一致；阶段五之前点它是「在文件夹中显示」</li>
+        <li>缩略图没到之前先显示角标胶囊或占位方块，到了再换</li>
+      </ul>
+    </div>
+
+    <div class="frame">
+      <p class="cap">D · 与「下一步建议」同时出现</p>
+      <p class="reply">迁移脚本写好了，还没有在正式库上执行。</p>
+      <div class="dlv"><div class="chips"><div class="chip "><button class="main"><span class="badge">SQL</span><span class="name"><span class="head">2026_11_add_turn_index</span><span class="tail">.sql</span></span><span class="meta swap">2 KB</span></button><button class="reveal" title="在文件夹中显示" aria-label="在文件夹中显示"><svg class="i"><use href="#reveal"/></svg></button></div></div></div>
+      <div class="next"><p>要现在在测试库上跑一遍吗？</p><span style="display:flex;gap:6px"><button class="btn primary">跑测试库</button><button class="btn">先不跑</button></span></div>
+      <ul class="spec">
+        <li>顺序固定：正文 → 交付物 → 下一步建议</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>2. 文件面板：表格视图（CSV / TSV）</h2>
+  <p class="note">阅读工具栏的位置不变，筛选框与行数放在工具栏里；「渲染 / 源码」切换沿用 Markdown 已有的开关。</p>
+  <div class="panel">
+    <div class="tabs"><span class="tab">季度复盘报告.md</span><span class="tab on"><span class="ft c-csv">CSV</span>达人投放明细_v2.csv</span></div>
+    <div class="tool"><span class="path">data/达人投放明细_v2.csv</span><input placeholder="筛选…" value="美妆" aria-label="筛选" /><span>38 / 1,240 行</span><button class="btn ghost" style="height:24px;font-size:12px">源码</button></div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th></th><th>达人</th><th>品类</th><th class="n sorted">播放量 ↓</th><th class="n">互动率</th><th class="n">花费</th><th>发布日期</th></tr></thead>
+        <tbody>
+          <tr><td class="idx">17</td><td>小鹿的梳妆台</td><td>美妆</td><td class="n">1,284,300</td><td class="n">6.2%</td><td class="n">¥38,000</td><td>2026-08-14</td></tr>
+          <tr><td class="idx">203</td><td>阿柚 Ayu</td><td>美妆</td><td class="n">962,110</td><td class="n">4.8%</td><td class="n">¥25,000</td><td>2026-09-02</td></tr>
+          <tr><td class="idx">58</td><td>成分党老周</td><td>美妆</td><td class="n">611,740</td><td class="n">9.1%</td><td class="n">¥18,500</td><td>2026-07-21</td></tr>
+          <tr><td class="idx">941</td><td>Mia 的日常</td><td>美妆</td><td class="n">402,005</td><td class="n">3.3%</td><td class="n">¥12,000</td><td>2026-09-19</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="foot">超过 2 MB 时，表格上方多一行「只显示前 N 行，文件共 X MB · 以源码查看全部」，被截断的最后一行丢弃。</div>
+  </div>
+  <ul class="spec">
+    <li>左侧行号是原始行号，筛选和排序后不变，方便回到源码定位</li>
+    <li>数字列右对齐、等宽数字；点表头排序，再点反向，第三次还原</li>
+    <li>表头吸顶；列多时横向滚动只发生在表格内，页面不横滚</li>
+  </ul>
+
+  <h2>3. 文件面板：看不了的文件、视频</h2>
+  <div class="grid">
+    <div class="panel">
+      <div class="tabs"><span class="tab on"><span class="ft c-doc">DOC</span>供应商合同.docx</span></div>
+      <div class="tool"><span class="path">docs/供应商合同.docx</span></div>
+      <div class="empty">
+        <div class="bigpage"><b></b><b></b><b></b><b></b><b></b></div>
+        <div class="title">供应商合同.docx</div>
+        <div class="muted" style="font-size:12px">Word 文档 · 24 KB</div>
+        <div class="muted" style="font-size:13px;margin-top:6px">这种文件没有内置预览</div>
+        <div class="acts"><button class="btn primary"><svg class="i"><use href="#eye"/></svg>快速查看</button><button class="btn"><svg class="i"><use href="#out"/></svg>用系统应用打开</button><button class="btn"><svg class="i"><use href="#reveal"/></svg>在文件夹中显示</button></div>
+        <a>以文本方式查看</a>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="tabs"><span class="tab on">model.bin</span></div>
+      <div class="tool"><span class="path">out/model.bin</span></div>
+      <div class="empty">
+        <div class="lead icon" style="width:72px;height:72px;border-radius:14px;display:grid;place-items:center;background:var(--muted);margin-bottom:10px"><svg class="i" style="width:30px;height:30px"><use href="#pkg"/></svg></div>
+        <div class="title">model.bin</div>
+        <div class="muted" style="font-size:12px">二进制数据 · 48.2 MB</div>
+        <div class="muted" style="font-size:13px;margin-top:6px">这个文件不是文本，无法预览</div>
+        <div class="acts"><button class="btn"><svg class="i"><use href="#out"/></svg>用系统应用打开</button><button class="btn"><svg class="i"><use href="#reveal"/></svg>在文件夹中显示</button></div>
+        <a>以文本方式查看</a>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="tabs"><span class="tab on">操作录屏.mov</span></div>
+      <div class="tool"><span class="path">~/Desktop/操作录屏.mov</span><span>工作区外 · 只读</span></div>
+      <div class="stage"><span class="big"></span></div>
+      <div class="ctl"><span>0:00</span><span class="track"></span><span>0:09</span></div>
+    </div>
+  </div>
+  <ul class="spec">
+    <li>认得的文档（左）：系统缩略图加主按钮「快速查看」；Windows 上没有快速查看，「用系统应用打开」升为主按钮</li>
+    <li>认不出的二进制（中）：没有缩略图也没有快速查看，用通用图标，文案换一种</li>
+    <li>「以文本方式查看」降为文字链接：它几乎总是乱码，不该和有用的出口同权重</li>
+    <li>视频（右）：黑底等比居中，用浏览器原生控件；播不了时整块换成左侧的空态并说明原因</li>
+    <li>工作区外的标签在工具栏右侧标「工作区外 · 只读」，没有「加入对话」与文件树定位</li>
+  </ul>
+
+  <h2>4. 会话侧栏：「产出」卡</h2>
+  <p class="note">沿用侧栏卡片的外壳（可折叠、可拖动排序），列出本会话交付过的全部条目，最新的在上。</p>
+  <div class="grid">
+    <div class="aside">
+      <div class="hd">产出</div>
+      <ul>
+        <li><span class="ft c-csv">CSV</span><span>达人投放明细_v2.csv</span></li>
+        <li><span class="ft c-md">MD</span><span>季度复盘报告.md</span></li>
+        <li><svg class="i"><use href="#globe"/></svg><span>本地预览</span></li>
+        <li><span class="ft c-pdf">PDF</span><span>合同终稿.pdf</span></li>
+        <li><svg class="i"><use href="#folder"/></svg><span>dist</span></li>
+        <li class="gone"><svg class="i"><use href="#file"/></svg><span>草稿_旧版.docx</span></li>
+      </ul>
+    </div>
+    <ul class="spec" style="margin:0">
+      <li>单行：类型标记加名称，不显示大小与说明（详情在对话里的卡片上）</li>
+      <li>点击行为与对话里的卡片完全一致</li>
+      <li>同一个目标交付多次只留一行，取最近一次</li>
+      <li>不存在的条目划线变灰，留在列表里（让用户知道交付过）</li>
+      <li>没有任何交付物时整张卡不出现；数量只在折叠时显示在标题右侧（侧栏卡片现有行为）</li>
+    </ul>
+  </div>
+</main>
+<script>
+  const root = document.documentElement;
+  const saved = (() => { try { return localStorage.getItem("mock-theme"); } catch { return null; } })();
+  root.dataset.theme = saved || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  document.getElementById("theme").onclick = () => {
+    root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("mock-theme", root.dataset.theme); } catch {}
+  };
+</script>
+</body>
+</html>

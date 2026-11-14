@@ -36,6 +36,8 @@ TOOL_SESSION_STATUS: Final[str] = "session_status"
 TOOL_WAIT_MESSAGES: Final[str] = "wait_messages"
 TOOL_PROPOSE_AGENT_CONFIGURATION: Final[str] = "propose_agent_configuration"
 TOOL_ASK_USER: Final[str] = "ask_user"
+TOOL_PRESENT_FILES: Final[str] = "present_files"
+TOOL_OFFER_NEXT_STEP: Final[str] = "offer_next_step"
 TOOL_MCP: Final[str] = "mcp"
 TOOL_SKILL: Final[str] = "skill"
 
@@ -69,6 +71,8 @@ ToolName: TypeAlias = Literal[
     "wait_messages",
     "propose_agent_configuration",
     "ask_user",
+    "present_files",
+    "offer_next_step",
     "mcp",
     "skill",
 ]
@@ -103,6 +107,8 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_WAIT_MESSAGES,
     TOOL_PROPOSE_AGENT_CONFIGURATION,
     TOOL_ASK_USER,
+    TOOL_PRESENT_FILES,
+    TOOL_OFFER_NEXT_STEP,
     TOOL_MCP,
     TOOL_SKILL,
 )

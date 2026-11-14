@@ -12,7 +12,7 @@ export type FakeBrowserCall = { method: string; args: unknown[] };
  * 与真实 Electron 一致：只有经文件选择框交给页面的 File 才有本机路径；页面里构造的 File
  * （粘贴、拖放测试数据）没有路径。`directory` 是目录选择框要返回的路径，null 表示用户取消。
  *
- * 内置浏览器只是一份静态状态（`browser.state`，缺省为空）：不开真实网页，作答、定位下载等调用只记进
+ * 内置浏览器只是一份静态状态（`browser.state`，缺省为空）：不开真实网页，作答、定位下载、在文件夹中显示等调用只记进
  * `fakeBrowserCalls`（`browser.failAnswer` 时作答失败），状态不随调用变化；真实标签行为由桌面 E2E 覆盖。
  */
 export async function installFakeDesktopHost(
@@ -48,7 +48,10 @@ export async function installFakeDesktopHost(
         log: { write: async () => undefined },
         dialog: { openDirectory: async () => directory },
         window: { setThemeSource: async () => undefined },
-        files: { pathOf: (file: File) => (pickedFiles.has(file) ? `/tmp/${file.name}` : "") },
+        files: {
+          pathOf: (file: File) => (pickedFiles.has(file) ? `/tmp/${file.name}` : ""),
+          reveal: async (...args: unknown[]) => record("files.reveal", args),
+        },
         browser: {
           state: async () => browserState,
           onStateChanged: () => () => undefined,

@@ -513,6 +513,11 @@ class SystemPromptBuilder:
                     "- When done, lead with the result. Mention anything you could not verify or "
                     "any failure you did not resolve."
                 ),
+                (
+                    "- If you have `present_files` and produced a file the user should open, "
+                    "present it. If you have `offer_next_step` and your work leaves the user one "
+                    "decision, offer it before your closing message."
+                ),
                 "</work_layer>",
             ]
         )
