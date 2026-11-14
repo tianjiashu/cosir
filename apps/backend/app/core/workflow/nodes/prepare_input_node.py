@@ -10,18 +10,26 @@ Session 闸门。Run 首次并入用户输入后，顺带启动标题支线（``
 需要直接执行的用户决定优先级最高、每轮只取一条：工具声明 ``user_decision == "execute"`` 时，
 无论批准还是驳回，都确认并写下决定后绕过模型、直接执行原调用（先确认再执行：执行中途进程退出
 不会重复执行），其余消息留到执行完回到这里再写。驳回也要执行：工具得落定自己的事实（如交接登记），
-等待占位也只有执行结果能收尾。``reply`` 类工具的决定只是普通消息，按 mailbox 的
-优先级与时间线和其余消息一起交给模型。并入前不必先闭合工具协议：``load_message`` 发请求前会
+等待占位也只有执行结果能收尾。``reply`` 类工具的决定按 mailbox 的优先级与时间线和其余消息一起
+交给模型；它没有执行结果，所以并入的同一事务就把等待占位推到 ``completed``，占位已不在等待
+（已作答、已作废）的迟到决定只确认、不写入。并入前不必先闭合工具协议：``load_message`` 发请求前会
 把被用户消息隔开的工具结果按调用恢复到合法顺序。
 """
 
 import asyncio
 from typing import cast
 
+from sqlalchemy.orm import Session as DbSession
+
 from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
 from app.core.events import InputConsumedEvent, ToolCallStatusChangedEvent
 from app.core.workflow.branch import session_title
+from app.core.workflow.decision_expiry import (
+    expire_decisions,
+    expired_notice,
+    incoming_decision_effects,
+)
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.session_message import (
@@ -86,6 +94,7 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
         routed = await _route_decision(decision, step_id)
         if routed is not None:
             return {**route_state(state.step_count, ReactRoute.TOOLS), "batch": routed, "wait_for_input": False}
+    await asyncio.to_thread(_expire_decisions_on_user_input, step_id)
     notices = rc.mailbox.take_notices()
     if notices:
         await asyncio.to_thread(_write_notices, notices)
@@ -103,6 +112,22 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
         patch["title_requested"] = True
     # 下一模型步不再看上一批观察或复用本次挂起请求。
     return patch
+
+
+def _expire_decisions_on_user_input(step_id: str) -> None:
+    """mailbox 里有用户输入时，先作废等用户回应的等待决定并告知模型；工作线程执行。
+
+    放在取通知之前、而不是写那条输入的事务里：通知要与这批通知合成一条、排在输入前面，写输入时
+    才结算就来不及了。代价是结算与输入不同事务——输入随后确认失败（极少：投递后、并入前被撤回）
+    时提问已作废而输入没写入，可接受。排在这条输入前面的决定（先作答、后发消息）会先结算占位，
+    所以它回答的调用不作废；排在后面的决定并入时发现占位已作废，只确认不写入。
+    """
+    rc = _runtime_context()
+    effects = incoming_decision_effects(rc.mailbox.ordered())
+    if effects.user_input is None:
+        return
+    for call_id in expire_decisions(step_id=step_id, keep=effects.answered_before_input):
+        rc.mailbox.notify(expired_notice(call_id, "user_message"))
 
 
 def _executes_tool(message: SessionMessage) -> bool:
@@ -198,17 +223,31 @@ def _write_message(session_message: SessionMessage, *, step_id: str, claim_decis
     来源），供 Transport 投影出 user 消息。
     后台结论的认领、并入与原占位落定共用此事务；卡片事件只在提交后发布。
     ``claim_decision`` 只用于要执行的决定：同一事务把这次调用仍为 ``pending`` 的等待占位推到
-    ``running``（占位已不在上下文时不动）。
+    ``running``（占位已不在上下文时不动）。其余决定（``reply`` 类）在同一事务把占位推到
+    ``completed``、载荷并进展示数据：决定入口当时校验通过不代表并入时仍在等待（提问可能已被新
+    回合作废），所以这里再看一次，不在等待就只确认、不写入，返回 ``False``。
     """
     rc = _runtime_context()
     context = _message_context()
     background_event = None
+    answered_event = None
     with main_db_factory().begin() as db:
         acked = service_depends.get_session_message_queue().ack(db, [cast(int, session_message.id)])
         current = acked.get(cast(int, session_message.id))
         if current is None:
             return False
+        if isinstance(current.body, DecisionBody) and not claim_decision:
+            answered_event = _settle_answered(current.body, step_id=step_id, db=db)
+        stale_decision = (
+            isinstance(current.body, DecisionBody) and not claim_decision and answered_event is None
+        )
         message, metadata = current.body.render()
+        if stale_decision:
+            log.info("prepare_input_stale_decision_dropped", extra={
+                "msg": "决定并入时调用已不在等待，只确认不写入",
+                "data": {"run_id": rc.run.id, "tool_call_id": metadata.tool_call_id},
+            })
+            return False
         # 回合输入以队列行 id 为消息身份：快照里的用户消息与途中来信都按它寻址。
         is_turn_input = metadata.kind in TURN_INPUT_KINDS
         context.add_message(
@@ -231,6 +270,8 @@ def _write_message(session_message: SessionMessage, *, step_id: str, claim_decis
             background_event = settle_background_placeholder(
                 current.body.tool_call_id, current.body, step_id=step_id, db=db
             )
+    if answered_event is not None:
+        emit(answered_event)
     if background_event is not None:
         log.info("background_placeholder_settled", extra={
             "msg": "后台结论已并入，占位已结算",
@@ -250,6 +291,42 @@ def _write_message(session_message: SessionMessage, *, step_id: str, claim_decis
             )
         )
     return True
+
+
+def _settle_answered(
+    body: DecisionBody, *, step_id: str, db: DbSession
+) -> ToolCallStatusChangedEvent | None:
+    """``reply`` 类决定并入时结算等待占位，返回提交后才可发布的卡片事件；占位不在等待时返回 ``None``。
+
+    这类工具没有执行结果，占位只能在这里收尾：推到 ``completed``（驳回也是——用户已经作出决定），
+    决定与载荷并进展示数据，卡片据此显示回答。占位离开 ``pending`` 后决定入口不再认它在等待，
+    重复提交被拒，「等你操作」的计数随状态事件更新。
+    """
+    rc = _runtime_context()
+    context = _message_context()
+    placeholder = context.tool_result_metadata(body.tool_call_id)
+    if placeholder is None or not placeholder.awaiting_decision:
+        return None
+    written = context.update_tool_result_metadata(
+        body.tool_call_id,
+        ToolMessageMetadata(
+            status="completed",
+            display_data={
+                **(placeholder.display_data or {}),
+                "decision": body.decision,
+                **(body.data or {}),
+            },
+        ),
+        db=db,
+    )
+    return ToolCallStatusChangedEvent(
+        session_id=rc.run.session_id,
+        run_id=rc.run.id,
+        step_id=step_id,
+        tool_call_id=body.tool_call_id,
+        status=written.status,
+        display_data=written.display_data,
+    )
 
 
 def _cancel_before_request(step_id: str, run_id: int) -> None:

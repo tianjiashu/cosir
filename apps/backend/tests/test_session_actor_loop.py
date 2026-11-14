@@ -193,13 +193,13 @@ def harness(monkeypatch):
         lambda session_id, ids, _hint, **_kw: settled.append((session_id, list(ids)))
         or frozenset({session_id}),
     )
-    # Run 落定时作废回合类等待决定要读库；记下调用，``expiring`` 里的调用视为被作废
-    # （结算本身见 test_turn_decision_after_run）。
+    # Run 落定时作废等用户回应的决定要读库；记下调用，``expiring`` 里的调用视为被作废
+    # （结算本身见 test_decision_expiry_after_run）。
     expiring: list[str] = []
     expired: list[tuple[int, str]] = []
     monkeypatch.setattr(
         actor_module,
-        "expire_turn_decisions_after_run",
+        "expire_decisions_after_run",
         lambda session_id, hint: expired.append((session_id, hint)) or list(expiring),
     )
     space = SimpleNamespace(
@@ -737,7 +737,7 @@ async def test_completed_run_keeps_background_entries(harness) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Run 落定：回合类等待决定（提问）一并作废
+# Run 落定：等用户回应的决定（提问）一并作废
 # ---------------------------------------------------------------------------
 
 

@@ -39,7 +39,7 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
     )
     monkeypatch.setattr(
         recover_module,
-        "expire_turn_decisions_after_run",
+        "expire_decisions_after_run",
         lambda session_id, hint: calls.append(("expire", (session_id, hint))) or [],
     )
     monkeypatch.setattr(

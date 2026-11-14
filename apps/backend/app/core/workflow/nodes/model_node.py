@@ -204,6 +204,20 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
         return {**route_state(step_count, ReactRoute.TOOLS), "batch": batch}
 
     # 无工具调用且 finish_reason 非 None：正文可以为空；结构化处理作为已完成 Run 的支线。
+    #
+    # 「这次响应是最终回复」只能在这里、整段流收完之后判定，没法在正文出来之前知道。实测
+    # （2026-11-14，deepseek-flash 与 deepseek-v4-pro 各 12 次流式请求，纯文字 / 给了工具但只答文字 /
+    # 只调工具 / 先说话再调工具四种情形）分块顺序无一例外是：
+    #
+    #     空的首块（只声明角色）→ 推理 → 正文 → 工具调用 → 结束信号
+    #
+    # finish_reason 每次都只出现一次、在最后一块，那一块不带正文或工具增量（与用量同块）。「先说话再
+    # 调工具」时正文块排在工具调用块前面，所以看到正文时无从知道后面是结束还是工具调用。只测了
+    # DeepSeek；这是 OpenAI 流式协议的通行顺序，其他兼容厂商未实测。
+    #
+    # 由此定下的取舍：模型的最终正文拦不住——它已经流给用户了。所以 Run 带着未答的提问完成时
+    # （提问挂着时被后台结果唤醒、模型说完话就结束），不为「回到挂起」另做一套判定：正文照常显示，
+    # 提问的去留由落定点按结局决定（见 ``SessionActor._expire_decisions``）。
     final_answer = content_to_text(ai_message.get("content"))
     structured = rc.agent.structured_output is not None
     log.info(

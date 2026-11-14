@@ -591,7 +591,7 @@ function handleMessage(res, body, sessionId) {
     reasoningEffort: body.reasoningEffort ?? null,
     disabledToolGroups: body.disabledToolGroups ?? [],
   };
-  // 与后端一致：新回合开启时，有效期为回合的等待（提问）作废为「未作答」；交接不受影响。
+  // 与后端一致：用户发了新消息，等用户回应的等待（提问）作废为「未作答」；交接不受影响。
   const base = settleAwaiting(states.get(sessionId) ?? emptyState(), (part) => part.display_data?.kind === "user-question", (part) => ({
     ...part, status: "cancelled", awaitingUser: false, error: "未作答",
   }));

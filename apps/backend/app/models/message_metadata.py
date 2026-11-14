@@ -38,12 +38,14 @@ TURN_INPUT_KINDS: frozenset[MessageKind] = frozenset({"user_input", "agent_messa
 
 class NoticeEntry(BaseModel):
     """合成进一条 ``<system_notice>`` 的单条通知：撤回回合时据此重新投递 Session 级通知，工具准入
-    通知的推导据 ``banned_tools`` 对照上次告知的禁用集合（见 ``NOTICE_LEVELS``）。"""
+    通知的推导据 ``banned_tools`` 对照上次告知的禁用集合，未了结事项通知据 ``open_items`` 对照上次
+    告知的清单（见 ``NOTICE_LEVELS``）。"""
 
     model_config = ConfigDict(extra="forbid")
     notice_kind: str
     content: str
     banned_tools: list[str] | None = None
+    open_items: list[str] | None = None
 
 
 class UserMessageMetadata(BaseModel):

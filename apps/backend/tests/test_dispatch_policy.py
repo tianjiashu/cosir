@@ -232,4 +232,4 @@ def test_agent_message_and_user_input_share_the_one_input_per_run_channel() -> N
     ],
 )
 def test_send_delivery(phase, awaits: bool, expected: str) -> None:
-    assert dispatch_policy.send_delivery(phase, awaits_turn_decision=awaits) == expected
+    assert dispatch_policy.send_delivery(phase, awaits_user_reply=awaits) == expected

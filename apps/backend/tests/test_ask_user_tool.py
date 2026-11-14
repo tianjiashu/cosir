@@ -141,7 +141,7 @@ def test_first_call_registers_the_question_and_suspends() -> None:
 def test_definition_declares_a_turn_scoped_reply_decision() -> None:
     definition = build_ask_user_definition()
 
-    assert (definition.user_decision, definition.decision_lifetime) == ("reply", "turn")
+    assert (definition.user_decision, definition.decision_lifetime) == ("reply", "until_user_input")
     assert definition.decision_model is AskUserAnswers
     # 需要用户作答的工具只给能操作界面的 Session：子 Agent 的工具清单里没有它。
     assert definition.requires_user_surface is True

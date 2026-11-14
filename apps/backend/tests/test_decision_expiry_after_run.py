@@ -1,4 +1,4 @@
-"""Run 落定后作废回合类等待决定：真实主库上的结算（接入点见 ``test_session_actor_loop.py`` 与
+"""Run 落定后作废等用户回应的决定：真实主库上的结算（接入点见 ``test_session_actor_loop.py`` 与
 ``test_recover_after_restart.py``）。"""
 
 from __future__ import annotations
@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.tool import placeholder_settlement
-from app.core.tool.placeholder_settlement import expire_turn_decisions_after_run
+from app.core.workflow import decision_expiry
+from app.core.workflow.decision_expiry import expire_decisions_after_run
 from app.models.errors.session_command_errors import SessionCommandConflictError
 from app.models.message_metadata import ToolMessageMetadata
 from app.models.session_context import SessionContextRecord
@@ -19,14 +19,14 @@ from app.service.conversation import tool_decision_service
 
 @pytest.fixture
 def asked(tmp_path: Path, isolated_storage, monkeypatch: pytest.MonkeyPatch):
-    """一个 Session 里两次等用户决定的调用：提问（有效期为回合）与交接（一直等到用户决定）。"""
-    lifetimes = {"ask_tool": "turn", "handoff_tool": "open"}
+    """一个 Session 里两次等用户决定的调用：提问（等用户回应）与交接（一直等到用户决定）。"""
+    lifetimes = {"ask_tool": "until_user_input", "handoff_tool": "until_decided"}
     registry = SimpleNamespace(
         get_tool_definition=lambda name: SimpleNamespace(
             decision_lifetime=lifetimes[name], decision_model=None
         )
     )
-    monkeypatch.setattr(placeholder_settlement, "get_tool_registry", lambda: registry)
+    monkeypatch.setattr(decision_expiry, "get_tool_registry", lambda: registry)
     monkeypatch.setattr(tool_decision_service, "get_tool_registry", lambda: registry)
     workspace = depends.get_workspace_crud().create("ws", str(tmp_path))
     session = depends.get_session_crud().create(workspace.id, "session")
@@ -65,20 +65,20 @@ def _placeholder(session_id: int, call_id: str) -> ToolMessageMetadata:
 
 def test_only_turn_scoped_decisions_expire_when_the_run_settles(asked: int) -> None:
     """提问随 Run 落定作废；交接要等到交还，不动。只改卡片状态，展示数据保留。"""
-    assert expire_turn_decisions_after_run(asked, "已停止") == ["call-ask"]
+    assert expire_decisions_after_run(asked, "已停止") == ["call-ask"]
 
     question = _placeholder(asked, "call-ask")
     assert (question.status, question.error) == ("cancelled", "已停止")
     assert question.display_data == {"kind": "probe"}
     assert _placeholder(asked, "call-hand").status == "pending"
     # 已结算的不再动：重复调用幂等。
-    assert expire_turn_decisions_after_run(asked, "未作答") == []
+    assert expire_decisions_after_run(asked, "未作答") == []
     assert _placeholder(asked, "call-ask").error == "已停止"
 
 
 def test_expired_question_can_no_longer_be_answered(asked: int) -> None:
     """作废后决定入口不再认它在等待：回答不会在 Run 结束之后开出新 Run。"""
-    expire_turn_decisions_after_run(asked, "已停止")
+    expire_decisions_after_run(asked, "已停止")
 
     with pytest.raises(SessionCommandConflictError) as rejected:
         tool_decision_service.ToolDecisionService().submit(asked, "call-ask", "approve")

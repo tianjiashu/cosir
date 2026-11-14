@@ -8,6 +8,7 @@ import pytest
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.message_queue.session_message import (
+    AgentMessageBody,
     BackgroundResultBody,
     DecisionBody,
     NoticeBody,
@@ -17,7 +18,7 @@ from app.core.workflow.message_queue.session_message import (
 )
 from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.nodes import prepare_input_node
-from app.models.conversation_input import UserInputPresentation
+from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.message_metadata import NoticeEntry
 from app.models.session_kind import SessionType
 from tests.runtime_context_stub import runtime_stub
@@ -88,7 +89,6 @@ def _context(
         if latest is not None and latest[1].notice_kind == kind
         else None,
         awaiting_decision_calls=lambda: list(awaiting),
-        input_opens_turn=lambda *, from_agent: True,
     )
 
 
@@ -293,10 +293,10 @@ def test_decisions_this_drive_is_about_to_settle_are_not_open(monkeypatch, open_
 
     registry = SimpleNamespace(
         get_tool_definition=lambda name: SimpleNamespace(
-            decision_lifetime="turn" if name == "ask_user" else "open"
+            decision_lifetime="until_user_input" if name == "ask_user" else "until_decided"
         )
     )
-    monkeypatch.setattr("app.core.tool.placeholder_settlement.get_tool_registry", lambda: registry)
+    monkeypatch.setattr("app.core.workflow.decision_expiry.get_tool_registry", lambda: registry)
     awaiting = (("call-ask", "ask_user"), ("call-hand", "browser_handoff"))
 
     answered = RunMailbox()
@@ -304,7 +304,7 @@ def test_decisions_this_drive_is_about_to_settle_are_not_open(monkeypatch, open_
     [notice] = _open(monkeypatch, _context(awaiting=awaiting), answered)
     assert notice.open_items == ["decision:call-hand"]
 
-    # 新回合会让提问作废（另有「提问未被回答」的通知），交接照常等交还。
+    # 用户发了新消息会让提问作废（另有「提问未被回答」的通知），交接照常等交还。
     new_turn = RunMailbox()
     new_turn.post(
         SessionMessage.of(
@@ -319,6 +319,21 @@ def test_decisions_this_drive_is_about_to_settle_are_not_open(monkeypatch, open_
     [notice] = _open(monkeypatch, _context(awaiting=awaiting), new_turn)
     assert notice.open_items == ["decision:call-hand"]
     assert module._OPEN_ITEMS_PREFIX in notice.content
+
+    # 别的 Agent 发来的消息与用户答不答无关：提问照常在等，提醒里仍列着它。
+    from_agent = RunMailbox()
+    from_agent.post(
+        SessionMessage.of(
+            AgentMessageBody(
+                text="审查完成",
+                launch=RunLaunch(model_config_id="test/m1"),
+                source=MessageSource(session_id=9, name="审查"),
+            ),
+            message_id=5,
+        )
+    )
+    [notice] = _open(monkeypatch, _context(awaiting=awaiting), from_agent)
+    assert notice.open_items == ["decision:call-ask", "decision:call-hand"]
 
 
 def _notice(

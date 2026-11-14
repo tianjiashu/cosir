@@ -17,6 +17,7 @@ from typing import Literal, cast
 
 from app.core.workflow.message_queue.session_message import (
     LAUNCH_INPUT_BODIES,
+    Delivery,
     LaunchInputBody,
     RunLaunch,
     SessionMessage,
@@ -99,6 +100,20 @@ def next_action(
         return StartRun(cast(LaunchInputBody, selected.body).launch)
     launch = RunLaunch.from_run(current)
     return StartRun(launch) if launch is not None else Stay()
+
+
+def send_delivery(phase: Phase, *, awaits_user_reply: bool) -> Delivery:
+    """用户发送一条消息时的并入时机。
+
+    - 空闲：``immediate``。取消后队列里可能还留着旧的排队消息，新发送的这条应先跑（见
+      :func:`next_input`）。
+    - 挂起且有决定在等用户回应（提问）：``immediate``，消息唤醒同一个 Run——用户没答、
+      直接说了新的话，这句话就是回应，提问随它开启的新回合作废（``decision_expiry``）。
+    - 其余（驱动中、只在等后台结果的挂起）：``next_run`` 排队，当前 Run 结束后依次处理。
+    """
+    if phase == "idle" or (phase == "suspended" and awaits_user_reply):
+        return "immediate"
+    return "next_run"
 
 
 def next_input(pending: list[SessionMessage]) -> SessionMessage | None:

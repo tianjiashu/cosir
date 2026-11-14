@@ -200,7 +200,7 @@ async def chain(monkeypatch):
     monkeypatch.setattr(
         service_module.service_depends,
         "get_tool_decision_service",
-        lambda: SimpleNamespace(awaits_turn_decision=lambda _session_id: waiting.question),
+        lambda: SimpleNamespace(awaits_user_reply=lambda _session_id: waiting.question),
     )
     # 推进前交出「队列变了」；本文件不验证投影（见 test_session_actor_loop 的「先刷新再投递」）。
     set_event_sink(lambda _event: None)  # 下一个用例由 conftest 的 autouse 夹具换回

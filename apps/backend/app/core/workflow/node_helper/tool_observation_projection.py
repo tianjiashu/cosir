@@ -13,6 +13,10 @@ from app.core.tool.execute.tool_terminal_projection import (
     terminal_event,
 )
 from app.core.tool.schemas import ToolObservation
+from app.core.workflow.decision_expiry import (
+    ends_on_user_input,
+    expire_decisions,
+)
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.session_message import (
     BackgroundResultBody,
@@ -64,6 +68,10 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
             },
         )
         emit(event)
+        # 模型又问了一次（典型是停止后恢复）：同一 Session 至多一个等用户回应的等待，旧的作废。
+        # 不另行告知模型——是它自己重新问的。
+        if observation.awaiting_decision and ends_on_user_input(observation.tool_name):
+            expire_decisions(step_id=step_id, keep=frozenset({call_id}))
 
 
 def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:

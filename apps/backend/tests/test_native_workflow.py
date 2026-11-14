@@ -22,9 +22,8 @@ def loop(monkeypatch):
     context = SimpleNamespace(
         begin_run=lambda *args: None,
         latest_notice=lambda _kind: None,
-        # 驱动开始时推导未了结事项要问的两件事；这里没有等用户决定的调用。
+        # 驱动开始时推导未了结事项要问它；这里没有等用户决定的调用。
         awaiting_decision_calls=lambda: [],
-        input_opens_turn=lambda *, from_agent: True,
         load_message=lambda: [
             {"role": "user", "content": "问题"},
             {"role": "assistant", "content": "自然回答"},

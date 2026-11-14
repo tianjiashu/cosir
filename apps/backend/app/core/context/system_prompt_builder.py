@@ -475,7 +475,7 @@ class SystemPromptBuilder:
         """构建工作方式层：过程叙述与收尾。
 
         工具怎么用归 Layer T，本层只讲怎么和用户协作：开始前说一句要做什么、发现变化就说、
-        不逐步播报、结束时先给结论。文案与工具集无关，恒定生成。
+        不逐步播报、信息够了就动手（权衡时给建议而不是罗列选项，免得动不动就问）、结束时先给结论。文案与工具集无关，恒定生成。
 
         返回:
             包裹在 ``<work_layer>`` 标签内的工作方式文本。
@@ -488,6 +488,12 @@ class SystemPromptBuilder:
                     "about to do. When something you find changes the plan, say so in one "
                     "sentence. Do not narrate every step; these lines are shown to the user while "
                     "you work."
+                ),
+                (
+                    "- When you have enough information to act, act. Do not re-derive facts "
+                    "already established in the conversation, re-litigate a decision the user has "
+                    "already made, or narrate options you will not pursue. If you are weighing a "
+                    "choice, give a recommendation, not an exhaustive survey."
                 ),
                 (
                     "- When done, lead with the result. Mention anything you could not verify or "

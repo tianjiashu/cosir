@@ -375,6 +375,27 @@ class RuntimeMessageContextManager:
                     return call
         return None
 
+    def awaiting_decision_calls(self) -> list[tuple[str, str]]:
+        """上下文里仍在等用户决定的调用「id、工具名」，按写入顺序（跨 Run，不含继承副本）。
+
+        与决定入口同一条等待条件（``ToolMessageMetadata.awaiting_decision``）。找不到发起调用的
+        行（协议不完整）跳过：没有工具名就无从读它的声明。
+        """
+        calls: list[tuple[str, str]] = []
+        for entry in self._entries:
+            metadata = entry.metadata
+            if (
+                entry.run_id is None
+                or entry.message["role"] != "tool"
+                or not isinstance(metadata, ToolMessageMetadata)
+                or not metadata.awaiting_decision
+            ):
+                continue
+            call = self.find_tool_call(entry.message["tool_call_id"])
+            if call is not None:
+                calls.append((call["id"], call["function"]["name"]))
+        return calls
+
     def tool_result_metadata(self, tool_call_id: str) -> ToolMessageMetadata | None:
         """按调用身份取工具结果行的展示 metadata（跨 Run）；没有结果行时返回 ``None``。"""
         for entry in reversed(self._entries):

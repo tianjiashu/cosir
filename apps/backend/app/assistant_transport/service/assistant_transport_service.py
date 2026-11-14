@@ -21,8 +21,8 @@ from app.assistant_transport.request import DecisionRequest, SendMessageRequest
 from app.assistant_transport.state.snapshot_window import HistoryPage
 from app.assistant_transport.stream.session_sse_stream import SessionSseStream
 from app.config.logging.logger import log
+from app.core.workflow.message_queue.dispatch_policy import send_delivery
 from app.core.workflow.message_queue.session_message import (
-    Delivery,
     RunLaunch,
     SessionMessage,
     UserInputBody,
@@ -47,11 +47,12 @@ class AssistantTransportService:
     # ── 命令 ──────────────────────────────────────────────────────────────
 
     async def send(self, session_id: int, request: SendMessageRequest) -> None:
-        """发送：Session 有活动 Run（含挂起）时排队（``next_run``），空闲时立即处理（``immediate``）。
+        """发送：Session 有活动 Run（含挂起）时排队（``next_run``），空闲时立即处理（``immediate``）；
+        挂起的 Run 在等用户回答提问时也立即处理——消息唤醒它，提问作废（规则见
+        ``dispatch_policy.send_delivery``）。
 
-        排队消息在当前 Run 结束后每个 Run 一条依次处理，用户可在队列里改为立即发送或删除；挂起时排队
-        不唤醒 Run。空闲时用 ``immediate``：取消后队列里可能还留着旧的排队消息，新发送的这条应先跑
-        （见 ``dispatch_policy.next_input``）。判定阶段与入队在 Session 闸门内完成，actor 不会在两者
+        排队消息在当前 Run 结束后每个 Run 一条依次处理，用户可在队列里改为立即发送或删除；只在等
+        后台结果的挂起，排队不唤醒 Run。判定阶段与入队在 Session 闸门内完成，actor 不会在两者
         之间开出或落定 Run；执行者自行结束不经闸门，此时排队的消息由刚结束的 Run 收尾时接续。
 
         Agent 身份沿用 Session 当前 Run：Session 不绑定 Agent，身份随发起配置走，子 Agent 的 Session
@@ -77,7 +78,14 @@ class AssistantTransportService:
         )
         space = await asyncio.to_thread(session_runtime_spaces.get_or_create, session_id)
         async with space.async_operation():
-            delivery: Delivery = "immediate" if await space.actor.phase() == "idle" else "next_run"
+            phase = await space.actor.phase()
+            delivery = send_delivery(
+                phase,
+                awaits_user_reply=phase == "suspended"
+                and await asyncio.to_thread(
+                    service_depends.get_tool_decision_service().awaits_user_reply, session_id
+                ),
+            )
             await asyncio.to_thread(
                 session_runtime_spaces.enqueue, session_id, SessionMessage.of(body, delivery=delivery)
             )
@@ -231,6 +239,7 @@ class AssistantTransportService:
         异常:
             KeyError: Session 不存在。
             SessionCommandConflictError: ``DECISION_NOT_AWAITED`` / ``DECISION_ALREADY_SUBMITTED``。
+            UserInputRejectedError: ``DECISION_DATA_INVALID``（载荷不符合工具声明的形状）。
         """
         await asyncio.to_thread(self._sessions.get_session, session_id)
         await asyncio.to_thread(
@@ -239,6 +248,7 @@ class AssistantTransportService:
             tool_call_id,
             request.decision,
             feedback=request.feedback,
+            data=request.data,
         )
 
     # ── 订阅与历史分页 ────────────────────────────────────────────────────────

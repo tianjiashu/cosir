@@ -37,6 +37,7 @@ import asyncio
 import contextlib
 from typing import TYPE_CHECKING, cast
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.context.context_store import ContextStore
 from app.core.events import SessionQueueChangedEvent
@@ -44,9 +45,15 @@ from app.core.events.event_sink import event_sink
 from app.core.session_execution import SessionExecution
 from app.core.session_recall import SessionRecall
 from app.core.tool.multi_agent import derived_report
+from app.core.tool.placeholder_settlement import RUN_STOPPED_HINT
 from app.core.workflow.cancel.run_cancellation_registry import (
     CancelReason,
     cancel_end_reason,
+)
+from app.core.workflow.decision_expiry import (
+    UNANSWERED_HINT,
+    expire_decisions_after_run,
+    expired_notice,
 )
 from app.core.workflow.message_queue import dispatch_policy
 from app.core.workflow.message_queue.session_message import SessionMessage
@@ -345,7 +352,43 @@ class SessionActor:
                 end_reason=cancel_end_reason(reason),
             )
             if cancelled is not None:
-                await self._report_settled(cancelled)
+                await self._run_settled(cancelled)
+
+    async def _expire_decisions(self, run: RunRecord) -> None:
+        """Run 被停下或失败：仍在等用户回应的决定（提问）作废，并给模型留一条通知，随下一次驱动并入。
+
+        被停下、失败的回合不会再往下走；留着卡片，之后的回答会开新 Run、落进新回合，被停下的 Run
+        还会先读到「用户已停止」再读到回答（见 ``expire_decisions_after_run``）。用户停止标
+        「已停止」，其余标「未作答」。通知经外部队列投、不开新 Run：恢复或下一条消息到来时模型才
+        需要知道。
+
+        正常完成不作废：模型的最终正文拦不住（见 ``model_node`` 关于结束信号的实测），提问挂着时
+        被别的消息唤醒、说完话就完成是正常路径——它开口前已被提醒提问还在等（``drive_notices``
+        的未了结事项），此时作废只会让卡片在用户没操作时消失。之后的回答开新 Run 接着干。
+        """
+        if run.status == RunStatus.COMPLETED.value:
+            return
+        stopped = run.end_reason in (
+            Constant.Run.RUN_END_REASON_USER_CANCELLED,
+            Constant.Run.RUN_END_REASON_PARENT_CANCELLED,
+        )
+        try:
+            expired = await asyncio.to_thread(
+                expire_decisions_after_run,
+                self.session_id,
+                RUN_STOPPED_HINT if stopped else UNANSWERED_HINT,
+            )
+            for call_id in expired:
+                notice = expired_notice(call_id, "run_stopped" if stopped else "run_ended")
+                await asyncio.to_thread(self._queue.put, self.session_id, SessionMessage.of(notice))
+        except Exception:
+            log.exception(
+                "decision_expiry_failed",
+                extra={
+                    "msg": "Run 落定后作废等用户回应的决定失败",
+                    "data": {"session_id": self.session_id, "run_id": run.id},
+                },
+            )
 
     async def resume(self) -> None:
         """当前 Run 为 cancelled / failed 且没有执行者时，从 prepare_input 续跑同一个 Run。
@@ -452,7 +495,7 @@ class SessionActor:
                     RunTransition.CANCEL,
                     end_reason=cancel_end_reason(reason),
                 ) or settled
-            await self._report_settled(settled)
+            await self._run_settled(settled)
             if reason is None and settled.status in CONTINUE_AFTER_STATUSES:
                 pending = await asyncio.to_thread(self._queue.pending_nowait, self.session_id)
                 if pending:
@@ -468,13 +511,16 @@ class SessionActor:
                 },
             )
 
-    async def _report_settled(self, run: RunRecord) -> None:
-        """Run 的唯一汇报点：落定为终态（挂起不算）时交给派生汇报，规则都在 ``derived_report``。
+    async def _run_settled(self, run: RunRecord) -> None:
+        """Run 的唯一落定点（挂起不算）：被停下或失败时先收尾它留下的、等用户回应的决定，再交给派生
+        汇报（规则都在 ``derived_report``）。
 
-        两个落定点（执行释放、挂起 Run 被取消）都经这里；汇报失败只记录，不影响本 Session 的结局与接续。
+        两条落定路径（执行释放、挂起 Run 被取消）都经这里；两步各自失败只记录，不影响本 Session
+        的结局与接续。
         """
         if run.status not in TERMINAL_RUN_STATUSES:
             return
+        await self._expire_decisions(run)
         try:
             await asyncio.to_thread(derived_report.report_settled, run)
         except Exception:

@@ -18,23 +18,25 @@ from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolCall, ToolDefinition
+from app.core.workflow import decision_expiry
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.session_message import (
+    AgentMessageBody,
     DecisionBody,
     NoticeBody,
     RunLaunch,
     SessionMessage,
     UserInputBody,
 )
-from app.core.workflow.node_helper import tool_batch_runner, turn_decision_expiry
+from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.node_helper.tool_observation_projection import (
     settle_decision_observation,
 )
 from app.core.workflow.nodes import prepare_input_node
-from app.models.conversation_input import UserInputPresentation
+from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.enums.react_route import ReactRoute
 from app.models.message_metadata import ToolMessageMetadata
 from tests.runtime_context_stub import runtime_stub
@@ -111,9 +113,6 @@ class _Context:
     def awaiting_decision_calls(self) -> list[tuple[str, str]]:
         awaiting = self.placeholder is not None and self.placeholder.awaiting_decision
         return [("call-hitl", "hitl_tool")] if awaiting else []
-
-    def input_opens_turn(self, *, from_agent: bool) -> bool:
-        return True
 
 
 # ---------------------------------------------------------------------------
@@ -602,7 +601,7 @@ def test_decision_result_without_display_keeps_the_placeholder_card() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 有效期为回合的决定（提问）：新回合开启时作废
+# 等用户回应的决定（提问）：用户说了别的话就作废
 # ---------------------------------------------------------------------------
 
 
@@ -615,7 +614,7 @@ def _user_input(message_id: int = 7) -> SessionMessage:
     return SessionMessage.of(body, message_id=message_id)
 
 
-def _question_rc(acked: dict[int, SessionMessage], lifetime: str = "turn"):
+def _question_rc(acked: dict[int, SessionMessage], lifetime: str = "until_user_input"):
     rc = _prepare_rc(acked, decision_mode="reply")
     rc.tool_definitions["hitl_tool"] = dataclasses.replace(
         rc.tool_definitions["hitl_tool"], decision_lifetime=lifetime
@@ -626,7 +625,7 @@ def _question_rc(acked: dict[int, SessionMessage], lifetime: str = "turn"):
 @pytest.fixture
 def expiry_events(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     events: list[Any] = []
-    monkeypatch.setattr(turn_decision_expiry, "emit", events.append)
+    monkeypatch.setattr(decision_expiry, "emit", events.append)
     return events
 
 
@@ -685,10 +684,10 @@ async def test_answer_queued_after_the_message_is_dropped(expiry_events: list[An
 
 
 @pytest.mark.usefixtures("isolated_storage")
-async def test_open_ended_decision_survives_a_new_turn(expiry_events: list[Any]) -> None:
-    """有效期不是回合的等待（交接）不随新回合结束。"""
+async def test_decision_awaiting_an_explicit_decision_survives_a_new_user_message(expiry_events: list[Any]) -> None:
+    """一直等到用户决定的等待（交接）不因用户发了新消息而结束。"""
     message = _user_input()
-    rc = _question_rc({7: message}, lifetime="open")
+    rc = _question_rc({7: message}, lifetime="until_decided")
     rc.mailbox.post(message)
     context = _Context(placeholder=ToolMessageMetadata(status="pending"))
 
@@ -696,6 +695,32 @@ async def test_open_ended_decision_survives_a_new_turn(expiry_events: list[Any])
 
     assert context.updated == [] and expiry_events == []
     assert len(context.added) == 1
+
+
+@pytest.mark.usefixtures("isolated_storage")
+async def test_a_message_from_another_agent_does_not_expire_the_question(
+    monkeypatch: pytest.MonkeyPatch, expiry_events: list[Any]
+) -> None:
+    """子 Agent 的汇报、别的会话发来的消息与用户答不答无关：提问照常等回答，不通知模型。
+
+    它们同样会开启回合；曾经只要是开回合的输入就作废提问，卡片会在用户没操作时消失。
+    """
+    monkeypatch.setattr(prepare_input_node, "emit", lambda _event: None)
+    body = AgentMessageBody(
+        text="审查完成",
+        launch=RunLaunch(model_config_id="test/m1"),
+        source=MessageSource(session_id=9, name="审查"),
+    )
+    message = SessionMessage.of(body, message_id=7)
+    rc = _question_rc({7: message})
+    rc.mailbox.post(message)
+    context = _Context(placeholder=ToolMessageMetadata(status="pending"))
+
+    await _prepare(rc, context)
+
+    assert context.updated == [] and expiry_events == []
+    [written] = context.added
+    assert "审查完成" in str(written["message"]["content"])
 
 
 @pytest.mark.usefixtures("isolated_storage")
@@ -710,7 +735,7 @@ def test_asking_again_keeps_only_the_new_question(expiry_events: list[Any]) -> N
     context = _Two(placeholder=ToolMessageMetadata(status="pending"))
 
     with execution_scope(rc, context):
-        expired = turn_decision_expiry.expire_turn_decisions(
+        expired = decision_expiry.expire_decisions(
             step_id="step-1", keep=frozenset({"call-new"})
         )
 
@@ -718,8 +743,8 @@ def test_asking_again_keeps_only_the_new_question(expiry_events: list[Any]) -> N
     assert [call_id for call_id, _ in context.updated] == ["call-old"]
 
 
-def test_context_lists_awaiting_calls_and_knows_which_inputs_open_a_turn() -> None:
-    """回合作废要问 context 两件事：哪些调用还在等用户、这条输入并入后会不会开新回合。"""
+def test_context_lists_the_calls_still_awaiting_the_user() -> None:
+    """作废与未了结事项提醒都要问 context：哪些调用还在等用户。"""
     from app.core.context.context_entry import ContextEntry
     from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 
@@ -746,12 +771,3 @@ def test_context_lists_awaiting_calls_and_knows_which_inputs_open_a_turn() -> No
     ]
 
     assert manager.awaiting_decision_calls() == [("call-hitl", "hitl_tool")]
-
-    # 用户输入总开新回合；Agent 消息只在本 Run 还没有可见内容时开。
-    manager._run_turn, manager._run_shown = 1, True
-    assert manager.input_opens_turn(from_agent=False) is True
-    assert manager.input_opens_turn(from_agent=True) is False
-    manager._run_shown = False
-    assert manager.input_opens_turn(from_agent=True) is True
-    manager._run_turn = None
-    assert manager.input_opens_turn(from_agent=True) is True

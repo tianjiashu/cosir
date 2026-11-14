@@ -6,8 +6,8 @@
 ``<user_decision>`` 交给模型，同一个 Run 接着干。本工具没有自己的业务事实：等待与否看占位行，
 回答在占位的展示数据里。
 
-提问只在发起它的回合内有效（``decision_lifetime="turn"``）：用户不理卡片直接发消息、或模型又问
-一次，旧提问作废（``turn_decision_expiry``）。只给侧栏会话（``user_decision`` 工具天然需要用户界面），
+提问等的是用户的回应（``decision_lifetime="until_user_input"``）：用户不理卡片直接发消息、或模型又问
+一次，旧提问作废（``decision_expiry``）。只给侧栏会话（``user_decision`` 工具天然需要用户界面），
 子 Agent 需要用户决定时在结论里交代，由上级去问。
 """
 
@@ -79,7 +79,7 @@ class AskUserTool(HandlerBase):
             execution_mode="thread",
             user_decision="reply",
             decision_model=AskUserAnswers,
-            decision_lifetime="turn",
+            decision_lifetime="until_user_input",
         )
 
 

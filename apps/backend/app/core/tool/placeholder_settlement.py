@@ -18,6 +18,7 @@ from app.core.events import ToolCallStatusChangedEvent
 from app.core.events.event_sink import event_sink
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import ToolMessageMetadata
+from app.models.session_context import SessionContextRecord
 from app.service import depends as service_depends
 
 # 卡片短提示（约 5 字）：区分「被谁结束」，状态本身都是 ``cancelled``。
@@ -51,6 +52,25 @@ def cancel_placeholders(
     settled = service_depends.get_session_context_service().settle_placeholders(
         session_id, ids, status, hint, exclude=exclude, displays=displays
     )
+    publish_settled(settled, status, hint)
+    if settled:
+        log.info(
+            "background_placeholders_settled",
+            extra={
+                "msg": "后台占位行已结算",
+                "data": {"session_id": session_id, "status": status, "count": len(settled)},
+            },
+        )
+    return frozenset(record.session_id for record in settled)
+
+
+def publish_settled(
+    settled: Iterable[SessionContextRecord], status: ToolCallEventStatus, hint: str | None
+) -> None:
+    """把 Run 之外结算的占位投影到已物化的 snapshot；未物化的下次重建自会读到（见模块说明）。
+
+    本模块的 ``cancel_placeholders`` 与等用户回应的决定的作废（``decision_expiry``）共用。
+    """
     from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
     sink = event_sink()
@@ -76,17 +96,8 @@ def cancel_placeholders(
             log.warning(
                 "background_placeholder_projection_skipped",
                 extra={
-                    "msg": "后台占位已结算，snapshot 投影跳过（下次重建读到）",
+                    "msg": "占位已结算，snapshot 投影跳过（下次重建读到）",
                     "data": {"session_id": record.session_id, "tool_call_id": tool_call_id},
                 },
                 exc_info=True,
             )
-    if settled:
-        log.info(
-            "background_placeholders_settled",
-            extra={
-                "msg": "后台占位行已结算",
-                "data": {"session_id": session_id, "status": status, "count": len(settled)},
-            },
-        )
-    return frozenset(record.session_id for record in settled)

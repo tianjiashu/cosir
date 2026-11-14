@@ -126,6 +126,32 @@ class SessionContextService:
             settled.append(updated)
         return settled
 
+    def expire_awaiting_decisions(
+        self, session_id: int, tool_call_ids: frozenset[str], error: str
+    ) -> list[SessionContextRecord]:
+        """把 ``tool_call_ids`` 里仍在等用户决定的占位推到 ``cancelled``，返回实际改写的行。
+
+        :meth:`settle_placeholders` 不认这类行（``pending`` 的 HITL 占位）：它跨 Session 结算
+        「工作已经没了」的占位，重启时会把交接和挂起 Run 的提问一并打掉。这里按调用点名作废，
+        哪些调用该作废由调用方按工具声明决定。等待条件与决定入口同一条（``awaits_user``），已
+        结算的行不动，重复调用幂等。只改 metadata：占位仍是这次调用在模型协议上的结果。
+        """
+        settled: list[SessionContextRecord] = []
+        for record in self._crud.get(session_id, include_in_context=True):
+            if (
+                record.message["role"] != "tool"
+                or record.message["tool_call_id"] not in tool_call_ids
+                or not record.awaits_user
+            ):
+                continue
+            metadata = cast(ToolMessageMetadata, record.metadata).model_copy(
+                update={"status": "cancelled", "error": error}
+            )
+            updated = dataclasses.replace(record, metadata=metadata)
+            self._crud.replace_message(record.session_id, record.sequence, updated)
+            settled.append(updated)
+        return settled
+
     def latest_user_input(
         self, session_id: int, db: DbSession | None = None
     ) -> SessionContextRecord | None:
@@ -143,40 +169,35 @@ class SessionContextService:
                 return record if metadata.kind == "user_input" else None
         return None
 
-    def awaiting_decision_tool(
-        self, session_id: int, tool_call_id: str, *, db: DbSession | None = None
-    ) -> str | None:
-        """这次调用仍在等用户决定时返回其工具名，否则返回 ``None``。
+    def awaiting_decision_calls(
+        self, session_id: int, *, db: DbSession | None = None
+    ) -> dict[str, tuple[str, str]]:
+        """Session 里仍在等用户决定的调用：调用 id → 原调用的「工具名、参数 JSON」。
 
         等待与否的事实源是工具结果行：HITL 工具首次调用写入的等待占位 metadata 为 ``pending``；
         ``prepare_input`` 接收决定时在同一事务把它推到 ``running``，执行后由结算推到终态。所以
         「已决定、执行中」也不算等待，迟到的重复决定不会让原调用再重放一次。判定规则只在
-        ``SessionContextRecord.awaits_user``（与侧栏「等你操作」同一条）。工具名取自发起
-        这次调用的 assistant 消息，不依赖工具自己的业务事实（如交接登记）。
+        ``SessionContextRecord.awaits_user``（与侧栏「等你操作」同一条）。工具名与参数取自发起
+        这次调用的 assistant 消息，不依赖工具自己的业务事实（如交接登记）；参数供决定入口校验
+        带载荷的决定（所选项是否属于这次调用）。
         """
         records = [
             r
             for r in self._crud.get(session_id, include_in_context=True, db=db)
             if r.run_id is not None
         ]
-        result = next(
-            (
-                record
-                for record in reversed(records)
-                if record.message["role"] == "tool"
-                and record.message["tool_call_id"] == tool_call_id
-            ),
-            None,
-        )
-        if result is None or not result.awaits_user:
-            return None
-        for record in reversed(records):
-            if record.run_id is None or record.message["role"] != "assistant":
-                continue
-            for call in record.message.get("tool_calls") or ():
-                if call["id"] == tool_call_id:
-                    return call["function"]["name"]
-        return None
+        awaiting = {
+            record.message["tool_call_id"]
+            for record in records
+            if record.message["role"] == "tool" and record.awaits_user
+        }
+        return {
+            call["id"]: (call["function"]["name"], call["function"]["arguments"])
+            for record in records
+            if record.message["role"] == "assistant"
+            for call in record.message.get("tool_calls") or ()
+            if call["id"] in awaiting
+        }
 
     def close_unclosed_tool_calls_for_run(
         self, session_id: int, run_id: int, db: DbSession | None = None

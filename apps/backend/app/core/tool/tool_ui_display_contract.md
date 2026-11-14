@@ -29,8 +29,6 @@
 | `write_file` | `file-changes` | 结构化结果见第 4 节 |
 | `patch_write` | `file-changes` | 结构化结果见第 4 节 |
 | `apply_patch` | `file-changes` | 结构化结果见第 4 节 |
-| `delete_file` | `file-changes` | 结构化结果见第 4 节 |
-| `move_file` | `file-changes` | 结构化结果见第 4 节 |
 | `search_content` | `content-search-results` | 结构化结果见第 4 节 |
 | `find_files` | `file-list` | 结构化结果见第 4 节 |
 | `list_directory` | `directory-list` | 结构化结果见第 4 节 |
@@ -55,6 +53,7 @@
 | `send_message` | `agent-session-result` | 结构化结果见第 4 节 |
 | `session_status` | `agent-session-result` | 结构化结果见第 4 节 |
 | `propose_agent_configuration` | `agent-configuration-draft` | 结构化结果见第 4 节 |
+| `ask_user` | `user-question` | 结构化结果见第 4 节 |
 | `mcp` | `mcp-tool-result` | 结构化结果见第 4 节 |
 | `skill` | `skill-content` | 结构化结果见第 4 节 |
 
@@ -66,7 +65,7 @@
 |---|---|
 | read-file-meta | path、line_range（start/end，end 可为 END/null）、file_size；可选 truncated/status_hint，不含文件正文 |
 | image-read | images[{path,asset_id,width,height}]、failures[{path,hint}]；失败图片数与调用数不同 |
-| file-changes | changes[{path,new_path,status,patch,insertions,deletions}]、diff_stats；同路径多次操作保持原序，patch 可为空，不代表最终文件内容 |
+| file-changes | changes[{path,status,patch,insertions,deletions}]、diff_stats；status 只有 added / modified（删除与移动走终端）；同路径多次操作保持原序，patch 可为空，不代表最终文件内容 |
 | content-search-results | pattern、path、matches[{path,line,content,is_match}]、page、total_rows、match_count、scanned_files、skipped_files |
 | file-list | files[{path}]、pattern、path、page、match_count |
 | directory-list | path、entries、page、total_entries |
@@ -79,6 +78,7 @@
 | fork-session-result | title、child_session_id |
 | agent-session-result | send: operation/session_id/agent_name；status 另带 final_output/end_reason；当前 Session 状态由既有 Session 读取路径提供 |
 | agent-configuration-draft | status=draft、agent_id、role、description、system_prompt；保存和编辑属于 Workbench，遵守调用方只读限制 |
+| user-question | questions[{question,header,options[{label,description,preview?}],multi_select}]（参数原样）；作答后补 decision（approve / reject）、answers{问题原文: label 或自由文字，多选为列表}、annotations{问题原文: {notes}}；全部跳过只有 decision=reject；作废（未作答）不补字段，状态为 cancelled |
 | mcp-tool-result | action=call: server_name/tool_name/scope；action=list: servers[{server_name,scope,tools,error?}]，`scope` 为 system / workspace，单服务 error 不改变整个调用的生命周期 |
 | skill-content | action=list: skills[{name,description,scope}]；action=load: skill_name/resource_path/scope，正文只进模型上下文 |
 

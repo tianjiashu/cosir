@@ -58,10 +58,11 @@ class ToolDefinition:
     # 决定携带的结构化载荷（见 :class:`DecisionPayload`）；``None`` 表示决定只有批准 / 驳回与附言。
     # 只对 ``reply`` 类有意义：载荷渲染成给模型的正文，并进等待占位的展示数据。
     decision_model: type[DecisionPayload] | None = None
-    # 等待中的决定何时作废：``"turn"`` 只在发起它的回合内有效——并入一条开启新回合的输入、或同类
-    # 的新等待写下时作废（提问问的是「此刻做不做」，见 ``turn_decision_expiry``）；``"open"`` 一直
-    # 等到用户决定（交接要等到交还）。两者都随撤回所在回合、Session 删除结束。
-    decision_lifetime: Literal["turn", "open"] = "open"
+    # 等待中的决定等到什么时候：``"until_user_input"`` 等用户回应——作答、跳过，或用户说了别的话
+    # （那句话就是回应，等待作废）；模型又问一次、发起它的 Run 被停下或失败也结束它（提问，规则见
+    # ``decision_expiry``）。``"until_decided"`` 一直等到用户作出决定（交接要等到交还）。两者都随撤回
+    # 所在回合、Session 删除结束。
+    decision_lifetime: Literal["until_user_input", "until_decided"] = "until_decided"
     # 产出图片给模型看（观察的 ``images``）：本次 Run 的模型不支持图片输入时，准入门禁直接拒绝，
     # 不进 handler——判定只在 ``ToolAccessGate`` 一处，各工具不再各写一遍。
     returns_images: bool = False

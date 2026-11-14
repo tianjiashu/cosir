@@ -84,6 +84,11 @@ class RunMailbox:
                     return entry[2]
             return None
 
+    def ordered(self) -> list[SessionMessage]:
+        """按出队顺序列出当前全部消息，不取出（并入前要先看一眼会写下什么的调用方用）。"""
+        with self._lock:
+            return [entry[2] for entry in sorted(self._heap)]
+
     def pop(self) -> SessionMessage:
         with self._lock:
             return heapq.heappop(self._heap)[2]
