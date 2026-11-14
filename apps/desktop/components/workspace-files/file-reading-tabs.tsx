@@ -4,7 +4,7 @@ import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type Re
 import { useQuery } from "@tanstack/react-query";
 import { ReadingCommandsContext, type ReadingCommand, type ReadingCommandRegistry } from "@/lib/workspace-files/reading-commands";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { fileSession, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
+import { workspaceFiles, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
 import { WorkspaceFileIcon } from "./file-icon";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -53,7 +53,7 @@ export function FileReadingTabs({
   ref?: Ref<HTMLDivElement>;
   children: ReactNode;
 }) {
-  const active = useFilesStore((s) => fileSession(s.sessions, workspaceId).active);
+  const active = useFilesStore((s) => workspaceFiles(s.byWorkspace, workspaceId).active);
   const open = useFilesStore((s) => s.open);
   const actions = useRef<Partial<Record<ReadingCommand, () => void>>>({});
   const register = useCallback<ReadingCommandRegistry>((command, action) => {
@@ -94,7 +94,7 @@ export function FileTabBar({
   workspaceId: number;
   onEmptyClose: () => void;
 }) {
-  const session = useFilesStore((s) => fileSession(s.sessions, workspaceId));
+  const files = useFilesStore((s) => workspaceFiles(s.byWorkspace, workspaceId));
   const open = useFilesStore((s) => s.open);
   const close = useFilesStore((s) => s.close);
   const list = useRef<HTMLDivElement>(null);
@@ -109,24 +109,24 @@ export function FileTabBar({
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [session.tabs]);
+  }, [files.tabs]);
   const closeTab = (path: string) => {
     restoreFocus.current = true;
     close(workspaceId, path);
   };
   useLayoutEffect(() => {
     list.current?.querySelector('[role="tab"][aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [session.active]);
+  }, [files.active]);
   useLayoutEffect(() => {
     if (!restoreFocus.current) return;
     restoreFocus.current = false;
-    if (session.active) {
+    if (files.active) {
       list.current
         ?.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')
         ?.focus();
     } else onEmptyClose();
-  }, [session.active, session.tabs, onEmptyClose]);
-  const paths = session.tabs.map((item) => item.path);
+  }, [files.active, files.tabs, onEmptyClose]);
+  const paths = files.tabs.map((item) => item.path);
   return (
     <>
       <Tabs.List
@@ -134,10 +134,10 @@ export function FileTabBar({
         aria-label="文件预览标签"
         className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
       >
-        {session.tabs.map((tab) => (
+        {files.tabs.map((tab) => (
           <ContextMenu.Root key={tab.path}>
             <ContextMenu.Trigger asChild>
-              <div className={panelTabClass(tab.path === session.active, "max-w-64")}>
+              <div className={panelTabClass(tab.path === files.active, "max-w-64")}>
                 <Tooltip disableHoverablePopup>
                   <TooltipTrigger render={<Tabs.Trigger
                     value={tab.path}
@@ -181,8 +181,8 @@ export function FileTabBar({
         <DropdownMenu.Trigger asChild><Button size="icon-sm" variant="ghost" className="shrink-0 self-center" aria-label="全部文件" title="全部文件"><ChevronDownIcon /></Button></DropdownMenu.Trigger>
         <DropdownMenu.Portal>
           <DropdownMenu.Content align="end" className={cn(MENU_CONTENT_CLASS, "max-h-80 max-w-[calc(100vw-1rem)] overflow-auto")}>
-            <DropdownMenu.RadioGroup value={session.active ?? ""} onValueChange={path => open(workspaceId, path)}>
-              {session.tabs.map(tab => <DropdownMenu.RadioItem key={tab.path} value={tab.path} className={cn(MENU_ITEM_CLASS, "data-[state=checked]:bg-muted")}>
+            <DropdownMenu.RadioGroup value={files.active ?? ""} onValueChange={path => open(workspaceId, path)}>
+              {files.tabs.map(tab => <DropdownMenu.RadioItem key={tab.path} value={tab.path} className={cn(MENU_ITEM_CLASS, "data-[state=checked]:bg-muted")}>
                 <span className="break-all">{tab.path}</span>{!tab.pinned && <span className="ml-2 text-xs text-muted-foreground">临时预览</span>}
               </DropdownMenu.RadioItem>)}
             </DropdownMenu.RadioGroup>
@@ -203,20 +203,20 @@ export function FileTabPanels({
   onBrowse: () => void;
   children: ReactNode;
 }) {
-  const session = useFilesStore((s) => fileSession(s.sessions, workspaceId));
+  const files = useFilesStore((s) => workspaceFiles(s.byWorkspace, workspaceId));
   return (
     <>
-      {session.tabs.map((tab) => (
+      {files.tabs.map((tab) => (
         <Tabs.Content
           key={tab.path}
           value={tab.path}
           forceMount
           className="flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden"
         >
-          {tab.path === session.active ? children : null}
+          {tab.path === files.active ? children : null}
         </Tabs.Content>
       ))}
-      {!session.active && (
+      {!files.active && (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
           选择文件以查看内容
           <Button size="sm" variant="ghost" onClick={onBrowse}>浏览文件</Button>

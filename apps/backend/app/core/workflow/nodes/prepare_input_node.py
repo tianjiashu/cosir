@@ -37,6 +37,7 @@ from app.core.workflow.message_queue.session_message import (
     DecisionBody,
     NoticeBody,
     SessionMessage,
+    UserInputBody,
     notices_to_context,
 )
 from app.core.workflow.node_helper.common import (
@@ -103,8 +104,9 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
         message = rc.mailbox.pop()
         if not await asyncio.to_thread(_write_message, message, step_id=step_id):
             continue
-        if message.kind == "user_input":
+        if isinstance(message.body, UserInputBody):
             consumed_input = True
+            await asyncio.to_thread(session_title.name_untitled, rc, message.body.text)
     # 用户说了新话才值得重新起标题；副本在主线开始流式改写 working copy 前取好。
     patch: dict[str, object] = {**route_state(state.step_count, ReactRoute.MODEL), "batch": ToolBatch(), "wait_for_input": False}
     if consumed_input and session_title.should_launch(rc, state):

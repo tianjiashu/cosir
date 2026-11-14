@@ -4,7 +4,7 @@ import { CheckIcon, ChevronsUpDownIcon, FolderIcon, FolderPlusIcon, Loader2Icon 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { Workspace } from "@/lib/api/workspaces";
 
-type WorkspacePickerProps = {
+export type WorkspacePickerProps = {
   workspaces: Workspace[];
   selectedWorkspaceId: number | null;
   onWorkspaceChange: (workspaceId: number) => void;

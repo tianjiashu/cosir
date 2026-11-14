@@ -7,10 +7,10 @@
     <title>Cosir</title>
     <script>
       // 首帧先应用用户选择；system 或首次启动时回退到系统外观。
-      // storage key 与 lib/theme/theme-preference.ts 的 STORAGE_KEY 保持一致。
+      // key 与格式（zustand persist 的 { state: { preference } }）见 lib/theme/theme-preference.ts 的 STORAGE_KEY。
       var preference = "system";
       try {
-        var storedPreference = window.localStorage.getItem("cosir.theme-preference");
+        var storedPreference = JSON.parse(window.localStorage.getItem("cosir:theme") || "null").state.preference;
         if (storedPreference === "light" || storedPreference === "dark" || storedPreference === "system") {
           preference = storedPreference;
         }

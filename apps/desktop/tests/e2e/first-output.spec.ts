@@ -46,7 +46,7 @@ test("status exists without an assistant message", async ({ page, request }) => 
 
 
 test("dark quiet waiting and reduced motion preserve status without a tool card", async ({ page, request }) => {
-  await page.addInitScript(() => localStorage.setItem("cosir.theme-preference", "dark"));
+  await page.addInitScript(() => localStorage.setItem("cosir:theme", JSON.stringify({ state: { preference: "dark" }, version: 0 })));
   await page.emulateMedia({ reducedMotion: "reduce" });
   await seedState(request, 42, transportState({
     messages: [userMessage("u", 1), assistantMessage("a", 1, [

@@ -25,12 +25,3 @@ class DeletionBusyError(RuntimeError):
         self.code = f"{resource_type.upper()}_BUSY"
         self.message = f"{resource_type} {resource_id} has an active operation"
         super().__init__(self.message)
-
-
-class ProvisionalSessionCleanupConflictError(RuntimeError):
-    """临时 Session 清理闸门拒绝了不安全的删除请求。"""
-
-    def __init__(self, message: str = "provisional session cleanup is not allowed") -> None:
-        super().__init__(message)
-        self.code = "PROVISIONAL_SESSION_CLEANUP_REJECTED"
-        self.message = message

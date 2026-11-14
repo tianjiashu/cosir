@@ -7,7 +7,6 @@
 ``SessionService.delete_session_tree``。
 """
 
-import asyncio
 
 from fastapi import Depends, HTTPException, Query
 
@@ -18,10 +17,7 @@ from app.api.schemas import (
     SessionResponse,
 )
 from app.app import app
-from app.models.errors.deletion_errors import (
-    DeletionBusyError,
-    ProvisionalSessionCleanupConflictError,
-)
+from app.models.errors.deletion_errors import DeletionBusyError
 from app.models.errors.session_fork_errors import SessionForkConflictError
 from app.service.conversation.session_context_service import (
     SessionContextService,
@@ -102,7 +98,6 @@ async def fork_session(
 async def delete_session(
     session_id: int,
     session_service: SessionService = Depends(get_session_service),
-    creation_command_id: str | None = Query(default=None, alias="creationCommandId"),
     with_forks: bool = Query(default=False, alias="withForks"),
 ) -> DeleteSessionResponse:
     """删除单个会话及其级联的轮次与运行时事件。
@@ -110,45 +105,27 @@ async def delete_session(
     参数:
         session_id: 来自路由的会话标识。
         session_service: 通过依赖注入的会话 service（负责级联清理）。
-        creation_command_id: 前端在首条命令未被接受时回收 provisional Session 的创建标记；
-            提供时走受控清理，会话树此时尚无 Run，故不经停止执行。
         with_forks: 为真时连同全部 fork 后代一起删除；默认只删这一个，它的 fork 改挂到上一级。
 
     返回:
         删除结果 ``DeleteSessionResponse``。
 
     异常:
-        HTTPException: 会话不存在时 404；删除闸门忙时 409（可重试）；创建标记不匹配或
-            会话已被接受时 409（不可重试）。
+        HTTPException: 会话不存在时 404；删除闸门忙时 409（可重试）。
 
     副作用:
-        普通删除经 ``SessionService.delete_session_tree``：先停止所有权子树的活动执行并等待释放，再级联
+        经 ``SessionService.delete_session_tree``：先停止所有权子树的活动执行并等待释放，再级联
         删除；它的 fork 默认不删除、改挂到上一级，``withForks`` 时一并删除。
     """
 
     try:
-        # 级联删除是同步 DB 操作（单 BEGIN IMMEDIATE 写锁事务），经 asyncio.to_thread
-        # 移出 event loop，避免冻结其它 session 的 turn 调度。
-        if isinstance(creation_command_id, str):
-            await asyncio.to_thread(
-                session_service.cleanup_provisional_session,
-                session_id,
-                creation_command_id,
-            )
-            deleted_session_ids = frozenset({session_id})
-        else:
-            deleted_session_ids = await session_service.delete_session_tree(session_id, with_forks=with_forks)
+        deleted_session_ids = await session_service.delete_session_tree(session_id, with_forks=with_forks)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
     except DeletionBusyError as exc:
         raise HTTPException(
             status_code=409,
             detail={"code": exc.code, "message": exc.message, "retryable": True},
-        ) from exc
-    except ProvisionalSessionCleanupConflictError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"code": exc.code, "message": exc.message, "retryable": False},
         ) from exc
     return DeleteSessionResponse(
         session_id=session_id, deleted=True, deleted_session_ids=sorted(deleted_session_ids)

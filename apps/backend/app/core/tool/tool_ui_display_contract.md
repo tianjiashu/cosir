@@ -27,11 +27,10 @@
 | `read_file` | `read-file-meta` | 结构化结果见第 4 节 |
 | `read_image` | `image-read` | 结构化结果见第 4 节 |
 | `write_file` | `file-changes` | 结构化结果见第 4 节 |
-| `patch_write` | `file-changes` | 结构化结果见第 4 节 |
+| `edit_file` | `file-changes` | 结构化结果见第 4 节 |
 | `apply_patch` | `file-changes` | 结构化结果见第 4 节 |
 | `search_content` | `content-search-results` | 结构化结果见第 4 节 |
 | `find_files` | `file-list` | 结构化结果见第 4 节 |
-| `list_directory` | `directory-list` | 结构化结果见第 4 节 |
 | `execute_terminal` | `terminal-result` | 结构化结果见第 4 节 |
 | `terminal_list` | `terminal-session` | 结构化结果见第 4 节 |
 | `terminal_read` | `terminal-session` | 结构化结果见第 4 节 |
@@ -68,7 +67,6 @@
 | file-changes | changes[{path,status,patch,insertions,deletions}]、diff_stats；status 只有 added / modified（删除与移动走终端）；同路径多次操作保持原序，patch 可为空，不代表最终文件内容 |
 | content-search-results | pattern、path、matches[{path,line,content,is_match}]、page、total_rows、match_count、scanned_files、skipped_files |
 | file-list | files[{path}]、pattern、path、page、match_count |
-| directory-list | path、entries、page、total_entries |
 | terminal-result | command、workdir、output、end（exited/signaled/timed_out/cancelled/start_failed/worker_failed），exit_code 只在 exited、signal 只在 signaled 时出现；启动时与后台占位只有 command/workdir，不能把缺失 exit_code 当作零；`output` 是原始文本的最近一段（窗口见 `core/tool/terminal_output_window.py`），可选 `output_omitted_lines`（前面省略的行数）与 `output_log_path`（完整输出日志的工作区相对路径，只在超过模型预算时存在） |
 | terminal-session | list: terminal_count；read/write: terminal_id/lines/screen/wait_result，可含 input_summary（write 为填入的命令摘要） |
 | web-search-results | query、results[{title,url}]，不含网页正文 |

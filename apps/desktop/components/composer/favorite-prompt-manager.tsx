@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import { PencilIcon, Trash2Icon } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
@@ -8,21 +8,16 @@ import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/state-panel";
 import { Textarea } from "@/components/ui/textarea";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
-import {
-  readFavoritePrompts,
-  subscribeFavoritePrompts,
-  writeFavoritePrompts,
-  type FavoritePrompt,
-} from "@/lib/favorite-prompt-storage";
+import { useFavoritePromptsStore, type FavoritePrompt } from "@/lib/favorite-prompts-store";
 
 /**
  * 常用提示词库的管理对话框：新建、编辑、删除（删除先确认）。入口在输入框「+」菜单的提示词页。
  *
- * 副作用：读写本机提示词偏好存储；写入失败（存储空间不足等）在对话框内提示，不关闭对话框。
+ * 读写本机提示词偏好（`favorite-prompts-store`）；写入本机存储失败由存储边界统一提示。
  * 每次打开都从「新建」状态开始。
  */
 export function FavoritePromptManager({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const prompts = useSyncExternalStore(subscribeFavoritePrompts, readFavoritePrompts, readFavoritePrompts);
+  const prompts = useFavoritePromptsStore((state) => state.prompts);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -46,15 +41,6 @@ export function FavoritePromptManager({ open, onOpenChange }: { open: boolean; o
     setError(null);
   };
 
-  const persist = (nextPrompts: FavoritePrompt[]) => {
-    if (!writeFavoritePrompts(nextPrompts)) {
-      setError("保存失败，请检查本机存储空间后重试");
-      return false;
-    }
-    setError(null);
-    return true;
-  };
-
   const savePrompt = () => {
     const nextTitle = title.trim();
     const nextContent = content.trim();
@@ -62,12 +48,8 @@ export function FavoritePromptManager({ open, onOpenChange }: { open: boolean; o
       setError("请填写提示词名称和内容");
       return;
     }
-    const nextPrompts = editingId
-      ? prompts.map((prompt) => prompt.id === editingId
-        ? { ...prompt, title: nextTitle, content: nextContent }
-        : prompt)
-      : [...prompts, { id: crypto.randomUUID(), title: nextTitle, content: nextContent }];
-    if (persist(nextPrompts)) openNewPrompt();
+    useFavoritePromptsStore.getState().save({ id: editingId ?? undefined, title: nextTitle, content: nextContent });
+    openNewPrompt();
   };
 
   const deletePrompt = async (target: FavoritePrompt) => {
@@ -76,8 +58,7 @@ export function FavoritePromptManager({ open, onOpenChange }: { open: boolean; o
       consequence: "删除后该提示词将从常用提示词列表中移除。",
     });
     if (!confirmed) return;
-    // 以确认后的最新列表为准：确认框打开期间另一处输入框可能已修改提示词库。
-    persist(readFavoritePrompts().filter((prompt) => prompt.id !== target.id));
+    useFavoritePromptsStore.getState().remove(target.id);
     if (editingId === target.id) openNewPrompt();
   };
 

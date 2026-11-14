@@ -8,7 +8,6 @@
 
 import asyncio
 from collections.abc import Callable
-from contextlib import ExitStack
 from copy import deepcopy
 from typing import TypeVar, cast
 
@@ -18,10 +17,7 @@ from app.config.logging.logger import log
 from app.core.workflow.message_queue.message_bodies import ADVANCING_KINDS
 from app.models import RunRecord, SessionRecord
 from app.models.enums.run_status import ACTIVE_RUN_STATUSES
-from app.models.errors.deletion_errors import (
-    DeletionBusyError,
-    ProvisionalSessionCleanupConflictError,
-)
+from app.models.errors.deletion_errors import DeletionBusyError
 from app.models.errors.session_fork_errors import SessionForkConflictError
 from app.models.session_extra import SessionExtra, SessionFork
 from app.models.session_kind import FORK_SESSION_TYPES, USER_FACING_SESSION_TYPES, SessionType
@@ -65,7 +61,6 @@ class SessionService:
         workspace_id: int,
         title: str,
         *,
-        creation_command_id: str | None = None,
         session_type: SessionType = SessionType.USER,
         parent_session_id: int | None = None,
         db: DbSession | None = None,
@@ -80,7 +75,6 @@ class SessionService:
         ``None`` 持久化为空列表，即该 Session 运行期没有可调用工具。
 
         参数:
-            creation_command_id: provisional Session 的创建命令标识。
             parent_session_id: 委派子 Session 的父 Session 标识。
             db: 传入时加入调用方事务。
             derivation_depth: 派生深度（见 ``core.tool.derivation.child_depth``）。
@@ -92,7 +86,6 @@ class SessionService:
             title=title,
             session_type=session_type,
             parent_session_id=parent_session_id,
-            creation_command_id=creation_command_id,
             extra=extra,
             tool_schemas=frozen_schemas,
             db=db,
@@ -190,6 +183,13 @@ class SessionService:
         """
         if self._session.update_title(session_id, title):
             service_depends.get_session_feed().publish_session_catalog(session_id)
+
+    def fill_empty_title(self, session_id: int, title: str) -> bool:
+        """给还没有标题的 Session 写入标题，返回是否写入；已有标题或已删除时不动。"""
+        filled = self._session.fill_empty_title(session_id, title)
+        if filled:
+            service_depends.get_session_feed().publish_session_catalog(session_id)
+        return filled
 
     async def fork_session(
         self,
@@ -509,49 +509,6 @@ class SessionService:
         )
         return deleted
 
-    def cleanup_provisional_session(self, session_id: int, creation_command_id: str) -> None:
-        """在 Assistant Transport 尚未接受首条命令时受控删除 provisional Session。
-
-        只有会话创建标记完全匹配、会话树尚未产生任何 Run 时才允许删除。该用例复用普通
-        Session 树删除核心，但明确不做图片附件删除或 workspace 附件孤儿 GC；清理失败由调用方
-        保留原始 Transport 错误并记录诊断日志。
-        """
-
-        if not creation_command_id.strip():
-            raise ProvisionalSessionCleanupConflictError("creationCommandId is required")
-        session = self._session.get(session_id)
-        if session.creation_command_id != creation_command_id:
-            raise ProvisionalSessionCleanupConflictError("creationCommandId does not match session")
-        try:
-            with workspace_operations.operation(session.workspace_id, timeout=10):
-                current = self._session.get(session_id)
-                if current.creation_command_id != creation_command_id:
-                    raise ProvisionalSessionCleanupConflictError(
-                        "creationCommandId does not match session"
-                    )
-                tree_ids = self.collect_session_tree_ids(session_id)
-                locked_ids = self._collect_session_ancestor_ids(session_id) | tree_ids
-                with ExitStack() as stack:
-                    for current_id in sorted(locked_ids):
-                        stack.enter_context(
-                            self._session_register.get_or_create(current_id).operation(timeout=10)
-                        )
-                    if any(self._turn.list_by_session(current_id) for current_id in tree_ids):
-                        raise ProvisionalSessionCleanupConflictError(
-                            "provisional session already has accepted business facts"
-                        )
-                    self._delete_session_after_operations(session_id)
-        except TimeoutError as exc:
-            raise DeletionBusyError("session", session_id) from exc
-        service_depends.get_session_feed().publish_catalog(session.workspace_id, session.session_type)
-        log.info(
-            "provisional_session_cleaned",
-            extra={
-                "msg": "provisional session cleaned without attachment deletion",
-                "data": {"session_id": session_id, "creation_command_id": creation_command_id},
-            },
-        )
-
     def _delete_session_after_operations(
         self, session_id: int, fork_ids: frozenset[int] = frozenset()
     ) -> frozenset[int]:
@@ -568,32 +525,6 @@ class SessionService:
             deleted = self.delete_session_tree_in_db(session_id, db, fork_ids=fork_ids)
         self.finalize_deleted_session_spaces(deleted)
         return deleted
-
-    def _collect_session_ancestor_ids(self, session_id: int) -> set[int]:
-        """收集 session 自身以上的父 session 标识。
-
-        参数:
-            session_id: 起始 session 标识。
-
-        返回:
-            从起始 session 向上的全部父 session 标识，不含起始 session。
-
-        异常:
-            sqlalchemy.exc.SQLAlchemyError: 如果读取父子关系失败。
-
-        副作用:
-            无；仅读取 session 关系。关系异常形成环时停止遍历，避免删除请求死循环。
-        """
-
-        ancestors: set[int] = set()
-        current = self._session.get(session_id)
-        while current.parent_session_id is not None:
-            parent_id = current.parent_session_id
-            if parent_id in ancestors or parent_id == session_id:
-                break
-            ancestors.add(parent_id)
-            current = self._session.get(parent_id)
-        return ancestors
 
     def collect_session_tree_ids(self, root_session_id: int) -> set[int]:
         """收集会话树（根会话及沿 ``parent_session_id`` 递归的全部子 Session）的 id 集合；
@@ -651,6 +582,7 @@ class SessionService:
         workspace 闸门。
         """
         from app.core.tool.handoff.handoff_registry import handoff_registry
+        from app.tools.tool_handler.file_observations import file_observations
         from app.tools.tool_handler.terminal.command_results import command_results
 
         service_depends.get_terminal_session_service().delete_session_terminals(session_ids)
@@ -662,6 +594,7 @@ class SessionService:
         for session_id in session_ids:
             command_results.drop_session(session_id)
             handoff_registry.drop_session(session_id)
+            file_observations.drop_session(session_id)
         self._unload_deleted_session_spaces(set(session_ids))
 
     def _unload_deleted_session_spaces(self, session_ids: set[int]) -> None:

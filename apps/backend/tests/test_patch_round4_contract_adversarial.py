@@ -31,7 +31,7 @@ import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.patch_write import (
+from app.tools.tool_handler.file_edit import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
@@ -415,7 +415,7 @@ def test_strip_never_drops_a_non_blank_authored_line(tmp_path: pathlib.Path) -> 
         + "\n"
     )
 
-    status, written = _tool_bytes(tmp_path, patch, "a\nb\nMORE\n", 4301)
+    status, written = _tool_bytes(tmp_path, patch, "a\nb\n\nMORE\n", 4301)
 
     assert status == "success", f"计数不符现在应被接受并按正文应用，实际 status={status}"
     for authored in ("a", "B", "EXTRA"):

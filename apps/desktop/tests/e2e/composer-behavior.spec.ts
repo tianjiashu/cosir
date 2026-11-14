@@ -48,17 +48,14 @@ async function pasteImages(input: Locator, names: readonly string[]) {
   }, names);
 }
 
-async function openComposer(page: Page, mode: "new" | "session", host: { directory?: string } = {}) {
+/** 新会话页就是未开始的会话，用的是同一个会话输入框，所以只测会话页这一处。 */
+async function openComposer(page: Page, host: { directory?: string } = {}) {
   await installFakeDesktopHost(page, host);
-  await page.goto(mode === "new" ? "/" : "/sessions/100");
-  if (mode === "new") {
-    await page.getByRole("button", { name: "选择工作区" }).click();
-    await page.getByRole("option", { name: /demo/ }).click();
-  }
-  const input = page.getByLabel(mode === "new" ? "新会话内容" : "消息输入");
+  await page.goto("/sessions/100");
+  const input = page.getByLabel("消息输入");
   await expect(input).toBeEditable();
   await expect(page.getByRole("combobox", { name: "选择模型" })).toContainText("demo-model");
-  return { input, send: page.getByRole("button", { name: mode === "new" ? "开始会话" : "发送", exact: true }) };
+  return { input, send: page.getByRole("button", { name: "发送", exact: true }) };
 }
 
 test.beforeEach(async ({ page, request }) => {
@@ -66,161 +63,111 @@ test.beforeEach(async ({ page, request }) => {
   for (const sessionId of [100, 101]) await request.post(`${api}/__test__/seed-session`, { data: { sessionId, title: `草稿${sessionId}` } });
   await page.addInitScript(() => {
     localStorage.clear();
-    for (const scope of ["workspace:7", "workspace:8", "session:100", "session:101"]) {
-      localStorage.setItem(`cosir:model-config-selection:${scope}`, JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
-    }
   });
 });
 
-test("工作区 A→B→A 保留各自草稿，撤销不会带回另一工作区文本", async ({ page }) => {
-  await page.route("**/workspaces", async route => {
-    const response = await route.fetch();
-    const workspaces = await response.json();
-    await route.fulfill({ response, json: [...workspaces, { ...workspaces[0], workspace_id: 8, name: "workspace-B", root_path: "/tmp/B" }] });
-  });
-  await page.route("**/workspaces/8/sessions", route => route.fulfill({ json: [] }));
-  const { input } = await openComposer(page, "new");
-  await input.fill("草稿 A");
-  await page.getByRole("button", { name: "选择工作区，当前 demo" }).click();
-  await page.getByRole("option", { name: /workspace-B/ }).click();
-  await expect(input).toHaveText("");
-  await input.press(undo);
-  await expect(input).toHaveText("");
-  await input.fill("草稿 B");
-  await page.getByRole("button", { name: "选择工作区，当前 workspace-B" }).click();
-  await page.getByRole("option", { name: /demo/ }).click();
-  await expect(input).toHaveText("草稿 A");
-  await input.press(undo);
-  await expect(input).toHaveText("草稿 A");
-});
-
-test("原生选择框打开期间切换工作区，迟到文件不会写入任一草稿", async ({ page }) => {
-  await page.route("**/workspaces", async route => {
-    const response = await route.fetch();
-    const workspaces = await response.json();
-    await route.fulfill({ response, json: [...workspaces, { ...workspaces[0], workspace_id: 8, name: "workspace-B", root_path: "/tmp/B" }] });
-  });
-  await page.route("**/workspaces/8/sessions", route => route.fulfill({ json: [] }));
-  const { input, send } = await openComposer(page, "new");
-  const chooser = await openNativePicker(page);
-  await page.getByRole("button", { name: "选择工作区，当前 demo" }).click();
-  await page.getByRole("option", { name: /workspace-B/ }).click();
-  await chooser.setFiles(pickedNotes);
-  await expect.poll(() => page.evaluate(() => (window as unknown as { __cosirFrontendLogs?: { event: string }[] }).__cosirFrontendLogs?.some(log => log.event === "composer_attachment_selection_discarded"))).toBe(true);
-  await expect(input).toHaveText("");
+test(`普通文件删除、撤销、重做与发送失败恢复使用同一文档事实`, async ({ page }) => {
+  const { input, send } = await openComposer(page);
+  await nativePicker(page);
+  await expect(send).toBeEnabled();
+  await input.getByRole("button", { name: "移除附件 notes.md" }).click();
+  await expect(input.locator('[data-capsule-token][data-capsule-kind="file"]')).toHaveCount(0);
   await expect(send).toBeDisabled();
-  await page.getByRole("button", { name: "选择工作区，当前 workspace-B" }).click();
-  await page.getByRole("option", { name: /demo/ }).click();
-  await expect(input).toHaveText("");
+  await input.press(undo);
+  await expect(input).toContainText("notes.md");
+  await input.press(redo);
   await expect(send).toBeDisabled();
+  await input.press(undo);
+  await input.press(selectAll);
+  await input.press("Backspace");
+  await expect(send).toBeDisabled();
+  await input.press(undo);
+  await expect(input).toContainText("notes.md");
+  let submitted: { message: { parts: { type: string; text: string }[] } } | undefined;
+  await page.route(`${api}/sessions/*/messages`, async route => {
+    submitted = route.request().postDataJSON();
+    await route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "回归测试拒绝发送", retryable: true } } } });
+  });
+  await send.click();
+  await expect(page.getByRole("dialog")).toContainText("回归测试拒绝发送");
+  expect(submitted?.message.parts).toEqual([
+    { type: "text", text: '<file path="/tmp/notes.md" />' },
+  ]);
+  await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
+  await expect(input).toContainText("notes.md");
 });
 
-for (const mode of ["new", "session"] as const) {
-  test(`${mode} 普通文件删除、撤销、重做与发送失败恢复使用同一文档事实`, async ({ page }) => {
-    const { input, send } = await openComposer(page, mode);
-    await nativePicker(page);
-    await expect(send).toBeEnabled();
-    await input.getByRole("button", { name: "移除附件 notes.md" }).click();
-    await expect(input.locator('[data-capsule-token][data-capsule-kind="file"]')).toHaveCount(0);
-    await expect(send).toBeDisabled();
-    await input.press(undo);
-    await expect(input).toContainText("notes.md");
-    await input.press(redo);
-    await expect(send).toBeDisabled();
-    await input.press(undo);
-    await input.press(selectAll);
-    await input.press("Backspace");
-    await expect(send).toBeDisabled();
-    await input.press(undo);
-    await expect(input).toContainText("notes.md");
-    let submitted: { message: { parts: { type: string; text: string }[] } } | undefined;
-    await page.route(`${api}/sessions/*/messages`, async route => {
-      submitted = route.request().postDataJSON();
-      await route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "回归测试拒绝发送", retryable: true } } } });
-    });
-    await send.click();
-    await expect(page.getByRole("dialog")).toContainText("回归测试拒绝发送");
-    expect(submitted?.message.parts).toEqual([
-      { type: "text", text: '<file path="/tmp/notes.md" />' },
-    ]);
-    await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
-    await expect(input).toContainText("notes.md");
+test(`图片粘贴和拖放各接纳一次，普通文件与不支持的图片在入口反馈`, async ({ page }) => {
+  const { input, send } = await openComposer(page);
+  await transfer(input, "paste", "paste.png", "image/png", "混合正文");
+  await expect(input).toHaveText("混合正文");
+  // 缩略图以文件名标注。
+  await expect(page.getByRole("img", { name: "paste.png", exact: true })).toHaveCount(1);
+  await transfer(input, "drop", "drop.jpg", "image/jpeg");
+  await expect(page.getByRole("img", { name: "drop.jpg", exact: true })).toHaveCount(1);
+  await transfer(input, "paste", "unknown.md", "text/plain");
+  await expect(page.getByRole("alert")).toContainText("不是本机文件");
+  await transfer(input, "drop", "animation.gif", "image/gif");
+  await expect(page.getByRole("alert")).toContainText("仅支持 JPEG 和 PNG");
+  await expect(input.locator('[data-capsule-token][data-capsule-kind="file"]')).toHaveCount(0);
+  await expect(send).toBeEnabled();
+});
+
+// 目的：超量图片在添加入口拦下；潜在缺陷：选了超量图片，发送时逐张上传完才被后端整条拒绝。
+test(`图片超过单条消息上限时只接纳前 20 张并在入口反馈`, async ({ page }) => {
+  const { input } = await openComposer(page);
+  const thumbnails = page.locator('[data-slot="image-attachment-strip"] [data-slot="image-tile"]');
+  await pasteImages(input, Array.from({ length: 18 }, (_, index) => `first-${index}.png`));
+  await expect(thumbnails).toHaveCount(18);
+  await pasteImages(input, ["a.png", "b.png", "c.png", "d.png"]);
+  await expect(thumbnails).toHaveCount(20);
+  await expect(page.getByRole("alert")).toContainText("一条消息最多 20 张图片，已跳过 2 张");
+});
+
+test(`「+」菜单：插入 Skill 与常用提示词，管理打开提示词库，文件夹以目录引用插入`, async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("cosir:favorite-prompts", JSON.stringify({ state: { prompts: [{ id: "p1", title: "代码审查", content: "请审查这次改动" }] }, version: 0 }));
   });
+  const skill = (name: string, enabled: boolean) => ({ name, description: `${name} 的说明`, enabled, scope: "system", overrides: false });
+  await page.route(/\/configuration\/skills$/, (route) => route.fulfill({ json: [skill("release-notes", true), skill("disabled-skill", false)] }));
+  const { input } = await openComposer(page, { directory: "C:/demo/docs" });
+  const addButton = page.getByRole("button", { name: "添加", exact: true });
 
-  test(`${mode} 图片粘贴和拖放各接纳一次，普通文件与不支持的图片在入口反馈`, async ({ page }) => {
-    const { input, send } = await openComposer(page, mode);
-    await transfer(input, "paste", "paste.png", "image/png", "混合正文");
-    await expect(input).toHaveText("混合正文");
-    // 两种输入框共用同一缩略图，图片以文件名标注。
-    await expect(page.getByRole("img", { name: "paste.png", exact: true })).toHaveCount(1);
-    await transfer(input, "drop", "drop.jpg", "image/jpeg");
-    await expect(page.getByRole("img", { name: "drop.jpg", exact: true })).toHaveCount(1);
-    await transfer(input, "paste", "unknown.md", "text/plain");
-    await expect(page.getByRole("alert")).toContainText("不是本机文件");
-    await transfer(input, "drop", "animation.gif", "image/gif");
-    await expect(page.getByRole("alert")).toContainText("仅支持 JPEG 和 PNG");
-    await expect(input.locator('[data-capsule-token][data-capsule-kind="file"]')).toHaveCount(0);
-    await expect(send).toBeEnabled();
-  });
+  // Skill 页只列已启用的，可搜索，选中后插入 Skill 胶囊并收起菜单。
+  await addButton.click();
+  await page.getByRole("option", { name: /^Skill/ }).click();
+  await expect(page.getByRole("option", { name: /disabled-skill/ })).toHaveCount(0);
+  await page.getByRole("combobox", { name: "搜索 Skill" }).fill("release");
+  await page.keyboard.press("Enter");
+  await expect(input.locator('[data-capsule-token][data-capsule-kind="skill"]')).toHaveCount(1);
+  await expect(page.getByRole("combobox", { name: "搜索 Skill" })).toHaveCount(0);
 
-  // 目的：超量图片在添加入口拦下；潜在缺陷：选了超量图片，发送时逐张上传完才被后端整条拒绝。
-  test(`${mode} 图片超过单条消息上限时只接纳前 20 张并在入口反馈`, async ({ page }) => {
-    const { input } = await openComposer(page, mode);
-    const thumbnails = page.locator('[data-slot="image-attachment-strip"] [data-slot="image-tile"]');
-    await pasteImages(input, Array.from({ length: 18 }, (_, index) => `first-${index}.png`));
-    await expect(thumbnails).toHaveCount(18);
-    await pasteImages(input, ["a.png", "b.png", "c.png", "d.png"]);
-    await expect(thumbnails).toHaveCount(20);
-    await expect(page.getByRole("alert")).toContainText("一条消息最多 20 张图片，已跳过 2 张");
-  });
-}
+  // 第一层可以只用键盘：方向键移到「常用提示词」，回车进入，返回后回到第一层。
+  await addButton.click();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "返回", exact: true }).click();
+  await expect(page.getByRole("option", { name: /^文件夹/ })).toBeVisible();
+  await page.getByRole("option", { name: /^常用提示词/ }).click();
+  await page.getByRole("option", { name: /代码审查/ }).click();
+  await expect(input).toContainText("请审查这次改动");
 
-for (const mode of ["new", "session"] as const) {
-  test(`${mode} 「+」菜单：插入 Skill 与常用提示词，管理打开提示词库，文件夹以目录引用插入`, async ({ page }) => {
-    await page.addInitScript(() => {
-      localStorage.setItem("cosir:favorite-prompts:v1", JSON.stringify([{ id: "p1", title: "代码审查", content: "请审查这次改动" }]));
-    });
-    const skill = (name: string, enabled: boolean) => ({ name, description: `${name} 的说明`, enabled, scope: "system", overrides: false });
-    await page.route(/\/configuration\/skills$/, (route) => route.fulfill({ json: [skill("release-notes", true), skill("disabled-skill", false)] }));
-    const { input } = await openComposer(page, mode, { directory: "C:/demo/docs" });
-    const addButton = page.getByRole("button", { name: "添加", exact: true });
+  await addButton.click();
+  await page.getByRole("option", { name: /^常用提示词/ }).click();
+  await page.getByRole("button", { name: "管理", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "管理常用提示词" })).toBeVisible();
+  await page.keyboard.press("Escape");
 
-    // Skill 页只列已启用的，可搜索，选中后插入 Skill 胶囊并收起菜单。
-    await addButton.click();
-    await page.getByRole("option", { name: /^Skill/ }).click();
-    await expect(page.getByRole("option", { name: /disabled-skill/ })).toHaveCount(0);
-    await page.getByRole("combobox", { name: "搜索 Skill" }).fill("release");
-    await page.keyboard.press("Enter");
-    await expect(input.locator('[data-capsule-token][data-capsule-kind="skill"]')).toHaveCount(1);
-    await expect(page.getByRole("combobox", { name: "搜索 Skill" })).toHaveCount(0);
-
-    // 第一层可以只用键盘：方向键移到「常用提示词」，回车进入，返回后回到第一层。
-    await addButton.click();
-    await page.keyboard.press("ArrowDown");
-    await page.keyboard.press("ArrowDown");
-    await page.keyboard.press("ArrowDown");
-    await page.keyboard.press("Enter");
-    await page.getByRole("button", { name: "返回", exact: true }).click();
-    await expect(page.getByRole("option", { name: /^文件夹/ })).toBeVisible();
-    await page.getByRole("option", { name: /^常用提示词/ }).click();
-    await page.getByRole("option", { name: /代码审查/ }).click();
-    await expect(input).toContainText("请审查这次改动");
-
-    await addButton.click();
-    await page.getByRole("option", { name: /^常用提示词/ }).click();
-    await page.getByRole("button", { name: "管理", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "管理常用提示词" })).toBeVisible();
-    await page.keyboard.press("Escape");
-
-    await addButton.click();
-    await page.getByRole("option", { name: /^文件夹/ }).click();
-    await expect(input.locator('[data-capsule-token][data-capsule-kind="file"]')).toHaveCount(1);
-    await expect(input).toContainText("docs");
-  });
-}
+  await addButton.click();
+  await page.getByRole("option", { name: /^文件夹/ }).click();
+  await expect(input.locator('[data-capsule-token][data-capsule-kind="file"]')).toHaveCount(1);
+  await expect(input).toContainText("docs");
+});
 
 test("Session 草稿离开后恢复普通文件，原生选择迟到结果不会写入新 Session", async ({ page }) => {
-  const { input } = await openComposer(page, "session");
+  const { input } = await openComposer(page);
   await input.fill("草稿 A ");
   await nativePicker(page);
   await page.getByText("草稿101", { exact: true }).click();
@@ -239,7 +186,7 @@ test("Session 草稿离开后恢复普通文件，原生选择迟到结果不会
 });
 
 test("Shift+Enter 换行，组合输入 Enter 不提交，普通 Enter 只发送一次", async ({ page }) => {
-  const { input } = await openComposer(page, "session");
+  const { input } = await openComposer(page);
   let sends = 0;
   page.on("request", req => { if (req.url() === `${api}/sessions/100/messages` && req.method() === "POST") sends++; });
   await input.fill("第一行");
@@ -259,7 +206,7 @@ test("Shift+Enter 换行，组合输入 Enter 不提交，普通 Enter 只发送
 });
 
 test("Session 保活但已进入配置页时，迟到文件不写入隐藏草稿", async ({ page }) => {
-  const { input } = await openComposer(page, "session");
+  const { input } = await openComposer(page);
   await input.fill("保留正文");
   const chooser = await openNativePicker(page);
   await page.getByRole("button", { name: "系统配置", exact: true }).click();
@@ -274,7 +221,7 @@ test("重载后撤回带普通文件的消息：附件按快照里的路径放�
   await seedState(apiRequest, 100, completedState(70, { id: "history-user", parts: [
     { type: "text", text: '查看 <file path="/w/history.md" />', status: "completed" },
   ] }, [{ type: "text", text: "历史回复", status: "completed" }]));
-  await openComposer(page, "session");
+  await openComposer(page);
   await page.reload();
   const user = page.locator('[data-role="user"]');
   await user.hover();
@@ -299,7 +246,7 @@ test("重载后撤回带普通文件的消息：附件按快照里的路径放�
 });
 
 test("Session 图片上传成功但消息提交失败后，正文与完整图片附件均恢复", async ({ page }) => {
-  const { input, send } = await openComposer(page, "session");
+  const { input, send } = await openComposer(page);
   const assetId = "a".repeat(64);
   const locator = `cosir-attachment://${assetId}`;
   await page.route(`${api}/workspaces/7/attachments`, route => route.fulfill({ json: {

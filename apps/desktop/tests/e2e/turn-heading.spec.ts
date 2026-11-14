@@ -16,7 +16,7 @@ test.beforeEach(async ({ request }) => {
 });
 
 for (const theme of ["light", "dark"]) test(`${theme}: duration is the only left-aligned disclosure; keyboard toggles preserve reply DOM`, async ({ page, request }) => {
-  await page.addInitScript(theme => localStorage.setItem("cosir.theme-preference", theme), theme);
+  await page.addInitScript(theme => localStorage.setItem("cosir:theme", JSON.stringify({ state: { preference: theme }, version: 0 })), theme);
   await seedState(request, 42, done([text("正在检查会话。"), toolCallPart("child", "read_file", { status: "cancelled" }), text(reply, true)]));
   await page.goto("/sessions/42");
   await expect(page.locator(".backend-startup-screen")).toHaveCount(0);

@@ -13,13 +13,9 @@ test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
 });
 
-test("新会话 Assistant Transport 被拒绝时不导航、不丢输入并清理 provisional Session", async ({ page, request }) => {
+test("新会话页就是未开始的会话：选中工作区即转到它、不进侧栏；首条消息被拒后草稿回到输入框", async ({ page, request }) => {
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem(
-      "cosir:model-config-selection:workspace:7",
-      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-    );
   });
   await page.route(`${API_ORIGIN}/sessions/*/messages`, async (route) => {
     await route.fulfill({
@@ -30,26 +26,56 @@ test("新会话 Assistant Transport 被拒绝时不导航、不丢输入并清�
   });
 
   await page.goto("/");
+  await expect(page.getByText("先在上方选择一个工作区")).toBeVisible();
   await page.getByRole("button", { name: "选择工作区" }).click();
   await page.getByRole("option", { name: /demo/ }).click();
+  // 新会话页的观感不变，背后是这个工作区未开始的会话。
+  await expect(page).toHaveURL(`${WEB_ORIGIN}/sessions/42`);
+  await expect(page.getByRole("heading", { name: /想做什么/ })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "选择模型" })).toContainText("demo-model");
-  const input = page.getByLabel("新会话内容");
-  await input.fill("保留这段输入");
-  await page.getByRole("button", { name: "开始会话" }).click();
+  await expect(page.getByRole("navigation").getByRole("link", { name: /新会话/ })).toHaveCount(0);
+  expect(await (await request.get(`${API_ORIGIN}/workspaces/7/sessions`)).json()).toMatchObject([{ session_id: 42, unstarted: true }]);
 
-  await expect(page).toHaveURL(`${WEB_ORIGIN}/`);
+  await page.getByLabel("消息输入").fill("保留这段输入");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("测试拒绝新会话");
-  await expect(input).toHaveText("保留这段输入");
-  await expect.poll(async () => (await request.get(`${API_ORIGIN}/workspaces/7/sessions`)).json()).toEqual([]);
+  await page.getByRole("dialog").getByRole("button").first().click();
+  await expect(page.getByLabel("消息输入")).toHaveText("保留这段输入");
+  await expect(page.getByRole("heading", { name: /想做什么/ })).toBeVisible();
+
+  // 再点「新会话」回到的还是它，不会再建一个。
+  await page.getByRole("button", { name: "新会话" }).first().click();
+  await expect(page).toHaveURL(`${WEB_ORIGIN}/sessions/42`);
+});
+
+test("新会话页打开终端：它就是会话页的终端；发出首条消息后会话进侧栏，终端还在", async ({ page, request }) => {
+  await page.addInitScript(() => {
+    window.localStorage.clear();
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "选择工作区" }).click();
+  await page.getByRole("option", { name: /demo/ }).click();
+  await expect(page).toHaveURL(`${WEB_ORIGIN}/sessions/42`);
+  await page.getByLabel("消息输入").fill("先写一半");
+
+  await page.getByRole("button", { name: /^终端，/ }).click();
+  await expect(page.getByRole("region", { name: "终端工作台" })).toBeVisible();
+  await expect(page.locator('[data-terminal-session="term-1"] .xterm-rows')).toContainText("term-1 $");
+  await expect(page.getByRole("heading", { name: /想做什么/ })).toBeVisible();
+  await expect(page.getByLabel("消息输入")).toHaveText("先写一半");
+
+  await page.getByLabel("消息输入").fill("你好");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await expect(page.locator('[data-role="user"]').getByText("你好", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /想做什么/ })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "终端工作台" })).toBeVisible();
+  await expect.poll(async () => (await request.get(`${API_ORIGIN}/workspaces/7/sessions`)).json()).toMatchObject([{ session_id: 42, unstarted: false, title: "你好" }]);
+  await expect(page.getByRole("navigation", { name: "工作区会话列表" }).getByRole("treeitem").filter({ hasText: "你好" })).toBeVisible();
 });
 
 test("新建会话请求、Assistant Transport 流和增量 UI 均正常工作", async ({ page, request }) => {
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem(
-      "cosir:model-config-selection:workspace:7",
-      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-    );
   });
   const assistantRequests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
   page.on("response", (response) => {
@@ -82,16 +108,11 @@ test("新建会话请求、Assistant Transport 流和增量 UI 均正常工作",
   await expect(page.getByText("demo").first()).toBeVisible();
   await page.getByRole("button", { name: "选择工作区" }).click();
   await page.getByRole("option", { name: /demo/ }).click();
-  await expect(page.getByRole("combobox", { name: "选择模型" })).toContainText("demo-model");
-  await expect.poll(() => page.evaluate(() => window.localStorage.getItem("cosir:model-config-selection:workspace:7"))).toBe(
-    JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-  );
-  expect(await page.evaluate(() => window.localStorage.getItem("cosir:model-config-selection:default"))).toBeNull();
-  await page.getByLabel("新会话内容").fill("你好");
-  await expect(page.getByRole("button", { name: "开始会话" })).toBeEnabled();
-  await page.getByRole("button", { name: "开始会话" }).click();
-
   await expect(page).toHaveURL(/\/sessions\/42$/);
+  await expect(page.getByRole("combobox", { name: "选择模型" })).toContainText("demo-model");
+  await page.getByLabel("消息输入").fill("你好");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+
   await expect.poll(() => assistantRequests.length).toBe(1);
   // 创建后的自动目录同步必须显示新会话，且不能替换 Assistant 会话或中断流。
   await expect(page.getByRole("navigation", { name: "工作区会话列表" }).getByRole("treeitem").filter({ hasText: "你好" })).toBeVisible();
@@ -141,10 +162,6 @@ test("新建会话请求、Assistant Transport 流和增量 UI 均正常工作",
 test("会话页面重挂载时自动恢复未结束的 run", async ({ page, request }) => {
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem(
-      "cosir:model-config-selection:session:42",
-      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-    );
   });
 
   await request.post(`${API_ORIGIN}/__test__/seed-running`, {
@@ -168,10 +185,6 @@ test("不同 session 的 Assistant Transport 会话与消息互相隔离", async
   await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 101, title: "会话101" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem(
-      "cosir:model-config-selection:session:100",
-      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-    );
   });
 
   await page.goto("/sessions/100");
@@ -199,10 +212,6 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 102, title: "会话102" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem(
-      "cosir:model-config-selection:session:102",
-      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-    );
   });
 
   const assistantRequests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
@@ -271,10 +280,6 @@ test("不可恢复时继续运行被同步拒绝，提示错误并复位按钮",
   await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 105, title: "拒绝恢复" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem(
-      "cosir:model-config-selection:session:105",
-      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-    );
   });
   await page.goto("/sessions/105");
   await page.getByLabel("消息输入").fill("cancel-then-reject");
@@ -306,10 +311,6 @@ test("取消后订阅断开时，前端有限重连并解除停止状态", async
   await request.post(`${API_ORIGIN}/__test__/drop-next-cancel-stream`);
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem(
-      "cosir:model-config-selection:session:103",
-      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-    );
   });
 
   const attachRequests: string[] = [];
@@ -340,10 +341,6 @@ test("撤回入口只给最新用户消息：撤回后内容放回输入框，�
   await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 103, title: "会话103" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem(
-      "cosir:model-config-selection:session:103",
-      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-    );
   });
 
   const assistantRequests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
@@ -402,10 +399,6 @@ test("撤回被拒时消息保留、输入框不动", async ({ page, request }) 
   await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 104, title: "会话104" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem(
-      "cosir:model-config-selection:session:104",
-      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-    );
   });
 
   await page.goto("/sessions/104");
@@ -433,10 +426,6 @@ test("attach 被拒后进入有限重连，订阅恢复后继续接收输出", a
   await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 106, title: "重连" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem(
-      "cosir:model-config-selection:session:106",
-      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-    );
   });
   await page.goto("/sessions/106");
   // 订阅建立后才注入失败：挂载期间 StrictMode 多发的那次 attach 会吃掉注入（见 fail-next-attach）。

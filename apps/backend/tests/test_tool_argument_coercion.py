@@ -21,11 +21,13 @@ from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
 from app.core.tool.multi_agent.args.session_status_args import SessionStatusArgs
 from app.core.tool.validation.argument_coercion import coerce_tool_arguments
 from app.core.tool.validation.arguments import validate_tool_arguments
-from app.tools.tool_models import ListDirectoryArgs, TerminalReadArgs
+from app.tools.tool_models import EditFileArgs, ReadImageArgs, TerminalReadArgs
 from app.tools.tool_models.terminal.execute_terminal_args import (
     MacExecuteTerminalArgs,
     WindowsExecuteTerminalArgs,
 )
+
+_EDIT = {"path": "a.py", "old_string": "a", "new_string": "b"}
 
 
 class _IntOrStrModel(BaseModel):
@@ -81,9 +83,9 @@ class TestWhitelistCoercion:
     def test_true_false_string_to_bool(self) -> None:
         """仅 ``"true"/"false"``（忽略大小写与空白）归一为布尔。"""
 
-        adapted, facts = _coerce({"path": ".", "include_hidden": " TRUE "}, ListDirectoryArgs)
-        assert adapted["include_hidden"] is True  # type: ignore[index]
-        assert facts == {"include_hidden": "str->bool"}
+        adapted, facts = _coerce({**_EDIT, "replace_all": " TRUE "}, EditFileArgs)
+        assert adapted["replace_all"] is True  # type: ignore[index]
+        assert facts == {"replace_all": "str->bool"}
 
     def test_single_value_to_list(self) -> None:
         """声明为列表的字段收到标量时包成单元素列表（元素递归同规则）。"""
@@ -95,8 +97,8 @@ class TestWhitelistCoercion:
     def test_list_element_coercion(self) -> None:
         """列表内部元素按声明元素类型归一。"""
 
-        adapted, facts = _coerce({"path": ".", "include_globs": ["*.md"]}, ListDirectoryArgs)
-        assert adapted["include_globs"] == ["*.md"]  # type: ignore[index]
+        adapted, facts = _coerce({"paths": ["a.png"]}, ReadImageArgs)
+        assert adapted["paths"] == ["a.png"]  # type: ignore[index]
         assert facts == {}
 
     def test_native_arguments_are_idempotent(self) -> None:
@@ -119,8 +121,8 @@ class TestWhitelistRefusals:
     def test_ambiguous_bool_string_is_not_coerced(self) -> None:
         """``"1"`` 不归因为布尔：与整型语义冲突，禁止猜测。"""
 
-        adapted, facts = _coerce({"path": ".", "include_hidden": "1"}, ListDirectoryArgs)
-        assert adapted["include_hidden"] == "1"  # type: ignore[index]
+        adapted, facts = _coerce({**_EDIT, "replace_all": "1"}, EditFileArgs)
+        assert adapted["replace_all"] == "1"  # type: ignore[index]
         assert facts == {}
 
     def test_empty_and_non_numeric_string_are_not_coerced(self) -> None:
@@ -265,8 +267,8 @@ class TestWhitelistBoundaries:
     def test_tuple_stays_tuple_when_no_element_coercion_needed(self) -> None:
         """元素无需归一时容器类型不被改写，交给 strict 报「应为列表」。"""
 
-        adapted, facts = _coerce({"path": ".", "include_globs": ("*.md",)}, ListDirectoryArgs)
-        assert isinstance(adapted["include_globs"], tuple)
+        adapted, facts = _coerce({"paths": ("a.png",)}, ReadImageArgs)
+        assert isinstance(adapted["paths"], tuple)
         assert facts == {}
 
     def test_multi_type_union_is_never_coerced(self) -> None:

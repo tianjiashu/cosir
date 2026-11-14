@@ -18,6 +18,7 @@ function session(sessionId: number, workspaceId: number, sourceSessionId?: numbe
     title: `Session ${sessionId}`,
     session_type: sourceSessionId ? "user_fork" : "user",
     extra: sourceSessionId ? { fork: { tree_parent_session_id: sourceSessionId } } : null,
+    unstarted: false,
     created_at: at,
     updated_at: at,
   };

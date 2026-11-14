@@ -12,6 +12,9 @@ import { FolderIcon, GlobeIcon, LayoutListIcon, PanelRightIcon, SquareTerminalIc
 import { useHotkeys } from "react-hotkeys-hook";
 
 import { ConversationAsideContext, type ConversationAside } from "@/components/conversation/thread/conversation-aside";
+import { EmptyThreadFrameContext, type EmptyThreadFrame } from "@/components/conversation/thread/empty-thread-frame";
+import { NewConversationFrame } from "@/components/new-conversation/new-conversation-frame";
+import type { NewConversationRouteState } from "@/components/new-conversation/new-conversation";
 import { ConversationAsidePanel } from "@/components/conversation-aside/conversation-aside-panel";
 import { useConversationAside } from "@/components/conversation-aside/use-conversation-aside";
 import { CONVERSATION_ASIDE_WIDTH } from "@/lib/conversation-aside/placement";
@@ -77,6 +80,9 @@ function parsePositiveId(value: string | undefined): number | null {
  *   inert），回来时 Assistant 会话、草稿与运行中的订阅都还在；只有进入另一个会话或新会话才替换。
  *   会话页始终由这里渲染（不经 Outlet），因此路由切换不会重建它。
  * - 未保存修改。离开配置路由（含切换配置标签）前统一经 useBlocker 询问，页面内不再各自确认。
+ * - 新会话页就是所选工作区未开始的会话：`/` 只负责解析并转到它（`NewConversation`），之后由会话页渲染，
+ *   面包屑是「新会话」，空态经 `EmptyThreadFrameContext` 用新会话页的版面。判定只看会话自己的
+ *   `unstarted`；首个 Run 建立后目录推送把它挪进侧栏，地址不变、会话页不重挂。
  * - 侧栏：宽屏停靠，收起即整个隐藏（偏好持久化）；窄屏（≤1024px）平时隐藏，打开时以抽屉覆盖主区域。
  *   开关（`SidebarControls`）钉在红绿灯右侧，不随侧栏状态移动：总是渲染在此刻左上角那一行的拖动区里。
  */
@@ -101,6 +107,9 @@ export function AppLayout() {
   const focusedSessionId = section === "conversation" ? routeSessionId : keptSessionId;
 
   const catalog = useWorkspaceCatalog(focusedSessionId, workspaceConfigurationId);
+  // 刚从 `/` 取或建过来时目录推送可能还没到：用随导航带来的取或建结果，不再请求一次。
+  const arrived = (location.state as NewConversationRouteState | null)?.session;
+  const focusedSession = catalog.activeSession ?? (arrived?.session_id === focusedSessionId ? arrived : undefined);
   useSessionFeed({ onWorkspacesChanged: catalog.load, onWorkspaceSessionsChanged: catalog.refreshWorkspaceSessions });
   const activeSessionId = catalog.activeSession?.session_id;
   useUnsavedRouteGuard();
@@ -189,6 +198,27 @@ export function AppLayout() {
   }, [navigate]);
   const conversationPath = keptSessionId === null ? "/" : `/sessions/${keptSessionId}`;
 
+  // ---- 未开始的会话就是它所在工作区的新会话页：面包屑与空态版面都按新会话页来 ----
+  const focusedUnstarted = focusedSession?.unstarted ?? false;
+  const { workspaces: catalogWorkspaces } = catalog;
+  const focusedWorkspaceId = focusedSession?.workspace_id ?? null;
+  const { addWorkspaceFromFolder, addingWorkspace } = actions;
+  const newConversationFrame = useMemo<EmptyThreadFrame | null>(
+    () => !focusedUnstarted ? null : (composer) => (
+      <NewConversationFrame
+        workspaces={catalogWorkspaces}
+        selectedWorkspaceId={focusedWorkspaceId}
+        // 换工作区即去那个工作区的新会话页；这个会话与它的终端、标签留在原工作区，回来还在。
+        onWorkspaceChange={startNewConversation}
+        onAddWorkspace={addWorkspaceFromFolder}
+        addingWorkspace={addingWorkspace}
+      >
+        {composer}
+      </NewConversationFrame>
+    ),
+    [addWorkspaceFromFolder, addingWorkspace, catalogWorkspaces, focusedUnstarted, focusedWorkspaceId, startNewConversation],
+  );
+
   const crumbs = useMemo<Crumb[]>(() => {
     if (section === "settings") {
       const tab = findSettingsTab(SYSTEM_SETTINGS_TABS, params.tab);
@@ -204,12 +234,12 @@ export function AppLayout() {
       ];
     }
     if (section === "observer") return [{ label: "会话观测" }];
-    if (routeSessionId === null) return [{ label: "新会话" }];
+    if (routeSessionId === null || focusedUnstarted) return [{ label: "新会话" }];
     return [
       { label: catalog.activeWorkspace?.name ?? "工作区" },
       { label: catalog.activeSession?.title || "会话" },
     ];
-  }, [catalog.activeSession?.title, catalog.activeWorkspace?.name, catalog.workspaces, conversationPath, params.tab, routeSessionId, section, workspaceConfigurationId]);
+  }, [catalog.activeSession?.title, catalog.activeWorkspace?.name, catalog.workspaces, conversationPath, focusedUnstarted, params.tab, routeSessionId, section, workspaceConfigurationId]);
 
   const showSessionLayer = section === "conversation" && routeSessionId !== null;
   const outletContext = useMemo<AppOutletContext>(() => ({ catalog, actions }), [actions, catalog]);
@@ -220,7 +250,8 @@ export function AppLayout() {
     <AppSidebar
       headerControls={headerControls}
       catalog={catalog}
-      focusedSessionId={focusedSessionId}
+      // 未开始的会话不在侧栏里：新会话页在侧栏上表现为它所在的工作区被选中。
+      focusedSessionId={focusedUnstarted ? null : focusedSessionId}
       section={section}
       onNewConversation={startNewConversation}
       onSelectSession={selectSession}
@@ -236,7 +267,7 @@ export function AppLayout() {
 
   // 引用跳转与工作台共用同一个工作区来源：文件标签总是打开到当前显示的那个工作台桶里。
   return (
-    <ReferenceBridgeProvider workspaceRoot={workbenchWorkspace?.root_path ?? ""} workspaceName={workbenchWorkspace?.name ?? "工作区"} target={filesVisible ? (routeSessionId ? `session:${routeSessionId}` : `new:${catalog.selectedWorkspaceId}`) : null} workspaceId={workbenchWorkspaceId}>
+    <ReferenceBridgeProvider workspaceRoot={workbenchWorkspace?.root_path ?? ""} workspaceName={workbenchWorkspace?.name ?? "工作区"} target={filesVisible && routeSessionId ? `session:${routeSessionId}` : null} workspaceId={workbenchWorkspaceId}>
     <WorkbenchProvider workspaceId={workbenchWorkspaceId}>
       {/* 根是下沉的窗口底色，侧栏直接铺在上面；主区与停靠卡片在 bg-background 上，二者靠明度差分隔，不画线。 */}
       <div className="bg-canvas relative flex h-dvh min-h-0 overflow-hidden">
@@ -367,15 +398,17 @@ export function AppLayout() {
             {focusedSessionId !== null && (
               <div className="h-full" inert={!showSessionLayer} aria-hidden={!showSessionLayer || undefined}>
                 <ConversationAsideContext.Provider value={conversationAside}>
+                <EmptyThreadFrameContext.Provider value={newConversationFrame}>
                 <ReferenceTargetScope.Provider value={`session:${focusedSessionId}`}><SessionPage
                   key={focusedSessionId}
                   sessionId={focusedSessionId}
-                  initialSession={catalog.activeSession}
+                  initialSession={focusedSession}
                   workspaceRoot={catalog.activeWorkspace?.root_path}
                   forkingMessageId={actions.forkingMessageId}
                   onForkMessage={actions.forkMessage}
                   onSessionLoaded={catalog.handleSessionLoaded}
                 /></ReferenceTargetScope.Provider>
+                </EmptyThreadFrameContext.Provider>
                 </ConversationAsideContext.Provider>
               </div>
             )}

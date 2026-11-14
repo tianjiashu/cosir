@@ -1,303 +1,94 @@
-import { create } from "zustand";
-import type { ComponentProps, SetStateAction } from "react";
+import { useEffect, useState } from "react";
+import { Navigate, useNavigate } from "react-router-dom";
 
-import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
-import { useLocation } from "react-router-dom";
-import { ArrowUpIcon, Loader2Icon } from "lucide-react";
-
-import { ComposerAddMenu } from "@/components/composer/add-menu/add-menu";
-import { ComposerEditor, COMPOSER_EDITOR_CLASS_NAME, COMPOSER_PLACEHOLDER } from "@/components/composer/composer-editor";
-import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
-import { ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
-import { useComposerFiles } from "@/components/composer/use-composer-files";
-import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
-import { ModelSelector } from "@/components/composer/composer-model-selector";
-import { ComposerSurface } from "@/components/composer/composer-surface";
-import { ComposerToolbar } from "@/components/composer/composer-toolbar";
-import { WorkspacePicker } from "@/components/new-conversation/workspace-picker";
-import { NewConversationBackdrop } from "@/components/new-conversation/backdrop";
-import { NewConversationKeyHints } from "@/components/new-conversation/key-hints";
-import { modelUnavailable, startBlockedReason } from "@/components/new-conversation/start-readiness";
-import { Button } from "@/components/ui/button";
-import { createWorkspaceSession, deleteSession, type Workspace, type StartedConversation } from "@/lib/api/workspaces";
-import { useModelCatalog } from "@/lib/model/catalog";
-import { cn } from "@/lib/utils";
-import { readStoredSelection, writeStoredSelection } from "@/lib/model/selection-storage";
-import { ImageAttachmentStrip } from "@/components/composer/image-attachment-strip";
-import { ImageTile } from "@/components/image/image-tile";
-import { useImageGallery } from "@/components/image/image-gallery";
-import { useObjectUrls } from "@/hooks/use-object-urls";
-import { submitNewConversationMessage, wasCommandPossiblyAccepted } from "@/lib/assistant/composer/submit-new-conversation-message";
-import { frontendLog } from "@/lib/logging/frontend-log";
-import { showErrorDialog } from "@/lib/confirm/confirm-store";
+import { NewConversationFrame } from "@/components/new-conversation/new-conversation-frame";
+import { ErrorState } from "@/components/ui/state-panel";
+import { Skeleton } from "@/components/ui/skeleton";
+import { getOrCreateUnstartedSession, type Workspace, type WorkspaceSession } from "@/lib/api/workspaces";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { UserFacingError } from "@/lib/errors/user-facing-error";
-import { notify } from "@/lib/notify";
-import { newTraceId } from "@/lib/logging/trace-id";
+import { frontendLog } from "@/lib/logging/frontend-log";
 
-/** 新会话页的待发图片：提交时才上传，草稿里只保存 File 本身。 */
-type ImageDraftAttachment = { id: string; name: string; file: File };
-
-function imageAttachment(file: File): ImageDraftAttachment {
-  const id = crypto.randomUUID();
-  // 剪贴板截图没有文件名，补一个，上传与展示都需要。
-  const name = file.name || `粘贴图片-${id}.png`;
-  const namedFile = file.name ? file : new File([file], name, { type: file.type, lastModified: file.lastModified });
-  return { id, name, file: namedFile };
-}
-
-/** 新会话页的待发图片条：对象 URL 与放大预览在这一层建一次，灯箱能在全部待发图片间翻看。 */
-function NewConversationImages({ attachments, onRemove }: {
-  attachments: readonly ImageDraftAttachment[];
-  onRemove: (id: string) => void;
-}) {
-  const urls = useObjectUrls(useMemo(() => attachments.map((attachment) => attachment.file), [attachments]));
-  const gallery = useImageGallery(useMemo(
-    () => attachments.map((attachment) => ({ src: urls.get(attachment.file), alt: attachment.name })),
-    [attachments, urls],
-  ));
-  return (
-    <>
-      <ImageAttachmentStrip>
-        {attachments.map((attachment, index) => (
-          <ImageTile
-            key={attachment.id}
-            size="compact"
-            src={urls.get(attachment.file)}
-            alt={attachment.name}
-            title={attachment.name}
-            onRemove={() => onRemove(attachment.id)}
-            onOpen={() => gallery.open(index)}
-          />
-        ))}
-      </ImageAttachmentStrip>
-      {gallery.lightbox}
-    </>
-  );
-}
-
-function NewConversationInput({ images, ...props }: Omit<ComponentProps<typeof ComposerEditor>, "onExternalFiles"> & {
-  images: ComposerImageSink;
-}) {
-  const addFiles = useComposerFiles(images);
-  return <ComposerEditor {...props} onExternalFiles={addFiles} />;
-}
+/**
+ * 从 `/` 转到未开始的会话时随导航带上的取或建结果：目录推送还没到，会话页与新会话版面先用它，
+ * 不必再请求一次 `GET /sessions/:id`。只在这一次导航里有效，之后以目录为准。
+ */
+export type NewConversationRouteState = { session: WorkspaceSession };
 
 type NewConversationProps = {
   workspaces: Workspace[];
-  /**
-   * 工作区目录是否仍在首次加载：加载完成前 workspaces 为空并不代表用户没有工作区，
-   * 据此避免首帧闪出「添加工作区」引导。
-   */
+  /** 目录首次加载完成前没有选中的工作区并不代表用户没有工作区，此时只显示占位。 */
+  catalogLoading: boolean;
   selectedWorkspaceId: number | null;
+  /** 所选工作区未开始的会话（目录里已有时直接转过去，不再请求）。 */
+  unstartedSession: WorkspaceSession | null;
   onWorkspaceChange: (workspaceId: number) => void;
   /** 从文件夹添加工作区（与侧栏共用 `useWorkspaceActions.addWorkspaceFromFolder`）。 */
   onAddWorkspace: () => Promise<boolean>;
   addingWorkspace: boolean;
-  /** 首条命令已被后端受理且用户仍停留在本页：由宿主导航到新 Session。 */
-  onStarted: (conversation: StartedConversation) => void;
-  /** 新 Session 被保留但不导航（用户已离开本页，或受理结果未知）：宿主只需刷新侧栏。 */
-  onSessionListChanged: () => void;
 };
 
-type NewSessionDraft = { text: string; attachments: ImageDraftAttachment[] };
-const emptyDraft: NewSessionDraft = { text: "", attachments: [] };
-const useNewSessionDrafts = create<{ drafts: Record<number, NewSessionDraft>; update: (id: number, update: (draft: NewSessionDraft) => NewSessionDraft) => void }>(set => ({ drafts: {}, update: (id, update) => set(state => ({ drafts: { ...state.drafts, [id]: update(state.drafts[id] ?? emptyDraft) } })) }));
-
+/**
+ * 新会话页的路由（`/`）：只负责把它解析成所选工作区未开始的会话并转过去。
+ *
+ * 新会话页本身就是那个会话（会话页套 `NewConversationFrame`，见 AppLayout），输入、草稿、模型选择、终端
+ * 与浏览器标签都是会话页的那一套。这里只剩不对应会话的状态：目录加载中、没有或没选工作区、正在取或建、
+ * 取或建失败。取或建是幂等的（每个工作区至多一个），重复进入或 StrictMode 下的两次请求得到同一个会话。
+ */
 export function NewConversation({
   workspaces,
+  catalogLoading,
   selectedWorkspaceId,
+  unstartedSession,
   onWorkspaceChange,
   onAddWorkspace,
   addingWorkspace,
-  onStarted,
-  onSessionListChanged,
 }: NewConversationProps) {
-  const formRef = useRef<HTMLFormElement>(null);
-  const location = useLocation();
-  // 提交跨越多个 await：完成时用 ref 判断用户是否仍在本页，避免把已离开的用户拽回新 Session。
-  const pathnameRef = useRef(location.pathname);
-  pathnameRef.current = location.pathname;
-  const mountedRef = useRef(true);
-  const draftId = selectedWorkspaceId ?? 0;
-  const currentDraftId = useRef(draftId);
-  currentDraftId.current = draftId;
-  const draft = useNewSessionDrafts(state => state.drafts[draftId] ?? emptyDraft);
-  const updateDraft = useNewSessionDrafts(state => state.update);
-  const text = draft.text;
-  const setText = (text: string) => updateDraft(draftId, current => ({ ...current, text }));
-  const [submitting, setSubmitting] = useState(false);
-  const [modelReady, setModelReady] = useState(false);
-  const attachments = draft.attachments;
-  const setAttachments = (value: SetStateAction<ImageDraftAttachment[]>) => updateDraft(draftId, current => ({ ...current, attachments: typeof value === "function" ? value(current.attachments) : value }));
-  const selectedWorkspace = workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId);
-  const images: ComposerImageSink = {
-    add: (file) => setAttachments((current) => [...current, imageAttachment(file)]),
-    // 现读 store：同一批文件逐张添加时，草稿列表已在上一次 add 后更新。
-    count: () => useNewSessionDrafts.getState().drafts[currentDraftId.current]?.attachments.length ?? 0,
-  };
-  const hasDraft = Boolean(text.trim() || attachments.length > 0);
-  const modelMissing = modelUnavailable(useModelCatalog());
-  const hasWorkspaces = workspaces.length > 0;
-  const canStart = Boolean(selectedWorkspaceId) && modelReady && hasDraft && !submitting;
-  const blockedReasonId = useId();
-  const blockedReason = startBlockedReason({ hasWorkspaces, selectedWorkspaceId, modelMissing, modelReady });
+  const navigate = useNavigate();
+  const [failure, setFailure] = useState<{ workspaceId: number; message: string } | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
+  const needsSession = selectedWorkspaceId !== null && unstartedSession === null;
 
   useEffect(() => {
-    mountedRef.current = true;
-    return () => { mountedRef.current = false; };
-  }, []);
-
-  /**
-   * 创建 provisional Session 并提交首条命令。
-   *
-   * 生命周期约束：
-   * - 只在用户仍停留在本页时导航；用户中途离开（切到其它 Session、组件卸载）只刷新侧栏并 toast，
-   *   不能把用户拽回新 Session。
-   * - 只有确定命令未被受理（请求未发出或 HTTP 明确拒绝）才删除 provisional Session；网络层结果未知
-   *   或已越过 accepted barrier 时删除会丢掉可能正在运行的对话，见 wasCommandPossiblyAccepted。
-   */
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const trimmedText = text.trim();
-    if (!canStart || !selectedWorkspaceId) return;
-    setSubmitting(true);
-    const sendAttachments = [...attachments];
-    const creationCommandId = crypto.randomUUID();
-    const traceId = newTraceId();
-    const submittedPathname = pathnameRef.current;
-    const stillHere = () => mountedRef.current && pathnameRef.current === submittedPathname && currentDraftId.current === draftId;
-    let provisionalSession: StartedConversation | null = null;
-    try {
-      const selection = readStoredSelection({ kind: "workspace", id: selectedWorkspaceId });
-      if (!selection?.modelConfigId) throw new UserFacingError("请先选择模型");
-      const session = await createWorkspaceSession(selectedWorkspaceId, {
-        text: trimmedText,
-        creationCommandId,
-      });
-      provisionalSession = session;
-      await submitNewConversationMessage({
-        sessionId: session.session_id,
-        workspaceId: selectedWorkspaceId,
-        text: trimmedText,
-        imageAttachments: sendAttachments.map((attachment) => ({ file: attachment.file, name: attachment.name })),
-        modelConfigId: selection.modelConfigId,
-        reasoningEffort: selection.reasoningEffort ?? null,
-        traceId,
-      });
-      writeStoredSelection({ kind: "session", id: session.session_id }, {
-        modelConfigId: selection.modelConfigId,
-        reasoningEffort: selection.reasoningEffort ?? null,
-      });
-      updateDraft(draftId, () => emptyDraft);
-      if (stillHere()) {
-        onStarted(session);
-      } else {
-        void frontendLog("INFO", "new_conversation_started_after_leave", "用户已离开新会话页，首条消息受理后不再导航", {
-          traceId,
-          data: { sessionId: session.session_id, creationCommandId },
+    if (!needsSession || selectedWorkspaceId === null) return;
+    // 卸载即用户已离开 `/`：迟到的结果不再导航。
+    let left = false;
+    setFailure(null);
+    getOrCreateUnstartedSession(selectedWorkspaceId)
+      .then((session) => {
+        if (left) return;
+        navigate(`/sessions/${session.session_id}`, { replace: true, state: { session } satisfies NewConversationRouteState });
+      })
+      .catch((cause: unknown) => {
+        void frontendLog("ERROR", "unstarted_session_resolve_failed", "新会话页取或建未开始的会话失败", {
+          data: { workspaceId: selectedWorkspaceId },
+          error: cause,
         });
-        onSessionListChanged();
-        notify.success("新会话已开始运行", { description: "可在侧栏中打开查看" });
-      }
-    } catch (cause) {
-      const possiblyAccepted = wasCommandPossiblyAccepted(cause);
-      if (provisionalSession && !possiblyAccepted) {
-        try {
-          await deleteSession(provisionalSession.session_id, { creationCommandId });
-        } catch (cleanupError) {
-          void frontendLog("ERROR", "provisional_session_cleanup_failed", "provisional Session 清理失败", {
-            traceId,
-            data: { sessionId: provisionalSession.session_id, creationCommandId },
-            error: cleanupError,
-          });
-        }
-      }
-      if (provisionalSession && possiblyAccepted) onSessionListChanged();
-      void frontendLog("ERROR", "new_conversation_submit_failed", "新会话首条消息发送失败", {
-        traceId,
-        data: { sessionId: provisionalSession?.session_id ?? null, creationCommandId, possiblyAccepted },
-        error: cause,
+        if (!left) setFailure({ workspaceId: selectedWorkspaceId, message: userErrorMessage(cause, "新会话打开失败，请重试") });
       });
-      if (stillHere()) void showErrorDialog({ title: "创建会话失败", message: userErrorMessage(cause, "创建会话失败，请重试") });
-      else notify.error("创建会话失败", { error: cause, fallback: "创建会话失败，请重试" });
-    } finally {
-      if (mountedRef.current) setSubmitting(false);
-    }
-  };
+    return () => { left = true; };
+  }, [navigate, needsSession, retryToken, selectedWorkspaceId]);
 
+  if (unstartedSession) return <Navigate to={`/sessions/${unstartedSession.session_id}`} replace />;
+
+  const failed = failure !== null && failure.workspaceId === selectedWorkspaceId ? failure.message : null;
   return (
-    // 背景包在滚动容器外，内容滚动时点阵不跟着走。
-    <NewConversationBackdrop>
-    {/* 上下留白 2:3，把视觉中心放在略高于正中处；内容超高时整页滚动。 */}
-    <div className="mx-auto grid h-full w-full max-w-conversation grid-rows-[2fr_auto_3fr] overflow-y-auto px-6">
-      <ComposerInsertionProvider key={draftId}>
-      <form ref={formRef} onSubmit={submit} className="row-start-2 w-full">
-        {/* 命令行提示符式标题：目录段就是工作区选择器，当前工作区不在输入框里重复显示。 */}
-        <h1 className="mb-6 flex min-w-0 items-center justify-center gap-2 text-2xl font-medium">
-          <WorkspacePicker
-            workspaces={workspaces}
-            selectedWorkspaceId={selectedWorkspaceId}
-            onWorkspaceChange={onWorkspaceChange}
-            onAddWorkspace={onAddWorkspace}
-            addingWorkspace={addingWorkspace}
-          />
-          <span aria-hidden="true" className="text-brand font-mono">❯</span>
-          <span className="shrink-0">想做什么？</span>
-        </h1>
-        <ComposerSurface>
-          <ComposerFeedbackProvider>
-          <NewConversationImages
-            attachments={attachments}
-            onRemove={(id) => setAttachments((current) => current.filter((item) => item.id !== id))}
-          />
-          <NewConversationInput
-            images={images}
-            value={text}
-            onChange={setText}
-            onSubmit={() => {
-              if (canStart) formRef.current?.requestSubmit();
-            }}
-            placeholder={COMPOSER_PLACEHOLDER}
-            className={cn(COMPOSER_EDITOR_CLASS_NAME, "min-h-20")}
-            disabled={submitting}
-            aria-label="新会话内容"
-            autoFocus
-          />
-          <ComposerToolbar
-            add={<ComposerAddMenu images={images} workspaceRoot={selectedWorkspace?.root_path} workspaceId={selectedWorkspaceId ?? null} disabled={submitting} />}
-            config={(
-              <ModelSelector
-                scope={selectedWorkspaceId ? { kind: "workspace", id: selectedWorkspaceId } : undefined}
-                onReadyChange={setModelReady}
-              />
-            )}
-            action={(
-              <>
-                {blockedReason && (
-                  <span id={blockedReasonId} className="text-muted-foreground px-1 text-xs">{blockedReason}</span>
-                )}
-                <Button
-                  type="submit"
-                  size="icon"
-                  className="size-8 rounded-full"
-                  disabled={!canStart}
-                  aria-label="开始会话"
-                  title="开始会话"
-                  aria-describedby={blockedReason ? blockedReasonId : undefined}
-                >
-                  {submitting ? <Loader2Icon className="size-4 animate-spin" /> : <ArrowUpIcon className="size-4" />}
-                </Button>
-              </>
-            )}
-          />
-          <ComposerFeedback />
-          </ComposerFeedbackProvider>
-        </ComposerSurface>
-        <NewConversationKeyHints />
-      </form>
-      </ComposerInsertionProvider>
-    </div>
-    </NewConversationBackdrop>
+    <NewConversationFrame
+      workspaces={workspaces}
+      selectedWorkspaceId={selectedWorkspaceId}
+      onWorkspaceChange={onWorkspaceChange}
+      onAddWorkspace={onAddWorkspace}
+      addingWorkspace={addingWorkspace}
+    >
+      {failed ? (
+        <ErrorState message={failed} onRetry={() => setRetryToken((value) => value + 1)} />
+      ) : catalogLoading || needsSession ? (
+        // 与会话页的加载骨架同一形状：转到会话页时输入区位置不跳。
+        <Skeleton role="status" aria-label="正在打开新会话" className="h-28 w-full rounded-3xl" />
+      ) : (
+        <p className="border-border text-muted-foreground flex h-28 items-center justify-center rounded-3xl border border-dashed text-sm">
+          {workspaces.length > 0 ? "先在上方选择一个工作区" : "先在上方添加一个工作区"}
+        </p>
+      )}
+    </NewConversationFrame>
   );
 }

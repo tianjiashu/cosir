@@ -462,6 +462,11 @@ function publishSessionStatus(sessionId) {
   for (const res of statusSubscribers) writeStatusFrame(res, { type: "changed", sessions: { [sessionId]: status } });
 }
 
+/** Session 的 HTTP 响应：补齐后端恒有的字段。 */
+function sessionResponse(session) {
+  return { ...session, session_type: session.session_type ?? "user", unstarted: session.unstarted ?? false };
+}
+
 /** 目录失效：`workspaces` 为 true 表示工作区列表变了，否则是这个工作区的侧栏 Session 变了。 */
 function publishCatalog({ workspaces: workspacesChanged = false, workspaceIds = [WORKSPACE_ID] } = {}) {
   const frame = { type: "catalog", workspaces: workspacesChanged, workspaceIds: workspacesChanged ? [] : workspaceIds };
@@ -595,6 +600,13 @@ function handleMessage(res, body, sessionId) {
     ...part, status: "cancelled", awaitingUser: false, error: "未作答",
   }));
   accepted(res);
+  // 与后端一致：未开始的会话有了第一个 Run 就成为普通会话，以首条输入命名并进侧栏。
+  const session = sessions.get(sessionId);
+  if (session?.unstarted) {
+    session.unstarted = false;
+    session.title ||= text.slice(0, 40);
+    publishCatalog();
+  }
 
   if (text.startsWith("tool-lifecycle")) {
     const finalStatus = text.startsWith("tool-lifecycle-failed") ? "failed"
@@ -809,7 +821,7 @@ const server = createServer(async (req, res) => {
   // CORS 头只在这里设一次（writeHead 会合并）；回写请求来源，不绑定某个 Vite 端口，并行运行各用各的。
   res.setHeader("Access-Control-Allow-Origin", req.headers.origin ?? "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Trace-Id");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Expose-Headers", "X-Cosir-Session-Id");
 
   if (req.method === "OPTIONS") {
@@ -847,23 +859,27 @@ const server = createServer(async (req, res) => {
     return;
   }
   if (req.method === "GET" && url.pathname === `/workspaces/${WORKSPACE_ID}/sessions`) {
-    jsonResponse(res, 200, [...sessions.values()].filter(session => session.session_type !== "delegate_task"));
+    jsonResponse(res, 200, [...sessions.values()].filter(session => session.session_type !== "delegate_task").map(sessionResponse));
     return;
   }
-  if (req.method === "POST" && url.pathname === `/workspaces/${WORKSPACE_ID}/sessions`) {
-    const body = await readJson(req);
-    const text = typeof body.text === "string" ? body.text : "";
-    sessions.set(SESSION_ID, {
-      session_id: SESSION_ID,
-      workspace_id: WORKSPACE_ID,
-      title: text.slice(0, 40),
-      created_at: "2026-01-01T00:00:00.000Z",
-      updated_at: "2026-01-01T00:00:00.000Z",
-    });
-    states.set(SESSION_ID, emptyState());
-    publishSessionStatus(SESSION_ID);
-    publishCatalog();
-    jsonResponse(res, 200, sessions.get(SESSION_ID));
+  // 与后端一致：取或建未开始的会话（幂等）；它不进侧栏，首条消息受理后才成为普通会话（见 handleMessage）。
+  if (req.method === "PUT" && url.pathname === `/workspaces/${WORKSPACE_ID}/unstarted-session`) {
+    let session = [...sessions.values()].find((candidate) => candidate.unstarted);
+    if (!session) {
+      session = {
+        session_id: SESSION_ID,
+        workspace_id: WORKSPACE_ID,
+        title: "",
+        unstarted: true,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      };
+      sessions.set(SESSION_ID, session);
+      states.set(SESSION_ID, { ...emptyState(), title: "" });
+      publishSessionStatus(SESSION_ID);
+      publishCatalog();
+    }
+    jsonResponse(res, 200, sessionResponse(session));
     return;
   }
   if (req.method === "DELETE" && /^\/sessions\/\d+$/.test(url.pathname)) {
@@ -1234,7 +1250,7 @@ const server = createServer(async (req, res) => {
       jsonResponse(res, 404, { detail: "session not found" });
       return;
     }
-    jsonResponse(res, 200, { ...session, session_type: session.session_type ?? "user" });
+    jsonResponse(res, 200, sessionResponse(session));
     return;
   }
   const historyRoute = url.pathname.match(/^\/sessions\/(\d+)\/assistant\/messages$/);

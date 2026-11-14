@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { TextPreview } from "./text-preview";
 import { ImagePreview } from "./image-preview";
 import { fileInfoQueryOptions } from "@/lib/query/query-options";
-import { fileSession, useFilesStore, type ReadingView } from "@/lib/workspace-files/workspace-files-store";
+import { workspaceFiles, useFilesStore, type ReadingView } from "@/lib/workspace-files/workspace-files-store";
 import type { FileInfo } from "@/lib/api/workspace-files";
 const PdfPreview = lazy(() => import("./pdf-preview"));
 
@@ -32,8 +32,8 @@ export function FilePreview({
   const query = useQuery({
     ...fileInfoQueryOptions(workspaceId, path),
   });
-  const preference = useFilesStore((s) => fileSession(s.sessions, workspaceId).preferences[path]);
-  const reveal = useFilesStore((s) => fileSession(s.sessions, workspaceId).positions[path]?.reveal);
+  const preference = useFilesStore((s) => workspaceFiles(s.byWorkspace, workspaceId).preferences[path]);
+  const reveal = useFilesStore((s) => workspaceFiles(s.byWorkspace, workspaceId).positions[path]?.reveal);
   const setPreference = useFilesStore((s) => s.preference);
   const setView = (view: ReadingView) => setPreference(workspaceId, path, { view });
   const kind = query.data?.kind;

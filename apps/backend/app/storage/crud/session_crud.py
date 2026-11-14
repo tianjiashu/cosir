@@ -59,7 +59,6 @@ class SessionCrud:
             title: str,
             session_type: SessionType = SessionType.USER,
             parent_session_id: int | None = None,
-            creation_command_id: str | None = None,
             db: DbSession | None = None,
             extra: SessionExtra | None = None,
             tool_schemas: list[dict[str, Any]] | None = None,
@@ -77,7 +76,6 @@ class SessionCrud:
             title: 会话标题。
             session_type: SessionType 枚举，缺省为 ``SessionType.USER``。
             parent_session_id: 父会话标识（整数 id），子 Session 必填，用户会话为 None。
-            creation_command_id: 前端创建命令标识，用于首条命令未被接受时回收 provisional Session。
             db: 可选的外部 SQLAlchemy 会话。传入时在本方法内复用该事务（调用方负责提交）；
                 为 None 时由本方法自开事务并自动提交。
             extra: Session 扩展 JSON（如 fork 来源、派生调用）。
@@ -89,7 +87,7 @@ class SessionCrud:
             落库成功的 ``SessionRecord``（含自增分配的 id 与填充的创建 / 更新时间）。
 
         异常:
-            sqlalchemy.exc.IntegrityError: 如果违反外键约束或同一工作区内 creation_command_id 重复。
+            sqlalchemy.exc.IntegrityError: 如果违反外键约束。
             sqlalchemy.exc.SQLAlchemyError: 如果写入失败。
 
         副作用:
@@ -103,7 +101,6 @@ class SessionCrud:
                     title,
                     session_type,
                     parent_session_id,
-                    creation_command_id,
                     extra,
                     tool_schemas,
                     derivation_depth,
@@ -114,7 +111,6 @@ class SessionCrud:
             title,
             session_type,
             parent_session_id,
-            creation_command_id,
             extra,
             tool_schemas,
             derivation_depth,
@@ -127,7 +123,6 @@ class SessionCrud:
             title: str,
             session_type: SessionType,
             parent_session_id: int | None,
-            creation_command_id: str | None,
             extra: SessionExtra | None,
             tool_schemas: list[dict[str, Any]] | None = None,
             derivation_depth: int = 0,
@@ -140,7 +135,6 @@ class SessionCrud:
             title: 会话标题。
             session_type: 会话类型。
             parent_session_id: 委派父会话标识。
-            creation_command_id: 触发建会话的命令标识。
 
         返回:
             已 flush 的 ``SessionRecord``。
@@ -156,7 +150,6 @@ class SessionCrud:
             title=title,
             session_type=session_type,
             parent_session_id=parent_session_id,
-            creation_command_id=creation_command_id,
             extra=(extra or SessionExtra()).model_dump(mode="json"),
             tool_schemas=tool_schemas or [],
             current_run_id=None,
@@ -367,6 +360,19 @@ class SessionCrud:
                 .values(title=title, updated_at=SessionModel.updated_at)
             )
             return True
+
+    def fill_empty_title(self, session_id: int, title: str) -> bool:
+        """标题还是空的才写入，返回是否写入；判断与写入是同一条语句，不依赖调用方手里可能过期的记录。
+
+        Session 已删除时同样返回 ``False``；与 :meth:`update_title` 一样不刷新 ``updated_at``。
+        """
+        with self._db_factory.begin() as db:
+            result = db.execute(
+                update(SessionModel)
+                .where(SessionModel.id == session_id, SessionModel.title == "")
+                .values(title=title, updated_at=SessionModel.updated_at)
+            )
+            return bool(result.rowcount)
 
     def list_by_workspace(self, workspace_id: int) -> list[SessionRecord]:
         """侧栏会话（``USER_FACING_SESSION_TYPES``），按更新时间倒序；委派子会话不在侧栏。"""

@@ -142,7 +142,7 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
     if "fork" in snapshot:
         _validate_fork(snapshot["fork"])
     require_int(snapshot["messageOffset"], "snapshot messageOffset", minimum=0)
-    require_non_empty_str(snapshot["title"], "snapshot title")
+    _validate_title(snapshot["title"])
     seen_message_ids: set[str] = set()
     for queued_message in require_list(snapshot["queued_messages"], "snapshot queued_messages"):
         _validate_queued_message(queued_message, seen_message_ids)
@@ -193,7 +193,8 @@ def validate_mutated(
 
 
 def _validate_title(value: object) -> None:
-    require_non_empty_str(value, "snapshot title")
+    # 允许为空：未开始的会话还没有标题（首条用户输入并入时才命名），界面按「新会话」显示。
+    require_str(value, "snapshot title")
 
 
 def _validate_optional_activity(value: object) -> None:

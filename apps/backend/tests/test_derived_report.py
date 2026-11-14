@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
+from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_schemas
 from app.core.workflow import workflow
 from app.core.workflow.branch import session_title
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
@@ -129,7 +130,9 @@ async def derived(backend_env, tmp_path, monkeypatch):
         supports_image=False,
     )
     workspace = depends.get_workspace_service().create_workspace("ws", str(tmp_path))
-    parent = depends.get_workspace_service().create_session(workspace.id, "parent")
+    parent = depends.get_session_service().create_session(
+        workspace.id, "parent", tool_schemas=main_agent_tool_schemas()
+    )
     state = SimpleNamespace(model=None, parent=parent, model_config=model_config)
 
     def resolve(**_):

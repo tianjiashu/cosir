@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import { recoverRejectedCommands } from "@/lib/assistant/composer/composer-drafts";
@@ -6,7 +6,8 @@ import { sendSessionMessage, type SessionMessageRequest } from "@/lib/assistant/
 import { showErrorDialog } from "@/lib/confirm/confirm-store";
 import { notify } from "@/lib/notify";
 import { activeRunLaunch } from "@/lib/assistant/run-launch";
-import { readStoredSelection } from "@/lib/model/selection-storage";
+import { useModelCatalog } from "@/lib/model/catalog";
+import { resolveModelSelection, useModelSelectionStore } from "@/lib/model/model-selection-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { RuntimeSessionContext } from "@/components/conversation-runtime/runtime/runtime-types";
 import { useSessionAssistantTransportRuntime } from "@/lib/assistant/transport/use-session-assistant-transport-runtime";
@@ -21,6 +22,10 @@ import { UserFacingError } from "@/lib/errors/user-facing-error";
 export function useRuntimeTransport(
   context: RuntimeSessionContext,
 ): ReturnType<typeof useSessionAssistantTransportRuntime> {
+  // 发送时按与选择器相同的回落链取模型，目录取最近一次渲染时的值。
+  const catalog = useModelCatalog().catalog;
+  const catalogRef = useRef(catalog);
+  catalogRef.current = catalog;
   const attachmentAdapter = useMemo(
     () => context.workspaceId == null ? null : createAttachmentAdapter(context.workspaceId),
     [context.workspaceId],
@@ -57,10 +62,15 @@ export function useRuntimeTransport(
       const state = context.store.getSnapshot().state;
       // 运行期配置锁定：活动期间发送用它冻结的配置（composer 也只显示这份）。
       const runLaunch = activeRunLaunch(state);
-      const selection = readStoredSelection({ kind: "session", id: context.sessionId });
+      const preferred = resolveModelSelection(
+        catalogRef.current?.models ?? [],
+        useModelSelectionStore.getState(),
+        { sessionId: context.sessionId, workspaceId: context.workspaceId },
+        { lastLaunch: state.activity?.launch ?? null, inheritedLaunch: state.fork?.initialLaunch ?? null },
+      );
       const launch = runLaunch ?? {
-        modelConfigId: selection?.modelConfigId ?? state.fork?.initialLaunch.modelConfigId ?? null,
-        reasoningEffort: selection ? selection.reasoningEffort ?? null : state.fork?.initialLaunch.reasoningEffort ?? null,
+        modelConfigId: preferred?.modelConfigId ?? null,
+        reasoningEffort: preferred?.reasoningEffort ?? null,
       };
       // 正文里的胶囊标签就是机器可读的指针，命令原样发送，不在前端改写 parts。
       const message = command.message as SessionMessageRequest["message"];

@@ -10,26 +10,26 @@ test.beforeEach(async ({ request }) => {
 });
 
 test("large details build only on first open, freeze hidden input, and catch up on reopen", async ({ page, request }) => {
-  const part = toolCallPart("list", "list_directory", { status: "completed", display_data: { kind: "directory-list", entries: Array.from({ length: 100 }, (_, i) => ({ name: `entry-${i}`, type: "file" })) } });
+  const part = toolCallPart("list", "find_files", { status: "completed", display_data: { kind: "file-list", files: Array.from({ length: 100 }, (_, i) => ({ path: `entry-${i}` })) } });
   await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { sessionId: 42, state: state([part]) } });
   await page.goto("/sessions/42");
   await page.locator('[data-slot="activity-head"]').click();
   await page.evaluate(async () => {
     const path = "/components/conversation/tools/call-view-registry.ts";
     const { CALL_VIEWS } = await import(/* @vite-ignore */ path);
-    const original = CALL_VIEWS["directory-list"];
+    const original = CALL_VIEWS["file-list"];
     const counter = { builds: 0 };
     Object.assign(window, { detailCounter: counter });
-    CALL_VIEWS["directory-list"] = (...args: unknown[]) => {
+    CALL_VIEWS["file-list"] = (...args: unknown[]) => {
       const result = original(...args), render = result.detail.render;
       result.detail.render = () => { counter.builds++; return render(); };
       return result;
     };
   });
-  const next = { ...part, display_data: { ...part.display_data!, total_entries: 100 } };
+  const next = { ...part, display_data: { ...part.display_data!, match_count: 100 } };
   await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { sessionId: 42, state: state([next]) } });
   const row = page.locator('[data-tool-call-id="list"]');
-  await expect(row).toContainText("100 个条目");
+  await expect(row).toContainText("100 个文件");
   const builds = () => page.evaluate(() => (window as unknown as { detailCounter: { builds: number } }).detailCounter.builds);
   expect(await builds()).toBe(0);
   await row.locator('[data-slot="call-row"]').click();
@@ -38,9 +38,9 @@ test("large details build only on first open, freeze hidden input, and catch up 
   expect(before).toBeGreaterThan(0);
   await row.locator('[data-slot="call-row"]').click();
   await expect(row.getByText("entry-99", { exact: true })).toBeHidden();
-  const after = { ...next, display_data: { ...next.display_data, entries: [{ name: "latest-entry", type: "file" }], total_entries: 1 } };
+  const after = { ...next, display_data: { ...next.display_data, files: [{ path: "latest-entry" }], match_count: 1 } };
   await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { sessionId: 42, state: state([after]) } });
-  await expect(row).toContainText("1 个条目");
+  await expect(row).toContainText("1 个文件");
   expect(await builds()).toBe(before);
   await row.locator('[data-slot="call-row"]').click();
   await expect(row.getByText("latest-entry", { exact: true })).toBeVisible();

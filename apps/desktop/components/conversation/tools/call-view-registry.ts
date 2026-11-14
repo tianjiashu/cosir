@@ -3,7 +3,7 @@ import { mcpView, skillView } from "./call-views/extension-views";
 import { imageReadView } from "./call-views/image-read-view";
 import { readFileView } from "./call-views/read-file-view";
 import { webExtractView, webSearchView } from "./call-views/web-views";
-import { contentSearchView, directoryListView, fileListView } from "./call-views/workspace-list-views";
+import { contentSearchView, fileListView } from "./call-views/workspace-list-views";
 import { asRecord } from "./display-data-readers";
 import { browserPageView } from "./call-views/browser-page-view";
 import { agentSessionResultView, delegationView, forkSessionView } from "./call-views/child-session-views";
@@ -21,7 +21,6 @@ export const CALL_VIEWS: Readonly<Record<string, CallView>> = {
   "read-file-meta": readFileView,
   "file-list": fileListView,
   "content-search-results": contentSearchView,
-  "directory-list": directoryListView,
   "web-search-results": webSearchView,
   "web-extract-urls": webExtractView,
   "image-read": imageReadView,

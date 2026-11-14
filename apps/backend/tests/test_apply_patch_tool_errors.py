@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.patch_write.patch_apply import PatchApplyError
+from app.tools.tool_handler.file_edit.patch_apply import PatchApplyError
 
 
 def _context(tmp_path: Path) -> ToolExecutionContext:
@@ -126,7 +126,7 @@ def test_hunk_validation_failure_does_not_write_any_file(tmp_path: Path) -> None
 # 已过时（会话要求把该用例翻转到新契约）。
 def test_hunk_count_mismatch_is_repaired_and_names_the_bad_header(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
-    target.write_text("keep\nold\n", encoding="utf-8")
+    target.write_text("keep\nold\ntail\n", encoding="utf-8")
     patch = "\n".join(
         (
             "diff --git a/a.txt b/a.txt",

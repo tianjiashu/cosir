@@ -4,8 +4,8 @@ import path from "node:path";
 import { _electron as electron, expect, type ElectronApplication, type Page } from "@playwright/test";
 
 const desktopRoot = path.resolve(__dirname, "..", "..");
-export const repositoryRoot = path.resolve(desktopRoot, "..", "..");
-export const backendPython = path.join(repositoryRoot, "apps", "backend", process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python");
+const repositoryRoot = path.resolve(desktopRoot, "..", "..");
+const backendPython = path.join(repositoryRoot, "apps", "backend", process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python");
 
 /**
  * 启动真实宿主。数据根指向临时目录（`CODING_AGENT_DATA_DIR`）：SQLite、日志与运行期文件全部隔离，不碰开发者的真实数据。
@@ -29,4 +29,19 @@ export async function backendBaseUrl(page: Page): Promise<string> {
   const snapshot = await page.evaluate(() => window.cosirHost!.backend.snapshot());
   expect(snapshot.status).toEqual({ state: "ready" });
   return snapshot.backendBaseUrl!;
+}
+
+/** 取或建工作区未开始的会话。首个 Run 建立前反复调用得到的是同一个，要第二个会话须先让它开始。 */
+export async function unstartedSession(base: string, workspaceId: number): Promise<number> {
+  const response = await fetch(`${base}/workspaces/${workspaceId}/unstarted-session`, { method: "PUT" });
+  expect(response.status, await response.clone().text()).toBe(200);
+  return ((await response.json()) as { session_id: number }).session_id;
+}
+
+/** 像用户一样进新会话页并选中工作区：它未开始的会话不在侧栏，页面随即转到这个会话。 */
+export async function openNewConversation(page: Page, workspaceName: string, sessionId: number): Promise<void> {
+  await page.getByRole("button", { name: "新会话" }).first().click();
+  await page.getByRole("button", { name: "选择工作区" }).click();
+  await page.getByRole("option", { name: workspaceName }).click();
+  await expect(page).toHaveURL(new RegExp(`/sessions/${sessionId}$`));
 }

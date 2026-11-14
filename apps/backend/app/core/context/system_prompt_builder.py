@@ -55,7 +55,6 @@ from app.core.tool.schemas.tool_names import (
     TOOL_DELEGATE_TASK,
     TOOL_EXECUTE_TERMINAL,
     TOOL_FIND_FILES,
-    TOOL_LIST_DIRECTORY,
     TOOL_MCP,
     TOOL_READ_FILE,
     TOOL_READ_IMAGE,
@@ -255,8 +254,7 @@ class SystemPromptBuilder:
     _FILE_TOOL_ROLES = (
         (TOOL_READ_FILE, "read_file to read"),
         (TOOL_SEARCH_CONTENT, "search_content to search"),
-        (TOOL_FIND_FILES, "find_files to find"),
-        (TOOL_LIST_DIRECTORY, "list_directory to list"),
+        (TOOL_FIND_FILES, "find_files to find files or see what a directory contains"),
     )
     _READ_ONLY_TOOLS = frozenset(
         {
@@ -264,8 +262,7 @@ class SystemPromptBuilder:
             TOOL_READ_IMAGE,
             TOOL_SEARCH_CONTENT,
             TOOL_FIND_FILES,
-            TOOL_LIST_DIRECTORY,
-            TOOL_WEB_SEARCH,
+                    TOOL_WEB_SEARCH,
             TOOL_WEB_EXTRACT,
         }
     )

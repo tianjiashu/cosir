@@ -116,6 +116,7 @@ def test_all_domain_routes_registered_on_same_app() -> None:
         "/workspaces",
         "/workspaces/{workspace_id}",
         "/workspaces/{workspace_id}/sessions",
+        "/workspaces/{workspace_id}/unstarted-session",
         "/sessions/{session_id}",
         "/sessions/{session_id}/fork",
         "/workspaces/{workspace_id}/attachments",

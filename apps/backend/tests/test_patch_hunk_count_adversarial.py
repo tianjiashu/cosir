@@ -32,7 +32,7 @@ from unidiff.errors import UnidiffParseError
 
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.patch_write import (
+from app.tools.tool_handler.file_edit import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
@@ -46,7 +46,7 @@ LEGACY_COUNT_REJECTION = "hunk line counts do not match"
 def _hunk_count_diagnostics(section: str, section_index: int) -> list[str]:
     """测试侧视图：解析层现在「按正文重算计数」，本函数返回重算时产出的提示列表。"""
 
-    module = pytest.importorskip("app.tools.tool_handler.patch_write.patch_parser")
+    module = pytest.importorskip("app.tools.tool_handler.file_edit.patch_parser")
     return module._recompute_hunk_counts(section, section_index)[1]
 
 
@@ -610,7 +610,7 @@ def test_diagnostics_number_hunks_sequentially() -> None:
 # 2026-09-21 契约 B：原「拒绝 + 零写入」的期望已过时，翻转为「接受 + 确实写入 + 提示完整」。
 def test_miscounted_patch_is_applied_with_a_complete_note(tmp_path: Path) -> None:
     target = tmp_path / "mod.txt"
-    target.write_text("a\nb\n", encoding="utf-8")
+    target.write_text("a\nb\nd\n", encoding="utf-8")
     patch = _section("@@ -1,2 +1,2 @@", " a", "-b", "+c", " d")
 
     observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)
@@ -632,7 +632,7 @@ def test_one_miscounted_section_still_writes_every_file(tmp_path: Path) -> None:
     first = tmp_path / "first.txt"
     second = tmp_path / "second.txt"
     first.write_text("a\nb\n", encoding="utf-8")
-    second.write_text("c\nd\n", encoding="utf-8")
+    second.write_text("c\nd\nf\n", encoding="utf-8")
     patch = "\n".join(
         (
             _section("@@ -1,2 +1,2 @@", " a", "-b", "+c", path="first.txt"),
@@ -655,7 +655,7 @@ def test_one_miscounted_section_still_writes_every_file(tmp_path: Path) -> None:
 # 缺陷类型：接受却无提示，或提示残缺导致模型无法核对。
 # 2026-09-21 契约 B：原「error + reason 双通道」的期望已过时。
 def test_model_visible_note_guides_the_recomputation(tmp_path: Path) -> None:
-    (tmp_path / "mod.txt").write_text("a\nb\n", encoding="utf-8")
+    (tmp_path / "mod.txt").write_text("a\nb\nd\n", encoding="utf-8")
     patch = _section("@@ -1,2 +1,2 @@", " a", "-b", "+c", " d")
 
     observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)

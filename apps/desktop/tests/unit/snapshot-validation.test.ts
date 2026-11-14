@@ -31,11 +31,11 @@ describe("Transport snapshot validation", () => {
     expect(parseTransportState(snapshot)).toBe(snapshot);
   });
 
-  it("Session 标题是必填的非空字符串", () => {
+  it("Session 标题是必填的字符串；未开始的会话还没有标题，允许为空", () => {
     const withoutTitle: Record<string, unknown> = { ...transportState() };
     delete withoutTitle.title;
     expect(() => parseTransportState(withoutTitle)).toThrow(TransportSnapshotValidationError);
-    expect(() => parseTransportState(transportState({ title: "  " }))).toThrow(TransportSnapshotValidationError);
+    expect(parseTransportState(transportState({ title: "" })).title).toBe("");
   });
 
   it("接受 Session 视角的完整 snapshot：消息、结局、活动与排队消息", () => {

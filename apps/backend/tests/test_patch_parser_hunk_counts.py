@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.tools.tool_handler.patch_write import (
+from app.tools.tool_handler.file_edit import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )

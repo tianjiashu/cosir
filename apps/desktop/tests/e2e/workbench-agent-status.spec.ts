@@ -89,7 +89,7 @@ const test = base.extend<{ agent: Fixture }>({
     });
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
     const address = server.address() as { port: number };
-    await page.addInitScript(() => { localStorage.clear(); localStorage.setItem("cosir:last-workspace-id", "7"); });
+    await page.addInitScript(() => { localStorage.clear(); localStorage.setItem("cosir:last-workspace", JSON.stringify({ state: { workspaceId: 7 }, version: 0 })); });
     await page.route(`${origin}/workspaces`, route => route.fulfill({ json: [{ workspace_id: 7, name: "验收工作区", root_path: "/workspace", created_at: "", updated_at: "" }] }));
     const session = (id: number) => ({ session_id: id, workspace_id: 7, title: `会话${id}`, session_type: id === 100 ? "user" : "delegated",
       created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" });

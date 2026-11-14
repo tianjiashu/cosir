@@ -1,4 +1,4 @@
-import { useSyncExternalStore, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import {
   FolderPlusIcon,
   Loader2Icon,
@@ -10,7 +10,6 @@ import {
   SquarePenIcon,
   Trash2Icon,
 } from "lucide-react";
-import { toast } from "sonner";
 
 import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
 import type { DeleteTarget } from "@/components/layout/use-workspace-actions";
@@ -22,7 +21,7 @@ import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-pane
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import type { WorkspaceSession } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { readPinnedSessionIds, setSessionPinned, subscribePinnedSessionIds } from "@/lib/pinned-session-storage";
+import { usePinnedSessionsStore } from "@/lib/pinned-sessions-store";
 import { withShortcut, type AppShortcutId } from "@/lib/keyboard/shortcuts";
 
 export type SidebarSection = "conversation" | "settings" | "workspace-settings" | "observer";
@@ -72,14 +71,11 @@ export function AppSidebar({
   headerControls,
 }: AppSidebarProps) {
   const { workspaces, status, error, load } = catalog;
-  const pinnedSessionIds = useSyncExternalStore(subscribePinnedSessionIds, readPinnedSessionIds, readPinnedSessionIds);
+  const pinnedSessionIds = usePinnedSessionsStore((state) => state.ids);
 
   const togglePinned = (sessionId: number, pinned: boolean) => {
-    const saved = setSessionPinned(sessionId, pinned);
-    void frontendLog(saved ? "INFO" : "WARNING", "session_pin_changed", saved ? "会话置顶状态已更新" : "会话置顶状态写入失败", {
-      data: { sessionId, pinned, saved },
-    });
-    if (!saved) toast.error(pinned ? "置顶失败" : "取消置顶失败", { description: "本机存储不可用。" });
+    usePinnedSessionsStore.getState().setPinned(sessionId, pinned);
+    void frontendLog("INFO", "session_pin_changed", "会话置顶状态已更新", { data: { sessionId, pinned } });
   };
 
   return (

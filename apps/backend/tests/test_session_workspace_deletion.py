@@ -255,7 +255,7 @@ def test_workspace_delete_serializes_session_creation(
 
     def create() -> None:
         try:
-            service.create_session(workspace.id, "created-during-delete")
+            service.get_or_create_unstarted_session(workspace.id)
         except BaseException as exc:
             creation_error.append(exc)
 
@@ -294,38 +294,20 @@ async def test_delete_endpoints_return_404_and_busy_409() -> None:
             self.delete_workspace_tree = failing(error)
 
     with pytest.raises(HTTPException) as session_404:
-        await delete_session_endpoint(1, FakeSessions(KeyError(1)), None, False)
+        await delete_session_endpoint(1, FakeSessions(KeyError(1)), False)
     with pytest.raises(HTTPException) as workspace_404:
         await delete_workspace_endpoint(1, FakeWorkspaces(KeyError(1)))
     assert session_404.value.status_code == 404
     assert workspace_404.value.status_code == 404
 
     with pytest.raises(HTTPException) as session_409:
-        await delete_session_endpoint(1, FakeSessions(DeletionBusyError("session", 1)), None, False)
+        await delete_session_endpoint(1, FakeSessions(DeletionBusyError("session", 1)), False)
     with pytest.raises(HTTPException) as workspace_409:
         await delete_workspace_endpoint(1, FakeWorkspaces(DeletionBusyError("workspace", 1)))
     assert session_409.value.status_code == 409
     assert session_409.value.detail["code"] == "SESSION_BUSY"
     assert workspace_409.value.status_code == 409
     assert workspace_409.value.detail["code"] == "WORKSPACE_BUSY"
-
-
-@pytest.mark.asyncio
-async def test_delete_session_endpoint_routes_creation_marker_to_guarded_cleanup(storage) -> None:
-    calls: list[tuple[int, str]] = []
-
-    class ProvisionalSession:
-        def cleanup_provisional_session(self, session_id: int, creation_command_id: str) -> None:
-            calls.append((session_id, creation_command_id))
-
-        async def delete_session_tree(self, _session_id: int, **_options: object) -> None:
-            raise AssertionError("provisional cleanup must not use ordinary deletion")
-
-    result = await delete_session_endpoint(7, ProvisionalSession(), "creation-7", False)
-
-    assert result.session_id == 7
-    assert result.deleted_session_ids == [7]
-    assert calls == [(7, "creation-7")]
 
 
 class _ActorLog:

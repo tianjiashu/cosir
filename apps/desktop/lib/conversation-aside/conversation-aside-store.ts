@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+import { preferenceStorage } from "@/lib/storage/preference-storage";
+
 import { callKey, useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
 
 /** 会话侧栏的卡片 id；新增卡片时在这里登记，并在卡片注册表（`components/conversation-aside/aside-card-registry.tsx`）补齐实现。 */
@@ -49,7 +51,7 @@ export function normalizeConversationAsidePreferences(raw: unknown): Conversatio
 
 /**
  * 会话侧栏的界面偏好（开关、卡片顺序、各卡片是否折叠）：全局一份，所有 Session 共用，不是会话事实。
- * 页头按钮与侧栏都要实时读到同一份，所以是响应式 store，经 zustand `persist`（默认存 localStorage）落盘；
+ * 页头按钮与侧栏都要实时读到同一份，所以是响应式 store，经 zustand `persist`（`preferenceStorage`）落盘；
  * 存储不可用（隐私模式等）时只在本次会话内生效。
  */
 export const useConversationAsideStore = create<ConversationAsideState>()(persist(
@@ -70,6 +72,7 @@ export const useConversationAsideStore = create<ConversationAsideState>()(persis
   }),
   {
     name: "cosir:conversation-aside",
+    storage: preferenceStorage<ConversationAsidePreferences>(),
     partialize: ({ open, order, collapsed }) => ({ open, order, collapsed }),
     merge: (persisted, current) => ({ ...current, ...normalizeConversationAsidePreferences(persisted) }),
   },

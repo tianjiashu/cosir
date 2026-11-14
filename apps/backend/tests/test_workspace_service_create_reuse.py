@@ -1,7 +1,7 @@
 """针对 ``WorkspaceService.create_workspace`` 的「复用或创建」语义的单元测试。
 
 覆盖：同路径复用、跨平台大小写不敏感复用、新建分支、.cosir 元数据初始化（含降级）、
-非法 root_path 校验，以及同类的 list/get/create_session/delete 等配套行为以达成覆盖率。
+非法 root_path 校验，以及同类的 list/get/未开始会话的取或建/delete 等配套行为以达成覆盖率。
 测试彼此独立，均依赖 ``storage`` fixture 隔离数据库。
 """
 
@@ -11,8 +11,11 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
+from app.models import SessionRecord
+from app.models.session_kind import SessionType
 from app.service.depends import (
     close_service_dependencies,
+    get_run_crud,
     get_session_crud,
     get_workspace_crud,
     get_workspace_service,
@@ -20,6 +23,7 @@ from app.service.depends import (
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import init_storage, main_db_factory
+from app.utils.datetime_utils import utc_now
 from app.utils.path import system_cosir as paths
 
 
@@ -241,18 +245,49 @@ def test_list_workspaces(storage, tmp_path) -> None:
     assert names == {"a", "b"}
 
 
-def test_create_session_creates_session(storage, tmp_path) -> None:
-    # 目的：验证 create_session 在写闸门内为 workspace 创建 session
-    # 并返回记录。潜在缺陷：未创建或异常类型错误。
+def test_unstarted_session_is_reused_until_its_first_run(storage, tmp_path) -> None:
+    # 每个工作区至多一个未开始的会话：反复取拿到同一个；它有了 Run 之后再取才建下一个。
     service = get_workspace_service()
     root = _make_dir(tmp_path, "ws_session")
 
     workspace = service.create_workspace("ws", str(root))
-    session = service.create_session(workspace.id, "my session")
+    session = service.get_or_create_unstarted_session(workspace.id)
 
-    assert session.id is not None
-    assert session.id > 0
+    assert session.unstarted and session.title == ""
+    assert service.get_or_create_unstarted_session(workspace.id).id == session.id
     assert get_session_crud().list_ids_by_workspace(workspace.id) == [session.id]
+
+    with main_db_factory().begin() as db:
+        run = get_run_crud().create(session.id, "completed", db=db)
+        get_session_crud().set_current_run_id(session.id, run.id, db=db)
+    assert not get_session_crud().get(session.id).unstarted
+
+    following = service.get_or_create_unstarted_session(workspace.id)
+    assert following.id != session.id and following.unstarted
+
+
+def test_only_user_sessions_without_a_run_are_unstarted() -> None:
+    # fork 继承了上下文、一建好就进侧栏，委派子会话不在侧栏：没有 Run 也不算未开始。
+    def record(session_type: SessionType, current_run_id: int | None = None) -> SessionRecord:
+        now = utc_now()
+        return SessionRecord(id=1, workspace_id=1, title="", created_at=now, updated_at=now,
+                             session_type=session_type, current_run_id=current_run_id)
+
+    assert record(SessionType.USER).unstarted
+    assert not record(SessionType.USER, current_run_id=3).unstarted
+    assert not record(SessionType.USER_FORK).unstarted
+    assert not record(SessionType.DELEGATED).unstarted
+
+
+def test_fill_empty_title_only_names_untitled_sessions(storage, tmp_path) -> None:
+    # 标题兜底只写给还没有标题的 Session：已有标题（含支线生成的）不被首条输入的摘要覆盖。
+    service = get_workspace_service()
+    workspace = service.create_workspace("ws", str(_make_dir(tmp_path, "ws_title")))
+    session = service.get_or_create_unstarted_session(workspace.id)
+
+    assert get_session_crud().fill_empty_title(session.id, "first input")
+    assert not get_session_crud().fill_empty_title(session.id, "second input")
+    assert get_session_crud().get(session.id).title == "first input"
 
 
 def test_delete_workspace_removes_record(storage, tmp_path) -> None:

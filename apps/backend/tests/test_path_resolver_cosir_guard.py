@@ -4,7 +4,7 @@
 
 1. ``PathResolver.resolve_for_write`` 的保留区判定（含 ``.cosir`` 目录本身、
    同前缀兄弟目录不误判）；
-2. 三个文件工具（write_file / patch_write / apply_patch）端到端被拒绝，
+2. 三个文件工具（write_file / edit_file / apply_patch）端到端被拒绝，
    且**磁盘状态不变**；
 3. 只读工具仍可读取 ``.cosir``（产品要求「允许读」）；
 4. 调度期资源路径解析（路径锁 / revision 登记入口）与终端 cwd 的豁免边界。
@@ -15,7 +15,7 @@ from pathlib import Path
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.tools.tool_handler.read_file import ReadFileTool
-from app.tools.tool_handler.replace_tool import ReplaceTool
+from app.tools.tool_handler.edit_file import EditFileTool
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.write_file import WriteFileTool
 
@@ -86,12 +86,12 @@ def test_write_file_cannot_write_into_cosir(tmp_path: Path) -> None:
 
 
 def test_patch_write_cannot_edit_inside_cosir(tmp_path: Path) -> None:
-    """patch_write 指向 ``.cosir`` 时返回 error，原文件内容不变。"""
+    """edit_file 指向 ``.cosir`` 时返回 error，原文件内容不变。"""
 
     target = tmp_path / ".cosir" / "a.txt"
     target.parent.mkdir()
     target.write_text("hello", encoding="utf-8")
-    observation = ReplaceTool().execute(
+    observation = EditFileTool().execute(
         execution_context=_context(tmp_path),
         path=".cosir/a.txt",
         old_string="hello",

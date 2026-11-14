@@ -2,7 +2,7 @@
 
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
-from app.core.tool.schemas.tool_names import TOOL_READ_FILE, TOOL_REPLACE
+from app.core.tool.schemas.tool_names import TOOL_READ_FILE, TOOL_EDIT_FILE
 
 
 def test_success_keeps_ui_and_internal_data_separate() -> None:
@@ -47,9 +47,9 @@ def test_error_uses_short_tool_default_and_rejects_long_ui_text() -> None:
     defaulted = tool_error(TOOL_READ_FILE, "missing. Fix it.")
     assert defaulted.display_data == {"status_hint": "读取失败"}
 
-    # ``patch_write``（``TOOL_REPLACE``）是替换语义工具的规范名；旧字面量 "replace" 不再存在。
-    replace_defaulted = tool_error(TOOL_REPLACE, "missing. Fix it.")
-    assert replace_defaulted.display_data == {"status_hint": "替换失败"}
+    # edit_file 的失败短提示。
+    replace_defaulted = tool_error(TOOL_EDIT_FILE, "missing. Fix it.")
+    assert replace_defaulted.display_data == {"status_hint": "编辑失败"}
 
     long_hint = tool_error(
         TOOL_READ_FILE, "missing. Fix it.", status_hint="完整错误原因泄漏到前端"

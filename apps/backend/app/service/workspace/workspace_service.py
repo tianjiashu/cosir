@@ -1,6 +1,6 @@
 """Workspace orchestration service.
 
-单一职责：编排工作区的创建、列表查询、受闸门保护的 session 创建，以及 workspace 级联删除。
+单一职责：编排工作区的创建、列表查询、受闸门保护的未开始会话取或建，以及 workspace 级联删除。
 删除 workspace 时在一个 SQLite 写事务内清理会话树、全部子产物和 workspace 记录。
 
 职责边界：
@@ -233,40 +233,31 @@ class WorkspaceService:
         """
         return self._workspace.get(workspace_id)
 
-    def create_session(
-        self,
-        workspace_id: int,
-        title: str,
-        creation_command_id: str | None = None,
-    ) -> SessionRecord:
-        """在 workspace 结构性写闸门内创建用户 session 容器。
+    def get_or_create_unstarted_session(self, workspace_id: int) -> SessionRecord:
+        """取这个工作区未开始的会话，没有就建一个；每个工作区至多一个。
 
-        参数:
-            workspace_id: 所属 workspace 标识。
-            title: session 标题。
-            creation_command_id: 可选的 provisional Session 来源标记，仅供未接受的首条
-                Assistant Transport 请求做受控清理。
-
-        返回:
-            新建的 session 记录。
+        新会话页在第一次需要 Session 时调用（开终端、开浏览器标签、发首条消息）：Session 级资源
+        只按 Session 寻址，所以先有这一行；它不进侧栏，首个 Run 建立后原地成为普通会话
+        （``SessionRecord.unstarted``），没用上的留着下次复用，不回收。查找与创建都在 workspace
+        闸门内，并发调用拿到同一个。标题留空：首条用户输入并入时才命名
+        （``branch.session_title.name_untitled``）。
 
         异常:
             KeyError: 如果 workspace 不存在。
             DeletionBusyError: 如果 workspace 正在结构性删除。
-            sqlalchemy.exc.SQLAlchemyError: 如果 session 创建失败。
 
         副作用:
-            向主库写入一个 session，提交后推送该工作区的目录失效；不会启动 Run。
+            新建时向主库写入一个 session，提交后推送该工作区的目录失效；不会启动 Run。
         """
 
         try:
             with workspace_operations.operation(workspace_id, timeout=10):
                 self._workspace.get(workspace_id)
+                for existing in self._session_crud.list_by_workspace(workspace_id):
+                    if existing.unstarted:
+                        return existing
                 session = self._session_service.create_session(
-                    workspace_id,
-                    title,
-                    creation_command_id=creation_command_id,
-                    tool_schemas=main_agent_tool_schemas(),
+                    workspace_id, "", tool_schemas=main_agent_tool_schemas()
                 )
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc

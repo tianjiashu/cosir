@@ -272,7 +272,7 @@ for (const theme of ["light", "dark"] as const) {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     await page.addInitScript(
-      (value) => localStorage.setItem("cosir.theme-preference", value),
+      (value) => localStorage.setItem("cosir:theme", JSON.stringify({ state: { preference: value }, version: 0 })),
       theme,
     );
     await mock(page);

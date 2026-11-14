@@ -5,17 +5,16 @@ type ComposerToolbarProps = {
   add: ReactNode;
   /** 本次运行的配置（工具、模型）；模型名可能很长，这一格可收窄截断。 */
   config: ReactNode;
-  /** 只读的状态信息（会话页的上下文用量）；新会话页没有。 */
-  status?: ReactNode;
+  /** 只读的状态信息（上下文用量）。 */
+  status: ReactNode;
   /** 发送、停止、继续运行等主操作。 */
   action: ReactNode;
 };
 
 /**
- * 输入框底栏：新会话页与会话页共用的布局，位置固定为「添加 · 配置 ｜ 状态 · 操作」。
+ * 输入框底栏的布局，位置固定为「添加 · 配置 ｜ 状态 · 操作」。
  *
- * 只负责摆放，不持有状态：两处输入框的状态来源不同（新会话页是本地草稿，会话页是 assistant-ui
- * composer），各位置的内容由所在输入框按自己的状态装配。顺序与间距只在这里定义，两处不会再各自走样。
+ * 只负责摆放，不持有状态：各位置的内容由输入框按 assistant-ui composer 的状态装配。
  * 收窄时整行换行，判断依据是输入框自身宽度（外层 `ComposerSurface` 是 `@container`）。
  */
 export function ComposerToolbar({ add, config, status, action }: ComposerToolbarProps) {

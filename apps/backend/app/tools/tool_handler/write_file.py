@@ -2,7 +2,8 @@
 
 本模块只承载 write_file 这一个工具。写盘经由 ``app.utils.atomic_write`` 做原子写
 并保留目标文件既有 BOM/CRLF；落盘前做行号污染门禁（拒绝把 read_file 的带行号
-输出回写），成功后返回文件变更展示数据。落盘后的语法检查只在发现问题时通过
+输出回写）；覆盖已有文件前要求本 Session 看过它且之后没被改过（``file_observations``），
+成功后返回文件变更展示数据。落盘后的语法检查只在发现问题时通过
 success content 提供简短警告，不改变写入成功状态。
 
 设计边界：
@@ -32,8 +33,9 @@ from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
 from app.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
-from app.tools.tool_handler.patch_write.line_numbered import looks_like_line_numbered
-from app.tools.tool_handler.patch_write.patch_diff import FileDiffResult
+from app.tools.tool_handler.file_edit.line_numbered import looks_like_line_numbered
+from app.tools.tool_handler.file_edit.patch_diff import FileDiffResult
+from app.tools.tool_handler.file_observations import file_observations
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models.write_file_args import WriteFileArgs
 from app.utils.atomic_write import atomic_write_text
@@ -56,11 +58,13 @@ class WriteFileTool(HandlerBase):
     """
 
     name = TOOL_WRITE_FILE
+    # 照搬 Claude Code 的 Write 工具，只改 cosir 不同之处（工作区、read_file / edit_file 的名字）。
     description = (
-        "Write a file with the provided content, creating parent directories as needed. "
-        "Uses atomic write and preserves the target file's existing CRLF/BOM. Refuses to "
-        "write content that looks like line-numbered read_file output. Returns a unified "
-        "diff for display."
+        "Writes a file in the workspace, overwriting it if one exists.\n"
+        "\n"
+        "When to use: creating a new file, or fully replacing one you've already read with "
+        "read_file. Overwriting an existing file you haven't read will fail. For partial "
+        "changes, use edit_file instead."
     )
     args_model = WriteFileArgs
     timeout_seconds = 30.0
@@ -135,6 +139,9 @@ class WriteFileTool(HandlerBase):
         existed = resolved.exists()
         original = ""
         if existed:
+            refusal = file_observations.overwrite_refusal(execution_context.session_id, resolved)
+            if refusal:
+                return tool_error(self.name, f"could not write the file: {refusal}.")
             try:
                 original = Path(resolved).read_text(encoding="utf-8", errors="replace")
             except OSError as exc:
@@ -163,6 +170,7 @@ class WriteFileTool(HandlerBase):
                 ),
             )
 
+        file_observations.record(execution_context.session_id, resolved)
         status = "modified" if existed else "added"
         snapshot = FileDiffResult(path=path, status=status, before=original, after=content)
         display_data = build_file_change_display_data([snapshot])

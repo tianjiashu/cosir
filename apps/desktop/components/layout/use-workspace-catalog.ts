@@ -4,9 +4,28 @@ import type { WorkspaceTreeSource } from "@/components/session-tree/workspace-tr
 import { getWorkspaceSessions, getWorkspaces, type WorkspaceSession } from "@/lib/api/workspaces";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { readLastWorkspaceId, writeLastWorkspaceId } from "@/lib/last-workspace";
+import { useLastWorkspaceStore } from "@/lib/last-workspace-store";
 
-export type WorkspaceWithSessions = WorkspaceTreeSource;
+/** 目录里的工作区：`sessions` 只含侧栏会话，未开始的会话单独给出（它就是这个工作区的新会话页）。 */
+export type WorkspaceWithSessions = WorkspaceTreeSource & { unstartedSession: WorkspaceSession | null };
+
+/** 后端的会话列表含未开始的会话；目录在这一处把它分出来，侧栏、命令面板等读到的都是分好的。 */
+function splitUnstarted(all: WorkspaceSession[]): Pick<WorkspaceWithSessions, "sessions" | "unstartedSession"> {
+  return {
+    sessions: all.filter((session) => !session.unstarted),
+    unstartedSession: all.find((session) => session.unstarted) ?? null,
+  };
+}
+
+/** 目录里能按 id 找到的全部会话：侧栏会话加未开始的会话（后者不显示，但路由会打开它）。 */
+function findCatalogSession(workspaces: readonly WorkspaceWithSessions[], sessionId: number): WorkspaceSession | undefined {
+  for (const workspace of workspaces) {
+    if (workspace.unstartedSession?.session_id === sessionId) return workspace.unstartedSession;
+    const listed = workspace.sessions.find((session) => session.session_id === sessionId);
+    if (listed) return listed;
+  }
+  return undefined;
+}
 
 /**
  * 侧栏工作区 / 会话目录与「当前会话、当前工作区」选择状态的唯一 owner。
@@ -58,12 +77,13 @@ export function useWorkspaceCatalog(routeSessionId: number | null, workspaceConf
       const baseWorkspaces = await getWorkspaces({ signal: controller.signal });
       const withSessions = await Promise.all(baseWorkspaces.map(async (workspace) => {
         try {
-          return { ...workspace, sessions: await getWorkspaceSessions(workspace.workspace_id, { signal: controller.signal }) };
+          return { ...workspace, ...splitUnstarted(await getWorkspaceSessions(workspace.workspace_id, { signal: controller.signal })) };
         } catch (cause: unknown) {
           if (controller.signal.aborted) throw cause;
           return {
             ...workspace,
             sessions: [],
+            unstartedSession: null,
             sessionLoadError: userErrorMessage(cause, "会话列表加载失败"),
           };
         }
@@ -78,7 +98,7 @@ export function useWorkspaceCatalog(routeSessionId: number | null, workspaceConf
       const receivedWorkspaceIds = new Set(withSessions.map((workspace) => workspace.workspace_id));
       setSelectedWorkspaceId((current) => {
         if (current && withSessions.some((workspace) => workspace.workspace_id === current)) return current;
-        const lastWorkspaceId = readLastWorkspaceId();
+        const lastWorkspaceId = useLastWorkspaceStore.getState().workspaceId;
         return lastWorkspaceId && withSessions.some((workspace) => workspace.workspace_id === lastWorkspaceId)
           ? lastWorkspaceId
           : null;
@@ -121,7 +141,7 @@ export function useWorkspaceCatalog(routeSessionId: number | null, workspaceConf
   useEffect(() => {
     if (workspaceConfigurationId === null) return;
     setSelectedWorkspaceId(workspaceConfigurationId);
-    writeLastWorkspaceId(workspaceConfigurationId);
+    useLastWorkspaceStore.getState().remember(workspaceConfigurationId);
   }, [workspaceConfigurationId]);
 
   // 打开一个会话时把它所在的工作区选中一次（列表里找到它或 GET /sessions/:id 确认它时），之后的目录刷新
@@ -132,7 +152,7 @@ export function useWorkspaceCatalog(routeSessionId: number | null, workspaceConf
     if (selectedForRouteSessionRef.current === session.session_id) return;
     selectedForRouteSessionRef.current = session.session_id;
     setSelectedWorkspaceId(session.workspace_id);
-    writeLastWorkspaceId(session.workspace_id);
+    useLastWorkspaceStore.getState().remember(session.workspace_id);
   }, []);
 
   useEffect(() => {
@@ -141,8 +161,7 @@ export function useWorkspaceCatalog(routeSessionId: number | null, workspaceConf
       setRouteSession(null);
       return;
     }
-    const workspace = workspaces.find((candidate) => candidate.sessions.some((session) => session.session_id === routeSessionId));
-    const session = workspace?.sessions.find((candidate) => candidate.session_id === routeSessionId);
+    const session = findCatalogSession(workspaces, routeSessionId);
     if (session) {
       setRouteSession(session);
       selectRouteSessionWorkspace(session);
@@ -162,7 +181,7 @@ export function useWorkspaceCatalog(routeSessionId: number | null, workspaceConf
 
   const selectedWorkspace = useMemo(() => workspaces.find((workspace) => workspace.workspace_id === selectedWorkspaceId), [selectedWorkspaceId, workspaces]);
   const activeSession = useMemo(
-    () => workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.session_id === routeSessionId)
+    () => (routeSessionId === null ? undefined : findCatalogSession(workspaces, routeSessionId))
       ?? (routeSession?.session_id === routeSessionId ? routeSession : undefined),
     [routeSessionId, routeSession, workspaces],
   );
@@ -173,8 +192,7 @@ export function useWorkspaceCatalog(routeSessionId: number | null, workspaceConf
   const activeSessionWorkspaceId = useMemo(() => {
     if (routeSessionId === null) return selectedWorkspaceId;
     if (routeSession?.session_id === routeSessionId) return routeSession.workspace_id;
-    return workspaces.find((workspace) => workspace.sessions.some((session) => session.session_id === routeSessionId))?.workspace_id
-      ?? null;
+    return findCatalogSession(workspaces, routeSessionId)?.workspace_id ?? null;
   }, [routeSessionId, routeSession, selectedWorkspaceId, workspaces]);
 
   const refreshWorkspaceSessions = useCallback(async (workspaceId: number) => {
@@ -195,14 +213,14 @@ export function useWorkspaceCatalog(routeSessionId: number | null, workspaceConf
       data: { workspaceId, requestGeneration: nextGeneration, catalogGeneration },
     });
     try {
-      const sessions = await getWorkspaceSessions(workspaceId, { signal: controller.signal });
+      const { sessions, unstartedSession } = splitUnstarted(await getWorkspaceSessions(workspaceId, { signal: controller.signal }));
       if (
         controller.signal.aborted
         || catalogGeneration !== loadGenerationRef.current
         || nextGeneration !== sessionRefreshGenerationRef.current.get(workspaceId)
       ) return;
       setWorkspaces((current) => current.map((workspace) => workspace.workspace_id === workspaceId
-        ? { ...workspace, sessions, sessionLoadError: undefined }
+        ? { ...workspace, sessions, unstartedSession, sessionLoadError: undefined }
         : workspace));
       void frontendLog("DEBUG", "workspace_session_refresh_completed", "Workspace session 列表定向刷新完成", {
         data: { workspaceId, requestGeneration: nextGeneration, sessionCount: sessions.length },
@@ -244,7 +262,7 @@ export function useWorkspaceCatalog(routeSessionId: number | null, workspaceConf
   }, []);
   const selectWorkspace = useCallback((workspaceId: number | null) => {
     setSelectedWorkspaceId(workspaceId);
-    if (workspaceId !== null) writeLastWorkspaceId(workspaceId);
+    if (workspaceId !== null) useLastWorkspaceStore.getState().remember(workspaceId);
   }, []);
 
   return {

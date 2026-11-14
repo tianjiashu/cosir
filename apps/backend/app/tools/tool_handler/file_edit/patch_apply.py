@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.tools.tool_handler.patch_write.fuzzy_match import (
-    format_no_match_hint,
-    fuzzy_find_and_replace,
-)
-from app.tools.tool_handler.patch_write.patch_diff import FileDiffResult
-from app.tools.tool_handler.patch_write.patch_parser import Hunk, PatchOperation
+from app.tools.tool_handler.file_edit.patch_diff import FileDiffResult
+from app.tools.tool_handler.file_edit.patch_parser import Hunk, PatchOperation
+from app.tools.tool_handler.file_edit.text_match import TextMatchError, replace_exact
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.utils.atomic_write import atomic_write_text
 
@@ -70,7 +67,7 @@ def _normalize_text(content: str) -> str:
 
 
 def _apply_hunks(content: str, operation: PatchOperation) -> str:
-    """Apply validated hunks in order, retaining fuzzy matching for context."""
+    """按序应用各块：有上下文的块按原文唯一命中定位（见 ``text_match``），不看块头行号。"""
 
     line_offset = 0
     for index, hunk in enumerate(operation.hunks, start=1):
@@ -82,20 +79,10 @@ def _apply_hunks(content: str, operation: PatchOperation) -> str:
             content = _insert_addition(content, hunk, line_offset, operation.file_path)
         elif search != replace:
             original_content = content
-            updated, count, _, error = fuzzy_find_and_replace(
-                content,
-                search,
-                replace,
-                replace_all=False,
-            )
-            if count == 0:
-                hint = format_no_match_hint(error, count, search, content)
-                raise RuntimeError(
-                    f"{operation.file_path}: hunk {index} not found"
-                    + (f" — {error}" if error else "")
-                    + hint
-                )
-            content = updated
+            try:
+                content, _ = replace_exact(content, search, replace)
+            except TextMatchError as exc:
+                raise RuntimeError(f"{operation.file_path}: hunk {index} not found — {exc}") from exc
             target_end = (
                 hunk.target_start + hunk.target_length - 1
                 if hunk.target_length

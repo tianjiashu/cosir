@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, Integer, String, Text, text
+from sqlalchemy import JSON, ForeignKey, Index, Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.session_kind import SessionType
@@ -15,7 +15,6 @@ class SessionModel(StorageBase):
     __tablename__ = "sessions"
 
     workspace_id: Mapped[int] = mapped_column(Integer, ForeignKey("workspaces.id"), nullable=False)
-    creation_command_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # Session 创建时冻结的模型可见工具 schema；本字段不包含 handler、权限运行态或版本号。
@@ -42,10 +41,4 @@ class SessionModel(StorageBase):
     )
     __table_args__ = (
         Index("idx_sessions_parent_session_id", "parent_session_id"),
-        Index(
-            "uq_sessions_workspace_creation_command",
-            "workspace_id",
-            "creation_command_id",
-            unique=True,
-        ),
     )

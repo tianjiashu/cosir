@@ -10,11 +10,10 @@ from typing import Final, Literal, TypeAlias
 TOOL_READ_FILE: Final[str] = "read_file"
 TOOL_READ_IMAGE: Final[str] = "read_image"
 TOOL_WRITE_FILE: Final[str] = "write_file"
-TOOL_REPLACE: Final[str] = "patch_write"
+TOOL_EDIT_FILE: Final[str] = "edit_file"
 TOOL_APPLY_PATCH: Final[str] = "apply_patch"
 TOOL_SEARCH_CONTENT: Final[str] = "search_content"
 TOOL_FIND_FILES: Final[str] = "find_files"
-TOOL_LIST_DIRECTORY: Final[str] = "list_directory"
 TOOL_EXECUTE_TERMINAL: Final[str] = "execute_terminal"
 TOOL_TERMINAL_LIST: Final[str] = "terminal_list"
 TOOL_TERMINAL_READ: Final[str] = "terminal_read"
@@ -44,11 +43,10 @@ ToolName: TypeAlias = Literal[
     "read_file",
     "read_image",
     "write_file",
-    "patch_write",
+    "edit_file",
     "apply_patch",
     "search_content",
     "find_files",
-    "list_directory",
     "execute_terminal",
     "terminal_list",
     "terminal_read",
@@ -79,11 +77,10 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_READ_FILE,
     TOOL_READ_IMAGE,
     TOOL_WRITE_FILE,
-    TOOL_REPLACE,
+    TOOL_EDIT_FILE,
     TOOL_APPLY_PATCH,
     TOOL_SEARCH_CONTENT,
     TOOL_FIND_FILES,
-    TOOL_LIST_DIRECTORY,
     TOOL_EXECUTE_TERMINAL,
     TOOL_TERMINAL_LIST,
     TOOL_TERMINAL_READ,

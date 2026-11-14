@@ -9,7 +9,6 @@ import asyncio
 from fastapi import Depends, HTTPException
 
 from app.api.schemas import (
-    CreateSessionRequest,
     CreateWorkspaceRequest,
     DeleteWorkspaceResponse,
     HealthResponse,
@@ -17,7 +16,6 @@ from app.api.schemas import (
     WorkspaceResponse,
 )
 from app.app import app
-from app.core.user_input import capsules
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service.depends import (
     get_session_service,
@@ -25,7 +23,6 @@ from app.service.depends import (
 )
 from app.service.session.session_service import SessionService
 from app.service.workspace.workspace_service import WorkspaceService
-from app.utils.datetime_utils import SESSION_TITLE_LIMIT, preview
 
 
 @app.get("/health")
@@ -179,19 +176,15 @@ async def list_workspace_sessions(
         raise HTTPException(status_code=404, detail="workspace not found") from exc
 
 
-@app.post("/workspaces/{workspace_id}/sessions")
-async def create_workspace_session(
+@app.put("/workspaces/{workspace_id}/unstarted-session")
+async def get_or_create_unstarted_session(
     workspace_id: int,
-    payload: CreateSessionRequest,
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ) -> SessionResponse:
-    """创建工作区下的会话容器，不启动 Run。"""
+    """取或建工作区未开始的会话（幂等，不启动 Run）；见 ``WorkspaceService.get_or_create_unstarted_session``。"""
     try:
         session = await asyncio.to_thread(
-            workspace_service.create_session,
-            workspace_id,
-            preview(capsules.plain_text(payload.text), limit=SESSION_TITLE_LIMIT) or "新会话",
-            payload.creation_command_id,
+            workspace_service.get_or_create_unstarted_session, workspace_id
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc

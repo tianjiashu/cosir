@@ -134,11 +134,11 @@ def test_tool_layer_lists_only_the_file_tools_the_agent_has():
     """工具层只引用当前 Agent 真有的工具：没有 search_content 就不提它。"""
 
     out = spb.SystemPromptBuilder._build_tool_layer(
-        "/workspace", ["read_file", "list_directory", "execute_terminal"]
+        "/workspace", ["read_file", "edit_file", "execute_terminal"]
     )
 
     assert out.startswith("<tool_layer>") and out.endswith("</tool_layer>")
-    assert "read_file to read, list_directory to list." in out
+    assert "read_file to read." in out
     assert "search_content" not in out
     assert "find_files" not in out
     assert "Use execute_terminal for builds, tests, git and running programs" in out

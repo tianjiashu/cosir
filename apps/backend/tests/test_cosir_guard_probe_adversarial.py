@@ -31,9 +31,8 @@ from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.tools.tool_handler.find_files import FindFilesTool
-from app.tools.tool_handler.list_directory import ListDirectoryTool
 from app.tools.tool_handler.read_file import ReadFileTool
-from app.tools.tool_handler.replace_tool import ReplaceTool
+from app.tools.tool_handler.edit_file import EditFileTool
 from app.tools.tool_handler.search_content import SearchContentTool
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_handler.write_file import WriteFileTool
@@ -338,13 +337,13 @@ def test_write_file_creates_parent_dirs_but_not_in_cosir(tmp_path: Path) -> None
 
 
 def test_patch_write_into_cosir_no_disk_change(tmp_path: Path) -> None:
-    """patch_write 指向 `.cosir` 中已有文件：error 且内容不变。"""
+    """edit_file 指向 `.cosir` 中已有文件：error 且内容不变。"""
 
     root = tmp_path / "ws"
     target = root / ".cosir" / "a.txt"
     target.parent.mkdir(parents=True)
     target.write_text("hello", encoding="utf-8")
-    obs = ReplaceTool().execute(
+    obs = EditFileTool().execute(
         execution_context=_ctx(root),
         path=".cosir/a.txt",
         old_string="hello",
@@ -440,21 +439,6 @@ def test_read_file_reads_cosir(tmp_path: Path) -> None:
     target.parent.mkdir(parents=True)
     target.write_text("secret-content", encoding="utf-8")
     obs = ReadFileTool().execute(path=".cosir/a.txt", execution_context=_ctx(root))
-    assert obs.status == "success"
-
-
-def test_list_directory_lists_cosir(tmp_path: Path) -> None:
-    """list_directory 列 `.cosir` 成功。"""
-
-    root = tmp_path / "ws"
-    target = root / ".cosir" / "a.txt"
-    target.parent.mkdir(parents=True)
-    target.write_text("x", encoding="utf-8")
-    obs = ListDirectoryTool().execute(
-        path=".cosir",
-        execution_context=_ctx(root),
-        include_hidden=True,
-    )
     assert obs.status == "success"
 
 

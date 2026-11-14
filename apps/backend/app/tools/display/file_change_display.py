@@ -4,7 +4,7 @@
 摘要或展示条目；展示布局由客户端渲染规则层生成。展示数据不经过模型输出预算截断。
 
 职责边界：
-- 负责：``file-changes`` 这一个展示 ``kind`` 的全部投影（``write_file`` / ``patch_write`` /
+- 负责：``file-changes`` 这一个展示 ``kind`` 的全部投影（``write_file`` / ``edit_file`` /
   ``apply_patch`` 的 ``modified`` / ``added``）。删除与移动走终端，没有文件变更卡片。
 - 不负责：读取文件内容、回退业务事实或渲染规则。
 """
@@ -12,7 +12,7 @@
 import re
 from typing import Any
 
-from app.tools.tool_handler.patch_write.patch_diff import (
+from app.tools.tool_handler.file_edit.patch_diff import (
     FileDiffResult,
     build_diff_stats,
     format_git_diff,

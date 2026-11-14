@@ -12,7 +12,7 @@ import {
   type FileInfo,
 } from "@/lib/api/workspace-files";
 import { queryKeys } from "@/lib/query/query-keys";
-import { fileSession, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
+import { workspaceFiles, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
 import { HttpError } from "@/lib/http/http-error";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
@@ -46,7 +46,7 @@ export function TextPreview({
 }) {
   const [selection, setSelection] = useState<RefCapsule | null>(null);
   const position = useFilesStore(
-    (s) => fileSession(s.sessions, workspaceId).positions[info.path],
+    (s) => workspaceFiles(s.byWorkspace, workspaceId).positions[info.path],
   );
   const setPosition = useFilesStore((s) => s.position);
   const queryClient = useQueryClient();
@@ -57,7 +57,7 @@ export function TextPreview({
   const setTail = (value: boolean) =>
     setPosition(workspaceId, info.path, { tail: value, before: undefined });
   const preference = useFilesStore(
-    (s) => fileSession(s.sessions, workspaceId).preferences[info.path],
+    (s) => workspaceFiles(s.byWorkspace, workspaceId).preferences[info.path],
   );
   const setPreference = useFilesStore((s) => s.preference);
   const wrap = preference?.wrap ?? false;

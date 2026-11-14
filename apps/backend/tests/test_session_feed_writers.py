@@ -45,7 +45,7 @@ def test_workspace_and_session_writes_publish_after_commit(feed: _RecordingFeed,
     workspaces.create_workspace("again", str(root))  # 复用既有记录：目录没变
     assert feed.events == [("workspaces",)]
 
-    session = workspaces.create_session(workspace.id, "first")
+    session = workspaces.get_or_create_unstarted_session(workspace.id)
     assert feed.events[-1] == ("catalog", workspace.id, SessionType.USER)
 
     sessions.update_title(session.id, "named")

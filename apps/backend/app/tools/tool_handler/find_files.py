@@ -31,8 +31,8 @@ from app.tools.tool_models.find_files_args import FindFilesArgs
 
 FIND_FILES_DESCRIPTION = (
     "Find files by filename or workspace-relative glob. The path can be a file or directory "
-    "relative to the workspace; a directory is searched recursively. Use search_content to "
-    "search inside file contents."
+    "relative to the workspace; a directory is searched recursively, so pattern '*' shows "
+    "the files a directory contains. Use search_content to search inside file contents."
 )
 
 

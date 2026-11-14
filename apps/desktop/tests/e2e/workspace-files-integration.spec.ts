@@ -170,17 +170,15 @@ async function referenceWorkspace(
 ) {
   await page.addInitScript((theme) => {
     localStorage.clear();
-    if (theme) localStorage.setItem("cosir.theme-preference", theme);
-    localStorage.setItem(
-      "cosir:model-config-selection:workspace:7",
-      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-    );
+    if (theme) localStorage.setItem("cosir:theme", JSON.stringify({ state: { preference: theme }, version: 0 }));
   }, theme);
   await routeFilesToRealBackend(page);
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
   await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
+  // 新会话页就是这个工作区未开始的会话。
+  await expect(page).toHaveURL(/\/sessions\/\d+$/);
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   return page.getByTestId("workspace-files-surface");
 }
@@ -201,7 +199,7 @@ test("引用：行范围指针打开当前文件定位，文件删除后提示�
     .filter({ hasText: /^1$/ })
     .click();
   await surface.getByRole("button", { name: "添加选区到对话", exact: true }).click();
-  const input = page.getByLabel("新会话内容");
+  const input = page.getByLabel("消息输入");
   const capsule = input.locator("[data-workspace-reference]");
   await expect(capsule).toHaveCount(1);
   // 引用只是路径 + 行范围指针：不携带选取时的正文。
@@ -231,21 +229,24 @@ test("引用：行范围指针打开当前文件定位，文件删除后提示�
       },
     });
   });
-  await page.getByRole("button", { name: "开始会话", exact: true }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("测试拒绝引用发送");
-  await expect(capsule).toHaveCount(1);
+  // 没发出去：草稿（含胶囊）回到输入框，之后在那里接着改。
+  const kept = page.getByLabel("消息输入");
+  const keptCapsule = kept.locator("[data-workspace-reference]");
+  await expect(keptCapsule).toHaveCount(1);
   const sentBody = JSON.stringify(sent);
   expect(sentBody).toContain('<ref path=\\"src/main.py\\" lines=\\"1\\" />');
   expect(sentBody).not.toContain("after update");
   await page.keyboard.press("Escape");
-  await capsule.getByRole("button", { name: /移除引用/ }).click();
-  await expect(capsule).toHaveCount(0);
-  await input.focus();
+  await keptCapsule.getByRole("button", { name: /移除引用/ }).click();
+  await expect(keptCapsule).toHaveCount(0);
+  await kept.focus();
   const modifier = await page.evaluate(() =>
     /Mac/.test(navigator.platform) ? "Meta" : "Control",
   );
   await page.keyboard.press(`${modifier}+z`);
-  await expect(capsule).toHaveCount(1);
+  await expect(keptCapsule).toHaveCount(1);
   await page.screenshot({ path: "/private/tmp/cosir-reference-capsule.png" });
 });
 
@@ -256,7 +257,7 @@ test("引用：@ 搜索去重、设置页隐藏文件并恢复草稿", async ({
   await request.post(`${API_ORIGIN}/__test__/reset`);
   await request.post(`${REAL_BACKEND}/__test__/files/update`);
   await referenceWorkspace(page);
-  const input = page.getByLabel("新会话内容");
+  const input = page.getByLabel("消息输入");
   await input.fill("@src/main");
   await expect(
     page.getByRole("option", { name: "src/main.py", exact: true }),
@@ -284,7 +285,7 @@ test("引用：胶囊标签粘贴、普通消息发送、重载历史后撤回�
   await referenceWorkspace(page);
   const text =
     '请检查 <ref path="src/" /> <ref path="src/main.py" /> <ref path="src/main.py" lines="1-2" />\n\n```py\nprint("saved content")\n# <ref path="example.txt" /> <skill name="example" />\n```\n';
-  const input = page.getByLabel("新会话内容");
+  const input = page.getByLabel("消息输入");
   await input.focus();
   await input.evaluate((element, value) => {
     const data = new DataTransfer();
@@ -311,7 +312,7 @@ test("引用：胶囊标签粘贴、普通消息发送、重载历史后撤回�
     if (/\/sessions\/\d+\/messages$/.test(req.url()) && req.method() === "POST")
       sent.push({ url: req.url(), ...req.postDataJSON() });
   });
-  await page.getByRole("button", { name: "开始会话", exact: true }).click();
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page).toHaveURL(/\/sessions\/\d+/);
   await expect(
     page.getByText("streaming response", { exact: true }),
@@ -412,7 +413,7 @@ test("引用：目录与文件通过右键添加、选中文本可附带问题",
     .getByRole("treeitem", { name: "README.md", exact: true })
     .click({ button: "right" });
   await page.getByRole("menuitem", { name: "添加到对话" }).click();
-  const input = page.getByLabel("新会话内容");
+  const input = page.getByLabel("消息输入");
   const capsules = input.locator("[data-workspace-reference]");
   await expect(capsules).toHaveCount(2);
   // 目录引用以 `/` 结尾，文件是裸路径：都是同一种 `<ref>` 指针。
@@ -483,7 +484,7 @@ for (const theme of ["light", "dark"]) {
     await page.keyboard.press("Shift+F10");
     await page.getByRole("menuitem", { name: "忽略此目录" }).click();
     await expect(src).toHaveCount(0);
-    const input = page.getByLabel("新会话内容");
+    const input = page.getByLabel("消息输入");
     await input.fill("@src/main");
     await expect(
       page.getByRole("listbox", { name: "工作区引用候选" }),

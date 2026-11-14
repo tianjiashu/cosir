@@ -1,5 +1,6 @@
-import type { ReactElement } from "react";
+import { useContext, type ReactNode } from "react";
 
+import { EmptyThreadFrameContext } from "@/components/conversation/thread/empty-thread-frame";
 import { Skeleton } from "@/components/ui/skeleton";
 
 /**
@@ -7,9 +8,16 @@ import { Skeleton } from "@/components/ui/skeleton";
  *
  * 打开会话要先后经过「解析会话身份」（SessionPage）和「等订阅首帧」（Assistant）两个阶段；
  * 两处共用本骨架，用户看到的是一段连续的加载，而不是文字转圈后再换成骨架。
- * 版式对齐 Thread：居中的消息列与底部输入框，避免就绪时整体跳动。
+ * 版式对齐 Thread：居中的消息列与底部输入框，避免就绪时整体跳动。空对话有外框提供方时（未开始的会话）
+ * 同样对齐：只在外框里占住输入框的位置，标题区与背景在加载前后不变。
  */
-export function ThreadSkeleton(): ReactElement {
+export function ThreadSkeleton(): ReactNode {
+  const emptyFrame = useContext(EmptyThreadFrameContext);
+  if (emptyFrame) {
+    return emptyFrame(
+      <Skeleton role="status" aria-label="正在加载会话" data-testid="session-thread-skeleton" className="h-28 w-full rounded-3xl" />,
+    );
+  }
   return (
     <div role="status" aria-label="正在加载会话" data-testid="session-thread-skeleton" className="flex h-full min-h-0 w-full flex-col">
       <div className="mx-auto flex min-h-0 w-full max-w-conversation flex-1 flex-col gap-6 overflow-hidden px-6 pt-6">

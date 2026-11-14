@@ -53,7 +53,7 @@ function captureOpener(sessionId: number | null): LinkOpener {
 const windowOpen = vi.fn();
 beforeEach(() => {
   vi.stubGlobal("window", { open: windowOpen });
-  useFilesStore.setState({ sessions: {} });
+  useFilesStore.setState({ byWorkspace: {} });
   useDockStore.setState({ panel: null });
   getFileInfo.mockImplementation(async (_id: number, path: string) => {
     if (path === "src/a.ts") return { path, name: "a.ts", kind: "text", version: "v1" };
@@ -69,20 +69,20 @@ describe("useOpenLink", () => {
   it("opens workspace files in the file panel at the linked lines", async () => {
     const opener = captureOpener(3);
     opener.open(opener.resolve("src/a.ts#L4-L6")!);
-    await vi.waitFor(() => expect(useFilesStore.getState().sessions[7]?.active).toBe("src/a.ts"));
-    expect(useFilesStore.getState().sessions[7].positions["src/a.ts"].reveal).toEqual({ start: 4, end: 6 });
+    await vi.waitFor(() => expect(useFilesStore.getState().byWorkspace[7]?.active).toBe("src/a.ts"));
+    expect(useFilesStore.getState().byWorkspace[7].positions["src/a.ts"].reveal).toEqual({ start: 4, end: 6 });
     expect(useDockStore.getState().panel).toBe("files");
   });
 
   it("filename searches never probe root files; missing addresses notify", async () => {
     const opener = captureOpener(3);
     opener.open({ kind: "filename-search", query: "session.ts", lines: { start: 42, end: 42 } });
-    await vi.waitFor(() => expect(useFilesStore.getState().sessions[7]?.searchRequest?.query).toBe("session.ts"));
+    await vi.waitFor(() => expect(useFilesStore.getState().byWorkspace[7]?.searchRequest?.query).toBe("session.ts"));
     expect(getFileInfo).not.toHaveBeenCalled();
-    expect(useFilesStore.getState().sessions[7].searchRequest?.navigation?.lines).toEqual({ start: 42, end: 42 });
+    expect(useFilesStore.getState().byWorkspace[7].searchRequest?.navigation?.lines).toEqual({ start: 42, end: 42 });
     opener.open(opener.resolve("src/gone.ts")!);
     await vi.waitFor(() => expect(notifyInfo).toHaveBeenCalledWith("工作区里没有 src/gone.ts", expect.anything()));
-    expect(useFilesStore.getState().sessions[7].tabs).toEqual([]);
+    expect(useFilesStore.getState().byWorkspace[7].tabs).toEqual([]);
   });
 
   it("opens local servers in the session's built-in browser without confirmation", async () => {
@@ -192,17 +192,17 @@ it("discards late opens after a newer click or closing the dock", async () => {
   const opener = captureOpener(3);
   opener.open(opener.resolve("slow.ts")!);
   opener.open(opener.resolve("src/a.ts")!);
-  await vi.waitFor(() => expect(useFilesStore.getState().sessions[7]?.active).toBe("src/a.ts"));
+  await vi.waitFor(() => expect(useFilesStore.getState().byWorkspace[7]?.active).toBe("src/a.ts"));
   finish();
   await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(useFilesStore.getState().sessions[7].active).toBe("src/a.ts");
+  expect(useFilesStore.getState().byWorkspace[7].active).toBe("src/a.ts");
   getFileInfo.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ path: "slow.ts", kind: "text" }); }));
   opener.open(opener.resolve("slow-again.ts")!);
   useDockStore.getState().close();
   finish();
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(useDockStore.getState().panel).toBeNull();
-  expect(useFilesStore.getState().sessions[7].active).toBe("src/a.ts");
+  expect(useFilesStore.getState().byWorkspace[7].active).toBe("src/a.ts");
 });
 
 it("keeps code-styled explicit link labels free of nested search buttons", () => {
@@ -220,7 +220,7 @@ it("selecting the already active file cancels an older pending link", async () =
   useFilesStore.getState().open(7, "src/a.ts", true);
   finish();
   await new Promise((resolve) => setTimeout(resolve, 0));
-  expect(useFilesStore.getState().sessions[7].active).toBe("src/a.ts");
+  expect(useFilesStore.getState().byWorkspace[7].active).toBe("src/a.ts");
 });
 
 describe("link icons", () => {

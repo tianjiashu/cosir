@@ -31,6 +31,8 @@ class SessionResponse(BaseModel):
         session_type: 会话类型，取值见 ``models.session_kind.SESSION_KINDS``：``"user"`` 为用户创建，
             ``"user_fork"`` / ``"agent_fork"`` 区分分叉发起方，``"delegated"`` 为委派子会话。
         parent_session_id: 父会话标识，委派子会话有值。
+        unstarted: 未开始的会话（``SessionRecord.unstarted``）：前端目录据此不把它放进侧栏、把它当作
+            所在工作区的新会话页。
         created_at: 创建时间文本。
         updated_at: 更新时间文本。
 
@@ -50,6 +52,7 @@ class SessionResponse(BaseModel):
     extra: SessionResponseExtra = Field(default_factory=SessionResponseExtra)
     session_type: SessionType = SessionType.USER
     parent_session_id: int | None = None
+    unstarted: bool = False
     created_at: str
     updated_at: str
 
@@ -86,6 +89,7 @@ class SessionResponse(BaseModel):
             )),
             session_type=record.session_type,
             parent_session_id=record.parent_session_id,
+            unstarted=record.unstarted,
             created_at=to_text(record.created_at),
             updated_at=to_text(record.updated_at),
         )

@@ -377,7 +377,8 @@ export function validateTransportUpdate(previous: TransportState, next: Transpor
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
   requireExactKeys(state, ["title", "messages", "messageOffset", "activity", "terminal_sessions", "background_tasks", "foreground_waits", "handoffs", ...(state.fork === undefined ? [] : ["fork"]), ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
-  if (typeof state.title !== "string" || state.title.trim() === "") throw new TransportSnapshotValidationError("title", "非空字符串");
+  // 允许为空：未开始的会话还没有标题，首条用户输入并入时才命名。
+  if (typeof state.title !== "string") throw new TransportSnapshotValidationError("title", "字符串");
   if (state.fork !== undefined) {
     const fork = requireRecord(state.fork, "fork");
     requireExactKeys(fork, ["sourceSessionId", "sourceTitle", "sessionType", "initialLaunch"], "fork");

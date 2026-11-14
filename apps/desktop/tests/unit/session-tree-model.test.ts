@@ -9,7 +9,7 @@ function session(sessionId: number, title: string, options: Partial<WorkspaceSes
     workspace_id: 1,
     title,
     session_type: "user",
-
+    unstarted: false,
     created_at: `2026-01-0${sessionId}T00:00:00.000Z`,
     updated_at: `2026-01-0${sessionId}T00:00:00.000Z`,
     ...options,

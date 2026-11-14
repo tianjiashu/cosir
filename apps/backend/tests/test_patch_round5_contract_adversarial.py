@@ -35,7 +35,7 @@ import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.patch_write import (
+from app.tools.tool_handler.file_edit import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
@@ -978,7 +978,7 @@ def test_workspace_containment_is_enforced_end_to_end(tmp_path: pathlib.Path) ->
 
 # ---------------------------------------------------------------------------
 # Attack surface 6: the supporting collaborators of the patch link
-# (atomic_write / patch_diff / patch_apply / fuzzy_match) as reached from apply_patch
+# (atomic_write / patch_diff / patch_apply / text_match) as reached from apply_patch
 # ---------------------------------------------------------------------------
 
 
@@ -1047,7 +1047,7 @@ def test_diff_stats_count_only_real_changes(tmp_path: pathlib.Path) -> None:
 
 
 # Purpose: a hunk whose context does not appear must be reported as a not-found hunk, never
-# applied approximately. Defect type: fuzzy matching accepting a hunk with no true match.
+# applied approximately. Defect type: a hunk with no exact match being applied.
 def test_unmatched_hunk_is_reported_and_nothing_is_written(tmp_path: pathlib.Path) -> None:
     (tmp_path / "m.txt").write_bytes(b"alpha\nbeta\n")
     patch = _section("m.txt", "@@ -1,1 +1,1 @@", "-gamma", "+GAMMA") + "\n"
@@ -1103,7 +1103,7 @@ def test_atomic_write_leaves_no_temp_file_when_it_fails(tmp_path: pathlib.Path) 
 # output, so a model cannot round-trip the numbered listing back into a file.
 # Defect type: guard too weak to detect the pollution it exists for.
 def test_line_number_pollution_guard_flags_numbered_content() -> None:
-    from app.tools.tool_handler.patch_write.line_numbered import looks_like_line_numbered
+    from app.tools.tool_handler.file_edit.line_numbered import looks_like_line_numbered
 
     # read_file renders lines as f"{line_number}| {line}" (no padding), so the guard must
     # catch exactly that shape.
@@ -1201,7 +1201,7 @@ def test_quoted_paths_are_decoded_and_malformed_quotes_rejected() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Attack surface 7: the fuzzy matching chain as reached from apply_patch hunks
+# Attack surface 7: exact text matching as reached from apply_patch hunks
 # ---------------------------------------------------------------------------
 
 
@@ -1222,7 +1222,7 @@ def test_indentation_only_drift_is_applied_with_the_file_indentation(
 
 
 # Purpose: an ambiguous context (two identical occurrences) must be refused rather than
-# applied to an arbitrary one. Defect type: non-unique fuzzy match silently applied.
+# applied to an arbitrary one. Defect type: non-unique match silently applied.
 def test_ambiguous_context_is_refused_rather_than_guessed(tmp_path: pathlib.Path) -> None:
     (tmp_path / "m.txt").write_bytes(b"x = 1\ny = 2\nx = 1\ny = 2\n")
     patch = _section("m.txt", "@@ -1,2 +1,2 @@", "-x = 1", "+x = 9", " y = 2") + "\n"
@@ -1234,59 +1234,6 @@ def test_ambiguous_context_is_refused_rather_than_guessed(tmp_path: pathlib.Path
         observation.status == "error"
     ), f"非唯一上下文被随意应用: {(tmp_path / 'm.txt').read_bytes()!r}"
     assert (tmp_path / "m.txt").read_bytes() == b"x = 1\ny = 2\nx = 1\ny = 2\n"
-
-
-# Purpose: a smart-quote / em-dash drift in the model's hunk must be normalized onto the
-# file's real characters while untouched text keeps its original characters.
-# Defect type: Unicode normalization corrupting untouched text.
-def test_unicode_drift_matches_but_preserves_untouched_characters(
-    tmp_path: pathlib.Path,
-) -> None:
-    (tmp_path / "m.txt").write_text("say \u201chello\u201d\nkeep\n", encoding="utf-8")
-    patch = _section("m.txt", "@@ -1,2 +1,2 @@", '-say "hello"', "+say GOODBYE", " keep") + "\n"
-
-    observation = _execute(tmp_path, patch, 6302)
-
-    assert observation.status == "success", observation.content
-    written = (tmp_path / "m.txt").read_text(encoding="utf-8")
-    assert written == "say GOODBYE\nkeep\n", f"Unicode 漂移处理结果不符: {written!r}"
-
-
-# Purpose: the escape-drift guard in ``fuzzy_match._detect_escape_drift`` keys on the literal
-# sequence being present in BOTH old and new. A hunk whose ``-`` lines are clean and whose
-# ``+`` line carries a spurious '\\'' is therefore not detected as drift and the backslash is
-# written into the file while the call reports success.
-# Defect type: escape drift written to disk (guard precondition too narrow).
-@pytest.mark.xfail(
-    strict=True,
-    reason="已知应用层缺口（非本次解析层改动引入）：转义漂移守卫仅在 - / + 双侧都含 '\\'' 时触发",
-)
-def test_escape_drift_only_in_the_added_line_is_refused(tmp_path: pathlib.Path) -> None:
-    (tmp_path / "m.txt").write_bytes(b"value = 'x'\n")
-    patch = _section("m.txt", "@@ -1,1 +1,1 @@", "-value = 'x'", "+value = \\'y\\'") + "\n"
-
-    status, written = _tool_bytes(tmp_path, patch, "value = 'x'\n", 6303)
-
-    drift_written = status == "success" and b"\\'" in written
-    assert not drift_written, (
-        "转义漂移（仅出现在 '+' 行）被原样写入文件并报成功：" f"status={status} wrote={written!r}"
-    )
-
-
-# Purpose: document the guard's real precondition so a future change is noticed: the guard
-# fires only when the literal sequence is present in *both* old and new text.
-# Defect type: guard precondition narrower than the drift it must catch.
-def test_escape_drift_guard_fires_when_both_sides_carry_the_escape() -> None:
-    from app.tools.tool_handler.patch_write.fuzzy_match import fuzzy_find_and_replace
-
-    content = "x = 'a'\n"
-    escaped = "x = \\'a\\'"
-    replacement = "x = \\'b\\'"
-
-    _, count, _, error = fuzzy_find_and_replace(content, escaped, replacement)
-
-    assert count == 0 and error is not None
-    assert "Escape-drift detected" in error
 
 
 # Purpose: applying a hunk whose context is present but whose declared body also contains an

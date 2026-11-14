@@ -1,13 +1,12 @@
 """API 请求/响应 Pydantic 模型包。
 
 每个模型独立成文件（单一职责），本模块集中重导出对外公开的模型类，
-使 ``from app.api.schemas import CreateSessionRequest`` 解析到类本身，
+使 ``from app.api.schemas import CreateWorkspaceRequest`` 解析到类本身，
 而非同名子模块（空 ``__init__`` 会让 ``import`` 拿到子模块导致
 FastAPI/Pydantic 把模块当作类型注解从而报错）。
 """
 
 from app.api.schemas.request.AgentConfigurationRequest import AgentConfigurationRequest
-from app.api.schemas.request.CreateSessionRequest import CreateSessionRequest
 from app.api.schemas.request.CreateWorkspaceRequest import CreateWorkspaceRequest
 from app.api.schemas.request.EnvironmentChangeRequest import EnvironmentChangeRequest
 from app.api.schemas.request.EnvironmentUpdateRequest import EnvironmentUpdateRequest
@@ -33,7 +32,6 @@ from app.api.schemas.response.WorkspaceResponse import WorkspaceResponse
 __all__ = [
     "AgentConfigurationRequest",
     "AgentConfigurationResponse",
-    "CreateSessionRequest",
     "CreateWorkspaceRequest",
     "DeleteSessionResponse",
     "DeleteWorkspaceResponse",

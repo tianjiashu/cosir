@@ -21,9 +21,8 @@ from app.core.tool.schemas.tool_names import (
     TOOL_EXECUTE_TERMINAL,
     TOOL_FIND_FILES,
     TOOL_FORK_SESSION,
-    TOOL_LIST_DIRECTORY,
     TOOL_READ_FILE,
-    TOOL_REPLACE,
+    TOOL_EDIT_FILE,
     TOOL_SEARCH_CONTENT,
     TOOL_WEB_EXTRACT,
     TOOL_WEB_SEARCH,
@@ -33,11 +32,10 @@ from app.core.tool.schemas.tool_names import (
 _DEFAULT_STATUS_HINTS = {
     TOOL_READ_FILE: "读取失败",
     TOOL_WRITE_FILE: "写入失败",
-    TOOL_REPLACE: "替换失败",
+    TOOL_EDIT_FILE: "编辑失败",
     TOOL_APPLY_PATCH: "补丁失败",
     TOOL_SEARCH_CONTENT: "搜索失败",
     TOOL_FIND_FILES: "搜索失败",
-    TOOL_LIST_DIRECTORY: "列举失败",
     TOOL_EXECUTE_TERMINAL: "命令失败",
     TOOL_WEB_SEARCH: "搜索失败",
     TOOL_WEB_EXTRACT: "提取失败",
@@ -65,7 +63,7 @@ def normalize_status_hint(tool_name: str, status_hint: object) -> str:
 def os_error_message(exc: OSError, action: str) -> str:
     """把 ``OSError`` 转成面向模型友好的可读错误描述（共享助手）。
 
-    该助手是文件类工具（read_file / replace / apply_patch 等）构造失败观察时
+    该助手是文件类工具（read_file / edit_file / apply_patch 等）构造失败观察时
     复用的唯一收口：把原始异常噪声（``[WinError 32] ...`` / ``[Errno 2] ...``）
     包成「动作 + 人读原因」的英文短句，便于模型一次理解并自行修正。
 

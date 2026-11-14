@@ -8,7 +8,7 @@ import { useSessionBrowserTabs } from "@/lib/browser/host-state-store";
 import { useBrowserPanelStore } from "@/lib/browser/panel-store";
 import { useDockStore } from "@/lib/layout/dock-store";
 import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS } from "@/lib/keyboard/shortcuts";
-import { useWorkbenchSession } from "@/lib/workbench/workbench-store";
+import { useWorkspaceWorkbench } from "@/lib/workbench/workbench-store";
 import { DOCK_PANEL_WIDTH, useLayoutPreferences, type DockPanel } from "@/lib/layout/preferences";
 
 const MAIN_MIN_WIDTH = 400;
@@ -28,8 +28,8 @@ export function useDockPanels({ workspaceId, filesVisible, conversationSessionId
 }) {
   const selected = useDockStore((state) => state.panel);
   const maximized = useDockStore((state) => state.maximized);
-  const workbenchSession = useWorkbenchSession(workspaceId);
-  const workbenchTabs = workbenchSession.tabs;
+  const workbench = useWorkspaceWorkbench(workspaceId);
+  const workbenchTabs = workbench.tabs;
   const pinnedBrowserSession = useBrowserPanelStore((state) => state.sessionId);
   const browserSessionId = pinnedBrowserSession ?? conversationSessionId;
   const conversationTabs = useSessionBrowserTabs(conversationSessionId);
@@ -74,7 +74,7 @@ export function useDockPanels({ workspaceId, filesVisible, conversationSessionId
     toggle,
     close,
     workbenchTabs,
-    workbenchActiveTabId: workbenchSession.activeTabId,
+    workbenchActiveTabId: workbench.activeTabId,
     browserSessionId,
     /** 页头地球按钮的角标：当前会话的标签数。 */
     conversationTabCount: conversationTabs.length,

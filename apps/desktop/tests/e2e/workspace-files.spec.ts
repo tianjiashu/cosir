@@ -324,7 +324,7 @@ test("阅读优先、每文件偏好、标签键盘和搜索恢复", async ({ pa
 for (const theme of ["light", "dark"]) {
   test(`${theme} 代码对比度、宽面板与缩放布局`, async ({ page }) => {
     await page.addInitScript(
-      (value) => localStorage.setItem("cosir.theme-preference", value),
+      (value) => localStorage.setItem("cosir:theme", JSON.stringify({ state: { preference: value }, version: 0 })),
       theme,
     );
     await mockFiles(page);
@@ -572,7 +572,7 @@ test("同名标签消歧、溢出菜单、临时替换和关闭后的目录入�
     const modulePath = "/lib/workspace-files/workspace-files-store.ts";
     const store = (await import(modulePath)).useFilesStore.getState();
     store.patch(7, { treeVisible: false });
-    for (const tab of store.sessions[7].tabs) store.close(7, tab.path);
+    for (const tab of store.byWorkspace[7].tabs) store.close(7, tab.path);
   });
   await expect(surface.getByRole("textbox", { name: "搜索工作区文件名" })).toBeVisible();
 });

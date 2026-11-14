@@ -31,7 +31,7 @@ import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.patch_write import (
+from app.tools.tool_handler.file_edit import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
@@ -45,7 +45,7 @@ pytestmark = pytest.mark.skipif(GIT is None, reason="git is required as the grou
 def _hunk_count_diagnostics():
     """Test-local view of the parser count pass: notes emitted when counts were recomputed."""
 
-    module = sys.modules["app.tools.tool_handler.patch_write.patch_parser"]
+    module = sys.modules["app.tools.tool_handler.file_edit.patch_parser"]
 
     def _notes(section: str, section_index: int) -> list[str]:
         return module._recompute_hunk_counts(section, section_index)[1]

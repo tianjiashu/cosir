@@ -1,11 +1,12 @@
 """Session 标题支线：Run 首次并入用户输入后，与主线并行地请模型给对话起一个简短标题；
-每个 Run 至多一次。
+每个 Run 至多一次。还没有标题的 Session 先以这条输入的摘要命名（``name_untitled``），支线失败时
+它就是兜底。
 
 为什么挂在驱动上：支线复用本次 Run 的 ``rc.model``（同一 client、同一工具定义，
 命中 Session 的前缀缓存），
 而 client 在 ``ReactLikeWorkflow.run`` 收尾时关闭，所以支线由驱动持有（``rc.title_branch``），
 ``settle`` 在关闭 client 前收尾它。成败都不影响 Run：失败、超时、取消只记日志，标题保持原样
-（创建 Session 时的用户输入兜底，或上一次生成的标题）。
+（首条输入的摘要，或上一次生成的标题）。
 
 用量不计入 Run：``RunUsageStats`` 是「最新一次调用覆盖」语义并驱动上下文窗口展示，并行的
 标题请求写进去会覆盖主线用量，只记进日志。
@@ -43,6 +44,23 @@ if TYPE_CHECKING:
 
 # 收尾等待期间复查取消信号的间隔：信号没有可等待的通知，停止与撤回不该被支线拖住。
 _SETTLE_POLL_SECONDS = 0.2
+
+
+def name_untitled(rc: RuntimeContext, text: str) -> None:
+    """用户输入并入后，给还没有标题的 Session 以这条输入的摘要命名；工作线程执行。
+
+    未开始的会话建立时还没有输入（新会话页开终端、开浏览器标签时就建了），标题留空，到这里才有
+    可用的文字；纯图片输入没有文字，落到「新会话」。是否为空以库里的值为准（``fill_empty_title``
+    的条件更新）：``rc.session`` 是运行时空间缓存的记录，标题可能已被别的 Run 改过。
+    """
+    if rc.session.title:
+        return
+    title = preview(capsules.plain_text(text), limit=SESSION_TITLE_LIMIT) or "新会话"
+    if not service_depends.get_session_service().fill_empty_title(rc.session.id, title):
+        return
+    # 同步缓存的记录：随后启动的支线把它当作「当前标题」交给模型。
+    rc.session.title = title
+    emit(SessionTitleUpdatedEvent(session_id=rc.session.id, run_id=rc.run.id, title=title))
 
 
 def should_launch(rc: RuntimeContext, state: ReactExecutionState) -> bool:

@@ -190,7 +190,7 @@ def _recompute_hunk_counts(section: str, section_index: int) -> tuple[str, list[
     不属于任何 hunk。其余计数规则与 ``unidiff`` 一致：空正文行在两侧都计为上下文，省略的计数
     表示一行，``\\ No newline at end of file`` 标记两侧都不计入。
 
-    「修复」而非「拒绝」是刻意为之。应用层通过 ``fuzzy_match`` 按上下文文本匹配 hunk，从不读取
+    「修复」而非「拒绝」是刻意为之。应用层按上下文原文匹配 hunk（``text_match``），从不读取
     计数，因此一个计错的数头在数值一致后是无害的；而 ``unidiff`` 会按声明计数消费 hunk，计数不符
     会让文件段错位，表现为毫不相干的「意外的 hunk」/「hunk 短于预期」错误。重写数头使补丁保持
     可应用，并让调用方回报一条诚实的备注，而不是泛起不相关的解析失败。

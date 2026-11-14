@@ -19,7 +19,7 @@ import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import {
-  fileSession,
+  workspaceFiles,
   parentPath,
   parentsOf,
   useFilesStore,
@@ -60,19 +60,19 @@ export function WorkspaceFilesSurface({
   const visibility = useBrowserVisibility(workspaceId);
   const [manageIgnored, setManageIgnored] = useState(false);
   const revision = visibility.data?.revision ?? "loading";
-  const session = useFilesStore((s) => fileSession(s.sessions, workspaceId));
+  const files = useFilesStore((s) => workspaceFiles(s.byWorkspace, workspaceId));
   const patch = useFilesStore((s) => s.patch);
   const opener = useOpenWorkspacePath();
   const client = useQueryClient();
   // 文件名搜索的文字与已提交的请求都在工作区会话里：用户可从文件名提及显式发起查找。
-  const query = session.searchText;
-  const searchRequest = session.searchRequest;
+  const query = files.searchText;
+  const searchRequest = files.searchRequest;
   const searchFilename = useFilesStore((s) => s.searchFilename);
   const [reveal, setReveal] = useState(0);
   const [shell, { width: availableWidth }] = useElementSize<HTMLDivElement>();
   const wide = availableWidth >= 650;
   const treeMaxWidth = Math.max(160, Math.min(420, availableWidth - 324));
-  const treeWidth = Math.min(session.treeWidth, treeMaxWidth);
+  const treeWidth = Math.min(files.treeWidth, treeMaxWidth);
   const filenameSearch = useRef<HTMLInputElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const treeToggle = useRef<HTMLButtonElement>(null);
@@ -83,20 +83,20 @@ export function WorkspaceFilesSurface({
   const clearFilenameSearch = () => patch(workspaceId, { searchText: "", searchRequest: null });
 
   const treeVisible = wide
-    ? session.treeVisible
-    : session.browsing || !session.active;
+    ? files.treeVisible
+    : files.browsing || !files.active;
   const readingVisible = wide || !treeVisible;
   const resources = useResourceWatchTargets();
   useFileWatch(workspaceId, [
-    ...session.expanded,
+    ...files.expanded,
     ...resources.paths,
-    ...session.tabs.map((tab) => parentPath(tab.path)),
+    ...files.tabs.map((tab) => parentPath(tab.path)),
   ]);
   const revealPath = () => {
-    if (!session.active) return;
+    if (!files.active) return;
     patch(workspaceId, {
       expanded: [
-        ...new Set([...session.expanded, ...parentsOf(session.active)]),
+        ...new Set([...files.expanded, ...parentsOf(files.active)]),
       ],
       treeVisible: true,
       browsing: true,
@@ -136,7 +136,7 @@ export function WorkspaceFilesSurface({
                 tooltip={treeVisible ? "收起目录" : "浏览目录与搜索"}
                 aria-label="切换目录面板"
                 aria-pressed={treeVisible}
-                disabled={!wide && !session.active}
+                disabled={!wide && !files.active}
                 className={cn("size-7 shrink-0", treeVisible && "bg-muted text-foreground")}
                 onClick={toggleTree}
               >
@@ -272,12 +272,12 @@ export function WorkspaceFilesSurface({
                 workspaceId={workspaceId}
                 onBrowse={() => patch(workspaceId, { treeVisible: true, browsing: true })}
               >
-                {session.active && (
+                {files.active && (
                   <FilePreview
-                    key={session.active}
+                    key={files.active}
                     workspaceId={workspaceId}
-                    path={session.active}
-                    navigation={{ path: session.active, rootPath, revealPath }}
+                    path={files.active}
+                    navigation={{ path: files.active, rootPath, revealPath }}
                   />
                 )}
               </FileTabPanels>

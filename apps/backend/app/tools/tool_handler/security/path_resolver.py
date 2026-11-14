@@ -11,7 +11,7 @@
     ``.cosir`` 保留区与受保护路径，没有放行开关。
   - ``resolve_for_read``：读一份文件（``read_file`` / ``read_image`` / 浏览器上传）。不强制
     containment，解析前后各拦一次设备路径，拒绝禁读的受保护路径。
-  - ``resolve_read_scope``：读一个范围（``list_directory`` / ``search_content`` /
+  - ``resolve_read_scope``：读一个范围（``search_content`` /
     ``find_files``，可以是目录也可以是文件）。在读一份文件的规则上再拒绝 ``/proc`` 等伪文件树；
     从上层目录遍历时跳过受保护子树由搜索遍历负责（``search/file_walker``）。
 - 受保护路径的事实源是 ``app.core.permission.protected_paths``；读写两侧只在这三个入口消费。

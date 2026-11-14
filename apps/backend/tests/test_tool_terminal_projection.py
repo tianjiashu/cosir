@@ -1160,7 +1160,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
     root = tmp_path / "projection-workspace"
     root.mkdir()
     workspace = get_workspace_service().create_workspace("projection", str(root))
-    session = get_workspace_service().create_session(workspace.id, "projection-session")
+    session = get_workspace_service().get_or_create_unstarted_session(workspace.id)
     session_id = session.id
     # 直接向进程内 state service 注入一条 run 骨架，使投影能命中 part。
     state = empty_snapshot()

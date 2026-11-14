@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+import { preferenceStorage } from "@/lib/storage/preference-storage";
+
 /**
  * 展开侧栏的宽度范围（px）。默认值放得下约 10 个汉字的会话标题；上限放得下后端标题上限
  * （`SESSION_TITLE_LIMIT` = 20 个汉字）加省略号。
@@ -73,7 +75,7 @@ function normalizeDockWidths(raw: unknown): Record<DockPanel, number> {
 
 /**
  * 界面尺寸偏好（侧栏收起与宽度、终端面板高度、各停靠面板宽度）：全局一份，跨工作区、Session 与重启保留，
- * 不是会话事实。经 zustand `persist`（默认存 localStorage）在每次 set 时落盘，调用方不再自行写回；
+ * 不是会话事实。经 zustand `persist`（`preferenceStorage`）在每次 set 时落盘，调用方不再自行写回；
  * 存储不可用（隐私模式等）时只在本次会话内生效。
  *
  * 偏好只记用户意图：窗口变窄、变矮时的显示收敛由各组件在渲染时派生，不改写这里的值。
@@ -88,6 +90,7 @@ export const useLayoutPreferences = create<LayoutPreferencesState>()(persist(
   }),
   {
     name: "cosir:layout",
+    storage: preferenceStorage<LayoutPreferences>(),
     partialize: ({ sidebarCollapsed, sidebarWidth, terminalPanelHeight, dockWidths }) => ({
       sidebarCollapsed, sidebarWidth, terminalPanelHeight, dockWidths,
     }),

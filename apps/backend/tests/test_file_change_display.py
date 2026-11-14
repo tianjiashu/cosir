@@ -1,7 +1,7 @@
 from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
-from app.tools.tool_handler.patch_write.patch_diff import FileDiffResult, format_git_diff
+from app.tools.tool_handler.file_edit.patch_diff import FileDiffResult, format_git_diff
 
 
 def test_display_data_uses_git_patch_without_full_snapshots() -> None:

@@ -14,7 +14,7 @@ from app.tools.tool_handler.read_file import ReadFileTool
 
 
 def _ctx(root: Path) -> SimpleNamespace:
-    return SimpleNamespace(workspace_root=root)
+    return SimpleNamespace(workspace_root=root, session_id=1)
 
 
 def _write_lines(root: Path, name: str, count: int, width: int = 6) -> Path:
@@ -99,7 +99,6 @@ def test_read_only_tools_are_scheduled_in_parallel() -> None:
     from app.core.tool.handler.web_extract import WebExtractTool
     from app.core.tool.handler.web_search import WebSearchTool
     from app.tools.tool_handler.find_files import FindFilesTool
-    from app.tools.tool_handler.list_directory import ListDirectoryTool
     from app.tools.tool_handler.read_image import ReadImageTool
     from app.tools.tool_handler.search_content import SearchContentTool
 
@@ -108,27 +107,8 @@ def test_read_only_tools_are_scheduled_in_parallel() -> None:
         ReadImageTool().to_definition(),
         SearchContentTool().to_definition(),
         FindFilesTool().to_definition(),
-        ListDirectoryTool().to_definition(),
         WebSearchTool(object()).to_definition(),  # type: ignore[arg-type]
         WebExtractTool(object()).to_definition(),  # type: ignore[arg-type]
     ]
 
     assert {definition.parallel_mode for definition in definitions} == {"parallel"}
-
-
-def test_list_directory_lines_carry_type_and_relative_name_only(tmp_path: Path) -> None:
-    """模型通道每行只有类型与条目名（相对所列目录），绝对路径只留在展示数据里（设计文档 A7）。"""
-
-    from app.tools.tool_handler.list_directory import ListDirectoryTool
-
-    (tmp_path / "src").mkdir()
-    (tmp_path / "README.md").write_text("x", encoding="utf-8")
-
-    observation = ListDirectoryTool().execute(path=".", execution_context=_ctx(tmp_path))
-
-    assert observation.content.splitlines() == ["dir   src", "file  README.md"]
-    assert str(tmp_path) not in observation.content
-    assert [entry["path"] for entry in observation.display_data["entries"]] == [
-        (tmp_path / "src").as_posix(),
-        (tmp_path / "README.md").as_posix(),
-    ]

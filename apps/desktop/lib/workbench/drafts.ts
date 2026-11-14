@@ -20,8 +20,8 @@ export function useWorkbenchTabDirty(tab: WorkbenchTab | undefined): boolean {
  */
 export function useDraftSaved(workspaceId: number | null, sessionId: number, toolCallId: string): boolean {
   const tab = useWorkbenchStore((state) => workspaceId === null ? undefined
-    : state.sessions[workspaceId]?.tabs.find((candidate): candidate is WorkbenchDraftTab => isDraftTab(candidate) && candidate.sessionId === sessionId && candidate.toolCallId === toolCallId));
-  const stamped = useWorkbenchStore((state) => workspaceId !== null && Boolean(state.sessions[workspaceId]?.savedDraftIds.includes(draftKey(sessionId, toolCallId))));
+    : state.byWorkspace[workspaceId]?.tabs.find((candidate): candidate is WorkbenchDraftTab => isDraftTab(candidate) && candidate.sessionId === sessionId && candidate.toolCallId === toolCallId));
+  const stamped = useWorkbenchStore((state) => workspaceId !== null && Boolean(state.byWorkspace[workspaceId]?.savedDraftIds.includes(draftKey(sessionId, toolCallId))));
   const dirty = useWorkbenchTabDirty(tab);
   return tab ? !dirty : stamped;
 }

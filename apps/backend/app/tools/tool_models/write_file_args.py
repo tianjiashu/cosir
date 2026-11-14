@@ -15,5 +15,5 @@ class WriteFileArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
-    path: str = Field(description="Path relative to the project root.")
-    content: str = Field(default="", description="File content to write.")
+    path: str = Field(description="Path to the file to write, relative to the workspace root.")
+    content: str = Field(default="", description="The content to write to the file")

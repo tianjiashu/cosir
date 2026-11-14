@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useMemo } from "react";
 import { SparklesIcon } from "lucide-react";
-import { useAui, useAuiState } from "@assistant-ui/react";
+import { useAuiState } from "@assistant-ui/react";
 
 import {
   ModelSelectorContent as OfficialModelSelectorContent,
@@ -19,55 +19,21 @@ import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-s
 import { RUN_LAUNCH_LOCKED_HINT } from "@/lib/assistant/run-launch";
 import { useModelCatalog, type ModelCatalogModel } from "@/lib/model/catalog";
 import {
-  scopeSuffix,
+  resolveModelSelection,
+  selectionFor,
+  useModelSelectionStore,
   type ModelSelection,
   type ModelSelectionScope,
-  readStoredSelection,
-  subscribeStoredSelection,
-  writeStoredSelection,
-} from "@/lib/model/selection-storage";
+  type SessionLaunchFacts,
+} from "@/lib/model/model-selection-store";
 
 type ModelSelectorProps = {
-  scope?: ModelSelectionScope;
-  initial?: TransportRunLaunch;
-  onReadyChange?: (ready: boolean) => void;
-  runtimeModelContext?: boolean;
+  scope: ModelSelectionScope;
   /**
-   * 运行期配置锁定：传入时显示这份 Run 冻结的配置且不可更改，也不写回存储的偏好；停止后恢复为
-   * 用户偏好。
+   * 运行期配置锁定：传入时显示这份 Run 冻结的配置且不可更改，也不写回偏好；停止后恢复按回落链显示。
    */
-  locked?: TransportRunLaunch | null;
+  locked: TransportRunLaunch | null;
 };
-
-type SelectionState = {
-  scopeKey: string;
-  selection: ModelSelection | null;
-};
-
-function scopeKey(scope?: ModelSelectionScope): string {
-  return scope ? scopeSuffix(scope) : "none";
-}
-
-function getSelection(
-  models: readonly ModelCatalogModel[],
-  stored: Partial<ModelSelection> | null,
-): ModelSelection | null {
-  const storedModel = stored
-    ? models.find(
-        (model) =>
-          model.modelConfigId === stored.modelConfigId,
-      )
-    : undefined;
-  const model = storedModel ?? models[0];
-  if (!model) return null;
-
-  return {
-    modelConfigId: model.modelConfigId,
-    reasoningEffort: model.supportsReasoningEffort
-      ? stored?.reasoningEffort ?? "high"
-      : null,
-  };
-}
 
 function toOfficialModel(model: ModelCatalogModel): ModelOption {
   return {
@@ -116,12 +82,7 @@ function SelectorView({
         onValueChange={(optionId) => {
           const model = catalogModels.find((candidate) => candidate.optionId === optionId);
           if (!model) return;
-          onSelectionChange({
-            modelConfigId: model.modelConfigId,
-            reasoningEffort: model.supportsReasoningEffort
-              ? selection.reasoningEffort ?? "high"
-              : null,
-          });
+          onSelectionChange(selectionFor(model, selection.reasoningEffort));
         }}
         onEffortChange={(reasoningEffort) => {
           if (!selectedModel.supportsReasoningEffort) return;
@@ -156,48 +117,11 @@ function SelectorView({
   );
 }
 
-function useScopedSelection(scope: ModelSelectionScope | undefined, initial?: TransportRunLaunch) {
-  const catalogState = useModelCatalog();
-  const key = scopeKey(scope);
-  const subscribe = useCallback(
-    (listener: () => void) => (scope ? subscribeStoredSelection(scope, listener) : () => undefined),
-    [key],
-  );
-  const getSnapshot = useCallback(
-    () => (scope ? readStoredSelection(scope) : null),
-    [key],
-  );
-  const savedSelection = useSyncExternalStore(subscribe, getSnapshot, () => null);
-  const initialSelection = useMemo(() => initial ? lockedSelection(initial) : null, [initial]);
-  const storedSelection = savedSelection ?? initialSelection;
-  const [selectionState, setSelectionState] = useState<SelectionState>({
-    scopeKey: "",
-    selection: null,
-  });
-
-  useEffect(() => {
-    if (catalogState.status !== "ready" || !catalogState.catalog) return;
-    const nextSelection = getSelection(
-      catalogState.catalog.models,
-      scope ? storedSelection : null,
-    );
-    setSelectionState({ scopeKey: key, selection: nextSelection });
-    if (scope && nextSelection) writeStoredSelection(scope, nextSelection);
-  }, [catalogState.catalog, catalogState.status, key, storedSelection]);
-
-  const selection = scope
-    ? catalogState.status === "ready" && catalogState.catalog
-      ? getSelection(catalogState.catalog.models, storedSelection)
-      : null
-    : selectionState.scopeKey === key
-      ? selectionState.selection
-      : null;
-  const updateSelection = (nextSelection: ModelSelection) => {
-    setSelectionState({ scopeKey: key, selection: nextSelection });
-    if (scope) writeStoredSelection(scope, nextSelection);
-  };
-
-  return { ...catalogState, selection, updateSelection };
+/** 会话快照里参与回落的两项发起配置（见 {@link resolveModelSelection}）。 */
+function useSessionLaunchFacts(): SessionLaunchFacts {
+  const lastLaunch = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.activity?.launch ?? null);
+  const inheritedLaunch = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.fork?.initialLaunch ?? null);
+  return { lastLaunch, inheritedLaunch };
 }
 
 const DELETED_LOCKED_MODEL_HINT = "运行中的模型配置已删除，停止后重新选择";
@@ -211,68 +135,33 @@ function lockedSelection(launch: TransportRunLaunch): ModelSelection | null {
   };
 }
 
-/** 偏好选择或锁定配置，二者择一；锁定时 `locked` 为 true，界面只读。 */
-function useEffectiveSelection(props: Omit<ModelSelectorProps, "runtimeModelContext">) {
-  const scoped = useScopedSelection(props.scope, props.initial);
-  const locked = props.locked ?? null;
-  const selection = locked === null ? scoped.selection : lockedSelection(locked);
-  const selectedModel = scoped.catalog?.models.find(
-    (model) => model.modelConfigId === selection?.modelConfigId,
-  );
-  return { ...scoped, selection, selectedModel, locked: locked !== null };
-}
-
-function SelectorBody({
-  props,
-  state,
-}: {
-  props: Omit<ModelSelectorProps, "runtimeModelContext">;
-  state: ReturnType<typeof useEffectiveSelection>;
-}) {
-  const { catalog, status, retry, selection, selectedModel, updateSelection, locked } = state;
-
-  useEffect(() => {
-    props.onReadyChange?.(status === "ready" && selection !== null);
-  }, [props.onReadyChange, selection, status]);
+/**
+ * 会话输入框的模型选择。显示值按回落链现算、不写回存储；只有用户换模型时才写偏好
+ * （同时成为工作区默认）。发送链路按同一条链取值（`use-runtime-transport.ts`）。
+ */
+export function ModelSelector({ scope, locked }: ModelSelectorProps) {
+  const { catalog, status, retry } = useModelCatalog();
+  const facts = useSessionLaunchFacts();
+  const sessions = useModelSelectionStore((state) => state.sessions);
+  const workspaces = useModelSelectionStore((state) => state.workspaces);
+  // 回落链只是几次查找，每次渲染现算，不缓存。
+  const preferred = catalog ? resolveModelSelection(catalog.models, { sessions, workspaces }, scope, facts) : null;
+  const selection = locked === null ? preferred : lockedSelection(locked);
+  const selectedModel = catalog?.models.find((model) => model.modelConfigId === selection?.modelConfigId);
 
   return (
     <ModelAvailability status={status} modelCount={catalog?.models.length ?? 0} onRetry={retry}>
-      {locked && !selectedModel && (
+      {locked !== null && !selectedModel && (
         <span className="text-muted-foreground min-w-0 truncate text-xs" title={DELETED_LOCKED_MODEL_HINT}>{DELETED_LOCKED_MODEL_HINT}</span>
       )}
       {selection && catalog && (
-        <SelectorView catalogModels={catalog.models} selection={selection} disabled={locked} onSelectionChange={updateSelection} />
+        <SelectorView
+          catalogModels={catalog.models}
+          selection={selection}
+          disabled={locked !== null}
+          onSelectionChange={(next) => useModelSelectionStore.getState().choose(scope, next)}
+        />
       )}
     </ModelAvailability>
   );
-}
-
-function StandaloneModelSelector(props: Omit<ModelSelectorProps, "runtimeModelContext">) {
-  return <SelectorBody props={props} state={useEffectiveSelection(props)} />;
-}
-
-function RuntimeModelSelector(props: Omit<ModelSelectorProps, "runtimeModelContext">) {
-  const aui = useAui();
-  const forkLaunch = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.fork?.initialLaunch);
-  const state = useEffectiveSelection({ ...props, initial: forkLaunch });
-  const { selection, selectedModel } = state;
-
-  useEffect(() => {
-    if (!selectedModel || !selection) return;
-    return aui.modelContext.register({
-      getModelContext: () => ({
-        config: {
-          modelName: selectedModel.optionId,
-          reasoningEffort: selection.reasoningEffort ?? undefined,
-        },
-      }),
-    });
-  }, [aui, selectedModel, selection]);
-
-  return <SelectorBody props={props} state={state} />;
-}
-
-export function ModelSelector(props: ModelSelectorProps) {
-  if (props.runtimeModelContext) return <RuntimeModelSelector {...props} />;
-  return <StandaloneModelSelector {...props} />;
 }

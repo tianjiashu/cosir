@@ -23,7 +23,7 @@ import {
 } from "@/lib/api/workspace-files";
 import { queryKeys } from "@/lib/query/query-keys";
 import { HttpError } from "@/lib/http/http-error";
-import { fileSession, parentsOf, useFilesStore, workspacePathText } from "@/lib/workspace-files/workspace-files-store";
+import { workspaceFiles, parentsOf, useFilesStore, workspacePathText } from "@/lib/workspace-files/workspace-files-store";
 import { WorkspaceFileIcon } from "./file-icon";
 import { cn } from "@/lib/utils";
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
@@ -57,11 +57,11 @@ export function FileTree({
   const { change, pending } = useChangeBrowserVisibility(workspaceId);
   const pendingFocus = useRef<string | null>(null);
   const bridge = useReferenceBridge();
-  const session = useFilesStore((s) => fileSession(s.sessions, workspaceId));
+  const files = useFilesStore((s) => workspaceFiles(s.byWorkspace, workspaceId));
   const patch = useFilesStore((s) => s.patch);
   const open = useFilesStore((s) => s.open);
   const queryClient = useQueryClient();
-  const expanded = session.expanded;
+  const expanded = files.expanded;
   const activeDirectories = expanded.filter((path) =>
     parentsOf(path).every((parent) => expanded.includes(parent)),
   );
@@ -233,8 +233,8 @@ export function FileTree({
       pendingReveal.current = true;
       lastReveal.current = reveal;
     }
-    if (!session.active || !pendingReveal.current) return;
-    const path = session.active;
+    if (!files.active || !pendingReveal.current) return;
+    const path = files.active;
     const parents = parentsOf(path);
     if (parents.some((parent) => !expanded.includes(parent))) {
       patch(workspaceId, { expanded: [...new Set([...expanded, ...parents])] });
@@ -290,7 +290,7 @@ export function FileTree({
             if (!node) return;
             const path = node.data.entry.path;
             const next = new Set(
-              useFilesStore.getState().sessions[workspaceId]?.expanded ?? [""],
+              useFilesStore.getState().byWorkspace[workspaceId]?.expanded ?? [""],
             );
             if (node.isOpen) next.add(path);
             else next.delete(path);

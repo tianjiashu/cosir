@@ -12,7 +12,7 @@ async function fixture(page: Page, request: APIRequestContext) {
   await request.post(`${origin}/__test__/reset`);
   await page.addInitScript(() => {
     localStorage.clear();
-    localStorage.setItem("cosir:last-workspace-id", "7");
+    localStorage.setItem("cosir:last-workspace", JSON.stringify({ state: { workspaceId: 7 }, version: 0 }));
   });
   await page.route(`${origin}/workspaces`, route => route.fulfill({ json: [7, 8].map(id => ({
     workspace_id: id, name: `工作区${id}`, root_path: `/workspace/${id}`,
@@ -48,10 +48,10 @@ async function state(page: Page) {
     const dockModulePath = "/lib/layout/dock-store.ts";
     const { useWorkbenchStore } = await import(modulePath);
     const { useDockStore } = await import(dockModulePath);
-    const sessions: Record<number, { tabs: { id: string }[] }> = useWorkbenchStore.getState().sessions;
-    const tabs = Object.fromEntries(Object.entries(sessions)
-      .filter(([, session]) => session.tabs.length > 0)
-      .map(([id, session]) => [id, session.tabs.map((tab) => tab.id)]));
+    const byWorkspace: Record<number, { tabs: { id: string }[] }> = useWorkbenchStore.getState().byWorkspace;
+    const tabs = Object.fromEntries(Object.entries(byWorkspace)
+      .filter(([, workbench]) => workbench.tabs.length > 0)
+      .map(([id, workbench]) => [id, workbench.tabs.map((tab) => tab.id)]));
     return { tabs, panel: useDockStore.getState().panel as string | null };
   });
 }
@@ -185,13 +185,13 @@ test("Agent 草稿标签直接反映草稿未保存状态", async ({ page }) => 
   await expect(agent.locator(".sr-only")).toHaveText("未保存");
   await page.evaluate(async () => {
     const modulePath = "/lib/workbench/workbench-store.ts";
-    const tabs = (await import(modulePath)).useWorkbenchStore.getState().sessions[7].tabs;
+    const tabs = (await import(modulePath)).useWorkbenchStore.getState().byWorkspace[7].tabs;
     tabs.find((tab: {kind: string}) => tab.kind === "agent-configuration-draft").session.store.setState({ dirty: false });
   });
   await expect(agent.locator(".sr-only")).toHaveCount(0);
   await page.evaluate(async () => {
     const modulePath = "/lib/workbench/workbench-store.ts";
-    const tabs = (await import(modulePath)).useWorkbenchStore.getState().sessions[7].tabs;
+    const tabs = (await import(modulePath)).useWorkbenchStore.getState().byWorkspace[7].tabs;
     tabs.find((tab: {kind: string}) => tab.kind === "agent-configuration-draft").session.setField("description", "新的后台编辑");
   });
   await expect(agent.locator(".sr-only")).toHaveText("未保存");

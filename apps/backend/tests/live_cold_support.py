@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import update
 
 from app.config.configuration import get_tool_registry
+from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_schemas
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolDefinition
@@ -178,7 +179,9 @@ class LiveColdEnv:
             supports_image=False,
         )
         self.workspace = depends.get_workspace_service().create_workspace("ws", str(tmp_path))
-        self.session = depends.get_workspace_service().create_session(self.workspace.id, "parent")
+        self.session = depends.get_session_service().create_session(
+            self.workspace.id, "parent", tool_schemas=main_agent_tool_schemas()
+        )
         _install_probe_tools(self.session)
         monkeypatch.setattr(
             workflow,

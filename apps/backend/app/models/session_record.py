@@ -31,9 +31,19 @@ class SessionRecord:
     session_type: SessionType = SessionType.USER
     parent_session_id: int | None = None
     current_run_id: int | None = None
-    creation_command_id: str | None = None
     # 派生深度（见 ``models.session_kind``）；创建后不变，所以缓存在运行时空间里的记录也可信。
     derivation_depth: int = 0
+
+    @property
+    def unstarted(self) -> bool:
+        """未开始的会话：用户会话且从未有过 Run。
+
+        新会话页在第一次需要 Session（开终端、开浏览器标签、发首条消息）时取或建它，每个工作区至多
+        一个、反复复用（``WorkspaceService.get_or_create_unstarted_session``）；它不进侧栏，首个 Run
+        建立后原地成为普通会话。只看当前 Run 指针即可：指针只在建 Run 时写入，Run 只随整个 Session
+        一起删除，不会回到空。fork 继承了上下文、一建好就进侧栏，不算未开始。
+        """
+        return self.session_type == SessionType.USER and self.current_run_id is None
 
     def deriver_id(self) -> int | None:
         """派生出本 Session 的那个 Session（委派或 Agent fork 的发起方）；不是 Agent 派生的为 ``None``。
@@ -110,7 +120,6 @@ class SessionRecord:
             session_type=session_type,
             parent_session_id=row.parent_session_id,
             current_run_id=row.current_run_id,
-            creation_command_id=row.creation_command_id,
             derivation_depth=row.derivation_depth,
         )
 
@@ -125,7 +134,6 @@ class SessionRecord:
             "session_type": self.session_type,
             "parent_session_id": self.parent_session_id,
             "current_run_id": self.current_run_id,
-            "creation_command_id": self.creation_command_id,
             "derivation_depth": self.derivation_depth,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),

@@ -1,7 +1,10 @@
-import { useSyncExternalStore } from "react";
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+import { useShallow } from "zustand/react/shallow";
 
 import { desktopHost } from "@/lib/desktop-host";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { preferenceStorage } from "@/lib/storage/preference-storage";
 
 export type ThemePreference = "light" | "dark" | "system";
 type ResolvedTheme = Exclude<ThemePreference, "system">;
@@ -11,35 +14,19 @@ export type ThemeState = {
   resolvedTheme: ResolvedTheme;
 };
 
-const STORAGE_KEY = "cosir.theme-preference";
+/**
+ * 外观偏好的存储 key。`index.html` 的首屏脚本在 React 之前按同一个 key 读 persist 的 JSON
+ * （`{ state: { preference } }`）先打上深色类，避免首帧闪白；这是唯一在本模块之外读偏好的地方。
+ */
+const STORAGE_KEY = "cosir:theme";
 const DARK_SCHEME_QUERY = "(prefers-color-scheme: dark)";
 const THEME_COLORS: Record<ResolvedTheme, string> = {
   light: "#ffffff",
   dark: "#0a0a0a",
 };
 
-let state: ThemeState = { preference: "system", resolvedTheme: "light" };
-const listeners = new Set<() => void>();
-let systemQuery: MediaQueryList | null = null;
-
-function logStorageFailure(message: string, error: unknown): void {
-  void frontendLog("WARNING", "theme_preference_storage_failed", message, { error });
-}
-
 function isThemePreference(value: unknown): value is ThemePreference {
   return value === "light" || value === "dark" || value === "system";
-}
-
-function readPreference(): ThemePreference {
-  try {
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored === null) return "system";
-    if (isThemePreference(stored)) return stored;
-    logStorageFailure("保存的外观偏好无效，已回退到跟随系统", new TypeError("Invalid theme preference"));
-  } catch (error) {
-    logStorageFailure("读取外观偏好失败，已回退到跟随系统", error);
-  }
-  return "system";
 }
 
 function resolveTheme(preference: ThemePreference): ResolvedTheme {
@@ -47,77 +34,62 @@ function resolveTheme(preference: ThemePreference): ResolvedTheme {
   return window.matchMedia(DARK_SCHEME_QUERY).matches ? "dark" : "light";
 }
 
-function applyTheme(next: ThemeState): void {
-  const root = document.documentElement;
-  root.classList.toggle("dark", next.resolvedTheme === "dark");
+/** 读入时收敛：不认识的值回到跟随系统。 */
+export function normalizeThemePreference(raw: unknown): { preference: ThemePreference } {
+  const preference = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>).preference : undefined;
+  return { preference: isThemePreference(preference) ? preference : "system" };
+}
+
+/** 只持久化偏好；实际深浅由偏好与系统外观现算（`resolvedTheme`），跟随系统时随系统变化。 */
+const useThemeStore = create<ThemeState>()(persist(
+  () => ({ preference: "system" as ThemePreference, resolvedTheme: "light" as ResolvedTheme }),
+  {
+    name: STORAGE_KEY,
+    storage: preferenceStorage<{ preference: ThemePreference }>(),
+    partialize: ({ preference }) => ({ preference }),
+    merge: (persisted, current) => {
+      const { preference } = normalizeThemePreference(persisted);
+      return { ...current, preference, resolvedTheme: resolveTheme(preference) };
+    },
+  },
+));
+
+function applyTheme({ preference, resolvedTheme }: ThemeState): void {
+  document.documentElement.classList.toggle("dark", resolvedTheme === "dark");
   document
     .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
-    ?.setAttribute("content", THEME_COLORS[next.resolvedTheme]);
+    ?.setAttribute("content", THEME_COLORS[resolvedTheme]);
   // 原生外观（系统对话框、菜单、Windows 窗口按钮）跟随同一偏好；同步失败只影响原生部分，不打断主题切换。
-  desktopHost?.window.setThemeSource(next.preference).catch((error: unknown) => {
+  desktopHost?.window.setThemeSource(preference).catch((error: unknown) => {
     void frontendLog("WARNING", "native_theme_sync_failed", "同步原生外观失败", { error });
   });
 }
 
-function publish(next: ThemeState): void {
-  if (state.preference === next.preference && state.resolvedTheme === next.resolvedTheme) return;
-  state = next;
-  applyTheme(state);
-  listeners.forEach((listener) => listener());
-}
-
-function updateSystemTheme(): void {
-  if (state.preference === "system") publish({ preference: "system", resolvedTheme: resolveTheme("system") });
-}
-
-function handleStorage(event: StorageEvent): void {
-  if (event.key !== STORAGE_KEY && event.key !== null) return;
-  const preference = event.newValue === null ? "system" : isThemePreference(event.newValue) ? event.newValue : "system";
-  publish({ preference, resolvedTheme: resolveTheme(preference) });
-}
-
 /**
- * 在 React 挂载前读取用户偏好并接管首屏脚本；只有 system 模式监听操作系统变化。
- * 偏好保存在 渲染进程 localStorage，主题类和系统状态栏颜色则由此模块统一应用。
+ * 在 React 挂载前接管首屏脚本：应用已读入的偏好，此后每次变化都重新应用；只有跟随系统时监听操作系统外观。
  */
 export function installThemePreferenceSync(): () => void {
-  state = { preference: readPreference(), resolvedTheme: "light" };
-  state = { ...state, resolvedTheme: resolveTheme(state.preference) };
-  applyTheme(state);
-
-  systemQuery = window.matchMedia(DARK_SCHEME_QUERY);
-  systemQuery.addEventListener("change", updateSystemTheme);
-  window.addEventListener("storage", handleStorage);
-
+  applyTheme(useThemeStore.getState());
+  const unsubscribe = useThemeStore.subscribe((next, previous) => {
+    if (next.preference !== previous.preference || next.resolvedTheme !== previous.resolvedTheme) applyTheme(next);
+  });
+  const systemQuery = window.matchMedia(DARK_SCHEME_QUERY);
+  const followSystem = () => {
+    const { preference } = useThemeStore.getState();
+    if (preference === "system") useThemeStore.setState({ resolvedTheme: resolveTheme("system") });
+  };
+  systemQuery.addEventListener("change", followSystem);
   return () => {
-    systemQuery?.removeEventListener("change", updateSystemTheme);
-    systemQuery = null;
-    window.removeEventListener("storage", handleStorage);
+    unsubscribe();
+    systemQuery.removeEventListener("change", followSystem);
   };
 }
 
-/** 用户选择立即作用于当前会话；存储失败只影响下次启动，不回滚当前界面。 */
+/** 用户选择立即作用于界面；写入本机存储失败由存储边界提示，只影响下次启动。 */
 export function setThemePreference(preference: ThemePreference): void {
-  if (!isThemePreference(preference)) throw new TypeError("Unsupported theme preference");
-  try {
-    window.localStorage.setItem(STORAGE_KEY, preference);
-  } catch (error) {
-    logStorageFailure("保存外观偏好失败，当前会话仍应用所选主题", error);
-  }
-  publish({ preference, resolvedTheme: resolveTheme(preference) });
-}
-
-function getThemeState(): ThemeState {
-  return state;
+  useThemeStore.setState({ preference, resolvedTheme: resolveTheme(preference) });
 }
 
 export function useThemeState(): ThemeState {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    getThemeState,
-    getThemeState,
-  );
+  return useThemeStore(useShallow(({ preference, resolvedTheme }) => ({ preference, resolvedTheme })));
 }

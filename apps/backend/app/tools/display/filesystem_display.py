@@ -3,7 +3,7 @@
 只把已完成的结果投影为客户端数据；不执行文件系统操作，也不构造模型可见的正文或错误诊断。
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from typing import Any
 
 _SEARCH_LINE_DISPLAY_LIMIT = 240
@@ -110,28 +110,3 @@ def _bounded_search_line(value: str) -> str:
     if len(value) <= _SEARCH_LINE_DISPLAY_LIMIT:
         return value
     return value[:_SEARCH_LINE_DISPLAY_LIMIT] + "…"
-
-
-def build_directory_display_data(
-    *,
-    path: str,
-    entries: Iterable[Mapping[str, Any]],
-    offset: int,
-    limit: int,
-    total_entries: int,
-    next_offset: int | None,
-) -> dict[str, Any]:
-    """构造 list_directory 的目录条目展示数据。"""
-
-    return {
-        "kind": "directory-list",
-        "path": path,
-        "entries": [dict(entry) for entry in entries],
-        "page": {
-            "offset": offset,
-            "limit": limit,
-            "has_more": next_offset is not None,
-            "next_offset": next_offset,
-        },
-        "total_entries": total_entries,
-    }

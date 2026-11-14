@@ -7,6 +7,7 @@
 import asyncio
 
 from app.core.tool.handoff.handoff_registry import HandoffLease, HandoffRegistry
+from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_schemas
 from app.service import depends
 from app.service.conversation.tool_decision_service import ToolDecisionService
 from app.tools.tool_handler.terminal.command_results import command_results
@@ -180,7 +181,9 @@ async def test_same_id_in_two_sessions_runs_independently(backend_env, tmp_path,
     try:
         env.send()
         await env.parked()
-        other = depends.get_workspace_service().create_session(env.workspace.id, "other")
+        other = depends.get_session_service().create_session(
+            env.workspace.id, "other", tool_schemas=main_agent_tool_schemas()
+        )
         env.send("另一个", session_id=other.id)
         await asyncio.sleep(0.1)
         await env.parked(other.id)

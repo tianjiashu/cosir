@@ -26,15 +26,16 @@ import { useComposerFeedback } from "@/components/composer/composer-feedback";
 import { useComposerInsertion } from "@/components/composer/composer-insertion-context";
 import { cn } from "@/lib/utils";
 
-/** 新会话页与会话内输入框共用的占位文案：描述要做的事，并点出 `@` 引用（没有它用户发现不了这个入口）。 */
+/** 输入框的占位文案：描述要做的事，并点出 `@` 引用（没有它用户发现不了这个入口）。 */
 export const COMPOSER_PLACEHOLDER = "描述要做的事，输入 @ 引用工作区文件…";
 
 /**
  * 一行起步、随内容长高到 `max-h-48` 后内部滚动，两端按滚动位置渐隐（`scroll-fade-mask`，写在编辑器
- * 自身的类上，两处输入框一致）；需要更大初始输入区的页面（新会话）自行叠加 `min-h-*`。
+ * 自身的类上）；需要更大初始输入区的版面（新会话页）在外层设 `--composer-min-height`，
+ * 不必另加类名。
  */
 export const COMPOSER_EDITOR_CLASS_NAME =
-  "text-foreground min-h-10 w-full bg-transparent px-2.5 py-2 text-base leading-6 outline-none focus-visible:outline-none data-[disabled=true]:cursor-not-allowed data-[disabled=true]:opacity-60";
+  "text-foreground min-h-[var(--composer-min-height,2.5rem)] w-full bg-transparent px-2.5 py-2 text-base leading-6 outline-none focus-visible:outline-none data-[disabled=true]:cursor-not-allowed data-[disabled=true]:opacity-60";
 
 /** 上下取 `scroll-fade-mask` 的渐隐长度（1.5rem = 24px）；左右保持 ProseMirror 默认值。 */
 const SCROLL_FADE_CARET_MARGIN = { top: 24, bottom: 24, left: 5, right: 5 };

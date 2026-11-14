@@ -84,7 +84,7 @@ def test_read_copies_only_the_window_and_does_not_validate(monkeypatch: pytest.M
 def test_materialize_validates_the_rebuild_and_does_not_cache_a_violating_one(monkeypatch: pytest.MonkeyPatch) -> None:
     service = ConversationStateService()
     broken = _history(2)
-    broken["title"] = ""
+    broken["title"] = None
     monkeypatch.setattr(service, "_rebuild", lambda _session_id: copy.deepcopy(broken))
     with pytest.raises(ValueError):
         service.get_state(SESSION_ID)
@@ -104,6 +104,6 @@ def test_validation_covers_only_what_a_change_touched() -> None:
         validate_mutated(state, [ConversationStateMutation("set", ("messages", 1), state["messages"][1])])
     with pytest.raises(ValueError):  # 碰到的那条违约
         validate_mutated(state, [ConversationStateMutation("set", ("messages", 3, "inherited"), False)])
-    state["title"] = ""
+    state["title"] = None
     with pytest.raises(ValueError):  # 独立的顶层字段只校验它自己
-        validate_mutated(state, [ConversationStateMutation("set", ("title",), "")])
+        validate_mutated(state, [ConversationStateMutation("set", ("title",), None)])

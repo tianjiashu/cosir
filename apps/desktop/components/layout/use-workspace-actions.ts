@@ -7,7 +7,9 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
-import { createWorkspace, deleteSession, deleteWorkspace, forkSession, type StartedConversation } from "@/lib/api/workspaces";
+import { createWorkspace, deleteSession, deleteWorkspace, forkSession } from "@/lib/api/workspaces";
+import { useModelSelectionStore } from "@/lib/model/model-selection-store";
+import { usePinnedSessionsStore } from "@/lib/pinned-sessions-store";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { desktopHost } from "@/lib/desktop-host";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
@@ -26,7 +28,7 @@ export type DeleteTarget =
   | { kind: "session"; id: number; label: string; forkCount: number };
 
 /**
- * 工作区 / 会话的用户动作：开始会话、从文件夹添加工作区、分叉、删除。
+ * 工作区 / 会话的用户动作：从文件夹添加工作区、分叉、删除。
  *
  * 只编排「请求 → 导航 → 反馈」：目录不在这里重读，写入提交后由后端推送失效（见 useWorkspaceCatalog），
  * 和后台会话 引起的变化走同一条路。失败统一经 notify / 确认框呈现，并写结构化日志。
@@ -44,10 +46,6 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedSessionId:
   const addPending = useRef(false);
   const [addingWorkspace, setAddingWorkspace] = useState(false);
   const { selectWorkspace, selectedWorkspaceId, workspaces } = catalog;
-
-  const startConversation = useCallback((conversation: StartedConversation) => {
-    navigate(`/sessions/${conversation.session_id}`);
-  }, [navigate]);
 
   /**
    * 从文件夹添加工作区（侧栏区头与新会话页选择器共用）：系统目录选择 → 创建 → 选中新工作区并来到
@@ -171,13 +169,15 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedSessionId:
         : undefined,
     });
     if (!confirmed) return;
-    // 终端工作台、后台工作看板、对话行高缓存与工作台里属于这些 Session 的标签随 Session 删除一并丢弃（后端已清理对应事实）。
+    // 终端工作台、后台工作看板、对话行高缓存、工作台标签与这些 Session 的模型选择、置顶随 Session 删除一并丢弃（后端已清理对应事实）。
     useTerminalWorkbenchStore.getState().forget(deletedSessionIds);
     useWorkbenchStore.getState().forgetSessions(deletedSessionIds);
     useBackgroundTasksStore.getState().forget(deletedSessionIds);
     useHandoffStore.getState().forget(deletedSessionIds);
     forgetMessageHeights(deletedSessionIds);
     forgetCommands(deletedSessionIds);
+    useModelSelectionStore.getState().forgetSessions(deletedSessionIds);
+    usePinnedSessionsStore.getState().forget(deletedSessionIds);
     for (const sessionId of deletedSessionIds) {
       useDisclosureStore.getState().clearSession(sessionId);
       forgetSessionComposerDrafts(sessionId);
@@ -185,6 +185,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedSessionId:
     if (target.kind === "workspace") {
       useWorkbenchStore.getState().forgetWorkspace(target.id);
       useFilesStore.getState().forget(target.id);
+      useModelSelectionStore.getState().forgetWorkspace(target.id);
       if (deletingCurrentWorkspace) {
         selectWorkspace(null);
         navigate("/");
@@ -195,5 +196,5 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedSessionId:
     notify.success(target.kind === "workspace" ? "工作区已删除" : deletedWithForks ? `已删除 ${forkCount + 1} 个会话` : "会话已删除");
   }, [focusedSessionId, navigate, selectWorkspace, selectedWorkspaceId, workspaces]);
 
-  return { startConversation, addWorkspaceFromFolder, addingWorkspace, forkMessage, forkingMessageId, requestDelete };
+  return { addWorkspaceFromFolder, addingWorkspace, forkMessage, forkingMessageId, requestDelete };
 }

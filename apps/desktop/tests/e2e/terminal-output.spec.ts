@@ -52,7 +52,7 @@ async function openCall(page: Page) {
 }
 for (const theme of ["light", "dark"]) test(`${theme}: real output, command once, labeled copy and independent reader`, async ({ page, request, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.addInitScript(theme => localStorage.setItem("cosir.theme-preference", theme), theme);
+  await page.addInitScript(theme => localStorage.setItem("cosir:theme", JSON.stringify({ state: { preference: theme }, version: 0 })), theme);
   await page.setViewportSize({ width: 1100, height: 900 });
   await seedState(request, 42, state(samples.ansi.display));
   await page.goto("/sessions/42");

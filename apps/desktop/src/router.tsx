@@ -35,12 +35,12 @@ function NewConversationRoute() {
   return (
     <NewConversation
       workspaces={catalog.workspaces}
+      catalogLoading={catalog.status === "loading" && catalog.workspaces.length === 0}
       selectedWorkspaceId={catalog.selectedWorkspaceId}
+      unstartedSession={catalog.selectedWorkspace?.unstartedSession ?? null}
       onWorkspaceChange={catalog.selectWorkspace}
       onAddWorkspace={actions.addWorkspaceFromFolder}
       addingWorkspace={actions.addingWorkspace}
-      onStarted={actions.startConversation}
-      onSessionListChanged={() => void catalog.load()}
     />
   );
 }

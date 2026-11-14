@@ -14,7 +14,6 @@ import pytest
 from app.core.permission.protected_paths import ProtectedPaths
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler.find_files import FindFilesTool
-from app.tools.tool_handler.list_directory import ListDirectoryTool
 from app.tools.tool_handler.read_file import ReadFileTool
 from app.tools.tool_handler.search_content import SearchContentTool
 from app.tools.tool_handler.write_file import WriteFileTool
@@ -111,19 +110,6 @@ def test_find_files_skips_system_cosir(home: Path) -> None:
     )
 
     assert "models.json" not in result.content
-
-
-def test_list_directory_denies_system_cosir_but_lists_skills(home: Path) -> None:
-    ctx = _ctx(home / "proj")
-
-    denied = ListDirectoryTool().execute(path=str(home / ".cosir"), execution_context=ctx)
-    allowed = ListDirectoryTool().execute(
-        path=str(home / ".cosir" / "skills"), execution_context=ctx
-    )
-
-    assert denied.status == "error"
-    assert allowed.status == "success"
-    assert "demo" in allowed.content
 
 
 def test_write_file_denies_system_cosir_inside_workspace(home: Path) -> None:

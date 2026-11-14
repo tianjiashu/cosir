@@ -38,7 +38,7 @@ async def test_background_results_reopen_the_session_after_its_run_answered(back
         supports_image=False,
     )
     workspace = depends.get_workspace_service().create_workspace("ws", str(tmp_path))
-    session = depends.get_workspace_service().create_session(workspace.id, "parent")
+    session = depends.get_workspace_service().get_or_create_unstarted_session(workspace.id)
     gates = {name: threading.Event() for name in ("A", "B")}
     saw_first = asyncio.Event()
     parent_inputs = []

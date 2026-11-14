@@ -1,26 +1,21 @@
-"""Text-patch primitives shared by file modification tools.
+"""文件编辑工具（``write_file`` / ``edit_file`` / ``apply_patch``）共用的内部件。
 
-The apply_patch parser and engine accept Git unified-diff updates only. Atomic writes,
-diff formatting, and the fuzzy hunk matcher remain shared with the existing replace and
-write_file handlers.
+``apply_patch`` 的解析与应用只接受 Git unified diff 的内容修改；原文匹配、diff 展示与行号污染检测
+三个工具共用。
 """
 
-from app.tools.tool_handler.patch_write.fuzzy_match import (
-    format_no_match_hint,
-    fuzzy_find_and_replace,
-)
-from app.tools.tool_handler.patch_write.patch_apply import (
+from app.tools.tool_handler.file_edit.patch_apply import (
     PatchApplyError,
     apply_all_with_diff,
     validate_all,
 )
-from app.tools.tool_handler.patch_write.patch_diff import (
+from app.tools.tool_handler.file_edit.patch_diff import (
     FileDiffResult,
     build_diff_stats,
     format_git_diff,
     format_unified_diff,
 )
-from app.tools.tool_handler.patch_write.patch_parser import (
+from app.tools.tool_handler.file_edit.patch_parser import (
     Hunk,
     HunkLine,
     PatchOperation,
@@ -39,9 +34,7 @@ __all__ = [
     "apply_all_with_diff",
     "build_diff_stats",
     "format_git_diff",
-    "format_no_match_hint",
     "format_unified_diff",
-    "fuzzy_find_and_replace",
     "parse_git_unified_diff",
     "parse_git_unified_diff_detailed",
     "validate_all",

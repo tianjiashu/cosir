@@ -1,15 +1,14 @@
-import { useSyncExternalStore } from "react";
 import { BookOpenTextIcon } from "lucide-react";
 
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { EmptyState } from "@/components/ui/state-panel";
 import { insertText, useComposerInsertion } from "@/components/composer/composer-insertion-context";
-import { readFavoritePrompts, subscribeFavoritePrompts } from "@/lib/favorite-prompt-storage";
+import { useFavoritePromptsStore } from "@/lib/favorite-prompts-store";
 import { AddMenuPageHeader } from "./add-menu-page-header";
 
 /**
  * 「+」菜单的常用提示词页：选中后把提示词正文插入光标处；「管理」打开提示词库对话框
- * （`FavoritePromptManager`，由菜单持有，菜单收起后对话框仍在）。提示词库是本机偏好存储，订阅它的变化。
+ * （`FavoritePromptManager`，由菜单持有，菜单收起后对话框仍在）。提示词库是本机偏好（`favorite-prompts-store`）。
  */
 export function FavoritePromptPage({ onBack, onPicked, onManage }: {
   onBack: () => void;
@@ -17,7 +16,7 @@ export function FavoritePromptPage({ onBack, onPicked, onManage }: {
   onManage: () => void;
 }) {
   const insertion = useComposerInsertion();
-  const prompts = useSyncExternalStore(subscribeFavoritePrompts, readFavoritePrompts, readFavoritePrompts);
+  const prompts = useFavoritePromptsStore((state) => state.prompts);
 
   return (
     <>

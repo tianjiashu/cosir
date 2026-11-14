@@ -1,6 +1,6 @@
 """把 Git 风格 unified diff 应用到工作区内已有的 UTF-8 文本文件。
 
-本模块只承载 ``apply_patch`` 工具：diff 解析、路径与内容校验、补丁落盘由 ``patch_write``
+本模块只承载 ``apply_patch`` 工具：diff 解析、路径与内容校验、补丁落盘由 ``file_edit``
 各协作者完成，本模块负责编排、取消检查、写后语法检查与观察归一化。
 """
 
@@ -21,14 +21,15 @@ from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
 from app.tools.guard.syntax_check import SyntaxDiagnostic, check_source_syntax
-from app.tools.tool_handler.patch_write.patch_apply import (
+from app.tools.tool_handler.file_edit.patch_apply import (
     PatchApplyError,
     apply_all_with_diff,
     validate_all,
 )
-from app.tools.tool_handler.patch_write.patch_parser import (
+from app.tools.tool_handler.file_edit.patch_parser import (
     parse_git_unified_diff_detailed,
 )
+from app.tools.tool_handler.file_observations import file_observations
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
 
@@ -52,7 +53,7 @@ class ApplyPatchTool(HandlerBase):
         "it cannot create, delete, or move files, so use 'write_file' to create or "
         "replace a whole file, and 'execute_terminal' to delete, move, or rename one. "
         "The 'patch' parameter holds the diff text; its description "
-        "defines the accepted format."
+        "defines the accepted format. For a single local change, prefer edit_file."
     )
     args_model = ApplyPatchArgs
     timeout_seconds = 30.0
@@ -145,6 +146,7 @@ class ApplyPatchTool(HandlerBase):
             resolved, error = resolver.resolve_for_write(result.path)
             if resolved is None or error:
                 continue
+            file_observations.record(execution_context.session_id, resolved)
             check = check_source_syntax(str(resolved), result.after)
             if check.has_error:
                 diagnostics.extend(check.diagnostics)

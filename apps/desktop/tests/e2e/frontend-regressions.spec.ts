@@ -28,10 +28,6 @@ test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输�
   });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem(
-      "cosir:model-config-selection:session:42",
-      JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
-    );
   });
 
   await page.goto("/sessions/42");
@@ -231,7 +227,7 @@ test("交替序列：运行中过程区展开、区头显示当前动作，命�
 
 test("交替序列：深色主题下回合正常渲染", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-alternating`, { data: { phase: "settled" } });
-  await page.addInitScript(() => window.localStorage.setItem("cosir.theme-preference", "dark"));
+  await page.addInitScript(() => window.localStorage.setItem("cosir:theme", JSON.stringify({ state: { preference: "dark" }, version: 0 })));
   await page.setViewportSize(SHOT_VIEWPORT);
   await page.goto("/sessions/42");
 
@@ -348,8 +344,6 @@ test("跨 Workspace 切换 Session 后请求使用新 Session 所属的 workspac
   });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("cosir:model-config-selection:session:42", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
-    window.localStorage.setItem("cosir:model-config-selection:session:43", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
   });
 
   await page.goto("/");
@@ -385,8 +379,6 @@ test("同一侧栏内切换 Session 不会重新加载整个侧栏", async ({ pa
   await page.route(`${API_ORIGIN}/configuration/model-connections`, (route) => route.fulfill({ json: { path: "/models.json", connections: [{ connection_id: "demo", name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", models: [{ config_id: "demo/demo-model", connection_id: "demo", model_name: "demo-model", context_window_k: 128, supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }] } }));
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("cosir:model-config-selection:session:42", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
-    window.localStorage.setItem("cosir:model-config-selection:session:43", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
   });
 
   await page.goto("/sessions/42");
@@ -405,7 +397,6 @@ test("Assistant Transport 会展示后端结构化错误", async ({ page, reques
   await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 103, title: "错误回归会话" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("cosir:model-config-selection:session:103", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
   });
   await page.route(`${API_ORIGIN}/sessions/103/messages`, (route) => route.fulfill({
     status: 400,
@@ -447,7 +438,6 @@ test("直接路由切换到另一个 Workspace 的 Session 会等待新 Workspac
   });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("cosir:model-config-selection:session:43", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
   });
 
   await page.goto("/sessions/42");

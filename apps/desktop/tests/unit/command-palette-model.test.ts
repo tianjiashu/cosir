@@ -16,7 +16,7 @@ function session(id: number, workspaceId: number, title: string, updatedAt: stri
     workspace_id: workspaceId,
     title,
     session_type: "user",
-
+    unstarted: false,
     created_at: updatedAt,
     updated_at: updatedAt,
   };

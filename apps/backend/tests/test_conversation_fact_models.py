@@ -291,7 +291,7 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
     factory = sessionmaker(bind=engine)
     try:
         with DbSession(engine) as db:
-            db.add(SessionModel(id=7, workspace_id=3, title="session", creation_command_id=None))
+            db.add(SessionModel(id=7, workspace_id=3, title="session"))
             db.add(
                 RunModel(
                     id=11,
@@ -417,7 +417,6 @@ def test_session_crud_new_session_has_no_current_run() -> None:
                 title="empty",
                 session_type="user",
                 parent_session_id=None,
-                creation_command_id=None,
                 extra=SessionExtra(),
             )
 

@@ -24,8 +24,8 @@ async function seedSidebar(
 ) {
   await page.addInitScript((value) => {
     localStorage.clear();
-    localStorage.setItem("cosir.theme-preference", value);
-    localStorage.setItem("cosir:last-workspace-id", "7");
+    localStorage.setItem("cosir:theme", JSON.stringify({ state: { preference: value }, version: 0 }));
+    localStorage.setItem("cosir:last-workspace", JSON.stringify({ state: { workspaceId: 7 }, version: 0 }));
   }, theme);
   const updatedAt = new Date(Date.now() - 44 * 60_000).toISOString();
   const workspace = { workspace_id: 7, name: workspaceName, root_path: "/workspace/cosir", created_at: updatedAt, updated_at: updatedAt };
@@ -111,7 +111,8 @@ for (const theme of ["light", "dark"]) {
     await page.locator("aside").first().screenshot({ path: testInfo.outputPath(`${theme}-sidebar.png`) });
 
     await page.getByRole("button", { name: "新会话", exact: true }).click();
-    await expect(page).toHaveURL(/\/$/);
+    // 新会话页（背后是工作区未开始的会话，不在侧栏里）在侧栏上表现为工作区被选中。
+    await expect(page.getByRole("heading", { name: /想做什么/ })).toBeVisible();
     await expect(workspace).toHaveAttribute("aria-current", "true");
     await expect(selected).toHaveAttribute("aria-selected", "false");
     await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(1);
@@ -196,9 +197,12 @@ test("Fork 挂在源会话下：缩进一层，可点击或用方向键折叠", 
   expect((await box(forked.locator(".workspace-tree-title"))).x).toBeGreaterThan((await box(source.locator(".workspace-tree-title"))).x);
 
   const toggle = source.getByRole("button", { name: `收起 ${longTitle} 的 Fork`, exact: true });
+  await expect(page.getByRole("heading", { name: /想做什么/ })).toBeVisible();
+  const newConversationUrl = page.url();
   await toggle.click();
   await expect(forked).toHaveCount(0);
-  await expect(page).toHaveURL(/\/$/);
+  // 折叠不打开会话：仍停在新会话页。
+  expect(page.url()).toBe(newConversationUrl);
   await expect(source.getByRole("button", { name: `展开 ${longTitle} 的 Fork`, exact: true })).toHaveAttribute("aria-expanded", "false");
 
 
@@ -237,14 +241,14 @@ test("置顶：顶层会话连同 Fork 移到置顶区并写入偏好，取消�
   await page.keyboard.press("Escape");
 
   // 夹具每次导航都会清空 localStorage，无法跨刷新验证，这里直接断言偏好已写入。
-  expect(await page.evaluate(() => localStorage.getItem("cosir:pinned-sessions:v1"))).toBe("[100]");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("cosir:pinned-sessions") ?? "null")?.state?.ids)).toEqual([100]);
 
   await source.hover();
   await source.getByRole("button", { name: `更多操作：${longTitle}`, exact: true }).click();
   await page.getByRole("menuitem", { name: "取消置顶" }).click();
   await expect(pinnedGroup).toHaveCount(0);
   await expect(source).toHaveAttribute("aria-level", "2");
-  expect(await page.evaluate(() => localStorage.getItem("cosir:pinned-sessions:v1"))).toBe("[]");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("cosir:pinned-sessions") ?? "null")?.state?.ids)).toEqual([]);
 });
 
 test("拖拽侧栏右缘调宽：最宽时 20 字标题完整显示，宽度写入偏好", async ({ page, request }) => {

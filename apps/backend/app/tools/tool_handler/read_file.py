@@ -31,6 +31,7 @@ from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
 from app.tools.display.filesystem_display import (
     build_read_file_display_data,
 )
+from app.tools.tool_handler.file_observations import file_observations
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models import ReadFileArgs
 from app.tools.tool_models.text_read_result import TextReadResult
@@ -156,6 +157,8 @@ class ReadFileTool(HandlerBase):
                 status_hint="无法读取",
             )
 
+        # 读一段也算看过（与 Claude Code 一致）：write_file 据此放行覆盖。
+        file_observations.record(execution_context.session_id, resolved)
         normalized_offset, _ = self._normalize_read_pagination(offset, limit)
         # 展示契约（tool_ui_display_contract.md 3.1）：读到文件尾渲染为 ``L<start>-END``，
         # 空文件与 offset 越界也算读到尾。
@@ -253,7 +256,7 @@ class ReadFileTool(HandlerBase):
             return TextReadResult(
                 error=(
                     f"could not read '{path}': it is a directory, not a file. "
-                    "Provide a file path, or use list_directory for this directory."
+                    "Provide a file path, or use find_files to see what this directory contains."
                 ),
             )
         file_size = self._safe_file_size(path)

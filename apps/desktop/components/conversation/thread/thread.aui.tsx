@@ -37,6 +37,7 @@ import { useActiveRunLaunch } from "@/lib/assistant/run-launch";
 import { AttachmentWorkspaceContext } from "@/components/conversation/thread/attachment-context";
 import { VirtualizedThreadMessages } from "@/components/conversation/thread/virtualized-thread-messages";
 import { ConversationAsideSlot } from "@/components/conversation/thread/conversation-aside";
+import { EmptyThreadFrameContext } from "@/components/conversation/thread/empty-thread-frame";
 import { QueuedMessages } from "@/components/conversation/thread/queued-messages";
 import { AgentInboundMessage } from "@/components/conversation/thread/agent-message";
 import { deleteQueuedSessionMessage, sendQueuedSessionMessageNow, withdrawSessionMessage } from "@/lib/assistant/session-commands";
@@ -90,6 +91,9 @@ const isNewChatView = (state: AssistantState) => state.thread.messages.length ==
 
 export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, sessionId, workspaceId, workspaceRoot, forkingMessageId = null, onForkMessage, onResumeBusiness, cancelling = false, performanceProbe = null }) {
   const isEmpty = useAuiState(isNewChatView);
+  // 空对话有外框提供方时（未开始的会话），输入框交给它摆放；只读阅读器没有输入框，不走这里。
+  const emptyFrame = useContext(EmptyThreadFrameContext);
+  const framed = isEmpty && !readonly ? emptyFrame : null;
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
     <ThreadContext.Provider value={{ sessionId, workspaceId, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, cancelling, readonly }}>
@@ -103,6 +107,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
           视口不能加 CSS scroll-smooth：虚拟列表重新测量行高时会程序化修正 scrollTop，
           平滑滚动会把这些修正变成可见的漂移。
         */}
+        {framed ? framed(<ComposerBoundary performanceProbe={performanceProbe} />) : (<>
         <ForkOrigin />
         <ThreadPrimitive.Viewport turnAnchor="top" autoScroll={false} className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto">
             <div aria-hidden="true" className="scroll-fade-top" />
@@ -129,6 +134,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
               <ConversationAsideSlot />
             </div>
         </ThreadPrimitive.Viewport>
+        </>)}
       </ThreadPrimitive.Root>
       </LinkSessionContext.Provider>
       </AttachmentWorkspaceContext.Provider>
@@ -184,7 +190,7 @@ const Composer = memo(function Composer() {
   // 运行期配置锁定：活动 Run 期间模型显示 Run 冻结的配置且只读，发送也用这份配置。
   const runLaunch = useActiveRunLaunch();
   // 运行中照常可以发送（后端排进队列，当前 Run 结束后依次处理）；只有停止请求在途时不提交，避免与停止交错。
-  const { cancelling = false, sessionId, workspaceRoot } = useThreadContext();
+  const { cancelling = false, sessionId, workspaceId, workspaceRoot } = useThreadContext();
   return (
     <ComposerInsertionProvider>
       <ComposerFeedbackProvider>
@@ -202,7 +208,7 @@ const Composer = memo(function Composer() {
           </div>
           <ComposerToolbar
             add={<ThreadComposerAddMenu workspaceRoot={workspaceRoot} />}
-            config={<ModelSelector scope={{ kind: "session", id: sessionId }} runtimeModelContext locked={runLaunch} />}
+            config={<ModelSelector scope={{ sessionId, workspaceId }} locked={runLaunch} />}
             status={<SessionContextUsage />}
             action={<ComposerAction />}
           />

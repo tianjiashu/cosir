@@ -34,17 +34,20 @@ async function caretPosition(input: Locator) {
   });
 }
 
+// 新会话页就是工作区未开始的会话（同一个输入框，套新会话版面、起步更高）：记住上次的工作区，`/` 直接转过去。
 for (const surface of [
-  { name: "新会话", path: "/", label: "新会话内容" },
-  { name: "会话", path: "/sessions/42", label: "消息输入" },
+  { name: "新会话", path: "/", newConversation: true },
+  { name: "会话", path: "/sessions/42", newConversation: false },
 ]) {
   for (const width of [1280, 640]) {
     test(`${surface.name}输入框在 ${width}px 下占位与光标对齐，清空后恢复`, async ({ page, request }, testInfo) => {
       await request.post(`${API_ORIGIN}/__test__/reset`);
-      await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "占位对齐回归" } });
+      if (surface.newConversation) await page.addInitScript(() => localStorage.setItem("cosir:last-workspace", JSON.stringify({ state: { workspaceId: 7 }, version: 0 })));
+      else await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "占位对齐回归" } });
       await page.setViewportSize({ width, height: 900 });
       await page.goto(surface.path);
-      const input = page.getByRole("textbox", { name: surface.label, exact: true });
+      if (surface.newConversation) await expect(page.getByRole("heading", { name: /想做什么/ })).toBeVisible();
+      const input = page.getByRole("textbox", { name: "消息输入", exact: true });
       await input.focus();
       await expectAlignedPlaceholder(input);
       const emptyCaret = await caretPosition(input);

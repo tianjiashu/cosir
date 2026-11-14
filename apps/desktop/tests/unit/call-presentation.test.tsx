@@ -18,7 +18,6 @@ describe("detail availability without building body", () => {
   it.each([
     ["file-list", {}, "未找到匹配"],
     ["content-search-results", {}, "未找到匹配"],
-    ["directory-list", { total_entries: 0 }, "目录为空"],
     ["web-search-results", {}, "未找到匹配"],
     ["web-extract-urls", {}, "未找到匹配"],
     ["mcp-tool-result", { action: "list" }, "没有已启用的 MCP 服务"],

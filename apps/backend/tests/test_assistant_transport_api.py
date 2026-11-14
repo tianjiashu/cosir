@@ -46,6 +46,7 @@ async def test_session_endpoint_returns_session_response_without_session_level_f
         current_run_id=None,
         context_window_total=None,
         session_type="user",
+        unstarted=False,
         parent_session_id=None,
         created_at=now,
         updated_at=now,
@@ -210,7 +211,7 @@ async def test_session_gate_waits_without_blocking_event_loop(tmp_path: Path) ->
     root = tmp_path / "workspace"
     root.mkdir()
     workspace = workspace_service.create_workspace("gate-test", str(root))
-    session = workspace_service.create_session(workspace.id, "gate-test")
+    session = workspace_service.get_or_create_unstarted_session(workspace.id)
     space = session_runtime_spaces.get_or_create(session.id)
     acquired = threading.Event()
     release = threading.Event()

@@ -5,7 +5,7 @@ import pytest
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.tool_base import HandlerBase
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.patch_write import parse_git_unified_diff
+from app.tools.tool_handler.file_edit import parse_git_unified_diff
 from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
 from app.tools.tool_registration import build_tool_registry
 

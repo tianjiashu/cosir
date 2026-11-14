@@ -26,7 +26,7 @@ import { ReferenceSelectionMenu } from "@/components/workspace-references/select
 import { pdfPageOfRange } from "@/lib/workspace-files/dom-selection-locator";
 import { workspaceFileRef, workspacePageRef } from "@/lib/workspace-references/ref-capsule";
 import type { RefCapsule } from "@/lib/assistant/capsules";
-import { fileSession, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
+import { workspaceFiles, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
 import { useDomSelection } from "@/hooks/use-dom-selection";
 import { AddToChatButton } from "./add-to-chat-button";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
@@ -70,7 +70,7 @@ export default function PdfPreview({
     setSelection(pageNumber !== null ? workspacePageRef(info.path, pageNumber) : workspaceFileRef(info.path));
   });
   // 引用带页码打开时跳到该页；跳完清除，之后照常按滚动位置恢复。
-  const revealPage = useFilesStore((s) => fileSession(s.sessions, workspaceId).positions[info.path]?.revealPage);
+  const revealPage = useFilesStore((s) => workspaceFiles(s.byWorkspace, workspaceId).positions[info.path]?.revealPage);
   useEffect(() => {
     if (revealPage === undefined) return;
     const viewer = viewerRef.current;
