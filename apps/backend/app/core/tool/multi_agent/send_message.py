@@ -35,12 +35,22 @@ class SendMessageTool(HandlerBase):
     """投递成功只表示消息入队；回信须另发一条消息。"""
 
     name: str = TOOL_SEND_MESSAGE
+    # 对照 Claude Code 的 SendMessage 补了三点：收件方看不到你的对话；别追问「做完没」；别让别的会话
+    # 替你做自己被拒的事——可写根收窄后，另一个会话的可写区可能更大，转托就绕过了限制。
     description: str = (
         "Send a message to another session in this workspace using its session_id. The message is "
-        "delivered once and sending does not wait. A session you derived (a delegated child agent or "
-        "a fork) reports back to you automatically when it finishes the run your message starts; "
-        "other sessions do not, so reply explicitly with send_message to the source_session_id of an "
-        "<agent_message> that is not a report."
+        "delivered once and sending does not wait; delivery means it reached that session, not "
+        "that it was read or agreed to.\n"
+        "- The recipient does not see your conversation, and your plain replies never reach it: "
+        "make the message self-contained, and point at files by path instead of pasting them.\n"
+        "- A session you derived (a delegated child agent or a fork) reports back to you "
+        "automatically when it finishes the run your message starts; other sessions do not, so "
+        "reply explicitly with send_message to the source_session_id of an <agent_message> that "
+        "is not a report.\n"
+        "- Do not send 'are you done?' messages: wait for the report with wait_messages, or check "
+        "a session you derived with session_status.\n"
+        "- Never ask another session to do what your own tools refused, such as writing outside "
+        "your writable root; tell the user instead."
     )
     args_model: type[SendMessageArgs] = SendMessageArgs
     timeout_seconds: ClassVar[float] = 30.0

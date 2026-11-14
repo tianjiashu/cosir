@@ -22,16 +22,16 @@ def build_web_search_display_data(
     return {"kind": "web-search-results", "query": query, "results": projected}
 
 
-def build_web_extract_display_data(
+def build_web_fetch_display_data(
     *, urls: Iterable[str], partial: bool = False
 ) -> dict[str, Any]:
-    """构造网页正文提取的 URL 列表。
+    """构造网页抓取的 URL 列表。
 
     UI 不消费正文、metadata 或逐站点错误；网站名称和图标由前端从 URL 处理。
     """
 
     data: dict[str, Any] = {
-        "kind": "web-extract-urls",
+        "kind": "web-fetch-urls",
         "partial": partial,
         "urls": [{"url": url} for url in urls if isinstance(url, str) and url],
     }

@@ -46,18 +46,42 @@ class DelegateTaskTool(HandlerBase):
 
     name: str = TOOL_DELEGATE_TASK
     # HandlerBase 要求提供类级描述；描述与工具集、workspace 候选无关（子 Agent 目录由系统提示词
-    # 的工具能力目录层下发），进程级基础定义即为模型可见终稿。
+    # 的工具能力目录层下发），进程级基础定义即为模型可见终稿。「何时用」一段对照 Claude Code 的
+    # Agent 工具改写：只说怎么用时，模型会把一两步就能查完的事也派出去，再照单全收子 Agent 的结论。
     description: str = (
-        "Delegate a focused subtask to a child agent. It runs its own loop with only your "
-        "message as input — it cannot see this conversation — so the message must be a "
-        "self-contained task contract. The call returns as soon as the child session is created; "
-        "the child then reports to you automatically with an <agent_message report=...> each "
-        "time it finishes a run, so wait for it with wait_messages or continue other "
-        "non-interfering work. To give it more instructions later, use send_message to its session. "
-        "A failed delegation "
-        "is terminal — adjust the contract or ask the user rather than retrying identical "
-        "arguments. Keep inputs within the stated length limits; an oversized call is "
-        "rejected as a tool error, so trim or split the task."
+        "Delegate a focused subtask to a child agent in a new conversation. It runs its own loop "
+        "with only your message as input — it cannot see this conversation — so the message must "
+        "be a self-contained brief.\n"
+        "\n"
+        "When to use:\n"
+        "A child costs more than it looks. It knows only what your message says, and you get back "
+        "only its report: both handoffs drop detail, and neither side can tell what the other "
+        "missed. You cannot watch it work; you can only wait for its report, check session_status, "
+        "or send it more instructions. Its mistakes come back as confidently as its findings, and "
+        "a child handed your hypothesis tends to return it confirmed. Several at once spend tokens "
+        "the user did not ask for.\n"
+        "- Delegate independent work that can run alongside yours, or an investigation that would "
+        "mean reading across many files: you keep the conclusion, not the file dumps.\n"
+        "- Do the work yourself when it is a handful of tool calls or a lookup whose target you "
+        "already know.\n"
+        "- Delegate a review only when you want a read that is not anchored on yours: give it the "
+        "material, not your conclusion.\n"
+        "- For independent pieces in parallel, make the calls together in one response, and give "
+        "children that write files separate writable_root directories.\n"
+        "- When in doubt, do not delegate. Once you have delegated something, do not also do it "
+        "yourself.\n"
+        "\n"
+        "After the call:\n"
+        "- It returns as soon as the child conversation is created; the child then reports to you "
+        "automatically with an <agent_message report=...> each time it finishes a run. Wait for it "
+        "with wait_messages, or continue work that does not overlap. To give it more instructions "
+        "later, use send_message to its session.\n"
+        "- Never fabricate or predict a report that has not arrived. Treat a report as a lead, not "
+        "proof: check its key claims before relying on them. The user sees the report only "
+        "collapsed, so state what matters in your own reply.\n"
+        "- A failed delegation is terminal: adjust the brief or ask the user rather than retrying "
+        "identical arguments. An oversized call is rejected as a tool error, so trim or split the "
+        "task."
     )
     args_model: type[DelegateTaskArgs] = DelegateTaskArgs
     timeout_seconds: ClassVar[float] = 300.0

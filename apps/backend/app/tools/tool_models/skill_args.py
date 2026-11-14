@@ -11,13 +11,16 @@ class SkillArgs(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     action: Literal["list", "load"] = Field(
-        description="Use 'list' to discover skills, or 'load' to read a skill or its resource."
+        description="'load' reads a skill or one of its files; 'list' re-reads the available skills."
     )
     skill_name: str | None = Field(
         default=None,
-        description="Skill name from 'list'; required for 'load'.",
+        description="Exact skill name as listed; required for 'load'.",
     )
     resource_path: str | None = Field(
         default=None,
-        description="Path relative to the skill directory; omit to load SKILL.md.",
+        description=(
+            "A file the skill refers to, relative to the skill directory (e.g. "
+            "references/checklist.md); omit to load SKILL.md."
+        ),
     )

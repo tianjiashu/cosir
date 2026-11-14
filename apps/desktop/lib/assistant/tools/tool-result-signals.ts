@@ -13,7 +13,7 @@ export function toolResultSignal(data: TransportToolDisplayData | null | undefin
         const status = (step as { status?: string } | null)?.status;
         return status === "failed" || status === "skipped";
       }) ? "动作未全部完成" : null;
-    case "web-extract-urls":
+    case "web-fetch-urls":
       return data.partial === true ? "部分成功" : null;
     case "mcp-tool-result":
       return data.action === "list" && Array.isArray(data.servers)

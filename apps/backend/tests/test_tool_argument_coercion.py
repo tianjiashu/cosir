@@ -15,7 +15,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
-from app.core.tool.handler.web.web_extract_args import WebExtractArgs
+from app.core.tool.handler.web.web_fetch_args import WebFetchArgs
 from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
 from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
 from app.core.tool.multi_agent.args.session_status_args import SessionStatusArgs
@@ -90,7 +90,7 @@ class TestWhitelistCoercion:
     def test_single_value_to_list(self) -> None:
         """声明为列表的字段收到标量时包成单元素列表（元素递归同规则）。"""
 
-        adapted, facts = _coerce({"urls": "https://example.com"}, WebExtractArgs)
+        adapted, facts = _coerce({"urls": "https://example.com"}, WebFetchArgs)
         assert adapted["urls"] == ["https://example.com"]  # type: ignore[index]
         assert facts == {"urls": "str->list"}
 
@@ -259,7 +259,7 @@ class TestWhitelistBoundaries:
         ``min_length=1``，约束被形态转换规避。
         """
 
-        result = validate_tool_arguments({"urls": blank}, {}, WebExtractArgs)
+        result = validate_tool_arguments({"urls": blank}, {}, WebFetchArgs)
         assert result.ok is False
         assert "urls" in result.error
         assert result.coercions == ()

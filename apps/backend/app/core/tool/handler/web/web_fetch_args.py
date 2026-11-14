@@ -1,6 +1,6 @@
-"""web_extract 工具的参数模型。
+"""web_fetch 工具的参数模型。
 
-``urls`` 的模型可见长度上限取自 ``Constant.Web.EXTRACT_URL_LIMIT_MAX``（导入期求值，属固定
+``urls`` 的模型可见长度上限取自 ``Constant.Web.FETCH_URL_LIMIT_MAX``（导入期求值，属固定
 契约，不经环境变量覆盖）；handler 侧用同一常量做运行期二次校验，两处口径同源。
 """
 
@@ -11,24 +11,25 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.config.constant import Constant
 
 
-class WebExtractArgs(BaseModel):
-    """网页正文提取工具的模型可见参数。"""
+class WebFetchArgs(BaseModel):
+    """网页抓取工具的模型可见参数。"""
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
     urls: list[str] = Field(
         min_length=1,
-        max_length=Constant.Web.EXTRACT_URL_LIMIT_MAX,
+        max_length=Constant.Web.FETCH_URL_LIMIT_MAX,
         description=(
-            f"List of public HTTP(S) URLs to extract content from "
-            f"(max {Constant.Web.EXTRACT_URL_LIMIT_MAX} URLs per call). "
-            "Duplicates are collapsed before any network request."
+            f"Public HTTP(S) URLs to fetch, at most {Constant.Web.FETCH_URL_LIMIT_MAX} per call; "
+            "put the pages you need together in one call. Duplicates are collapsed before any "
+            "request. Do not put the user's personal details in a URL: it goes to an external "
+            "service."
         ),
     )
     format: Literal["markdown", "html"] = Field(
         default="markdown",
         description=(
-            "Extraction format. Use markdown for readable prose or html when you "
+            "Content format. Use markdown for readable prose or html when you "
             "need the original markup."
         ),
     )
@@ -36,7 +37,7 @@ class WebExtractArgs(BaseModel):
         default=None,
         ge=2000,
         description=(
-            "Optional per-page character budget applied during extraction. "
+            "Optional per-page character budget. "
             "Omit (null) to use the global default. Content beyond the budget is "
             "truncated and the result is marked truncated=true; when the combined "
             "output exceeds the global tool output budget it is saved to disk with a "

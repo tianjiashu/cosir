@@ -1,4 +1,4 @@
-"""URL normalization and network safety checks for web extraction."""
+"""URL normalization and network safety checks for web_fetch."""
 import ipaddress
 import socket
 from collections.abc import Callable, Iterable

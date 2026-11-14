@@ -60,7 +60,7 @@ from app.core.tool.schemas.tool_names import (
     TOOL_READ_IMAGE,
     TOOL_SEARCH_CONTENT,
     TOOL_SKILL,
-    TOOL_WEB_EXTRACT,
+    TOOL_WEB_FETCH,
     TOOL_WEB_SEARCH,
 )
 from app.core.workflow.message_queue.session_message import MODEL_INPUT_BODIES
@@ -263,7 +263,7 @@ class SystemPromptBuilder:
             TOOL_SEARCH_CONTENT,
             TOOL_FIND_FILES,
                     TOOL_WEB_SEARCH,
-            TOOL_WEB_EXTRACT,
+            TOOL_WEB_FETCH,
         }
     )
     _BROWSER_TOOLS = frozenset(

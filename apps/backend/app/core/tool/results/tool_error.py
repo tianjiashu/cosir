@@ -24,7 +24,7 @@ from app.core.tool.schemas.tool_names import (
     TOOL_READ_FILE,
     TOOL_EDIT_FILE,
     TOOL_SEARCH_CONTENT,
-    TOOL_WEB_EXTRACT,
+    TOOL_WEB_FETCH,
     TOOL_WEB_SEARCH,
     TOOL_WRITE_FILE,
 )
@@ -38,7 +38,7 @@ _DEFAULT_STATUS_HINTS = {
     TOOL_FIND_FILES: "搜索失败",
     TOOL_EXECUTE_TERMINAL: "命令失败",
     TOOL_WEB_SEARCH: "搜索失败",
-    TOOL_WEB_EXTRACT: "提取失败",
+    TOOL_WEB_FETCH: "抓取失败",
     TOOL_DELEGATE_TASK: "委派失败",
     TOOL_FORK_SESSION: "分叉失败",
 }

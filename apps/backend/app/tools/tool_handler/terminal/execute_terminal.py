@@ -80,9 +80,13 @@ from app.tools.tool_models.terminal.execute_terminal_args import (
 # - 没有 stdin、也没有终端：要输入的程序会读到输入结束、通常直接失败，要终端的程序（密码提示、
 #   全屏程序、git rebase -i / git add -i 这类交互参数）跑不起来。带上 --yes 之类的非交互参数。
 # - 用户在调用卡片上只看到输出的最后一段；要紧的结果写进回复。
+# - 命令一眼看不懂时（管道、少见参数、内联脚本），intent 要说清整条命令达成什么，不只说第一步。
+#   写在这里而不是公共的 intent 说明里：只有终端命令有这个问题，放进公共说明会让每个工具都多带一句。
 # - 移动、删除文件在这里做（mv / rm，PowerShell 用 Move-Item / Remove-Item）：先看清目标，移动不要
 #   覆盖已有文件。没有单独的移动、删除工具。
-# - 前台调用会一直占着这一步，直到命令退出或超时。长构建、测试套件设 background=true，继续做别的事。
+# - 前台调用会一直占着这一步，直到命令退出或超时。可能跑两分钟以上的（构建、测试套件）设
+#   background=true，继续做别的事；不要反复 terminal_read 轮询，非等结果不可时用 wait_messages。
+#   给出时长门槛，「长」才有可操作的判断标准（对照 Claude Code 的约两分钟）。
 # - 命令用 & 或 nohup 留下的进程会在它结束时被结束（自行脱离会话的守护进程除外），改用
 #   background=true。
 # - 只在工作期间需要的服务 / watcher 用 background=true 跑：用 terminal_read（wait until=match）等就绪
@@ -102,10 +106,14 @@ _DESCRIPTION = (
     "flags such as --yes.\n"
     "- The user sees only the tail of the output on the call card; state the results that "
     "matter in your reply.\n"
+    "- When the command is hard to read at a glance (pipes, unusual flags, an inline script), "
+    "make intent say what it achieves, not just its first step.\n"
     "- Move and delete files here (mv / rm, or Move-Item / Remove-Item in PowerShell): look at "
     "the target first, and never let a move overwrite an existing file.\n"
-    "- A foreground call holds this step until the command exits or times out. For long builds "
-    "and test suites, set background=true and keep working.\n"
+    "- A foreground call holds this step until the command exits or times out. For anything "
+    "likely to run longer than about two minutes (builds, test suites), set background=true and "
+    "keep working. Do not poll it with repeated terminal_read; if you cannot go on without its "
+    "result, use wait_messages.\n"
     "- Processes the command leaves behind with & or nohup are stopped when it exits (daemons "
     "that detach into their own session are not); use background=true instead.\n"
     "- A server or watcher you only need while working can run with background=true: wait for "

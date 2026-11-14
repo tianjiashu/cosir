@@ -37,7 +37,7 @@
 | `terminal_write` | `terminal-session` | 结构化结果见第 4 节 |
 | `terminal_stop` | 无 | 结构化结果见第 4 节 |
 | `web_search` | `web-search-results` | 结构化结果见第 4 节 |
-| `web_extract` | `web-extract-urls` | 结构化结果见第 4 节 |
+| `web_fetch` | `web-fetch-urls` | 结构化结果见第 4 节 |
 | `browser_navigate` | `browser-page` | 结构化结果见第 4 节 |
 | `browser_snapshot` | `browser-page` | 结构化结果见第 4 节 |
 | `browser_act` | `browser-page` | 结构化结果见第 4 节 |
@@ -70,7 +70,7 @@
 | terminal-result | command、workdir、output、end（exited/signaled/timed_out/cancelled/start_failed/worker_failed），exit_code 只在 exited、signal 只在 signaled 时出现；启动时与后台占位只有 command/workdir，不能把缺失 exit_code 当作零；`output` 是原始文本的最近一段（窗口见 `core/tool/terminal_output_window.py`），可选 `output_omitted_lines`（前面省略的行数）与 `output_log_path`（完整输出日志的工作区相对路径，只在超过模型预算时存在） |
 | terminal-session | list: terminal_count；read/write: terminal_id/lines/screen/wait_result，可含 input_summary（write 为填入的命令摘要） |
 | web-search-results | query、results[{title,url}]，不含网页正文 |
-| web-extract-urls | partial（必有 boolean）、urls[{url}]；URL 可能包含失败页面，URL 数不是成功页数；全部失败走错误观察，不出现此 kind |
+| web-fetch-urls | partial（必有 boolean）、urls[{url}]；URL 可能包含失败页面，URL 数不是成功页数；全部失败走错误观察，不出现此 kind |
 | browser-page | tab_id/url/title；可含 screenshot（asset ID）、handoff_reason、steps[{action,target,status,hint}]；步骤 status 为 done/failed/skipped/unknown；done 只表示输入执行完成，unknown 表示可能生效、须观察后决定，skipped 不算执行失败 |
 | delegation-result | title、child_agent_id；可含 role/delegation_id/child_session_id/writable_root（子会话被收窄时的可写根，相对工作区根） |
 | fork-session-result | title、child_session_id；可含 writable_root（同上） |

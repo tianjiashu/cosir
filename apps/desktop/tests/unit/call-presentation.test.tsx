@@ -19,7 +19,7 @@ describe("detail availability without building body", () => {
     ["file-list", {}, "未找到匹配"],
     ["content-search-results", {}, "未找到匹配"],
     ["web-search-results", {}, "未找到匹配"],
-    ["web-extract-urls", {}, "未找到匹配"],
+    ["web-fetch-urls", {}, "未找到匹配"],
     ["mcp-tool-result", { action: "list" }, "没有已启用的 MCP 服务"],
     ["skill-content", { action: "list" }, "没有可用 Skill"],
   ])("%s keeps an expandable empty-state detail", (kind, fields, label) => {

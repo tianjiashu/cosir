@@ -239,14 +239,14 @@ describe("assistant transport converter", () => {
     expect(awaiting).not.toHaveProperty("result");
 
     const completed = toToolCallPart(tool("completed", {
-      toolName: "web_extract",
-      display_data: { kind: "web-extract-urls", urls: [{ url: "https://example.com" }] },
+      toolName: "web_fetch",
+      display_data: { kind: "web-fetch-urls", urls: [{ url: "https://example.com" }] },
     }));
     expect(completed).not.toHaveProperty("result");
     expect(completed).toMatchObject({
       artifact: {
         awaitingUser: false,
-        display_data: { kind: "web-extract-urls", urls: [{ url: "https://example.com" }] },
+        display_data: { kind: "web-fetch-urls", urls: [{ url: "https://example.com" }] },
       },
     });
   });

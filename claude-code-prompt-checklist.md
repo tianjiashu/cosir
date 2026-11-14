@@ -1,8 +1,8 @@
 # 对照 Claude Code 的提示词清单
 
 > 2026-11-12 整理。原文取自本会话里 Claude Code（桌面应用 Code 标签页）实际加载的系统提示词与工具描述，英文原句照录，只删去与 cosir 无关的宿主细节（终端面板、会话卡片、发布页面等）和用户个人信息。标注【转述】的条目在本会话的提示词里没有原文，是按意思概括。
-> 原文全文（系统提示词、运行中提醒模板、通用工具描述）见 [claude-code-system-prompt.md](claude-code-system-prompt.md)。
-> cosir 现状取自同日导出的实际系统提示词（约 6.8k 字符，`SystemPromptBuilder.build` 组装）与 35 个工具定义。
+> 原文全文（系统提示词、运行中提醒模板、通用工具描述）见 [claude-code-system-prompt.md](claude-code-system-prompt.md)；逐工具对照见 [claude-code-tool-mapping.md](claude-code-tool-mapping.md)。
+> cosir 现状取自同日导出的实际系统提示词（约 6.8k 字符，`SystemPromptBuilder.build` 组装）与当时的 35 个工具定义。2026-11-14 按代码复核了工具描述一节（第 15–20 条，现为 31 个工具）与术语；第 1–14 条未复核。
 > 状态：✅ 已有　◐ 部分　❌ 没有。优先级：P0 只改文本、影响大；P1 值得做；P2 以后再说。
 
 ## 总览
@@ -24,10 +24,10 @@
 | 13 | 任务清单与收尾 | ◐ | 机制 + 提示词 | P1 |
 | 14 | 权限被拒后怎么办 | ❌ | 随安全设计 | P2 |
 | 15 | 终端 / git 规程 | ✅ | — | — |
-| 16 | 先读后改 | ❌ | 编辑工具描述 + 机制 | P0（描述）/ P1（机制） |
-| 17 | 编辑工具分工 | ◐ | 工具层 | P0 |
-| 18 | 委派的成本与纪律 | ◐ | `delegate_task` / `fork_task` 描述 | P0 |
-| 19 | 向用户提问 | ❌ | 新工具 | P1 |
+| 16 | 先读后改 | ◐ `write_file` 已拦截 | 编辑工具描述 + 机制 | P0（描述）/ P1（机制） |
+| 17 | 编辑工具分工 | ✅ | — | — |
+| 18 | 委派的成本与纪律 | ✅ | — | — |
+| 19 | 向用户提问 | ✅ `ask_user` | — | — |
 | 20 | 工具按需加载 | ◐ | 机制 | P2 |
 
 ---
@@ -77,7 +77,7 @@
 
 > You must treat information you learn about the user and their project as private. Never include the user's name, project, email address or other personal details in requests to outside services, such as in a header, URL, or payload, unless the user explicitly asks you to do so.
 
-- **cosir 现状**：没有。`web_search`、`web_extract`、浏览器都会把模型写的内容发往外部。
+- **cosir 现状**：系统提示词里没有。`web_search`、`web_fetch`、浏览器都会把模型写的内容发往外部；2026-11-14 已在 `web_search` 的 `query` 与 `web_fetch` 的 `urls` 参数说明里各写了一句，浏览器与系统提示词还没有。
 - **建议**：一句话进默认提示词。
 
 ### 7. 专用工具优先、并行调用 ✅
@@ -105,7 +105,7 @@
 
 > The system may send updates, reminders, or modifications to rules via mid-conversation system turns.
 
-- **cosir 现状**：`<system_notice>` 三级通知（Task / Run / 回合）已经承载这个机制。以后的「文件被外部改过」「任务清单久未更新」等提醒都可以走它。
+- **cosir 现状**：`<system_notice>` 三级通知（Session / Run / 回合）已经承载这个机制。以后的「文件被外部改过」「任务清单久未更新」等提醒都可以走它。
 
 ### 11. 上下文压缩 ❌ P0（设计）
 
@@ -157,7 +157,7 @@
 - **cosir 现状**（2026-11-14 落地）：`execute_terminal` 描述按原文改成分条，补了「用户只看到输出末段，结果写进回复」「等就绪用 `terminal_read`，不用 sleep 轮询」与 Git 一节（`gh`、`@名字` 会通知人、用户要求才提交或推送、默认分支先开分支；`-i` 并进「没有终端」那条）。调用说明的写法（白话、不复述命令与参数）放进所有工具共用的 `intent`，不另加 `description` 参数。
 - **未采纳**：【转述】的 `--force` / `--no-verify`、不改别人的提交，本会话加载的版本里没有，等出现真实问题再加。
 
-### 16. 先读后改 ❌ P0（描述）/ P1（机制）
+### 16. 先读后改 ◐ P0（描述）/ P1（机制）
 
 > You must Read the file in this conversation before editing, or the call will fail.
 
@@ -167,18 +167,17 @@
 
 > Do NOT re-read a file you just edited to verify — Edit/Write would have errored if the change failed, and the harness tracks file state for you.
 
-- **cosir 现状**：没有「先读后改」；待办里记着「防覆盖未观察内容」（原 `FileToolStateCoordinator` 已删除）。`read_file` 有分页，但没说「知道要看哪段就只读那段」，也没说「改完不必重读验证」。
-- **建议**：先把这几句写进 `read_file`、`patch_write`、`write_file` 的描述（P0，零成本）；机制按待办统一设计（P1），被外部改过时用系统通知提醒。
+- **cosir 现状**（2026-11-14）：`write_file` 的描述已照录第二段，机制由 `tools/tool_handler/file_observations.py` 兑现（覆盖没读过的已有文件即拒绝；当前未提交）。`edit_file`、`apply_patch` 只记录、不拦截，所以描述里也还没有第一段。`read_file` 有分页，但没说「知道要看哪段就只读那段」，也没说「改完不必重读验证」。
+- **建议**：第三、四段现在就写进 `read_file` 的描述（P0）；`edit_file` / `apply_patch` 接上拦截后，再补第一段（P1）。机制落地后，同步勾掉 AGENTS.md 待办「防覆盖未观察内容」。
 
-### 17. 编辑工具分工 ◐ P0
+### 17. 编辑工具分工 ✅
 
 > `old_string` must match the file exactly, including indentation, and be unique — the edit fails otherwise.
 > `replace_all: true` replaces every occurrence instead.
 
-- **cosir 现状**：三个编辑工具各自说明自己（`patch_write` 有唯一匹配与 `replace_all`；`apply_patch` 说了只改已有文件），但没有一处讲「该选哪个」。删除、移动工具已于 2026-11-14 删掉，改走终端，与 Claude Code 一致。
-- **建议**：工具层加一句：小范围替换用 `patch_write`，多处、多段改动用 `apply_patch`，新建或整体重写用 `write_file`。
+- **cosir 现状**（2026-11-14）：`patch_write` 已改名 `edit_file`，描述照录上面两句。分工写在各工具描述的交叉引用里：`write_file` 让局部修改去用 `edit_file`；`apply_patch` 写明只改已有文件，新建用 `write_file`、删除和移动走终端，单处修改优先用 `edit_file`。删除、移动工具已删掉，改走终端，与 Claude Code 一致。
 
-### 18. 委派的成本与纪律 ◐ P0
+### 18. 委派的成本与纪律 ✅
 
 > A fresh agent costs more than it looks. It knows only what you put in the prompt, and you see only the summary it sends back — both handoffs drop detail, and neither of you can tell what the other missed.
 
@@ -188,10 +187,9 @@
 
 > Never fabricate or predict a pending agent's results
 
-- **cosir 现状**：`delegate_task` 讲清了「子 Agent 看不到当前对话，任务说明要自成一体」与自动汇报；`fork_task` 讲清了分工。缺「什么时候不该派」「派了就别自己再做」「别编造未到的结果」。
-- **建议**：照这四段补进 `delegate_task`（`fork_task` 取前两段）。子 Agent 的结论是线索、关键处要核对，也一并写上。
+- **cosir 现状**（2026-11-14）：`delegate_task` 的描述与参数说明已照这四段改写，并补了「汇报是线索、关键处要核对」（改法见 [claude-code-tool-mapping.md](claude-code-tool-mapping.md) 第五节）。`fork_session` 同日按分叉的事实取舍改写（逐句对照见同一节）。
 
-### 19. 向用户提问 ❌ P1
+### 19. 向用户提问 ✅
 
 > Use this tool only when you are blocked on a decision that is genuinely the user's to make: one you cannot resolve from the request, the code, or sensible defaults.
 
@@ -199,25 +197,25 @@
 
 > Reserve this for decisions where the user's answer changes what you do next — not for choices with a conventional default or facts you can verify in the codebase yourself.
 
-- **cosir 现状**：没有提问工具；`ToolDefinition.user_decision` 已预留 `"reply"`（用户的回答作为消息交给模型），目前没有工具使用。
-- **建议**：做一个 `ask_user` 工具，`user_decision="reply"`，前端出选项卡片。基础设施现成，投入最小。描述照录上面三段的意思：只在真被卡住时问，推荐项放第一个。
+- **cosir 现状**（2026-11-14）：`ask_user` 已落地（`core/tool/handler/ask_user.py`，`reply` 类决定），描述与 AskUserQuestion 逐段对应。
 
 ### 20. 工具按需加载 ◐ P2
 
 > Deferred tools appear by name in <system-reminder> messages. Until fetched, only the name is known — there is no parameter schema, so the tool cannot be invoked.
 
 - **cosir 现状**：`mcp` 与 `skill` 已是网关式（先列名字，用时再取），思路一致。其余工具的参数定义合计约 5.5 万字符，`browser_act` 一个就约 1.2 万字符，每次请求都带。
-- **建议**：先精简字段说明；再考虑浏览器、Team 等工具按组按需加载。cosir 为每个 Task 固化工具定义以利用缓存，按需加载只能往后追加，不能改动已有部分。
+- **建议**：先精简字段说明；再考虑浏览器、多 Agent 等工具按组按需加载。cosir 为每个 Session 固化工具定义以利用缓存，按需加载只能往后追加，不能改动已有部分。
 
 ---
 
 ## 三、建议的落地顺序
 
-1. **默认主 Agent 提示词 + 安全规则**（第 1–4、6 条）与**工具描述补充**（第 15–18 条）：只改文本。
-2. **`ask_user` 工具**（第 19 条）：复用已预留的 `reply` 类决定。
-3. **上下文压缩**（第 11 条）：风险最大，先出设计。
-4. **任务清单**（第 13 条）、**先读后改机制**（第 16 条）、**git 快照通知**（第 9 条）。
-5. 跨会话记忆、工具按需加载、权限模式（第 12、14、20 条）：以后再说。
+1. **默认主 Agent 提示词 + 安全规则**（第 1–4、6 条）与**工具描述补充**（第 16 条的 `read_file`）：只改文本。
+2. **上下文压缩**（第 11 条）：风险最大，先出设计。
+3. **任务清单**（第 13 条）、**先读后改机制补到 `edit_file` / `apply_patch`**（第 16 条）、**git 快照通知**（第 9 条）。
+4. 跨会话记忆、工具按需加载、权限模式（第 12、14、20 条）：以后再说。
+
+（第 15、17、18、19 条已于 2026-11-14 前落地。）
 
 ## 四、不照搬的
 

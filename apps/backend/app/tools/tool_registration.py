@@ -6,7 +6,7 @@
 
 from app.core.tool.handler.ask_user import build_ask_user_definition
 from app.core.tool.handler.wait_messages import build_wait_messages_definition
-from app.core.tool.handler.web_extract import build_web_extract_definition
+from app.core.tool.handler.web_fetch import build_web_fetch_definition
 from app.core.tool.handler.web_search import build_web_search_definition
 from app.core.tool.multi_agent.delegate_task import build_delegate_task_definition
 from app.core.tool.multi_agent.fork_session import build_fork_session_definition
@@ -53,7 +53,7 @@ def build_tool_registry() -> ToolRegistry:
     for definition in build_terminal_definitions():
         registry.register(definition)
     registry.register(build_web_search_definition())
-    registry.register(build_web_extract_definition())
+    registry.register(build_web_fetch_definition())
     for definition in build_browser_definitions():
         registry.register(definition)
     registry.register(build_delegate_task_definition())

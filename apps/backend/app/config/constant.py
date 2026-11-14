@@ -240,10 +240,10 @@ class Constant:
         SEARCH_LIMIT_MAX: int = 20
         # web_search ``limit`` 的默认值：模型可见 schema 默认值与 handler 形参默认值同源。
         SEARCH_LIMIT_DEFAULT: int = 5
-        # 单次 web_extract 最多接受的 URL 数（同时是模型可见 schema 的 ``urls`` 长度上限）。
-        EXTRACT_URL_LIMIT_MAX: int = 5
-        # web_extract 单次返回正文的字符上限（调用方未显式传 char_limit 时的默认值）。
-        EXTRACT_CHAR_LIMIT: int = 15_000
+        # 单次 web_fetch 最多接受的 URL 数（同时是模型可见 schema 的 ``urls`` 长度上限）。
+        FETCH_URL_LIMIT_MAX: int = 5
+        # web_fetch 单次返回正文的字符上限（调用方未显式传 char_limit 时的默认值）。
+        FETCH_CHAR_LIMIT: int = 15_000
         # Markdown 内联 base64 图片占位符提取正则（忽略大小写）。
         BASE64_IMAGE_PATTERN: re.Pattern[str] = re.compile(
             r"!\[([^\]]*)\]\(data:image/[A-Za-z0-9.+-]+;base64,[^)]*\)",
@@ -258,7 +258,7 @@ class Constant:
             r"(?i)(sk-[a-z0-9_-]{8,}|xox[baprs]-[a-z0-9-]{8,}|gh[pousr]_[a-z0-9_]{12,}|"
             r"api[_-]?key[=:][^&\s]+|bearer\s+[a-z0-9._-]{12,})"
         )
-        # Web provider 单次 HTTP 请求超时（秒）：web_search / web_extract 的工具级超时在此
+        # Web provider 单次 HTTP 请求超时（秒）：web_search / web_fetch 的工具级超时在此
         # 之上派生（``+5`` / ``+10``），firecrawl provider 的直连请求也用它。
         # 取值沿用迁移前 ``CODING_AGENT_WEB_REQUEST_TIMEOUT_SECONDS`` 的实际生效值（抓取较慢
         # 时放宽），迁移后不再支持 env 覆盖——需要调整直接改本值。
@@ -294,7 +294,7 @@ class Constant:
             {"rawHtml", "links", "screenshot"}
         )
         # 提取结果中已映射到专有字段、不应重复进 metadata 的键。
-        FIRECRAWL_EXTRACT_MAPPED_FIELDS: frozenset[str] = frozenset(
+        FIRECRAWL_FETCH_MAPPED_FIELDS: frozenset[str] = frozenset(
             {"url", "markdown", "html", "rawHtml", "content", "links", "screenshot", "error"}
         )
 

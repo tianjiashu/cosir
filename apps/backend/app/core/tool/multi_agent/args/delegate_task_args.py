@@ -18,19 +18,26 @@ class DelegateTaskArgs(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
     child_agent_id: str = Field(
-        description="Target child Agent id. REQUIRED. Choose one of the listed available agents."
+        description=(
+            "The child agent to run the task, from the available child agents listed in your "
+            "instructions: pick the one whose description and allowed_tools fit the task. REQUIRED."
+        )
     )
     agent_name: str = Field(
         description=(
-            "Short noun-phrase label naming the agent; prefer a unique name. "
-            f"REQUIRED, at most {AGENT_NAME_MAX} characters."
+            "Short name for this child, shown to the user as its conversation title and on its "
+            "status line. Name it after its job (e.g. 'API review') so parallel children can be "
+            f"told apart. REQUIRED, at most {AGENT_NAME_MAX} characters."
         )
     )
+    # 不写「越详细越好」：它与长度上限冲突，还诱导模型把文件内容贴进来；按要素写、文件按路径指。
     message: str = Field(
         description=(
-            "The complete task contract as free-form text, passed verbatim as the child's "
-            f"entire input. REQUIRED, at most {MESSAGE_MAX} characters. "
-            "The child agent starts with a clean context, so provide as detailed a brief as possible."
+            "The brief, passed verbatim as the child's entire input; it is all the child knows "
+            "about this task. State the goal, what done looks like and what to report back, what "
+            "you have already found or ruled out, and the scope. Point it at files and docs by "
+            "path instead of pasting their contents. "
+            f"REQUIRED, at most {MESSAGE_MAX} characters."
         )
     )
 
@@ -40,6 +47,7 @@ class DelegateTaskArgs(BaseModel):
             "Optional. An existing directory inside the workspace, relative to the workspace root, "
             "that the child may write to: its file-writing tools are refused elsewhere and its "
             "commands start there. It can only narrow your own writable area, never widen it. "
+            "Give parallel children separate directories so they cannot overwrite each other. "
             "Omit to give the child the same writable area as you."
         ),
     )

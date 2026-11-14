@@ -80,7 +80,7 @@ describe("stable conversation projection", () => {
       call("terminal", { display_data: { kind: "terminal-result", exit_code: 1 } }),
       call("images", { display_data: { kind: "image-read", failures: ["a", "b"] } }),
       call("browser", { display_data: { kind: "browser-page", steps: [{ status: "skipped" }] } }),
-      call("web", { display_data: { kind: "web-extract-urls", partial: true } }),
+      call("web", { display_data: { kind: "web-fetch-urls", partial: true } }),
       call("mcp", { display_data: { kind: "mcp-tool-result", action: "list", servers: [{ error: "offline" }] } }),
     ], "settled");
     expect(firstGroupSummary(layout).failedCount).toBe(0);

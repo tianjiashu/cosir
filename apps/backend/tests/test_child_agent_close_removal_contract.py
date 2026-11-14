@@ -82,7 +82,7 @@ _CHILD_TOOL_SPECS = [
 ]
 
 # 装配期可能被条件跳过的工具（无可用 Provider 的 Web 工具）。
-_CONDITIONALLY_SKIPPED_TOOLS = frozenset({"web_search", "web_extract"})
+_CONDITIONALLY_SKIPPED_TOOLS = frozenset({"web_search", "web_fetch"})
 
 
 @pytest.fixture

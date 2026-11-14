@@ -67,7 +67,7 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
       groups: [{
         id: "web",
         label: "网页工具",
-        description: "配置网页搜索与正文提取。",
+        description: "配置网页搜索与网页抓取。",
         fields: [
           {
             name: "FIRECRAWL_API_KEY",

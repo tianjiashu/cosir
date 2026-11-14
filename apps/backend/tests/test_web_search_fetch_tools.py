@@ -1,14 +1,14 @@
-"""web_search / web_extract 工具及其 Firecrawl 客户端的单元测试。
+"""web_search / web_fetch 工具及其 Firecrawl 客户端的单元测试。
 
 无网络、不依赖真实 API Key：所有远端交互均通过 monkeypatch 的假 httpx.Client
 或直接注入工具的假客户端完成，URL 安全校验通过注入 resolver 控制。
 
 被测对象：
-- app/core/tool/web/web_extract.py (WebExtractTool)
+- app/core/tool/web/web_fetch.py (WebFetchTool)
 - app/core/tool/web/web_search.py (WebSearchTool)
 - app/core/tool/web/firecrawl_client.py (FirecrawlClient、结果值对象与异常)
 - app/core/tool/web/url_safety.py (URL 安全校验)
-- app/core/tool/web/web_extract_args.py / web_search_args.py (参数模型)
+- app/core/tool/web/web_fetch_args.py / web_search_args.py (参数模型)
 """
 
 import logging
@@ -24,7 +24,7 @@ from app.core.tool.handler.web.firecrawl_client import (
     FirecrawlClient,
     FirecrawlRequestError,
     FirecrawlUnavailableError,
-    WebExtractItem,
+    WebFetchItem,
     WebSearchItem,
     _clean_metadata,
     _search_result_items,
@@ -35,9 +35,9 @@ from app.core.tool.handler.web.url_safety import (
     sensitive_query_param_name,
     url_contains_secret,
 )
-from app.core.tool.handler.web.web_extract_args import WebExtractArgs
+from app.core.tool.handler.web.web_fetch_args import WebFetchArgs
 from app.core.tool.handler.web.web_search_args import WebSearchArgs
-from app.core.tool.handler.web_extract import WebExtractTool
+from app.core.tool.handler.web_fetch import WebFetchTool
 from app.core.tool.handler.web_search import WebSearchTool
 
 # ---------------------------------------------------------------------------
@@ -56,16 +56,16 @@ class FakeClient:
         self,
         *,
         search_items: list[WebSearchItem] | None = None,
-        extract_factory=None,
+        fetch_factory=None,
         search_side_effect: BaseException | None = None,
         extract_side_effect: BaseException | None = None,
     ) -> None:
         self._search_items = search_items or []
-        self._extract_factory = extract_factory
+        self._fetch_factory = fetch_factory
         self._search_side_effect = search_side_effect
         self._extract_side_effect = extract_side_effect
         self.search_calls: list[tuple[str, int]] = []
-        self.extract_calls: list[tuple[list[str], str, int]] = []
+        self.fetch_calls: list[tuple[list[str], str, int]] = []
 
     def search(self, query: str, limit: int) -> list[WebSearchItem]:
         self.search_calls.append((query, limit))
@@ -73,16 +73,16 @@ class FakeClient:
             raise self._search_side_effect
         return self._search_items[:limit]
 
-    def extract(
+    def fetch(
         self, urls: list[str], output_format: str, char_limit: int
-    ) -> list[WebExtractItem]:
-        self.extract_calls.append((list(urls), output_format, char_limit))
+    ) -> list[WebFetchItem]:
+        self.fetch_calls.append((list(urls), output_format, char_limit))
         if self._extract_side_effect is not None:
             raise self._extract_side_effect
-        if self._extract_factory is not None:
-            return self._extract_factory(urls, output_format, char_limit)
+        if self._fetch_factory is not None:
+            return self._fetch_factory(urls, output_format, char_limit)
         return [
-            WebExtractItem(
+            WebFetchItem(
                 url=url,
                 title=f"title-{url}",
                 content=f"content-{url}",
@@ -202,12 +202,12 @@ def test_web_tools_use_generic_minimal_ui_entries() -> None:
     assert '"description":"desc"' in observation.content
 
 
-def test_web_extract_ui_data_uses_generic_entries_without_document_content() -> None:
+def test_web_fetch_ui_data_uses_generic_entries_without_document_content() -> None:
     """正文仍供模型使用，但 UI data 只使用通用 entries。"""
 
     client = FakeClient(
-        extract_factory=lambda urls, fmt, cl: [
-            WebExtractItem(
+        fetch_factory=lambda urls, fmt, cl: [
+            WebFetchItem(
                 url=urls[0],
                 title="title",
                 content="private document body",
@@ -215,12 +215,12 @@ def test_web_extract_ui_data_uses_generic_entries_without_document_content() -> 
             )
         ],
     )
-    observation = WebExtractTool(client, resolver=_public_resolver).execute(
+    observation = WebFetchTool(client, resolver=_public_resolver).execute(
         urls=["https://example.com/docs"]
     )
 
     assert observation.display_data == {
-        "kind": "web-extract-urls",
+        "kind": "web-fetch-urls",
         "partial": False,
         "urls": [{"url": "https://example.com/docs"}],
     }
@@ -333,7 +333,7 @@ def test_extract_empty_urls_returns_empty_list() -> None:
 
     client = FirecrawlClient(api_key="dummy")
 
-    assert client.extract([], "markdown", 1000) == []
+    assert client.fetch([], "markdown", 1000) == []
 
 
 def test_post_transport_error_is_logged_and_propagated(
@@ -522,7 +522,7 @@ def test_post_success_logs_info_and_not_response_body(
 def test_scrape_one_page_failure_logs_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """_scrape_one 单页失败时写 warning 级 web_extract_page_failed，且 data 含失败 url（潜在缺陷：
+    """_scrape_one 单页失败时写 warning 级 web_fetch_page_failed，且 data 含失败 url（潜在缺陷：
     部分失败无日志，事后无法定位是哪一页因何失败）。"""
 
     api_key = "AKIA-SUPER-SECRET-KEY-123"
@@ -539,9 +539,9 @@ def test_scrape_one_page_failure_logs_warning(
     warnings = [
         r
         for r in caplog.records
-        if r.levelno == logging.WARNING and r.msg == "web_extract_page_failed"
+        if r.levelno == logging.WARNING and r.msg == "web_fetch_page_failed"
     ]
-    assert warnings, "expected web_extract_page_failed warning record"
+    assert warnings, "expected web_fetch_page_failed warning record"
     assert warnings[0].data["url"] == bad_url
     assert "boom on page" in warnings[0].data["error"]
     full_text = _log_full_text(caplog.records)
@@ -571,7 +571,7 @@ def test_scrape_applies_char_limit_and_truncated_flag(
     }
     client = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
 
-    items = client.extract(["https://e.com/p"], "markdown", char_limit=10)
+    items = client.fetch(["https://e.com/p"], "markdown", char_limit=10)
 
     assert len(items) == 1
     assert items[0].content == "x" * 10
@@ -593,7 +593,7 @@ def test_scrape_not_truncated_when_within_limit(
     }
     client = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
 
-    items = client.extract(["https://e.com/p"], "markdown", char_limit=100)
+    items = client.fetch(["https://e.com/p"], "markdown", char_limit=100)
 
     assert items[0].truncated is False
 
@@ -616,7 +616,7 @@ def test_scrape_strips_metadata_noise_keys(monkeypatch: pytest.MonkeyPatch) -> N
     }
     client = _FakeFirecrawl(post_impl=lambda endpoint, body: payload)
 
-    items = client.extract(["https://e.com/p"], "markdown", char_limit=100)
+    items = client.fetch(["https://e.com/p"], "markdown", char_limit=100)
 
     metadata = items[0].metadata
     assert "rawHtml" not in metadata
@@ -644,7 +644,7 @@ def test_scrape_preserves_order_for_multiple_urls(
 
     client = _FakeFirecrawl(post_impl=_fake_post)
 
-    items = client.extract(urls, "markdown", char_limit=100)
+    items = client.fetch(urls, "markdown", char_limit=100)
 
     assert [item.url for item in items] == urls
 
@@ -671,7 +671,7 @@ def test_scrape_single_page_failure_records_error_not_raise(
 
     client = _FakeFirecrawl(post_impl=_fake_post)
 
-    items = client.extract([good_url, bad_url], "markdown", char_limit=100)
+    items = client.fetch([good_url, bad_url], "markdown", char_limit=100)
 
     by_url = {item.url: item for item in items}
     assert by_url[good_url].error == ""
@@ -685,7 +685,7 @@ def test_scrape_missing_data_object_records_error(
 
     client = _FakeFirecrawl(post_impl=lambda endpoint, body: {"success": True})
 
-    items = client.extract(["https://e.com/p"], "markdown", char_limit=100)
+    items = client.fetch(["https://e.com/p"], "markdown", char_limit=100)
 
     assert items[0].error  # 非空错误描述
 
@@ -699,7 +699,7 @@ def test_clean_metadata_removes_noise_and_handles_non_dict() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. WebExtractTool.execute：全失败 / 部分失败 / 去重
+# 4. WebFetchTool.execute：全失败 / 部分失败 / 去重
 # ---------------------------------------------------------------------------
 
 
@@ -707,12 +707,12 @@ def test_extract_all_pages_fail_returns_error_retryable_true() -> None:
     """全部页失败时 execute 返回 status=error 且 retryable=True（潜在缺陷：重试语义）。"""
 
     failed = [
-        WebExtractItem(
+        WebFetchItem(
             url="https://e.com/1", title="", content="", metadata={}, error="boom1"
         )
     ]
-    client = FakeClient(extract_factory=lambda urls, fmt, cl: failed)
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    client = FakeClient(fetch_factory=lambda urls, fmt, cl: failed)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://e.com/1"])
 
@@ -727,13 +727,13 @@ def test_extract_partial_success_marks_partial_and_failed_count() -> None:
 
     def _factory(req_urls, fmt, cl):
         return [
-            WebExtractItem(url=urls[0], title="t", content="ok", metadata={}),
-            WebExtractItem(url=urls[1], title="", content="", metadata={}, error="fail2"),
-            WebExtractItem(url=urls[2], title="t", content="ok2", metadata={}),
+            WebFetchItem(url=urls[0], title="t", content="ok", metadata={}),
+            WebFetchItem(url=urls[1], title="", content="", metadata={}, error="fail2"),
+            WebFetchItem(url=urls[2], title="t", content="ok2", metadata={}),
         ]
 
-    client = FakeClient(extract_factory=_factory)
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    client = FakeClient(fetch_factory=_factory)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
 
@@ -764,11 +764,11 @@ def test_extract_full_success_no_partial_field() -> None:
 
     def _factory(req_urls, fmt, cl):
         return [
-            WebExtractItem(url=u, title="t", content="c", metadata={}) for u in req_urls
+            WebFetchItem(url=u, title="t", content="c", metadata={}) for u in req_urls
         ]
 
-    client = FakeClient(extract_factory=_factory)
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    client = FakeClient(fetch_factory=_factory)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
     import json
@@ -783,22 +783,22 @@ def test_extract_dedup_requests_each_url_once() -> None:
     """重复 URL 在请求前去重，client.extract 仅被调用一次且 URL 唯一。"""
 
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://e.com/a", "https://e.com/a", "https://e.com/a"])
 
     assert obs.status == "success"
-    assert len(client.extract_calls) == 1
-    called_urls = client.extract_calls[0][0]
+    assert len(client.fetch_calls) == 1
+    called_urls = client.fetch_calls[0][0]
     assert called_urls == ["https://e.com/a"]
 
 
-def test_extract_url_count_over_limit_returns_error() -> None:
-    """URL 数超过 Constant.Web.EXTRACT_URL_LIMIT_MAX 时返回确定性错误（潜在缺陷：越界保护）。"""
+def test_fetch_url_count_over_limit_returns_error() -> None:
+    """URL 数超过 Constant.Web.FETCH_URL_LIMIT_MAX 时返回确定性错误（潜在缺陷：越界保护）。"""
 
-    urls = [f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)]
+    urls = [f"https://e.com/{i}" for i in range(Constant.Web.FETCH_URL_LIMIT_MAX + 1)]
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
 
@@ -846,7 +846,7 @@ def test_url_safety_allows_proxy_fake_ip_resolution(
     """主机名解析到代理 fake-ip 占位段（198.18.0.0/15）时放行，并写 web_url_fake_ip_allowed。
 
     潜在缺陷：把 fake-ip 占位地址当成内网 ⇒ 开启系统代理（Clash 系）的环境下所有域名
-    都被拦，web_extract 完全不可用。放行必须留下可见日志，供事后审计这次的放宽。
+    都被拦，web_fetch 完全不可用。放行必须留下可见日志，供事后审计这次的放宽。
     """
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
@@ -887,20 +887,20 @@ def test_url_safety_blocks_when_fake_ip_mixed_with_private_address() -> None:
     assert "private" in reason or "internal" in reason
 
 
-def test_web_extract_succeeds_behind_fake_ip_proxy() -> None:
-    """fake-ip 代理环境下 web_extract 能真正走到客户端（潜在缺陷：全域名被拦）。
+def test_web_fetch_succeeds_behind_fake_ip_proxy() -> None:
+    """fake-ip 代理环境下 web_fetch 能真正走到客户端（潜在缺陷：全域名被拦）。
 
     这是本次缺陷的端到端回归：解析结果为 fake-ip 占位段时必须照常提取，而不是在
     安全检查阶段就返回 Blocked。
     """
 
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=lambda h: ["198.18.0.67"])
+    tool = WebFetchTool(client, resolver=lambda h: ["198.18.0.67"])
 
     obs = tool.execute(urls=["https://example.com/page"])
 
     assert obs.status == "success"
-    assert len(client.extract_calls) == 1
+    assert len(client.fetch_calls) == 1
 
 
 def test_url_safety_blocks_non_http_scheme() -> None:
@@ -953,11 +953,11 @@ def test_normalize_url_adds_https_when_scheme_missing() -> None:
     assert normalize_url_for_request("https://example.com") == "https://example.com"
 
 
-def test_web_extract_blocks_sensitive_query_param() -> None:
-    """web_extract 对带 token 的 URL 返回 'Blocked:' 错误（潜在缺陷：端到端拦截）。"""
+def test_web_fetch_blocks_sensitive_query_param() -> None:
+    """web_fetch 对带 token 的 URL 返回 'Blocked:' 错误（潜在缺陷：端到端拦截）。"""
 
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://example.com/?token=abc"])
 
@@ -965,11 +965,11 @@ def test_web_extract_blocks_sensitive_query_param() -> None:
     assert obs.content.startswith("Blocked:")
 
 
-def test_web_extract_blocks_non_http_scheme() -> None:
-    """web_extract 对非 http(s) 协议返回 'Blocked:' 错误。"""
+def test_web_fetch_blocks_non_http_scheme() -> None:
+    """web_fetch 对非 http(s) 协议返回 'Blocked:' 错误。"""
 
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["ftp://example.com/file"])
 
@@ -977,11 +977,11 @@ def test_web_extract_blocks_non_http_scheme() -> None:
     assert obs.content.startswith("Blocked:")
 
 
-def test_web_extract_blocks_userinfo() -> None:
-    """web_extract 对带凭据的 URL 返回 'Blocked:' 错误。"""
+def test_web_fetch_blocks_userinfo() -> None:
+    """web_fetch 对带凭据的 URL 返回 'Blocked:' 错误。"""
 
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["http://user:pass@example.com/"])
 
@@ -1007,10 +1007,10 @@ def test_search_unconfigured_client_gives_actionable_message() -> None:
 
 
 def test_extract_unconfigured_client_gives_actionable_message() -> None:
-    """Firecrawl 未配置时，web_extract 应给出 actionable 文案（潜在缺陷：可执行指引）。"""
+    """Firecrawl 未配置时，web_fetch 应给出 actionable 文案（潜在缺陷：可执行指引）。"""
 
     client = FirecrawlClient(api_key="", base_url="")
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://example.com/"])
 
@@ -1023,14 +1023,14 @@ def test_extract_unconfigured_client_gives_actionable_message() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_web_extract_args_schema_constraints() -> None:
-    """WebExtractArgs schema：items 为字符串、maxItems 对齐上限、format 不含 text。"""
+def test_web_fetch_args_schema_constraints() -> None:
+    """WebFetchArgs schema：items 为字符串、maxItems 对齐上限、format 不含 text。"""
 
-    schema = WebExtractArgs.model_json_schema()
+    schema = WebFetchArgs.model_json_schema()
     urls_prop = schema["properties"]["urls"]
 
     assert urls_prop["items"] == {"type": "string"}
-    assert urls_prop["maxItems"] == Constant.Web.EXTRACT_URL_LIMIT_MAX
+    assert urls_prop["maxItems"] == Constant.Web.FETCH_URL_LIMIT_MAX
 
     format_prop = schema["properties"]["format"]
     enum = format_prop.get("enum") or []
@@ -1048,14 +1048,14 @@ def test_web_search_args_limit_max_equals_constant() -> None:
     assert limit_prop["maximum"] == Constant.Web.SEARCH_LIMIT_MAX
 
 
-def test_web_extract_args_strict_rejects_type_mismatch() -> None:
+def test_web_fetch_args_strict_rejects_type_mismatch() -> None:
     """strict 模式下类型不符应校验失败（潜在缺陷：禁止隐式转换）。"""
 
     with pytest.raises(ValidationError):
-        WebExtractArgs(urls="not-a-list")  # type: ignore[arg-type]
+        WebFetchArgs(urls="not-a-list")  # type: ignore[arg-type]
 
     with pytest.raises(ValidationError):
-        WebExtractArgs(urls=["https://e.com"], format=123)  # type: ignore[arg-type]
+        WebFetchArgs(urls=["https://e.com"], format=123)  # type: ignore[arg-type]
 
 
 def test_web_search_args_strict_rejects_type_mismatch() -> None:
@@ -1085,19 +1085,19 @@ def test_web_search_chinese_not_escaped() -> None:
     assert "中文标题" in obs.content
 
 
-def test_web_extract_chinese_not_escaped() -> None:
+def test_web_fetch_chinese_not_escaped() -> None:
     """中文提取结果序列化后不被转义。"""
 
     def _factory(req_urls, fmt, cl):
         return [
-            WebExtractItem(
+            WebFetchItem(
                 url=u, title="中文标题", content="中文正文内容", metadata={"k": "值"}
             )
             for u in req_urls
         ]
 
-    client = FakeClient(extract_factory=_factory)
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    client = FakeClient(fetch_factory=_factory)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://e.com/1"])
 
@@ -1116,7 +1116,7 @@ def test_extract_unavailable_error_retryable_false() -> None:
     client = FakeClient(
         extract_side_effect=FirecrawlUnavailableError("not configured")
     )
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://example.com/"])
 
@@ -1129,7 +1129,7 @@ def test_extract_request_error_retryable_true() -> None:
     client = FakeClient(
         extract_side_effect=FirecrawlRequestError("remote failed")
     )
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://example.com/"])
 
@@ -1168,16 +1168,16 @@ def test_search_request_error_retryable_true() -> None:
 
 
 def test_build_definitions_return_tool_definition() -> None:
-    """build_web_search_definition / build_web_extract_definition 返回可用定义（不触网）。"""
+    """build_web_search_definition / build_web_fetch_definition 返回可用定义（不触网）。"""
 
-    from app.core.tool.handler.web_extract import build_web_extract_definition
+    from app.core.tool.handler.web_fetch import build_web_fetch_definition
     from app.core.tool.handler.web_search import build_web_search_definition
 
     search_def = build_web_search_definition()
-    extract_def = build_web_extract_definition()
+    extract_def = build_web_fetch_definition()
 
     assert search_def is not None and extract_def is not None
     assert search_def.name == "web_search"
-    assert extract_def.name == "web_extract"
+    assert extract_def.name == "web_fetch"
     assert search_def.args_model is WebSearchArgs
-    assert extract_def.args_model is WebExtractArgs
+    assert extract_def.args_model is WebFetchArgs

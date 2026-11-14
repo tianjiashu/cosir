@@ -2,13 +2,13 @@
 
 被测对象：
 - app/core/tool/web/url_safety.py::is_safe_public_url
-- app/core/tool/web/web_extract.py::WebExtractTool.execute
+- app/core/tool/web/web_fetch.py::WebFetchTool.execute
 
 本次修复语义：主机名解析到代理 fake-ip 占位段 198.18.0.0/15（Clash/Mihomo fake-ip）
 时不再判为内网 —— 但仅当 URL 主机名不是 IP 字面量时豁免；IP 字面量 host 仍按原规则
 拦截。放行写 web_url_fake_ip_allowed(WARNING)，拦截写 web_url_address_blocked(WARNING)。
 
-本文件只新增测试，不修改任何业务代码。复用 test_web_search_extract_tools.py 的
+本文件只新增测试，不修改任何业务代码。复用 test_web_search_fetch_tools.py 的
 FakeClient / _public_resolver / _log_full_text 等 node_helper。
 """
 
@@ -20,8 +20,8 @@ import pytest
 from app.config.constant import Constant
 from app.core.tool.handler.web import url_safety
 from app.core.tool.handler.web.url_safety import is_safe_public_url
-from app.core.tool.handler.web_extract import WebExtractTool
-from tests.test_web_search_extract_tools import (
+from app.core.tool.handler.web_fetch import WebFetchTool
+from tests.test_web_search_fetch_tools import (
     FakeClient,
     _log_full_text,
     _public_resolver,
@@ -594,7 +594,7 @@ def test_blocked_log_truncates_address_list_to_max(
 
 
 # ---------------------------------------------------------------------------
-# 7. 端到端：WebExtractTool.execute 在 fake-ip resolver 下必须真的调用 Firecrawl 客户端
+# 7. 端到端：WebFetchTool.execute 在 fake-ip resolver 下必须真的调用 Firecrawl 客户端
 # ---------------------------------------------------------------------------
 
 
@@ -603,13 +603,13 @@ def test_execute_reaches_client_under_fake_ip_resolver() -> None:
     返回 Blocked（本次缺陷的端到端回归）。"""
 
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_fake_ip_resolver("198.18.0.67"))
+    tool = WebFetchTool(client, resolver=_fake_ip_resolver("198.18.0.67"))
 
     obs = tool.execute(urls=["https://example.com/page", "https://example.org/other"])
 
     assert obs.status == "success"
-    assert len(client.extract_calls) == 1
-    assert client.extract_calls[0][0] == [
+    assert len(client.fetch_calls) == 1
+    assert client.fetch_calls[0][0] == [
         "https://example.com/page",
         "https://example.org/other",
     ]
@@ -620,14 +620,14 @@ def test_execute_blocked_before_client_when_mixed_internal() -> None:
     绝不被调用（潜在缺陷：先调用后校验，SSRF 实际已发出）。"""
 
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_fake_ip_resolver("198.18.0.67", "10.0.0.5")
+    tool = WebFetchTool(client, resolver=_fake_ip_resolver("198.18.0.67", "10.0.0.5")
     )
 
     obs = tool.execute(urls=["https://example.com/page"])
 
     assert obs.status == "error"
     assert obs.content.startswith("Blocked:")
-    assert client.extract_calls == [], "被拦 URL 绝不能触发 客户端 调用"
+    assert client.fetch_calls == [], "被拦 URL 绝不能触发 客户端 调用"
 
 
 def test_execute_rejects_fake_ip_literal_before_client() -> None:
@@ -635,11 +635,11 @@ def test_execute_rejects_fake_ip_literal_before_client() -> None:
     字面量被豁免而放行到 客户端）。"""
 
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_fake_ip_resolver("198.18.0.67"))
+    tool = WebFetchTool(client, resolver=_fake_ip_resolver("198.18.0.67"))
 
     obs = tool.execute(urls=["http://198.18.0.67/"])
     assert obs.status == "error"
-    assert client.extract_calls == []
+    assert client.fetch_calls == []
 
 
 def test_execute_fail_closed_when_resolver_errors() -> None:
@@ -651,13 +651,13 @@ def test_execute_fail_closed_when_resolver_errors() -> None:
     def _boom(hostname: str) -> list[str]:
         raise OSError("dns down")
 
-    tool = WebExtractTool(client, resolver=_boom)
+    tool = WebFetchTool(client, resolver=_boom)
 
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
     assert obs.content.startswith("Blocked:")
-    assert client.extract_calls == []
+    assert client.fetch_calls == []
 
 
 def test_execute_does_not_leak_secret_url_into_logs(
@@ -668,7 +668,7 @@ def test_execute_does_not_leak_secret_url_into_logs(
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
     secret_url = "https://example.com/page?api_key=E2ELEAKCANARY999"  # noqa: S105 - 泄漏检测用假密钥
 
     obs = tool.execute(urls=[secret_url])
@@ -686,17 +686,17 @@ def test_execute_partial_failure_under_fake_ip_resolver_keeps_success() -> None:
     urls = ["https://example.com/ok", "https://example.com/bad"]
 
     def _factory(req_urls, fmt, cl):
-        from app.core.tool.handler.web.firecrawl_client import WebExtractItem
+        from app.core.tool.handler.web.firecrawl_client import WebFetchItem
 
         return [
-            WebExtractItem(url=urls[0], title="t", content="ok", metadata={}),
-            WebExtractItem(url=urls[1], title="", content="", metadata={}, error="boom"),
+            WebFetchItem(url=urls[0], title="t", content="ok", metadata={}),
+            WebFetchItem(url=urls[1], title="", content="", metadata={}, error="boom"),
         ]
 
-    client = FakeClient(extract_factory=_factory)
-    tool = WebExtractTool(client, resolver=_fake_ip_resolver("198.18.0.67"))
+    client = FakeClient(fetch_factory=_factory)
+    tool = WebFetchTool(client, resolver=_fake_ip_resolver("198.18.0.67"))
 
     obs = tool.execute(urls=urls)
 
     assert obs.status == "success"
-    assert len(client.extract_calls) == 1
+    assert len(client.fetch_calls) == 1

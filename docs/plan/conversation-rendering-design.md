@@ -47,7 +47,7 @@
 | B4 | 「等待用户决定」没有显式字段，`pending` 同时表示「准备执行」与「等你操作」，各卡片自行推断 | `browser-page-tool.tsx:37` | Transport 契约 / 中高 | 处理 |
 | B5 | 委派卡片的 `display_data.status` 被当作子 Run 状态镜像，由 state service 写回并用 SQL `json_set` 改写，与「展示数据不是事实源」相抵；而应用级任务状态推送已覆盖子任务 | `apps/backend/app/storage/crud/conversation_task_context_crud.py:296`；`apps/backend/app/storage/queries/task_status_queries.py:35` | 事实所有权 / 高 | 处理 |
 | B6 | 参数只在 running 时下发、不流式；排队与生成参数期间卡片只有 verb | `apps/backend/app/core/tool/execute/tool_executor.py:84` | 事件契约 / 高 | 记下（§10） |
-| B7 | 契约文档多处漂移：`deferred` 应为 `background`、`web_extract` 声明不符、漏列 10 个工具、variant 数量、过时章节；前端读后端从不产出的 `truncated` / `stream_truncated` | 契约 `:173`、`:180`、`:188`、`:408`、`:452`；`terminal-tool.tsx:75` | 文档治理 / 高 | 契约重写时一并修正 |
+| B7 | 契约文档多处漂移：`deferred` 应为 `background`、`web_fetch` 声明不符、漏列 10 个工具、variant 数量、过时章节；前端读后端从不产出的 `truncated` / `stream_truncated` | 契约 `:173`、`:180`、`:188`、`:408`、`:452`；`terminal-tool.tsx:75` | 文档治理 / 高 | 契约重写时一并修正 |
 | A1 | 主 Agent 提示词没有工具选择、叙述、工作方式指令；本机预设与全局层文件为空，实际只有三层约 4.5K 字符 | `apps/backend/app/core/context/system_prompt_builder.py:110`、`:421`；`apps/backend/app/core/agents/define_agents.py:101` | 提示词 / 高 | 处理 |
 | A2 | `read_file` 描述写「约 100K 字符」，实际全局预算 20K、超出从中间截掉；不报总行数、模型看不到 END——模型因此先 `wc -l` 再 `sed -n` | `apps/backend/app/tools/tool_handler/read_file.py:43`；`apps/backend/app/config/constant.py:378`；`core/tool/execute/tool_output_budget.py:61`；Task 42 一次读取被删 56 行 | 工具契约 / 高 | 处理 |
 | A3 | 并行发出的只读调用实际串行执行，每个一张卡；shell 一条命令能做 N 件事 | `apps/backend/app/core/workflow/node_helper/tool_batch_runner.py:56`；`parallel_mode` 默认串行，只有 `delegate_task` 并行 | 工具定义 / 高 | 处理 |
@@ -331,7 +331,7 @@ class ToolDisplayHints:
 **(2) 修正把模型推向 shell 的工具缺陷**
 
 - `read_file`：在工具内按字符预算（低于全局 20K）自行分页，不再被中段截断；结果头写 `lines a–b of N`，读到结尾给 `[end of file]`，否则给下一段 `offset`；描述改为真实上限（A2）。
-- 只读工具并行执行：`read_file`、`read_image`、`search_content`、`find_files`、`list_directory`、`web_search`、`web_extract` 声明 `parallel_mode="parallel"`（A3）。模型并行发出的读取真正并行，界面上是同一时刻出现的几行。
+- 只读工具并行执行：`read_file`、`read_image`、`search_content`、`find_files`、`list_directory`、`web_search`、`web_fetch` 声明 `parallel_mode="parallel"`（A3）。模型并行发出的读取真正并行，界面上是同一时刻出现的几行。
 - `list_directory` 输出相对路径（A7）；`terminal_start` 描述改正（A6）；运行时上下文改正读路径边界的说法（A5）；`execute_terminal` 描述删掉「把相关步骤串在一条命令里」的引导，改为说明它不用于读文件和搜索（A4）。
 
 **(3) 不做的 Agent 侧改动**（见 §10）：多目标读取、ripgrep 后端、放宽 strict、剥离历史推理、计划工具（待确认）。

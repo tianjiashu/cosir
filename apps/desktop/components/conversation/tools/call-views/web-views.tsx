@@ -21,8 +21,8 @@ export const webSearchView: CallView = (data) => {
   };
 };
 
-/** `web-extract-urls`：只列出抓取了哪些站点，抓取正文不进入卡片；目标已在行上，这里不再写元信息。 */
-export const webExtractView: CallView = (data) => {
+/** `web-fetch-urls`：只列出抓取了哪些站点，抓取正文不进入卡片；目标已在行上，这里不再写元信息。 */
+export const webFetchView: CallView = (data) => {
   return {
     detail: listDetail(data, () => withUrl(data.urls), "未找到匹配", (item, index) => {
       const rawUrl = item.url as string;

@@ -1,4 +1,4 @@
-"""Firecrawl 客户端：``web_search`` 与 ``web_extract`` 唯一的远端实现，两个工具直接调用。
+"""Firecrawl 客户端：``web_search`` 与 ``web_fetch`` 唯一的远端实现，两个工具直接调用。
 
 只负责请求 Firecrawl 并把响应归一化为结果值对象；URL 安全校验、结果投影与输出预算归工具。
 
@@ -33,8 +33,8 @@ class WebSearchItem:
 
 
 @dataclass(frozen=True, slots=True)
-class WebExtractItem:
-    """一页网页正文提取结果。
+class WebFetchItem:
+    """一页网页抓取结果。
 
     ``content`` 已按调用方的 ``char_limit`` 截断，``truncated`` 标记原文是否被裁剪，使模型能区分
     「页面就这么短」与「正文被截断」。
@@ -57,7 +57,7 @@ class FirecrawlRequestError(RuntimeError):
 
 
 class FirecrawlClient:
-    """通过 Firecrawl API 执行网页搜索与正文提取。"""
+    """通过 Firecrawl API 执行网页搜索与网页抓取。"""
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None) -> None:
         """读取 ``FIRECRAWL_API_KEY`` / ``FIRECRAWL_API_URL``（显式传入优先）。
@@ -108,12 +108,12 @@ class FirecrawlClient:
             )
         ]
 
-    def extract(
+    def fetch(
         self,
         urls: list[str],
         output_format: str,
         char_limit: int,
-    ) -> list[WebExtractItem]:
+    ) -> list[WebFetchItem]:
         """并发调用 Firecrawl Scrape API 逐页提取网页正文。
 
         参数:
@@ -150,7 +150,7 @@ class FirecrawlClient:
         url: str,
         output_format: str,
         char_limit: int,
-    ) -> WebExtractItem:
+    ) -> WebFetchItem:
         """抓取单个 URL 并归一化为提取结果。
 
         参数:
@@ -175,13 +175,13 @@ class FirecrawlClient:
             # 单页失败必须落日志：部分失败时上层返回 success，模型侧看不到堆栈，
             # 缺少此条记录将无法事后定位是哪一页、因何失败。
             log.warning(
-                "web_extract_page_failed",
+                "web_fetch_page_failed",
                 extra={
-                    "msg": "网页正文提取单页失败",
+                    "msg": "网页抓取单页失败",
                     "data": {"url": url, "format": output_format, "error": str(exc)},
                 },
             )
-            return WebExtractItem(
+            return WebFetchItem(
                 url=url,
                 title="",
                 content="",
@@ -190,7 +190,7 @@ class FirecrawlClient:
             )
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, dict):
-            return WebExtractItem(
+            return WebFetchItem(
                 url=url,
                 title="",
                 content="",
@@ -200,12 +200,12 @@ class FirecrawlClient:
         metadata = _clean_metadata(data.get("metadata")) or {
             key: value
             for key, value in data.items()
-            if key not in Constant.Web.FIRECRAWL_EXTRACT_MAPPED_FIELDS
+            if key not in Constant.Web.FIRECRAWL_FETCH_MAPPED_FIELDS
         }
         content = str(
             data.get(output_format) or data.get("markdown") or data.get("content") or ""
         )
-        return WebExtractItem(
+        return WebFetchItem(
             url=str(data.get("url") or url),
             title=str(metadata.get("title", "")),
             content=content[:char_limit],
@@ -220,7 +220,7 @@ class FirecrawlClient:
         委托 ``self._proxy_http_client``（``ProxyHttpClient``）持有缓存：每次取 client 都会重新
         解析一次系统代理，仅当解析到的代理与已缓存 client 所用代理不一致时才关闭旧 client 并重建，
         从而让系统代理开关变化在**不重启后端进程**的情况下对后续 web 请求实时生效。
-        ``search`` / ``extract`` 共享同一实例。
+        ``search`` / ``fetch`` 共享同一实例。
 
         参数:
             无。

@@ -17,9 +17,10 @@ class WebSearchArgs(BaseModel):
     query: str = Field(
         min_length=1,
         description=(
-            "Search query to look up on the web. You may include search "
-            "operators such as site:example.com, filetype:pdf, intitle:word, -term, "
-            'or "exact phrase".'
+            "Search query, passed through to the search engine: operators such as "
+            'site:example.com, filetype:pdf, intitle:word, -term and "exact phrase" may work. '
+            "It goes to an external service, so do not put the user's personal details or "
+            "secrets in it."
         ),
     )
     limit: int = Field(

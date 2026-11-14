@@ -96,7 +96,7 @@ def test_description_states_the_real_budget_and_paging_facts() -> None:
 def test_read_only_tools_are_scheduled_in_parallel() -> None:
     """只读工具声明并行：模型一次发出的多个读取真正并发执行（设计文档 A3）。"""
 
-    from app.core.tool.handler.web_extract import WebExtractTool
+    from app.core.tool.handler.web_fetch import WebFetchTool
     from app.core.tool.handler.web_search import WebSearchTool
     from app.tools.tool_handler.find_files import FindFilesTool
     from app.tools.tool_handler.read_image import ReadImageTool
@@ -108,7 +108,7 @@ def test_read_only_tools_are_scheduled_in_parallel() -> None:
         SearchContentTool().to_definition(),
         FindFilesTool().to_definition(),
         WebSearchTool(object()).to_definition(),  # type: ignore[arg-type]
-        WebExtractTool(object()).to_definition(),  # type: ignore[arg-type]
+        WebFetchTool(object()).to_definition(),  # type: ignore[arg-type]
     ]
 
     assert {definition.parallel_mode for definition in definitions} == {"parallel"}

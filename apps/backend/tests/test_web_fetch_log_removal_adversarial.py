@@ -2,23 +2,23 @@
 
 背景与验证目标
 --------------
-本次改动对 ``app/core/tool/web/web_extract.py`` 的执行流水做了两件事：
+本次改动对 ``app/core/tool/web/web_fetch.py`` 的执行流水做了两件事：
 1. 删除 5 个「执行流水」日志事件，后续它们**绝不应再出现**：
-   ``web_extract_url_limit_exceeded``、``web_extract_urls_rejected``、
-   ``web_extract_started``、``web_extract_provider_completed``、
-   ``web_extract_completed``。
-2. 在删除 ``started``/``completed`` 事件后，仅保留 ``web_extract_all_pages_failed``
+   ``web_fetch_url_limit_exceeded``、``web_fetch_urls_rejected``、
+   ``web_fetch_started``、``web_fetch_provider_completed``、
+   ``web_fetch_completed``。
+2. 在删除 ``started``/``completed`` 事件后，仅保留 ``web_fetch_all_pages_failed``
    一条带 ``elapsed_ms`` 的耗时日志，并新增了 ``started = time.monotonic()`` 与
    ``content`` 局部变量。
 
 必须**行为不变**：各失败/成功路径下 ``ToolObservation`` 的
 ``status`` / ``content`` / ``display_data`` 与改动前一致。
 
-必须**保留**的日志事件：``web_extract_unconfigured``、
-``web_extract_failed``、``web_extract_all_pages_failed``、
-``web_extract_result_build_failed``（web_extract.py）；
+必须**保留**的日志事件：``web_fetch_unconfigured``、
+``web_fetch_failed``、``web_fetch_all_pages_failed``、
+``web_fetch_result_build_failed``（web_fetch.py）；
 ``web_url_address_blocked``、``web_url_fake_ip_allowed``（url_safety.py）；
-``web_extract_page_failed``（firecrawl_client.py）。
+``web_fetch_page_failed``（firecrawl_client.py）。
 
 对抗重点
 --------
@@ -28,7 +28,7 @@
 - 是否存在「删日志导致变量未定义 / 未使用」的路径（如 ``客户端``、``content``）。
 - 任何路径下日志都不得出现 URL 原文 / query 串 / 凭据。
 
-本文件复用 test_web_search_extract_tools.py 中的 FakeClient /
+本文件复用 test_web_search_fetch_tools.py 中的 FakeClient /
 _public_resolver，避免重复脚手架，且不触碰生产代码。
 """
 
@@ -45,10 +45,10 @@ from app.core.tool.handler.web.firecrawl_client import (
     FirecrawlClient,
     FirecrawlRequestError,
     FirecrawlUnavailableError,
-    WebExtractItem,
+    WebFetchItem,
 )
-from app.core.tool.handler.web_extract import WebExtractTool
-from tests.test_web_search_extract_tools import (
+from app.core.tool.handler.web_fetch import WebFetchTool
+from tests.test_web_search_fetch_tools import (
     FakeClient,
     _log_full_text,
     _public_resolver,
@@ -60,19 +60,19 @@ from tests.test_web_search_extract_tools import (
 
 # 被删除的 5 个执行流水事件：任何路径下都不得再被记录。
 REMOVED_EVENTS: tuple[str, ...] = (
-    "web_extract_url_limit_exceeded",
-    "web_extract_urls_rejected",
-    "web_extract_started",
-    "web_extract_provider_completed",
-    "web_extract_completed",
+    "web_fetch_url_limit_exceeded",
+    "web_fetch_urls_rejected",
+    "web_fetch_started",
+    "web_fetch_provider_completed",
+    "web_fetch_completed",
 )
 
 # 明确保留的事件：对应失败路径必须仍被记录。
-KEPT_WEB_EXTRACT_EVENTS: tuple[str, ...] = (
-    "web_extract_unconfigured",
-    "web_extract_failed",
-    "web_extract_all_pages_failed",
-    "web_extract_result_build_failed",
+KEPT_WEB_FETCH_EVENTS: tuple[str, ...] = (
+    "web_fetch_unconfigured",
+    "web_fetch_failed",
+    "web_fetch_all_pages_failed",
+    "web_fetch_result_build_failed",
 )
 
 KEPT_URL_SAFETY_EVENTS: tuple[str, ...] = (
@@ -80,11 +80,11 @@ KEPT_URL_SAFETY_EVENTS: tuple[str, ...] = (
     "web_url_fake_ip_allowed",
 )
 
-KEPT_FIRECRAWL_EVENTS: tuple[str, ...] = ("web_extract_page_failed",)
+KEPT_FIRECRAWL_EVENTS: tuple[str, ...] = ("web_fetch_page_failed",)
 
 # 需要断言「绝不出现在任何日志」的五类被删事件名的统一正则（用于反向扫描）。
 _REMOVED_EVENT_RE = re.compile(
-    r"web_extract_(url_limit_exceeded|urls_rejected|started|provider_completed|completed)"
+    r"web_fetch_(url_limit_exceeded|urls_rejected|started|provider_completed|completed)"
 )
 
 
@@ -129,20 +129,20 @@ def test_over_limit_returns_error_not_silent_success_and_no_removed_event(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """test_purpose: 删掉 url_limit_exceeded 日志后，超限分支必须**仍返回错误**（不是静默成功），
-    且不得再产生 web_extract_url_limit_exceeded（潜在缺陷：删日志时误删了 return / 分支体）。"""
+    且不得再产生 web_fetch_url_limit_exceeded（潜在缺陷：删日志时误删了 return / 分支体）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
-    urls = [f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)]
+    urls = [f"https://e.com/{i}" for i in range(Constant.Web.FETCH_URL_LIMIT_MAX + 1)]
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
 
     assert obs.status == "error"
-    assert str(Constant.Web.EXTRACT_URL_LIMIT_MAX) in obs.content
+    assert str(Constant.Web.FETCH_URL_LIMIT_MAX) in obs.content
     # 超限在被拦时绝不能调用 客户端（无网络副作用）。
-    assert client.extract_calls == []
-    assert _find(caplog.records, "web_extract_url_limit_exceeded") == []
+    assert client.fetch_calls == []
+    assert _find(caplog.records, "web_fetch_url_limit_exceeded") == []
     _assert_no_removed_events(caplog.records)
 
 
@@ -150,14 +150,14 @@ def test_exactly_at_limit_is_allowed_not_rejected() -> None:
     """test_purpose: 边界值 —— URL 数**恰好等于**上限必须放行（潜在缺陷：off-by-one 把 `<=` 写成 `<`，
     与「删除超限日志」相伴的分支改写风险）。"""
 
-    urls = [f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX)]
+    urls = [f"https://e.com/{i}" for i in range(Constant.Web.FETCH_URL_LIMIT_MAX)]
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
 
     assert obs.status == "success"
-    assert len(client.extract_calls) == 1
+    assert len(client.fetch_calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -184,16 +184,16 @@ def test_security_rejection_paths_behavior_unchanged(
     （潜在缺陷：删日志时改坏了 _blocked_url_error 的字段填充或去掉了 return）。"""
 
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=[url])
 
     assert obs.status == "error"
     assert obs.content.startswith("Blocked:")
     assert error_fragment in obs.content
-    assert client.extract_calls == []
+    assert client.fetch_calls == []
     # 错误 UI 通道只承载稳定短提示，不承载完整错误原因。
-    assert obs.display_data == {"status_hint": "提取失败"}
+    assert obs.display_data == {"status_hint": "抓取失败"}
 
 
 def test_ip_literal_internal_blocked_with_system_resolver() -> None:
@@ -203,13 +203,13 @@ def test_ip_literal_internal_blocked_with_system_resolver() -> None:
 
     for url in ("http://127.0.0.1/", "http://10.0.0.5/"):
         client = FakeClient()
-        tool = WebExtractTool(client, resolver=None)
+        tool = WebFetchTool(client, resolver=None)
 
         obs = tool.execute(urls=[url])
 
         assert obs.status == "error", f"{url} 应被拦截"
         assert obs.content.startswith("Blocked:")
-        assert client.extract_calls == []
+        assert client.fetch_calls == []
 
 
 def test_injected_resolver_can_allow_ip_literal_host_pre_existing_behavior() -> None:
@@ -219,33 +219,33 @@ def test_injected_resolver_can_allow_ip_literal_host_pre_existing_behavior() -> 
     「字面量一定被拦」而在别处建立错误假设（也顺带说明本文件其它用例为何对字面量改用系统解析）。"""
 
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=lambda h: ["8.8.8.8"])
+    tool = WebFetchTool(client, resolver=lambda h: ["8.8.8.8"])
 
     obs = tool.execute(urls=["http://127.0.0.1/"])
 
     # 当前事实：注入的解析结果覆盖了字面量的真实内网属性。
     assert obs.status == "success"
-    assert len(client.extract_calls) == 1
+    assert len(client.fetch_calls) == 1
 
 
 def test_client_unavailable_path_behavior_and_kept_event(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """test_purpose: 客户端 抛 FirecrawlUnavailableError 时行为不变（retryable=False、
-    error 为异常文本），且 web_extract_unconfigured 仍被记录（潜在缺陷：删日志误伤保留事件）。"""
+    error 为异常文本），且 web_fetch_unconfigured 仍被记录（潜在缺陷：删日志误伤保留事件）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     client = FakeClient(
         extract_side_effect=FirecrawlUnavailableError("not configured here"),
     )
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
     assert obs.content.startswith("not configured here")
-    kept = _find(caplog.records, "web_extract_unconfigured")
-    assert kept, "客户端 未配置路径必须保留 web_extract_unconfigured"
+    kept = _find(caplog.records, "web_fetch_unconfigured")
+    assert kept, "客户端 未配置路径必须保留 web_fetch_unconfigured"
     _assert_no_removed_events(caplog.records)
 
 
@@ -253,21 +253,21 @@ def test_client_generic_exception_path_behavior_and_kept_event(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """test_purpose: 客户端 抛通用异常时行为不变（retryable=True、error 含 客户端 名），
-    且 web_extract_failed 仍被记录、异常细节不外泄到观测（潜在缺陷：删日志误伤保留事件）。"""
+    且 web_fetch_failed 仍被记录、异常细节不外泄到观测（潜在缺陷：删日志误伤保留事件）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     client = FakeClient( extract_side_effect=RuntimeError("boom-detail-should-not-leak")
     )
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://example.com/"])
 
     assert obs.status == "error"
-    assert obs.content.startswith("Web extraction failed.")
+    assert obs.content.startswith("Web fetch failed.")
     # 原始异常细节不写入面向模型的 error（避免噪声 / 泄漏）。
     assert "boom-detail-should-not-leak" not in obs.content
-    kept = _find(caplog.records, "web_extract_failed")
-    assert kept, "客户端 通用异常路径必须保留 web_extract_failed"
+    kept = _find(caplog.records, "web_fetch_failed")
+    assert kept, "客户端 通用异常路径必须保留 web_fetch_failed"
     _assert_no_removed_events(caplog.records)
 
 
@@ -275,23 +275,23 @@ def test_all_pages_failed_path_behavior_and_kept_event_with_elapsed(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """test_purpose: 全部页面失败时行为不变（retryable=True、error 聚合所有失败原因），
-    web_extract_all_pages_failed 仍被记录且**必须带非负数值 elapsed_ms**
+    web_fetch_all_pages_failed 仍被记录且**必须带非负数值 elapsed_ms**
     （潜在缺陷：删除 started 事件/变量后 elapsed_ms 计算错位或为 None/负值）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     failures = [
-        WebExtractItem(url="https://e.com/1", title="", content="", metadata={}, error="boom1"),
-        WebExtractItem(url="https://e.com/2", title="", content="", metadata={}, error="boom2"),
+        WebFetchItem(url="https://e.com/1", title="", content="", metadata={}, error="boom1"),
+        WebFetchItem(url="https://e.com/2", title="", content="", metadata={}, error="boom2"),
     ]
-    client = FakeClient(extract_factory=lambda urls, fmt, cl: failures)
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    client = FakeClient(fetch_factory=lambda urls, fmt, cl: failures)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://e.com/1", "https://e.com/2"])
 
     assert obs.status == "error"
     assert "boom1" in obs.content and "boom2" in obs.content
-    kept = _find(caplog.records, "web_extract_all_pages_failed")
-    assert kept, "全页失败必须保留 web_extract_all_pages_failed"
+    kept = _find(caplog.records, "web_fetch_all_pages_failed")
+    assert kept, "全页失败必须保留 web_fetch_all_pages_failed"
     elapsed = kept[0].data["elapsed_ms"]
     assert isinstance(elapsed, int | float), f"elapsed_ms 必须是数值，实际 {elapsed!r}"
     assert elapsed >= 0, f"elapsed_ms 必须非负，实际 {elapsed!r}"
@@ -308,13 +308,13 @@ def test_partial_failure_path_behavior_unchanged() -> None:
 
     def _factory(req_urls, fmt, cl):
         return [
-            WebExtractItem(url=urls[0], title="t", content="ok1", metadata={}),
-            WebExtractItem(url=urls[1], title="", content="", metadata={}, error="fail2"),
-            WebExtractItem(url=urls[2], title="t", content="ok3", metadata={}),
+            WebFetchItem(url=urls[0], title="t", content="ok1", metadata={}),
+            WebFetchItem(url=urls[1], title="", content="", metadata={}, error="fail2"),
+            WebFetchItem(url=urls[2], title="t", content="ok3", metadata={}),
         ]
 
-    client = FakeClient(extract_factory=_factory)
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    client = FakeClient(fetch_factory=_factory)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
 
@@ -323,7 +323,7 @@ def test_partial_failure_path_behavior_unchanged() -> None:
     payload = json.loads(obs.content)
     assert payload["partial"] is True
     assert payload["failed_count"] == 1
-    assert obs.display_data["kind"] == "web-extract-urls"
+    assert obs.display_data["kind"] == "web-fetch-urls"
     assert len(obs.display_data["urls"]) == 3
 
 
@@ -334,10 +334,10 @@ def test_full_success_path_behavior_and_display_unchanged() -> None:
     urls = ["https://e.com/1", "https://e.com/2"]
 
     def _factory(req_urls, fmt, cl):
-        return [WebExtractItem(url=u, title="t", content="c", metadata={}) for u in req_urls]
+        return [WebFetchItem(url=u, title="t", content="c", metadata={}) for u in req_urls]
 
-    client = FakeClient(extract_factory=_factory)
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    client = FakeClient(fetch_factory=_factory)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=urls)
 
@@ -346,7 +346,7 @@ def test_full_success_path_behavior_and_display_unchanged() -> None:
     assert "partial" not in payload
     assert "failed_count" not in payload
     assert obs.display_data == {
-        "kind": "web-extract-urls",
+        "kind": "web-fetch-urls",
         "partial": False,
         "urls": [{"url": urls[0]}, {"url": urls[1]}],
     }
@@ -356,7 +356,7 @@ def test_result_build_failure_path_behavior_and_kept_event(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """test_purpose: 结果构造失败时行为不变（retryable=False、error 固定文案），
-    web_extract_result_build_failed 仍被记录（潜在缺陷：删日志误伤保留事件或 客户端 变量）。"""
+    web_fetch_result_build_failed 仍被记录（潜在缺陷：删日志误伤保留事件或 客户端 变量）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     client = FakeClient()
@@ -364,15 +364,15 @@ def test_result_build_failure_path_behavior_and_kept_event(
     def _boom(self, extracted):  # type: ignore[no-untyped-def]
         raise ValueError("assembly failed internally")
 
-    monkeypatch.setattr(WebExtractTool, "_build_results", _boom)
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    monkeypatch.setattr(WebFetchTool, "_build_results", _boom)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://ec.com/1"])
 
     assert obs.status == "error"
-    assert obs.content.startswith("Web extraction result assembly failed.")
-    kept = _find(caplog.records, "web_extract_result_build_failed")
-    assert kept, "结果构造失败必须保留 web_extract_result_build_failed"
+    assert obs.content.startswith("Web fetch result assembly failed.")
+    kept = _find(caplog.records, "web_fetch_result_build_failed")
+    assert kept, "结果构造失败必须保留 web_fetch_result_build_failed"
     # data.客户端 分支使用了 客户端.name（客户端 为真值）；不得因删日志而 NameError。
     _assert_no_removed_events(caplog.records)
 
@@ -391,51 +391,51 @@ def test_removed_events_never_emitted_across_all_paths(
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
 
     # 1) 超限
-    WebExtractTool(
+    WebFetchTool(
         FakeClient(), resolver=_public_resolver
-    ).execute(urls=[f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)])
+    ).execute(urls=[f"https://e.com/{i}" for i in range(Constant.Web.FETCH_URL_LIMIT_MAX + 1)])
 
     # 2) 安全拦截（IP 字面量内网 / 敏感 query / 非法 scheme）
-    safe_tool = WebExtractTool(FakeClient(), resolver=_public_resolver)
+    safe_tool = WebFetchTool(FakeClient(), resolver=_public_resolver)
     safe_tool.execute(urls=["http://127.0.0.1/"])
     safe_tool.execute(urls=["https://example.com/?token=abc"])
     safe_tool.execute(urls=["ftp://example.com/"])
 
     # 3) 客户端 未配置
-    WebExtractTool(
+    WebFetchTool(
         FakeClient(extract_side_effect=FirecrawlUnavailableError("x")),
         resolver=_public_resolver,
     ).execute(urls=["https://example.com/"])
 
     # 4) 客户端 通用异常
-    WebExtractTool(
+    WebFetchTool(
         FakeClient(extract_side_effect=RuntimeError("x")),
         resolver=_public_resolver,
     ).execute(urls=["https://example.com/"])
 
     # 5) 全失败
-    WebExtractTool(
+    WebFetchTool(
         FakeClient(
-                extract_factory=lambda u, f, c: [
-                    WebExtractItem(url=u[0], title="", content="", metadata={}, error="e")
+                fetch_factory=lambda u, f, c: [
+                    WebFetchItem(url=u[0], title="", content="", metadata={}, error="e")
                 ]
             ),
         resolver=_public_resolver,
     ).execute(urls=["https://e.com/1"])
 
     # 6) 部分失败
-    WebExtractTool(
+    WebFetchTool(
         FakeClient(
-                extract_factory=lambda u, f, c: [
-                    WebExtractItem(url=u[0], title="t", content="c", metadata={}),
-                    WebExtractItem(url=u[1] if len(u) > 1 else u[0], title="", content="", metadata={}, error="e"),
+                fetch_factory=lambda u, f, c: [
+                    WebFetchItem(url=u[0], title="t", content="c", metadata={}),
+                    WebFetchItem(url=u[1] if len(u) > 1 else u[0], title="", content="", metadata={}, error="e"),
                 ]
             ),
         resolver=_public_resolver,
     ).execute(urls=["https://e.com/1", "https://e.com/2"])
 
     # 7) 全成功
-    WebExtractTool(
+    WebFetchTool(
         FakeClient(), resolver=_public_resolver
     ).execute(urls=["https://example.com/"])
 
@@ -452,19 +452,19 @@ def test_kept_events_are_not_emitted_on_unrelated_paths(
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
 
     # 全成功：不应有失败类事件。
-    WebExtractTool(FakeClient(), resolver=_public_resolver).execute(
+    WebFetchTool(FakeClient(), resolver=_public_resolver).execute(
         urls=["https://example.com/"]
     )
-    for event in KEPT_WEB_EXTRACT_EVENTS:
+    for event in KEPT_WEB_FETCH_EVENTS:
         assert _find(caplog.records, event) == [], f"全成功路径不应出现 {event}"
 
     caplog.clear()
 
     # 安全拦截（早期返回，不进入 客户端 调用）：不应有 客户端 类事件。
-    WebExtractTool(FakeClient(), resolver=_public_resolver).execute(
+    WebFetchTool(FakeClient(), resolver=_public_resolver).execute(
         urls=["http://127.0.0.1/"]
     )
-    for event in KEPT_WEB_EXTRACT_EVENTS:
+    for event in KEPT_WEB_FETCH_EVENTS:
         assert _find(caplog.records, event) == [], f"安全拦截路径不应出现 {event}"
     _assert_no_removed_events(caplog.records)
 
@@ -488,17 +488,17 @@ def test_elapsed_ms_reflects_real_elapsed_time(
 
         _t.sleep(0.1)
         return [
-            WebExtractItem(url=u, title="", content="", metadata={}, error="boom") for u in urls
+            WebFetchItem(url=u, title="", content="", metadata={}, error="boom") for u in urls
         ]
 
-    client = FakeClient(extract_factory=_slow_factory)
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    client = FakeClient(fetch_factory=_slow_factory)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://e.com/1"])
 
     assert obs.status == "error"
-    kept = _find(caplog.records, "web_extract_all_pages_failed")
-    assert kept, "全页失败必须保留 web_extract_all_pages_failed"
+    kept = _find(caplog.records, "web_fetch_all_pages_failed")
+    assert kept, "全页失败必须保留 web_fetch_all_pages_failed"
     elapsed = kept[0].data["elapsed_ms"]
     assert elapsed >= 90, f"客户端 至少 sleep 100ms，elapsed_ms 应 >= 90，实际 {elapsed!r}"
 
@@ -516,11 +516,11 @@ def test_all_pages_failed_event_includes_started_before_client_call() -> None:
         call_marker["t0"] = _t.monotonic()
         _t.sleep(0.08)
         return [
-            WebExtractItem(url=u, title="", content="", metadata={}, error="boom") for u in urls
+            WebFetchItem(url=u, title="", content="", metadata={}, error="boom") for u in urls
         ]
 
-    client = FakeClient(extract_factory=_slow_factory)
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    client = FakeClient(fetch_factory=_slow_factory)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     records: list[logging.LogRecord] = []
     handler = logging.Handler()
@@ -535,7 +535,7 @@ def test_all_pages_failed_event_includes_started_before_client_call() -> None:
         logger.removeHandler(handler)
         logger.setLevel(old_level)
 
-    kept = _find(records, "web_extract_all_pages_failed")
+    kept = _find(records, "web_fetch_all_pages_failed")
     assert kept
     elapsed = kept[0].data["elapsed_ms"]
     assert elapsed >= 70, (
@@ -554,7 +554,7 @@ def test_non_address_rejection_emits_no_log_known_tradeoff(
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     # 逐个跑「非地址类」拦截，记录事件名。
     observed_events: list[str] = []
@@ -572,7 +572,7 @@ def test_non_address_rejection_emits_no_log_known_tradeoff(
         assert obs.status == "error"
         observed_events.extend(_caevents(caplog.records))
 
-    # 事实：这些路径不产生 web_extract 流水日志，也不产生 url_safety 地址日志。
+    # 事实：这些路径不产生 web_fetch 流水日志，也不产生 url_safety 地址日志。
     assert observed_events == [], (
         "非地址类拦截当前应完全无日志（已知取舍）；"
         f"若出现说明行为已改变：{observed_events}"
@@ -589,7 +589,7 @@ def test_address_rejection_still_logs_url_address_blocked(
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     client = FakeClient()
     # 字面量 host 的地址即其自身：用系统解析（resolver=None）才能得到真实的 10.0.0.5。
-    tool = WebExtractTool(client, resolver=None)
+    tool = WebFetchTool(client, resolver=None)
 
     obs = tool.execute(urls=["http://10.0.0.5/"])
 
@@ -610,13 +610,13 @@ def test_fake_ip_exemption_event_still_emitted_and_client_reached(
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=lambda hostname: ["198.18.0.67"]
+    tool = WebFetchTool(client, resolver=lambda hostname: ["198.18.0.67"]
     )
 
     obs = tool.execute(urls=["https://example.com/page"])
 
     assert obs.status == "success"
-    assert len(client.extract_calls) == 1
+    assert len(client.fetch_calls) == 1
     allowed = _find(caplog.records, "web_url_fake_ip_allowed")
     assert allowed, "fake-ip 放行必须保留 web_url_fake_ip_allowed"
     _assert_no_removed_events(caplog.records)
@@ -627,7 +627,7 @@ def test_empty_url_list_short_circuits_without_client() -> None:
     调用 客户端（潜在缺陷：删日志时引入未定义变量路径或改变了空输入语义）。"""
 
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=[])
 
@@ -660,7 +660,7 @@ def test_blocked_url_never_leaks_into_logs(
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     client = FakeClient()
     # resolver 解析到内网以触发地址类拦截（含 URL 的路径），同时敏感参数检查更早生效。
-    tool = WebExtractTool(client, resolver=lambda h: ["10.0.0.5"])
+    tool = WebFetchTool(client, resolver=lambda h: ["10.0.0.5"])
 
     obs = tool.execute(urls=[secret_url])
 
@@ -679,7 +679,7 @@ def test_fake_ip_allowed_path_does_not_leak_url(
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=lambda h: ["198.18.0.67"]
+    tool = WebFetchTool(client, resolver=lambda h: ["198.18.0.67"]
     )
     # 刻意使用**非敏感**查询参数：含 token/api_key 会在安全校验早期被拦，无法到达 fake-ip 放行分支。
     # 这里验证的是「真正走到放行路径」时日志不泄漏 URL 原文与 query 串。
@@ -696,22 +696,22 @@ def test_fake_ip_allowed_path_does_not_leak_url(
 def test_all_failed_event_does_not_leak_error_details_of_client(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """test_purpose: web_extract_all_pages_failed 的 data 只应含 客户端/failed_count/elapsed_ms，
+    """test_purpose: web_fetch_all_pages_failed 的 data 只应含 客户端/failed_count/elapsed_ms，
     不得把页面错误正文或 URL 原文写进去（潜在缺陷：新增 elapsed_ms 时顺手塞入了额外字段）。"""
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     secret_body_marker = "PAGE-BODY-SECRET-CANARY"
     client = FakeClient(
-        extract_factory=lambda u, f, c: [
-            WebExtractItem(url=u[0], title="", content="", metadata={}, error=secret_body_marker)
+        fetch_factory=lambda u, f, c: [
+            WebFetchItem(url=u[0], title="", content="", metadata={}, error=secret_body_marker)
         ]
     )
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     obs = tool.execute(urls=["https://secret.example.com/path?q=QUERYCANARY"])
 
     assert obs.status == "error"
-    kept = _find(caplog.records, "web_extract_all_pages_failed")
+    kept = _find(caplog.records, "web_fetch_all_pages_failed")
     assert kept
     data = kept[0].data
     # 只允许这三个字段，防止误加 URL / 正文 / 错误详情。
@@ -738,18 +738,18 @@ def test_repeated_calls_do_not_accumulate_stale_elapsed_or_state(
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     client = FakeClient(
-        extract_factory=lambda u, f, c: [
-            WebExtractItem(url=u[0], title="", content="", metadata={}, error="boom")
+        fetch_factory=lambda u, f, c: [
+            WebFetchItem(url=u[0], title="", content="", metadata={}, error="boom")
         ]
     )
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     elapsed_values: list[float] = []
     for _ in range(5):
         caplog.clear()
         obs = tool.execute(urls=["https://e.com/1"])
         assert obs.status == "error"
-        kept = _find(caplog.records, "web_extract_all_pages_failed")
+        kept = _find(caplog.records, "web_fetch_all_pages_failed")
         assert kept
         value = kept[0].data["elapsed_ms"]
         assert isinstance(value, int | float) and value >= 0
@@ -760,32 +760,32 @@ def test_repeated_calls_do_not_accumulate_stale_elapsed_or_state(
 
 
 def test_state_hint_present_on_all_error_paths_unchanged() -> None:
-    """test_purpose: 所有错误路径的 display_data 都应是稳定的 ``{"status_hint": "提取失败"}``，
+    """test_purpose: 所有错误路径的 display_data 都应是稳定的 ``{"status_hint": "抓取失败"}``，
     与 tool_error 的契约一致（潜在缺陷：删日志时改动了工具名或提示）。"""
 
     client = FakeClient()
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
 
     # 超限
-    over = tool.execute(urls=[f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)])
+    over = tool.execute(urls=[f"https://e.com/{i}" for i in range(Constant.Web.FETCH_URL_LIMIT_MAX + 1)])
     # 安全拦截
     blocked = tool.execute(urls=["ftp://example.com/"])
     # 未配置
-    unavailable = WebExtractTool(
+    unavailable = WebFetchTool(
         FakeClient(extract_side_effect=FirecrawlUnavailableError("x")),
         resolver=_public_resolver,
     ).execute(urls=["https://example.com/"])
 
     for obs in (over, blocked, unavailable):
         assert obs.status == "error"
-        assert obs.display_data == {"status_hint": "提取失败"}
-        assert obs.tool_name == "web_extract"
+        assert obs.display_data == {"status_hint": "抓取失败"}
+        assert obs.tool_name == "web_fetch"
 
 
 
 
 def test_client_side_page_failed_event_still_available_contract() -> None:
-    """test_purpose: 单页失败日志由 客户端侧记录（web_extract_page_failed），本次改动不应
+    """test_purpose: 单页失败日志由 客户端侧记录（web_fetch_page_failed），本次改动不应
     影响其可达性。用 firecrawl 假 _post 驱动真实客户端 的 _scrape_one，断言该事件仍在
     （潜在缺陷：把 客户端 侧日志一并删掉或改动其字段）。"""
 
@@ -811,8 +811,8 @@ def test_client_side_page_failed_event_still_available_contract() -> None:
         logger.setLevel(old_level)
 
     assert item.error
-    page_failed = _find(records, "web_extract_page_failed")
-    assert page_failed, "客户端侧 web_extract_page_failed 仍应可达"
+    page_failed = _find(records, "web_fetch_page_failed")
+    assert page_failed, "客户端侧 web_fetch_page_failed 仍应可达"
     assert page_failed[0].data["url"] == "https://e.com/bad"
 
 
@@ -826,13 +826,13 @@ def test_no_removed_event_names_left_in_any_log_record_attribute(
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
 
     client = FakeClient(
-        extract_factory=lambda u, f, c: [
-            WebExtractItem(url=u[0], title="", content="", metadata={}, error="boom")
+        fetch_factory=lambda u, f, c: [
+            WebFetchItem(url=u[0], title="", content="", metadata={}, error="boom")
         ]
     )
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
     tool.execute(urls=["https://e.com/1"])
-    tool.execute(urls=[f"https://e.com/{i}" for i in range(Constant.Web.EXTRACT_URL_LIMIT_MAX + 1)])
+    tool.execute(urls=[f"https://e.com/{i}" for i in range(Constant.Web.FETCH_URL_LIMIT_MAX + 1)])
 
     for record in caplog.records:
         blob = f"{record.msg!r}|{getattr(record, 'data', None)!r}|{getattr(record, 'display_message', '')!r}"
@@ -847,14 +847,14 @@ def test_elapsed_ms_is_rounded_to_two_decimals(
 
     caplog.set_level(logging.DEBUG, logger="coding_agent.backend")
     client = FakeClient(
-        extract_factory=lambda u, f, c: [
-            WebExtractItem(url=u[0], title="", content="", metadata={}, error="boom")
+        fetch_factory=lambda u, f, c: [
+            WebFetchItem(url=u[0], title="", content="", metadata={}, error="boom")
         ]
     )
-    tool = WebExtractTool(client, resolver=_public_resolver)
+    tool = WebFetchTool(client, resolver=_public_resolver)
     tool.execute(urls=["https://e.com/1"])
 
-    kept = _find(caplog.records, "web_extract_all_pages_failed")
+    kept = _find(caplog.records, "web_fetch_all_pages_failed")
     assert kept
     value = kept[0].data["elapsed_ms"]
     assert isinstance(value, int | float)

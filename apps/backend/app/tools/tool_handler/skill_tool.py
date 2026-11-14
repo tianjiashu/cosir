@@ -27,11 +27,22 @@ class SkillTool(HandlerBase):
     """列出当前工作区可见的 Skill（系统级与 workspace 级合并），并读取其正文或配套文本资源。"""
 
     name = TOOL_SKILL
+    # 对照 Claude Code 的 Skill 工具补了触发规则（任务被覆盖就先加载、按它做）与「只认目录里的名字」；
+    # 目录已在系统提示词里，所以不再要求先 list。
     description = (
-        "Discover and load local Agent Skills. Use action='list' to see names and descriptions, "
-        "then action='load' with a relevant skill_name to read its instructions. Omit "
-        "resource_path to load SKILL.md or provide a relative path to read a referenced file. "
-        "Skills are read as text; scripts are not executed."
+        "Load an Agent Skill: a packaged set of instructions the user or project set up for a "
+        "particular kind of task (a review checklist, a release procedure, a project workflow). "
+        "The available skills are listed with their descriptions in your instructions.\n"
+        "- When the task at hand is one a listed skill covers, load it before you start, and "
+        "follow its instructions in place of your default approach. When the user asks for a "
+        "skill by name, load it.\n"
+        "- Only names from the list are valid; do not guess. action='list' re-reads the current "
+        "list.\n"
+        "- A skill you already loaded in this conversation is still above: follow it rather than "
+        "loading it again.\n"
+        "- Omit resource_path to load SKILL.md; set it to read a file the skill refers to. Skills "
+        "are read as text and nothing runs by itself: when a skill tells you to run one of its "
+        "scripts, run it with execute_terminal."
     )
     args_model = SkillArgs
     timeout_seconds = 10.0

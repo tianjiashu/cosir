@@ -1,4 +1,4 @@
-"""fork_session 工具：把当前会话复制成一条侧栏可见的分叉会话，交给它一份子会话，当场完成。
+"""fork_session 工具：把当前会话复制成一条侧栏可见的分叉会话，交给它一份任务说明，当场完成。
 
 与 ``delegate_task`` 的分工：委派换一个子 Agent 身份、只带任务说明；fork 不换身份，带着到上一条回复为止的
 上下文去做。两者共用派生的其余部分：派生深度（``core.tool.derivation.child_depth``）、以 Agent 消息
@@ -57,19 +57,43 @@ _WRITABLE_ROOT_NOTICE = (
 
 
 class ForkSessionTool(HandlerBase):
-    """把当前会话分叉出去执行一份子会话；投递任务说明后当场完成，结论由编排汇报。"""
+    """把当前会话分叉出去做一部分工作；投递任务说明后当场完成，结论由编排汇报。"""
 
     name: str = TOOL_FORK_SESSION
+    # 「何时用」对照 Claude Code 的 Agent 工具与派生会话规则改写，只取适用于分叉的部分：分叉带着上下文，
+    # 「它只知道你写的」不成立，反过来要强调本回合不可见、它与你同一套推理不能当独立核查。
     description: str = (
         "Fork this conversation into a new sidebar conversation and hand it one part of the "
-        "work. It inherits your identity, tools and the conversation up to your previous reply. "
-        "The current turn, including the input that started it and all work done in it, is "
-        "excluded. Supply a complete new assignment with goal, constraints, necessary new facts and expected deliverable. Use it to split a task into parts that each need this context; "
-        "use delegate_task instead when a specialised child agent should do a self-contained "
-        "session. The fork does not see anything said here after it starts, and the user can open "
-        "and talk to it. The call returns once the fork is created; the fork reports to you "
-        "automatically with an <agent_message report=...> each time it finishes a run of your "
-        "assignment, so wait for it with wait_messages, or keep doing work that does not overlap."
+        "work. It inherits your identity, model, tools and the conversation up to your previous "
+        "reply. The current turn — the input that started it and all work done in it — is "
+        "excluded, so restate in your own words whatever from this turn the fork needs: a line "
+        "like 'based on the findings above' points at nothing.\n"
+        "\n"
+        "When to use:\n"
+        "Use it to split a task into parts that each need this conversation's context; use "
+        "delegate_task instead when a specialised child agent should do a self-contained piece, "
+        "or when the part needs little of a long conversation. A fork still costs more than it "
+        "looks: it carries this whole conversation into every request, you get back only its "
+        "report, you cannot watch it work, and its mistakes come back as confidently as its "
+        "findings. It also shares your reasoning so far, so it is no independent check: for a "
+        "review not anchored on yours, use delegate_task and give it the material, not your "
+        "conclusion.\n"
+        "- Do the work yourself when it is a handful of tool calls or a lookup whose target you "
+        "already know.\n"
+        "- For parts in parallel, make the calls together in one response, and give forks that "
+        "write files separate writable_root directories.\n"
+        "- When in doubt, do not fork. Once you have handed a part to a fork, do not also do it "
+        "yourself.\n"
+        "\n"
+        "After the call:\n"
+        "- It returns once the fork is created. The fork does not see anything said here after it "
+        "starts, and the user can open it and talk to it. Each time it finishes a run of your "
+        "assignment it reports to you with an <agent_message report=...>; wait for it with "
+        "wait_messages, or keep doing work that does not overlap. To give it more instructions, "
+        "use send_message.\n"
+        "- Never fabricate or predict a report that has not arrived. Treat a report as a lead, not "
+        "proof: check its key claims before relying on them. The user sees the report only "
+        "collapsed, so state what matters in your own reply."
     )
     args_model: type[ForkSessionArgs] = ForkSessionArgs
     timeout_seconds: ClassVar[float] = 300.0

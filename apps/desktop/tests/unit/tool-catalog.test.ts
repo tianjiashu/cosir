@@ -24,7 +24,7 @@ describe("toolHeading", () => {
     expect(toolHeading("search_content", { pattern: "ToolHeading", path: "app" }).target).toBe('"ToolHeading" in app');
     expect(toolHeading("search_content", { pattern: "x" }).target).toBeNull();
     expect(toolHeading("read_image", { paths: ["a.png", "b.png"] }).target).toBe("a.png +1");
-    expect(toolHeading("web_extract", { urls: ["https://example.com/a", "https://example.com/b"] }).target).toBe("https://example.com/a +1");
+    expect(toolHeading("web_fetch", { urls: ["https://example.com/a", "https://example.com/b"] }).target).toBe("https://example.com/a +1");
     expect(toolHeading("apply_patch", { patch: "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\ndiff --git a/x.py b/x.py\n" }).target).toBe("x.py");
     expect(toolHeading("browser_act", { actions: [{ type: "click", ref: "e1" }, { type: "scroll" }] }).target).toBe("点击 +1");
     expect(toolHeading("browser_logs", { kind: "network", failed_only: true }).target).toBe("network");

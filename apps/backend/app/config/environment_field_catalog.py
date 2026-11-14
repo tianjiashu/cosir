@@ -14,7 +14,7 @@ from app.models.environment.environment_group import EnvironmentGroup
 
 ENVIRONMENT_GROUPS: tuple[EnvironmentGroup, ...] = (
     EnvironmentGroup("general", "基础配置", "控制 Agent 的通用运行行为。"),
-    EnvironmentGroup("web", "网页工具", "配置网页搜索与正文提取使用的 Firecrawl 凭证和服务地址。"),
+    EnvironmentGroup("web", "网页工具", "配置网页搜索与网页抓取使用的 Firecrawl 凭证和服务地址。"),
     EnvironmentGroup(
         "browser", "浏览器", "限制内置浏览器同时打开的标签页数量；调小不会关闭已打开的标签。"
     ),

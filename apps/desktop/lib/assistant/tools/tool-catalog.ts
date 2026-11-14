@@ -138,7 +138,7 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   browser_evaluate: { verb: "执行网页脚本", icon: "globe", target: (args) => clipped(firstLine(args.expression), 60) },
   browser_handoff: { verb: "交给你操作网页", icon: "globe", target: (args) => str(args.reason) },
   web_search: { verb: "网页搜索", icon: "globe", target: (args) => str(args.query) },
-  web_extract: { verb: "网页正文提取", icon: "globe", target: (args) => withMore(args.urls) },
+  web_fetch: { verb: "抓取网页", icon: "globe", target: (args) => withMore(args.urls) },
   mcp: { verb: "调用 MCP", icon: "network", target: mcpTarget },
   skill: { verb: "加载 Skill", icon: "puzzle", target: skillTarget },
   delegate_task: { verb: "委派任务", icon: "users", title: (args) => str(args.agent_name), target: (args) => str(args.child_agent_id) },
