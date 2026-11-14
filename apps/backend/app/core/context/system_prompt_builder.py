@@ -68,7 +68,7 @@ from app.core.workflow.message_queue.session_message import MODEL_INPUT_BODIES
 from app.service.configuration.file_store import ConfigurationFileStore
 from app.utils.file_utils import read_text_file
 from app.utils.host_platform import host_platform_name
-from app.utils.path.system_cosir import system_instruction_file
+from app.utils.path.system_cosir import system_cosir_dir, system_instruction_file
 from app.utils.token_estimator import TokenEstimator
 from app.utils.workspace_instruction import find_workspace_instruction_file
 
@@ -138,9 +138,11 @@ class SystemPromptBuilder:
         """构建动态变量层：身份、输入消息协议、操作系统、工作区根目录与写入边界。
 
         文案为英文（读者是模型，与工具描述、子 Agent 选择指南保持同一语言）。本层只承载
-        当前实现确认的运行期事实：路径边界的说法对应 ``PathResolver`` 的两条解析路径——只读工具
-        走 ``resolve_without_boundary``（可读工作区外），写类工具走 ``resolve_within_workspace``
-        （限制在工作区内且拒绝 ``.cosir/``）；这里不点名工具，因为本层不按工具名裁剪。
+        当前实现确认的运行期事实：路径边界的说法对应 ``PathResolver`` 的入口——读类工具走
+        ``resolve_for_read`` / ``resolve_read_scope``（可读工作区外，系统数据目录除外），写类工具走
+        ``resolve_within_workspace``（限制在工作区内且拒绝 ``.cosir/``）；系统数据目录取
+        ``system_cosir_dir()``，规则见 ``app.core.permission.protected_paths``。这里不点名工具，因为
+        本层不按工具名裁剪。
 
         参数:
             workspace_root: 当前工作区根目录。
@@ -162,9 +164,11 @@ class SystemPromptBuilder:
             f"- Workspace root: {workspace_root}",
             (
                 "- Workspace rules: all code lives under the workspace root. Read-only file tools "
-                "also accept absolute paths outside it; tools that write, edit, delete, or move "
-                "files only work inside it, and .cosir/ is a reserved read-only area (runtime "
-                "metadata) they refuse. Shell commands are not sandboxed: they can reach anything "
+                "also accept absolute paths outside it, except cosir's own data directory "
+                f"{system_cosir_dir()} (only its skills/ is readable); tools that write, edit, "
+                "delete, or move files only work inside it, and "
+                ".cosir/ is a reserved read-only area (runtime metadata) they refuse. Shell "
+                "commands are not sandboxed: they can reach anything "
                 "they are given, including paths outside the workspace and .cosir/, so never "
                 "modify either."
             ),

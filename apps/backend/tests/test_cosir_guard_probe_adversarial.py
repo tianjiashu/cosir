@@ -782,7 +782,7 @@ def test_artifact_when_root_does_not_exist_degrades(tmp_path: Path) -> None:
     assert (result.artifact_data or {}).get("output_truncated") is True
 
 
-def test_resolve_without_boundary_returns_error_on_resolve_failure(
+def test_resolve_read_scope_returns_error_on_resolve_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """only-read 解析在 Path.resolve 抛 OSError 时必须归一化为错误字符串而非抛出。"""
@@ -798,7 +798,7 @@ def test_resolve_without_boundary_returns_error_on_resolve_failure(
 
     monkeypatch.setattr(Path, "resolve", _boom)
     try:
-        resolved, error = resolver.resolve_without_boundary("a.txt")
+        resolved, error = resolver.resolve_read_scope("a.txt")
         assert resolved is None
         assert "cannot resolve path" in error
     finally:
@@ -957,22 +957,22 @@ def test_is_within_cosir_with_relative_path_under_cwd(
     assert is_within_cosir("src/x.txt", root) is False
 
 
-def test_resolve_without_boundary_rejects_blank_and_nul(tmp_path: Path) -> None:
-    """resolve_without_boundary 对空串/空白/NUL 输入必须拒绝（只读工具入口校验）。"""
+def test_resolve_read_scope_rejects_blank_and_nul(tmp_path: Path) -> None:
+    """resolve_read_scope 对空串/空白/NUL 输入必须拒绝（只读工具入口校验）。"""
 
     resolver = PathResolver(tmp_path)
     for bad in ("", "   ", "a\x00b"):
-        resolved, error = resolver.resolve_without_boundary(bad)
+        resolved, error = resolver.resolve_read_scope(bad)
         assert resolved is None
         assert error != ""
 
 
-def test_resolve_without_boundary_allows_cosir_read(tmp_path: Path) -> None:
+def test_resolve_read_scope_allows_workspace_cosir_read(tmp_path: Path) -> None:
     """只读解析不套用 `.cosir` 保护：`.cosir/x` 必须可解析（允许读）。"""
 
     root = tmp_path / "ws"
     (root / ".cosir").mkdir(parents=True)
-    resolved, error = PathResolver(root).resolve_without_boundary(".cosir/x.txt")
+    resolved, error = PathResolver(root).resolve_read_scope(".cosir/x.txt")
     assert resolved == root / ".cosir" / "x.txt"
     assert error == ""
 

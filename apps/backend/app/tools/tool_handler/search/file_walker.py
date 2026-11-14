@@ -7,6 +7,8 @@
 - 只做遍历与过滤，不做匹配、排序、分页与输出格式化。
 - 忽略规则由调用方注入（:class:`GitignoreMatcher` 或组合器）：本模块不读配置文件、不知道
   workspace 位置，也不提供默认跳过集合；调用方传 ``load_search_ignore_rules(workspace_root)``。
+- 受保护路径（``app.core.permission.protected_paths``）不是忽略偏好而是安全底线：本模块自己剪掉
+  禁读子树，不经可由用户改写的忽略规则，任何遍历都绕不开。
 - 不依赖外部命令，跨平台零重型依赖。
 """
 
@@ -16,6 +18,7 @@ import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
+from app.core.permission.protected_paths import ProtectedPaths
 from app.tools.tool_handler.search.ignore_matcher import IgnoreMatcher
 from app.tools.tool_handler.security.windows_reparse_point import (
     is_windows_directory_reparse_point,
@@ -50,13 +53,14 @@ def iter_files(
         无（只读目录结构）。
     """
 
-    yield from _walk(base, file_glob, rules, check_interrupt)
+    yield from _walk(base, file_glob, rules, ProtectedPaths.current(), check_interrupt)
 
 
 def _walk(
     base: Path,
     file_glob: str | None,
     rules: IgnoreMatcher,
+    protected: ProtectedPaths,
     check_interrupt: Callable[[], None] | None,
 ) -> Iterator[Path]:
     """递归遍历一层目录；规则对象在整次遍历中复用，避免逐层重复读取规则文件。
@@ -65,6 +69,7 @@ def _walk(
         base: 当前层目录。
         file_glob: 文件名 glob 过滤模式；None 表示不过滤。
         rules: 本次遍历使用的忽略规则。
+        protected: 本次遍历开始时取的受保护路径快照。
 
     返回:
         当前子树下的文件路径生成器（不保证顺序）。
@@ -84,7 +89,7 @@ def _walk(
                 if check_interrupt is not None:
                     check_interrupt()
                 yield from _visit_entry(
-                    Path(raw_entry.path), raw_entry, file_glob, rules, check_interrupt
+                    Path(raw_entry.path), raw_entry, file_glob, rules, protected, check_interrupt
                 )
     except OSError:
         return
@@ -95,15 +100,17 @@ def _visit_entry(
     raw_entry: os.DirEntry[str],
     file_glob: str | None,
     rules: IgnoreMatcher,
+    protected: ProtectedPaths,
     check_interrupt: Callable[[], None] | None,
 ) -> Iterator[Path]:
-    """判定单个目录项：symlink / junction 跳过、目录按规则跳过、文件按规则与 glob 过滤。
+    """判定单个目录项：symlink / junction 跳过、受保护与命中规则的目录跳过、文件按规则与 glob 过滤。
 
     参数:
         entry: 目录项路径。
         raw_entry: ``os.scandir`` 返回的原始目录项（复用其类型查询，避免重复 stat）。
         file_glob: 文件名 glob 过滤模式；None 表示不过滤。
         rules: 本次遍历使用的忽略规则。
+        protected: 本次遍历开始时取的受保护路径快照。
 
     返回:
         命中的文件路径生成器；目录命中忽略规则时不产出任何项（整棵子树被跳过）。
@@ -120,9 +127,9 @@ def _visit_entry(
             # 与 rg 默认语义一致：不跟随 symlink 或 Windows junction。
             return
         if raw_entry.is_dir(follow_symlinks=False):
-            if rules.match_dir(entry):
+            if protected.is_denied_root(entry) or rules.match_dir(entry):
                 return
-            yield from _walk(entry, file_glob, rules, check_interrupt)
+            yield from _walk(entry, file_glob, rules, protected, check_interrupt)
         elif raw_entry.is_file(follow_symlinks=False):
             if rules.match_file(entry):
                 return

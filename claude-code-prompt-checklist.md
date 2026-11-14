@@ -23,7 +23,7 @@
 | 12 | 跨会话记忆 | ◐ | 机制 | P2 |
 | 13 | 任务清单与收尾 | ◐ | 机制 + 提示词 | P1 |
 | 14 | 权限被拒后怎么办 | ❌ | 随安全设计 | P2 |
-| 15 | 终端 / git 规程 | ◐ | `execute_terminal` 描述 | P0 |
+| 15 | 终端 / git 规程 | ✅ | — | — |
 | 16 | 先读后改 | ❌ | 编辑工具描述 + 机制 | P0（描述）/ P1（机制） |
 | 17 | 编辑工具分工 | ◐ | 工具层 | P0 |
 | 18 | 委派的成本与纪律 | ◐ | `delegate_task` / `fork_task` 描述 | P0 |
@@ -146,7 +146,7 @@
 
 ## 二、工具描述
 
-### 15. 终端 / git 规程 ◐ P0
+### 15. 终端 / git 规程 ✅
 
 > `timeout` is in milliseconds … `run_in_background` runs the command detached: it keeps running across turns and re-invokes you when it exits.
 
@@ -154,8 +154,8 @@
 > - Interactive flags (`-i`, e.g. `git rebase -i`, `git add -i`) are not supported in this environment.
 > - Commit or push only when the user asks. If on the default branch, branch first.
 
-- **cosir 现状**：`execute_terminal` 把无状态、无 stdin、超时、后台、`terminal_read` / `terminal_stop` 讲得很清楚（这部分比原文细）。没有 git 规程。
-- **建议**：在描述末尾加 git 规程：不要求不提交、不推送；不用 `-i`；【转述】不用 `--force` / `--no-verify`，不修改不是自己做的提交。
+- **cosir 现状**（2026-11-14 落地）：`execute_terminal` 描述按原文改成分条，补了「用户只看到输出末段，结果写进回复」「等就绪用 `terminal_read`，不用 sleep 轮询」与 Git 一节（`gh`、`@名字` 会通知人、用户要求才提交或推送、默认分支先开分支；`-i` 并进「没有终端」那条）。调用说明的写法（白话、不复述命令与参数）放进所有工具共用的 `intent`，不另加 `description` 参数。
+- **未采纳**：【转述】的 `--force` / `--no-verify`、不改别人的提交，本会话加载的版本里没有，等出现真实问题再加。
 
 ### 16. 先读后改 ❌ P0（描述）/ P1（机制）
 

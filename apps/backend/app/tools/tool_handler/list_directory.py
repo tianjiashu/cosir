@@ -1,10 +1,10 @@
 """list_directory 工具实现。
 
 本模块只承载 list_directory 这一个工具。列出项目内目录条目（名称 / 类型 /
-路径），路径安全委托 ``security.ProjectPathResolver``。
+路径），路径安全委托 ``security.PathResolver.resolve_read_scope``。
 
 设计边界：
-- 路径安全委托 ``security.ProjectPathResolver``，不内联路径规则。
+- 路径安全委托 ``security.PathResolver.resolve_read_scope``，不内联路径规则。
 - 只列目录，不读文件内容、不写文件。
 """
 
@@ -119,26 +119,9 @@ class ListDirectoryTool(HandlerBase):
         if path == "":
             path = ""
         root = execution_context.workspace_root
-        resolver = PathResolver(root)
-        device_error = resolver.blocked_device_reason(path)
-        if device_error:
-            return tool_error(
-                self.name,
-                device_error,
-            )
-        resolved, error = resolver.resolve_without_boundary(path)
+        resolved, error = PathResolver(root).resolve_read_scope(path)
         if resolved is None:
-            return tool_error(
-                self.name,
-                f"could not list the directory: {error}. "
-                "Provide a valid directory path.",
-            )
-        device_error = resolver.blocked_device_reason(path, resolved)
-        if device_error:
-            return tool_error(
-                self.name,
-                device_error,
-            )
+            return tool_error(self.name, f"could not list the directory: {error}.")
         if not resolved.exists():
             return tool_error(
                 self.name,

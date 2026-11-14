@@ -5,22 +5,25 @@
 
 设计边界：
 - 只解析与拦截路径，不读不写文件。
-- 提供两种作用域解析策略，均返回 ``(Path | None, str)`` 二元组：
-  - ``resolve_within_workspace``：解析并强制项目根 containment（写/改/删等
-    破坏性工具，越界即拒绝）。
-  - ``resolve_without_boundary``：解析但不强制 containment（只读工具，允许
-    访问项目根外）。
-  - ``resolve_for_read``：读取单个文件（``read_file`` / ``read_image`` / 浏览器上传）的
-    完整规则：不强制 containment，解析前后各拦一次设备路径。
-- ``blocked_device_reason`` 返回空串表示允许。
-- ``resolve_within_workspace`` 同时拒绝落在 workspace ``.cosir`` 保留子树内的路径
-  （``.cosir`` 是只读保留区），没有放行开关。后端自行拼出的内部落盘路径（工具产物）不经本解析器，
-  越界防护由 ``atomic_write_text`` 的 ``containment_root`` 承担。
+- 三个入口，均返回 ``(Path | None, str)`` 二元组，错误为面向模型的英文短句：
+  - ``resolve_within_workspace``：写/改/删等破坏性工具。强制项目根 containment，拒绝 workspace
+    ``.cosir`` 保留区与受保护路径，没有放行开关。
+  - ``resolve_for_read``：读一份文件（``read_file`` / ``read_image`` / 浏览器上传）。不强制
+    containment，解析前后各拦一次设备路径，拒绝禁读的受保护路径。
+  - ``resolve_read_scope``：读一个范围（``list_directory`` / ``search_content`` /
+    ``find_files``，可以是目录也可以是文件）。在读一份文件的规则上再拒绝 ``/proc`` 等伪文件树；
+    从上层目录遍历时跳过受保护子树由搜索遍历负责（``search/file_walker``）。
+- 受保护路径的事实源是 ``app.core.permission.protected_paths``；读写两侧只在这三个入口消费。
+- ``blocked_device_reason`` 返回空串表示允许；写类工具自行在解析前后各调一次。
+- 后端自行拼出的内部落盘路径（工具产物）不经本解析器，越界防护由 ``atomic_write_text`` 的
+  ``containment_root`` 承担。
 """
 
 from pathlib import Path
 from typing import ClassVar
 
+from app.config.logging.logger import log
+from app.core.permission.protected_paths import ProtectedPaths
 from app.utils.path.relative_path import has_nul
 from app.utils.path.validation import is_within_cosir
 
@@ -28,13 +31,8 @@ from app.utils.path.validation import is_within_cosir
 class PathResolver:
     """将用户传入的路径解析到项目根目录内的安全解析器。
 
-    单一职责：解析路径并拦截 Windows 设备名与 POSIX 敏感设备/伪文件路径，并提供
-    两种作用域策略——:meth:`resolve_within_workspace` 强制项目根 containment 且拒绝
-    workspace ``.cosir`` 只读保留区（供 write / patch_write 等文件变更工具，越界或落入
-    保留区即拒绝）；
-    :meth:`resolve_without_boundary` 不强制 containment
-    （供 read / list 等只读工具，允许访问项目根外）。所有文件工具共用同一套设备
-    拦截与解析规则，避免规则漂移。
+    单一职责：解析路径并拦截设备路径与受保护路径，按写、读一份文件、读一个范围三种入口
+    提供（见模块说明）。所有文件工具共用同一套拦截与解析规则，避免规则漂移。
 
     参数:
         project_root: 允许访问的项目根目录，所有路径必须解析到其内部。
@@ -178,29 +176,16 @@ class PathResolver:
                 "read-only; write, edit, delete, and move operations must target files "
                 "outside '.cosir'."
             )
+        if ProtectedPaths.current().denies_write(resolved):
+            return None, self._protected_denial(path, resolved, write=True)
         return resolved, ""
 
-    def resolve_without_boundary(self, path: str) -> tuple[Path | None, str]:
-        """解析用户路径但不强制项目根 containment（供只读工具使用）。
+    def _resolve_unbounded(self, path: str) -> tuple[Path | None, str]:
+        """解析用户路径但不强制项目根 containment，是两个读入口的共同底座。
 
-        与 :meth:`resolve_within_workspace` 的唯一区别是不强制校验路径必须在
-        workspace 根内。相对路径仍以 workspace 根为基准解析（保持
-        ``read_file("src/x.py")`` 的体验），但解析到 workspace 外的绝对/越界路径
-        也允许。项目约定：workspace 内路径只读、可写；workspace 外的路径读是允许
-        的、写是禁止的。
-
-        参数:
-            path: 模型传入的路径字符串。
-
-        返回:
-            ``(resolved_path, "")`` 表示成功；``(None, error)`` 表示路径无法解析
-            （空串或解析异常）。
-
-        异常:
-            不向上抛出。解析失败会被转换成错误字符串。
-
-        副作用:
-            无。
+        相对路径仍以 workspace 根为基准解析（保持 ``read_file("src/x.py")`` 的体验），workspace
+        外的绝对 / 越界路径也允许：读可以出工作区，写不行。返回 ``(None, error)`` 表示空串、
+        NUL 或解析异常。
         """
 
         # 检查用户输入是否合法
@@ -217,19 +202,37 @@ class PathResolver:
         return resolved, ""
 
     def resolve_for_read(self, path: str) -> tuple[Path | None, str]:
-        """读取一个文件的路径规则：先按原始字符串拦设备路径（不碰文件系统），解析后再按真实
-        目标（跟随符号链接）拦一次。读取文件内容的工具都走这里，规则只此一份。
+        """读一份文件的路径规则：先按原始字符串拦设备路径（不碰文件系统），解析后再按真实
+        目标（跟随符号链接）拦一次设备路径与禁读的受保护路径。读取文件内容的工具都走这里，
+        规则只此一份。
         """
 
         device_error = self.blocked_device_reason(path)
         if device_error:
             return None, device_error
-        resolved, error = self.resolve_without_boundary(path)
+        resolved, error = self._resolve_unbounded(path)
         if resolved is None:
             return None, error
         device_error = self.blocked_device_reason(path, resolved)
         if device_error:
             return None, device_error
+        if ProtectedPaths.current().denies_read(resolved):
+            return None, self._protected_denial(path, resolved, write=False)
+        return resolved, ""
+
+    def resolve_read_scope(self, path: str) -> tuple[Path | None, str]:
+        """读一个范围（目录或文件）的路径规则：读一份文件的规则，再拒绝 ``/proc`` 等伪文件树。
+
+        列目录与递归搜索共用；不检查存在性与类型（各工具给出各自的提示）。范围内部的受保护
+        子树由搜索遍历剪掉，这里只拦起点本身。
+        """
+
+        resolved, error = self.resolve_for_read(path)
+        if resolved is None:
+            return None, error
+        pseudo_error = self._blocked_pseudo_tree_reason(path, resolved)
+        if pseudo_error:
+            return None, pseudo_error
         return resolved, ""
 
     def blocked_device_reason(self, path: str, resolved: Path | None = None) -> str:
@@ -268,45 +271,33 @@ class PathResolver:
             )
         return ""
 
-    def blocked_recursive_search_reason(
-        self,
-        path: str,
-        resolved: Path | None = None,
-    ) -> str:
-        """判断递归搜索根是否位于设备或敏感伪文件树。
+    def _blocked_pseudo_tree_reason(self, path: str, resolved: Path) -> str:
+        """判断范围起点是否位于 ``/proc``、``/sys``、``/dev`` 伪文件树；空串表示允许。"""
 
-        参数:
-            path: 原始搜索根路径。
-            resolved: 可选的 unrestricted 解析结果。
-
-        返回:
-            空字符串表示允许；非空字符串表示必须拒绝递归搜索。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
-        device_reason = self.blocked_device_reason(path, resolved)
-        if device_reason:
-            return device_reason
-        candidates = [str(path)]
-        # resolved.as_posix() 是把 Path 对象转换成统一用正斜杠 / 的路径字符串
-        if resolved is not None:
-            candidates.append(resolved.as_posix())
-        for candidate in candidates:
+        for candidate in (str(path), resolved.as_posix()):
             normalized = candidate.replace("\\", "/").lower().rstrip("/")
             if any(
                 normalized == root or normalized.startswith(f"{root}/")
                 for root in self.posix_blocked_recursive_roots
             ):
                 return (
-                    f"blocked recursive search path: {path}; "
-                    "search a regular directory inside the project instead"
+                    f"blocked pseudo-filesystem path: {path}; "
+                    "use a regular directory inside the project instead"
                 )
         return ""
+
+    @staticmethod
+    def _protected_denial(path: str, resolved: Path, *, write: bool) -> str:
+        """记录受保护路径拒绝并返回面向模型的说明。"""
+
+        log.warning(
+            "protected_path_denied",
+            extra={
+                "msg": "文件工具访问受保护路径被拒绝",
+                "data": {"path": path, "resolved": str(resolved), "write": write},
+            },
+        )
+        return ProtectedPaths.current().denial_message(path, write=write)
 
     def _is_blocked_posix_path(self, path: str) -> bool:
         """判断路径是否命中 POSIX 设备或 Linux procfs 敏感路径。

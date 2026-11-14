@@ -65,27 +65,13 @@ class SearchContentTool(HandlerBase):
         """解析文件/目录 scope，执行内容搜索并收口为 ToolObservation。"""
 
         workspace_root = execution_context.workspace_root
-        resolver = PathResolver(workspace_root)
-        device_error = resolver.blocked_device_reason(path)
-        if device_error:
-            return tool_error(
-                self.name,
-                device_error,
-                status_hint="搜索失败",
-            )
-        resolved_path, path_error = resolver.resolve_without_boundary(path)
+        resolved_path, path_error = PathResolver(workspace_root).resolve_read_scope(path)
         if resolved_path is None:
-            return _path_error(self.name, path_error or path)
+            return tool_error(self.name, path_error, status_hint="搜索失败")
         try:
             scope = SearchScope.from_path(
                 workspace_root, resolved_path, execution_context.session_id, time.monotonic() + self.timeout_seconds
             )
-            device_error = resolver.blocked_recursive_search_reason(path, resolved_path)
-            if device_error:
-                return tool_error(
-                    self.name,
-                    device_error,
-                )
             page = search_content(
                 scope,
                 pattern,
