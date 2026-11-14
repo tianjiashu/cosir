@@ -4,7 +4,11 @@ from collections.abc import Iterable
 
 from app.config.logging.logger import log
 from app.core.context.tool_call_closure import ContextProtocolError
-from app.core.tool.placeholder_settlement import INTERRUPTED_HINT, cancel_placeholders
+from app.core.tool.placeholder_settlement import (
+    INTERRUPTED_HINT,
+    cancel_placeholders,
+    expire_turn_decisions_after_run,
+)
 from app.core.workflow.message_queue.message_bodies import NoticeBody
 from app.core.workflow.message_queue.session_message import BackgroundResultBody, SessionMessage
 from app.models import (
@@ -53,9 +57,9 @@ class RecoverService:
         1. 收敛遗留 Run：之后查出的待调度 Session 以收敛后的 Run 状态为准。
         2. 为外部队列有待处理消息或当前 Run 挂起的 Session 物化 space（随之拉起 actor），让重启前
            已到达的消息照常处理、挂起的 Run 照常等唤醒。
-        3. 把重启前还在等结果的占位推到「已中断」，再给受影响的 Session 各投一条重启通知：它只唤醒
-           挂起的 Run（在 ``wait_messages`` 上等的工作已经没了，不叫醒就一直挂着），不开新 Run，
-           空闲的 Session 随下次驱动并入。
+        3. 被收敛的 Run 留下的提问作废；把重启前还在等结果的占位推到「已中断」，再给受影响的
+           Session 各投一条重启通知：它只唤醒挂起的 Run（在 ``wait_messages`` 上等的工作已经没了，
+           不叫醒就一直挂着），不开新 Run，空闲的 Session 随下次驱动并入。
         """
 
         recovered_runs = self.recover_orphaned_runs()
@@ -63,6 +67,10 @@ class RecoverService:
         for session_id in dispatch_session_ids:
             session_runtime_spaces.get_or_create(session_id)
         recovered_session_ids = {run.session_id for run in recovered_runs}
+        # 被收敛的 Run 不经 actor 的落定点：它们留下的回合类等待决定（提问）在这里作废，模型从下面
+        # 的重启通知得知。挂起的 Run 不在其列，它的提问照常等回答。
+        for session_id in sorted(recovered_session_ids):
+            expire_turn_decisions_after_run(session_id, INTERRUPTED_HINT)
         interrupted_session_ids = (
             recovered_session_ids
             | self._derivers_of(recovered_session_ids)

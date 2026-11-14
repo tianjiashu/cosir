@@ -2,8 +2,8 @@
 
 仅约定字段级契约：被接受的 diff 格式与 hunk 计数规则（按正文重算，不要求模型精确计数）
 的唯一事实源是下方 ``patch`` 字段的描述，最小示例随该字段的 ``examples`` 导出。工具描述
-（``apply_patch_tool.APPLY_PATCH_DESCRIPTION``）只承载工具职责及其与 ``write_file`` /
-``delete_file`` / ``move_file`` 的边界，绝不重复该格式，从而两处文本不会漂移。
+（``apply_patch_tool.APPLY_PATCH_DESCRIPTION``）只承载工具职责及其与 ``write_file`` 和终端
+（删除、移动）的边界，绝不重复该格式，从而两处文本不会漂移。
 """
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,8 +26,8 @@ class ApplyPatchArgs(BaseModel):
             "workspace-relative path. Body lines start with ' ' (context), '-' (removed) or "
             "'+' (added); hunk line counts are recomputed from the body. Every section must "
             "modify an existing UTF-8 text file: creation, deletion, moves, copies, mode-only "
-            "changes, binaries and merge diffs are rejected, so use write_file, delete_file or "
-            "move_file for those.\n"
+            "changes, binaries and merge diffs are rejected, so use write_file or "
+            "execute_terminal for those.\n"
         ),
         # 每行必须自带 "\n"：相邻字符串字面量会被直接拼接，漏掉换行时样例会塌成一行，
         # 模型照抄即被解析器拒绝。

@@ -80,6 +80,8 @@ from app.tools.tool_models.terminal.execute_terminal_args import (
 # - 没有 stdin、也没有终端：要输入的程序会读到输入结束、通常直接失败，要终端的程序（密码提示、
 #   全屏程序、git rebase -i / git add -i 这类交互参数）跑不起来。带上 --yes 之类的非交互参数。
 # - 用户在调用卡片上只看到输出的最后一段；要紧的结果写进回复。
+# - 移动、删除文件在这里做（mv / rm，PowerShell 用 Move-Item / Remove-Item）：先看清目标，移动不要
+#   覆盖已有文件。没有单独的移动、删除工具。
 # - 前台调用会一直占着这一步，直到命令退出或超时。长构建、测试套件设 background=true，继续做别的事。
 # - 命令用 & 或 nohup 留下的进程会在它结束时被结束（自行脱离会话的守护进程除外），改用
 #   background=true。
@@ -100,6 +102,8 @@ _DESCRIPTION = (
     "flags such as --yes.\n"
     "- The user sees only the tail of the output on the call card; state the results that "
     "matter in your reply.\n"
+    "- Move and delete files here (mv / rm, or Move-Item / Remove-Item in PowerShell): look at "
+    "the target first, and never let a move overwrite an existing file.\n"
     "- A foreground call holds this step until the command exits or times out. For long builds "
     "and test suites, set background=true and keep working.\n"
     "- Processes the command leaves behind with & or nohup are stopped when it exits (daemons "

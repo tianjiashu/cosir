@@ -136,6 +136,8 @@ class BrowserHandoffTool(HandlerBase):
 
     def to_definition(self) -> ToolDefinition:
         return ToolDefinition(
+            # 等用户决定的调用在对话里就地画成卡片，必须是独立工具（见 ``ToolDefinition.user_decision``）。
+            conversation_presentation="standalone",
             name=self.name,
             group=self.group,
             description=self.description,

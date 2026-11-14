@@ -5,7 +5,7 @@
 把消息正文映射为领域命令，发起配置字段由应用服务直接读取。
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
 
@@ -62,9 +62,13 @@ class SendMessageRequest(BaseModel):
 
 class DecisionRequest(BaseModel):
     """对一次等待用户决定的工具调用（HITL）作出决定；调用由路径里的 ``tool_call_id`` 寻址。
+
+    ``data`` 是工具声明的结构化回答（``ToolDefinition.decision_model``），这里只收原样 JSON，
+    形状由决定入口按工具校验（400 ``DECISION_DATA_INVALID``）。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     decision: Literal["approve", "reject"]
     feedback: str | None = None
+    data: dict[str, Any] | None = None
