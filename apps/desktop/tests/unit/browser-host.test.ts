@@ -175,18 +175,24 @@ describe("BrowserHost 资源生命周期", () => {
 
   // 潜在缺陷：「在不在面板上」另由设备模拟的占位矩形推断，某条只摘视图的路径（如关闭）没清它，后台标签里网页自己
   // 打开的选文件框就会弹给看不见这个页面的用户。
-  it("只有此刻挂在面板上的标签算挂上，摆上新的、摘下或关闭后都不算", async () => {
-    const window = {
-      contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
-      webContents: { getZoomFactor: () => 1 },
-    };
+  // 主窗口替身：place 会经 followRenderer 监听主窗口 webContents 的事件，替身须是可触发的事件源。
+  const panelWindow = () => ({
+    contentView: { addChildView: vi.fn(), removeChildView: vi.fn() },
+    webContents: Object.assign(new EventEmitter(), { getZoomFactor: () => 1 }),
+  });
+  const openTwoTabs = async (window: ReturnType<typeof panelWindow>) => {
     const host = new BrowserHost(() => window as never);
     const openings = [host.userOpen(1, limits), host.userOpen(1, limits)];
     tab(0).finish();
     tab(1).finish();
     await Promise.all(openings);
-    const rect = { x: 0, y: 0, width: 400, height: 300 };
-    const attached = () => FakeTab.instances.map((item) => item.events.isAttached());
+    return host;
+  };
+  const rect = { x: 0, y: 0, width: 400, height: 300 };
+  const attached = () => FakeTab.instances.map((item) => item.events.isAttached());
+
+  it("只有此刻挂在面板上的标签算挂上，摆上新的、摘下或关闭后都不算", async () => {
+    const host = await openTwoTabs(panelWindow());
 
     host.place("t1", rect);
     expect(attached()).toEqual([true, false]);
@@ -197,6 +203,20 @@ describe("BrowserHost 资源生命周期", () => {
     host.place("t1", rect);
     host.userClose("t1");
     expect(attached()).toEqual([false, false]);
+  });
+
+  // 整页刷新与渲染进程崩溃不执行面板卸载，摆放只能随上报它的文档作废（followRenderer）。
+  it.each(["did-navigate", "render-process-gone"])("主窗口 %s 时摘下面板上的标签，新文档上报后再挂上", async (event) => {
+    const window = panelWindow();
+    const host = await openTwoTabs(window);
+
+    host.place("t1", rect);
+    window.webContents.emit(event);
+    expect(attached()).toEqual([false, false]);
+    expect(window.contentView.removeChildView).toHaveBeenCalledWith(tab(0).view);
+
+    host.place("t1", rect);
+    expect(attached()).toEqual([true, false]);
   });
 
   it("初始化失败回收视图和名额，后续标签不复用 id", async () => {
