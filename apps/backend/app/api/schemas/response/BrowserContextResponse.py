@@ -10,7 +10,7 @@ from app.service.browser.tab_context import BrowserTabContext
 
 
 class BrowserTabLimitsResponse(BaseModel):
-    per_task: int
+    per_session: int
     total: int
 
 
@@ -22,7 +22,7 @@ class BrowserContextResponse(BaseModel):
     def from_domain(cls, context: BrowserTabContext) -> "BrowserContextResponse":
         return cls(
             limits=BrowserTabLimitsResponse(
-                per_task=context.limits.per_task, total=context.limits.total
+                per_session=context.limits.per_session, total=context.limits.total
             ),
             download_dir=context.download_dir,
         )

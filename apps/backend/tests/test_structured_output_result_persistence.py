@@ -6,12 +6,12 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.events import RunResultUpdatedEvent, RunStatusChangedEvent
-from app.core.workflow import conversation_run_ledger as ledger_module
-from app.models.enums.conversation_run_status import RunTransition
+from app.core.workflow import run_ledger as ledger_module
+from app.models.enums.run_status import RunTransition
 from app.service.depends import (
-    get_conversation_run_crud,
-    get_conversation_run_ledger,
-    get_task_crud,
+    get_run_crud,
+    get_run_ledger,
+    get_session_crud,
     get_workspace_crud,
 )
 
@@ -29,10 +29,10 @@ def test_structured_result_only_updates_completed_fields(
     ),
     )
     workspace = get_workspace_crud().create("structured-test", str(Path.cwd()))
-    task = get_task_crud().create(workspace.id, "task")
-    run_crud = get_conversation_run_crud()
-    run = run_crud.create(task.id, status="running")
-    state = get_conversation_run_ledger()
+    session = get_session_crud().create(workspace.id, "session")
+    run_crud = get_run_crud()
+    run = run_crud.create(session.id, status="running")
+    state = get_run_ledger()
 
     state.transition(run.id, RunTransition.COMPLETE, final_output="自然回答", end_reason="stop")
     if succeeds:
@@ -47,7 +47,7 @@ def test_structured_result_only_updates_completed_fields(
     assert [type(event) for event in events] == [RunStatusChangedEvent, RunResultUpdatedEvent]
     assert events[0].end_reason == "stop"
 
-    other = run_crud.create(task.id, status="running")
+    other = run_crud.create(session.id, status="running")
     assert state.update_completed_result(other.id, end_reason="structured_output_failed") is None
     assert run_crud.get(other.id).end_reason is None
     assert len(events) == 2
@@ -65,11 +65,11 @@ def test_completion_persists_empty_output_and_finish_reason(
     ),
     )
     workspace = get_workspace_crud().create("empty-output-test", str(Path.cwd()))
-    task = get_task_crud().create(workspace.id, "task")
-    run_crud = get_conversation_run_crud()
-    run = run_crud.create(task.id, status="running")
+    session = get_session_crud().create(workspace.id, "session")
+    run_crud = get_run_crud()
+    run = run_crud.create(session.id, status="running")
 
-    get_conversation_run_ledger().transition(
+    get_run_ledger().transition(
         run.id, RunTransition.COMPLETE, final_output="", end_reason="content_filter"
     )
 

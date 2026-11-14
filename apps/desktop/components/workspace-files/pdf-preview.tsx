@@ -38,7 +38,7 @@ import type { FindDirection, FindResult } from "@/lib/find/next-match";
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
 /**
- * PDF.js viewer 负责页面回收、文本层与查找；销毁 loadingTask 同时终止 range 请求及 worker。
+ * PDF.js viewer 负责页面回收、文本层与查找；销毁 loadingSession 同时终止 range 请求及 worker。
  * 翻页与查找入口放进共用工具栏；查找沿用 PDF.js 的查找控制器（逐页文本层高亮），查找条是应用共用的
  * `FindBar`，命中位置来自控制器的 `updatefindmatchescount` 事件。
  */

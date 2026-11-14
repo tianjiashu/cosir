@@ -1,10 +1,9 @@
 import { createElement, type ComponentProps } from "react";
 import {
   BotIcon,
+  CircleHelpIcon,
   ClockIcon,
   EyeIcon,
-  FileSymlinkIcon,
-  FileXIcon,
   GitCompareIcon,
   GitForkIcon,
   GlobeIcon,
@@ -24,12 +23,11 @@ import { cn } from "@/lib/utils";
 /** 工具目录（`lib/assistant/tools/tool-catalog.ts`）里 `icon` 的取值表（lucide 图标名）；没登记的名字回落到扳手。 */
 const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   bot: BotIcon,
+  "circle-help": CircleHelpIcon,
   clock: ClockIcon,
   eye: EyeIcon,
   "git-compare": GitCompareIcon,
   "git-fork": GitForkIcon,
-  "file-x": FileXIcon,
-  "file-symlink": FileSymlinkIcon,
   globe: GlobeIcon,
   info: InfoIcon,
   network: NetworkIcon,

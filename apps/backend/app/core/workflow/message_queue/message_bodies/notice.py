@@ -8,7 +8,7 @@ from pydantic import Field
 
 from app.core.workflow.message_queue.message_bodies.base import (
     EnqueuedMessageBody,
-    TaskMessageKind,
+    SessionMessageKind,
     WakeScope,
 )
 from app.core.workflow.message_queue.message_bodies.rendering import render_time
@@ -19,43 +19,52 @@ NoticeKind = Literal[
     "catalog_change",
     "fork_handover",
     "backend_restarted",
-    "derived_task_stopped",
+    "derived_session_stopped",
     "tool_availability",
     "user_cancelled",
     "model_continuation",
+    "decision_expired",
+    "open_items",
 ]
-NoticeLevel = Literal["task", "run", "turn"]
+NoticeLevel = Literal["session", "run", "turn"]
 
 # 通知按它说的事属于哪一层分级，级别决定通知从哪来、撤回回合时怎么办：
-# - task：Task 环境的变化（系统提示词、能力目录、分叉交接、后端重启、派生 Task 被用户停止）。事件只在那一刻
+# - session：Session 环境的变化（系统提示词、能力目录、分叉交接、后端重启、派生 Session 被用户停止）。事件只在那一刻
 #   存在，经外部队列投递、只投一次；所在回合被撤回时重新投递，否则之后的 Run 永远看不到这次变化。
-# - run：本 Run 的事实（工具准入）。驱动开始时对照上下文推导（``drive_notices``），不入队。
+# - run：本 Run 的事实（工具准入、还有哪些事没了结）。驱动开始时对照上下文推导（``drive_notices``），
+#   不入队。
 # - turn：上一个回合怎样结束（用户已停止）或本次驱动内的提示（续写）。驱动开始时推导或驱动内投递，
 #   不入队。
-# run 与 turn 级都从持久化事实与上下文现推，撤回后自然重新推导，所以撤回只需重新投递 task 级。
+# run 与 turn 级都从持久化事实与上下文现推，撤回后自然重新推导，所以撤回只需重新投递 session 级。
 NOTICE_LEVELS: dict[NoticeKind, NoticeLevel] = {
-    "system_prompt_delta": "task",
-    "catalog_change": "task",
-    "fork_handover": "task",
-    "backend_restarted": "task",
-    "derived_task_stopped": "task",
+    "system_prompt_delta": "session",
+    "catalog_change": "session",
+    "fork_handover": "session",
+    "backend_restarted": "session",
+    "derived_session_stopped": "session",
     "tool_availability": "run",
+    "open_items": "run",
     "user_cancelled": "turn",
     "model_continuation": "turn",
+    # 提问没等到回答：这件事只发生一次。Run 内作废时由驱动投，Run 落定后作废时经外部队列投；所在
+    # 回合被撤回时重新投递——提问仍是作废的，模型还得知道。
+    "decision_expired": "session",
 }
 
 # 通知的唤醒范围（见 ``WakeScope``）：通知多半只提醒、不值得单独跑一轮模型。例外是「等着的东西没了」：
-# 派生的 Task 被用户停止或删除、后端重启都不会再汇报，挂起在 ``wait_messages`` 上等它们的
+# 派生的 Session 被用户停止或删除、后端重启都不会再汇报，挂起在 ``wait_messages`` 上等它们的
 # Agent 只能靠这条通知醒来，否则一直挂着；Agent 空闲时仍不为它开新 Run。
 NOTICE_WAKE_SCOPES: dict[NoticeKind, WakeScope] = {
     "system_prompt_delta": "none",
     "catalog_change": "none",
     "fork_handover": "none",
     "backend_restarted": "active",
-    "derived_task_stopped": "active",
+    "derived_session_stopped": "active",
     "tool_availability": "none",
+    "open_items": "none",
     "user_cancelled": "none",
     "model_continuation": "none",
+    "decision_expired": "none",
 }
 
 
@@ -67,7 +76,7 @@ class NoticeBody(EnqueuedMessageBody):
     规则）、只进系统提示词，不随每条通知重复。``notice_kind`` / ``metadata`` 只服务观测，不进模型正文。
     """
 
-    KIND: ClassVar[TaskMessageKind] = "system_notice"
+    KIND: ClassVar[SessionMessageKind] = "system_notice"
     TAG: ClassVar[str] = "system_notice"
     PROMPT_GUIDE: ClassVar[str | None] = (
         "runtime facts injected by the system (instruction or catalog changes, tool admission, "
@@ -84,6 +93,8 @@ class NoticeBody(EnqueuedMessageBody):
     metadata: dict[str, str | None] = Field(default_factory=dict)
     # 只有工具准入通知带：告知时禁用的工具名（排序），是下一次推导的比对基准（随行落库）。
     banned_tools: list[str] | None = None
+    # 只有未了结事项通知带：告知时的清单（排序），同样是下一次推导的比对基准。
+    open_items: list[str] | None = None
 
     def wake_scope(self) -> WakeScope:
         return NOTICE_WAKE_SCOPES[self.notice_kind]
@@ -114,6 +125,7 @@ def notices_to_context(
                     notice_kind=item.notice_kind,
                     content=item.content,
                     banned_tools=item.banned_tools,
+                    open_items=item.open_items,
                 )
                 for item in notices
             ],

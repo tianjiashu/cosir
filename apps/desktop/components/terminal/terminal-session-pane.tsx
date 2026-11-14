@@ -8,17 +8,17 @@ import { TerminalView, type TerminalViewRuntime } from "./terminal-view";
 import { xtermPaneTheme } from "./xterm-appearance";
 
 type TerminalSessionPaneProps = {
-  taskId: number;
-  sessionId: string;
+  sessionId: number;
+  terminalSessionId: string;
   /** 当前选中且面板可见：只有它可见、可交互并获取焦点。 */
   visible: boolean;
   focusToken: number;
   workspaceRoot?: string;
-  onRuntime: (sessionId: string, runtime: TerminalViewRuntime) => void;
-  onSearchResults: (sessionId: string, result: { index: number; count: number }) => void;
+  onRuntime: (terminalSessionId: string, runtime: TerminalViewRuntime) => void;
+  onSearchResults: (terminalSessionId: string, result: { index: number; count: number }) => void;
   onOpenSearch: () => void;
   onOpenLink: (target: LinkTarget) => void;
-  registerView: (sessionId: string, view: TerminalView | null) => void;
+  registerView: (terminalSessionId: string, view: TerminalView | null) => void;
 };
 
 /**
@@ -30,8 +30,8 @@ type TerminalSessionPaneProps = {
  * 直接跳过 fit，不会把 0 行列发给后端，重新可见时由 `refresh` 补一次 fit。
  */
 export function TerminalSessionPane({
-  taskId,
   sessionId,
+  terminalSessionId,
   visible,
   focusToken,
   workspaceRoot,
@@ -54,23 +54,23 @@ export function TerminalSessionPane({
     const container = containerRef.current;
     if (!container) return;
     const view = new TerminalView(container, {
-      taskId,
       sessionId,
+      terminalSessionId,
       theme: xtermPaneTheme(initialThemeRef.current),
       getWorkspaceRoot: () => latestRef.current.workspaceRoot,
-      onRuntime: (runtime) => latestRef.current.onRuntime(sessionId, runtime),
-      onSearchResults: (result) => latestRef.current.onSearchResults(sessionId, result),
+      onRuntime: (runtime) => latestRef.current.onRuntime(terminalSessionId, runtime),
+      onSearchResults: (result) => latestRef.current.onSearchResults(terminalSessionId, result),
       onOpenSearch: () => latestRef.current.onOpenSearch(),
       onOpenLink: (target) => latestRef.current.onOpenLink(target),
     });
     viewRef.current = view;
-    registerView(sessionId, view);
+    registerView(terminalSessionId, view);
     return () => {
-      registerView(sessionId, null);
+      registerView(terminalSessionId, null);
       viewRef.current = null;
       view.dispose();
     };
-  }, [registerView, sessionId, taskId]);
+  }, [registerView, terminalSessionId, sessionId]);
 
   useEffect(() => {
     viewRef.current?.setTheme(xtermPaneTheme(resolvedTheme));
@@ -93,7 +93,7 @@ export function TerminalSessionPane({
     <div
       className={cn("absolute inset-0 px-3 py-2", !visible && "invisible pointer-events-none")}
       aria-hidden={!visible || undefined}
-      data-terminal-session={sessionId}
+      data-terminal-session={terminalSessionId}
       data-active={visible || undefined}
     >
       <div ref={containerRef} className="h-full w-full" />

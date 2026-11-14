@@ -9,7 +9,7 @@ import {
 } from "@/lib/assistant/turn/disclosure-store";
 
 describe("disclosure store", () => {
-  beforeEach(() => useDisclosureStore.setState({ tasks: {} }));
+  beforeEach(() => useDisclosureStore.setState({ sessions: {} }));
 
   it("没有覆盖时按调用方给的默认值；默认值随阶段变化，不被旧状态卡住", () => {
     expect(resolveDisclosure(1, processKey("m1"), true)).toBe(true);
@@ -29,23 +29,23 @@ describe("disclosure store", () => {
 
     reset(1, processKey("m1"));
     expect(resolveDisclosure(1, processKey("m1"), true)).toBe(true);
-    expect(useDisclosureStore.getState().tasks[1]).toEqual({ [callKey("c1")]: true, [activityKey("m1", "3")]: true });
+    expect(useDisclosureStore.getState().sessions[1]).toEqual({ [callKey("c1")]: true, [activityKey("m1", "3")]: true });
   });
 
-  it("按 Task 分桶：同名键在不同 Task 互不影响", () => {
+  it("按 Session 分桶：同名键在不同 Session 互不影响", () => {
     useDisclosureStore.getState().set(1, callKey("c1"), true);
     expect(resolveDisclosure(2, callKey("c1"), false)).toBe(false);
   });
 
-  it("clearTask 丢掉整桶，不影响其他 Task", () => {
-    const { set, clearTask } = useDisclosureStore.getState();
+  it("clearSession 丢掉整桶，不影响其他 Session", () => {
+    const { set, clearSession } = useDisclosureStore.getState();
     set(1, callKey("c1"), true);
     set(2, callKey("c1"), true);
-    clearTask(1);
-    expect(useDisclosureStore.getState().tasks).toEqual({ 2: { [callKey("c1")]: true } });
-    // 不存在的 Task 不产生新状态对象。
+    clearSession(1);
+    expect(useDisclosureStore.getState().sessions).toEqual({ 2: { [callKey("c1")]: true } });
+    // 不存在的 Session 不产生新状态对象。
     const before = useDisclosureStore.getState();
-    clearTask(9);
+    clearSession(9);
     expect(useDisclosureStore.getState()).toBe(before);
   });
 });

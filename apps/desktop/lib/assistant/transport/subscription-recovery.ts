@@ -11,9 +11,9 @@ export type TransportIssue = {
 export type ReconnectReason = "disconnected" | "resync_required";
 
 export type SubscriptionRecoveryDeps = {
-  taskId: number;
+  sessionId: number;
   traceId: string;
-  /** 打开（或替换）Task 长订阅。 */
+  /** 打开（或替换）Session 长订阅。 */
   attach: () => void;
   backend: () => { available: boolean; generation: number };
   setIssue: (issue: TransportIssue | null) => void;
@@ -31,10 +31,10 @@ const RECONNECT_DELAYS_MS = [0, 250, 500, 1_000, 2_000] as const;
 const RECOVERY_FEEDBACK_DELAY_MS = 350;
 
 /**
- * 订阅恢复编排（由 `TaskTransportConnection` 持有，主对话与 Workbench 阅读页因此共用）：断流重连、背压重同步、
+ * 订阅恢复编排（由 `SessionTransportConnection` 持有，主对话与 Workbench 阅读页因此共用）：断流重连、背压重同步、
  * 手动重新同步与后端恢复都走这里。
  *
- * 订阅跟随 Task、首帧总是完整 canonical state，所以恢复只需重开订阅，不另读 snapshot、不判断
+ * 订阅跟随 Session、首帧总是完整 canonical state，所以恢复只需重开订阅，不另读 snapshot、不判断
  * Run 状态；业务执行是否继续与订阅无关。计时期间后端换了实例时旧计时器作废，交给后端恢复入口
  * 统一 resync。
  */
@@ -71,7 +71,7 @@ export class SubscriptionRecovery {
     if (reason === "resync_required") {
       void frontendLog("INFO", "assistant_transport_resync_required", "Assistant Transport 背压重同步，立即重开订阅", {
         traceId: this.deps.traceId,
-        data: { taskId: this.deps.taskId },
+        data: { sessionId: this.deps.sessionId },
       });
       this.resetBudget();
       this.attachNow();
@@ -83,7 +83,7 @@ export class SubscriptionRecovery {
     if (this.attempts >= MAX_RECONNECT_ATTEMPTS) {
       void frontendLog("WARNING", "assistant_transport_reconnect_exhausted", "Assistant Transport 重连次数耗尽", {
         traceId: this.deps.traceId,
-        data: { taskId: this.deps.taskId, attempts: this.attempts },
+        data: { sessionId: this.deps.sessionId, attempts: this.attempts },
       });
       this.deps.setIssue({ message: "本机后端连接多次中断，请重新同步恢复对话。", canResync: true });
       return;
@@ -94,7 +94,7 @@ export class SubscriptionRecovery {
     const scheduledGeneration = this.deps.backend().generation;
     void frontendLog("INFO", "assistant_transport_reconnect_scheduled", "Assistant Transport 已安排重连", {
       traceId: this.deps.traceId,
-      data: { taskId: this.deps.taskId, attempt: attempt + 1, delay },
+      data: { sessionId: this.deps.sessionId, attempt: attempt + 1, delay },
     });
     if (this.feedbackTimer === null) {
       this.feedbackTimer = setTimeout(() => {
@@ -113,7 +113,7 @@ export class SubscriptionRecovery {
   public resync = (issue?: TransportIssue | null): void => {
     void frontendLog("INFO", "assistant_transport_resync", "Assistant Transport 重新同步", {
       traceId: this.deps.traceId,
-      data: { taskId: this.deps.taskId, reason: "user_resync" },
+      data: { sessionId: this.deps.sessionId, reason: "user_resync" },
     });
     this.resetBudget();
     if (issue !== undefined) this.deps.setIssue(issue);
@@ -122,7 +122,7 @@ export class SubscriptionRecovery {
 
   /**
    * 后端恢复或换了实例：清零预算并提示正在同步，但不在这里重开——重开由连接在同一次后端跳变里
-   * 自己做（`TaskTransportConnection` 跟随后端实例），这里再开一次只会把刚建立的连接替换掉。
+   * 自己做（`SessionTransportConnection` 跟随后端实例），这里再开一次只会把刚建立的连接替换掉。
    */
   public restored = (issue: TransportIssue | null): void => {
     this.resetBudget();

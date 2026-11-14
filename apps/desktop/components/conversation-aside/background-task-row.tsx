@@ -13,7 +13,7 @@ import type { BackgroundTaskEntry, TransportToolCallPart } from "@/lib/assistant
 import { toToolCallPart } from "@/lib/assistant/transport-message-converter";
 import { callKey, useDisclosure } from "@/lib/assistant/turn/disclosure-store";
 import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
-import { cancelToolCall } from "@/lib/assistant/task-commands";
+import { cancelToolCall } from "@/lib/assistant/session-commands";
 import { notify } from "@/lib/notify";
 import { useBackgroundTaskPart } from "@/lib/background-tasks/background-tasks-store";
 import { useElapsedSince } from "@/hooks/use-elapsed-since";
@@ -36,22 +36,22 @@ const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
  * 对话里的占位还没落定）不计时、不能停止，只标「收尾中」，等 snapshot 回推完成或取消。
  * 操作只发命令，结果等 snapshot 回推。
  */
-export function BackgroundTaskRow({ taskId, entry }: { taskId: number; entry: BackgroundTaskEntry }) {
-  const request = useCommandRequest(taskId, stopTarget(entry.toolCallId));
+export function BackgroundTaskRow({ sessionId, entry }: { sessionId: number; entry: BackgroundTaskEntry }) {
+  const request = useCommandRequest(sessionId, stopTarget(entry.toolCallId));
   const busy = commandPending(request);
-  const part = useBackgroundTaskPart(taskId, entry.toolCallId);
+  const part = useBackgroundTaskPart(sessionId, entry.toolCallId);
   const running = entry.status === "running";
-  const [expanded, setExpanded] = useDisclosure(taskId, callKey(entry.toolCallId), false);
+  const [expanded, setExpanded] = useDisclosure(sessionId, callKey(entry.toolCallId), false);
   const Icon = KIND_ICONS[entry.kind];
   const requested = useConversationAsideStore((state) => state.revealCall);
   const ref = useRef<HTMLLIElement>(null);
   useEffect(() => {
-    if (requested?.taskId === taskId && requested.callId === entry.toolCallId) {
+    if (requested?.sessionId === sessionId && requested.callId === entry.toolCallId) {
       ref.current?.scrollIntoView({ block: "nearest" });
       useConversationAsideStore.getState().consumeReveal();
     }
-  }, [requested, taskId, entry.toolCallId]);
-  const view = part && backgroundCallView(taskId, part, entry.status);
+  }, [requested, sessionId, entry.toolCallId]);
+  const view = part && backgroundCallView(sessionId, part, entry.status);
   const open = expanded && view?.detail !== undefined;
 
   const run = async (action: () => Promise<string | null>) => {
@@ -87,7 +87,7 @@ export function BackgroundTaskRow({ taskId, entry }: { taskId: number; entry: Ba
             tooltip={busy ? "正在停止" : request?.error ? "重试停止" : "停止"}
             className="size-6"
             disabled={busy}
-            onClick={() => run(() => cancelToolCall(taskId, entry.toolCallId))}
+            onClick={() => run(() => cancelToolCall(sessionId, entry.toolCallId))}
           >
             <SquareIcon aria-hidden="true" />
           </TooltipIconButton>
@@ -112,11 +112,11 @@ export function BackgroundTaskRow({ taskId, entry }: { taskId: number; entry: Ba
   );
 }
 
-function backgroundCallView(taskId: number, part: TransportToolCallPart, workStatus: BackgroundTaskEntry["status"]) {
+function backgroundCallView(sessionId: number, part: TransportToolCallPart, workStatus: BackgroundTaskEntry["status"]) {
   const converted = toToolCallPart(part);
   if (converted.type !== "tool-call") return null;
   const artifact = readToolArtifact(converted.artifact);
-  return resolveCallView({ taskId, toolCallId: part.toolCallId, artifact, args: part.args ?? {}, interactive: false, taskCancelling: false, surface: "details", workStatus });
+  return resolveCallView({ sessionId, toolCallId: part.toolCallId, toolName: part.toolName, artifact, args: part.args ?? {}, interactive: false, sessionCancelling: false, surface: "details", workStatus });
 }
 
 /**

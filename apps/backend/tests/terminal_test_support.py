@@ -142,7 +142,7 @@ def make_service(
     return TerminalSessionService(on_sessions_changed=on_changed or ignore_session_changes), workers
 
 
-def ignore_session_changes(_task_id: int) -> None:
+def ignore_session_changes(_session_id: int) -> None:
     """会话变化的通知替身：测试不接 snapshot 投影时用。"""
 
 
@@ -153,14 +153,14 @@ def _spec(shell: str, integration: str) -> Any:
     return ShellSpec(kind, f"/bin/{kind}", (f"/bin/{kind}",), integration)
 
 
-def start(service: TerminalSessionService, tmp_path: Any, *, task_id: int = 1,
+def start(service: TerminalSessionService, tmp_path: Any, *, session_id: int = 1,
           shell: str = "auto") -> str:
     runtime = service.start(
-        task_id=task_id,
+        session_id=session_id,
         cwd=str(tmp_path),
         shell=shell,
     )
-    return runtime.session_id
+    return runtime.terminal_session_id
 
 
 def user_enter(runtime: Any, text: str = "") -> None:
@@ -177,30 +177,30 @@ def never() -> bool:
     return False
 
 
-def session_view(service: TerminalSessionService, session_id: str, task_id: int = 1) -> Any:
+def session_view(service: TerminalSessionService, terminal_session_id: str, session_id: int = 1) -> Any:
     """测试检查用：会话当前快照。"""
-    return service.require(session_id, task_id).snapshot()
+    return service.require(terminal_session_id, session_id).snapshot()
 
 
-def session_entries(service: TerminalSessionService, task_id: int = 1) -> list[dict[str, Any]]:
-    """该 Task 的 Transport 会话条目（生产投影同一路径：快照 → ``to_terminal_session``）。"""
+def session_entries(service: TerminalSessionService, session_id: int = 1) -> list[dict[str, Any]]:
+    """该 Session 的 Transport 会话条目（生产投影同一路径：快照 → ``to_terminal_session``）。"""
     from app.assistant_transport.state.conversation_state_terminal_session import (
         to_terminal_session,
     )
 
-    return [dict(to_terminal_session(r.snapshot())) for r in service.task_runtimes(task_id)]
+    return [dict(to_terminal_session(r.snapshot())) for r in service.session_runtimes(session_id)]
 
 
-def geometry(service: TerminalSessionService, session_id: str, task_id: int = 1) -> tuple[int, int]:
+def geometry(service: TerminalSessionService, terminal_session_id: str, session_id: int = 1) -> tuple[int, int]:
     """测试检查用：会话当前屏幕尺寸（跟随 worker screen 事件）。"""
-    buffer = service.require(session_id, task_id)._observation.buffer
+    buffer = service.require(terminal_session_id, session_id)._observation.buffer
     return buffer.rows, buffer.columns
 
 
-def active_session_ids(service: TerminalSessionService, task_id: int = 1) -> list[str]:
+def active_session_ids(service: TerminalSessionService, session_id: int = 1) -> list[str]:
     return [
-        str(entry["sessionId"])
-        for entry in session_entries(service, task_id)
+        str(entry["terminalSessionId"])
+        for entry in session_entries(service, session_id)
         if entry["status"] in ("starting", "running")
     ]
 

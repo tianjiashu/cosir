@@ -23,20 +23,20 @@ pytestmark = [
     requires_terminal_worker,
 ]
 
-_TASK_ID = 41
+_SESSION_ID = 41
 
 
 @pytest.fixture
 def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, dict[str, Any]]]:
     calls: list[tuple[str | None, str, dict[str, Any]]] = []
 
-    def deliver(task_id, tool_call_id, conclusion, *, starts_run=True) -> bool:
+    def deliver(session_id, tool_call_id, conclusion, *, starts_run=True) -> bool:
         calls.append(
             (tool_call_id, "execute_terminal", {**conclusion.result, "card": conclusion.display_data})
         )
         return True
 
-    def report_cancelled(task_id, tool_call_id, conclusion) -> bool:
+    def report_cancelled(session_id, tool_call_id, conclusion) -> bool:
         calls.append((tool_call_id, "execute_terminal", {
             **conclusion.result, "cancel_hint": conclusion.cancel_hint,
             "card": conclusion.display_data,
@@ -48,18 +48,18 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
         CommandResultRegistry, "_enqueue_cancel_receipt", staticmethod(report_cancelled),
     )
     yield calls
-    # 收尾：撤销这个 Task 全部后台条目，并等作业线程把登记表条目清掉。
-    command_results.drop_task(_TASK_ID)
+    # 收尾：撤销这个 Session 全部后台条目，并等作业线程把登记表条目清掉。
+    command_results.drop_session(_SESSION_ID)
     deadline = time.monotonic() + 10
-    while running_commands.task_commands(_TASK_ID) and time.monotonic() < deadline:
+    while running_commands.session_commands(_SESSION_ID) and time.monotonic() < deadline:
         time.sleep(0.02)
 
 
-def _context(tmp_path: Path, tool_call_id: str, task_id: int = _TASK_ID) -> ToolExecutionContext:
+def _context(tmp_path: Path, tool_call_id: str, session_id: int = _SESSION_ID) -> ToolExecutionContext:
     return ToolExecutionContext(
         call_intent="test",
         step_id="step-1",
-        task_id=task_id,
+        session_id=session_id,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=1,
@@ -103,7 +103,7 @@ def test_background_command_can_be_read_listed_and_stopped(tmp_path, delivered) 
     _wait_for(lambda: len(delivered) == 1)
     assert delivered[0][2]["end_reason"] == "cancelled"
 
-    # 结束即从登记表移除：再读只剩「这个 Task 里没有这个终端」。
+    # 结束即从登记表移除：再读只剩「这个 Session 里没有这个终端」。
     after = TerminalReadTool().execute(
         terminal_id="call-bg", execution_context=_context(tmp_path, "call-after")
     )
@@ -126,7 +126,7 @@ def test_stop_and_read_reject_unknown_or_foreign_terminals(tmp_path) -> None:
         missing_stop.content or ""
     )
 
-    # 另一个 Task 看不到这个 Task 的命令。
+    # 另一个 Session 看不到这个 Session 的命令。
     ExecuteTerminalTool().execute(
         command="sleep 30",
         background=True,
@@ -134,7 +134,7 @@ def test_stop_and_read_reject_unknown_or_foreign_terminals(tmp_path) -> None:
     )
     foreign = TerminalReadTool().execute(
         terminal_id="call-owned",
-        execution_context=_context(tmp_path, "call-r2", task_id=_TASK_ID + 1),
+        execution_context=_context(tmp_path, "call-r2", session_id=_SESSION_ID + 1),
     )
     assert foreign.status == "error" and "no terminal call-owned" in (foreign.content or "")
 
@@ -186,4 +186,4 @@ def test_a_shell_gone_after_startup_is_a_start_failure(tmp_path, delivered, monk
     assert result.status == "error"
     assert "[start_failed]" in (result.content or "")
     assert "sh is not available" in (result.content or "")
-    assert running_commands.task_commands(_TASK_ID) == []
+    assert running_commands.session_commands(_SESSION_ID) == []

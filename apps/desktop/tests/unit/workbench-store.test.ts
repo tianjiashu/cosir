@@ -25,38 +25,38 @@ describe("workbench store", () => {
 
   it("按工作区分桶：切换工作区不影响另一个工作区的标签与草稿", () => {
     const store = useWorkbenchStore.getState();
-    store.openAgent(7, { taskId: 21, title: "审查" });
-    store.openAgent(7, { taskId: 21, title: "审查（更新）" });
-    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    store.openAgent(7, { sessionId: 21, title: "审查" });
+    store.openAgent(7, { sessionId: 21, title: "审查（更新）" });
+    store.openAgentConfigurationDraft(7, { sessionId: 20, toolCallId: "call-1", draft: agentDraft });
     agentDraftTab(7, "call-1").session.setField("description", "改过的描述");
-    store.openAgent(8, { taskId: 30, title: "另一个工作区" });
+    store.openAgent(8, { sessionId: 30, title: "另一个工作区" });
 
-    expect(session(7).tabs.map((tab) => tab.id)).toEqual(["agent-task:21", "agent-config-draft:20:call-1"]);
+    expect(session(7).tabs.map((tab) => tab.id)).toEqual(["agent-session:21", "agent-config-draft:20:call-1"]);
     expect(session(7).tabs[0].title).toBe("审查（更新）");
     expect(agentDraftTab(7, "call-1").session.store.getState().form.description).toBe("改过的描述");
-    expect(session(8).tabs.map((tab) => tab.id)).toEqual(["agent-task:30"]);
+    expect(session(8).tabs.map((tab) => tab.id)).toEqual(["agent-session:30"]);
   });
 
   it("关闭标签时激活项落到相邻标签；关完后没有标签（面板随之不显示，见 useDockPanels）", () => {
     const store = useWorkbenchStore.getState();
-    store.openAgent(7, { taskId: 1, title: "一" });
-    store.openAgent(7, { taskId: 2, title: "二" });
-    store.openAgent(7, { taskId: 3, title: "三" });
-    store.activateTab(7, "agent-task:2");
-    store.closeTab(7, "agent-task:2");
-    expect(session(7).activeTabId).toBe("agent-task:3");
-    store.closeTab(7, "agent-task:1");
-    store.closeTab(7, "agent-task:3");
+    store.openAgent(7, { sessionId: 1, title: "一" });
+    store.openAgent(7, { sessionId: 2, title: "二" });
+    store.openAgent(7, { sessionId: 3, title: "三" });
+    store.activateTab(7, "agent-session:2");
+    store.closeTab(7, "agent-session:2");
+    expect(session(7).activeTabId).toBe("agent-session:3");
+    store.closeTab(7, "agent-session:1");
+    store.closeTab(7, "agent-session:3");
     expect(session(7)).toMatchObject({ tabs: [], activeTabId: null });
   });
 
   it("重复打开同一草稿不覆盖正在编辑的会话", () => {
     const store = useWorkbenchStore.getState();
-    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    store.openAgentConfigurationDraft(7, { sessionId: 20, toolCallId: "call-1", draft: agentDraft });
     const opened = agentDraftTab(7, "call-1").session;
     opened.setField("role", "资深审查");
-    store.openAgent(7, { taskId: 21, title: "其他" });
-    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    store.openAgent(7, { sessionId: 21, title: "其他" });
+    store.openAgentConfigurationDraft(7, { sessionId: 20, toolCallId: "call-1", draft: agentDraft });
 
     expect(agentDraftTab(7, "call-1").session).toBe(opened);
     expect(session(7).activeTabId).toBe("agent-config-draft:20:call-1");
@@ -64,53 +64,53 @@ describe("workbench store", () => {
 
   it("关闭已保存过的草稿记下已保存标记，重新打开时从原始草稿新建会话并清除标记", async () => {
     const store = useWorkbenchStore.getState();
-    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    store.openAgentConfigurationDraft(7, { sessionId: 20, toolCallId: "call-1", draft: agentDraft });
     await agentDraftTab(7, "call-1").session.save(persistAgent);
     store.closeTab(7, "agent-config-draft:20:call-1");
     expect(session(7).savedDraftIds).toEqual(["20:call-1"]);
 
-    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    store.openAgentConfigurationDraft(7, { sessionId: 20, toolCallId: "call-1", draft: agentDraft });
     expect(session(7).savedDraftIds).toEqual([]);
     expect(agentDraftTab(7, "call-1").session.store.getState().dirty).toBe(true);
   });
 
-  it("两个 Task 的同号调用各开各的草稿标签", () => {
+  it("两个 Session 的同号调用各开各的草稿标签", () => {
     const store = useWorkbenchStore.getState();
-    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call_0", draft: agentDraft });
-    store.openAgentConfigurationDraft(7, { taskId: 21, toolCallId: "call_0", draft: agentDraft });
+    store.openAgentConfigurationDraft(7, { sessionId: 20, toolCallId: "call_0", draft: agentDraft });
+    store.openAgentConfigurationDraft(7, { sessionId: 21, toolCallId: "call_0", draft: agentDraft });
     expect(session(7).tabs.map((tab) => tab.id)).toEqual(["agent-config-draft:20:call_0", "agent-config-draft:21:call_0"]);
   });
 
   it("未保存过的草稿关闭后不记已保存标记", () => {
     const store = useWorkbenchStore.getState();
-    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    store.openAgentConfigurationDraft(7, { sessionId: 20, toolCallId: "call-1", draft: agentDraft });
     store.closeTab(7, "agent-config-draft:20:call-1");
     expect(session(7).savedDraftIds).toEqual([]);
   });
 
-  it("删除 Task 时移除属于它的子 Agent 与草稿标签，删除工作区时丢弃整个桶", () => {
+  it("删除 Session 时移除属于它的子 Agent 与草稿标签，删除工作区时丢弃整个桶", () => {
     const store = useWorkbenchStore.getState();
-    store.openAgent(7, { taskId: 21, title: "子 Agent" });
-    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
-    store.openAgent(7, { taskId: 22, title: "保留" });
-    store.openAgent(8, { taskId: 31, title: "保留" });
+    store.openAgent(7, { sessionId: 21, title: "子 Agent" });
+    store.openAgentConfigurationDraft(7, { sessionId: 20, toolCallId: "call-1", draft: agentDraft });
+    store.openAgent(7, { sessionId: 22, title: "保留" });
+    store.openAgent(8, { sessionId: 31, title: "保留" });
 
-    store.forgetTasks([20, 21]);
-    expect(session(7).tabs.map((tab) => tab.id)).toEqual(["agent-task:22"]);
-    expect(session(8).tabs.map((tab) => tab.id)).toEqual(["agent-task:31"]);
+    store.forgetSessions([20, 21]);
+    expect(session(7).tabs.map((tab) => tab.id)).toEqual(["agent-session:22"]);
+    expect(session(8).tabs.map((tab) => tab.id)).toEqual(["agent-session:31"]);
 
     store.forgetWorkspace(7);
     expect(session(7)).toBeUndefined();
   });
 
-  it("删除 Task 移除已保存过的草稿时不记已保存标记，未受影响的工作区桶保持原引用", async () => {
+  it("删除 Session 移除已保存过的草稿时不记已保存标记，未受影响的工作区桶保持原引用", async () => {
     const store = useWorkbenchStore.getState();
-    store.openAgentConfigurationDraft(7, { taskId: 20, toolCallId: "call-1", draft: agentDraft });
+    store.openAgentConfigurationDraft(7, { sessionId: 20, toolCallId: "call-1", draft: agentDraft });
     await agentDraftTab(7, "call-1").session.save(persistAgent);
-    store.openAgent(8, { taskId: 31, title: "保留" });
+    store.openAgent(8, { sessionId: 31, title: "保留" });
     const untouched = session(8);
 
-    store.forgetTasks([20]);
+    store.forgetSessions([20]);
     expect(session(7).tabs).toEqual([]);
     expect(session(7).savedDraftIds).toEqual([]);
     expect(session(8)).toBe(untouched);
@@ -119,10 +119,10 @@ describe("workbench store", () => {
   // 目的：打开标签就是要看它；潜在缺陷：标签加进去了，停靠区却还停在文件或浏览器面板。
   it("打开标签把停靠区切到工作台，激活与关闭不改动停靠区", () => {
     useDockStore.getState().show("browser");
-    useWorkbenchStore.getState().openAgent(7, { taskId: 21, title: "子任务" });
+    useWorkbenchStore.getState().openAgent(7, { sessionId: 21, title: "子会话" });
     expect(useDockStore.getState().panel).toBe("workbench");
     useDockStore.getState().show("files");
-    useWorkbenchStore.getState().closeTab(7, "agent-task:21");
+    useWorkbenchStore.getState().closeTab(7, "agent-session:21");
     expect(useDockStore.getState().panel).toBe("files");
   });
 });

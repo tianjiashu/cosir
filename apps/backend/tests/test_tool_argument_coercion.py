@@ -18,7 +18,7 @@ from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
 from app.core.tool.handler.web.web_extract_args import WebExtractArgs
 from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
 from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
-from app.core.tool.multi_agent.args.task_status_args import TaskStatusArgs
+from app.core.tool.multi_agent.args.session_status_args import SessionStatusArgs
 from app.core.tool.validation.argument_coercion import coerce_tool_arguments
 from app.core.tool.validation.arguments import validate_tool_arguments
 from app.tools.tool_models import ListDirectoryArgs, TerminalReadArgs
@@ -288,14 +288,14 @@ class TestWhitelistBoundaries:
         assert result.arguments["timeout"] == 30.0
 
 
-class TestChildTaskStrictAlignment:
-    """``child_task`` 参数模型必须与其余工具模型同样保持 strict（契约对齐）。"""
+class TestChildSessionStrictAlignment:
+    """``child_session`` 参数模型必须与其余工具模型同样保持 strict（契约对齐）。"""
 
     @pytest.mark.parametrize(
         "model",
-        [DelegateTaskArgs, SendMessageArgs, TaskStatusArgs, WaitMessagesArgs],
+        [DelegateTaskArgs, SendMessageArgs, SessionStatusArgs, WaitMessagesArgs],
     )
-    def test_child_task_models_keep_strict_config(self, model: type[BaseModel]) -> None:
+    def test_child_session_models_keep_strict_config(self, model: type[BaseModel]) -> None:
         """潜在缺陷：漏配 strict 会让该工具退化为宽松校验，与其它工具口径分叉。"""
 
         assert model.model_config.get("strict") is True
@@ -304,7 +304,7 @@ class TestChildTaskStrictAlignment:
     def test_string_id_is_coerced_then_strictly_accepted(self) -> None:
         """对齐 strict 后，字符串 id 仍可经入口归一被接受（宽容在入口、严格在契约）。"""
 
-        result = validate_tool_arguments({"task_id": "4"}, {}, TaskStatusArgs)
+        result = validate_tool_arguments({"session_id": "4"}, {}, SessionStatusArgs)
         assert result.ok is True
-        assert result.arguments["task_id"] == 4
-        assert [item.field for item in result.coercions] == ["task_id"]
+        assert result.arguments["session_id"] == 4
+        assert [item.field for item in result.coercions] == ["session_id"]

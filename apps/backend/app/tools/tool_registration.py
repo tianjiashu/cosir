@@ -4,28 +4,27 @@
 （``app/tools → core/tool`` 方向合法，core 不得反向导入）。
 """
 
+from app.core.tool.handler.ask_user import build_ask_user_definition
 from app.core.tool.handler.wait_messages import build_wait_messages_definition
 from app.core.tool.handler.web_extract import build_web_extract_definition
 from app.core.tool.handler.web_search import build_web_search_definition
 from app.core.tool.multi_agent.delegate_task import build_delegate_task_definition
-from app.core.tool.multi_agent.fork_task import build_fork_task_definition
+from app.core.tool.multi_agent.fork_session import build_fork_session_definition
 from app.core.tool.multi_agent.propose_agent_configuration import (
     build_propose_agent_configuration_definition,
 )
 from app.core.tool.multi_agent.send_message import (
     build_send_message_definition,
 )
-from app.core.tool.multi_agent.task_status import (
-    build_task_status_definition,
+from app.core.tool.multi_agent.session_status import (
+    build_session_status_definition,
 )
 from app.core.tool.tool_registry import ToolRegistry
 from app.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
 from app.tools.tool_handler.browser import build_browser_definitions
-from app.tools.tool_handler.delete_tool import build_delete_file_definition
 from app.tools.tool_handler.find_files import build_find_files_definition
 from app.tools.tool_handler.list_directory import build_list_directory_definition
 from app.tools.tool_handler.mcp_tool import build_mcp_definition
-from app.tools.tool_handler.move_tool import build_move_file_definition
 from app.tools.tool_handler.read_file import build_read_file_definition
 from app.tools.tool_handler.read_image import ReadImageTool
 from app.tools.tool_handler.replace_tool import build_replace_definition
@@ -50,8 +49,6 @@ def build_tool_registry() -> ToolRegistry:
     # patch_write 工具已拆分为 replace(patch_write) 与 apply_patch(Git unified diff)。
     registry.register(build_replace_definition())
     registry.register(build_apply_patch_definition())
-    registry.register(build_delete_file_definition())
-    registry.register(build_move_file_definition())
     registry.register(build_search_content_definition())
     registry.register(build_find_files_definition())
     registry.register(build_list_directory_definition())
@@ -63,11 +60,12 @@ def build_tool_registry() -> ToolRegistry:
     for definition in build_browser_definitions():
         registry.register(definition)
     registry.register(build_delegate_task_definition())
-    registry.register(build_fork_task_definition())
+    registry.register(build_fork_session_definition())
     registry.register(build_send_message_definition())
-    registry.register(build_task_status_definition())
+    registry.register(build_session_status_definition())
     registry.register(build_wait_messages_definition())
     registry.register(build_propose_agent_configuration_definition())
+    registry.register(build_ask_user_definition())
     registry.register(build_mcp_definition())
     registry.register(build_skill_definition())
     return registry

@@ -16,7 +16,7 @@ from app.core.workflow.cancel.tool_call_cancellation_registry import (
 
 def _context() -> ToolExecutionContext:
     return ToolExecutionContext(
-        task_id=3, workspace_id=1, workspace_root=Path("."), step_id="s", run_id=1, tool_call_id="c"
+        session_id=3, workspace_id=1, workspace_root=Path("."), step_id="s", run_id=1, tool_call_id="c"
     )
 
 

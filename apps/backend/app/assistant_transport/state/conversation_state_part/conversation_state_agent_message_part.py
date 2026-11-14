@@ -6,17 +6,17 @@ from typing_extensions import TypedDict
 
 
 class ConversationStateReport(TypedDict):
-    """派生 Task 的汇报：它的 Run 以什么结局落定，以及这是不是中间结果（之后还会再汇报）。"""
+    """派生 Session 的汇报：它的 Run 以什么结局落定，以及这是不是中间结果（之后还会再汇报）。"""
 
     status: Literal["completed", "failed"]
     intermediate: bool
 
 
 class ConversationStateMessageSource(TypedDict):
-    """Agent 消息的发送方：前端据 ``taskId`` 跳到来源 Task；``name`` 是发送时的显示名；``report``
+    """Agent 消息的发送方：前端据 ``sessionId`` 跳到来源 Session；``name`` 是发送时的显示名；``report``
     非空时这条消息是来源的汇报（见领域 ``MessageSource``）。"""
 
-    taskId: int
+    sessionId: int
     name: str
     report: ConversationStateReport | None
 

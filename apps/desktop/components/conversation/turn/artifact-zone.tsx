@@ -10,27 +10,27 @@ import { ChangesCard } from "./changes-card";
 
 export type ArtifactZoneProps = {
   inherited?: boolean;
-  taskId: number;
+  sessionId: number;
   artifacts: readonly ArtifactCard[];
   interactive: boolean;
-  taskCancelling: boolean;
+  sessionCancelling: boolean;
 };
 
 /** 文件汇总直接消费投影里的操作记录，不再订阅 parts 或按下标回查载荷。 */
-function ChangesArtifact({ card, taskId }: { card: Extract<ArtifactCard, { kind: "changes" }>; taskId: number }) {
+function ChangesArtifact({ card, sessionId }: { card: Extract<ArtifactCard, { kind: "changes" }>; sessionId: number }) {
   const messageId = useAuiState((state) => state.message.id);
-  return <ChangesCard card={card} taskId={taskId} messageId={messageId} />;
+  return <ChangesCard card={card} sessionId={sessionId} messageId={messageId} />;
 }
 
 /**
  * 配置草稿卡：各自读自己那次调用的 artifact；等用户决定期间不显示。
  */
-function StandaloneArtifact({ card, taskId, interactive, taskCancelling, inherited }: { inherited?: boolean; card: StandaloneArtifactCard; taskId: number; interactive: boolean; taskCancelling: boolean }) {
+function StandaloneArtifact({ card, sessionId, interactive, sessionCancelling, inherited }: { inherited?: boolean; card: StandaloneArtifactCard; sessionId: number; interactive: boolean; sessionCancelling: boolean }) {
   const part = useAuiState((state) => state.message.parts[card.index]);
   if (part?.type !== "tool-call") return null;
   const artifact = readToolArtifact(part.artifact);
   if (artifact.awaitingUser) return null;
-  const props = { inherited, taskId, toolCallId: card.part.toolCallId, artifact, interactive, taskCancelling };
+  const props = { inherited, sessionId, toolCallId: card.part.toolCallId, artifact, interactive, sessionCancelling };
   switch (card.kind) {
     case "agent-configuration-draft":
       return <AgentConfigurationDraftTool {...props} />;
@@ -38,7 +38,7 @@ function StandaloneArtifact({ card, taskId, interactive, taskCancelling, inherit
 }
 
 /** 产物区：本轮改动（聚合）排在前，其余草稿卡按调用顺序；每张卡各自隔离渲染错误。 */
-export const ArtifactZone = memo(function ArtifactZone({ inherited, taskId, artifacts, interactive, taskCancelling }: ArtifactZoneProps) {
+export const ArtifactZone = memo(function ArtifactZone({ inherited, sessionId, artifacts, interactive, sessionCancelling }: ArtifactZoneProps) {
   if (artifacts.length === 0) return null;
   return (
     <div data-slot="artifact-zone" className="flex flex-col gap-2">
@@ -50,7 +50,7 @@ export const ArtifactZone = memo(function ArtifactZone({ inherited, taskId, arti
           metadata={{ renderer: "changes-card", partIndices: card.callIndexes }}
           fallback={({ onRetry }) => <RenderErrorCard scope="part" label="文件操作记录" onRetry={onRetry} />}
         >
-          <ChangesArtifact card={card} taskId={taskId} />
+          <ChangesArtifact card={card} sessionId={sessionId} />
         </RenderIsolationBoundary>
       ) : (
         <RenderIsolationBoundary
@@ -60,7 +60,7 @@ export const ArtifactZone = memo(function ArtifactZone({ inherited, taskId, arti
           metadata={{ renderer: card.kind, partId: card.part.toolCallId }}
           fallback={({ onRetry }) => <RenderErrorCard scope="tool" label={card.part.toolName} onRetry={onRetry} />}
         >
-          <StandaloneArtifact inherited={inherited} card={card} taskId={taskId} interactive={interactive} taskCancelling={taskCancelling} />
+          <StandaloneArtifact inherited={inherited} card={card} sessionId={sessionId} interactive={interactive} sessionCancelling={sessionCancelling} />
         </RenderIsolationBoundary>
       )))}
     </div>

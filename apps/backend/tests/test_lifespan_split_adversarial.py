@@ -115,9 +115,9 @@ def test_all_domain_routes_registered_on_same_app() -> None:
         "/health",
         "/workspaces",
         "/workspaces/{workspace_id}",
-        "/workspaces/{workspace_id}/tasks",
-        "/tasks/{task_id}",
-        "/tasks/{task_id}/fork",
+        "/workspaces/{workspace_id}/sessions",
+        "/sessions/{session_id}",
+        "/sessions/{session_id}/fork",
         "/workspaces/{workspace_id}/attachments",
         "/workspaces/{workspace_id}/attachments/{asset_id}/content",
         "/configuration/model-connections",
@@ -126,14 +126,14 @@ def test_all_domain_routes_registered_on_same_app() -> None:
         "/configuration/model-connections/{connection_id}/models/{model_name}",
         "/configuration/model-connections/discover",
         "/configuration/model-connections/test",
-        "/tasks/{task_id}/messages",
-        "/tasks/{task_id}/queued-messages/{message_id}",
-        "/tasks/{task_id}/messages/{message_id}/withdraw",
-        "/tasks/{task_id}/resume",
-        "/tasks/{task_id}/tool-calls/{tool_call_id}/decision",
-        "/tasks/{task_id}/assistant/attach",
-        "/tasks/{task_id}/cancel",
-        "/tasks/{task_id}/tool-calls/{tool_call_id}/cancel",
+        "/sessions/{session_id}/messages",
+        "/sessions/{session_id}/queued-messages/{message_id}",
+        "/sessions/{session_id}/messages/{message_id}/withdraw",
+        "/sessions/{session_id}/resume",
+        "/sessions/{session_id}/tool-calls/{tool_call_id}/decision",
+        "/sessions/{session_id}/assistant/attach",
+        "/sessions/{session_id}/cancel",
+        "/sessions/{session_id}/tool-calls/{tool_call_id}/cancel",
     }
     missing = expected - oa_paths
     assert missing == set(), f"拆分后丢失的域路由：{sorted(missing)}"
@@ -143,10 +143,10 @@ def test_domain_route_modules_share_the_singleton() -> None:
     """域路由模块内 ``from app.app import app`` 取到的必须与装配入口同一对象。"""
 
     for module_name in (
-        "app.api.tasks_api",
+        "app.api.sessions_api",
         "app.api.workspaces_api",
         "app.api.configuration.models",
-        "app.api.assistant_transport_api",
+        "app.assistant_transport.api",
     ):
         module = sys.modules.get(module_name) or importlib.import_module(module_name)
         assert module.app is app_module.app, module_name
@@ -743,7 +743,7 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         def bind_loop(self, _loop: Any) -> None:
             recorder.calls.append("bind_loop")
 
-        def get_or_create(self, _task_id: int) -> None:
+        def get_or_create(self, _session_id: int) -> None:
             pass
 
         async def aclose(self) -> None:
@@ -754,7 +754,7 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         "get_recover_service",
         record("get_recover_service", _RecoverService()),
     )
-    monkeypatch.setattr(lifespan_module, "task_runtime_spaces", _Spaces())
+    monkeypatch.setattr(lifespan_module, "session_runtime_spaces", _Spaces())
     monkeypatch.setattr(lifespan_module, "close_service_dependencies", record("close_deps"))
     monkeypatch.setattr(lifespan_module, "build_tool_registry", lambda: "tool-registry")
     monkeypatch.setattr(

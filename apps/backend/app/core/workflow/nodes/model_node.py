@@ -18,7 +18,7 @@ from app.core.llm_provider.message_codec import assistant_message
 from app.core.llm_provider.openai_model import usage_from_response
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.message_queue.task_message import NoticeBody
+from app.core.workflow.message_queue.session_message import NoticeBody
 from app.core.workflow.node_helper.common import (
     RunStopped,
     _message_context,
@@ -28,8 +28,8 @@ from app.core.workflow.node_helper.common import (
 from app.core.workflow.node_helper.model_stream_state_machine import (
     ModelStreamStateMachine,
 )
-from app.models.enums.conversation_run_status import RunTransition
 from app.models.enums.react_route import ReactRoute
+from app.models.enums.run_status import RunTransition
 from app.service import depends as service_depends
 from app.utils.message_content import content_to_text
 
@@ -44,14 +44,14 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     收尾看不到，这段内的失败由本节点收敛为 cancelled；提交之后的失败归 RunDriver 按上下文补结果。
     调用 Run 独占的 SDK 模型，逐帧替换持久化响应，结束后纳入上下文；部分输出留作展示，
     不进入模型上下文或工具执行。工具调用只按 id 与注册名过滤，参数交 tools；无保留调用时，
-    有完成原因时落定 Run（后台工作属于 Task，不等它们：结论稍后到达时唤醒或开出新 Run）；缺少完成原因时，
+    有完成原因时落定 Run（后台工作属于 Session，不等它们：结论稍后到达时唤醒或开出新 Run）；缺少完成原因时，
     输出仅供展示并重新请求模型。"""
 
     rc = _runtime_context()
     model = rc.model
 
     step_count = state.step_count + 1
-    task_id = rc.task.id
+    session_id = rc.session.id
     run_id = rc.run.id
     step_id = f"step-{step_count}"
 
@@ -75,7 +75,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     )
     # 请求阶段与输出事件由同一状态机管理；工具批次仅承担后续执行交接。
     batch = ToolBatch()
-    parts = ModelStreamStateMachine(task_id=task_id, run_id=run_id, step_id=step_id)
+    parts = ModelStreamStateMachine(session_id=session_id, run_id=run_id, step_id=step_id)
 
     # SDK 快照负责聚合；context 只保存请求正文副本和独立响应元数据。
     aggregated_message: ParsedChatCompletionSnapshot | None = None
@@ -132,7 +132,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
                 extra={
                     "msg": "模型调用已关闭，保存中断输出并收口工具预览",
                     "data": {
-                        "task_id": task_id,
+                        "session_id": session_id,
                         "run_id": run_id,
                         "step_id": step_id,
                         "usage": rc.usage_stats.to_dict(),
@@ -141,7 +141,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             )
             # 取消时工具 part 的收敛由状态机按「本请求已投影的调用」完成，不再查询生命周期记录。
             parts.cancel()
-            service_depends.get_conversation_run_ledger().transition(
+            service_depends.get_run_ledger().transition(
                 run_id,
                 RunTransition.CANCEL,
                 end_reason=rc.cancel_end_reason(),
@@ -204,6 +204,20 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
         return {**route_state(step_count, ReactRoute.TOOLS), "batch": batch}
 
     # 无工具调用且 finish_reason 非 None：正文可以为空；结构化处理作为已完成 Run 的支线。
+    #
+    # 「这次响应是最终回复」只能在这里、整段流收完之后判定，没法在正文出来之前知道。实测
+    # （2026-11-14，deepseek-flash 与 deepseek-v4-pro 各 12 次流式请求，纯文字 / 给了工具但只答文字 /
+    # 只调工具 / 先说话再调工具四种情形）分块顺序无一例外是：
+    #
+    #     空的首块（只声明角色）→ 推理 → 正文 → 工具调用 → 结束信号
+    #
+    # finish_reason 每次都只出现一次、在最后一块，那一块不带正文或工具增量（与用量同块）。「先说话再
+    # 调工具」时正文块排在工具调用块前面，所以看到正文时无从知道后面是结束还是工具调用。只测了
+    # DeepSeek；这是 OpenAI 流式协议的通行顺序，其他兼容厂商未实测。
+    #
+    # 由此定下的取舍：模型的最终正文拦不住——它已经流给用户了。所以 Run 带着未答的提问完成时
+    # （提问挂着时被后台结果唤醒、模型说完话就结束），不为「回到挂起」另做一套判定：正文照常显示，
+    # 提问的去留由落定点按结局决定（见 ``SessionActor._expire_decisions``）。
     final_answer = content_to_text(ai_message.get("content"))
     structured = rc.agent.structured_output is not None
     log.info(
@@ -218,7 +232,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             },
         },
     )
-    completed = service_depends.get_conversation_run_ledger().transition(
+    completed = service_depends.get_run_ledger().transition(
         run_id,
         RunTransition.COMPLETE,
         usage_stats=rc.usage_stats,

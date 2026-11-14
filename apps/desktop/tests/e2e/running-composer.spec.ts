@@ -14,7 +14,7 @@ import { API_ORIGIN as origin } from "./e2e-env";
  * 后端不会自行续跑，页面能稳定停在「运行中」。
  */
 
-const TASK_ID = 42;
+const SESSION_ID = 42;
 // 活动 Run 冻结的发起配置：运行中发送沿用它，而不是 composer 里的选择。
 const RUN_LAUNCH = { modelConfigId: "demo/demo-model", reasoningEffort: null, disabledToolGroups: ["联网工具"] };
 
@@ -36,9 +36,9 @@ function activeState(queued: TransportState["queued_messages"] = []): TransportS
   };
 }
 
-async function openActiveTask(page: Page, request: APIRequestContext, state: TransportState) {
-  await seedState(request, TASK_ID, state);
-  await page.goto(`/tasks/${TASK_ID}`);
+async function openActiveSession(page: Page, request: APIRequestContext, state: TransportState) {
+  await seedState(request, SESSION_ID, state);
+  await page.goto(`/sessions/${SESSION_ID}`);
   await expect(page.getByText("正在处理", { exact: true })).toBeVisible();
 }
 
@@ -48,20 +48,20 @@ const isCommand = (path: RegExp, method: string) => (req: Request) => (
 
 test.beforeEach(async ({ page, request }) => {
   await request.post(`${origin}/__test__/reset`);
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: TASK_ID, title: "运行中的任务" } });
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: SESSION_ID, title: "运行中的会话" } });
   await page.addInitScript(() => window.localStorage.clear());
 });
 
 for (const via of ["button", "enter"] as const) {
   test(`运行中可以发送新消息（${via === "button" ? "按钮" : "回车"}），沿用冻结配置、不带投递方式`, async ({ page, request }) => {
-    await openActiveTask(page, request, activeState());
+    await openActiveSession(page, request, activeState());
     const input = page.getByLabel("消息输入");
     await input.fill("运行中追加的消息");
 
-    const sent = page.waitForRequest(isCommand(/^\/tasks\/42\/messages$/, "POST"));
+    const sent = page.waitForRequest(isCommand(/^\/sessions\/42\/messages$/, "POST"));
     if (via === "button") {
       // 运行中发送一律排队，按钮据此标注。
-      await page.getByRole("button", { name: "加入队列", exact: true }).click();
+      await page.getByRole("button", { name: "发送", exact: true }).click();
     } else {
       await input.press("Enter");
     }
@@ -77,7 +77,7 @@ for (const via of ["button", "enter"] as const) {
 }
 
 test("排队消息显示在输入框上方的队列区，不在消息流里；可立即发送与删除", async ({ page, request }) => {
-  await openActiveTask(page, request, activeState([
+  await openActiveSession(page, request, activeState([
     { id: "q-1", role: "user", delivery: "next_run",
       parts: [{ type: "text", text: "第一条排队", status: "completed" }] },
     { id: "q-2", role: "user", delivery: "next_run",
@@ -90,7 +90,7 @@ test("排队消息显示在输入框上方的队列区，不在消息流里；�
 
   const first = queue.locator('[data-role="user"]').filter({ hasText: "第一条排队" });
   await expect(first.getByText("排队中", { exact: true })).toBeVisible();
-  const sendNow = page.waitForRequest(isCommand(/^\/tasks\/42\/queued-messages\/q-1\/send-now$/, "POST"));
+  const sendNow = page.waitForRequest(isCommand(/^\/sessions\/42\/queued-messages\/q-1\/send-now$/, "POST"));
   await first.getByRole("button", { name: "立即发送", exact: true }).click();
   await sendNow;
   // 改为立即处理后以新身份重新入队，标注随之变化，不再提供立即发送。
@@ -99,7 +99,7 @@ test("排队消息显示在输入框上方的队列区，不在消息流里；�
   await expect(promoted.getByRole("button", { name: "立即发送", exact: true })).toHaveCount(0);
 
   const second = queue.locator('[data-role="user"]').filter({ hasText: "第二条排队" });
-  const deleted = page.waitForRequest(isCommand(/^\/tasks\/42\/queued-messages\/q-2$/, "DELETE"));
+  const deleted = page.waitForRequest(isCommand(/^\/sessions\/42\/queued-messages\/q-2$/, "DELETE"));
   await second.getByRole("button", { name: "删除", exact: true }).click();
   await deleted;
   await expect(page.getByText("第二条排队", { exact: true })).toHaveCount(0);
@@ -107,7 +107,7 @@ test("排队消息显示在输入框上方的队列区，不在消息流里；�
 });
 
 test("编辑排队消息：撤回这一条，正文放回输入框并排在已有草稿之前", async ({ page, request }) => {
-  await openActiveTask(page, request, activeState([
+  await openActiveSession(page, request, activeState([
     { id: "q-1", role: "user", delivery: "next_run",
       parts: [{ type: "text", text: "排队中的消息", status: "completed" }] },
   ]));
@@ -117,7 +117,7 @@ test("编辑排队消息：撤回这一条，正文放回输入框并排在已�
   const queued = queue.locator('[data-role="user"]').filter({ hasText: "排队中的消息" });
   await queued.hover();
 
-  const withdrawn = page.waitForRequest(isCommand(/^\/tasks\/42\/queued-messages\/q-1$/, "DELETE"));
+  const withdrawn = page.waitForRequest(isCommand(/^\/sessions\/42\/queued-messages\/q-1$/, "DELETE"));
   await queued.getByRole("button", { name: "编辑", exact: true }).click();
   await withdrawn;
 
@@ -128,17 +128,17 @@ test("编辑排队消息：撤回这一条，正文放回输入框并排在已�
 });
 
 test("迟到的发送失败并入当前草稿，不覆盖请求期间的新输入", async ({ page, request }) => {
-  await openActiveTask(page, request, activeState());
+  await openActiveSession(page, request, activeState());
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  await page.route("**/tasks/42/messages", async route => {
+  await page.route("**/sessions/42/messages", async route => {
     await gate;
     await route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ detail: { error: { code: "TEST_REJECTED", message: "测试拒绝" } } }) });
   });
   const input = page.getByLabel("消息输入");
   await input.fill("请求失败的内容");
-  const sent = page.waitForRequest(isCommand(/^\/tasks\/42\/messages$/, "POST"));
-  await page.getByRole("button", { name: "加入队列", exact: true }).click();
+  const sent = page.waitForRequest(isCommand(/^\/sessions\/42\/messages$/, "POST"));
+  await page.getByRole("button", { name: "发送", exact: true }).click();
   await sent;
   await input.fill("用户新写的内容");
   release();
@@ -147,30 +147,30 @@ test("迟到的发送失败并入当前草稿，不覆盖请求期间的新输�
   await expect(input).toHaveText(/请求失败的内容\s*用户新写的内容/);
 });
 
-test("撤回完成前切换 Task，内容保存在原 Task 草稿中", async ({ page, request }) => {
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: 43, title: "另一个Task" } });
-  await openActiveTask(page, request, activeState([{ id: "q-late", role: "user", delivery: "next_run", parts: [{ type: "text", text: "迟到撤回内容" }] }]));
+test("撤回完成前切换 Session，内容保存在原 Session 草稿中", async ({ page, request }) => {
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: 43, title: "另一个Session" } });
+  await openActiveSession(page, request, activeState([{ id: "q-late", role: "user", delivery: "next_run", parts: [{ type: "text", text: "迟到撤回内容" }] }]));
   const input = page.getByLabel("消息输入");
-  await input.fill("原Task草稿");
+  await input.fill("原Session草稿");
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  await page.route("**/tasks/42/queued-messages/q-late", async route => {
+  await page.route("**/sessions/42/queued-messages/q-late", async route => {
     await gate;
     await route.continue();
   });
-  const sent = page.waitForRequest(isCommand(/^\/tasks\/42\/queued-messages\/q-late$/, "DELETE"));
+  const sent = page.waitForRequest(isCommand(/^\/sessions\/42\/queued-messages\/q-late$/, "DELETE"));
   await page.getByRole("region", { name: "排队消息" }).getByRole("button", { name: "编辑", exact: true }).click();
   await sent;
-  await page.getByRole("treeitem").filter({ hasText: "另一个Task" }).click();
-  await expect(page).toHaveURL(/\/tasks\/43$/);
-  await input.fill("另一个Task草稿");
+  await page.getByRole("treeitem").filter({ hasText: "另一个Session" }).click();
+  await expect(page).toHaveURL(/\/sessions\/43$/);
+  await input.fill("另一个Session草稿");
   const response = page.waitForResponse(res => res.url().endsWith("/queued-messages/q-late") && res.request().method() === "DELETE");
   release();
   await response;
-  await expect(input).toHaveText("另一个Task草稿");
-  await page.getByRole("treeitem").filter({ hasText: "运行中的任务" }).click();
-  await expect(page).toHaveURL(/\/tasks\/42$/);
-  await expect(input).toHaveText(/迟到撤回内容\s*原Task草稿/);
+  await expect(input).toHaveText("另一个Session草稿");
+  await page.getByRole("treeitem").filter({ hasText: "运行中的会话" }).click();
+  await expect(page).toHaveURL(/\/sessions\/42$/);
+  await expect(input).toHaveText(/迟到撤回内容\s*原Session草稿/);
 });
 
 
@@ -183,11 +183,11 @@ test("后端暂停时提交恢复草稿并提示，不发送业务请求", async
       for (const listener of listeners) listener({ generation: 2, status: { state: "stopped" }, backendBaseUrl: null });
     } });
   });
-  await openActiveTask(page, request, activeState());
+  await openActiveSession(page, request, activeState());
   const input = page.getByLabel("消息输入");
   await input.fill("后端暂停仍需保留的草稿");
   let sent = 0;
-  page.on("request", req => { if (isCommand(/^\/tasks\/42\/messages$/, "POST")(req)) sent++; });
+  page.on("request", req => { if (isCommand(/^\/sessions\/42\/messages$/, "POST")(req)) sent++; });
   await page.evaluate(() => (window as unknown as { pauseTestBackend(): void }).pauseTestBackend());
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   await input.press("Enter");

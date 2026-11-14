@@ -1,0 +1,183 @@
+import { forgetCommands } from "@/lib/assistant/command-request-store";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn().mockResolvedValue(undefined) }));
+
+import {
+  backgroundToolCall,
+  cancelSession,
+  cancelToolCall,
+  deleteQueuedSessionMessage,
+  resumeSession,
+  sendQueuedSessionMessageNow,
+  sendSessionMessage,
+  submitToolDecision,
+  withdrawSessionMessage,
+  type SessionMessageRequest,
+} from "@/lib/assistant/session-commands";
+import { HttpError } from "@/lib/http/http-error";
+
+const REQUEST: SessionMessageRequest = {
+  message: { role: "user", parts: [{ type: "text", text: "hello" }] },
+  modelConfigId: "c/m1",
+  reasoningEffort: "high",
+  disabledToolGroups: ["文件"],
+};
+
+/** 后端处理完这一轮返回 200 `{}`，输出经 Session 长订阅到达。 */
+function accepted(status = 200) {
+  return vi.fn().mockImplementation(async () => new Response("{}", { status }));
+}
+
+function lastCall(): [string, RequestInit] {
+  return vi.mocked(fetch).mock.calls.at(-1) as [string, RequestInit];
+}
+
+// http client 按 runtime config 解析后端地址，它读 window；单测跑在 Node 环境，给一个空 window。
+beforeEach(() => { forgetCommands([7, 12]); vi.stubGlobal("window", {}); });
+afterEach(() => vi.unstubAllGlobals());
+
+describe("session commands", () => {
+  it("deduplicates parallel submissions across different component instances", async () => {
+    let release!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(resolve => { release = resolve; })));
+    const first = submitToolDecision(7, "same", { decision: "approve" });
+    await submitToolDecision(7, "same", { decision: "approve" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    release(new Response("{}"));
+    await first;
+  });
+  it("发送消息只按 Session 寻址，不携带投递方式与运行身份（并入时机由后端决定）", async () => {
+    vi.stubGlobal("fetch", accepted());
+
+    await expect(sendSessionMessage(7, REQUEST)).resolves.toBeUndefined();
+
+    const [url, init] = lastCall();
+    expect(url).toMatch(/\/sessions\/7\/messages$/);
+    expect(JSON.parse(String(init.body))).toEqual(REQUEST);
+  });
+
+  it("排队消息立即发送用 POST send-now、删除用 DELETE，都按消息寻址且不带请求体", async () => {
+    vi.stubGlobal("fetch", accepted(200));
+
+    await expect(sendQueuedSessionMessageNow(7, "msg/1")).resolves.toBeUndefined();
+    let [url, init] = lastCall();
+    expect(url).toMatch(/\/sessions\/7\/queued-messages\/msg%2F1\/send-now$/);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+
+    await expect(deleteQueuedSessionMessage(7, "msg/1")).resolves.toBeUndefined();
+    [url, init] = lastCall();
+    expect(url).toMatch(/\/sessions\/7\/queued-messages\/msg%2F1$/);
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+  });
+
+  it("撤回按消息寻址，不带请求体", async () => {
+    vi.stubGlobal("fetch", accepted());
+
+    await withdrawSessionMessage(7, "msg/1");
+
+    const [url, init] = lastCall();
+    expect(url).toMatch(/\/sessions\/7\/messages\/msg%2F1\/withdraw$/);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+  });
+
+  it("恢复不带请求体，决定使用后端 wire 字段", async () => {
+    vi.stubGlobal("fetch", accepted());
+
+    await resumeSession(7);
+    expect(lastCall()[0]).toMatch(/\/sessions\/7\/resume$/);
+    expect(lastCall()[1].body).toBeUndefined();
+
+    await submitToolDecision(7, "call/1", { decision: "reject", feedback: "换个方向" });
+    expect(lastCall()[0]).toMatch(/\/sessions\/7\/tool-calls\/call%2F1\/decision$/);
+    expect(JSON.parse(String(lastCall()[1].body))).toEqual({ decision: "reject", feedback: "换个方向" });
+  });
+
+  it("排队消息已不在队列中：409 MESSAGE_CONSUMED 原样抛出", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ detail: { error: { code: "MESSAGE_CONSUMED", message: "消息已被处理", retryable: false } } }),
+      { status: 409, headers: { "Content-Type": "application/json" } },
+    )));
+    const error = await deleteQueuedSessionMessage(7, "1").catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(HttpError);
+    expect((error as HttpError).code).toBe("MESSAGE_CONSUMED");
+  });
+
+  it("非 2xx 抛出带后端原因的 HttpError", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ detail: { error: { code: "SESSION_NOT_FOUND", message: "会话不存在", retryable: false } } }),
+      { status: 404, headers: { "Content-Type": "application/json" } },
+    )));
+
+    const error = await submitToolDecision(7, "call-1", { decision: "reject", feedback: "换个分工" })
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(HttpError);
+    expect((error as HttpError).status).toBe(404);
+    expect((error as HttpError).message).toBe("会话不存在");
+  });
+});
+
+/** 停止与工具调用命令幂等：失败收敛成结果对象，文案用后端给出的可读原因，不露裸 HTTP 状态码。 */
+describe("idempotent session commands", () => {
+  const backendError = (status: number, message: string) =>
+    new Response(JSON.stringify({ detail: { error: { code: "X", message, retryable: false } } }), { status });
+
+  it("停止 Session 按 Session 寻址，202 视为已受理", async () => {
+    const fetchMock = accepted(202);
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(cancelSession(7)).resolves.toEqual({ accepted: true });
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/sessions\/7\/cancel$/);
+  });
+
+  it("停止被拒时展示后端原因，网络失败归为 network", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(backendError(404, "会话不存在")));
+    await expect(cancelSession(7)).resolves.toEqual({ accepted: false, reason: "rejected", message: "会话不存在" });
+
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    await expect(cancelSession(7)).resolves.toMatchObject({ accepted: false, reason: "network" });
+  });
+
+  it("取消工具调用按 tool_call_id 寻址，409 表示已无事可做，不算失败", async () => {
+    const fetchMock = accepted();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(cancelToolCall(12, "call/1")).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/sessions\/12\/tool-calls\/call%2F1\/cancel$/),
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        headers: expect.objectContaining({ "X-Trace-Id": expect.any(String) }),
+      }),
+    );
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 409 })));
+    await expect(cancelToolCall(12, "call-1")).resolves.toBeNull();
+  });
+
+  it("取消工具调用失败时不声称已取消", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 500 })));
+    await expect(cancelToolCall(12, "call-1")).resolves.toBe("本机后端处理失败，请查看后端日志");
+
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+    await expect(cancelToolCall(12, "call-1")).resolves.toBe("无法连接本机后端，请确认后端正在运行");
+  });
+
+  it("转后台在途时停止照常发出，互不占用", async () => {
+    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+    vi.stubGlobal("fetch", fetchMock);
+    void backgroundToolCall(12, "c");
+    void cancelToolCall(12, "c");
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("转到后台：409 表示不可转，失败带可读原因", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 409 })));
+    await expect(backgroundToolCall(12, "call-1")).resolves.toBeNull();
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(backendError(404, "会话不存在")));
+    await expect(backgroundToolCall(12, "call-1")).resolves.toBe("会话不存在");
+  });
+});

@@ -29,7 +29,7 @@ from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
-from app.core.workflow.message_queue.task_message import DecisionBody
+from app.core.workflow.message_queue.session_message import DecisionBody
 from app.core.workflow.node_helper.common import emit
 from app.models.enums.error_kind import ErrorKind
 
@@ -121,7 +121,7 @@ def _reject_mixed_decision_batch(
         extra={
             "msg": "需要用户决定的工具未单独调用，整批拒绝执行",
             "data": {
-                "task_id": rc.task.id,
+                "session_id": rc.session.id,
                 "run_id": rc.run.id,
                 "step_id": step_id,
                 "hitl_tools": hitl_names,
@@ -144,7 +144,7 @@ def _reject_mixed_decision_batch(
         emit(
             terminal_event(
                 observation,
-                task_id=rc.task.id,
+                session_id=rc.session.id,
                 run_id=rc.run.id,
                 step_id=step_id,
                 tool_call_id=call.call_id,
@@ -166,7 +166,7 @@ def _execution_context(
     每个调用各建一份不可变上下文，同批调用因此不可能共享调用身份；执行器直接信任它，不再特化。
     """
     return ToolExecutionContext(
-        task_id=rc.task.id,
+        session_id=rc.session.id,
         workspace_id=rc.workspace.id,
         workspace_root=Path(rc.workspace.root_path),
         step_id=step_id,
@@ -200,7 +200,7 @@ def _execute_call(
     emit(
         terminal_event(
             observation,
-            task_id=execution_context.task_id,
+            session_id=execution_context.session_id,
             run_id=execution_context.run_id,
             step_id=execution_context.step_id,
             tool_call_id=call.call_id,
@@ -221,7 +221,7 @@ def _internal_error(
                 "error_kind": ErrorKind.RUNTIME_FAILED.value,
                 "tool_name": call.tool_name,
                 "tool_call_id": call.call_id,
-                "task_id": execution_context.task_id,
+                "session_id": execution_context.session_id,
                 "step_id": execution_context.step_id,
                 "error": str(exc),
             },

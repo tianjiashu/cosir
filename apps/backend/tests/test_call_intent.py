@@ -28,7 +28,7 @@ class Args(BaseModel):
 
 def context(tmp_path):
     return ToolExecutionContext(
-        task_id=1, workspace_id=1, run_id=2, step_id="s", workspace_root=tmp_path, tool_call_id="c"
+        session_id=1, workspace_id=1, run_id=2, step_id="s", workspace_root=tmp_path, tool_call_id="c"
     )
 
 

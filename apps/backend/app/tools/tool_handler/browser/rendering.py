@@ -104,7 +104,7 @@ def page_text(page: dict[str, Any], *, lead: str | None = None) -> str:
     lines = [lead] if lead else []
     lines.extend(header_lines(page))
     if page["other_tabs"]:
-        lines.append(f"other tabs in this task: {', '.join(page['other_tabs'])}")
+        lines.append(f"other tabs in this session: {', '.join(page['other_tabs'])}")
     if page["frames"]:
         lines.append(
             f"the page has {page['frames']} embedded frame(s) whose contents are not shown"
@@ -283,7 +283,7 @@ def tabs_text(tabs: list[dict[str, Any]]) -> str:
         f"{item['title'] or '(untitled)'} · {item['url']}"
         for item in tabs
     ]
-    return "\n".join(lines) or "this task has no open tabs"
+    return "\n".join(lines) or "this session has no open tabs"
 
 
 def screenshot_text(shot: dict[str, Any], ref: str | None = None) -> str:

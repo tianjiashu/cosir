@@ -9,7 +9,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 TAB_DESCRIPTION = (
-    "Tab id such as t1, from an earlier browser result. Pass null to use this task's current tab."
+    "Tab id such as t1, from an earlier browser result. Pass null to use this session's current tab."
 )
 
 # ref 按节点稳定（宿主 ``ref-registry.ts``），任何一次快照里的 ref 在元素还在页面上时都可用，
@@ -40,7 +40,7 @@ MODIFIERS = list[Literal["Alt", "Control", "Meta", "Shift", "ControlOrMeta"]]
 
 
 def tab_field() -> Any:
-    """本 Task 的标签；模型不能指定别的 Task。每次返回新的字段定义，不在模型之间共享实例。"""
+    """本 Session 的标签；模型不能指定别的 Session。每次返回新的字段定义，不在模型之间共享实例。"""
 
     return Field(default=None, pattern=r"^t\d+$", description=TAB_DESCRIPTION)
 

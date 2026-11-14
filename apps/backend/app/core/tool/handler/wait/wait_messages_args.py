@@ -1,4 +1,4 @@
-"""``wait_messages`` 工具的参数模型：没有参数，等什么由挂起时 Task 上的未完成工作决定。"""
+"""``wait_messages`` 工具的参数模型：没有参数，等什么由挂起时 Session 上的未完成工作决定。"""
 
 from pydantic import BaseModel, ConfigDict
 

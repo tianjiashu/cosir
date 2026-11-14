@@ -6,7 +6,7 @@ import type { ContextMessageQuery } from "@/lib/api/context-messages";
 import { parseId } from "./message-model";
 
 export function QueryBar({
-  task,
+  session,
   turn,
   busy,
   hasQuery,
@@ -14,7 +14,7 @@ export function QueryBar({
   onRefresh,
   onBack,
 }: {
-  task: string;
+  session: string;
   turn: string;
   busy: boolean;
   hasQuery: boolean;
@@ -22,25 +22,25 @@ export function QueryBar({
   onRefresh: () => void;
   onBack?: () => void;
 }) {
-  const [taskInput, setTaskInput] = useState(task);
+  const [sessionInput, setSessionInput] = useState(session);
   const [turnInput, setTurnInput] = useState(turn);
   const [error, setError] = useState<string | null>(null);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const taskValue = taskInput.trim();
+    const sessionValue = sessionInput.trim();
     const turnValue = turnInput.trim();
-    const taskId = parseId(taskValue);
+    const sessionId = parseId(sessionValue);
     const turnNumber = parseId(turnValue);
-    if ((taskValue && !taskId) || (turnValue && !turnNumber)) {
-      setError("Task ID 和回合必须是正整数。");
+    if ((sessionValue && !sessionId) || (turnValue && !turnNumber)) {
+      setError("Session ID 和回合必须是正整数。");
       return;
     }
-    if (!taskId) {
-      setError("请输入 Task ID。");
+    if (!sessionId) {
+      setError("请输入 Session ID。");
       return;
     }
     setError(null);
-    onQuery({ taskId, turn: turnNumber });
+    onQuery({ sessionId, turn: turnNumber });
   };
   return (
     <form
@@ -58,20 +58,20 @@ export function QueryBar({
             data-testid="context-observer-back"
           >
             <ArrowLeftIcon />
-            返回对话
+            返回会话
           </Button>
         )}
-        <label htmlFor="context-task-id" className="text-xs font-medium">
-          Task
+        <label htmlFor="context-session-id" className="text-xs font-medium">
+          Session
         </label>
         <Input
-          id="context-task-id"
-          aria-label="Task ID"
+          id="context-session-id"
+          aria-label="Session ID"
           className="w-28 font-mono text-xs"
           inputMode="numeric"
-          placeholder="任务 ID"
-          value={taskInput}
-          onChange={(event) => setTaskInput(event.target.value)}
+          placeholder="会话 ID"
+          value={sessionInput}
+          onChange={(event) => setSessionInput(event.target.value)}
         />
         <label htmlFor="context-turn" className="ml-1 text-xs font-medium">
           回合

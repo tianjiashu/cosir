@@ -6,37 +6,38 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.orm import sessionmaker
 
 import app.service.user_input.user_input_service as user_input_module
 from app.core.context.context_store import ContextStore
 from app.core.events import RunStatusChangedEvent
-from app.core.workflow.conversation_run_ledger import (
-    ConversationRunLedger,
-)
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.core.workflow.message_queue.task_message import UserInputBody
+from app.core.workflow.message_queue.session_message import UserInputBody
+from app.core.workflow.run_ledger import (
+    RunLedger,
+)
 from app.models.conversation_input import UserInputPresentation
-from app.models.conversation_run_command import ConversationRunCommand
-from app.models.conversation_run_options import ConversationRunOptions
-from app.models.conversation_run_record import ConversationRunRecord
-from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import ToolMessageMetadata
-from app.models.task_extra import TaskExtra
-from app.models.task_record import TaskRecord
-from app.service.conversation.conversation_task_context_service import (
-    ConversationTaskContextService,
+from app.models.run_command import RunCommand
+from app.models.run_options import RunOptions
+from app.models.run_record import RunRecord
+from app.models.session_context import SessionContextRecord
+from app.models.session_extra import SessionExtra
+from app.models.session_record import SessionRecord
+from app.service.conversation.session_context_service import (
+    SessionContextService,
 )
 from app.service.recover_service import RecoverService
 from app.service.user_input.user_input_service import UserInputService
-from app.storage.crud.conversation_run_crud import ConversationRunCrud
-from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
-from app.storage.crud.task_crud import TaskCrud
+from app.storage.crud.run_crud import RunCrud
+from app.storage.crud.session_context_crud import SessionContextCrud
+from app.storage.crud.session_crud import SessionCrud
 from app.storage.model.base import StorageBase
-from app.storage.model.conversation_run_model import ConversationRunModel
-from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
-from app.storage.model.task_model import TaskModel
+from app.storage.model.run_model import RunModel
+from app.storage.model.session_context_model import SessionContextModel
+from app.storage.model.session_model import SessionModel
 from app.storage.store_engines import initialize_app_schema
 from tests.model_config_fixtures import model_config_record, model_configs
 
@@ -47,8 +48,8 @@ def _timestamp() -> datetime:
 
 def test_context_record_round_trips_with_row_identity_and_metadata() -> None:
     metadata = {"status": "completed", "display_data": {"kind": "read-file-meta", "path": "a.py"}}
-    record = ConversationTaskContextRecord(
-        task_id=7,
+    record = SessionContextRecord(
+        session_id=7,
         run_id=11,
         message={"role": "tool", "tool_call_id": "call-1", "content": "hello"},
         include_in_context=True,
@@ -59,7 +60,7 @@ def test_context_record_round_trips_with_row_identity_and_metadata() -> None:
     )
 
     model = record._to_model()
-    restored = ConversationTaskContextRecord._from_model(model)
+    restored = SessionContextRecord._from_model(model)
 
     assert model.id == 41
     assert restored.id == 41
@@ -72,9 +73,9 @@ def test_context_record_round_trips_with_row_identity_and_metadata() -> None:
 
 
 def test_context_storage_exposes_only_canonical_message_fields() -> None:
-    assert {column.name for column in ConversationTaskContextModel.__table__.columns} == {
+    assert {column.name for column in SessionContextModel.__table__.columns} == {
         "id",
-        "task_id",
+        "session_id",
         "run_id",
         "message_json",
         "message_id",
@@ -89,9 +90,9 @@ def test_context_storage_exposes_only_canonical_message_fields() -> None:
 
 
 def test_context_record_rejects_malformed_metadata_json() -> None:
-    model = ConversationTaskContextModel(
+    model = SessionContextModel(
         message_id="test-message",
-        task_id=7,
+        session_id=7,
         run_id=11,
         message_json=json.dumps({"role": "user", **{"content": "hello"}}),
         include_in_context=True,
@@ -100,7 +101,7 @@ def test_context_record_rejects_malformed_metadata_json() -> None:
     )
 
     with pytest.raises((TypeError, ValueError)):
-        ConversationTaskContextRecord._from_model(model)
+        SessionContextRecord._from_model(model)
 
 
 def test_run_record_round_trips_usage_and_error() -> None:
@@ -113,9 +114,9 @@ def test_run_record_round_trips_usage_and_error() -> None:
         "reasoning_tokens": 1,
     }
     error = {"code": "provider_error", "message": "provider unavailable"}
-    record = ConversationRunRecord(
+    record = RunRecord(
         id=11,
-        task_id=7,
+        session_id=7,
         status="failed",
         created_at=_timestamp(),
         updated_at=_timestamp(),
@@ -124,7 +125,7 @@ def test_run_record_round_trips_usage_and_error() -> None:
     )
 
     model = record.to_model()
-    restored = ConversationRunRecord.from_model(model)
+    restored = RunRecord.from_model(model)
 
     assert json.loads(model.usage_json) == usage
     assert json.loads(model.error_json) == error
@@ -161,7 +162,7 @@ def test_presentation_is_a_plain_binding() -> None:
 def _input_service(
     monkeypatch, workspace_root: Path, *, supports_reasoning_effort: bool = False
 ) -> UserInputService:
-    """不触达存储的 ``UserInputService``：Task 归属 workspace 7，模型不支持图片。"""
+    """不触达存储的 ``UserInputService``：Session 归属 workspace 7，模型不支持图片。"""
     monkeypatch.setattr(
         user_input_module,
         "get_model_config_service",
@@ -181,7 +182,7 @@ def _input_service(
         ),
     )
     service = UserInputService.__new__(UserInputService)
-    service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))
+    service._session = SimpleNamespace(get=lambda _session_id: SimpleNamespace(workspace_id=7))
     return service
 
 
@@ -189,7 +190,7 @@ def test_run_service_prepares_new_command_for_model_and_persistence(monkeypatch,
     attachment_path = tmp_path / "README.md"
     attachment_path.write_text("hello", encoding="utf-8")
     service = _input_service(monkeypatch, tmp_path)
-    command = ConversationRunCommand(text=f'请阅读 <file path="{attachment_path}" />')
+    command = RunCommand(text=f'请阅读 <file path="{attachment_path}" />')
 
     prepared = service.prepare(7, command, "test/m3", None, "main_agent")
 
@@ -200,10 +201,10 @@ def test_run_service_prepares_new_command_for_model_and_persistence(monkeypatch,
 
 
 def test_prepare_returns_a_user_input_body_for_the_caller_to_queue(monkeypatch, tmp_path) -> None:
-    """投递方式是信封属性，由入队方按 Task 当时的阶段决定；这里只产出消息体。"""
+    """投递方式是信封属性，由入队方按 Session 当时的阶段决定；这里只产出消息体。"""
     service = _input_service(monkeypatch, tmp_path)
 
-    body = service.prepare(7, ConversationRunCommand(text="检查项目"), "test/m3", None, "main_agent")
+    body = service.prepare(7, RunCommand(text="检查项目"), "test/m3", None, "main_agent")
 
     assert isinstance(body, UserInputBody)
     assert body.text == "检查项目"
@@ -214,7 +215,7 @@ def test_input_preparation_keeps_run_options_out_of_message(monkeypatch, tmp_pat
     service = _input_service(monkeypatch, tmp_path, supports_reasoning_effort=True)
     queued = service.prepare(
         7,
-        ConversationRunCommand(text="检查项目", disabled_tool_groups=["终端工具"]),
+        RunCommand(text="检查项目", disabled_tool_groups=["终端工具"]),
         "test/m3",
         "high",
         "main_agent",
@@ -227,7 +228,7 @@ def test_input_preparation_keeps_run_options_out_of_message(monkeypatch, tmp_pat
 
 
 def test_prepare_maps_missing_model_config_to_input_rejection(monkeypatch, tmp_path) -> None:
-    """模型配置缺失不是「寻址不到 Task」，不能以 KeyError 冒到 404 映射。"""
+    """模型配置缺失不是「寻址不到 Session」，不能以 KeyError 冒到 404 映射。"""
     monkeypatch.setattr(
         user_input_module,
         "get_model_config_service",
@@ -241,10 +242,10 @@ def test_prepare_maps_missing_model_config_to_input_rejection(monkeypatch, tmp_p
         ),
     )
     service = UserInputService.__new__(UserInputService)
-    service._task = SimpleNamespace(get=lambda _task_id: SimpleNamespace(workspace_id=7))
+    service._session = SimpleNamespace(get=lambda _session_id: SimpleNamespace(workspace_id=7))
 
     with pytest.raises(UserInputRejectedError) as caught:
-        service.prepare(7, ConversationRunCommand(text="你好"), "test/m3", None, "main_agent")
+        service.prepare(7, RunCommand(text="你好"), "test/m3", None, "main_agent")
 
     assert caught.value.code == "MODEL_CONFIG_UNAVAILABLE"
 
@@ -253,15 +254,15 @@ def test_context_crud_raises_on_sequence_collision() -> None:
     """序号冲突（调用方分配序号出错）必须原样抛出，不得在持久化层被吞掉。
 
     工具调用身份不再是数据库事实（``tool_call_id`` 列已删除），因此 ``create`` 的唯一冲突来源
-    只有 ``(task_id, sequence)``；它代表序号 owner 出错，只能暴露。
+    只有 ``(session_id, sequence)``；它代表序号 owner 出错，只能暴露。
     """
 
     engine = create_engine("sqlite://")
     StorageBase.metadata.create_all(engine)
     try:
-        crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
-        first = ConversationTaskContextRecord(
-            task_id=7,
+        crud = SessionContextCrud.__new__(SessionContextCrud)
+        first = SessionContextRecord(
+            session_id=7,
             run_id=11,
             message={"role": "tool", "content": "done", "tool_call_id": "call-1"},
             include_in_context=True,
@@ -269,8 +270,8 @@ def test_context_crud_raises_on_sequence_collision() -> None:
             metadata=ToolMessageMetadata(status="completed"),
             turn=1,
         )
-        conflicting_sequence = ConversationTaskContextRecord(
-            task_id=7,
+        conflicting_sequence = SessionContextRecord(
+            session_id=7,
             run_id=11,
             message={"role": "tool", "content": "other", "tool_call_id": "call-2"},
             include_in_context=True,
@@ -278,10 +279,10 @@ def test_context_crud_raises_on_sequence_collision() -> None:
             metadata=ToolMessageMetadata(status="completed"),
             turn=1,
         )
-        with Session(engine) as session:
-            crud.create(first, session=session)
+        with DbSession(engine) as db:
+            crud.create(first, db=db)
             with pytest.raises(IntegrityError):
-                crud.create(conflicting_sequence, session=session)
+                crud.create(conflicting_sequence, db=db)
     finally:
         engine.dispose()
 
@@ -291,19 +292,19 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
     StorageBase.metadata.create_all(engine)
     factory = sessionmaker(bind=engine)
     try:
-        with Session(engine) as session:
-            session.add(TaskModel(id=7, workspace_id=3, title="task", creation_command_id=None))
-            session.add(
-                ConversationRunModel(
+        with DbSession(engine) as db:
+            db.add(SessionModel(id=7, workspace_id=3, title="session", creation_command_id=None))
+            db.add(
+                RunModel(
                     id=11,
-                    task_id=7,
+                    session_id=7,
                     status="running",
-                    options=ConversationRunOptions().model_dump(mode="json"),
+                    options=RunOptions().model_dump(mode="json"),
                     execution_data=ReactExecutionState().model_dump(mode="json"),
                 )
             )
-            context = ConversationTaskContextRecord(
-                task_id=7,
+            context = SessionContextRecord(
+                session_id=7,
                 run_id=11,
                 message={
                     "role": "assistant",
@@ -323,25 +324,25 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
                 sequence=1,
                 turn=1,
             )
-            session.add(context._to_model())
-            session.commit()
+            db.add(context._to_model())
+            db.commit()
 
-        run_crud = ConversationRunCrud.__new__(ConversationRunCrud)
-        run_crud._session_factory = factory
-        context_service = ConversationTaskContextService.__new__(ConversationTaskContextService)
-        context_crud = ConversationTaskContextCrud.__new__(ConversationTaskContextCrud)
-        context_crud._session_factory = factory
+        run_crud = RunCrud.__new__(RunCrud)
+        run_crud._db_factory = factory
+        context_service = SessionContextService.__new__(SessionContextService)
+        context_crud = SessionContextCrud.__new__(SessionContextCrud)
+        context_crud._db_factory = factory
         context_store = ContextStore.__new__(ContextStore)
         context_store._crud = context_crud
         context_service._crud = context_crud
         context_service._store = context_store
         service = RecoverService.__new__(RecoverService)
         service._run = run_crud
-        run_state = ConversationRunLedger.__new__(ConversationRunLedger)
+        run_state = RunLedger.__new__(RunLedger)
         run_state._run = run_crud
         service._ledger = run_state
         service._context = context_service
-        service._session_factory = factory
+        service._db_factory = factory
         projected: list[RunStatusChangedEvent] = []
 
         class _Projector:
@@ -354,18 +355,18 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
 
         recovered = service.recover_orphaned_runs()
 
-        with Session(engine) as session:
-            run_row = session.get(ConversationRunModel, 11)
-            context_rows = session.scalars(
-                select(ConversationTaskContextModel).where(
-                    ConversationTaskContextModel.task_id == 7,
-                    ConversationTaskContextModel.run_id == 11,
+        with DbSession(engine) as db:
+            run_row = db.get(RunModel, 11)
+            context_rows = db.scalars(
+                select(SessionContextModel).where(
+                    SessionContextModel.session_id == 7,
+                    SessionContextModel.run_id == 11,
                 )
             ).all()
             repaired = [
                 record
                 for record in (
-                    ConversationTaskContextRecord._from_model(row) for row in context_rows
+                    SessionContextRecord._from_model(row) for row in context_rows
                 )
                 if record.message["role"] == "tool"
             ]
@@ -385,42 +386,42 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
         engine.dispose()
 
 
-def test_task_record_round_trips_current_run_without_run_owned_context_window() -> None:
+def test_session_record_round_trips_current_run_without_run_owned_context_window() -> None:
     now = _timestamp()
-    model = TaskModel(
+    model = SessionModel(
         id=7,
         workspace_id=3,
-        title="task",
-        task_type="user",
+        title="session",
+        session_type="user",
         current_run_id=11,
         created_at=now.isoformat(),
         updated_at=now.isoformat(),
     )
 
-    record = TaskRecord.from_model(model)
+    record = SessionRecord.from_model(model)
 
     assert record.current_run_id == 11
     assert "context_window_total" not in record.to_dict()
     assert record.to_dict()["current_run_id"] == 11
     round_tripped = record.to_model()
     assert round_tripped.current_run_id == 11
-    assert "context_window_total" not in TaskModel.__table__.columns
+    assert "context_window_total" not in SessionModel.__table__.columns
 
 
-def test_task_crud_new_task_has_no_current_run() -> None:
+def test_session_crud_new_session_has_no_current_run() -> None:
     engine = create_engine("sqlite://")
     StorageBase.metadata.create_all(engine)
     try:
-        crud = TaskCrud.__new__(TaskCrud)
-        with Session(engine) as session:
+        crud = SessionCrud.__new__(SessionCrud)
+        with DbSession(engine) as db:
             record = crud._build_and_flush(
-                session,
+                db,
                 workspace_id=3,
                 title="empty",
-                task_type="user",
-                parent_task_id=None,
+                session_type="user",
+                parent_session_id=None,
                 creation_command_id=None,
-                extra=TaskExtra(),
+                extra=SessionExtra(),
             )
 
         assert record.current_run_id is None
@@ -428,10 +429,10 @@ def test_task_crud_new_task_has_no_current_run() -> None:
         engine.dispose()
 
 
-def test_fresh_app_schema_does_not_create_task_snapshots_table() -> None:
+def test_fresh_app_schema_does_not_create_session_snapshots_table() -> None:
     engine = create_engine("sqlite://")
     try:
         initialize_app_schema(engine)
-        assert "conversation_task_snapshots" not in inspect(engine).get_table_names()
+        assert "conversation_session_snapshots" not in inspect(engine).get_table_names()
     finally:
         engine.dispose()

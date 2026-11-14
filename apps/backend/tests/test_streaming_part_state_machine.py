@@ -52,7 +52,7 @@ class _Harness:
         # 生产由 model 节点每次请求新建批次并交给状态机；这里每个 harness 一个批次。
         # 事件出口在构造期绑定（生产为 ``emit``），测试用替身提供收集器。
         with patch.object(machine_module, "emit", self.events.append):
-            self.machine = ModelStreamStateMachine(task_id=1, run_id=2, step_id="step-1")
+            self.machine = ModelStreamStateMachine(session_id=1, run_id=2, step_id="step-1")
         # 合并阈值与时钟是构造期固化的实现细节（生产取 Constant + time.monotonic），测试按用例
         # 白盒注入，才能在字符阈值与时间阈值两个维度上可控。
         self.machine._min_chars = min_chars
@@ -318,7 +318,7 @@ def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monke
     # 请求边界：model_node 每次请求新建批次，同一 id 属于新请求，必须重新投影。
     second_events: list[Any] = []
     with patch.object(machine_module, "emit", second_events.append):
-        second = ModelStreamStateMachine(task_id=1, run_id=2, step_id="step-2")
+        second = ModelStreamStateMachine(session_id=1, run_id=2, step_id="step-2")
     second.tool_call([_tool_call("c1", "read_file")])
 
     assert [

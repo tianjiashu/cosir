@@ -15,7 +15,7 @@ import { TerminalOutputPreview, useParsedOutput } from "../terminal-output/previ
 import { TerminalOutputReader } from "../terminal-output/reader";
 import { resolvePathText } from "@/lib/links/resolve-link";
 import { stopTarget } from "@/lib/assistant/command-request-store";
-import { cancelToolCall } from "@/lib/assistant/task-commands";
+import { cancelToolCall } from "@/lib/assistant/session-commands";
 import type { CallView, CallViewContext } from "../call-view";
 import { readText as text } from "../display-data-readers";
 import { useCallRanAWhile } from "../call-elapsed";
@@ -60,7 +60,7 @@ function commandLive({ artifact, workStatus, inherited }: CallViewContext): bool
 function terminalStatusLabel(data: Record<string, unknown>, context: CallViewContext): string {
   const { artifact } = context;
   if (context.inherited && (artifact.backendStatus === "pending" || artifact.backendStatus === "running")) return "继承时未结束";
-  if (commandLive(context)) return context.taskCancelling ? "正在停止…" : "运行中";
+  if (commandLive(context)) return context.sessionCancelling ? "正在停止…" : "运行中";
   if (context.workStatus === "settling") return "后台结果收尾中";
   if (artifact.backendStatus === "cancelled") return "已取消";
   if (data.end === "timed_out") return "命令超时";
@@ -70,20 +70,20 @@ function terminalStatusLabel(data: Record<string, unknown>, context: CallViewCon
 
 /**
  * 去留操作只给可交互面上仍在前台运行的命令：转到后台的命令在看板外壳上停止，只读面（子 Agent 阅读器、
- * 看板详情）与 Task 停止中都不给。
+ * 看板详情）与 Session 停止中都不给。
  */
 function liveActionsAvailable(context: CallViewContext): boolean {
-  return context.interactive && !context.taskCancelling && !context.artifact.background && commandLive(context);
+  return context.interactive && !context.sessionCancelling && !context.artifact.background && commandLive(context);
 }
 
 /**
- * 前台命令只停这一条（随 Task 停止也会一并结束）。图标按钮与子 Agent 的停止同一个样子，次于「转到后台」：
+ * 前台命令只停这一条（随 Session 停止也会一并结束）。图标按钮与子 Agent 的停止同一个样子，次于「转到后台」：
  * 它会中断命令，用得少。HTTP 只确认进程内信号已发出，「正在停止」保持到 snapshot 里的工具状态落定。
  */
-function TerminalStopButton({ taskId, toolCallId }: CallViewContext) {
-  const cancellation = useStopRequest(taskId, stopTarget(toolCallId));
+function TerminalStopButton({ sessionId, toolCallId }: CallViewContext) {
+  const cancellation = useStopRequest(sessionId, stopTarget(toolCallId));
   return <ToolStopButton label="终端命令" pending={cancellation.pending}
-    onClick={() => void cancellation.stop(() => cancelToolCall(taskId, toolCallId))} />;
+    onClick={() => void cancellation.stop(() => cancelToolCall(sessionId, toolCallId))} />;
 }
 
 /**
@@ -92,7 +92,7 @@ function TerminalStopButton({ taskId, toolCallId }: CallViewContext) {
 function TerminalLiveActions(context: CallViewContext) {
   if (!useCallRanAWhile(context.artifact.startedAt)) return null;
   return <>
-    <ForegroundWaitAction taskId={context.taskId} toolCallId={context.toolCallId} />
+    <ForegroundWaitAction sessionId={context.sessionId} toolCallId={context.toolCallId} />
     <TerminalStopButton {...context} />
   </>;
 }
@@ -117,19 +117,19 @@ function TerminalStatusBar({ data, context }: { data: Record<string, unknown>; c
  * 状态不决定已收集输出是否可读。复制命令常显，输出的复制与放大悬停才出现。
  */
 function TerminalResultBody({ data, context }: { data: Record<string, unknown>; context: CallViewContext; }) {
-  const { taskId, toolCallId } = context;
+  const { sessionId, toolCallId } = context;
   const command = text(data.command) ?? text(context.args.command);
   const output = rawOutput(data);
   const workdir = text(data.workdir);
   const live = commandLive(context);
-  const links = useOpenLink("tool", taskId);
+  const links = useOpenLink("tool", sessionId);
   const directoryTarget = workdir ? resolvePathText(`${workdir}/`, { workspaceRoot: links.workspaceRoot }) : null;
   const directoryName = workdir?.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) || workdir;
   // 在工作区根目录跑命令是常态，只有换了目录才值得说。
   const showWorkdir = workdir !== undefined && workdir.replace(/[\\/]+$/, "") !== links.workspaceRoot?.replace(/[\\/]+$/, "");
   const { tail, readText } = useParsedOutput(output);
-  const [commandOpen, setCommandOpen] = useDisclosure(taskId, `terminal-command:${toolCallId}`, false);
-  const [, setReaderOpen] = useDisclosure(taskId, `terminal-reader:${toolCallId}`, false);
+  const [commandOpen, setCommandOpen] = useDisclosure(sessionId, `terminal-command:${toolCallId}`, false);
+  const [, setReaderOpen] = useDisclosure(sessionId, `terminal-reader:${toolCallId}`, false);
   const commandElement = useRef<HTMLPreElement>(null);
   const commandClipped = useClipped(commandElement, !commandOpen, [command]);
   return (
@@ -138,14 +138,14 @@ function TerminalResultBody({ data, context }: { data: Record<string, unknown>; 
         <div className="flex items-start gap-2 rounded-lg border border-border/60 px-2.5 py-1.5 font-mono">
           <span className="text-muted-foreground select-none" aria-hidden="true">$</span>
           <pre ref={commandElement} data-terminal-command="true" className={`min-w-0 flex-1 font-mono break-all whitespace-pre-wrap ${commandOpen ? "" : "line-clamp-2"}`}>{command}</pre>
-          <CopyIconButton label="复制命令" size="xs" className="-my-0.5" getText={() => command} logEvent="terminal_command_copy_failed" logData={{ taskId, toolCallId }} />
+          <CopyIconButton label="复制命令" size="xs" className="-my-0.5" getText={() => command} logEvent="terminal_command_copy_failed" logData={{ sessionId, toolCallId }} />
         </div>
         {(commandOpen || commandClipped) && <Button variant="ghost" size="sm" onClick={() => setCommandOpen(!commandOpen)} aria-expanded={commandOpen}>{commandOpen ? "收起命令" : "显示完整命令"}</Button>}
       </div>}
       {output ? <div className="relative">
         <OmittedOutputNotice omittedLines={omittedLines(data)} logPath={outputLogPath(data)} links={{ workspaceRoot: links.workspaceRoot, open: links.open }} />
         <div className={cn("bg-card absolute top-0 right-0 flex gap-1", REVEAL_ON_DISCLOSURE_HOVER)}>
-          <CopyIconButton label="复制输出" size="xs" getText={readText} logEvent="terminal_output_copy_failed" logData={{ taskId, toolCallId }} />
+          <CopyIconButton label="复制输出" size="xs" getText={readText} logEvent="terminal_output_copy_failed" logData={{ sessionId, toolCallId }} />
           <TooltipIconButton tooltip="查看输出" className="size-6" onClick={() => setReaderOpen(true)}><Maximize2Icon aria-hidden="true" /></TooltipIconButton>
         </div>
         {tail && tail.hiddenLines > 0 && <p className="text-muted-foreground">还有 {tail.hiddenLines} 行</p>}
@@ -163,9 +163,9 @@ function TerminalResultBody({ data, context }: { data: Record<string, unknown>; 
 
 /** 独立阅读器不继承过程/调用详情的可见性，关闭详情仍接收最新输出。 */
 function TerminalReaderOverlay({ data, context }: { data: Record<string, unknown>; context: CallViewContext; }) {
-  const { taskId, toolCallId } = context;
-  const [open, setOpen] = useDisclosure(taskId, `terminal-reader:${toolCallId}`, false);
-  const links = useOpenLink("tool", taskId);
+  const { sessionId, toolCallId } = context;
+  const [open, setOpen] = useDisclosure(sessionId, `terminal-reader:${toolCallId}`, false);
+  const links = useOpenLink("tool", sessionId);
   const anchor = useRef<HTMLSpanElement>(null);
   // 原打开按钮随过程收起后仍连接 DOM；把焦点交回最近的可见标题。看板里没有调用行，也不会随过程收起。
   const finalFocus = () => {
@@ -176,7 +176,7 @@ function TerminalReaderOverlay({ data, context }: { data: Record<string, unknown
     const processHead = row.closest('[data-slot="turn"]')?.querySelector<HTMLElement>('[data-slot="process-head"]');
     return processHead?.checkVisibility() ? processHead : false;
   };
-  return <><span ref={anchor} hidden /><TerminalOutputReader finalFocus={finalFocus} taskId={taskId} toolCallId={toolCallId} output={rawOutput(data)}
+  return <><span ref={anchor} hidden /><TerminalOutputReader finalFocus={finalFocus} sessionId={sessionId} toolCallId={toolCallId} output={rawOutput(data)}
     omittedLines={omittedLines(data)} logPath={outputLogPath(data)}
     links={{ getWorkspaceRoot: () => links.workspaceRoot, onOpenLink: links.open }} open={open} onOpenChange={setOpen}
     command={text(data.command) ?? text(context.args.command)}

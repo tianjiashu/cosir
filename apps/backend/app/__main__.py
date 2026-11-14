@@ -90,7 +90,7 @@ def main() -> None:
             access_log=False,
             ws_ping_interval=30,
             ws_ping_timeout=90,
-            # 前端常驻的长连接（Task 订阅、执行状态流）不会自己结束；不设上限时优雅关闭会一直等它们，
+            # 前端常驻的长连接（Session 订阅、执行状态流）不会自己结束；不设上限时优雅关闭会一直等它们，
             # 宿主宽限期一到只能强杀，lifespan 的收尾从不执行。到时限后 uvicorn 取消剩余连接再进入
             # lifespan 关闭；宿主的宽限期（``STOP_GRACE_MS``）须大于这里加上收尾耗时。
             timeout_graceful_shutdown=2,

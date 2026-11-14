@@ -1,4 +1,4 @@
-"""Task 3 canonical message/tool/run write-path tests."""
+"""Session 3 canonical message/tool/run write-path tests."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ import pytest
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.events import RunStatusChangedEvent
-from app.core.workflow.conversation_run_ledger import ConversationRunLedger
-from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.models.conversation_run_failure import run_failure_message
-from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
+from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
+from app.core.workflow.run_ledger import RunLedger
+from app.models.enums.run_status import RunStatus, RunTransition
+from app.models.run_failure import run_failure_message
 from app.service.recover_service import RecoverService
 from tests.model_config_fixtures import model_config_record, model_configs
 from tests.sdk_fixtures import sdk_completion
@@ -27,7 +27,7 @@ class _RecordingContextStore:
         self.appended: list[dict[str, Any]] = []
         self.current_max_sequence = 0
 
-    def tool_call_ids(self, task_id: int) -> set[str]:
+    def tool_call_ids(self, session_id: int) -> set[str]:
         return set()
 
     def append(self, *args: Any, **kwargs: Any) -> None:
@@ -35,16 +35,16 @@ class _RecordingContextStore:
         self.current_max_sequence = args[3]
         return ContextEntry(args[2], args[1], args[3], turn=kwargs["turn"])
 
-    def entries_in_context(self, _task_id: int) -> list[ContextEntry]:
+    def entries_in_context(self, _session_id: int) -> list[ContextEntry]:
         return []
 
-    def max_sequence(self, _task_id: int) -> int:
+    def max_sequence(self, _session_id: int) -> int:
         return self.current_max_sequence
 
-    def max_turn(self, _task_id: int) -> int:
+    def max_turn(self, _session_id: int) -> int:
         return 0
 
-    def run_records(self, _task_id: int, _run_id: int) -> list:
+    def run_records(self, _session_id: int, _run_id: int) -> list:
         return []
 
 
@@ -55,7 +55,7 @@ def _runtime_manager(context_store: _RecordingContextStore) -> RuntimeMessageCon
     manager._run_shown = False
     manager._used_call_ids = set()
     manager._response_call_ids = {}
-    manager.current_task_id = 7
+    manager.current_session_id = 7
     manager.agent_profile = SimpleNamespace()
     manager.workspace = SimpleNamespace(id=7, root_path="")
     manager.context_store = context_store
@@ -94,8 +94,8 @@ def test_begin_run_binds_identity_without_rewriting_context() -> None:
     context_store = _RecordingContextStore()
     manager = _runtime_manager(context_store)
     message = {"role": "user", "content": "existing"}
-    context_store.entries_in_context = lambda _task_id: [ContextEntry(message, 11, 1, turn=1)]
-    manager.begin_run(SimpleNamespace(id=12, task_id=7))
+    context_store.entries_in_context = lambda _session_id: [ContextEntry(message, 11, 1, turn=1)]
+    manager.begin_run(SimpleNamespace(id=12, session_id=7))
     assert manager.current_run_id == 12
     assert manager._entries[0].message is message
     assert context_store.appended == []
@@ -136,7 +136,7 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
 
     order: list[str] = []
     recovered_run = SimpleNamespace(
-        id=11, task_id=7, status="cancelled", execution_data=ReactExecutionState()
+        id=11, session_id=7, status="cancelled", execution_data=ReactExecutionState()
     )
 
     class _Transaction:
@@ -147,7 +147,7 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
         def __exit__(self, *_args: object) -> None:
             order.append("commit")
 
-    class _SessionFactory:
+    class _DbFactory:
         def begin(self):
             return _Transaction()
 
@@ -164,31 +164,31 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
             final_output: str | None = None,
             usage: object = None,
             error: object = None,
-            session: object = None,
+            db: object = None,
             clear_terminal_fields: bool = False,
             execution_data: object = None,
         ) -> object:
-            assert session is not None
+            assert db is not None
             order.append("run")
             return recovered_run
 
     class _ContextService:
-        def invalidate_waiting_calls(self, task_id, run_id, session):
+        def invalidate_waiting_calls(self, session_id, run_id, db):
             pass
 
         def close_unclosed_tool_calls_for_run(
-            self, task_id: int, run_id: int, session: object = None
+            self, session_id: int, run_id: int, db: object = None
         ) -> list[str]:
-            assert (task_id, run_id) == (7, 11)
-            assert session is not None
+            assert (session_id, run_id) == (7, 11)
+            assert db is not None
             order.append("context")
             return ["call-1"]
 
     service = RecoverService.__new__(RecoverService)
     service._run = _RunCrud()
     service._context = _ContextService()
-    service._session_factory = _SessionFactory()
-    service._ledger = ConversationRunLedger.__new__(ConversationRunLedger)
+    service._db_factory = _DbFactory()
+    service._ledger = RunLedger.__new__(RunLedger)
     service._ledger._run = service._run
 
     assert service.recover_orphaned_runs() == [recovered_run]
@@ -197,16 +197,16 @@ def test_orphan_recovery_commits_run_and_tool_closure_before_return() -> None:
 
 def _creation_service(store, monkeypatch, projector):
     """创建与冷读共用临时 SQLite，模型解析只注入配置事实。"""
-    service = ConversationRunLedger.__new__(ConversationRunLedger)
+    service = RunLedger.__new__(RunLedger)
     service._run = store.runs
-    service._task = store.tasks
-    service._session_factory = store.factory
+    service._session = store.sessions
+    service._db_factory = store.factory
     monkeypatch.setattr(
         "app.service.depends.get_conversation_event_projector",
         lambda: projector,
     )
     monkeypatch.setattr(
-        "app.core.workflow.conversation_run_ledger.get_model_config_service",
+        "app.core.workflow.run_ledger.get_model_config_service",
         lambda: SimpleNamespace(
             get_config=lambda _id: model_config_record(model_name="test", context_window_k=128)
         ),
@@ -222,8 +222,12 @@ def _creation_service(store, monkeypatch, projector):
 
 def test_create_run_commits_inbox_and_current_run_before_projector(request, monkeypatch):
     """独立连接在事件发布时已能看到整组事实，context 留待模型边界并入。"""
-    from app.core.workflow.message_queue.task_message import RunLaunch, TaskMessage, UserInputBody
-    from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
+    from app.core.workflow.message_queue.session_message import (
+        RunLaunch,
+        SessionMessage,
+        UserInputBody,
+    )
+    from app.core.workflow.message_queue.session_message_queue import SessionMessageQueue
     from app.models.conversation_input import UserInputPresentation
 
     store = request.getfixturevalue("canonical_store")
@@ -231,12 +235,12 @@ def test_create_run_commits_inbox_and_current_run_before_projector(request, monk
 
     class Projector:
         def process(self, event):
-            assert store.tasks.get(store.task.id).current_run_id == event.run_id
+            assert store.sessions.get(store.session.id).current_run_id == event.run_id
             assert store.runs.get(event.run_id).context_window_total == 128000
-            [queued] = TaskMessageQueue().pending_nowait(store.task.id)
+            [queued] = SessionMessageQueue().pending_nowait(store.session.id)
             assert isinstance(queued.body, UserInputBody)
             assert queued.body.text == "hello"
-            assert store.contexts.get(store.task.id, include_in_context=False) == []
+            assert store.contexts.get(store.session.id, include_in_context=False) == []
             events.append(event)
 
     service = _creation_service(store, monkeypatch, Projector())
@@ -245,8 +249,8 @@ def test_create_run_commits_inbox_and_current_run_before_projector(request, monk
         launch=RunLaunch(model_config_id="test/m1"),
         presentation=UserInputPresentation(text="hello"),
     )
-    TaskMessageQueue().put(store.task.id, TaskMessage.of(body))
-    run = service.create_run(store.task.id, body.launch)
+    SessionMessageQueue().put(store.session.id, SessionMessage.of(body))
+    run = service.create_run(store.session.id, body.launch)
     assert len(events) == 1
     assert events[0].run_id == run.id
 
@@ -255,7 +259,7 @@ def _run_record() -> SimpleNamespace:
     now = datetime.now(UTC)
     return SimpleNamespace(
         id=11,
-        task_id=7,
+        session_id=7,
         status="running",
         created_at=now,
         updated_at=now,
@@ -290,11 +294,11 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
     class _Projector:
         def process(self, event: RunStatusChangedEvent, **kwargs: Any) -> None:
             order.append("event")
-            assert event.status is ConversationRunStatus.FAILED
+            assert event.status is RunStatus.FAILED
 
-    service = ConversationRunLedger.__new__(ConversationRunLedger)
+    service = RunLedger.__new__(RunLedger)
     service._run = _RunCrud()
-    service._session_factory = None
+    service._db_factory = None
     from app.service import depends as ledger_module
 
     ledger_getter = ledger_module.get_conversation_event_projector
@@ -304,7 +308,7 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
             11,
             RunTransition.FAIL,
             end_reason="max_steps_reached",
-            usage_stats=ConversationRunUsageStats(
+            usage_stats=RunUsageStats(
                 input_tokens=3,
                 output_tokens=2,
                 total_tokens=5,
@@ -336,7 +340,7 @@ def test_terminal_run_projector_failure_is_non_fatal_after_database_commit() -> 
         def process(self, _event: Any, **_kwargs: Any) -> None:
             raise RuntimeError("transport unavailable")
 
-    service = ConversationRunLedger.__new__(ConversationRunLedger)
+    service = RunLedger.__new__(RunLedger)
     service._run = _RunCrud()
     from app.service import depends as ledger_module
 

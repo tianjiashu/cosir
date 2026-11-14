@@ -22,9 +22,9 @@ describe("model selection storage scopes", () => {
     const selection = { modelConfigId: "c/m1", reasoningEffort: null as null };
     writeStoredSelection({ kind: "workspace", id: 9 }, selection);
     expect(selectionStorageKey({ kind: "workspace", id: 9 })).toBe("cosir:model-config-selection:workspace:9");
-    expect(selectionStorageKey({ kind: "task", id: 9 })).toBe("cosir:model-config-selection:task:9");
+    expect(selectionStorageKey({ kind: "session", id: 9 })).toBe("cosir:model-config-selection:session:9");
     expect(readStoredSelection({ kind: "workspace", id: 9 })).toEqual(selection);
-    expect(readStoredSelection({ kind: "task", id: 9 })).toBeNull();
+    expect(readStoredSelection({ kind: "session", id: 9 })).toBeNull();
   });
 
   it("ignores selections stored before model ids became strings", () => {
@@ -34,7 +34,7 @@ describe("model selection storage scopes", () => {
   });
 
   it("notifies another selector in the same WebView when a choice changes", () => {
-    const scope = { kind: "task" as const, id: 12 };
+    const scope = { kind: "session" as const, id: 12 };
     const listener = vi.fn();
     const unsubscribe = subscribeStoredSelection(scope, listener);
     writeStoredSelection(scope, { modelConfigId: "c/m2", reasoningEffort: null });
@@ -47,7 +47,7 @@ describe("model selection storage scopes", () => {
       getItem: () => { throw new Error("storage unavailable"); },
       setItem: () => { throw new Error("storage unavailable"); },
     } });
-    expect(readStoredSelection({ kind: "task", id: 12 })).toBeNull();
-    expect(() => writeStoredSelection({ kind: "task", id: 12 }, { modelConfigId: "c/m2", reasoningEffort: null })).not.toThrow();
+    expect(readStoredSelection({ kind: "session", id: 12 })).toBeNull();
+    expect(() => writeStoredSelection({ kind: "session", id: 12 }, { modelConfigId: "c/m2", reasoningEffort: null })).not.toThrow();
   });
 });

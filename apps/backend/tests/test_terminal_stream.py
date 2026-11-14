@@ -62,7 +62,7 @@ async def test_stream_attach_replays_then_streams_state_frames() -> None:
     assert event["type"] == "geometry" and event["rows"] == 30
     buffer.finish()
     assert await asyncio.wait_for(attachment.subscription.get(), 1) == {
-        "protocol": "terminal-v2", "session_id": "s", "type": "exit",
+        "protocol": "terminal-v2", "terminal_session_id": "s", "type": "exit",
     }
 
 
@@ -108,11 +108,11 @@ async def test_websocket_input_resize_and_exit(monkeypatch, tmp_path: Path):
     from app.api.terminal_stream_api import terminal_session_stream
 
     service, workers = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
+    terminal_session_id = start(service, tmp_path)
     workers[0].output(b"hello")
     ws = FakeWebSocket()
     ws.push({"type": "attach", "after_seq": None})
-    task = asyncio.create_task(terminal_session_stream(ws, 1, session_id, service))
+    task = asyncio.create_task(terminal_session_stream(ws, 1, terminal_session_id, service))
     await _settle(lambda: "output" in ws.types())
     attached = ws.sent[0]
     assert attached["type"] == "attached" and attached["protocol"] == "terminal-v2"
@@ -139,14 +139,14 @@ async def test_websocket_accepts_user_input_after_agent_prefill(monkeypatch, tmp
     from app.api.terminal_stream_api import terminal_session_stream
 
     service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
-    session_id = start(service, tmp_path)
+    terminal_session_id = start(service, tmp_path)
     workers[0].screen(["$ "], cursor=(0, 2))
     workers[0].shell("shell_prompt", cwd="/w")
     ws = FakeWebSocket()
     ws.push({"type": "attach", "after_seq": None})
-    task = asyncio.create_task(terminal_session_stream(ws, 1, session_id, service))
+    task = asyncio.create_task(terminal_session_stream(ws, 1, terminal_session_id, service))
     await _settle(lambda: "attached" in ws.types())
-    service.require(session_id, 1).prefill(
+    service.require(terminal_session_id, 1).prefill(
         "echo hi", run_id=1, tool_call_id="call-prefill"
     )
     await _settle(lambda: "input_mark" in ws.types())
@@ -166,20 +166,20 @@ async def test_websocket_protocol_errors(monkeypatch, tmp_path: Path):
     from app.api.terminal_stream_api import terminal_session_stream
 
     service, _ = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
+    terminal_session_id = start(service, tmp_path)
     ws = FakeWebSocket()
     ws.push({"type": "attach", "after_seq": None})
     ws.push({"type": "handoff_done"})
-    await asyncio.wait_for(terminal_session_stream(ws, 1, session_id, service), 2)
+    await asyncio.wait_for(terminal_session_stream(ws, 1, terminal_session_id, service), 2)
     assert ws.types()[-1] == "protocol_error" and ws.closed_with is not None
     assert ws.closed_with[0] == 1008
     assert ws.sent[-1]["code"] == "TERMINAL_STREAM_PROTOCOL_ERROR"
 
     missing = FakeWebSocket()
     missing.push({"type": "attach", "after_seq": None})
-    await asyncio.wait_for(terminal_session_stream(missing, 2, session_id, service), 2)
+    await asyncio.wait_for(terminal_session_stream(missing, 2, terminal_session_id, service), 2)
     assert missing.sent[-1]["code"] == "TERMINAL_SESSION_OWNERSHIP_ERROR"
-    assert missing.sent[-1]["message"] == "terminal session is not owned by this task"
+    assert missing.sent[-1]["message"] == "terminal session is not owned by this session"
 
     unknown = FakeWebSocket()
     unknown.push({"type": "attach", "after_seq": None})
@@ -193,7 +193,7 @@ async def test_websocket_backpressure_turns_into_resync(monkeypatch, tmp_path: P
 
     monkeypatch.setattr(Constant.Terminal, "MAX_STREAM_QUEUE_FRAMES", 3)
     service, workers = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
+    terminal_session_id = start(service, tmp_path)
     ws = FakeWebSocket()
     ws.push({"type": "attach", "after_seq": None})
     original = ws.send_json
@@ -205,7 +205,7 @@ async def test_websocket_backpressure_turns_into_resync(monkeypatch, tmp_path: P
         await original(payload)
 
     ws.send_json = slow_send  # type: ignore[method-assign]
-    task = asyncio.create_task(terminal_session_stream(ws, 1, session_id, service))
+    task = asyncio.create_task(terminal_session_stream(ws, 1, terminal_session_id, service))
     await _settle(lambda: "attached" in ws.types())
     for _ in range(10):
         workers[0].output(b"z")
@@ -221,10 +221,10 @@ async def test_worker_write_backpressure_reaches_the_panel(monkeypatch, tmp_path
     from app.api.terminal_stream_api import terminal_session_stream
 
     service, workers = make_service(monkeypatch)
-    session_id = start(service, tmp_path)
+    terminal_session_id = start(service, tmp_path)
     ws = FakeWebSocket()
     ws.push({"type": "attach", "after_seq": None})
-    task = asyncio.create_task(terminal_session_stream(ws, 1, session_id, service))
+    task = asyncio.create_task(terminal_session_stream(ws, 1, terminal_session_id, service))
     await _settle(lambda: "attached" in ws.types())
 
     workers[0].emit({"type": "error", "code": "input_backpressure"})
@@ -232,6 +232,6 @@ async def test_worker_write_backpressure_reaches_the_panel(monkeypatch, tmp_path
     await _settle(lambda: "input_rejected" in ws.types())
     rejected = next(frame for frame in ws.sent if frame["type"] == "input_rejected")
     assert rejected["reason"] == "backpressure"
-    assert service.require(session_id, 1).snapshot().status == "running"
+    assert service.require(terminal_session_id, 1).snapshot().status == "running"
     ws.disconnect()
     await asyncio.wait_for(task, 2)

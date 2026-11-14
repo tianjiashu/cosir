@@ -47,7 +47,7 @@ export const AssistantRuntimeTransportHost = memo(function AssistantRuntimeTrans
     <AssistantRuntimeProvider runtime={runtime}>
       <TransportHistoryContext.Provider value={loadEarlierHistory}>
       <AssistantThreadSurface
-        taskId={context.taskId}
+        sessionId={context.sessionId}
         workspaceId={context.workspaceId}
         workspaceRoot={context.workspaceRoot}
         forkingMessageId={forkingMessageId}

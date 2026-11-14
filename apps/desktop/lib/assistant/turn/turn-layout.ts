@@ -37,7 +37,6 @@ export type ChangedFile = { path: string; operations: FileOperation[] };
 export type ChangesCard = { kind: "changes"; files: ChangedFile[]; totals: { files: number; calls: number }; callIndexes: number[] };
 export type StandaloneArtifactCard = { kind: StandaloneArtifactKind; index: number; part: TransportToolCallPart };
 export type ArtifactCard = ChangesCard | StandaloneArtifactCard;
-export type AttentionItem = { index: number; part: TransportToolCallPart };
 export type AnswerItem = { index: number; part: TransportTextPart };
 export type TurnLayout = {
   /** 直接引用 canonical parts，供下一版复用未变区间；不反向还原 AUI content。 */
@@ -49,7 +48,6 @@ export type TurnLayout = {
   blocks: TurnBlock[];
   /** 过程里的全部条目（标题据此判断能否展开）。 */
   process: { items: ProcessItem[] };
-  attention: AttentionItem[];
   artifacts: ArtifactCard[];
   answer: AnswerItem[];
   hasFinalReply: boolean;
@@ -61,7 +59,7 @@ export function callVerb(part: TransportToolCallPart): string { return toolVerb(
 export function isUnfinished(part: TransportToolCallPart): boolean { return part.status === "pending" || part.status === "running"; }
 export function visibleCall(part: TransportToolCallPart): boolean {
   return part.presentation !== "quiet" || part.status === "failed" || part.status === "cancelled"
-    || part.awaitingUser || Boolean(part.background) || toolResultSignal(part.display_data) !== null;
+    || Boolean(part.background) || toolResultSignal(part.display_data) !== null;
 }
 
 /**
@@ -94,7 +92,7 @@ export function summarizeCalls(calls: readonly CallItem[]): CallSummary {
 export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnPhase, outcome?: TransportOutcome | null, previous?: TurnLayout | null, activity: TransportActivity | null = null, background: readonly BackgroundTaskEntry[] = []): TurnLayout {
   const hasFinalReply = outcome?.status === "completed" && parts.some((part) => part.type === "text" && part.finalReply && part.text.trim());
   const blocks: TurnBlock[] = [], items: ProcessItem[] = [], calls: CallItem[] = [];
-  const answer: AnswerItem[] = [], attention: AttentionItem[] = [], artifacts: ArtifactCard[] = [];
+  const answer: AnswerItem[] = [], artifacts: ArtifactCard[] = [];
   const changes: CallItem[] = [];
   const previousArtifacts = new Map(previous?.artifacts.flatMap(card => card.kind === "changes" ? [] : [[card.index, card] as const]));
   let group: ActivityGroup | null = null;
@@ -119,7 +117,6 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
       if (!group) { group = { kind: "activity", key: `interval:${index}`, index, calls: [], summary: summarizeCalls([]) }; blocks.push(group); }
       const item: CallItem = { kind: "call", index, part };
       if (visibleCall(part)) { group.calls.push(item); items.push(item); calls.push(item); }
-      if (part.awaitingUser) attention.push({ index, part });
       const kind = part.display_data?.kind;
       if (kind === CHANGES_KIND) changes.push(item);
       else if (STANDALONE_ARTIFACT_KINDS.includes(kind as StandaloneArtifactKind)) {
@@ -162,16 +159,20 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
   // request is not observable here, so it must not be inferred from the absence of visible cards.
   const intro = phase === "running" && !outcome && parts.every((part) => part.type === "text" && !part.text.trim())
     ? "waiting" : null;
-  return { parts, phase, current, intro, blocks, process: { items }, attention, artifacts: previous?.artifacts.length === artifacts.length && artifacts.every((card, i) => card === previous.artifacts[i]) ? previous.artifacts : artifacts, answer, hasFinalReply,
+  return { parts, phase, current, intro, blocks, process: { items }, artifacts: previous?.artifacts.length === artifacts.length && artifacts.every((card, i) => card === previous.artifacts[i]) ? previous.artifacts : artifacts, answer, hasFinalReply,
     defaultProcessOpen: !hasFinalReply };
 }
 
-/** 渲染和虚拟估高共用：需要用户操作的入口常显，其余过程遵循用户开合。 */
+/**
+ * 渲染和虚拟估高共用：等你操作的调用常显，其余过程遵循用户开合。需要用户决定的工具一律是独立工具
+ * （后端 `test_tool_registry_display_guard.py` 守着），所以只有独立块要看 `awaitingUser`——收在工具组里
+ * 的调用会被折叠的组藏住，不能承载等待。
+ */
 export function visibleTurnBlock(block: TurnBlock, open: boolean, currentKey?: string): boolean {
   if (block.kind === "narration") return open || !block.inProcess;
   if (block.kind === "agent") return open;
   if (block.kind === "standalone") return open || block.part.awaitingUser;
-  return block.key === currentKey || block.calls.length > 0 && (open || block.calls.some(({ part }) => part.awaitingUser));
+  return block.key === currentKey || block.calls.length > 0 && open;
 }
 
 /** Index operation history by path; neither status ranking nor summed diffs describe the final filesystem. */

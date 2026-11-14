@@ -2,10 +2,10 @@
 
 覆盖三层：
 
-1. ``ToolCallCancellationRegistry``：键规范（task + tool_call 二元组）、跨 Task 隔离、
+1. ``ToolCallCancellationRegistry``：键规范（session + tool_call 二元组）、跨 Session 隔离、
    清理与并发不串扰；
 2. ``ToolHandlerRunner``：工具级信号命中即中止本次调用、不误伤同批的兄弟调用、
-   不写 Task 级注册表、不投影 Transport 终态、信号释放；
+   不写 Session 级注册表、不投影 Transport 终态、信号释放；
 
 终态投影的时序属于「执行出口」契约，本文件只断言它**不发生在执行层**：终态必须晚于
 ``ToolHandlerRunner`` 的强杀与输出排空（见 ``tool_batch_runner._execute_call`` 在
@@ -36,7 +36,7 @@ from app.core.tool.execute.tool_handler_runner import ToolHandlerRunner
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext
 from app.core.tool.tool_registry import ToolRegistry
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import tool_batch_runner
@@ -48,11 +48,11 @@ _NO_LOOP: Any = None
 # 执行上下文里的 run 标识；取消信号不按它记录，只用于构造上下文与投影事件。
 _RUN_A = 950001
 _RUN_EXECUTOR = 950003
-# _make_context 绑定的 Task：Task 级与工具级取消信号都按它记录。
-_TASK_ID = 11
-# 另一个 Task：验证工具级信号不跨 Task 串扰。
-_OTHER_TASK = 950002
-_CLEANUP_TASK_IDS = (_TASK_ID, _OTHER_TASK)
+# _make_context 绑定的 Session：Session 级与工具级取消信号都按它记录。
+_SESSION_ID = 11
+# 另一个 Session：验证工具级信号不跨 Session 串扰。
+_OTHER_SESSION = 950002
+_CLEANUP_SESSION_IDS = (_SESSION_ID, _OTHER_SESSION)
 
 
 class _NoArgs(BaseModel):
@@ -78,14 +78,14 @@ def _handler_sleeps_then_writes(
 
 
 def _handler_marks_own_call_signal(
-    task_id: int,
+    session_id: int,
     call_id: str,
     execution_context: object = None,
     **_kwargs: object,
 ) -> str:
     """执行途中给自己标记工具级取消信号后正常返回；用于覆盖 thread 模式执行后边界。"""
 
-    tool_call_cancellation_registry.mark_cancelled(task_id, call_id)
+    tool_call_cancellation_registry.mark_cancelled(session_id, call_id)
     return "handler-completed"
 
 
@@ -123,7 +123,7 @@ def _make_context(
 
     return ToolExecutionContext(
         step_id="step-1",
-        task_id=_TASK_ID,
+        session_id=_SESSION_ID,
         workspace_id=22,
         workspace_root=Path("."),
         run_id=run_id,
@@ -135,13 +135,13 @@ def _make_context(
 def _isolated_cancellation_registries():
     """每个用例前后清空进程内取消信号，避免用例间串扰。"""
 
-    cancellation_registry.consume(_TASK_ID)
-    for task_id in _CLEANUP_TASK_IDS:
-        tool_call_cancellation_registry.clear_task(task_id)
+    cancellation_registry.consume(_SESSION_ID)
+    for session_id in _CLEANUP_SESSION_IDS:
+        tool_call_cancellation_registry.clear_session(session_id)
     yield
-    cancellation_registry.consume(_TASK_ID)
-    for task_id in _CLEANUP_TASK_IDS:
-        tool_call_cancellation_registry.clear_task(task_id)
+    cancellation_registry.consume(_SESSION_ID)
+    for session_id in _CLEANUP_SESSION_IDS:
+        tool_call_cancellation_registry.clear_session(session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -149,38 +149,38 @@ def _isolated_cancellation_registries():
 # ---------------------------------------------------------------------------
 
 
-def test_registry_tracks_exact_task_and_call_keys() -> None:
-    """信号必须精确到 (task_id, tool_call_id)：不同 Task 或不同调用不得串扰。"""
+def test_registry_tracks_exact_session_and_call_keys() -> None:
+    """信号必须精确到 (session_id, tool_call_id)：不同 Session 或不同调用不得串扰。"""
 
-    assert tool_call_cancellation_registry.mark_cancelled(_TASK_ID, "call-1") is True
+    assert tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1") is True
 
-    assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, "call-1") is True
-    assert tool_call_cancellation_registry.is_cancelled(_OTHER_TASK, "call-1") is False
-    assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, "call-2") is False
-    assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, "call-1 ") is False
+    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-1") is True
+    assert tool_call_cancellation_registry.is_cancelled(_OTHER_SESSION, "call-1") is False
+    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-2") is False
+    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-1 ") is False
 
 
 def test_registry_mark_reports_duplicates() -> None:
     """重复标记幂等，并以返回值告知调用方「已标记过」。"""
 
-    assert tool_call_cancellation_registry.mark_cancelled(_TASK_ID, "call-1") is True
-    assert tool_call_cancellation_registry.mark_cancelled(_TASK_ID, "call-1") is False
-    tool_call_cancellation_registry.clear(_TASK_ID, "call-1")
-    assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, "call-1") is False
+    assert tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1") is True
+    assert tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1") is False
+    tool_call_cancellation_registry.clear(_SESSION_ID, "call-1")
+    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-1") is False
 
 
-def test_registry_clear_task_only_removes_target_task() -> None:
-    """clear_task 只清理目标 Task 的全部信号，不影响其它 Task 的同名调用。"""
+def test_registry_clear_session_only_removes_target_session() -> None:
+    """clear_session 只清理目标 Session 的全部信号，不影响其它 Session 的同名调用。"""
 
-    tool_call_cancellation_registry.mark_cancelled(_TASK_ID, "call-1")
-    tool_call_cancellation_registry.mark_cancelled(_TASK_ID, "call-2")
-    tool_call_cancellation_registry.mark_cancelled(_OTHER_TASK, "call-1")
+    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1")
+    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-2")
+    tool_call_cancellation_registry.mark_cancelled(_OTHER_SESSION, "call-1")
 
-    tool_call_cancellation_registry.clear_task(_TASK_ID)
+    tool_call_cancellation_registry.clear_session(_SESSION_ID)
 
-    assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, "call-1") is False
-    assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, "call-2") is False
-    assert tool_call_cancellation_registry.is_cancelled(_OTHER_TASK, "call-1") is True
+    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-1") is False
+    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-2") is False
+    assert tool_call_cancellation_registry.is_cancelled(_OTHER_SESSION, "call-1") is True
 
 
 def test_registry_concurrent_access_does_not_crosstalk() -> None:
@@ -189,18 +189,18 @@ def test_registry_concurrent_access_does_not_crosstalk() -> None:
     rounds = 200
     errors: list[BaseException] = []
     witness_call_id = "call-witness"
-    tool_call_cancellation_registry.mark_cancelled(_TASK_ID, witness_call_id)
+    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, witness_call_id)
 
     def _worker(offset: int) -> None:
         try:
             for index in range(rounds):
                 call_id = f"call-{offset}-{index}"
-                tool_call_cancellation_registry.mark_cancelled(_TASK_ID, call_id)
-                assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, call_id) is True
-                # 并发写入不得挤掉见证键，也不得让本线程误命中别的 Task。
-                assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, witness_call_id) is True
-                assert tool_call_cancellation_registry.is_cancelled(_OTHER_TASK, call_id) is False
-                tool_call_cancellation_registry.clear(_TASK_ID, call_id)
+                tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, call_id)
+                assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, call_id) is True
+                # 并发写入不得挤掉见证键，也不得让本线程误命中别的 Session。
+                assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, witness_call_id) is True
+                assert tool_call_cancellation_registry.is_cancelled(_OTHER_SESSION, call_id) is False
+                tool_call_cancellation_registry.clear(_SESSION_ID, call_id)
         except BaseException as exc:  # 线程异常需回传主线程断言，不能静默丢失
             errors.append(exc)
 
@@ -211,8 +211,8 @@ def test_registry_concurrent_access_does_not_crosstalk() -> None:
         thread.join()
 
     assert errors == []
-    assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, witness_call_id) is True
-    assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, "call-0-0") is False
+    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, witness_call_id) is True
+    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-0-0") is False
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +243,7 @@ def test_tool_call_signal_cancels_only_the_named_call_in_parallel(tmp_path: Path
     )
     sibling_thread = threading.Thread(target=_execute, args=("call-sibling", sibling_marker, 1.0))
     timer = threading.Timer(
-        0.3, tool_call_cancellation_registry.mark_cancelled, args=(_TASK_ID, "call-cancelled")
+        0.3, tool_call_cancellation_registry.mark_cancelled, args=(_SESSION_ID, "call-cancelled")
     )
     started = time.monotonic()
     try:
@@ -268,10 +268,10 @@ def test_tool_call_signal_cancels_only_the_named_call_in_parallel(tmp_path: Path
 
 
 def test_tool_call_signal_does_not_touch_run_level_registry() -> None:
-    """工具级取消不得写入 Task 级注册表，否则会把整个 agent 执行打断。"""
+    """工具级取消不得写入 Session 级注册表，否则会把整个 agent 执行打断。"""
 
     tool = _make_tool(_handler_sleeps_then_writes, name="proc_run_isolation")
-    tool_call_cancellation_registry.mark_cancelled(_TASK_ID, "call-1")
+    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1")
 
     observation = ToolHandlerRunner().execute(
         tool,
@@ -280,7 +280,7 @@ def test_tool_call_signal_does_not_touch_run_level_registry() -> None:
     )
 
     assert observation.status == "cancelled"
-    assert cancellation_registry.is_cancelled(_TASK_ID) is False
+    assert cancellation_registry.is_cancelled(_SESSION_ID) is False
 
 
 def _capture_workflow_emits(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
@@ -299,7 +299,7 @@ def _capture_workflow_emits(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 def test_cancelled_execution_returns_cancelled_observation() -> None:
     """工具级取消命中时返回取消观察，且不向上抛异常。"""
 
-    tool_call_cancellation_registry.mark_cancelled(_TASK_ID, "call-1")
+    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1")
     tool = _make_tool(_handler_sleeps_then_writes, name="proc_cancelled", execution_mode="thread")
 
     observation = ToolHandlerRunner().execute(
@@ -321,7 +321,7 @@ def test_thread_mode_keeps_result_when_cancel_arrives_during_execution() -> None
 
     observation = ToolHandlerRunner().execute(
         tool,
-        {"task_id": _TASK_ID, "call_id": "call-post"},
+        {"session_id": _SESSION_ID, "call_id": "call-post"},
         _make_context(_RUN_A, tool_call_id="call-post"),
     )
 
@@ -339,7 +339,7 @@ def test_runner_cancellation_does_not_project_transport_state(
     """
 
     captured = _capture_workflow_emits(monkeypatch)
-    tool_call_cancellation_registry.mark_cancelled(_TASK_ID, "call-1")
+    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1")
     tool = _make_tool(_handler_sleeps_then_writes, name="proc_no_bypass", execution_mode="thread")
 
     observation = ToolHandlerRunner().execute(
@@ -391,8 +391,8 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
         registry=ToolRegistry([_make_tool(_handler_sleeps_then_writes, execution_mode="thread")])
     )
     rc = runtime_stub(
-        run=SimpleNamespace(id=_RUN_A, task_id=_TASK_ID),
-        task=SimpleNamespace(id=_TASK_ID),
+        run=SimpleNamespace(id=_RUN_A, session_id=_SESSION_ID),
+        session=SimpleNamespace(id=_SESSION_ID),
         tool_executor=executor,
         admitted_tools=frozenset({"probe_tool"}),
     )
@@ -413,10 +413,10 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
 
 
 def test_tool_call_signal_is_released_after_execution() -> None:
-    """单次执行结束后（任意结果）工具级信号必须被释放，Task 级信号不受影响。"""
+    """单次执行结束后（任意结果）工具级信号必须被释放，Session 级信号不受影响。"""
 
-    tool_call_cancellation_registry.mark_cancelled(_TASK_ID, "call-1")
-    cancellation_registry.request_cancel(_TASK_ID)
+    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1")
+    cancellation_registry.request_cancel(_SESSION_ID)
     tool = _make_tool(_handler_sleeps_then_writes, name="proc_release", execution_mode="thread")
 
     observation = ToolHandlerRunner().execute(
@@ -426,24 +426,24 @@ def test_tool_call_signal_is_released_after_execution() -> None:
     )
 
     assert observation.status == "cancelled"
-    assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, "call-1") is False
-    assert cancellation_registry.is_cancelled(_TASK_ID) is True
+    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-1") is False
+    assert cancellation_registry.is_cancelled(_SESSION_ID) is True
 
 
 def test_late_tool_call_signal_survives_until_execution_cleanup() -> None:
     """点名了已结束调用的迟到信号不会被工具执行层消费，只能由执行收尾兜底清理。"""
 
-    tool_call_cancellation_registry.mark_cancelled(_TASK_ID, "call-already-finished")
+    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-already-finished")
 
-    assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, "call-already-finished") is True
+    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-already-finished") is True
 
-    tool_call_cancellation_registry.clear_task(_TASK_ID)
+    tool_call_cancellation_registry.clear_session(_SESSION_ID)
 
-    assert tool_call_cancellation_registry.is_cancelled(_TASK_ID, "call-already-finished") is False
+    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-already-finished") is False
 
 
 def test_cancel_check_watches_both_signal_sources() -> None:
-    """取消检查必须同时实时观察 Task 级与工具级信号。"""
+    """取消检查必须同时实时观察 Session 级与工具级信号。"""
 
     context = _make_context(_RUN_A, tool_call_id="call-1")
 
@@ -452,14 +452,14 @@ def test_cancel_check_watches_both_signal_sources() -> None:
 
     assert check() is False
 
-    tool_call_cancellation_registry.mark_cancelled(_TASK_ID, "call-1")
+    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1")
     assert check() is True
-    tool_call_cancellation_registry.clear(_TASK_ID, "call-1")
+    tool_call_cancellation_registry.clear(_SESSION_ID, "call-1")
     assert check() is False
 
-    cancellation_registry.request_cancel(_TASK_ID)
+    cancellation_registry.request_cancel(_SESSION_ID)
     assert check() is True
-    cancellation_registry.consume(_TASK_ID)
+    cancellation_registry.consume(_SESSION_ID)
     assert check() is False
 
 
@@ -469,7 +469,7 @@ def test_cancel_check_watches_both_signal_sources() -> None:
 
 
 def test_cancel_tool_call_endpoint_is_registered() -> None:
-    """工具级取消端点必须注册在真实 app 上，且与 Task 级取消端点同级。"""
+    """工具级取消端点必须注册在真实 app 上，且与 Session 级取消端点同级。"""
 
     from app.app import app
 
@@ -477,8 +477,8 @@ def test_cancel_tool_call_endpoint_is_registered() -> None:
         (route.path, tuple(sorted(getattr(route, "methods", None) or ()))) for route in app.routes
     }
 
-    assert ("/tasks/{task_id}/tool-calls/{tool_call_id}/cancel", ("POST",)) in routes
-    assert ("/tasks/{task_id}/cancel", ("POST",)) in routes
+    assert ("/sessions/{session_id}/tool-calls/{tool_call_id}/cancel", ("POST",)) in routes
+    assert ("/sessions/{session_id}/cancel", ("POST",)) in routes
 
 
 # ---------------------------------------------------------------------------
@@ -530,7 +530,7 @@ def test_cancelled_event_mutates_running_part_to_cancelled() -> None:
     """
 
     event = ToolCallStatusChangedEvent(
-        task_id=11,
+        session_id=11,
         run_id=_RUN_A,
         tool_call_id="call-1",
         status="cancelled",
@@ -552,7 +552,7 @@ def test_cancelled_observation_plan_tolerates_missing_tool_part() -> None:
     """目标 part 不存在时投影只降级为无 mutation，不得抛异常打断工具收尾。"""
 
     event = ToolCallStatusChangedEvent(
-        task_id=11,
+        session_id=11,
         run_id=_RUN_A,
         tool_call_id="call-absent",
         status="cancelled",
@@ -581,7 +581,7 @@ def test_placeholder_overwrite_transition_cancelled_to_completed_is_applied() ->
     """
 
     event = ToolCallStatusChangedEvent(
-        task_id=11,
+        session_id=11,
         run_id=_RUN_A,
         tool_call_id="call-1",
         status="completed",
@@ -603,7 +603,7 @@ def test_late_event_cannot_revive_a_completed_part_and_is_logged(caplog: Any) ->
     """``completed`` 不可逆：迟到事件被丢弃且必须留 warning（不得静默失效）。"""
 
     event = ToolCallStatusChangedEvent(
-        task_id=11,
+        session_id=11,
         run_id=_RUN_A,
         tool_call_id="call-1",
         status="failed",

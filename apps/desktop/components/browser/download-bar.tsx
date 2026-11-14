@@ -10,10 +10,10 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 
 /**
- * Task 最近的下载：浏览器面板底部的一条，平时只显示最新一次，多于一次时可展开全部（新的在上）。
+ * Session 最近的下载：浏览器面板底部的一条，平时只显示最新一次，多于一次时可展开全部（新的在上）。
  *
- * 下载列表是宿主事实（随浏览器状态推送，旧的在前），下载归 Task 不归标签，触发它的标签关掉后仍在；这里只渲染，
- * 文件落在 Task 所在工作区的下载目录。落盘路径随推送到达渲染进程，只用作文件名的悬停提示；「在文件夹中显示」
+ * 下载列表是宿主事实（随浏览器状态推送，旧的在前），下载归 Session 不归标签，触发它的标签关掉后仍在；这里只渲染，
+ * 文件落在 Session 所在工作区的下载目录。落盘路径随推送到达渲染进程，只用作文件名的悬停提示；「在文件夹中显示」
  * 只按下载 id 请宿主定位，宿主不接受渲染进程给的任意路径。
  */
 export function DownloadBar({ host, downloads }: { host: CosirHost; downloads: readonly BrowserDownload[] }) {
@@ -22,7 +22,7 @@ export function DownloadBar({ host, downloads }: { host: CosirHost; downloads: r
 
   const reveal = (download: BrowserDownload) => {
     host.browser.revealDownload(download.id).catch((error: unknown) => {
-      void frontendLog("WARNING", "browser_download_reveal_failed", "在文件夹中显示下载失败", { data: { taskId: download.taskId, downloadId: download.id }, error });
+      void frontendLog("WARNING", "browser_download_reveal_failed", "在文件夹中显示下载失败", { data: { sessionId: download.sessionId, downloadId: download.id }, error });
       notify.error("无法在文件夹中显示", { error });
     });
   };

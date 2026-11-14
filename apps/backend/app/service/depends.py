@@ -22,28 +22,28 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_event_projector import (
         ConversationEventProjector,
     )
-    from app.assistant_transport.service.conversation_task_state_service import (
-        ConversationTaskStateService,
+    from app.assistant_transport.service.conversation_state_service import (
+        ConversationStateService,
     )
-    from app.core.workflow.conversation_run_ledger import ConversationRunLedger
-    from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
-    from app.service.conversation.conversation_task_context_service import (
-        ConversationTaskContextService,
+    from app.core.workflow.message_queue.session_message_queue import SessionMessageQueue
+    from app.core.workflow.run_ledger import RunLedger
+    from app.service.conversation.session_context_service import (
+        SessionContextService,
     )
     from app.service.conversation.tool_decision_service import ToolDecisionService
     from app.service.conversation.turn_withdrawal_service import TurnWithdrawalService
     from app.service.model_config import ModelConfigService
     from app.service.model_config.model_discovery_service import ModelDiscoveryService
     from app.service.recover_service import RecoverService
-    from app.service.task.task_service import TaskService
-    from app.service.task_feed.task_feed import TaskFeed
+    from app.service.session.session_service import SessionService
+    from app.service.session_feed.session_feed import SessionFeed
     from app.service.user_input.user_input_service import UserInputService
     from app.service.workspace.workspace_service import WorkspaceService
     from app.service.workspace_files.file_watch import WorkspaceFileWatcher
     from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
-    from app.storage.crud.conversation_run_crud import ConversationRunCrud
-    from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
-    from app.storage.crud.task_crud import TaskCrud
+    from app.storage.crud.run_crud import RunCrud
+    from app.storage.crud.session_context_crud import SessionContextCrud
+    from app.storage.crud.session_crud import SessionCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
     from app.tools.host.host_link import HostLink
     from app.tools.mcp.connection_pool import MCPConnectionPool
@@ -90,8 +90,8 @@ def close_service_dependencies() -> None:
     ``command_results``，再调用本函数。
     """
 
+    from app.session_runtime.workspace_operation_registry import workspace_operations
     from app.storage.store_engines import close_storage
-    from app.task_runtime.workspace_operation_registry import workspace_operations
 
     reset_service_dependencies()
     workspace_operations.close()
@@ -99,47 +99,47 @@ def close_service_dependencies() -> None:
 
 
 @_process_singleton
-def get_task_crud() -> TaskCrud:
-    """Return the process-local TaskCrud singleton.
+def get_session_crud() -> SessionCrud:
+    """Return the process-local SessionCrud singleton.
 
     参数:
         无。
 
     返回:
-        TaskCrud 单例。
+        SessionCrud 单例。
 
     异常:
         RuntimeError: 如果 storage 尚未初始化。
 
     副作用:
-        首次调用时创建 TaskCrud。
+        首次调用时创建 SessionCrud。
     """
 
-    from app.storage.crud.task_crud import TaskCrud
+    from app.storage.crud.session_crud import SessionCrud
 
-    return TaskCrud()
+    return SessionCrud()
 
 
 @_process_singleton
-def get_conversation_run_crud() -> ConversationRunCrud:
-    """Return the process-local ConversationRunCrud singleton.
+def get_run_crud() -> RunCrud:
+    """Return the process-local RunCrud singleton.
 
     参数:
         无。
 
     返回:
-        ConversationRunCrud 单例。
+        RunCrud 单例。
 
     异常:
         RuntimeError: 如果 storage 尚未初始化。
 
     副作用:
-        首次调用时创建 ConversationRunCrud。
+        首次调用时创建 RunCrud。
     """
 
-    from app.storage.crud.conversation_run_crud import ConversationRunCrud
+    from app.storage.crud.run_crud import RunCrud
 
-    return ConversationRunCrud()
+    return RunCrud()
 
 
 @_process_singleton
@@ -172,8 +172,8 @@ def get_terminal_session_service() -> TerminalSessionService:
 
     # 通知时才取状态服务：两个单例互不在构造期依赖。
     return TerminalSessionService(
-        on_sessions_changed=lambda task_id: (
-            get_conversation_task_state_service().refresh_terminal_sessions(task_id)
+        on_sessions_changed=lambda session_id: (
+            get_conversation_state_service().refresh_terminal_sessions(session_id)
         )
     )
 
@@ -197,47 +197,47 @@ def get_host_link() -> HostLink:
 
 
 @_process_singleton
-def get_task_service() -> TaskService:
-    """Return the process-local TaskService singleton.
+def get_session_service() -> SessionService:
+    """Return the process-local SessionService singleton.
 
     参数:
         无。
 
     返回:
-        TaskService 单例。
+        SessionService 单例。
 
     异常:
         RuntimeError: 如果 storage 尚未初始化。
 
     副作用:
-        首次调用时创建 TaskService。
+        首次调用时创建 SessionService。
     """
 
-    from app.service.task.task_service import TaskService
+    from app.service.session.session_service import SessionService
 
-    return TaskService()
-
-
-@_process_singleton
-def get_conversation_task_state_service() -> ConversationTaskStateService:
-    """返回进程级 Task Transport state owner。"""
-
-    from app.assistant_transport.service.conversation_task_state_service import (
-        ConversationTaskStateService,
-    )
-
-    return ConversationTaskStateService()
+    return SessionService()
 
 
 @_process_singleton
-def get_conversation_task_context_service() -> ConversationTaskContextService:
-    """返回进程级 Task Agent context owner。"""
+def get_conversation_state_service() -> ConversationStateService:
+    """返回进程级 Session Transport state owner。"""
 
-    from app.service.conversation.conversation_task_context_service import (
-        ConversationTaskContextService,
+    from app.assistant_transport.service.conversation_state_service import (
+        ConversationStateService,
     )
 
-    return ConversationTaskContextService()
+    return ConversationStateService()
+
+
+@_process_singleton
+def get_session_context_service() -> SessionContextService:
+    """返回进程级 Session Agent context owner。"""
+
+    from app.service.conversation.session_context_service import (
+        SessionContextService,
+    )
+
+    return SessionContextService()
 
 
 @_process_singleton
@@ -246,7 +246,7 @@ def get_turn_withdrawal_service() -> TurnWithdrawalService:
 
     from app.service.conversation.turn_withdrawal_service import TurnWithdrawalService
 
-    return TurnWithdrawalService(get_conversation_task_context_service())
+    return TurnWithdrawalService(get_session_context_service())
 
 
 @_process_singleton
@@ -258,11 +258,11 @@ def get_workspace_files_service() -> WorkspaceFilesService:
 
 
 @_process_singleton
-def get_task_feed() -> TaskFeed:
-    """进程级 Task 推送（状态与目录失效）；状态与 Run 开始经 projector 发布，目录写入方提交后发布。"""
-    from app.service.task_feed.task_feed import TaskFeed
+def get_session_feed() -> SessionFeed:
+    """进程级 Session 推送（状态与目录失效）；状态与 Run 开始经 projector 发布，目录写入方提交后发布。"""
+    from app.service.session_feed.session_feed import SessionFeed
 
-    return TaskFeed()
+    return SessionFeed()
 
 
 @_process_singleton
@@ -314,16 +314,16 @@ def get_model_discovery_service() -> ModelDiscoveryService:
 
 
 @_process_singleton
-def get_conversation_task_context_crud() -> ConversationTaskContextCrud:
-    """返回进程级 ConversationTaskContextCrud 单例。"""
-    from app.storage.crud.conversation_task_context_crud import ConversationTaskContextCrud
+def get_session_context_crud() -> SessionContextCrud:
+    """返回进程级 SessionContextCrud 单例。"""
+    from app.storage.crud.session_context_crud import SessionContextCrud
 
-    return ConversationTaskContextCrud()
+    return SessionContextCrud()
 
 
 @_process_singleton
 def get_assistant_transport_service() -> AssistantTransportService:
-    """返回进程级 Assistant Transport 应用服务（用户命令编排、Task 长订阅与 snapshot 读取）。"""
+    """返回进程级 Assistant Transport 应用服务（用户命令编排、Session 长订阅与 snapshot 读取）。"""
     from app.assistant_transport.service.assistant_transport_service import (
         AssistantTransportService,
     )
@@ -332,31 +332,31 @@ def get_assistant_transport_service() -> AssistantTransportService:
 
 
 @_process_singleton
-def get_conversation_run_ledger() -> ConversationRunLedger:
+def get_run_ledger() -> RunLedger:
     """返回进程级 Conversation Run 事实台账单例。
 
     所有 Run 行的创建、读取、状态迁移、执行进度与结果改写都只经它，调用方不再区分
     「创建/查询」与「状态机」两套入口。
 
     返回:
-        已装配 Task / Run CRUD 与会话工厂的 ``ConversationRunLedger`` 单例
+        已装配 Session / Run CRUD 与 db 工厂的 ``RunLedger`` 单例
         （``lru_cache`` 缓存）。
 
     异常:
         RuntimeError: 若存储初始化失败。
     """
 
-    from app.core.workflow.conversation_run_ledger import ConversationRunLedger
+    from app.core.workflow.run_ledger import RunLedger
 
-    return ConversationRunLedger()
+    return RunLedger()
 
 
 @_process_singleton
 def get_recover_service() -> RecoverService:
     """返回进程级启动恢复 service 单例。
 
-    只负责后端启动期的重启恢复（收敛遗留 Run、拉起待调度 Task、后台结果收尾）；
-    运行期的 Run 生命周期归属 ``get_conversation_run_ledger``。
+    只负责后端启动期的重启恢复（收敛遗留 Run、拉起待调度 Session、后台结果收尾）；
+    运行期的 Run 生命周期归属 ``get_run_ledger``。
     """
 
     from app.service.recover_service import RecoverService
@@ -365,12 +365,12 @@ def get_recover_service() -> RecoverService:
 
 
 @_process_singleton
-def get_task_message_queue() -> TaskMessageQueue:
-    """返回进程级 Task 外部消息队列单例（无进程内状态，只包队列 CRUD）。"""
+def get_session_message_queue() -> SessionMessageQueue:
+    """返回进程级 Session 外部消息队列单例（无进程内状态，只包队列 CRUD）。"""
 
-    from app.core.workflow.message_queue.task_message_queue import TaskMessageQueue
+    from app.core.workflow.message_queue.session_message_queue import SessionMessageQueue
 
-    return TaskMessageQueue()
+    return SessionMessageQueue()
 
 
 @_process_singleton
@@ -418,7 +418,7 @@ def reset_service_dependencies() -> None:
         storage 路径后应调用。
     """
 
-    from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+    from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
     if get_workspace_file_watcher.cache_info().currsize:
         get_workspace_file_watcher().close()
@@ -428,9 +428,9 @@ def reset_service_dependencies() -> None:
     get_workspace_files_service.cache_clear()
     _shutdown_cached_runtime_before_reset()
     # 订阅与快照工作副本都是易失的进程状态：同一解释器里重新初始化存储后不得继承上一次的副本。
-    if get_conversation_task_state_service.cache_info().currsize:
-        get_conversation_task_state_service().close_subscribers()
-    task_runtime_spaces.close()
+    if get_conversation_state_service.cache_info().currsize:
+        get_conversation_state_service().close_subscribers()
+    session_runtime_spaces.close()
     for singleton in _SINGLETONS:
         singleton.cache_clear()
 

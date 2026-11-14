@@ -12,7 +12,7 @@ import type { ToolGroupCatalog } from "@/lib/api/tool-groups";
 
 type AssistantThreadSurfaceProps = Pick<
   AssistantRuntimeProps,
-  | "taskId"
+  | "sessionId"
   | "workspaceId"
   | "workspaceRoot"
   | "forkingMessageId"
@@ -36,7 +36,7 @@ type AssistantThreadSurfaceProps = Pick<
  * 本组件不创建 transport、不写入后端，也不改变 Assistant Transport wire schema。
  */
 export const AssistantThreadSurface = memo(function AssistantThreadSurface({
-  taskId,
+  sessionId,
   workspaceId,
   workspaceRoot,
   forkingMessageId,
@@ -52,10 +52,10 @@ export const AssistantThreadSurface = memo(function AssistantThreadSurface({
 }: AssistantThreadSurfaceProps) {
   return (
     <>
-      <RuntimeRenderDiagnostics taskId={taskId} />
+      <RuntimeRenderDiagnostics sessionId={sessionId} />
       <div className="flex h-full min-h-0 flex-col">
         <Thread
-          taskId={taskId}
+          sessionId={sessionId}
           workspaceId={workspaceId}
           toolGroups={toolGroups}
           selectedToolGroups={selectedToolGroups}

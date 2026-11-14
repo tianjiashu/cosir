@@ -18,12 +18,10 @@ from app.core.tool.schemas import ToolObservation
 from app.core.tool.schemas.tool_names import (
     TOOL_APPLY_PATCH,
     TOOL_DELEGATE_TASK,
-    TOOL_DELETE_FILE,
     TOOL_EXECUTE_TERMINAL,
     TOOL_FIND_FILES,
-    TOOL_FORK_TASK,
+    TOOL_FORK_SESSION,
     TOOL_LIST_DIRECTORY,
-    TOOL_MOVE_FILE,
     TOOL_READ_FILE,
     TOOL_REPLACE,
     TOOL_SEARCH_CONTENT,
@@ -37,8 +35,6 @@ _DEFAULT_STATUS_HINTS = {
     TOOL_WRITE_FILE: "写入失败",
     TOOL_REPLACE: "替换失败",
     TOOL_APPLY_PATCH: "补丁失败",
-    TOOL_DELETE_FILE: "删除失败",
-    TOOL_MOVE_FILE: "移动失败",
     TOOL_SEARCH_CONTENT: "搜索失败",
     TOOL_FIND_FILES: "搜索失败",
     TOOL_LIST_DIRECTORY: "列举失败",
@@ -46,7 +42,7 @@ _DEFAULT_STATUS_HINTS = {
     TOOL_WEB_SEARCH: "搜索失败",
     TOOL_WEB_EXTRACT: "提取失败",
     TOOL_DELEGATE_TASK: "委派失败",
-    TOOL_FORK_TASK: "分叉失败",
+    TOOL_FORK_SESSION: "分叉失败",
 }
 STATUS_HINT_MAX_LENGTH = 8
 

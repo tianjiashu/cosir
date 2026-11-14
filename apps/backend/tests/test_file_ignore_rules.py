@@ -161,7 +161,7 @@ def test_search_scope_applies_workspace_fileignore(tmp_path: Path) -> None:
     _write_ignore_file(tmp_path, "generated\n")
     kept = _touch(tmp_path / "src" / "main.py")
     _touch(tmp_path / "generated" / "gen.py")
-    scope = SearchScope.from_path(tmp_path, tmp_path, task_id=1, deadline=monotonic() + 5)
+    scope = SearchScope.from_path(tmp_path, tmp_path, session_id=1, deadline=monotonic() + 5)
 
     produced = list(scope.iter_files())
 
@@ -221,7 +221,7 @@ def test_gitignore_skips_files_and_directories(tmp_path: Path) -> None:
     _touch(tmp_path / "data" / "dump.log")  # 文件级跳过
 
     produced = list(
-        SearchScope.from_path(tmp_path, tmp_path, task_id=1, deadline=monotonic() + 5).iter_files()
+        SearchScope.from_path(tmp_path, tmp_path, session_id=1, deadline=monotonic() + 5).iter_files()
     )
 
     assert kept in produced
@@ -239,7 +239,7 @@ def test_search_scope_combines_fileignore_and_gitignore(tmp_path: Path) -> None:
     _touch(tmp_path / "data" / "dump.log")  # .gitignore
 
     produced = list(
-        SearchScope.from_path(tmp_path, tmp_path, task_id=1, deadline=monotonic() + 5).iter_files()
+        SearchScope.from_path(tmp_path, tmp_path, session_id=1, deadline=monotonic() + 5).iter_files()
     )
 
     assert kept in produced

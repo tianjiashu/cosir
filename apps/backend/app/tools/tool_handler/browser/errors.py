@@ -33,13 +33,13 @@ BROWSER_ERRORS: dict[str, tuple[str, str]] = {
         "等待用户交还",
     ),
     "TAB_NOT_FOUND": (
-        "Pass one of this task's tab ids (see browser_tabs), or open a page with browser_navigate.",
+        "Pass one of this session's tab ids (see browser_tabs), or open a page with browser_navigate.",
         "标签不存在",
     ),
     "TAB_LIMIT": (
-        "Reuse one of this task's open tabs by passing its tab id, or close one with "
-        "browser_tabs; if the limit is the global one and this task has none, wait for other "
-        "tasks to close tabs.",
+        "Reuse one of this session's open tabs by passing its tab id, or close one with "
+        "browser_tabs; if the limit is the global one and this session has none, wait for other "
+        "sessions to close tabs.",
         "标签已满",
     ),
     "NAVIGATION_BLOCKED": (
@@ -61,7 +61,7 @@ BROWSER_ERRORS: dict[str, tuple[str, str]] = {
     ),
     "DIALOG_OPEN": (
         "Answer it first with a browser_act dialog action on the tab showing it, using the dialog "
-        "id given above; if that tab is not one of this task's tabs, wait for the user to answer "
+        "id given above; if that tab is not one of this session's tabs, wait for the user to answer "
         "it.",
         "页面有弹窗",
     ),

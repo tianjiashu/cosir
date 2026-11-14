@@ -20,7 +20,7 @@ from app.core.events import (
     RunInitializedEvent,
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
-    TaskQueueChangedEvent,
+    SessionQueueChangedEvent,
     ToolCallCreatedEvent,
     ToolCallIntentEvent,
     ToolCallStatusChangedEvent,
@@ -28,7 +28,7 @@ from app.core.events import (
     WorkflowEventEnvelope,
 )
 from app.models.conversation_input import UserInputPresentation
-from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.enums.run_status import RunStatus
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
 _RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
@@ -40,7 +40,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     (
         {
             "type": "run_initialized",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "created_at": "2026-01-01T00:00:00+00:00",
         },
@@ -49,7 +49,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     (
         {
             "type": "input_consumed",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             # 消息身份（message_queue 行 id）与确认删除那一刻的展示绑定。
             "message_id": 1,
@@ -62,7 +62,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
         {
             "type": "run_status_changed",
             "changed_at": "2026-01-01T00:00:01Z",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "status": "completed",
             "end_reason": None,
@@ -72,7 +72,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     (
         {
             "type": "run_result_updated",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "end_reason": "structured_output_failed",
         },
@@ -82,7 +82,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
         {
             "type": "assistant_text_delta",
             "source_sequence": 1,
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "turn": 1,
             "step_id": "step-2",
@@ -95,7 +95,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
         {
             "type": "assistant_part_closed",
             "source_sequence": 1,
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "turn": 1,
             "part": "text",
@@ -105,7 +105,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     (
         {
             "type": "tool_call_created",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "turn": 1,
             "tool_call_id": "1:step-2:0",
@@ -116,7 +116,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     (
         {
             "type": "tool_call_intent",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "tool_call_id": "1:step-2:0",
             "intent": "核对配置",
@@ -127,7 +127,7 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     (
         {
             "type": "tool_call_status_changed",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "tool_call_id": "1:step-2:0",
             "status": "failed",
@@ -183,7 +183,7 @@ def test_discriminator_rejects_unknown_type() -> None:
     """
 
     with pytest.raises(ValidationError):
-        _ADAPTER.validate_python({"type": "not_a_known_event", "task_id": 1, "run_id": 1})
+        _ADAPTER.validate_python({"type": "not_a_known_event", "session_id": 1, "run_id": 1})
 
 
 def test_envelope_defaults_and_optional_fields() -> None:
@@ -202,10 +202,10 @@ def test_envelope_defaults_and_optional_fields() -> None:
         无；只做内存内校验。
     """
 
-    event = RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=7, run_id=42)
+    event = RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=7, run_id=42)
     assert event.step_id is None
     assert event.occurred_at.tzinfo is not None
-    assert event.model_dump()["task_id"] == 7
+    assert event.model_dump()["session_id"] == 7
 
 
 @pytest.mark.parametrize(
@@ -213,7 +213,7 @@ def test_envelope_defaults_and_optional_fields() -> None:
     [
         {
             "type": "user_input_appended",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "message_id": "message-1",
             "parts": [],
@@ -221,7 +221,7 @@ def test_envelope_defaults_and_optional_fields() -> None:
         {
             "type": "assistant_text_delta",
             "source_sequence": 1,
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "turn": 1,
             "part": "text",
@@ -230,7 +230,7 @@ def test_envelope_defaults_and_optional_fields() -> None:
         {
             "type": "assistant_text_delta",
             "source_sequence": 1,
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "turn": 1,
             "part": "unknown",
@@ -238,7 +238,7 @@ def test_envelope_defaults_and_optional_fields() -> None:
         },
         {
             "type": "tool_call_created",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "turn": 1,
             "tool_call_id": "",
@@ -247,33 +247,33 @@ def test_envelope_defaults_and_optional_fields() -> None:
         {
             "type": "run_status_changed",
             "changed_at": "2026-01-01T00:00:01Z",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "status": "half_done",
         },
         {
             "type": "run_initialized",
-            "task_id": 0,
+            "session_id": 0,
             "run_id": 1,
             "created_at": "2026-01-01T00:00:00+00:00",
         },
         {
             "type": "run_initialized",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "typo_field": 1,
             "created_at": "2026-01-01T00:00:00+00:00",
         },
         {
             "type": "run_initialized",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "image_paths": [],
             "created_at": "2026-01-01T00:00:00+00:00",
         },
         {
             "type": "user_input_appended",
-            "task_id": 1,
+            "session_id": 1,
             "run_id": 1,
             "message_id": "message-1",
             "text": "旧契约字段",
@@ -285,7 +285,7 @@ def test_envelope_defaults_and_optional_fields() -> None:
         "unknown_part",
         "empty_tool_call_id",
         "unknown_run_status",
-        "non_positive_task_id",
+        "non_positive_session_id",
         "unknown_field",
         "run_initialized_user_input_fields",
         "user_text_field",
@@ -328,7 +328,7 @@ def test_event_is_frozen() -> None:
     """
 
     event = InputConsumedEvent(
-        task_id=1,
+        session_id=1,
         run_id=1,
         message_id=1,
         presentation=UserInputPresentation(text="hi"),
@@ -348,7 +348,7 @@ def test_run_status_uses_domain_enumeration() -> None:
         无。
 
     异常:
-        AssertionError: 状态未解析为 ``ConversationRunStatus``、或 JSON 序列化结果
+        AssertionError: 状态未解析为 ``RunStatus``、或 JSON 序列化结果
             不是稳定落库字符串时抛出（由 pytest 报告）。
 
     副作用:
@@ -357,18 +357,18 @@ def test_run_status_uses_domain_enumeration() -> None:
 
     event = RunStatusChangedEvent(
         changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-        task_id=1,
+        session_id=1,
         run_id=1,
-        status=ConversationRunStatus.CANCELLED,
+        status=RunStatus.CANCELLED,
         end_reason="user_cancelled",
     )
-    assert event.status is ConversationRunStatus.CANCELLED
+    assert event.status is RunStatus.CANCELLED
     assert event.model_dump(mode="json")["status"] == "cancelled"
     # 稳定落库字符串必须能直接回灌为枚举，保证日志回放与测试无需构造枚举实例。
     parsed = RunStatusChangedEvent.model_validate(
-        {"task_id": 1, "run_id": 1, "status": "cancelled", "changed_at": "2026-01-01T00:00:01Z"}
+        {"session_id": 1, "run_id": 1, "status": "cancelled", "changed_at": "2026-01-01T00:00:01Z"}
     )
-    assert parsed.status is ConversationRunStatus.CANCELLED
+    assert parsed.status is RunStatus.CANCELLED
 
 
 def test_union_covers_every_event_type() -> None:
@@ -405,7 +405,7 @@ def test_every_event_type_has_a_planner() -> None:
 
     assert set(get_args(get_args(WorkflowEvent)[0])) == set(_PLANNERS) | {
         ToolCallCreatedEvent,
-        TaskQueueChangedEvent,
+        SessionQueueChangedEvent,
     }
 
 
@@ -449,7 +449,7 @@ def test_type_annotation_shape_is_literal() -> None:
         无；只做类型反射。
     """
 
-    event: WorkflowEvent = RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=1)
+    event: WorkflowEvent = RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=1, run_id=1)
     annotation = type(event).model_fields["type"].annotation
     assert get_args(annotation) == ("run_initialized",)
     assert isinstance(event.type, str)
@@ -459,4 +459,4 @@ def test_type_annotation_shape_is_literal() -> None:
 def test_run_status_event_requires_committed_timestamp() -> None:
     """事件缺少持久化时间直接失败，不能让终态耗时退化为空值。"""
     with pytest.raises(ValidationError):
-        RunStatusChangedEvent.model_validate({"task_id": 1, "run_id": 1, "status": "completed"})
+        RunStatusChangedEvent.model_validate({"session_id": 1, "run_id": 1, "status": "completed"})

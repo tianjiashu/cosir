@@ -139,7 +139,7 @@ describe("exported argument schema", () => {
 describe("argument keys the host reads", () => {
   // 目的：宿主按字面键名读参数；潜在缺陷：后端改了字段名，schema 与 ajv 跟着变，宿主却读到 undefined 后静默用默认值。
   // 每个工具给一份所有字段都填了非默认值的样例：键集合必须等于 schema 的属性，解析结果里必须能找到每个值。
-  const host = { task_id: 7, limits: { per_task: 5, total: 20 }, download_dir: "/ws/.cosir/Download" };
+  const host = { session_id: 7, limits: { per_session: 5, total: 20 }, download_dir: "/ws/.cosir/Download" };
   const cases: [keyof typeof schemas, (params: unknown) => unknown, Record<string, unknown>][] = [
     ["browser_navigate", parseNavigate, { url: "https://example.com/z", action: null, tab: "t9", new_tab: true, viewport: { width: 391, height: 845, mobile: true }, color_scheme: "dark" }],
     ["browser_snapshot", parseSnapshot, { tab: "t9", scope: "viewport", find: "needle", from_line: 37 }],

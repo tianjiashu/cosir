@@ -18,12 +18,12 @@ import type { ConsoleLevel, LogQuery } from "./tab-log";
  * `contract/tool-args.schema.json`——后端照 `model_dump()` 原样发送，每个字段都在，未填的可选字段为 null（后端守卫
  * 测试保证导出文件是最新的，见 `tests/test_browser_contract_guard.py`）。这里按它校验形状、枚举与上限，不再手写第二
  * 份，也不补缺省值；null 只在映射成请求类型时转成「未给」。跨字段规则（url 与 action 二选一等）只在后端，宿主信任
- * 后端已经校验过。手写的只有宿主自己的键（Task、上限、下载目录）与语义检查（打开的地址经 `pageUrl`，
+ * 后端已经校验过。手写的只有宿主自己的键（Session、上限、下载目录）与语义检查（打开的地址经 `pageUrl`，
  * 与地址栏同一条规则）。
  */
 
 /** 后端每个请求都带、不属于工具参数的键。 */
-const HOST_KEYS = new Set(["task_id", "limits", "download_dir", "handoff_tabs"]);
+const HOST_KEYS = new Set(["session_id", "limits", "download_dir", "handoff_tabs"]);
 
 type ToolName = keyof typeof toolArgsSchemas;
 const ajv = new Ajv2020({ allErrors: false, strict: false });
@@ -35,9 +35,9 @@ const validators = new Map<ToolName, ValidateFunction>(
  * 每个请求都带后端给出的标签上下文：宿主据此刷新上限（页面开出的标签没有请求可带，用最近一次的），下载目录
  * 只在这次请求新建标签时用。
  */
-type TaskRequest = { taskId: number; context: BrowserTabContext; handoffTabs?: string[] };
-/** 指向本 Task 的某个标签（省略即当前标签）。 */
-export type TabRequest = TaskRequest & { tab?: string };
+type SessionRequest = { sessionId: number; context: BrowserTabContext; handoffTabs?: string[] };
+/** 指向本 Session 的某个标签（省略即当前标签）。 */
+export type TabRequest = SessionRequest & { tab?: string };
 export type NavigateRequest = TabRequest & {
   newTab: boolean;
   target: BrowserNavigation;
@@ -126,10 +126,10 @@ export function parseEvaluate(params: unknown): EvaluateRequest {
   return { ...request, expression: args.expression as string };
 }
 
-export function parseDropTasks(params: unknown): number[] {
+export function parseDropSessions(params: unknown): number[] {
   const value = object(params);
-  if (!Array.isArray(value.task_ids)) throw invalid("task_ids must be an array");
-  return value.task_ids.map(taskId);
+  if (!Array.isArray(value.session_ids)) throw invalid("session_ids must be an array");
+  return value.session_ids.map(sessionId);
 }
 
 /** 拆出宿主自己的键并校验，其余按工具的 schema 校验（每个字段都在，可选字段可能为 null）。 */
@@ -141,7 +141,7 @@ function toolRequest(tool: ToolName, params: unknown): { request: TabRequest; ar
   const tab = given(args.tab as string | null);
   const handed = value.handoff_tabs ?? [];
   if (!Array.isArray(handed) || handed.some((id) => typeof id !== "string")) throw invalid("handoff_tabs must be an array of tab ids");
-  return { request: { taskId: taskId(value.task_id), context: tabContext(value), handoffTabs: handed, ...(tab ? { tab } : {}) }, args };
+  return { request: { sessionId: sessionId(value.session_id), context: tabContext(value), handoffTabs: handed, ...(tab ? { tab } : {}) }, args };
 }
 
 /** 线上的鼠标落点：ref 与坐标恰好给了一种（后端校验过），另一种为 null。 */
@@ -215,8 +215,8 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function taskId(value: unknown): number {
-  if (!Number.isSafeInteger(value) || (value as number) <= 0) throw invalid("task_id must be a positive integer");
+function sessionId(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0) throw invalid("session_id must be a positive integer");
   return value as number;
 }
 
@@ -224,16 +224,16 @@ function taskId(value: unknown): number {
  * 标签上下文的规则：两个上限都是正的安全整数，下载目录是本机绝对路径。宿主收标签上下文的两条进程边界（后端的工具
  * 请求、渲染进程的「新开标签」IPC）共用这一份规则，各自只取出字段（键名风格不同）、按自己的方式报错；不合规为 null。
  */
-export function tabContextOf(perTask: unknown, total: unknown, downloadDir: unknown): BrowserTabContext | null {
-  if (!positive(perTask) || !positive(total) || typeof downloadDir !== "string" || !path.isAbsolute(downloadDir)) return null;
-  return { limits: { perTask, total }, downloadDir };
+export function tabContextOf(perSession: unknown, total: unknown, downloadDir: unknown): BrowserTabContext | null {
+  if (!positive(perSession) || !positive(total) || typeof downloadDir !== "string" || !path.isAbsolute(downloadDir)) return null;
+  return { limits: { perSession, total }, downloadDir };
 }
 
-/** 后端随请求带来的标签上下文：上限与 Task 所在工作区的下载目录。 */
+/** 后端随请求带来的标签上下文：上限与 Session 所在工作区的下载目录。 */
 function tabContext(value: Record<string, unknown>): BrowserTabContext {
   const limits = object(value.limits);
-  const context = tabContextOf(limits.per_task, limits.total, value.download_dir);
-  if (!context) throw invalid("limits must carry positive per_task and total, and download_dir must be an absolute path");
+  const context = tabContextOf(limits.per_session, limits.total, value.download_dir);
+  if (!context) throw invalid("limits must carry positive per_session and total, and download_dir must be an absolute path");
   return context;
 }
 

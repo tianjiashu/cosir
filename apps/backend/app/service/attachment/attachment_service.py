@@ -111,8 +111,8 @@ class AttachmentService:
 
     上传、读取和归一化只以 ``workspace_id`` 为资源边界：图片按 SHA-256
     幂等保存到该 workspace 的 ``.cosir/Attachment`` 目录，不创建附件数据库
-    记录，也不依赖 Task 或 Run 才能完成上传。附件一旦成功发布便永久保留，
-    不因 Composer、Run、Task 或 workspace 的引用变化而删除。
+    记录，也不依赖 Session 或 Run 才能完成上传。附件一旦成功发布便永久保留，
+    不因 Composer、Run、Session 或 workspace 的引用变化而删除。
     """
 
     def __init__(self) -> None:
@@ -187,7 +187,7 @@ class AttachmentService:
     async def upload(self, workspace_id: int, file: UploadFile) -> AttachmentDescriptor:
         """校验、规范化并幂等保存一张 workspace 级 JPEG/PNG 图片。
 
-        上传不要求 Task 或 Run 已存在，也不建立任何消息引用。原始流先写入 workspace 临时目录，
+        上传不要求 Session 或 Run 已存在，也不建立任何消息引用。原始流先写入 workspace 临时目录，
         再交给与 :meth:`save_image` 共用的发布内核（:meth:`_publish`）。
 
         参数:
@@ -205,7 +205,7 @@ class AttachmentService:
 
         副作用:
             在 workspace 的 ``.cosir/Attachment`` 下写入或复用图片文件；不写入
-            SQLite，不绑定 Task/Run。已发布文件不会由附件服务回收。
+            SQLite，不绑定 Session/Run。已发布文件不会由附件服务回收。
         """
 
         workspace_dirs = self._dirs(workspace_id)

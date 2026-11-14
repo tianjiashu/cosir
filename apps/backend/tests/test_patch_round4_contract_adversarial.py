@@ -58,7 +58,7 @@ def _valid_patch(path: str = "m.txt") -> str:
 
 
 def _context(root: pathlib.Path, run_id: int = 4001) -> ToolExecutionContext:
-    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
+    return ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
 
 
 def _execute(root: pathlib.Path, patch: str, run_id: int = 4001):
@@ -88,8 +88,7 @@ def test_every_required_constraint_survives_the_deduplication() -> None:
         "unsupported: cannot delete": "delete",
         "unsupported: cannot move": "move",
         "alternative tool write_file": "write_file",
-        "alternative tool delete_file": "delete_file",
-        "alternative tool move_file": "move_file",
+        "alternative tool execute_terminal": "execute_terminal",
         "workspace containment": "inside the active workspace",
     }
 
@@ -124,7 +123,7 @@ def test_the_two_texts_do_not_contradict_each_other() -> None:
     # 参数描述明确说「只传入原始 diff」，不得出现可选措辞来争夺语义。
     assert "Raw Git unified diff text only" in PARAM_DESCRIPTION
     assert "optional" not in PARAM_DESCRIPTION.lower()
-    for tool in ("write_file", "delete_file", "move_file"):
+    for tool in ("write_file", "execute_terminal"):
         assert tool in APPLY_PATCH_DESCRIPTION, f"工具描述缺少替代工具 {tool}"
 
 

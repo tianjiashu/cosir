@@ -16,8 +16,8 @@ import { WorkspaceConfigurationPage } from "@/components/configuration/workspace
  * 应用路由表（react-router data router）。
  *
  * AppLayout 是唯一的布局路由，子路由只渲染主区域内容，并用 handle.section 声明所属区域，
- * 供布局决定面包屑、侧栏高亮与任务页保活。任务页本身由布局渲染（保活需要），
- * 因此 `tasks/:taskId` 只做标识校验。新增页面：在这里加一条子路由并声明 section。
+ * 供布局决定面包屑、侧栏高亮与会话页保活。会话页本身由布局渲染（保活需要），
+ * 因此 `sessions/:sessionId` 只做标识校验。新增页面：在这里加一条子路由并声明 section。
  */
 
 const conversation: RouteHandle = { section: "conversation", files: true };
@@ -40,14 +40,14 @@ function NewConversationRoute() {
       onAddWorkspace={actions.addWorkspaceFromFolder}
       addingWorkspace={actions.addingWorkspace}
       onStarted={actions.startConversation}
-      onTaskListChanged={() => void catalog.load()}
+      onSessionListChanged={() => void catalog.load()}
     />
   );
 }
 
-function TaskRoute() {
-  const taskId = Number(useLeafParams().taskId);
-  return Number.isInteger(taskId) && taskId > 0 ? null : <EmptyState title="任务标识无效" description="请从侧栏重新选择任务。" className="m-6" />;
+function SessionRoute() {
+  const sessionId = Number(useLeafParams().sessionId);
+  return Number.isInteger(sessionId) && sessionId > 0 ? null : <EmptyState title="会话标识无效" description="请从侧栏重新选择会话。" className="m-6" />;
 }
 
 function SystemSettingsRoute() {
@@ -79,7 +79,7 @@ export function createAppRouter() {
       element: <AppLayout />,
       children: [
         { index: true, element: <NewConversationRoute />, handle: conversation },
-        { path: "tasks/:taskId", element: <TaskRoute />, handle: conversation },
+        { path: "sessions/:sessionId", element: <SessionRoute />, handle: conversation },
         { path: "settings", element: <SystemSettingsRoute />, handle: settings },
         { path: "settings/:tab", element: <SystemSettingsRoute />, handle: settings },
         { path: "workspaces/:workspaceId/settings", element: <WorkspaceSettingsRoute />, handle: workspaceSettings },

@@ -267,11 +267,11 @@ def test_usage_preserves_unknown_and_explicit_zero(provider_usage, expected):
     """SDK 未返回的字段不补零、不推算，仍由统计层统一校验数值。"""
     from openai.types import CompletionUsage
 
-    from app.core.workflow.execution_state.conversation_run_usage_stats import (
-        ConversationRunUsageStats,
+    from app.core.workflow.execution_state.run_usage_stats import (
+        RunUsageStats,
     )
 
-    stats = ConversationRunUsageStats()
+    stats = RunUsageStats()
     normalized = usage_from_response(CompletionUsage.model_construct(**provider_usage))
     stats.add_usage_metadata(normalized)
     result = stats.to_dict()
@@ -290,8 +290,8 @@ def test_usage_preserves_unknown_and_explicit_zero(provider_usage, expected):
 @pytest.mark.parametrize("details", ["invalid", [1, 2]])
 async def test_sdk_malformed_usage_details_do_not_fail_completed_response(details):
     """实际 SDK 响应边界容忍厂商明细形状异常，完成的回答仍能交付。"""
-    from app.core.workflow.execution_state.conversation_run_usage_stats import (
-        ConversationRunUsageStats,
+    from app.core.workflow.execution_state.run_usage_stats import (
+        RunUsageStats,
     )
 
     def handler(_request):
@@ -331,7 +331,7 @@ async def test_sdk_malformed_usage_details_do_not_fail_completed_response(detail
         result = await model.complete(
             [{"role": "user", "content": "go"}], response_format={"type": "text"}
         )
-        stats = ConversationRunUsageStats()
+        stats = RunUsageStats()
         stats.add_usage_metadata(usage_from_response(result.usage))
         assert result.choices[0].message.content == "完成"
         assert stats.total_tokens == 12

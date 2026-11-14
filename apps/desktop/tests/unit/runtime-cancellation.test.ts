@@ -1,48 +1,48 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { backgroundTarget, beginCommand, commandPending, decisionTarget, finishCommand, forgetCommands, markTaskRequestsUnsynced, reconcileCommands, reconcileTaskStatuses, releaseCommandObservation, stopTarget, useCommandRequests } from "@/lib/assistant/command-request-store";
+import { backgroundTarget, beginCommand, commandPending, decisionTarget, finishCommand, forgetCommands, markSessionRequestsUnsynced, reconcileCommands, reconcileSessionStatuses, releaseCommandObservation, stopTarget, useCommandRequests } from "@/lib/assistant/command-request-store";
 import { activity } from "./transport-fixtures";
 
-const current = () => useCommandRequests.getState().tasks[1];
+const current = () => useCommandRequests.getState().sessions[1];
 beforeEach(() => forgetCommands([1]));
 
 describe("跨界面的请求生命周期", () => {
   it("已发信号的停止保持到 canonical 落定，并跨挂载去重", () => {
     reconcileCommands(1, activity(7, "running"));
-    const request = beginCommand(1, "task")!;
-    finishCommand(1, "task", request, "accepted");
-    expect(current()?.task?.phase).toBe("syncing");
-    expect(beginCommand(1, "task")).toBeNull();
+    const request = beginCommand(1, "session")!;
+    finishCommand(1, "session", request, "accepted");
+    expect(current()?.session?.phase).toBe("syncing");
+    expect(beginCommand(1, "session")).toBeNull();
     reconcileCommands(1, activity(7, "cancelled"));
-    expect(current()?.task).toBeUndefined();
+    expect(current()?.session).toBeUndefined();
   });
 
   it("停下后新开的运行与迟到的 HTTP 响应不能复活旧的「停止中」", () => {
     reconcileCommands(1, activity(7, "running"));
-    const request = beginCommand(1, "task")!;
+    const request = beginCommand(1, "session")!;
     reconcileCommands(1, activity(7, "cancelled"));
     reconcileCommands(1, activity(8, "running"));
-    finishCommand(1, "task", request, "accepted");
-    expect(current()?.task).toBeUndefined();
+    finishCommand(1, "session", request, "accepted");
+    expect(current()?.session).toBeUndefined();
   });
 
-  it("对话订阅断开时只把这个 Task 的停止转为待确认", () => {
+  it("对话订阅断开时只把这个 Session 的停止转为待确认", () => {
     reconcileCommands(1, activity(7, "running"));
     reconcileCommands(2, activity(3, "running"));
-    beginCommand(1, "task");
-    beginCommand(2, "task");
-    markTaskRequestsUnsynced(1);
-    expect(current()?.task?.error).toContain("待确认");
-    expect(useCommandRequests.getState().tasks[2]?.task?.error).toBeNull();
+    beginCommand(1, "session");
+    beginCommand(2, "session");
+    markSessionRequestsUnsynced(1);
+    expect(current()?.session?.error).toContain("待确认");
+    expect(useCommandRequests.getState().sessions[2]?.session?.error).toBeNull();
     forgetCommands([2]);
   });
 
   it("结果未知可以重试，旧请求的 HTTP 结果被忽略", () => {
-    const first = beginCommand(1, "task")!;
-    finishCommand(1, "task", first, "unknown", "未能确认");
-    expect(commandPending(current()?.task)).toBe(false);
-    const retry = beginCommand(1, "task")!;
-    finishCommand(1, "task", first, "accepted");
-    expect(current()?.task?.token).toBe(retry.token);
+    const first = beginCommand(1, "session")!;
+    finishCommand(1, "session", first, "unknown", "未能确认");
+    expect(commandPending(current()?.session)).toBe(false);
+    const retry = beginCommand(1, "session")!;
+    finishCommand(1, "session", first, "accepted");
+    expect(current()?.session?.token).toBe(retry.token);
   });
 
   it("结果未知的决定同样可以重试：后端判重，重复提交只会 409", () => {
@@ -53,37 +53,37 @@ describe("跨界面的请求生命周期", () => {
     expect(beginCommand(1, target)).not.toBeNull();
   });
 
-  it("全局 Task 终态能收尾卡片已卸载的子 Task 停止", () => {
-    const request = beginCommand(1, "task")!;
-    reconcileTaskStatuses({ 1: { executionStatus: "completed", awaitingUserCalls: 0 } });
-    reconcileTaskStatuses({ 1: { executionStatus: "running", awaitingUserCalls: 0 } });
-    finishCommand(1, "task", request, "accepted");
-    expect(current()?.task).toBeUndefined();
+  it("全局 Session 终态能收尾卡片已卸载的子 Session 停止", () => {
+    const request = beginCommand(1, "session")!;
+    reconcileSessionStatuses({ 1: { executionStatus: "completed", awaitingUserCalls: 0 } });
+    reconcileSessionStatuses({ 1: { executionStatus: "running", awaitingUserCalls: 0 } });
+    finishCommand(1, "session", request, "accepted");
+    expect(current()?.session).toBeUndefined();
   });
 
-  it("状态流丢失后不再声称可能已是新 Run 的 Task 正在停止", () => {
-    const request = beginCommand(1, "task")!;
-    markTaskRequestsUnsynced();
-    finishCommand(1, "task", request, "accepted");
-    expect(current()?.task?.error).toContain("待确认");
-    expect(commandPending(current()?.task)).toBe(false);
+  it("状态流丢失后不再声称可能已是新 Run 的 Session 正在停止", () => {
+    const request = beginCommand(1, "session")!;
+    markSessionRequestsUnsynced();
+    finishCommand(1, "session", request, "accepted");
+    expect(current()?.session?.error).toContain("待确认");
+    expect(commandPending(current()?.session)).toBe(false);
   });
 
   it("HTTP 完成时用已观察到的事实收尾，不再等下一帧", () => {
     reconcileCommands(1, activity(7, "completed"));
-    const request = beginCommand(1, "task")!;
-    finishCommand(1, "task", request, "accepted");
-    expect(current()?.task).toBeUndefined();
+    const request = beginCommand(1, "session")!;
+    finishCommand(1, "session", request, "accepted");
+    expect(current()?.session).toBeUndefined();
   });
 
-  it("离开 Task 后旧事实失效，别处发起的停止不被它提前收尾", () => {
+  it("离开 Session 后旧事实失效，别处发起的停止不被它提前收尾", () => {
     reconcileCommands(1, activity(7, "completed"));
     releaseCommandObservation(1);
-    const stop = beginCommand(1, "task")!;
-    finishCommand(1, "task", stop, "accepted");
-    expect(current()?.task?.phase).toBe("syncing");
-    reconcileTaskStatuses({ 1: { executionStatus: "completed", awaitingUserCalls: 0 } });
-    expect(current()?.task).toBeUndefined();
+    const stop = beginCommand(1, "session")!;
+    finishCommand(1, "session", stop, "accepted");
+    expect(current()?.session?.phase).toBe("syncing");
+    reconcileSessionStatuses({ 1: { executionStatus: "completed", awaitingUserCalls: 0 } });
+    expect(current()?.session).toBeUndefined();
   });
 });
 

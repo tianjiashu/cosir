@@ -26,8 +26,8 @@ import { useWorkspaceActions } from "@/components/layout/use-workspace-actions";
 import { useWorkspaceCatalog, type WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { findSettingsTab, SYSTEM_SETTINGS_TABS, WORKSPACE_SETTINGS_TABS } from "@/components/settings/settings-tabs";
-import { TaskPage } from "@/components/task/task-page";
-import { TaskStatusBadges } from "@/components/task-status/task-status-indicator";
+import { SessionPage } from "@/components/session/session-page";
+import { SessionStatusBadges } from "@/components/session-status/session-status-indicator";
 import { StatusDot } from "@/components/ui/status-dot";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -40,14 +40,14 @@ import { useUnsavedRouteGuard } from "./use-unsaved-route-guard";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS, withShortcut } from "@/lib/keyboard/shortcuts";
 import {
-  selectTerminalTask,
+  selectTerminalSession,
   useTerminalBadge,
   useTerminalWorkbenchStore,
 } from "@/lib/terminal/terminal-workbench-store";
 import { WorkbenchProvider } from "@/lib/workbench/workbench-context";
 import { SIDEBAR_WIDTH, useLayoutPreferences } from "@/lib/layout/preferences";
 import { cn } from "@/lib/utils";
-import { useTaskFeed } from "@/lib/task-feed/use-task-feed";
+import { useSessionFeed } from "@/lib/session-feed/use-session-feed";
 
 /** 路由表上每个子路由通过 handle 声明自己属于哪个区域（见 src/router.tsx）。 */
 export type RouteHandle = { section: SidebarSection; files?: boolean };
@@ -73,9 +73,9 @@ function parsePositiveId(value: string | undefined): number | null {
  * 应用的唯一页面骨架（布局路由）：侧栏 + 页面头部 + 主区域 + 工作台。
  *
  * 关键约束：
- * - 任务会话保活。离开对话去看配置或上下文观测时，最近的任务页保持挂载（被内容层覆盖并设为
- *   inert），回来时 Assistant 会话、草稿与运行中的订阅都还在；只有进入另一个任务或新对话才替换。
- *   任务页始终由这里渲染（不经 Outlet），因此路由切换不会重建它。
+ * - 会话保活。离开对话去看配置或上下文观测时，最近的会话页保持挂载（被内容层覆盖并设为
+ *   inert），回来时 Assistant 会话、草稿与运行中的订阅都还在；只有进入另一个会话或新会话才替换。
+ *   会话页始终由这里渲染（不经 Outlet），因此路由切换不会重建它。
  * - 未保存修改。离开配置路由（含切换配置标签）前统一经 useBlocker 询问，页面内不再各自确认。
  * - 侧栏：宽屏停靠，收起即整个隐藏（偏好持久化）；窄屏（≤1024px）平时隐藏，打开时以抽屉覆盖主区域。
  *   开关（`SidebarControls`）钉在红绿灯右侧，不随侧栏状态移动：总是渲染在此刻左上角那一行的拖动区里。
@@ -88,28 +88,28 @@ export function AppLayout() {
   const section = (leaf?.handle as RouteHandle | undefined)?.section ?? "conversation";
   const params = leaf?.params ?? {};
 
-  const routeTaskId = section === "conversation" ? parsePositiveId(params.taskId) : null;
+  const routeSessionId = section === "conversation" ? parsePositiveId(params.sessionId) : null;
   const workspaceConfigurationId = section === "workspace-settings" ? parsePositiveId(params.workspaceId) : null;
 
-  // 最近一个任务：对话区为当前路由任务；其余区域沿用上一次的任务（保活）。
-  const [keptTaskId, setKeptTaskId] = useState<number | null>(routeTaskId);
+  // 最近一个会话：对话区为当前路由会话；其余区域沿用上一次的会话（保活）。
+  const [keptSessionId, setKeptSessionId] = useState<number | null>(routeSessionId);
   useEffect(() => {
     if (section !== "conversation") return;
-    setKeptTaskId(routeTaskId);
-  }, [routeTaskId, section]);
-  const filesVisible = Boolean((leaf?.handle as RouteHandle | undefined)?.files) && (!params.taskId || routeTaskId !== null);
-  const focusedTaskId = section === "conversation" ? routeTaskId : keptTaskId;
+    setKeptSessionId(routeSessionId);
+  }, [routeSessionId, section]);
+  const filesVisible = Boolean((leaf?.handle as RouteHandle | undefined)?.files) && (!params.sessionId || routeSessionId !== null);
+  const focusedSessionId = section === "conversation" ? routeSessionId : keptSessionId;
 
-  const catalog = useWorkspaceCatalog(focusedTaskId, workspaceConfigurationId);
-  useTaskFeed({ onWorkspacesChanged: catalog.load, onWorkspaceTasksChanged: catalog.refreshWorkspaceTasks });
-  const activeTaskId = catalog.activeTask?.task_id;
+  const catalog = useWorkspaceCatalog(focusedSessionId, workspaceConfigurationId);
+  useSessionFeed({ onWorkspacesChanged: catalog.load, onWorkspaceSessionsChanged: catalog.refreshWorkspaceSessions });
+  const activeSessionId = catalog.activeSession?.session_id;
   useUnsavedRouteGuard();
-  // 工作台显示聚焦任务所在工作区的桶（无任务时为选中工作区）；归属尚在加载时暂不显示，不销毁任何内容。
-  const workbenchWorkspace = catalog.workspaces.find((workspace) => workspace.workspace_id === catalog.activeTaskWorkspaceId);
+  // 工作台显示聚焦会话所在工作区的桶（无会话时为选中工作区）；归属尚在加载时暂不显示，不销毁任何内容。
+  const workbenchWorkspace = catalog.workspaces.find((workspace) => workspace.workspace_id === catalog.activeSessionWorkspaceId);
   const workbenchWorkspaceId = workbenchWorkspace?.workspace_id ?? null;
   // 快捷键先于导航函数注册，经 ref 调用最新的实现。
   const startNewConversationRef = useRef<(workspaceId?: number) => void>(() => undefined);
-  const actions = useWorkspaceActions(catalog, focusedTaskId);
+  const actions = useWorkspaceActions(catalog, focusedSessionId);
 
   // ---- 侧栏：宽屏停靠（可收起并记住），窄屏抽屉 ----
   const narrow = useMediaQuery(NARROW_VIEWPORT_QUERY);
@@ -141,42 +141,42 @@ export function AppLayout() {
   useHotkeys(APP_SHORTCUTS.toggleSidebar.keys, () => toggleSidebar(), APP_HOTKEY_OPTIONS, [toggleSidebar]);
   useHotkeys(APP_SHORTCUTS.openSettings.keys, () => navigate("/settings"), APP_HOTKEY_OPTIONS, [navigate]);
 
-  // ---- 终端工作台：入口在页头，面板在 TaskPage 内，二者经按 taskId 分桶的 store 协作 ----
-  // 对话页的 Task：终端与会话侧栏都只属于对话区，配置 / 观测页不显示。
-  const conversationTaskId = section === "conversation" ? routeTaskId : null;
+  // ---- 终端工作台：入口在页头，面板在 SessionPage 内，二者经按 sessionId 分桶的 store 协作 ----
+  // 对话页的 Session：终端与会话侧栏都只属于对话区，配置 / 观测页不显示。
+  const conversationSessionId = section === "conversation" ? routeSessionId : null;
   // 右侧停靠区：文件、内置浏览器、工作台三选一，各自独立（见 useDockPanels / lib/layout/dock-store）。
-  const dock = useDockPanels({ workspaceId: workbenchWorkspaceId, filesVisible, conversationTaskId });
-  const terminalPanelOpen = useTerminalWorkbenchStore((state) => conversationTaskId === null ? false : selectTerminalTask(conversationTaskId)(state).open);
-  const terminalBadge = useTerminalBadge(conversationTaskId);
+  const dock = useDockPanels({ workspaceId: workbenchWorkspaceId, filesVisible, conversationSessionId });
+  const terminalPanelOpen = useTerminalWorkbenchStore((state) => conversationSessionId === null ? false : selectTerminalSession(conversationSessionId)(state).open);
+  const terminalBadge = useTerminalBadge(conversationSessionId);
   const toggleTerminal = useCallback(() => {
-    if (conversationTaskId !== null) useTerminalWorkbenchStore.getState().toggle(conversationTaskId);
-  }, [conversationTaskId]);
-  useHotkeys(APP_SHORTCUTS.toggleTerminal.keys, toggleTerminal, { ...APP_HOTKEY_OPTIONS, enabled: conversationTaskId !== null }, [toggleTerminal]);
+    if (conversationSessionId !== null) useTerminalWorkbenchStore.getState().toggle(conversationSessionId);
+  }, [conversationSessionId]);
+  useHotkeys(APP_SHORTCUTS.toggleTerminal.keys, toggleTerminal, { ...APP_HOTKEY_OPTIONS, enabled: conversationSessionId !== null }, [toggleTerminal]);
 
   // ---- 会话侧栏：开关、摆放、页头角标与快捷键见 useConversationAside ----
-  const rail = useConversationAside(conversationTaskId);
+  const rail = useConversationAside(conversationSessionId);
   // 对话页始终给视口一个附注：显隐要看视口量出的摆放，由 ConversationAsidePanel 自己决定；崩溃兜底占网格右列，与固定时的位置一致。
   const conversationAside = useMemo<ConversationAside | null>(
-    () => conversationTaskId === null ? null : (viewport) => (
+    () => conversationSessionId === null ? null : (viewport) => (
       <IsolatedRegion
         region="conversation-aside"
         label="会话侧栏"
-        resetKey={`conversation-aside:${conversationTaskId}`}
+        resetKey={`conversation-aside:${conversationSessionId}`}
         fallbackClassName="dock-panel bg-background col-start-2 row-start-1 m-2 w-(--conversation-aside-width) self-start p-3"
         escape={{ label: "收起会话侧栏", onClick: (reset) => { rail.close(); reset(); } }}
       >
-        <ConversationAsidePanel taskId={conversationTaskId} viewport={viewport} onClose={rail.close} />
+        <ConversationAsidePanel sessionId={conversationSessionId} viewport={viewport} onClose={rail.close} />
       </IsolatedRegion>
     ),
-    [conversationTaskId, rail.close],
+    [conversationSessionId, rail.close],
   );
 
-  // ---- 命令面板（⌘K）：搜索任务、开始新对话、跳转配置 ----
+  // ---- 命令面板（⌘K）：搜索会话、开始新会话、跳转配置 ----
   const [paletteOpen, setPaletteOpen] = useState(false);
   useHotkeys(APP_SHORTCUTS.commandPalette.keys, () => setPaletteOpen(true), APP_HOTKEY_OPTIONS);
 
   // ---- 导航意图 ----
-  // 开始新对话的唯一入口（侧栏「新对话」与工作区「+」、⌘N、命令面板）：带工作区时先显式选中它，
+  // 开始新会话的唯一入口（侧栏「新会话」与工作区「+」、⌘N、命令面板）：带工作区时先显式选中它，
   // 不带时沿用当前选择。选中工作区只经这类显式意图改变，点侧栏工作区行不会改。
   const { selectWorkspace } = catalog;
   const startNewConversation = useCallback((workspaceId?: number) => {
@@ -184,10 +184,10 @@ export function AppLayout() {
     navigate("/");
   }, [navigate, selectWorkspace]);
   startNewConversationRef.current = startNewConversation;
-  const selectTask = useCallback((task: { task_id: number }) => {
-    navigate(`/tasks/${task.task_id}`);
+  const selectSession = useCallback((session: { session_id: number }) => {
+    navigate(`/sessions/${session.session_id}`);
   }, [navigate]);
-  const conversationPath = keptTaskId === null ? "/" : `/tasks/${keptTaskId}`;
+  const conversationPath = keptSessionId === null ? "/" : `/sessions/${keptSessionId}`;
 
   const crumbs = useMemo<Crumb[]>(() => {
     if (section === "settings") {
@@ -204,14 +204,14 @@ export function AppLayout() {
       ];
     }
     if (section === "observer") return [{ label: "上下文观测" }];
-    if (routeTaskId === null) return [{ label: "新对话" }];
+    if (routeSessionId === null) return [{ label: "新会话" }];
     return [
       { label: catalog.activeWorkspace?.name ?? "工作区" },
-      { label: catalog.activeTask?.title || "对话" },
+      { label: catalog.activeSession?.title || "会话" },
     ];
-  }, [catalog.activeTask?.title, catalog.activeWorkspace?.name, catalog.workspaces, conversationPath, params.tab, routeTaskId, section, workspaceConfigurationId]);
+  }, [catalog.activeSession?.title, catalog.activeWorkspace?.name, catalog.workspaces, conversationPath, params.tab, routeSessionId, section, workspaceConfigurationId]);
 
-  const showTaskLayer = section === "conversation" && routeTaskId !== null;
+  const showSessionLayer = section === "conversation" && routeSessionId !== null;
   const outletContext = useMemo<AppOutletContext>(() => ({ catalog, actions }), [actions, catalog]);
 
   // 侧栏开关只有一份状态，同一时刻只渲染在此刻左上角那一行：侧栏可见（停靠或抽屉）时在侧栏头部，否则在页面头部。
@@ -220,13 +220,13 @@ export function AppLayout() {
     <AppSidebar
       headerControls={headerControls}
       catalog={catalog}
-      focusedTaskId={focusedTaskId}
+      focusedSessionId={focusedSessionId}
       section={section}
       onNewConversation={startNewConversation}
-      onSelectTask={selectTask}
+      onSelectSession={selectSession}
       onOpenSettings={() => navigate("/settings")}
       onOpenWorkspaceSettings={(workspaceId) => navigate(`/workspaces/${workspaceId}/settings`)}
-      onOpenObserver={() => navigate("/context-observer", { state: { returnTo: focusedTaskId ? `/tasks/${focusedTaskId}` : undefined } })}
+      onOpenObserver={() => navigate("/context-observer", { state: { returnTo: focusedSessionId ? `/sessions/${focusedSessionId}` : undefined } })}
       onOpenSearch={() => setPaletteOpen(true)}
       onAddWorkspace={() => void actions.addWorkspaceFromFolder()}
       addingWorkspace={actions.addingWorkspace}
@@ -236,7 +236,7 @@ export function AppLayout() {
 
   // 引用跳转与工作台共用同一个工作区来源：文件标签总是打开到当前显示的那个工作台桶里。
   return (
-    <ReferenceBridgeProvider workspaceRoot={workbenchWorkspace?.root_path ?? ""} workspaceName={workbenchWorkspace?.name ?? "工作区"} target={filesVisible ? (routeTaskId ? `task:${routeTaskId}` : `new:${catalog.selectedWorkspaceId}`) : null} workspaceId={workbenchWorkspaceId}>
+    <ReferenceBridgeProvider workspaceRoot={workbenchWorkspace?.root_path ?? ""} workspaceName={workbenchWorkspace?.name ?? "工作区"} target={filesVisible ? (routeSessionId ? `session:${routeSessionId}` : `new:${catalog.selectedWorkspaceId}`) : null} workspaceId={workbenchWorkspaceId}>
     <WorkbenchProvider workspaceId={workbenchWorkspaceId}>
       {/* 根是下沉的窗口底色，侧栏直接铺在上面；主区与停靠卡片在 bg-background 上，二者靠明度差分隔，不画线。 */}
       <div className="bg-canvas relative flex h-dvh min-h-0 overflow-hidden">
@@ -286,15 +286,15 @@ export function AppLayout() {
             !sidebarDocked && "[--header-inset-left:var(--titlebar-inset-left)]",
           )}
         >
-        {/* 浏览器铺满时对话区让出整行；用 hidden 而不是卸载：任务页与 Assistant runtime 保持挂载。 */}
+        {/* 浏览器铺满时对话区让出整行；用 hidden 而不是卸载：会话页与 Assistant runtime 保持挂载。 */}
         <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col", dock.maximized && "hidden")}>
           <PageHeader
             leading={sidebarOpen ? undefined : sidebarControls}
             crumbs={crumbs}
-            status={showTaskLayer && activeTaskId != null ? <TaskStatusBadges taskId={activeTaskId} /> : undefined}
+            status={showSessionLayer && activeSessionId != null ? <SessionStatusBadges sessionId={activeSessionId} /> : undefined}
             actions={(
               <>
-                {conversationTaskId !== null && (
+                {conversationSessionId !== null && (
                   <TooltipIconButton
                     tooltip={withShortcut(
                       [terminalPanelOpen ? "收起终端" : "打开终端", terminalBadge.count > 0 && `${terminalBadge.count} 个会话`, terminalBadge.hint].filter(Boolean).join(" · "),
@@ -309,7 +309,7 @@ export function AppLayout() {
                     {terminalBadge.tone === "attention" && <StatusDot tone="attention" />}
                   </TooltipIconButton>
                 )}
-                {conversationTaskId !== null && desktopHost !== null && (
+                {conversationSessionId !== null && desktopHost !== null && (
                   <TooltipIconButton
                     tooltip={[dock.panel === "browser" ? "收起浏览器" : "打开浏览器", dock.conversationTabCount > 0 && `${dock.conversationTabCount} 个标签页`].filter(Boolean).join(" · ")}
                     aria-label={`浏览器，${dock.conversationTabCount} 个标签页，${dock.panel === "browser" ? "点击收起" : "点击打开"}`}
@@ -331,7 +331,7 @@ export function AppLayout() {
                     <FolderIcon />
                   </TooltipIconButton>
                 )}
-                {conversationTaskId !== null && rail.hasContent && (
+                {conversationSessionId !== null && rail.hasContent && (
                   <TooltipIconButton
                     ref={rail.buttonRef}
                     tooltip={withShortcut([rail.visible ? "收起会话侧栏" : "打开会话侧栏", rail.runningCount > 0 && `${rail.runningCount} 个后台任务运行中`].filter(Boolean).join(" · "), "toggleConversationAside")}
@@ -364,29 +364,29 @@ export function AppLayout() {
             `--conversation-aside-width` 与侧栏取同一个宽度常量。
           */}
           <div style={{ "--conversation-aside-width": `${CONVERSATION_ASIDE_WIDTH}px` } as CSSProperties} className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
-            {focusedTaskId !== null && (
-              <div className="h-full" inert={!showTaskLayer} aria-hidden={!showTaskLayer || undefined}>
+            {focusedSessionId !== null && (
+              <div className="h-full" inert={!showSessionLayer} aria-hidden={!showSessionLayer || undefined}>
                 <ConversationAsideContext.Provider value={conversationAside}>
-                <ReferenceTargetScope.Provider value={`task:${focusedTaskId}`}><TaskPage
-                  key={focusedTaskId}
-                  taskId={focusedTaskId}
-                  initialTask={catalog.activeTask}
+                <ReferenceTargetScope.Provider value={`session:${focusedSessionId}`}><SessionPage
+                  key={focusedSessionId}
+                  sessionId={focusedSessionId}
+                  initialSession={catalog.activeSession}
                   workspaceRoot={catalog.activeWorkspace?.root_path}
                   forkingMessageId={actions.forkingMessageId}
                   onForkMessage={actions.forkMessage}
-                  onTaskLoaded={catalog.handleTaskLoaded}
+                  onSessionLoaded={catalog.handleSessionLoaded}
                 /></ReferenceTargetScope.Provider>
                 </ConversationAsideContext.Provider>
               </div>
             )}
-            {!showTaskLayer && (
-              <div className={cn("bg-background h-full", focusedTaskId !== null && "absolute inset-0 z-10")}>
+            {!showSessionLayer && (
+              <div className={cn("bg-background h-full", focusedSessionId !== null && "absolute inset-0 z-10")}>
                 <IsolatedRegion
                   region={section}
                   label={crumbs.at(-1)?.label ?? "页面"}
                   resetKey={location.pathname}
                   fallbackClassName="flex h-full items-center justify-center p-6"
-                  escape={section === "conversation" ? undefined : { label: "返回对话", onClick: () => navigate(conversationPath) }}
+                  escape={section === "conversation" ? undefined : { label: "返回会话", onClick: () => navigate(conversationPath) }}
                 >
                   <Outlet context={outletContext} />
                 </IsolatedRegion>
@@ -412,7 +412,7 @@ export function AppLayout() {
               maximized={dock.maximized} onToggleMaximized={dock.toggleMaximized} onClose={dock.close} />
           )}
           {dock.sizing && dock.panel === "browser" && (
-            <BrowserPanel taskId={dock.browserTaskId} sizing={dock.sizing}
+            <BrowserPanel sessionId={dock.browserSessionId} sizing={dock.sizing}
               maximized={dock.maximized} onToggleMaximized={dock.toggleMaximized} onClose={dock.close} />
           )}
         </IsolatedRegion>
@@ -422,7 +422,7 @@ export function AppLayout() {
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
         workspaces={catalog.workspaces}
-        onSelectTask={selectTask}
+        onSelectSession={selectSession}
         onNewConversation={() => startNewConversationRef.current()}
         onNavigate={navigate}
         onRestartBackend={canRestartBackendRuntime() ? () => confirmBackendRestart("command_palette") : undefined}

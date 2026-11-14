@@ -5,7 +5,7 @@ export function transportMessageCount(state: TransportState): number {
   return state.messages.length;
 }
 
-/** 当前活动是否处于活动态（运行中或挂起）；Task 尚无 Run 时为 false。 */
+/** 当前活动是否处于活动态（运行中或挂起）；Session 尚无 Run 时为 false。 */
 export function isActivityActive(state: TransportState): boolean {
   return isActiveRunStatus(state.activity?.status);
 }
@@ -33,11 +33,11 @@ export function readRuntimeTransportState(value: unknown): TransportState | null
 }
 
 /**
- * Task 当前的上下文窗口占用。
+ * Session 当前的上下文窗口占用。
  *
  * 「已用」与「上限」必须来自同一个 Run（窗口随 Run 冻结，两个 Run 之间可能换了模型）：优先取当前活动
  * 的用量与窗口；当前活动刚开始还没有用量时，回落到最近一条带用量的历史回复结局，用它自己记下的
- * 窗口（同一 Task 的上下文前缀连续，作为新 Run 开始前的占用）。选中的那一对窗口未知时不显示，不拿
+ * 窗口（同一 Session 的上下文前缀连续，作为新 Run 开始前的占用）。选中的那一对窗口未知时不显示，不拿
  * 别的 Run 的窗口凑。
  */
 export function latestMeasuredContextUsage(value: unknown): {

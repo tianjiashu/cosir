@@ -1,6 +1,6 @@
 import type { ThreadUserMessage } from "@assistant-ui/react";
 
-import { recoverComposerDraft, taskDraftKey } from "@/lib/assistant/composer/composer-drafts";
+import { recoverComposerDraft, sessionDraftKey } from "@/lib/assistant/composer/composer-drafts";
 import { editableDocumentAttachments } from "@/lib/assistant/composer/editable-user-document";
 import type { TransportMessage } from "@/lib/assistant/contract";
 import { toEditableUserMessageDraft } from "@/lib/assistant/transport-message-converter";
@@ -16,22 +16,22 @@ import { frontendLog } from "@/lib/logging/frontend-log";
  * 解析成原子节点；只有图片作为附件恢复。用户已切走时内容并入保存的草稿（见 `recoverComposerDraft`）。
  */
 export async function moveMessageToComposer(options: {
-  taskId: number;
+  sessionId: number;
   message: ThreadUserMessage;
   canonical: Pick<TransportMessage, "parts">;
   remove: () => Promise<void>;
 }): Promise<void> {
-  const { taskId, message, remove } = options;
+  const { sessionId, message, remove } = options;
   // 内容在 remove 之前取出：成功后消息随快照消失，消息作用域也跟着卸载。
   const draft = toEditableUserMessageDraft(message);
   await remove();
-  const result = await recoverComposerDraft(taskDraftKey(taskId), {
+  const result = await recoverComposerDraft(sessionDraftKey(sessionId), {
     text: draft.text,
     attachments: editableDocumentAttachments(draft.document),
   });
   if (result?.error) {
     void frontendLog("ERROR", "message_composer_restore_failed", "消息放回输入框时附件恢复失败", {
-      data: { taskId, messageId: message.id, addedCount: result.addedCount, expectedCount: result.expectedCount },
+      data: { sessionId, messageId: message.id, addedCount: result.addedCount, expectedCount: result.expectedCount },
       error: result.error,
     });
   }

@@ -129,7 +129,7 @@ def plan_tool_call_status_changed(
             extra={
                 "msg": "已终态的工具调用收到不接受的迁移，已丢弃",
                 "data": {
-                    "task_id": event.task_id,
+                    "session_id": event.session_id,
                     "run_id": event.run_id,
                     "tool_call_id": event.tool_call_id,
                     "from_status": current,

@@ -7,6 +7,6 @@ import { Thread } from "@/components/conversation/thread/thread.aui";
  * ``ReadonlyThreadRuntimeCore``，该 core 不承载 external state，使 ``thread.state`` 恒为
  * null；Thread 子树中读取 Transport state 的 selector 因此会在渲染期抛错，导致整屏渲染失败。
  */
-export function ReadonlyThread({ taskId, workspaceId }: { taskId: number; workspaceId: number }) {
-  return <Thread readonly taskId={taskId} workspaceId={workspaceId} />;
+export function ReadonlyThread({ sessionId, workspaceId }: { sessionId: number; workspaceId: number }) {
+  return <Thread readonly sessionId={sessionId} workspaceId={workspaceId} />;
 }

@@ -29,36 +29,36 @@ class _ContextStore:
         self.appended: list[tuple[int, int | None, object, int, bool]] = []
         self.loaded: list[ContextEntry] = []
 
-    def entries_in_context(self, task_id: int) -> list[ContextEntry]:
+    def entries_in_context(self, session_id: int) -> list[ContextEntry]:
         return list(self.loaded)
 
-    def tool_call_ids(self, task_id: int) -> set[str]:
+    def tool_call_ids(self, session_id: int) -> set[str]:
         return set()
 
-    def max_sequence(self, task_id: int) -> int:
+    def max_sequence(self, session_id: int) -> int:
         return self.current_max_sequence
 
-    def max_turn(self, task_id: int) -> int:
+    def max_turn(self, session_id: int) -> int:
         return 0
 
-    def run_records(self, _task_id: int, _run_id: int) -> list:
+    def run_records(self, _session_id: int, _run_id: int) -> list:
         return []
 
     def append(
         self,
-        task_id: int,
+        session_id: int,
         run_id: int | None,
         message: object,
         seq: int,
         include_in_context: bool,
         metadata: object = None,
         project_to_transport: bool = True,
-        session: object = None,
+        db: object = None,
         *,
         turn: int,
         message_id: int | None = None,
     ) -> ContextEntry:
-        self.appended.append((task_id, run_id, message, seq, include_in_context))
+        self.appended.append((session_id, run_id, message, seq, include_in_context))
         self.current_max_sequence = seq
         return ContextEntry(
             message,
@@ -81,7 +81,7 @@ def _manager(
     manager._run_shown = False
     manager._used_call_ids = set()
     manager._response_call_ids = {}
-    manager.current_task_id = 7
+    manager.current_session_id = 7
     manager.agent_profile = SimpleNamespace()
     manager.workspace = SimpleNamespace(id=7, root_path="")
     manager.context_store = context_store
@@ -120,7 +120,7 @@ def test_background_completion_updates_work_and_preserves_existing_card():
         label="research",
         started_at="2026-01-01T00:00:00+00:00",
     )
-    card = {"kind": "child-agent", "child_task_id": 11}
+    card = {"kind": "child-agent", "child_session_id": 11}
     manager._entries = [
         ContextEntry(
             {"role": "tool", "tool_call_id": "c", "content": "placeholder"},
@@ -144,7 +144,7 @@ def test_runtime_message_context_manager_owns_next_sequence_after_run_restart() 
 
     context_store = _ContextStore(max_sequence=1)
     manager = _manager(context_store, next_sequence=0)
-    manager.begin_run(SimpleNamespace(task_id=7, id=2))
+    manager.begin_run(SimpleNamespace(session_id=7, id=2))
     manager.add_message(
         {"role": "user", "content": "second message"}, metadata=_user_meta("second message")
     )
@@ -161,7 +161,7 @@ def test_begin_run_rebuilds_memory_entries_from_persisted_context() -> None:
     ]
     manager = _manager(context_store, next_sequence=1)
     manager._entries = [ContextEntry({"role": "user", "content": "stale"}, 1, 1, turn=1)]
-    manager.begin_run(SimpleNamespace(task_id=7, id=2))
+    manager.begin_run(SimpleNamespace(session_id=7, id=2))
 
     assert manager.current_run_id == 2
     assert manager._entries == context_store.loaded

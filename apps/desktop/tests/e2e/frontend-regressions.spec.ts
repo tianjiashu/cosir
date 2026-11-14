@@ -10,16 +10,16 @@ test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
 });
 
-test("直接打开不存在的 Task 会显示错误而不是永久等待", async ({ page }) => {
-  await page.goto("/tasks/9999");
+test("直接打开不存在的 Session 会显示错误而不是永久等待", async ({ page }) => {
+  await page.goto("/sessions/9999");
 
-  await expect(page.getByText("task not found", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("task-thread-skeleton")).toHaveCount(0);
+  await expect(page.getByText("session not found", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("session-thread-skeleton")).toHaveCount(0);
 });
 
 test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输入", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "拒绝发送回归" } });
-  await page.route(`${API_ORIGIN}/tasks/42/messages`, async (route) => {
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "拒绝发送回归" } });
+  await page.route(`${API_ORIGIN}/sessions/42/messages`, async (route) => {
     await route.fulfill({
       status: 400,
       contentType: "application/json",
@@ -29,12 +29,12 @@ test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输�
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-config-selection:task:42",
+      "cosir:model-config-selection:session:42",
       JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
 
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const input = page.getByLabel("消息输入");
   await input.fill("这条消息不能进入对话");
   await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -46,7 +46,7 @@ test("普通发送被 Assistant Transport 拒绝时不显示消息并恢复输�
 
 test("回合结束后多次调用收进过程区，展开后按顺序出现", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
   const head = assistant.locator('[data-slot="process-head"]');
@@ -65,7 +65,7 @@ test("回合结束后多次调用收进过程区，展开后按顺序出现", as
 
 test("网页搜索结果只显示标题并保留标题链接", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-web-search`);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
   // 没有最终回复时过程保持展开；调用收在活动摘要里，按需展开具体结果。
@@ -80,7 +80,7 @@ test("网页搜索结果只显示标题并保留标题链接", async ({ page, re
 
 test("Mermaid 时序图全屏后仍保留可见 SVG", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-mermaid`);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
 
   const diagram = page.locator('[data-streamdown="mermaid-block"]').last();
   const inlineSvg = diagram.locator('[data-streamdown="mermaid"] [aria-label="Mermaid chart"] > svg');
@@ -103,8 +103,8 @@ test("Mermaid 时序图全屏后仍保留可见 SVG", async ({ page, request }) 
 });
 
 test("工具运行中保持单行，完成拿到展示数据后才可展开且默认收起", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "工具生命周期回归" } });
-  await page.goto("/tasks/42");
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "工具生命周期回归" } });
+  await page.goto("/sessions/42");
   await page.getByLabel("消息输入").fill("tool-lifecycle");
   await page.getByRole("button", { name: "发送", exact: true }).click();
 
@@ -125,8 +125,8 @@ test("工具运行中保持单行，完成拿到展示数据后才可展开且�
 });
 
 test("失败的工具在流结束后显示失败而不是执行中", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "失败工具生命周期回归" } });
-  await page.goto("/tasks/42");
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "失败工具生命周期回归" } });
+  await page.goto("/sessions/42");
   await page.getByLabel("消息输入").fill("tool-lifecycle-failed");
   await page.getByRole("button", { name: "发送", exact: true }).click();
 
@@ -140,8 +140,8 @@ test("失败的工具在流结束后显示失败而不是执行中", async ({ pa
 });
 
 test("取消的工具在流结束后显示已取消而不是执行中", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "取消工具生命周期回归" } });
-  await page.goto("/tasks/42");
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "取消工具生命周期回归" } });
+  await page.goto("/sessions/42");
   await page.getByLabel("消息输入").fill("tool-lifecycle-cancelled");
   await page.getByRole("button", { name: "发送", exact: true }).click();
 
@@ -161,7 +161,7 @@ const SHOT_VIEWPORT = { width: 960, height: 1400 };
 test("交替序列：结束后过程收起带计数，结论、改动卡与等待卡常显，展开后调用行按顺序出现", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-alternating`, { data: { phase: "settled" } });
   await page.setViewportSize(SHOT_VIEWPORT);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
   const head = assistant.locator('[data-slot="process-head"]');
@@ -176,7 +176,7 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   const changes = assistant.locator('[data-slot="changes-card"]');
   await expect(changes).toContainText("涉及 2 个路径");
   await expect(changes).toContainText("1 次调用");
-  const attention = assistant.locator('[data-slot="attention-card"]');
+  const attention = assistant.locator('[data-slot="awaiting-card"]');
   await expect(attention).toContainText("交给你操作网页");
   await expect(attention).toContainText("输入完成后点「交还」，Agent 会继续安装");
   await expect(attention.getByRole("button", { name: "交还" })).toBeVisible();
@@ -185,7 +185,8 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   await head.click();
   for (const group of await assistant.locator('[data-slot="activity-head"]').all()) await group.click();
   const rows = assistant.locator("[data-tool-call-id]").filter({ has: page.locator('[data-slot="call-row"]') });
-  await expect(rows).toHaveCount(4);
+  // 交接在等交还：就地是等待卡，不是一行调用。
+  await expect(rows).toHaveCount(3);
   await expect(rows.nth(0)).toContainText("搜索内容");
   await expect(rows.nth(0)).toContainText('"setInterval|tick" in src/');
   await expect(rows.nth(1)).toContainText("运行类型检查");
@@ -193,9 +194,7 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   await expect(rows.nth(1).locator('[data-call-status="failed"]')).toHaveCount(1);
   await expect(rows.nth(2)).toContainText("应用补丁");
   await expect(rows.nth(2)).toContainText("src/config.ts");
-  await expect(rows.nth(3)).toContainText("交给你操作网页");
-  await expect(rows.nth(3)).toContainText("输入 sudo 密码");
-  await expect(rows.nth(3)).toContainText("等你操作");
+  await expect(assistant.locator('[data-tool-call-id="alt-handoff"] [data-slot="awaiting-card"]')).toBeVisible();
   await expect(assistant.getByText("先找调度循环在哪里。", { exact: true })).toBeVisible();
   await assistant.screenshot({ path: `${SHOTS}/impl-expanded.png`, animations: "disabled" });
 
@@ -207,7 +206,7 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
 test("交替序列：运行中过程区展开、区头显示当前动作，命令输出跟随主题展开", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-alternating`, { data: { phase: "running" } });
   await page.setViewportSize(SHOT_VIEWPORT);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
 
   const assistant = page.locator('[data-role="assistant"]').last();
   const head = assistant.locator('[data-slot="process-head"]');
@@ -216,7 +215,7 @@ test("交替序列：运行中过程区展开、区头显示当前动作，命�
   await assistant.locator('[data-slot="activity-head"]').last().click();
   const running = assistant.locator('[data-tool-call-id="alt-test"]');
   await running.locator('[data-slot="call-row"]').click();
-  await expect(running).toContainText("bun test tests/task.test.ts");
+  await expect(running).toContainText("bun test tests/session.test.ts");
   await expect(running.locator('[data-terminal-mode="preview"]')).toBeVisible();
   await expect(running).toHaveAttribute("data-tool-status", "running");
   // 复制按钮悬停才出现，触屏与键盘同样可用（见 `REVEAL_ON_DISCLOSURE_HOVER`）。
@@ -234,24 +233,24 @@ test("交替序列：深色主题下回合正常渲染", async ({ page, request 
   await request.post(`${API_ORIGIN}/__test__/seed-alternating`, { data: { phase: "settled" } });
   await page.addInitScript(() => window.localStorage.setItem("cosir.theme-preference", "dark"));
   await page.setViewportSize(SHOT_VIEWPORT);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
 
   await expect(page.locator("html")).toHaveClass(/dark/);
   const assistant = page.locator('[data-role="assistant"]').last();
   await expect(assistant.locator('[data-slot="process-head"]')).toBeVisible();
   await expect(assistant.locator('[data-slot="changes-card"]')).toBeVisible();
-  await expect(assistant.locator('[data-slot="attention-card"]')).toBeVisible();
+  await expect(assistant.locator('[data-slot="awaiting-card"]')).toBeVisible();
   await assistant.locator('[data-slot="process-head"]').click();
   await assistant.locator('[data-slot="activity-head"]').first().click();
   await expect(assistant.locator('[data-tool-call-id="alt-search"]')).toBeVisible();
   await assistant.screenshot({ path: `${SHOTS}/impl-dark.png`, animations: "disabled" });
 });
 
-test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage footer", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "用量展示回归" } });
-  await page.goto("/tasks/42");
+test("连续 Run 的 context meter 是 Session 级且每个 Run 都保留 usage footer", async ({ page, request }) => {
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "用量展示回归" } });
+  await page.goto("/sessions/42");
   const input = page.getByLabel("消息输入");
-  const contextMeter = page.getByTestId("task-context-usage");
+  const contextMeter = page.getByTestId("session-context-usage");
   await expect(contextMeter).toHaveAttribute("aria-label", "上下文 —");
   await contextMeter.focus();
   await contextMeter.press("Enter");
@@ -287,6 +286,8 @@ test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage foo
   // 视口收窄后侧栏等响应式布局需要一帧以上才完成重排，轮询最终状态而非瞬时状态。
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
+  // 发送按钮不再区分「发送 / 加入队列」，不能靠按钮名等上一个 Run 结束：显式等它落定再发下一条。
+  await expect(page.locator('[data-slot="turn"]').last()).toHaveAttribute("data-phase", "settled");
   await input.fill("usage-regression-second");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(contextMeter).toContainText("上下文 2%");
@@ -307,112 +308,112 @@ test("连续 Run 的 context meter 是 Task 级且每个 Run 都保留 usage foo
   await expect(page.getByTestId("run-usage-display").last()).toContainText("2.5k tokens");
 });
 
-test("侧栏任务列表失败时不阻塞已确认 Task 的 Assistant", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 104, title: "侧栏失败任务" } });
-  await page.route(`${API_ORIGIN}/workspaces/7/tasks`, (route) => route.fulfill({ status: 503, body: "sidebar unavailable" }));
+test("侧栏会话列表失败时不阻塞已确认 Session 的 Assistant", async ({ page, request }) => {
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 104, title: "侧栏失败会话" } });
+  await page.route(`${API_ORIGIN}/workspaces/7/sessions`, (route) => route.fulfill({ status: 503, body: "sidebar unavailable" }));
 
-  await page.goto("/tasks/104");
+  await page.goto("/sessions/104");
 
   await expect(page.getByLabel("消息输入")).toBeVisible();
-  await expect(page.locator('nav[aria-label="工作区任务列表"]')).toContainText("加载失败");
+  await expect(page.locator('nav[aria-label="工作区会话列表"]')).toContainText("加载失败");
 });
 
-test("侧栏点击 Task 会同步渲染进程内部路由", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "路由回归任务" } });
+test("侧栏点击 Session 会同步渲染进程内部路由", async ({ page, request }) => {
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "路由回归会话" } });
   await page.addInitScript(() => window.localStorage.clear());
 
   await page.goto("/");
-  await page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "路由回归任务" }).click();
+  await page.getByRole("navigation", { name: "工作区会话列表" }).getByRole("treeitem").filter({ hasText: "路由回归会话" }).click();
 
-  await expect(page).toHaveURL(/\/tasks\/42$/);
+  await expect(page).toHaveURL(/\/sessions\/42$/);
 });
 
-test("跨 Workspace 切换 Task 后请求使用新 Task 所属的 workspaceId", async ({ page, request }) => {
+test("跨 Workspace 切换 Session 后请求使用新 Session 所属的 workspaceId", async ({ page, request }) => {
   const workspaces = [
     { workspace_id: 7, name: "workspace-a", root_path: "C:/a", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" },
     { workspace_id: 8, name: "workspace-b", root_path: "C:/b", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" },
   ];
   await page.route(`${API_ORIGIN}/workspaces`, (route) => route.fulfill({ json: workspaces }));
-  await page.route(`${API_ORIGIN}/workspaces/7/tasks`, (route) => route.fulfill({ json: [{ task_id: 42, workspace_id: 7, title: "任务 A", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
-  await page.route(`${API_ORIGIN}/workspaces/8/tasks`, (route) => route.fulfill({ json: [{ task_id: 43, workspace_id: 8, title: "任务 B", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
-  await page.route(`${API_ORIGIN}/tasks/{42,43}`, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
-  // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
-  for (const taskId of [42, 43]) await seedState(request, taskId, emptyState());
+  await page.route(`${API_ORIGIN}/workspaces/7/sessions`, (route) => route.fulfill({ json: [{ session_id: 42, workspace_id: 7, title: "会话 A", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
+  await page.route(`${API_ORIGIN}/workspaces/8/sessions`, (route) => route.fulfill({ json: [{ session_id: 43, workspace_id: 8, title: "会话 B", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
+  await page.route(`${API_ORIGIN}/sessions/{42,43}`, (route) => { const sessionId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { session_id: sessionId, workspace_id: sessionId === 43 ? 8 : 7, title: "会话", session_type: "user", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
+  // 对话 state 与 Session 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
+  for (const sessionId of [42, 43]) await seedState(request, sessionId, emptyState());
   await page.route(`${API_ORIGIN}/configuration/model-connections`, (route) => route.fulfill({ json: { path: "/models.json", connections: [{ connection_id: "demo", name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", models: [{ config_id: "demo/demo-model", connection_id: "demo", model_name: "demo-model", context_window_k: 128, supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }] } }));
-  // Task 由路径寻址，workspace 归属由后端从 Task 事实解析；这里只需核对请求命中的 Task。
+  // Session 由路径寻址，workspace 归属由后端从 Session 事实解析；这里只需核对请求命中的 Session。
   const requestUrls: string[] = [];
-  await page.route(`${API_ORIGIN}/tasks/*/messages`, async (route) => {
+  await page.route(`${API_ORIGIN}/sessions/*/messages`, async (route) => {
     requestUrls.push(route.request().url());
-    await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { code: "TASK_WORKSPACE_MISMATCH", message: "mismatch", retryable: false } }) });
+    await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: { code: "SESSION_WORKSPACE_MISMATCH", message: "mismatch", retryable: false } }) });
   });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("cosir:model-config-selection:task:42", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
-    window.localStorage.setItem("cosir:model-config-selection:task:43", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
+    window.localStorage.setItem("cosir:model-config-selection:session:42", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
+    window.localStorage.setItem("cosir:model-config-selection:session:43", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
   });
 
   await page.goto("/");
-  await page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "任务 A" }).click();
+  await page.getByRole("navigation", { name: "工作区会话列表" }).getByRole("treeitem").filter({ hasText: "会话 A" }).click();
   await expect(page.getByLabel("消息输入")).toBeVisible();
-  await page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "任务 B" }).click();
-  // 等 Task B 的 runtime 挂载后再输入：否则会写进即将卸载的 Task A composer。
+  await page.getByRole("navigation", { name: "工作区会话列表" }).getByRole("treeitem").filter({ hasText: "会话 B" }).click();
+  // 等 Session B 的 runtime 挂载后再输入：否则会写进即将卸载的 Session A composer。
   await expect.poll(() => page.evaluate(() => (
-    (window as Window & { __cosirFrontendLogs?: { event: string; data?: { taskId?: number } }[] }).__cosirFrontendLogs ?? []
-  ).some((entry) => entry.event === "assistant_runtime_mounted" && entry.data?.taskId === 43))).toBe(true);
+    (window as Window & { __cosirFrontendLogs?: { event: string; data?: { sessionId?: number } }[] }).__cosirFrontendLogs ?? []
+  ).some((entry) => entry.event === "assistant_runtime_mounted" && entry.data?.sessionId === 43))).toBe(true);
   await expect(page.getByLabel("消息输入")).toBeVisible();
   await page.getByLabel("消息输入").fill("跨工作区请求");
   await page.getByRole("button", { name: "发送", exact: true }).click();
 
   await expect.poll(() => requestUrls.length).toBeGreaterThan(0);
-  expect(requestUrls.every((url) => url.endsWith("/tasks/43/messages"))).toBe(true);
+  expect(requestUrls.every((url) => url.endsWith("/sessions/43/messages"))).toBe(true);
 });
 
-test("同一侧栏内切换 Task 不会重新加载整个侧栏", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "任务 A" } });
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 43, title: "任务 B" } });
+test("同一侧栏内切换 Session 不会重新加载整个侧栏", async ({ page, request }) => {
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "会话 A" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 43, title: "会话 B" } });
 
   let workspaceRequestCount = 0;
-  let workspaceTaskRequestCount = 0;
+  let workspaceSessionRequestCount = 0;
   await page.route(`${API_ORIGIN}/workspaces`, async (route) => {
     workspaceRequestCount += 1;
     await route.continue();
   });
-  await page.route(`${API_ORIGIN}/workspaces/7/tasks`, async (route) => {
-    workspaceTaskRequestCount += 1;
+  await page.route(`${API_ORIGIN}/workspaces/7/sessions`, async (route) => {
+    workspaceSessionRequestCount += 1;
     await route.continue();
   });
   await page.route(`${API_ORIGIN}/configuration/model-connections`, (route) => route.fulfill({ json: { path: "/models.json", connections: [{ connection_id: "demo", name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", models: [{ config_id: "demo/demo-model", connection_id: "demo", model_name: "demo-model", context_window_k: 128, supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }] } }));
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("cosir:model-config-selection:task:42", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
-    window.localStorage.setItem("cosir:model-config-selection:task:43", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
+    window.localStorage.setItem("cosir:model-config-selection:session:42", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
+    window.localStorage.setItem("cosir:model-config-selection:session:43", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
   });
 
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await expect(page.getByLabel("消息输入")).toBeVisible();
   const initialWorkspaceRequestCount = workspaceRequestCount;
-  const initialWorkspaceTaskRequestCount = workspaceTaskRequestCount;
+  const initialWorkspaceSessionRequestCount = workspaceSessionRequestCount;
 
-  await page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "任务 B" }).click();
-  await expect(page).toHaveURL(/\/tasks\/43$/);
+  await page.getByRole("navigation", { name: "工作区会话列表" }).getByRole("treeitem").filter({ hasText: "会话 B" }).click();
+  await expect(page).toHaveURL(/\/sessions\/43$/);
   await expect(page.getByLabel("消息输入")).toBeVisible();
   expect(workspaceRequestCount).toBe(initialWorkspaceRequestCount);
-  expect(workspaceTaskRequestCount).toBe(initialWorkspaceTaskRequestCount);
+  expect(workspaceSessionRequestCount).toBe(initialWorkspaceSessionRequestCount);
 });
 
 test("Assistant Transport 会展示后端结构化错误", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 103, title: "错误回归任务" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 103, title: "错误回归会话" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("cosir:model-config-selection:task:103", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
+    window.localStorage.setItem("cosir:model-config-selection:session:103", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
   });
-  await page.route(`${API_ORIGIN}/tasks/103/messages`, (route) => route.fulfill({
+  await page.route(`${API_ORIGIN}/sessions/103/messages`, (route) => route.fulfill({
     status: 400,
     contentType: "application/json",
     body: JSON.stringify({ detail: { error: { code: "MODEL_SELECTION_REQUIRED", message: "请先选择模型和模型提供商", retryable: false } } }),
   }));
 
-  await page.goto("/tasks/103");
+  await page.goto("/sessions/103");
   await expect(page.getByLabel("消息输入")).toBeVisible();
   await page.getByLabel("消息输入").fill("触发结构化错误");
   await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -422,7 +423,7 @@ test("Assistant Transport 会展示后端结构化错误", async ({ page, reques
   await expect(page.getByRole("button", { name: "重新同步" })).toHaveCount(0);
 });
 
-test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace 解析", async ({ page, request }) => {
+test("直接路由切换到另一个 Workspace 的 Session 会等待新 Workspace 解析", async ({ page, request }) => {
   let workspaceLoadCount = 0;
   const workspaceA = { workspace_id: 7, name: "workspace-a", root_path: "C:/a", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" };
   const workspaceB = { workspace_id: 8, name: "workspace-b", root_path: "C:/b", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" };
@@ -432,32 +433,32 @@ test("直接路由切换到另一个 Workspace 的 Task 会等待新 Workspace �
     await new Promise((resolve) => setTimeout(resolve, 300));
     return route.fulfill({ json: [workspaceA, workspaceB] });
   });
-  await page.route(`${API_ORIGIN}/workspaces/7/tasks`, (route) => route.fulfill({ json: [{ task_id: 42, workspace_id: 7, title: "任务 A", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
-  await page.route(`${API_ORIGIN}/workspaces/8/tasks`, (route) => route.fulfill({ json: [{ task_id: 43, workspace_id: 8, title: "任务 B", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
-  await page.route(`${API_ORIGIN}/tasks/{42,43}`, (route) => { const taskId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { task_id: taskId, workspace_id: taskId === 43 ? 8 : 7, title: "任务", task_type: "user", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
-  // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
-  for (const taskId of [42, 43]) await seedState(request, taskId, emptyState());
+  await page.route(`${API_ORIGIN}/workspaces/7/sessions`, (route) => route.fulfill({ json: [{ session_id: 42, workspace_id: 7, title: "会话 A", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
+  await page.route(`${API_ORIGIN}/workspaces/8/sessions`, (route) => route.fulfill({ json: [{ session_id: 43, workspace_id: 8, title: "会话 B", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" }] }));
+  await page.route(`${API_ORIGIN}/sessions/{42,43}`, (route) => { const sessionId = Number(route.request().url().split("/").at(-1)); return route.fulfill({ json: { session_id: sessionId, workspace_id: sessionId === 43 ? 8 : 7, title: "会话", session_type: "user", created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" } }); });
+  // 对话 state 与 Session 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
+  for (const sessionId of [42, 43]) await seedState(request, sessionId, emptyState());
   await page.route(`${API_ORIGIN}/configuration/model-connections`, (route) => route.fulfill({ json: { path: "/models.json", connections: [{ connection_id: "demo", name: "Demo", base_url: "https://api.example.com", api_key: "test-api-key", models: [{ config_id: "demo/demo-model", connection_id: "demo", model_name: "demo-model", context_window_k: 128, supports_thinking: false, supports_image: false, supports_reasoning_effort: false }] }] } }));
-  // Task 由路径寻址，workspace 归属由后端从 Task 事实解析；这里只需核对请求命中的 Task。
+  // Session 由路径寻址，workspace 归属由后端从 Session 事实解析；这里只需核对请求命中的 Session。
   const requestUrls: string[] = [];
-  await page.route(`${API_ORIGIN}/tasks/*/messages`, async (route) => {
+  await page.route(`${API_ORIGIN}/sessions/*/messages`, async (route) => {
     requestUrls.push(route.request().url());
-    await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: { error: { code: "TASK_WORKSPACE_MISMATCH", message: "mismatch", retryable: false } } }) });
+    await route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ detail: { error: { code: "SESSION_WORKSPACE_MISMATCH", message: "mismatch", retryable: false } } }) });
   });
   await page.addInitScript(() => {
     window.localStorage.clear();
-    window.localStorage.setItem("cosir:model-config-selection:task:43", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
+    window.localStorage.setItem("cosir:model-config-selection:session:43", JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
   });
 
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await expect(page.getByLabel("消息输入")).toBeVisible();
-  await page.goto("/tasks/43");
-  await page.goto("/tasks/42");
-  await page.goto("/tasks/43");
-  await expect(page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "任务 B" })).toBeVisible();
+  await page.goto("/sessions/43");
+  await page.goto("/sessions/42");
+  await page.goto("/sessions/43");
+  await expect(page.getByRole("navigation", { name: "工作区会话列表" }).getByRole("treeitem").filter({ hasText: "会话 B" })).toBeVisible();
   await page.getByLabel("消息输入").fill("直接路由切换");
   await page.getByRole("button", { name: "发送", exact: true }).click();
 
   await expect.poll(() => requestUrls.length).toBeGreaterThan(0);
-  expect(requestUrls.every((url) => url.endsWith("/tasks/43/messages"))).toBe(true);
+  expect(requestUrls.every((url) => url.endsWith("/sessions/43/messages"))).toBe(true);
 });

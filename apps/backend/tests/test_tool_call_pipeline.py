@@ -11,18 +11,18 @@ from app.core.tool.schemas import ToolCall, ToolObservation
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.message_queue.task_message import (
+from app.core.workflow.message_queue.session_message import (
     BackgroundResultBody,
     NoticeBody,
-    TaskMessage,
+    SessionMessage,
 )
 from app.core.workflow.node_helper import model_stream_state_machine as streaming
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper import tool_observation_projection as projection
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import observation_node, prepare_input_node, tools_node
-from app.models.enums.conversation_run_status import RunTransition
 from app.models.enums.react_route import ReactRoute
+from app.models.enums.run_status import RunTransition
 from tests.runtime_context_stub import install_runtime_singletons, runtime_stub
 from tests.sdk_fixtures import sdk_completion
 from tests.tool_executor_fakes import emit_running
@@ -68,7 +68,7 @@ def test_streaming_preview_includes_denied_registered_tool(monkeypatch) -> None:
     )
     install_runtime_singletons(runtime)
     monkeypatch.setattr(streaming, "emit", events.append)
-    parts = streaming.ModelStreamStateMachine(task_id=1, run_id=2, step_id="step-1")
+    parts = streaming.ModelStreamStateMachine(session_id=1, run_id=2, step_id="step-1")
 
     from openai.types.chat import ParsedFunctionToolCall
 
@@ -95,8 +95,8 @@ def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -
         ]
 
     runtime = runtime_stub(
-        task=SimpleNamespace(id=3),
-        run=SimpleNamespace(id=4, task_id=3),
+        session=SimpleNamespace(id=3),
+        run=SimpleNamespace(id=4, session_id=3),
         tool_definitions={"read_file": SimpleNamespace(name="read_file", need_HIL=False)},
     )
     batch = ToolBatch(
@@ -127,8 +127,8 @@ def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
 
     banned = {**_raw("banned"), "function": {"name": "write_file", "arguments": "{}"}}
     runtime = runtime_stub(
-        task=SimpleNamespace(id=3),
-        run=SimpleNamespace(id=4, task_id=3),
+        session=SimpleNamespace(id=3),
+        run=SimpleNamespace(id=4, session_id=3),
         tool_definitions={
             "read_file": SimpleNamespace(name="read_file", need_HIL=False),
             "write_file": SimpleNamespace(name="write_file", need_HIL=False),
@@ -167,8 +167,8 @@ class _StartingExecutor:
 
 def _batch_runtime(executor):
     return runtime_stub(
-        task=SimpleNamespace(id=3),
-        run=SimpleNamespace(id=4, task_id=3),
+        session=SimpleNamespace(id=3),
+        run=SimpleNamespace(id=4, session_id=3),
         tool_definitions={
             "read_file": SimpleNamespace(
                 name="read_file", parallel_mode="serial", user_decision=None
@@ -271,8 +271,8 @@ def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
         ]
 
     runtime = runtime_stub(
-        task=SimpleNamespace(id=3),
-        run=SimpleNamespace(id=4, task_id=3),
+        session=SimpleNamespace(id=3),
+        run=SimpleNamespace(id=4, session_id=3),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
     install_runtime_singletons(runtime)
@@ -328,15 +328,15 @@ def _gate_runtime(
             tool_call_id=f"call-{message_id}", tool_name="execute_terminal", tool_result="{}",
             ended_at="t",
         )
-        mailbox.post(TaskMessage.of(body, message_id=message_id))
+        mailbox.post(SessionMessage.of(body, message_id=message_id))
     for message_id, text in notice_rows:
         notice = NoticeBody(content=text, notice_kind=notice_kind)
-        mailbox.post(TaskMessage.of(notice, message_id=message_id))
+        mailbox.post(SessionMessage.of(notice, message_id=message_id))
     for text in local_notices:
         mailbox.notify(NoticeBody(content=text, notice_kind="model_continuation"))
     runtime = SimpleNamespace(
-        run=SimpleNamespace(id=4, task_id=3),
-        task=SimpleNamespace(id=3),
+        run=SimpleNamespace(id=4, session_id=3),
+        session=SimpleNamespace(id=3),
         usage_stats=None,
         mailbox=mailbox,
         is_cancelled=lambda: cancelled,
@@ -345,7 +345,7 @@ def _gate_runtime(
     monkeypatch.setattr(prepare_input_node, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
         prepare_input_node.service_depends,
-        "get_conversation_run_ledger",
+        "get_run_ledger",
         lambda: SimpleNamespace(
             transition=lambda run_id, transition, **_k: transitions.append((run_id, transition))
             or SimpleNamespace(id=run_id)
@@ -411,7 +411,7 @@ def test_prepare_input_skips_suspend_when_external_message_waiting(monkeypatch) 
 def test_prepare_input_does_not_suspend_past_a_notice_that_ends_the_wait(monkeypatch) -> None:
     """派生工作被停止的通知在挂起前一刻已到：挂起就再没有人来叫醒，所以直接继续、先写这条通知。"""
     transitions, drained = _gate_runtime(
-        monkeypatch, notice_rows=((5, "child stopped"),), notice_kind="derived_task_stopped"
+        monkeypatch, notice_rows=((5, "child stopped"),), notice_kind="derived_session_stopped"
     )
 
     patch = asyncio.run(prepare_input_node._prepare_input_node(_gate_state(suspend=True)))
@@ -455,8 +455,8 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
         return []
 
     runtime = runtime_stub(
-        task=SimpleNamespace(id=3),
-        run=SimpleNamespace(id=4, task_id=3),
+        session=SimpleNamespace(id=3),
+        run=SimpleNamespace(id=4, session_id=3),
         tool_definitions={"read_file": SimpleNamespace(name="read_file", need_HIL=False)},
     )
     batch = ToolBatch(
@@ -486,7 +486,7 @@ def test_internal_artifact_does_not_enter_tool_batch_snapshot() -> None:
 
 def test_observation_persists_all_results_before_events(monkeypatch) -> None:
     order = []
-    runtime = SimpleNamespace(run=SimpleNamespace(id=4, task_id=3))
+    runtime = SimpleNamespace(run=SimpleNamespace(id=4, session_id=3))
     written_metadata = []
 
     def add_message(_message, *, metadata: object):

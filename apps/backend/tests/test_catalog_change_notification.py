@@ -1,6 +1,6 @@
 """能力目录变更通知：命中规则（工具、作用域、覆盖）与 Skill / MCP 配置写入时的发布点。
 
-命中的 Task 经 ``task_runtime_spaces.enqueue`` 入外部队列；这里用不依赖 SQLite 的 space 外壳记录投递。
+命中的 Session 经 ``session_runtime_spaces.enqueue`` 入外部队列；这里用不依赖 SQLite 的 space 外壳记录投递。
 """
 
 from __future__ import annotations
@@ -12,50 +12,50 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.agents.agent_profile import AgentProfileType
-from app.core.workflow.message_queue.task_message import NoticeBody
+from app.core.workflow.message_queue.session_message import NoticeBody
 from app.service.configuration import mcp_configuration_service
 from app.service.configuration.mcp_configuration import MCPServerConfig
 from app.service.configuration.mcp_configuration_service import MCPConfigurationService
 from app.service.configuration.runtime_notices.catalog_change import CatalogChange
 from app.service.configuration.skill_configuration_service import SkillConfigurationService
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
 
 class _FakeRuntimeSpace:
-    """只提供匹配所需的 Task 身份、space 记下的 Agent、固化的工具名与工作区。"""
+    """只提供匹配所需的 Session 身份、space 记下的 Agent、固化的工具名与工作区。"""
 
     def __init__(
-        self, task_id: int, agent_type: AgentProfileType | None, tool_names: list[str], root: str
+        self, session_id: int, agent_type: AgentProfileType | None, tool_names: list[str], root: str
     ) -> None:
-        self.task_id = task_id
+        self.session_id = session_id
         self.agent = None if agent_type is None else SimpleNamespace(agent_type=agent_type)
-        self.task_tool_names = tuple(tool_names)
+        self.session_tool_names = tuple(tool_names)
         self.current_workspace = SimpleNamespace(root_path=root)
 
 
 @pytest.fixture(autouse=True)
 def clear_runtime_spaces():
-    task_runtime_spaces.close()
+    session_runtime_spaces.close()
     yield
-    task_runtime_spaces.close()
+    session_runtime_spaces.close()
 
 
 @pytest.fixture(autouse=True)
 def posted(monkeypatch) -> dict[int, list[NoticeBody]]:
-    """记录广播经 ``enqueue`` 写入的通知，按 Task 归档。"""
+    """记录广播经 ``enqueue`` 写入的通知，按 Session 归档。"""
 
-    by_task: dict[int, list[NoticeBody]] = {}
+    by_session: dict[int, list[NoticeBody]] = {}
 
-    def enqueue(task_id: int, message, **_kw) -> int:
-        by_task.setdefault(task_id, []).append(message.body)
+    def enqueue(session_id: int, message, **_kw) -> int:
+        by_session.setdefault(session_id, []).append(message.body)
         return 0
 
-    monkeypatch.setattr(task_runtime_spaces, "enqueue", enqueue)
-    return by_task
+    monkeypatch.setattr(session_runtime_spaces, "enqueue", enqueue)
+    return by_session
 
 
-def _install(task_id: int, tools: list[str], root: str, agent_type=AgentProfileType.MAIN) -> None:
-    task_runtime_spaces._spaces[task_id] = _FakeRuntimeSpace(task_id, agent_type, tools, root)
+def _install(session_id: int, tools: list[str], root: str, agent_type=AgentProfileType.MAIN) -> None:
+    session_runtime_spaces._spaces[session_id] = _FakeRuntimeSpace(session_id, agent_type, tools, root)
 
 
 def _write_skill(root: Path, name: str, description: str = "说明") -> None:
@@ -70,7 +70,7 @@ def _write_skill(root: Path, name: str, description: str = "说明") -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_change_reaches_only_tasks_with_the_catalog_tool_in_scope(posted) -> None:
+def test_change_reaches_only_sessions_with_the_catalog_tool_in_scope(posted) -> None:
     _install(1, ["delegate_task"], "/workspace/one")
     _install(2, ["delegate_task"], "/workspace/one", AgentProfileType.CHILD)
     _install(3, ["delegate_task"], "/workspace/two")

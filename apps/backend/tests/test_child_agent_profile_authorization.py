@@ -10,12 +10,12 @@ from app.config import configuration
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.tool.multi_agent import send_message
 from app.core.tool.schemas import ToolExecutionContext
-from app.models.conversation_run_options import ConversationRunOptions
+from app.models.run_options import RunOptions
 
 
 @pytest.fixture(autouse=True)
 def target_space(monkeypatch):
-    monkeypatch.setattr(send_message.task_runtime_spaces, "get_or_create",
+    monkeypatch.setattr(send_message.session_runtime_spaces, "get_or_create",
                         lambda _: SimpleNamespace(operation=nullcontext))
 
 
@@ -24,16 +24,16 @@ async def test_send_message_rejects_main_profile_before_creating_run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """历史 child Task 若绑定主 Agent，follow-up 入口不得创建新 Run。"""
+    """历史 child Session 若绑定主 Agent，follow-up 入口不得创建新 Run。"""
 
-    class _TaskService:
-        def get_task(self, task_id: int) -> SimpleNamespace:
+    class _SessionService:
+        def get_session(self, session_id: int) -> SimpleNamespace:
             return SimpleNamespace(
-                id=task_id,
-                title="子任务",
-                derived_by=lambda task_id: task_id == 7,
-                task_type="agent_task",
-                parent_task_id=7,
+                id=session_id,
+                title="子会话",
+                derived_by=lambda session_id: session_id == 7,
+                session_type="delegated",
+                parent_session_id=7,
                 workspace_id=3,
                 current_run_id=11,
             )
@@ -43,19 +43,19 @@ async def test_send_message_rejects_main_profile_before_creating_run(
             return SimpleNamespace(id=3, root_path=str(tmp_path))
 
     class _RunService:
-        def require_current_run(self, _task_id: int) -> SimpleNamespace:
+        def require_current_run(self, _session_id: int) -> SimpleNamespace:
             return SimpleNamespace(
                 id=11, status="completed", agent_id="main_agent", model_config_id="test/m1"
             )
 
-    task_service = _TaskService()
+    session_service = _SessionService()
     run_service = _RunService()
-    monkeypatch.setattr(send_message, "get_task_service", lambda: task_service)
+    monkeypatch.setattr(send_message, "get_session_service", lambda: session_service)
     monkeypatch.setattr(send_message, "get_workspace_service", _WorkspaceService)
-    task_service.require_current_run = run_service.require_current_run
+    session_service.require_current_run = run_service.require_current_run
     # 非 CHILD profile 在开 Run 之前就被拒绝，调度入口不得被触达。
     monkeypatch.setattr(
-        send_message.task_runtime_spaces, "enqueue", lambda *_a, **_k: pytest.fail("enqueued")
+        send_message.session_runtime_spaces, "enqueue", lambda *_a, **_k: pytest.fail("enqueued")
     )
     base_registry = configuration.build_agent_registry()
     assert base_registry.resolve("system", "main_agent").agent_type is AgentProfileType.MAIN
@@ -64,7 +64,7 @@ async def test_send_message_rejects_main_profile_before_creating_run(
     tool = send_message.SendMessageTool()
     context = ToolExecutionContext(
         step_id="step-1",
-        task_id=7,
+        session_id=7,
         workspace_id=3,
         workspace_root=tmp_path,
         run_id=12,
@@ -83,26 +83,26 @@ def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
 ) -> None:
     """分叉不换身份：新 Run 沿用它当前 Run 的发起配置，不按子 Agent profile 解析。"""
 
-    fork_task = SimpleNamespace(
+    fork_session = SimpleNamespace(
         id=41,
         title="前端部分",
-        derived_by=lambda task_id: task_id == 7,
-        task_type="agent_fork",
+        derived_by=lambda session_id: session_id == 7,
+        session_type="agent_fork",
         workspace_id=3,
         current_run_id=11,
     )
-    parent_task = SimpleNamespace(id=7, title="主对话", task_type="user", workspace_id=3)
+    parent_session = SimpleNamespace(id=7, title="主对话", session_type="user", workspace_id=3)
     monkeypatch.setattr(
         send_message,
-        "get_task_service",
+        "get_session_service",
         lambda: SimpleNamespace(
-            get_task=lambda task_id: fork_task if task_id == 41 else parent_task,
+            get_session=lambda session_id: fork_session if session_id == 41 else parent_session,
             require_current_run=lambda _: run,
         ),
     )
     monkeypatch.setattr(send_message, "get_workspace_service", lambda: None)
     run = SimpleNamespace(id=11, status="completed", agent_id="main_agent", model_config_id="test/m3",
-                          options=ConversationRunOptions(reasoning_effort="high", disabled_tool_groups=["浏览器工具"]))
+                          options=RunOptions(reasoning_effort="high", disabled_tool_groups=["浏览器工具"]))
     monkeypatch.setattr(
         configuration, "get_agent_registry", lambda: pytest.fail("resolved a child profile")
     )
@@ -114,14 +114,14 @@ def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
     )
     enqueued: list[tuple[int, str]] = []
     monkeypatch.setattr(
-        send_message.task_runtime_spaces,
+        send_message.session_runtime_spaces,
         "enqueue",
-        lambda task_id, message: enqueued.append((task_id, message)),
+        lambda session_id, message: enqueued.append((session_id, message)),
     )
 
     context = ToolExecutionContext(
         step_id="step-1",
-        task_id=7,
+        session_id=7,
         workspace_id=3,
         workspace_root=tmp_path,
         run_id=12,

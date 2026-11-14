@@ -1,8 +1,8 @@
 """AssistantTransportService 发送、取消、恢复链路的回归测试。
 
-真实的 ``TaskActor``、``cancellation_registry`` 与 ``AssistantTransportService``；外部队列、
-Run 台账与驱动是替身。驱动替身按生产语义收敛取消：每次进入模型边界前先看 Task 取消信号，有信号就
-落定 cancelled、不取 mailbox（消息留在外部队列）。Task 取消信号由 actor 在执行收尾时取走（唯一
+真实的 ``SessionActor``、``cancellation_registry`` 与 ``AssistantTransportService``；外部队列、
+Run 台账与驱动是替身。驱动替身按生产语义收敛取消：每次进入模型边界前先看 Session 取消信号，有信号就
+落定 cancelled、不取 mailbox（消息留在外部队列）。Session 取消信号由 actor 在执行收尾时取走（唯一
 清理点），驱动替身不碰它。
 
 覆盖曾经的六个缺陷：取消挂起 Run 不生效、停止中发送的消息被卡住、无执行者时登记的信号残留、
@@ -21,44 +21,44 @@ import pytest
 
 from app.assistant_transport.service import assistant_transport_service as service_module
 from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
-from app.core import task_actor as actor_module
-from app.core import task_execution as execution_module
-from app.core import task_recall as recall_module
+from app.core import session_actor as actor_module
+from app.core import session_execution as execution_module
+from app.core import session_recall as recall_module
 from app.core.events.event_sink import set_event_sink
-from app.core.task_actor import TaskActor
+from app.core.session_actor import SessionActor
 from app.core.tool import placeholder_settlement as placeholder_module
 from app.core.tool.placeholder_settlement import USER_CANCELLED_HINT
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
-from app.core.workflow.message_queue.task_message import (
+from app.core.workflow.message_queue.session_message import (
     BackgroundResultBody,
     NoticeBody,
     RunLaunch,
-    TaskMessage,
+    SessionMessage,
     UserInputBody,
 )
 from app.models.conversation_input import UserInputPresentation
-from app.models.enums.conversation_run_status import RunTransition
-from app.models.errors.task_command_errors import TaskCommandConflictError
-from app.models.task_extra import TaskExtra
-from app.task_runtime import task_runtime_space_registry as registry_module
+from app.models.enums.run_status import RunTransition
+from app.models.errors.session_command_errors import SessionCommandConflictError
+from app.models.session_extra import SessionExtra
+from app.session_runtime import session_runtime_space_registry as registry_module
 from tests.command_job_fakes import FakeCommandJob
 
-_TASK_ID = 41
-_CHILD_TASK_ID = 42
+_SESSION_ID = 41
+_CHILD_SESSION_ID = 42
 
 
 class _Queue:
     """按水位阻塞的外部队列替身；行 id 递增，``ack`` 模拟 prepare_input 的确认删除。"""
 
     def __init__(self) -> None:
-        self.rows: list[TaskMessage] = []
+        self.rows: list[SessionMessage] = []
         self._next_id = 1
         self._changed = asyncio.Event()
 
-    def put(self, _task_id: int, message: TaskMessage, **_kw: Any) -> int:
-        stored = TaskMessage.of(
+    def put(self, _session_id: int, message: SessionMessage, **_kw: Any) -> int:
+        stored = SessionMessage.of(
             message.body,
             delivery=message.delivery,
             project_to_transport=message.project_to_transport,
@@ -72,27 +72,27 @@ class _Queue:
     def ack(self, *ids: int) -> None:
         self.rows = [row for row in self.rows if row.id not in ids]
 
-    async def pending(self, _task_id: int, after_id: int = 0) -> list[TaskMessage]:
+    async def pending(self, _session_id: int, after_id: int = 0) -> list[SessionMessage]:
         while not any(row.id > after_id for row in self.rows):
             self._changed.clear()
             await self._changed.wait()
         return list(self.rows)
 
-    def pending_nowait(self, _task_id: int) -> list[TaskMessage]:
+    def pending_nowait(self, _session_id: int) -> list[SessionMessage]:
         return list(self.rows)
 
 
 class _Ledger:
-    """Run 台账与 Task 当前 Run 替身；迁移按来源状态条件生效。"""
+    """Run 台账与 Session 当前 Run 替身；迁移按来源状态条件生效。"""
 
     def __init__(self) -> None:
         self.runs: dict[int, SimpleNamespace] = {}
         self.current: SimpleNamespace | None = None
 
-    def create_run(self, task_id: int, launch: RunLaunch) -> SimpleNamespace:
+    def create_run(self, session_id: int, launch: RunLaunch) -> SimpleNamespace:
         run = SimpleNamespace(
             id=len(self.runs) + 1,
-            task_id=task_id,
+            session_id=session_id,
             status="running",
             agent_id=launch.agent_id,
             end_reason=None,
@@ -117,14 +117,14 @@ class _Ledger:
     def get_run(self, run_id: int) -> SimpleNamespace:
         return self.runs[run_id]
 
-    def require_current_run(self, _task_id: int) -> SimpleNamespace | None:
+    def require_current_run(self, _session_id: int) -> SimpleNamespace | None:
         return self.current
 
-    def list_derived_tasks(self, _task_id: int) -> list:
+    def list_derived_sessions(self, _session_id: int) -> list:
         return []
 
-    def get_task(self, task_id: int) -> SimpleNamespace:
-        return SimpleNamespace(id=task_id, extra=TaskExtra())
+    def get_session(self, session_id: int) -> SimpleNamespace:
+        return SimpleNamespace(id=session_id, extra=SessionExtra())
 
 
 class _Driver:
@@ -144,7 +144,7 @@ class _Driver:
         self._mailbox = _Driver.mailbox
 
     async def drive(self, run, preceding_run) -> None:
-        if cancellation_registry.is_cancelled(run.task_id):
+        if cancellation_registry.is_cancelled(run.session_id):
             # prepare_input：取消优先，不取 mailbox，消息留在外部队列。
             _Driver.ledger.transition(run.id, RunTransition.CANCEL)
             return
@@ -192,23 +192,30 @@ async def chain(monkeypatch):
         actor_module,
         "ContextStore",
         lambda: SimpleNamespace(
-            run_last_turn_withdrawn=lambda _task_id, run_id: run_id in chain_withdrawn
+            run_last_turn_withdrawn=lambda _session_id, run_id: run_id in chain_withdrawn
         ),
     )
-    # 推进前交出「队列变了」；本文件不验证投影（见 test_task_actor_loop 的「先刷新再投递」）。
+    # 挂起时发送要问「有没有提问在等用户」；默认没有，需要的用例把 question 置真。
+    waiting = SimpleNamespace(question=False)
+    monkeypatch.setattr(
+        service_module.service_depends,
+        "get_tool_decision_service",
+        lambda: SimpleNamespace(awaits_user_reply=lambda _session_id: waiting.question),
+    )
+    # 推进前交出「队列变了」；本文件不验证投影（见 test_session_actor_loop 的「先刷新再投递」）。
     set_event_sink(lambda _event: None)  # 下一个用例由 conftest 的 autouse 夹具换回
-    # 开新 Run 前 actor 查模型是否还在；本文件的模型总在（悬空 id 见 test_task_actor_loop）。
+    # 开新 Run 前 actor 查模型是否还在；本文件的模型总在（悬空 id 见 test_session_actor_loop）。
     models = SimpleNamespace(exists=lambda _model_config_id: True)
     for getter, fake in (
         ("get_model_config_service", models),
-        ("get_conversation_run_ledger", ledger),
-        ("get_task_service", ledger),
-        ("get_task_message_queue", queue),
+        ("get_run_ledger", ledger),
+        ("get_session_service", ledger),
+        ("get_session_message_queue", queue),
     ):
         monkeypatch.setattr(actor_module.service_depends, getter, lambda fake=fake: fake)
-    actor = TaskActor(
+    actor = SessionActor(
         SimpleNamespace(
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             async_operation=contextlib.nullcontext,
             mailbox=RunMailbox(),
         )
@@ -218,26 +225,26 @@ async def chain(monkeypatch):
     child_cancels: list[tuple[int, str]] = []
     monkeypatch.setattr(
         service_module,
-        "task_runtime_spaces",
+        "session_runtime_spaces",
         SimpleNamespace(
-            get_or_create=lambda _task_id: space,
-            enqueue=lambda task_id, message, **_kw: queue.put(task_id, message),
+            get_or_create=lambda _session_id: space,
+            enqueue=lambda session_id, message, **_kw: queue.put(session_id, message),
         ),
     )
-    # 收回时经子 Task 的 actor 停止子 Task。
+    # 收回时经子 Session 的 actor 停止子 Session。
     monkeypatch.setattr(
-        registry_module.task_runtime_spaces,
+        registry_module.session_runtime_spaces,
         "get_or_create",
-        lambda task_id: SimpleNamespace(
+        lambda session_id: SimpleNamespace(
             actor=SimpleNamespace(
-                request_cancel=lambda reason: child_cancels.append((task_id, reason))
+                request_cancel=lambda reason: child_cancels.append((session_id, reason))
             )
         ),
     )
     service = AssistantTransportService.__new__(AssistantTransportService)
-    service._tasks = ledger
+    service._sessions = ledger
     service._inputs = SimpleNamespace(
-        prepare=lambda _task_id, command, model_config_id, _reasoning_effort, agent_id: UserInputBody(
+        prepare=lambda _session_id, command, model_config_id, _reasoning_effort, agent_id: UserInputBody(
             text=command.text,
             launch=RunLaunch(agent_id=agent_id, model_config_id=model_config_id),
             presentation=UserInputPresentation(text=command.text),
@@ -251,11 +258,12 @@ async def chain(monkeypatch):
         service=service,
         child_cancels=child_cancels,
         withdrawn=chain_withdrawn,
+        waiting=waiting,
     )
     await actor.abort()
-    tool_call_cancellation_registry.clear_task(_TASK_ID)
-    cancellation_registry.consume(_TASK_ID)
-    cancellation_registry.consume(_CHILD_TASK_ID)
+    tool_call_cancellation_registry.clear_session(_SESSION_ID)
+    cancellation_registry.consume(_SESSION_ID)
+    cancellation_registry.consume(_CHILD_SESSION_ID)
 
 
 def _send_request(text: str):
@@ -276,7 +284,7 @@ def _send_request(text: str):
 
 async def test_phase_reads_the_run_on_a_freshly_started_actor(chain) -> None:
     """actor 刚拉起、从未推进过：阶段按当前 Run 判定，不依赖推进时缓存的标志。"""
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "completed"
     assert await chain.actor.phase() == "idle"
     run.status = "suspended"
@@ -284,7 +292,7 @@ async def test_phase_reads_the_run_on_a_freshly_started_actor(chain) -> None:
 
 
 async def test_phase_stays_driving_until_the_executor_is_released(chain) -> None:
-    await chain.service.send(_TASK_ID, _send_request("hello"))
+    await chain.service.send(_SESSION_ID, _send_request("hello"))
     await _settle()
     run = chain.ledger.current
     _Driver.linger[run.id] = asyncio.Event()
@@ -299,13 +307,13 @@ async def test_phase_stays_driving_until_the_executor_is_released(chain) -> None
 
 async def test_sends_while_running_queue_and_drain_one_per_run(chain) -> None:
     """运行中发送排队（``next_run``）不并入当前 Run；Run 完成后一轮只消费一条，依次接续。"""
-    await chain.service.send(_TASK_ID, _send_request("first"))
+    await chain.service.send(_SESSION_ID, _send_request("first"))
     await _settle()
     first_run = chain.ledger.current
     assert len(_Driver.consumed) == 1
 
-    await chain.service.send(_TASK_ID, _send_request("second"))
-    await chain.service.send(_TASK_ID, _send_request("third"))
+    await chain.service.send(_SESSION_ID, _send_request("second"))
+    await chain.service.send(_SESSION_ID, _send_request("third"))
     await _settle()
     assert [row.delivery for row in chain.queue.rows] == ["next_run", "next_run"]
     assert len(_Driver.consumed) == 1
@@ -323,12 +331,12 @@ async def test_sends_while_running_queue_and_drain_one_per_run(chain) -> None:
 
 async def test_queued_inputs_wait_after_cancel_and_a_new_send_runs_first(chain) -> None:
     """取消不自动接续；空闲时新发送的是 ``immediate``，先于留下的排队消息被新 Run 选中。"""
-    await chain.service.send(_TASK_ID, _send_request("first"))
+    await chain.service.send(_SESSION_ID, _send_request("first"))
     await _settle()
-    await chain.service.send(_TASK_ID, _send_request("queued"))
+    await chain.service.send(_SESSION_ID, _send_request("queued"))
     # 等 loop 读到排队消息再停止：停止之后才读到的消息算停止后的新消息，会开新 Run。
     await _settle()
-    await chain.service.cancel(_TASK_ID)
+    await chain.service.cancel(_SESSION_ID)
     await _finish(chain.ledger.current.id, "cancelled")
     assert chain.ledger.current.status == "cancelled"
     # 队列里还有用户取消留下的通知（随下一个 Run 并入）。
@@ -336,7 +344,7 @@ async def test_queued_inputs_wait_after_cancel_and_a_new_send_runs_first(chain) 
         "queued"
     ]
 
-    await chain.service.send(_TASK_ID, _send_request("fresh"))
+    await chain.service.send(_SESSION_ID, _send_request("fresh"))
     await _settle()
     assert chain.ledger.current.status == "running"
     assert [row.body.text for row in chain.queue.rows if isinstance(row.body, UserInputBody)] == [
@@ -345,23 +353,37 @@ async def test_queued_inputs_wait_after_cancel_and_a_new_send_runs_first(chain) 
     await _finish(chain.ledger.current.id, "completed")
 
 
+async def test_send_wakes_a_run_suspended_on_a_question(chain) -> None:
+    """挂着提问时用户直接发消息：以 immediate 入队，唤醒同一个 Run，不开新的。"""
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
+    run.status = "suspended"
+    chain.waiting.question = True
+
+    await chain.service.send(_SESSION_ID, _send_request("直接说"))
+    await _settle()
+
+    assert chain.actor.driving
+    assert chain.ledger.current.id == run.id and run.status == "running"
+    await _finish(run.id, "completed")
+
+
 async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) -> None:
     """挂起的 Run 没有执行者：工具调用都已闭合，标记了也没人取，409 TOOL_CALL_NOT_CANCELLABLE。"""
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
-    with pytest.raises(TaskCommandConflictError) as rejected:
-        chain.service.cancel_tool_call(_TASK_ID, "call-1")
+    with pytest.raises(SessionCommandConflictError) as rejected:
+        chain.service.cancel_tool_call(_SESSION_ID, "call-1")
     assert rejected.value.code == "TOOL_CALL_NOT_CANCELLABLE"
 
     # 挂起时用户发送只排队、不唤醒：仍没有执行者。
-    await chain.service.send(_TASK_ID, _send_request("hello"))
+    await chain.service.send(_SESSION_ID, _send_request("hello"))
     await _settle()
     assert not chain.actor.driving
     assert [row.delivery for row in chain.queue.rows] == ["next_run"]
 
     chain.queue.put(
-        _TASK_ID,
-        TaskMessage.of(
+        _SESSION_ID,
+        SessionMessage.of(
             BackgroundResultBody(
                 ended_at="2026-01-01T00:01:00+00:00", tool_call_id="call-probe",
                 tool_name="execute_terminal", tool_result="done",
@@ -370,7 +392,7 @@ async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) ->
     )
     await _settle()
     assert chain.actor.driving
-    chain.service.cancel_tool_call(_TASK_ID, "call-1")
+    chain.service.cancel_tool_call(_SESSION_ID, "call-1")
     await _finish(chain.ledger.current.id, "completed")
 
 
@@ -380,7 +402,7 @@ def _register_background_work(tool_call_id: str, mode: str, calls: list[str]) ->
     detached = threading.Event()
     command_results.register(
         tool_call_id,
-        task_id=_TASK_ID,
+        session_id=_SESSION_ID,
         run_id=None,
         label="terminal_command:t",
         job=FakeCommandJob(lambda: calls.append("cancel")),
@@ -398,19 +420,19 @@ async def test_cancel_background_work_while_idle_settles_now_and_tells_the_next_
     monkeypatch.setattr(
         placeholder_module,
         "cancel_placeholders",
-        lambda task_id, ids, hint, **kwargs: settled.append((task_id, list(ids), hint)) or 1,
+        lambda session_id, ids, hint, **kwargs: settled.append((session_id, list(ids), hint)) or 1,
     )
     calls: list[str] = []
     _register_background_work("call-bg", "background", calls)
 
-    chain.service.cancel_tool_call(_TASK_ID, "call-bg")
+    chain.service.cancel_tool_call(_SESSION_ID, "call-bg")
 
     assert calls == ["cancel"]
-    assert settled == [(_TASK_ID, ["call-bg"], USER_CANCELLED_HINT)]
-    [receipt] = chain.queue.pending_nowait(_TASK_ID)
+    assert settled == [(_SESSION_ID, ["call-bg"], USER_CANCELLED_HINT)]
+    [receipt] = chain.queue.pending_nowait(_SESSION_ID)
     assert receipt.kind == "background_result" and not receipt.wakes(None)
-    with pytest.raises(TaskCommandConflictError):
-        chain.service.cancel_tool_call(_TASK_ID, "call-bg")
+    with pytest.raises(SessionCommandConflictError):
+        chain.service.cancel_tool_call(_SESSION_ID, "call-bg")
 
 
 async def test_cancel_background_work_foreground_only_wakes_the_waiter(chain, monkeypatch) -> None:
@@ -422,20 +444,20 @@ async def test_cancel_background_work_foreground_only_wakes_the_waiter(chain, mo
     calls: list[str] = []
     _register_background_work("call-fg", "foreground", calls)
 
-    chain.service.cancel_tool_call(_TASK_ID, "call-fg")
+    chain.service.cancel_tool_call(_SESSION_ID, "call-fg")
 
     assert calls == ["cancel"]
-    assert chain.queue.pending_nowait(_TASK_ID) == []
+    assert chain.queue.pending_nowait(_SESSION_ID) == []
 
 
 async def test_background_command_detaches_only_foreground_entries(chain) -> None:
     calls: list[str] = []
     detached = _register_background_work("call-fg", "foreground", calls)
-    chain.service.background_tool_call(_TASK_ID, "call-fg")
+    chain.service.background_tool_call(_SESSION_ID, "call-fg")
     assert detached.is_set()
     for call_id in ("call-fg", "call-missing"):
-        with pytest.raises(TaskCommandConflictError) as raised:
-            chain.service.background_tool_call(_TASK_ID, call_id)
+        with pytest.raises(SessionCommandConflictError) as raised:
+            chain.service.background_tool_call(_SESSION_ID, call_id)
         assert raised.value.code == "TOOL_CALL_NOT_DETACHABLE"
 
 
@@ -445,23 +467,23 @@ async def test_background_command_detaches_only_foreground_entries(chain) -> Non
 
 
 async def test_baseline_send_starts_a_run_and_cancel_stops_it(chain) -> None:
-    await chain.service.send(_TASK_ID, _send_request("hello"))
+    await chain.service.send(_SESSION_ID, _send_request("hello"))
     await _settle()
     run = chain.ledger.current
     assert run.status == "running" and _Driver.consumed == [1]
 
-    await chain.service.cancel(_TASK_ID)
-    assert cancellation_registry.is_cancelled(_TASK_ID)
+    await chain.service.cancel(_SESSION_ID)
+    assert cancellation_registry.is_cancelled(_SESSION_ID)
     await _finish(run.id, "cancelled")
     assert run.status == "cancelled"
-    assert not cancellation_registry.is_cancelled(_TASK_ID)
+    assert not cancellation_registry.is_cancelled(_SESSION_ID)
 
 
 async def test_baseline_resume_restarts_the_cancelled_run(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "cancelled"
 
-    await chain.service.resume(_TASK_ID)
+    await chain.service.resume(_SESSION_ID)
     await _settle()
     assert run.status == "running"
 
@@ -472,21 +494,21 @@ async def test_baseline_resume_restarts_the_cancelled_run(chain) -> None:
 
 
 async def test_cancel_settles_a_suspended_run(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
 
-    await chain.service.cancel(_TASK_ID)
+    await chain.service.cancel(_SESSION_ID)
     await _settle()
 
     assert run.status == "cancelled"
 
 
 async def test_message_after_cancelling_a_suspended_run_is_processed(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
-    await chain.service.cancel(_TASK_ID)
+    await chain.service.cancel(_SESSION_ID)
 
-    await chain.service.send(_TASK_ID, _send_request("继续"))
+    await chain.service.send(_SESSION_ID, _send_request("继续"))
     await _settle()
 
     # 用户这条消息开出新 Run；「用户已停止」不入队，由新 Run 的驱动按上一个 Run 的结束原因推导。
@@ -501,12 +523,12 @@ async def test_message_after_cancelling_a_suspended_run_is_processed(chain) -> N
 
 
 async def test_message_sent_while_stopping_is_processed_after_the_stop(chain) -> None:
-    await chain.service.send(_TASK_ID, _send_request("first"))
+    await chain.service.send(_SESSION_ID, _send_request("first"))
     await _settle()
     first_run = chain.ledger.current
 
-    await chain.service.cancel(_TASK_ID)
-    await chain.service.send(_TASK_ID, _send_request("after stop"))
+    await chain.service.cancel(_SESSION_ID)
+    await chain.service.send(_SESSION_ID, _send_request("after stop"))
     await _settle()
     await _finish(first_run.id, "cancelled")
 
@@ -523,60 +545,60 @@ async def test_message_sent_while_stopping_is_processed_after_the_stop(chain) ->
 
 async def test_cancel_after_the_run_finished_registers_no_signal(chain) -> None:
     """Run 已完成才到的停止（如停止与完成竞态）：没有可停止的对象，不登记信号。"""
-    await chain.service.send(_TASK_ID, _send_request("first"))
+    await chain.service.send(_SESSION_ID, _send_request("first"))
     await _settle()
     await _finish(chain.ledger.current.id, "completed")
 
-    await chain.service.cancel(_TASK_ID)
-    assert not cancellation_registry.is_cancelled(_TASK_ID)
+    await chain.service.cancel(_SESSION_ID)
+    assert not cancellation_registry.is_cancelled(_SESSION_ID)
 
-    await chain.service.send(_TASK_ID, _send_request("next"))
+    await chain.service.send(_SESSION_ID, _send_request("next"))
     await _settle()
     assert chain.ledger.current.status == "running"
     assert len(chain.ledger.runs) == 2
 
 
 async def test_cancel_of_a_failed_run_does_not_kill_its_resume(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "failed"
 
-    await chain.service.cancel(_TASK_ID)
-    assert not cancellation_registry.is_cancelled(_TASK_ID)
+    await chain.service.cancel(_SESSION_ID)
+    assert not cancellation_registry.is_cancelled(_SESSION_ID)
 
-    await chain.service.resume(_TASK_ID)
+    await chain.service.resume(_SESSION_ID)
     await _settle()
     assert run.status == "running"
 
 
 async def test_signal_is_cleared_when_the_cancelled_execution_finishes(chain) -> None:
-    await chain.service.send(_TASK_ID, _send_request("first"))
+    await chain.service.send(_SESSION_ID, _send_request("first"))
     await _settle()
     run = chain.ledger.current
 
-    await chain.service.cancel(_TASK_ID)
-    assert cancellation_registry.is_cancelled(_TASK_ID)
+    await chain.service.cancel(_SESSION_ID)
+    assert cancellation_registry.is_cancelled(_SESSION_ID)
     await _finish(run.id, "cancelled")
 
-    assert not cancellation_registry.is_cancelled(_TASK_ID)
+    assert not cancellation_registry.is_cancelled(_SESSION_ID)
 
 
 # ---------------------------------------------------------------------------
-# 用户停止只打断；上游停止（parent）另外收回后台工作与子 Task
+# 用户停止只打断；上游停止（parent）另外收回后台工作与子 Session
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("phase", ["running", "suspended", "idle"])
 async def test_user_stop_leaves_children_alone(chain, phase) -> None:
-    chain.ledger.list_derived_tasks = lambda _task_id: [SimpleNamespace(id=_CHILD_TASK_ID)]
+    chain.ledger.list_derived_sessions = lambda _session_id: [SimpleNamespace(id=_CHILD_SESSION_ID)]
     if phase == "running":
-        await chain.service.send(_TASK_ID, _send_request("first"))
+        await chain.service.send(_SESSION_ID, _send_request("first"))
         await _settle()
         run = chain.ledger.current
     else:
-        run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+        run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
         run.status = "suspended" if phase == "suspended" else "completed"
 
-    await chain.service.cancel(_TASK_ID)
+    await chain.service.cancel(_SESSION_ID)
     if phase == "running":
         await _finish(run.id, "cancelled")
 
@@ -586,23 +608,23 @@ async def test_user_stop_leaves_children_alone(chain, phase) -> None:
 
 @pytest.mark.parametrize("phase", ["running", "suspended", "idle"])
 async def test_parent_stop_recalls_children_at_once(chain, phase) -> None:
-    chain.ledger.list_derived_tasks = lambda _task_id: [SimpleNamespace(id=_CHILD_TASK_ID)]
+    chain.ledger.list_derived_sessions = lambda _session_id: [SimpleNamespace(id=_CHILD_SESSION_ID)]
     if phase == "running":
-        await chain.service.send(_TASK_ID, _send_request("first"))
+        await chain.service.send(_SESSION_ID, _send_request("first"))
         await _settle()
         run = chain.ledger.current
     else:
-        run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+        run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
         run.status = "suspended" if phase == "suspended" else "completed"
 
     await chain.actor.cancel("parent")
 
     # 收回在发起停止时就完成，不等 Run 落定。
-    assert chain.child_cancels == [(_CHILD_TASK_ID, "parent")]
+    assert chain.child_cancels == [(_CHILD_SESSION_ID, "parent")]
     if phase == "running":
         await _finish(run.id, "cancelled")
         # 落定后不再重复收回。
-        assert chain.child_cancels == [(_CHILD_TASK_ID, "parent")]
+        assert chain.child_cancels == [(_CHILD_SESSION_ID, "parent")]
 
 
 def _fail_settling(monkeypatch) -> None:
@@ -613,10 +635,10 @@ def _fail_settling(monkeypatch) -> None:
 
 
 async def test_placeholder_settle_failure_does_not_block_running_cancel(chain, monkeypatch) -> None:
-    """收回时占位结算写库失败只记录：信号照常取走、执行照常注销，Task 不会卡在停止中。"""
+    """收回时占位结算写库失败只记录：信号照常取走、执行照常注销，Session 不会卡在停止中。"""
     _fail_settling(monkeypatch)
-    chain.ledger.list_derived_tasks = lambda _task_id: []
-    await chain.service.send(_TASK_ID, _send_request("first"))
+    chain.ledger.list_derived_sessions = lambda _session_id: []
+    await chain.service.send(_SESSION_ID, _send_request("first"))
     await _settle()
     run = chain.ledger.current
     _register_background_work("call-bg", "background", [])
@@ -624,7 +646,7 @@ async def test_placeholder_settle_failure_does_not_block_running_cancel(chain, m
     await chain.actor.cancel("parent")
     await _finish(run.id, "cancelled")
 
-    assert not cancellation_registry.is_cancelled(_TASK_ID)
+    assert not cancellation_registry.is_cancelled(_SESSION_ID)
     assert not chain.actor._execution.driving
     assert run.status == "cancelled"
 
@@ -633,8 +655,8 @@ async def test_placeholder_settle_failure_does_not_block_suspended_cancel(
     chain, monkeypatch
 ) -> None:
     _fail_settling(monkeypatch)
-    chain.ledger.list_derived_tasks = lambda _task_id: []
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+    chain.ledger.list_derived_sessions = lambda _session_id: []
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
     _register_background_work("call-bg", "background", [])
 
@@ -649,17 +671,17 @@ async def test_placeholder_settle_failure_does_not_block_suspended_cancel(
 
 
 async def test_user_cancel_records_its_reason_and_queues_no_notice(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
 
-    await chain.service.cancel(_TASK_ID)
+    await chain.service.cancel(_SESSION_ID)
 
     assert run.status == "cancelled" and run.end_reason == "user_cancelled"
     assert not any(isinstance(row.body, NoticeBody) for row in chain.queue.rows)
 
 
 async def test_parent_stop_records_parent_reason(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
 
     await chain.actor.cancel("parent")
@@ -674,18 +696,18 @@ async def test_parent_stop_records_parent_reason(chain) -> None:
 
 
 async def test_cancel_reads_state_off_the_event_loop(chain) -> None:
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
     loop_thread = threading.get_ident()
     threads: list[int] = []
     original = chain.ledger.require_current_run
 
-    def recording(task_id: int):
+    def recording(session_id: int):
         threads.append(threading.get_ident())
-        return original(task_id)
+        return original(session_id)
 
     chain.ledger.require_current_run = recording
-    await chain.service.cancel(_TASK_ID)
+    await chain.service.cancel(_SESSION_ID)
 
     assert threads and all(ident != loop_thread for ident in threads)
 
@@ -696,14 +718,14 @@ async def test_cancel_reads_state_off_the_event_loop(chain) -> None:
 
 
 async def test_background_result_after_stop_starts_a_run(chain) -> None:
-    await chain.service.send(_TASK_ID, _send_request("first"))
+    await chain.service.send(_SESSION_ID, _send_request("first"))
     await _settle()
-    await chain.service.cancel(_TASK_ID)
+    await chain.service.cancel(_SESSION_ID)
     await _finish(chain.ledger.current.id, "cancelled")
 
     chain.queue.put(
-        _TASK_ID,
-        TaskMessage.of(
+        _SESSION_ID,
+        SessionMessage.of(
             BackgroundResultBody(
                 ended_at="2026-01-01T00:01:00+00:00", tool_call_id="call-probe",
                 tool_name="execute_terminal", tool_result="done",
@@ -743,7 +765,7 @@ def withdraw(chain, monkeypatch):
     context = _Context("user_input", "assistant", "user_input", "assistant")
     republished: list[int] = []
 
-    def withdraw_turn(task_id: int, message_id: int) -> None:
+    def withdraw_turn(session_id: int, message_id: int) -> None:
         """撤回用例替身：移出目标及其后的行（真实语义与目标校验见 test_turn_withdrawal）。"""
         target = next(row for row in context.rows if row.message_id == message_id)
         for row in context.rows:
@@ -756,14 +778,14 @@ def withdraw(chain, monkeypatch):
         lambda: SimpleNamespace(withdraw=withdraw_turn),
     )
     chain.service._states = SimpleNamespace(
-        republish_from_canonical=lambda task_id: republished.append(task_id),
+        republish_from_canonical=lambda session_id: republished.append(session_id),
     )
     chain.context, chain.republished = context, republished
     return chain
 
 
 def _finished_run(chain, status: str = "completed"):
-    run = chain.ledger.create_run(_TASK_ID, RunLaunch(model_config_id="test/m1"))
+    run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = status
     return run
 
@@ -771,26 +793,26 @@ def _finished_run(chain, status: str = "completed"):
 async def test_withdraw_removes_the_turn_and_starts_nothing(withdraw) -> None:
     old = _finished_run(withdraw)
 
-    await withdraw.service.withdraw(_TASK_ID, 3)
+    await withdraw.service.withdraw(_SESSION_ID, 3)
     await _settle()
 
     assert withdraw.context.included() == [1, 2]
-    assert withdraw.republished == [_TASK_ID]
+    assert withdraw.republished == [_SESSION_ID]
     # 编辑是前端把内容放回输入框再照常发送：撤回本身不入队、不开新 Run。
     assert withdraw.ledger.current is old and withdraw.queue.rows == []
 
 
 async def test_withdraw_is_rejected_while_running_without_stopping_the_run(withdraw) -> None:
     """撤回不替用户停止：运行中的 Run 用的是内存上下文，看不到移出，只能拒绝。"""
-    await withdraw.service.send(_TASK_ID, _send_request("hello"))
+    await withdraw.service.send(_SESSION_ID, _send_request("hello"))
     await _settle()
     old = withdraw.ledger.current
 
-    with pytest.raises(actor_module.TaskCommandConflictError) as error:
-        await withdraw.service.withdraw(_TASK_ID, 3)
+    with pytest.raises(actor_module.SessionCommandConflictError) as error:
+        await withdraw.service.withdraw(_SESSION_ID, 3)
 
     assert error.value.code == "RUN_NOT_STOPPED"
-    assert not cancellation_registry.is_cancelled(_TASK_ID)
+    assert not cancellation_registry.is_cancelled(_SESSION_ID)
     assert old.status == "running" and withdraw.context.included() == [1, 2, 3, 4]
     await _finish(old.id, "completed")
 
@@ -798,8 +820,8 @@ async def test_withdraw_is_rejected_while_running_without_stopping_the_run(withd
 async def test_withdraw_is_rejected_while_suspended(withdraw) -> None:
     old = _finished_run(withdraw, "suspended")
 
-    with pytest.raises(actor_module.TaskCommandConflictError) as error:
-        await withdraw.service.withdraw(_TASK_ID, 3)
+    with pytest.raises(actor_module.SessionCommandConflictError) as error:
+        await withdraw.service.withdraw(_SESSION_ID, 3)
 
     assert error.value.code == "RUN_NOT_STOPPED"
     assert old.status == "suspended" and withdraw.context.included() == [1, 2, 3, 4]
@@ -807,21 +829,21 @@ async def test_withdraw_is_rejected_while_suspended(withdraw) -> None:
 
 async def test_withdraw_is_rejected_while_the_executor_is_still_settling(withdraw) -> None:
     """Run 已落定 cancelled、执行者还在收尾：此时改 context 会与收尾交错，按执行阶段拒绝。"""
-    await withdraw.service.send(_TASK_ID, _send_request("hello"))
+    await withdraw.service.send(_SESSION_ID, _send_request("hello"))
     await _settle()
     old = withdraw.ledger.current
     _Driver.linger[old.id] = asyncio.Event()
     await _finish(old.id, "cancelled")
     assert old.status == "cancelled"
 
-    with pytest.raises(actor_module.TaskCommandConflictError) as error:
-        await withdraw.service.withdraw(_TASK_ID, 3)
+    with pytest.raises(actor_module.SessionCommandConflictError) as error:
+        await withdraw.service.withdraw(_SESSION_ID, 3)
     assert error.value.code == "RUN_NOT_STOPPED"
     assert withdraw.context.included() == [1, 2, 3, 4]
 
     _Driver.linger[old.id].set()
     await _settle()
-    await withdraw.service.withdraw(_TASK_ID, 3)
+    await withdraw.service.withdraw(_SESSION_ID, 3)
     assert withdraw.context.included() == [1, 2]
 
 
@@ -830,8 +852,8 @@ async def test_resume_is_refused_once_the_runs_last_turn_was_withdrawn(withdraw)
     old = _finished_run(withdraw, "cancelled")
     withdraw.withdrawn.add(old.id)
 
-    with pytest.raises(actor_module.TaskCommandConflictError) as error:
-        await withdraw.service.resume(_TASK_ID)
+    with pytest.raises(actor_module.SessionCommandConflictError) as error:
+        await withdraw.service.resume(_SESSION_ID)
 
     assert error.value.code == "RUN_NOT_RESUMABLE"
     assert old.status == "cancelled"

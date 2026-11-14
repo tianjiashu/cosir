@@ -1,7 +1,7 @@
 """终端工具的输入契约。
 
 模型可见说明只来自字段描述：schema 生成边界会剥离模型级 description，类 docstring 只服务
-源码阅读，不能当作投递渠道。会话归属取自执行上下文，模型不能指定别的 Task。
+源码阅读，不能当作投递渠道。会话归属取自执行上下文，模型不能指定别的 Session。
 
 一个工具一个模块：``execute_terminal`` 的平台差异见 :mod:`.execute_terminal_args`，
 会话类工具各占 ``terminal_{list,read,write,stop}_args``。

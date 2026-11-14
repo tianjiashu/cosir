@@ -37,14 +37,14 @@ export function useBackendRestart(source: RestartSource) {
 }
 
 /**
- * 主动重启（命令面板）：后端就绪时重启会中断所有运行中的任务，因此必须二次确认；中断的 Run 由后端收敛为
- * cancelled，用户可在对话中继续。是否提供这个入口由 `canRestartBackendRuntime` 决定（只在开发期）。
+ * 主动重启（命令面板）：后端就绪时重启会中断所有运行中的会话，因此必须二次确认；中断的 Run 由后端收敛为
+ * cancelled，用户可在会话中继续。是否提供这个入口由 `canRestartBackendRuntime` 决定（只在开发期）。
  */
 export function confirmBackendRestart(source: RestartSource) {
   void requestConfirmation({
     title: "重启本地后端？",
     description: "后端会停止并重新启动，期间无法发送消息。",
-    warning: "所有正在运行的任务都会被中断；重启后可在对话中继续运行。",
+    warning: "所有正在运行的会话都会被中断；重启后可在会话中继续运行。",
     confirmLabel: "重启后端",
     busyLabel: "重启中…",
     icon: "restart",

@@ -52,7 +52,7 @@ class OpenAIChatModel:
         *,
         tools: Sequence[FunctionDefinition] = (),
     ) -> None:
-        """绑定 Task 固化的工具快照；两种请求保留相同定义与顺序以复用缓存前缀。"""
+        """绑定 Session 固化的工具快照；两种请求保留相同定义与顺序以复用缓存前缀。"""
         self.client = client
         self.parameters = dict(parameters)
         if tools:

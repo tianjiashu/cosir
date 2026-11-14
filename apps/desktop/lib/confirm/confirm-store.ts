@@ -13,7 +13,7 @@ export type ConfirmationRequest = {
   description: string;
   /** 为 true 时在说明下方加一行「此操作无法撤销。」；不要再把这句写进说明或 warning。 */
   irreversible?: boolean;
-  /** 需要醒目强调的后果（会中断运行中的任务等），渲染为提示框；一般的不可撤销用 `irreversible`。 */
+  /** 需要醒目强调的后果（会中断运行中的会话等），渲染为提示框；一般的不可撤销用 `irreversible`。 */
   warning?: string;
   confirmLabel: string;
   /** 默认「处理中…」。 */

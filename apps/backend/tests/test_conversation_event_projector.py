@@ -31,9 +31,9 @@ from app.core.events import (
 )
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolObservation
-from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
+from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
 from app.models.conversation_input import UserInputPresentation
-from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.models.enums.run_status import RunStatus
 from tests.transport_fixtures import consumed, queue_user_input
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
@@ -46,21 +46,21 @@ class InMemorySnapshotService:
     def __init__(self) -> None:
         self.states: dict[int, ConversationStateSnapshot] = {}
 
-    def get_state(self, task_id: int) -> ConversationStateSnapshot:
-        state = self.states.setdefault(task_id, empty_snapshot())
+    def get_state(self, session_id: int) -> ConversationStateSnapshot:
+        state = self.states.setdefault(session_id, empty_snapshot())
         return copy.deepcopy(state)
 
     def apply_planned(self, event: object) -> TransportFrame:
         """按生产口径投影一条事件：由事件自带 ``plan`` 产出 mutation 后落回进程内状态。"""
 
-        task_id = event.task_id
-        state = self.get_state(task_id)
+        session_id = event.session_id
+        state = self.get_state(session_id)
         mutations = tuple(plan_event(event, copy.deepcopy(state), {}))
         for mutation in mutations:
             mutation.apply_to(state)
         validate_snapshot(state)
-        self.states[task_id] = copy.deepcopy(state)
-        return TransportFrame(task_id=task_id, kind="mutation", mutations=mutations)
+        self.states[session_id] = copy.deepcopy(state)
+        return TransportFrame(session_id=session_id, kind="mutation", mutations=mutations)
 
 
 @pytest.fixture
@@ -77,7 +77,7 @@ def _init_run(
     projector.process(
         RunInitializedEvent(
             created_at=_RUN_CREATED_AT,
-            task_id=1,
+            session_id=1,
             run_id=1,
             context_window_total=context_window_total,
         )
@@ -85,26 +85,26 @@ def _init_run(
 
 
 def _append_user_input(
-    projector: ConversationEventProjector, task_id: int = 1, run_id: int = 1
+    projector: ConversationEventProjector, session_id: int = 1, run_id: int = 1
 ) -> None:
     """追加一条已消费用户输入，生成 user 消息与其后的 assistant 占位。
 
     生产口径：先投影排队消息，再发只带消息身份的消费事件（消息身份取 Run 号，便于断言）。
     """
 
-    _consume(projector, run_id, UserInputPresentation(text="你好"), task_id, run_id)
+    _consume(projector, run_id, UserInputPresentation(text="你好"), session_id, run_id)
 
 
 def _consume(
     projector: ConversationEventProjector,
     message_id: int,
     presentation: UserInputPresentation,
-    task_id: int = 1,
+    session_id: int = 1,
     run_id: int = 1,
 ) -> object:
     owner = projector._state_service
-    queue_user_input(owner.states.setdefault(task_id, empty_snapshot()), message_id, presentation)
-    return projector.process(consumed(task_id, run_id, message_id, presentation))
+    queue_user_input(owner.states.setdefault(session_id, empty_snapshot()), message_id, presentation)
+    return projector.process(consumed(session_id, run_id, message_id, presentation))
 
 
 def _start(projector: ConversationEventProjector, context_window_total: int | None = None) -> None:
@@ -159,7 +159,7 @@ def test_delegation_status_event_projects_display_data_to_target_tool(
     _start(event_projector)
     event_projector.process(
         ToolCallCreatedEvent(
-            task_id=1,
+            session_id=1,
             run_id=1,
             turn=1,
             tool_call_id="delegate-1",
@@ -167,14 +167,14 @@ def test_delegation_status_event_projects_display_data_to_target_tool(
         )
     )
     event = ToolCallStatusChangedEvent(
-        task_id=1,
+        session_id=1,
         run_id=1,
         tool_call_id="delegate-1",
         status="completed",
         display_data={
             "kind": "delegation-result",
             "child_agent_id": "delegate_reviewer",
-            "child_task_id": 22,
+            "child_session_id": 22,
             "title": "审查前端",
             "role": "Reviewer",
             "status": "running",
@@ -188,7 +188,7 @@ def test_delegation_status_event_projects_display_data_to_target_tool(
     assert part["display_data"] == {
         "kind": "delegation-result",
         "child_agent_id": "delegate_reviewer",
-        "child_task_id": 22,
+        "child_session_id": 22,
         "title": "审查前端",
         "role": "Reviewer",
         "status": "running",
@@ -261,11 +261,11 @@ def test_assistant_text_and_reasoning_parts(
     from app.core.events import ModelActivityEvent
 
     event_projector.process(
-        ModelActivityEvent(task_id=1, run_id=1, step_id="step-1", phase="reasoning")
+        ModelActivityEvent(session_id=1, run_id=1, step_id="step-1", phase="reasoning")
     )
     event_projector.process(
         AssistantTextDeltaEvent(
-            source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="答案"
+            source_sequence=1, session_id=1, run_id=1, turn=1, part="text", delta="答案"
         )
     )
     parts = _messages(snapshots.states[1], 1)[1]["parts"]
@@ -283,9 +283,9 @@ def test_cancelled_run_resume_status_is_projected(
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.CANCELLED,
+            status=RunStatus.CANCELLED,
             end_reason="user_cancelled",
         )
     )
@@ -294,9 +294,9 @@ def test_cancelled_run_resume_status_is_projected(
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.RUNNING,
+            status=RunStatus.RUNNING,
         )
     )
 
@@ -317,17 +317,17 @@ def test_completed_run_rejects_reviving_status_event() -> None:
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.COMPLETED,
+            status=RunStatus.COMPLETED,
         )
     )
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.RUNNING,
+            status=RunStatus.RUNNING,
         )
     )
 
@@ -344,29 +344,29 @@ def test_tool_part_is_created_after_run_resume(
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.CANCELLED,
+            status=RunStatus.CANCELLED,
             end_reason="user_cancelled",
         )
     )
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.RUNNING,
+            status=RunStatus.RUNNING,
         )
     )
 
     event_projector.process(
         ToolCallCreatedEvent(
-            task_id=1, run_id=1, turn=1, tool_call_id="call-9", tool_name="read_file"
+            session_id=1, run_id=1, turn=1, tool_call_id="call-9", tool_name="read_file"
         )
     )
     event_projector.process(
         ToolCallStatusChangedEvent(
-            task_id=1,
+            session_id=1,
             run_id=1,
             tool_call_id="call-9",
             status="running",
@@ -390,7 +390,7 @@ def test_tool_status_change_without_part_is_skipped(
     with caplog.at_level("WARNING"):
         change = event_projector.process(
             ToolCallStatusChangedEvent(
-                task_id=1,
+                session_id=1,
                 run_id=1,
                 tool_call_id="missing-call",
                 status="running",
@@ -413,18 +413,18 @@ def test_run_status_usage_is_projected(
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.RUNNING,
+            status=RunStatus.RUNNING,
         )
     )
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.COMPLETED,
-            usage_stats=ConversationRunUsageStats(
+            status=RunStatus.COMPLETED,
+            usage_stats=RunUsageStats(
                 input_tokens=10, output_tokens=4, total_tokens=14
             ),
         )
@@ -444,18 +444,18 @@ def test_terminal_usage_is_projected(
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.RUNNING,
+            status=RunStatus.RUNNING,
         )
     )
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.COMPLETED,
-            usage_stats=ConversationRunUsageStats(
+            status=RunStatus.COMPLETED,
+            usage_stats=RunUsageStats(
                 input_tokens=100, output_tokens=50, total_tokens=150
             ),
         )
@@ -471,23 +471,23 @@ def test_new_run_clears_previous_run_usage(
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.RUNNING,
+            status=RunStatus.RUNNING,
         )
     )
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.COMPLETED,
-            usage_stats=ConversationRunUsageStats(
+            status=RunStatus.COMPLETED,
+            usage_stats=RunUsageStats(
                 input_tokens=10, output_tokens=4, total_tokens=14
             ),
         )
     )
-    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
+    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=1, run_id=2))
     state = snapshots.states[1]
     assert _run(state, 1)["usage"]["total_tokens"] == 14
     assert _run(state, 2)["usage"] is None
@@ -506,25 +506,25 @@ def test_structured_result_updates_completed_run_without_status_transition(
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.RUNNING,
+            status=RunStatus.RUNNING,
         )
     )
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.COMPLETED,
+            status=RunStatus.COMPLETED,
         )
     )
     change = event_projector.process(
         RunResultUpdatedEvent(
-            task_id=1,
+            session_id=1,
             run_id=1,
             end_reason="structured_output_failed",
-            usage_stats=ConversationRunUsageStats(input_tokens=4, output_tokens=2, total_tokens=6),
+            usage_stats=RunUsageStats(input_tokens=4, output_tokens=2, total_tokens=6),
         )
     )
     assert change is not None and change.mutations
@@ -543,10 +543,10 @@ def test_unknown_run_event_raises_and_is_not_projected(
     change = event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=404,
-            status=ConversationRunStatus.COMPLETED,
-            usage_stats=ConversationRunUsageStats(input_tokens=1, output_tokens=1, total_tokens=2),
+            status=RunStatus.COMPLETED,
+            usage_stats=RunUsageStats(input_tokens=1, output_tokens=1, total_tokens=2),
         )
     )
     assert change is not None and change.mutations == ()
@@ -560,7 +560,7 @@ def test_model_chunk_event_becomes_assistant_transport_update() -> None:
     event_projector = ConversationEventProjector(snapshots)
     _start(event_projector)
     event = AssistantTextDeltaEvent(
-        source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="你好"
+        source_sequence=1, session_id=1, run_id=1, turn=1, part="text", delta="你好"
     )
     change = event_projector.process(event)
     assert change is not None and change.mutations
@@ -592,13 +592,13 @@ def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(
     _start(event_projector)
     event_projector.process(
         AssistantTextDeltaEvent(
-            source_sequence=1, task_id=1, run_id=1, turn=1, part="text", delta="你好"
+            source_sequence=1, session_id=1, run_id=1, turn=1, part="text", delta="你好"
         )
     )
     _assert_reapply_changes_nothing(
         event_projector,
         snapshots,
-        lambda: RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=1),
+        lambda: RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=1, run_id=1),
     )
     _assert_reapply_changes_nothing(
         event_projector,
@@ -610,16 +610,16 @@ def test_idempotent_run_and_message_events_reapply_without_changing_snapshot(
         snapshots,
         lambda: RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.RUNNING,
+            status=RunStatus.RUNNING,
         ),
     )
     _assert_reapply_changes_nothing(
         event_projector,
         snapshots,
         lambda: AssistantPartClosedEvent(
-            source_sequence=1, task_id=1, run_id=1, turn=1, part="text"
+            source_sequence=1, session_id=1, run_id=1, turn=1, part="text"
         ),
     )
 
@@ -635,14 +635,14 @@ def test_idempotent_tool_events_reapply_without_changing_snapshot(
         event_projector,
         snapshots,
         lambda: ToolCallCreatedEvent(
-            task_id=1, run_id=1, turn=1, tool_call_id="t1", tool_name="read_file"
+            session_id=1, run_id=1, turn=1, tool_call_id="t1", tool_name="read_file"
         ),
     )
     _assert_reapply_changes_nothing(
         event_projector,
         snapshots,
         lambda: ToolCallStatusChangedEvent(
-            task_id=1, run_id=1, tool_call_id="t1", status="running"
+            session_id=1, run_id=1, tool_call_id="t1", status="running"
         ),
     )
     # 终态由实时与结算两条路径各投一次（同经 ``terminal_event`` 构造），重放必须不改快照。
@@ -656,7 +656,7 @@ def test_idempotent_tool_events_reapply_without_changing_snapshot(
                 content="hello",
                 display_data={"kind": "read-file-meta", "path": "a.txt"},
             ),
-            task_id=1,
+            session_id=1,
             run_id=1,
             step_id="step-1",
             tool_call_id="t1",
@@ -665,25 +665,25 @@ def test_idempotent_tool_events_reapply_without_changing_snapshot(
 
 
 # ---------------------------------------------------------------------------
-# Task 视角：activity、消息级结局（outcome）与旧 Run 的迟到事件
+# Session 视角：activity、消息级结局（outcome）与旧 Run 的迟到事件
 # ---------------------------------------------------------------------------
 
 
 def _finish(
     projector: ConversationEventProjector,
     run_id: int,
-    status: ConversationRunStatus,
+    status: RunStatus,
     total_tokens: int | None = None,
 ) -> None:
     usage = (
         None
         if total_tokens is None
-        else ConversationRunUsageStats(input_tokens=1, output_tokens=1, total_tokens=total_tokens)
+        else RunUsageStats(input_tokens=1, output_tokens=1, total_tokens=total_tokens)
     )
     projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=run_id,
             status=status,
             usage_stats=usage,
@@ -691,8 +691,8 @@ def _finish(
     )
 
 
-def test_empty_task_has_no_activity() -> None:
-    """A3：Task 还没有任何 Run 时 activity 为 null。"""
+def test_empty_session_has_no_activity() -> None:
+    """A3：Session 还没有任何 Run 时 activity 为 null。"""
 
     assert empty_snapshot()["activity"] is None
 
@@ -704,10 +704,10 @@ def test_activity_follows_latest_run(
 
     event_projector, snapshots = projector
     _start(event_projector, context_window_total=100)
-    _finish(event_projector, 1, ConversationRunStatus.COMPLETED, total_tokens=9)
+    _finish(event_projector, 1, RunStatus.COMPLETED, total_tokens=9)
     event_projector.process(
         RunInitializedEvent(
-            created_at=_RUN_CREATED_AT, task_id=1, run_id=2, context_window_total=64
+            created_at=_RUN_CREATED_AT, session_id=1, run_id=2, context_window_total=64
         )
     )
 
@@ -735,7 +735,7 @@ def test_terminal_status_writes_outcome_on_last_assistant_message(
     ]
     assert all(m["outcome"] is None for m in snapshots.states[1]["messages"])
 
-    _finish(event_projector, 1, ConversationRunStatus.COMPLETED, total_tokens=7)
+    _finish(event_projector, 1, RunStatus.COMPLETED, total_tokens=7)
 
     outcomes = [(m["id"], m["outcome"]) for m in snapshots.states[1]["messages"]]
     assert [message_id for message_id, outcome in outcomes if outcome is not None] == [
@@ -755,16 +755,16 @@ def test_resume_clears_outcome(
 
     event_projector, snapshots = projector
     _start(event_projector)
-    _finish(event_projector, 1, ConversationRunStatus.CANCELLED)
+    _finish(event_projector, 1, RunStatus.CANCELLED)
     assert snapshots.states[1]["messages"][-1]["outcome"]["status"] == "cancelled"
     assert snapshots.states[1]["activity"]["resumable"] is True
 
-    _finish(event_projector, 1, ConversationRunStatus.RUNNING)
+    _finish(event_projector, 1, RunStatus.RUNNING)
     assert snapshots.states[1]["messages"][-1]["outcome"] is None
     assert snapshots.states[1]["activity"]["status"] == "running"
     assert snapshots.states[1]["activity"]["resumable"] is False
 
-    _finish(event_projector, 1, ConversationRunStatus.FAILED)
+    _finish(event_projector, 1, RunStatus.FAILED)
     assert snapshots.states[1]["messages"][-1]["outcome"]["status"] == "failed"
     assert snapshots.states[1]["activity"]["resumable"] is True
 
@@ -780,9 +780,9 @@ def test_run_events_never_write_top_level_error(
     change = event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.FAILED,
+            status=RunStatus.FAILED,
             error=failure,
         )
     )
@@ -805,22 +805,22 @@ def test_first_output_of_run_without_user_input_creates_leading_reply(
 
     event_projector, snapshots = projector
     _start(event_projector)
-    _finish(event_projector, 1, ConversationRunStatus.COMPLETED)
-    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
+    _finish(event_projector, 1, RunStatus.COMPLETED)
+    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=1, run_id=2))
 
     event_projector.process(
         AssistantTextDeltaEvent(
-            source_sequence=1, task_id=1, run_id=2, turn=2, part="text", delta="结"
+            source_sequence=1, session_id=1, run_id=2, turn=2, part="text", delta="结"
         )
     )
     event_projector.process(
         AssistantTextDeltaEvent(
-            source_sequence=1, task_id=1, run_id=2, turn=2, part="text", delta="论"
+            source_sequence=1, session_id=1, run_id=2, turn=2, part="text", delta="论"
         )
     )
     event_projector.process(
         ToolCallCreatedEvent(
-            task_id=1, run_id=2, turn=2, tool_call_id="call-9", tool_name="read_file"
+            session_id=1, run_id=2, turn=2, tool_call_id="call-9", tool_name="read_file"
         )
     )
 
@@ -831,7 +831,7 @@ def test_first_output_of_run_without_user_input_creates_leading_reply(
     assert reply["parts"][1]["toolCallId"] == "call-9"
 
 
-def test_run_and_tool_status_events_publish_the_task_status(
+def test_run_and_tool_status_events_publish_the_session_status(
     projector: tuple[ConversationEventProjector, InMemorySnapshotService],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -847,29 +847,29 @@ def test_run_and_tool_status_events_publish_the_task_status(
         (),
         {
             "publish_status": staticmethod(published.append),
-            "publish_task_catalog": staticmethod(catalog.append),
+            "publish_session_catalog": staticmethod(catalog.append),
         },
     )()
-    monkeypatch.setattr(projector_module, "get_task_feed", lambda: feed)
+    monkeypatch.setattr(projector_module, "get_session_feed", lambda: feed)
     event_projector, _ = projector
     _init_run(event_projector)
     _append_user_input(event_projector)
     event_projector.process(
         ToolCallCreatedEvent(
-            task_id=1, run_id=1, turn=1, tool_call_id="call-hitl", tool_name="browser_handoff"
+            session_id=1, run_id=1, turn=1, tool_call_id="call-hitl", tool_name="browser_handoff"
         )
     )
     event_projector.process(
         ToolCallStatusChangedEvent(
-            task_id=1, run_id=1, tool_call_id="call-hitl", status="pending"
+            session_id=1, run_id=1, tool_call_id="call-hitl", status="pending"
         )
     )
     event_projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.COMPLETED,
+            status=RunStatus.COMPLETED,
         )
     )
 
@@ -883,9 +883,9 @@ def test_terminal_duration_is_derived_from_required_committed_time(projector) ->
     _start(event_projector)
     event_projector.process(
         RunStatusChangedEvent(
-            task_id=1,
+            session_id=1,
             run_id=1,
-            status=ConversationRunStatus.COMPLETED,
+            status=RunStatus.COMPLETED,
             changed_at=datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
         )
     )
@@ -902,7 +902,7 @@ def test_snapshot_rejects_removed_approval_placeholder(projector) -> None:
     _start(event_projector)
     event_projector.process(
         ToolCallCreatedEvent(
-            task_id=1,
+            session_id=1,
             run_id=1,
             turn=1,
             tool_call_id="obsolete",
@@ -924,10 +924,10 @@ def test_run_without_a_visible_turn_keeps_its_outcome_on_activity_only(
 
     event_projector, snapshots = projector
     _start(event_projector)
-    _finish(event_projector, 1, ConversationRunStatus.COMPLETED)
-    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=1, run_id=2))
+    _finish(event_projector, 1, RunStatus.COMPLETED)
+    event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=1, run_id=2))
 
-    _finish(event_projector, 2, ConversationRunStatus.FAILED)
+    _finish(event_projector, 2, RunStatus.FAILED)
 
     state = snapshots.states[1]
     assert state["messages"][-1]["outcome"]["status"] == "completed"

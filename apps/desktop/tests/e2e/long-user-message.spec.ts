@@ -4,10 +4,10 @@ import { seedState, completedState } from "./transport-fixtures";
 
 const LONG_TEXT = Array.from({ length: 40 }, (_, line) => `第 ${line + 1} 条规则：先查清全貌再动手。`).join("\n\n");
 
-async function seedConversation(request: Parameters<typeof seedState>[0], taskId: number, userText: string) {
+async function seedConversation(request: Parameters<typeof seedState>[0], sessionId: number, userText: string) {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId, title: "长消息" } });
-  await seedState(request, taskId, completedState(1, { id: "u", parts: [{ type: "text", text: userText }] }, [{ type: "text", text: "收到。", finalReply: true }]));
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId, title: "长消息" } });
+  await seedState(request, sessionId, completedState(1, { id: "u", parts: [{ type: "text", text: userText }] }, [{ type: "text", text: "收到。", finalReply: true }]));
 }
 
 /** 两端渐隐长度由滚动驱动动画写进注册过的自定义属性，读计算值即是此刻真实生效的渐隐。 */
@@ -19,7 +19,7 @@ const fadeEdges = (editor: Locator) => editor.evaluate((element) => {
 // 目的：长用户消息收起后不霸屏、能看全；潜在缺陷：全文铺开把回复推远，或硬切看起来像内容丢失。
 test("长用户消息默认收起、底部渐隐，可以展开与收起；短消息不受影响", async ({ page, request }) => {
   await seedConversation(request, 61, LONG_TEXT);
-  await page.goto("/tasks/61");
+  await page.goto("/sessions/61");
   const bubble = page.locator('[data-role="user"]');
   const content = bubble.locator("[data-user-message-collapsed]");
   const toggle = bubble.getByRole("button", { name: "显示全部" });
@@ -39,7 +39,7 @@ test("长用户消息默认收起、底部渐隐，可以展开与收起；短�
   await expect(bubble.getByRole("button", { name: "显示全部" })).toBeVisible();
 
   await seedConversation(request, 62, "一句话的问题");
-  await page.goto("/tasks/62");
+  await page.goto("/sessions/62");
   await expect(page.locator('[data-role="user"]').getByText("一句话的问题")).toBeVisible();
   await expect(page.locator('[data-role="user"]').getByRole("button", { name: /显示全部|收起/ })).toHaveCount(0);
 });
@@ -47,7 +47,7 @@ test("长用户消息默认收起、底部渐隐，可以展开与收起；短�
 // 目的：输入框滚动时两端渐隐提示还有内容；潜在缺陷：首屏或正在编辑的末行被淡化，或内容没溢出时也淡。
 test("输入框只在还有内容的一侧渐隐", async ({ page, request }) => {
   await seedConversation(request, 63, "开始");
-  await page.goto("/tasks/63");
+  await page.goto("/sessions/63");
   const editor = page.getByLabel("消息输入");
   await editor.click();
   await page.keyboard.insertText("一行");

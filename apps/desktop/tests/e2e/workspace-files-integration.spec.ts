@@ -76,7 +76,7 @@ test("真实后端：内部链接、原子替换实时更新、搜索和退出",
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
-  await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
+  await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const surface = page.getByTestId("workspace-files-surface");
   await surface
@@ -121,7 +121,7 @@ test("真实后端：Markdown 相对图片更新、大文件从末尾反向阅�
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
-  await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
+  await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   const surface = page.getByTestId("workspace-files-surface");
   await surface.getByText("README.md", { exact: true }).click();
@@ -180,7 +180,7 @@ async function referenceWorkspace(
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
-  await page.getByRole("button", { name: "在 demo 中新建对话" }).click();
+  await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   return page.getByTestId("workspace-files-surface");
 }
@@ -201,7 +201,7 @@ test("引用：行范围指针打开当前文件定位，文件删除后提示�
     .filter({ hasText: /^1$/ })
     .click();
   await surface.getByRole("button", { name: "添加选区到对话", exact: true }).click();
-  const input = page.getByLabel("新对话内容");
+  const input = page.getByLabel("新会话内容");
   const capsule = input.locator("[data-workspace-reference]");
   await expect(capsule).toHaveCount(1);
   // 引用只是路径 + 行范围指针：不携带选取时的正文。
@@ -218,20 +218,20 @@ test("引用：行范围指针打开当前文件定位，文件删除后提示�
   await capsule.getByRole("button").first().click();
   await expect(page.getByText("工作区里没有 src/main.py")).toBeVisible();
   const sent: unknown[] = [];
-  await page.route("**/tasks/*/messages", (route) => {
+  await page.route("**/sessions/*/messages", (route) => {
     sent.push(route.request().postDataJSON());
     return route.fulfill({
       status: 409,
       json: {
         error: {
-          code: "TASK_BUSY",
+          code: "SESSION_BUSY",
           message: "测试拒绝引用发送",
           retryable: true,
         },
       },
     });
   });
-  await page.getByRole("button", { name: "开始对话", exact: true }).click();
+  await page.getByRole("button", { name: "开始会话", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("测试拒绝引用发送");
   await expect(capsule).toHaveCount(1);
   const sentBody = JSON.stringify(sent);
@@ -256,7 +256,7 @@ test("引用：@ 搜索去重、设置页隐藏文件并恢复草稿", async ({
   await request.post(`${API_ORIGIN}/__test__/reset`);
   await request.post(`${REAL_BACKEND}/__test__/files/update`);
   await referenceWorkspace(page);
-  const input = page.getByLabel("新对话内容");
+  const input = page.getByLabel("新会话内容");
   await input.fill("@src/main");
   await expect(
     page.getByRole("option", { name: "src/main.py", exact: true }),
@@ -284,7 +284,7 @@ test("引用：胶囊标签粘贴、普通消息发送、重载历史后撤回�
   await referenceWorkspace(page);
   const text =
     '请检查 <ref path="src/" /> <ref path="src/main.py" /> <ref path="src/main.py" lines="1-2" />\n\n```py\nprint("saved content")\n# <ref path="example.txt" /> <skill name="example" />\n```\n';
-  const input = page.getByLabel("新对话内容");
+  const input = page.getByLabel("新会话内容");
   await input.focus();
   await input.evaluate((element, value) => {
     const data = new DataTransfer();
@@ -308,11 +308,11 @@ test("引用：胶囊标签粘贴、普通消息发送、重载历史后撤回�
     };
   }> = [];
   page.on("request", (req) => {
-    if (/\/tasks\/\d+\/messages$/.test(req.url()) && req.method() === "POST")
+    if (/\/sessions\/\d+\/messages$/.test(req.url()) && req.method() === "POST")
       sent.push({ url: req.url(), ...req.postDataJSON() });
   });
-  await page.getByRole("button", { name: "开始对话", exact: true }).click();
-  await expect(page).toHaveURL(/\/tasks\/\d+/);
+  await page.getByRole("button", { name: "开始会话", exact: true }).click();
+  await expect(page).toHaveURL(/\/sessions\/\d+/);
   await expect(
     page.getByText("streaming response", { exact: true }),
   ).toBeVisible();
@@ -350,16 +350,16 @@ test("引用：胶囊标签粘贴、普通消息发送、重载历史后撤回�
   await expect(user.locator("[data-workspace-reference]")).toHaveCount(3);
 });
 
-test("引用：Task 混合草稿切换后恢复附件并可移除", async ({ page, request }) => {
+test("引用：Session 混合草稿切换后恢复附件并可移除", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, {
-    data: { taskId: 100, title: "混合草稿甲" },
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, {
+    data: { sessionId: 100, title: "混合草稿甲" },
   });
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, {
-    data: { taskId: 101, title: "混合草稿乙" },
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, {
+    data: { sessionId: 101, title: "混合草稿乙" },
   });
   await installFakeDesktopHost(page);
-  await page.goto("/tasks/100");
+  await page.goto("/sessions/100");
   const input = page.getByLabel("消息输入");
   await input.focus();
   await input.evaluate((element) => {
@@ -380,11 +380,11 @@ test("引用：Task 混合草稿切换后恢复附件并可移除", async ({ pag
   await (await chooser).setFiles({ name: "notes.md", mimeType: "text/markdown", buffer: Buffer.from("# notes") });
   await expect(input).toContainText("notes.md");
   await page.getByText("混合草稿乙", { exact: true }).click();
-  await expect(page).toHaveURL(/\/tasks\/101$/);
+  await expect(page).toHaveURL(/\/sessions\/101$/);
   await expect(input).toHaveText("");
   await input.fill("草稿乙");
   await page.getByText("混合草稿甲", { exact: true }).click();
-  await expect(page).toHaveURL(/\/tasks\/100$/);
+  await expect(page).toHaveURL(/\/sessions\/100$/);
   await expect(input).toContainText("草稿甲");
   await expect(input.locator("[data-workspace-reference]")).toHaveCount(1);
   await expect(input).toContainText("notes.md");
@@ -412,7 +412,7 @@ test("引用：目录与文件通过右键添加、选中文本可附带问题",
     .getByRole("treeitem", { name: "README.md", exact: true })
     .click({ button: "right" });
   await page.getByRole("menuitem", { name: "添加到对话" }).click();
-  const input = page.getByLabel("新对话内容");
+  const input = page.getByLabel("新会话内容");
   const capsules = input.locator("[data-workspace-reference]");
   await expect(capsules).toHaveCount(2);
   // 目录引用以 `/` 结尾，文件是裸路径：都是同一种 `<ref>` 指针。
@@ -483,7 +483,7 @@ for (const theme of ["light", "dark"]) {
     await page.keyboard.press("Shift+F10");
     await page.getByRole("menuitem", { name: "忽略此目录" }).click();
     await expect(src).toHaveCount(0);
-    const input = page.getByLabel("新对话内容");
+    const input = page.getByLabel("新会话内容");
     await input.fill("@src/main");
     await expect(
       page.getByRole("listbox", { name: "工作区引用候选" }),
@@ -644,7 +644,7 @@ test("真实后端：文件地址与文件名查找分离，候选定位和字�
   state.messages[1].parts = [{ type: "text", status: "completed", text:
     "确定地址 [API.md](docs/brand/API.md)，根文件 [root](API.md)。未知位置 `API.md:2`。文档 [guide](docs/brand/guide.md)。缺失 [gone](docs/brand/gone.md#L2)。[slow](slow.md) [slow-again](slow-again.md)。" }];
   await seedState(request, 42, state);
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const message = page.locator('main [data-index="1"]');
   const surface = page.getByTestId("workspace-files-surface");
   await message.getByRole("link", { name: "API.md", exact: true }).click();

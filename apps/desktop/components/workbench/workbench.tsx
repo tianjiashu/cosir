@@ -107,10 +107,10 @@ export function Workbench({
                       value={tab.id}
                       className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left focus-visible:outline-2 focus-visible:outline-ring"
                     />} >
-                      {tab.kind === "agent" ? <WorkbenchAgentTabStatus taskId={tab.taskId} /> : <TabIcon className="size-3.5 shrink-0" aria-hidden="true" />}
+                      {tab.kind === "agent" ? <WorkbenchAgentTabStatus sessionId={tab.sessionId} /> : <TabIcon className="size-3.5 shrink-0" aria-hidden="true" />}
                       <TabLabel tab={tab} />
                     </TooltipTrigger>
-                    <TooltipContent side="top"><TabLabel tab={tab} expanded />{tab.kind === "agent" && <WorkbenchAgentTabStatus taskId={tab.taskId} expanded />}</TooltipContent>
+                    <TooltipContent side="top"><TabLabel tab={tab} expanded />{tab.kind === "agent" && <WorkbenchAgentTabStatus sessionId={tab.sessionId} expanded />}</TooltipContent>
                   </Tooltip>
                   <TooltipIconButton
                     tooltip="关闭标签"

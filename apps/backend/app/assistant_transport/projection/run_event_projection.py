@@ -1,9 +1,9 @@
-"""Run 生命周期事件到 snapshot mutation 的投影（Task 视角）。
+"""Run 生命周期事件到 snapshot mutation 的投影（Session 视角）。
 
 最新 Run 投影到 ``activity``；Run 进入终态时把结局写到它最后一个可见回合（``activity.turn``）的
 回复上，历史回复因此不必知道 Run 也能显示结局。事件不按 Run 号路由：Run 状态只经
-``ConversationRunLedger.transition`` 发出，而每个调用点都在这个 Run 仍是当前活动时迁移（驱动内的
-迁移早于执行者注销，挂起、唤醒、恢复与取消都在 Task 闸门内），新 Run 只在上一个驱动结束后开出。
+``RunLedger.transition`` 发出，而每个调用点都在这个 Run 仍是当前活动时迁移（驱动内的
+迁移早于执行者注销，挂起、唤醒、恢复与取消都在 Session 闸门内），新 Run 只在上一个驱动结束后开出。
 """
 
 from collections.abc import Sequence
@@ -22,30 +22,30 @@ from app.assistant_transport.state.conversation_state_mutation import (
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.logging.logger import log
 from app.core.events import RunInitializedEvent, RunResultUpdatedEvent, RunStatusChangedEvent
-from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
-from app.models.conversation_run_usage import ConversationRunUsage
-from app.models.enums.conversation_run_status import (
+from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
+from app.models.enums.run_status import (
     RESUMABLE_RUN_STATUSES,
     TERMINAL_RUN_STATUSES,
-    ConversationRunStatus,
+    RunStatus,
     RunTransition,
 )
+from app.models.run_usage import RunUsage
 from app.utils.datetime_utils import from_text, to_text
 
 
 def _accepts(current: str, target: str) -> bool:
     """投影层只放行领域迁移表（``RunTransition``）声明过的迁移与自迁移，其余（陈旧事件）丢弃并留痕。
 
-    恢复、唤醒是合法的 ``→ running``：由 ``ConversationRunLedger`` 在条件更新成功之后才发出，若在此
+    恢复、唤醒是合法的 ``→ running``：由 ``RunLedger`` 在条件更新成功之后才发出，若在此
     丢弃，snapshot 会永久停在终态。``completed`` 之后没有迁移，迟到事件不会把它拉回 active。
     """
     return current == target or RunTransition.declared(current, target)
 
 
 def _merged_usage(
-    current: ConversationRunUsage | None,
-    usage_stats: ConversationRunUsageStats | None,
-) -> ConversationRunUsage | None:
+    current: RunUsage | None,
+    usage_stats: RunUsageStats | None,
+) -> RunUsage | None:
     """把新增模型用量并入已有用量；缺失字段和较小值不回退已有事实。没有变化时返回 ``None``。"""
 
     if usage_stats is None:
@@ -64,7 +64,7 @@ def _merged_usage(
         )
         for key in incoming
     }
-    return None if merged == current else cast(ConversationRunUsage, merged)
+    return None if merged == current else cast(RunUsage, merged)
 
 
 def _outcome_path(message_index: int) -> SnapshotPath:
@@ -94,7 +94,7 @@ def plan_run_initialized(
             ("activity",),
             ConversationStateActivity(
                 modelActivity=None,
-                status=ConversationRunStatus.RUNNING.value,
+                status=RunStatus.RUNNING.value,
                 turn=None,
                 resumable=False,
                 startedAt=to_text(event.created_at),
@@ -196,7 +196,7 @@ def _log_status_dropped(event: RunStatusChangedEvent, snapshot_status: str | Non
         extra={
             "msg": "RunStatusChangedEvent 不在迁移白名单内或快照没有当前活动，已丢弃",
             "data": {
-                "task_id": event.task_id,
+                "session_id": event.session_id,
                 "run_id": event.run_id,
                 "snapshot_status": snapshot_status,
                 "incoming_status": event.status.value,
@@ -215,7 +215,7 @@ def plan_run_result_updated(
     """
 
     activity = state["activity"]
-    if activity is None or activity["status"] != ConversationRunStatus.COMPLETED.value:
+    if activity is None or activity["status"] != RunStatus.COMPLETED.value:
         _log_result_dropped(event, None if activity is None else activity["status"])
         return []
     usage = _merged_usage(activity["usage"], event.usage_stats)
@@ -246,7 +246,7 @@ def _log_result_dropped(event: RunResultUpdatedEvent, snapshot_status: str | Non
         extra={
             "msg": "已完成 Run 的结果事件未命中 completed 的当前活动",
             "data": {
-                "task_id": event.task_id,
+                "session_id": event.session_id,
                 "run_id": event.run_id,
                 "snapshot_status": snapshot_status,
             },

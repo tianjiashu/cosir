@@ -16,9 +16,9 @@ import { CONVERSATION_ASIDE_CARDS } from "./aside-card-registry";
  * 只有手柄能拖（整张卡可拖会让点标题折叠时误拖）；手柄与折叠箭头平时隐藏，悬停标题行或键盘聚焦时出现，
  * 键盘排序由 dnd-kit 提供（空格拿起、方向键移动、空格放下）。折叠状态是全局偏好，见 `useConversationAsideStore`。
  */
-export function AsideCard({ id, taskId }: { id: AsideCardId; taskId: number }) {
+export function AsideCard({ id, sessionId }: { id: AsideCardId; sessionId: number }) {
   const { title, useHasContent, Summary, Actions, Body } = CONVERSATION_ASIDE_CARDS[id];
-  const hasContent = useHasContent(taskId);
+  const hasContent = useHasContent(sessionId);
   const collapsed = useConversationAsideStore((state) => state.collapsed[id] ?? false);
   const setCollapsed = useConversationAsideStore((state) => state.setCollapsed);
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id });
@@ -38,8 +38,8 @@ export function AsideCard({ id, taskId }: { id: AsideCardId; taskId: number }) {
             {title}
             <DisclosureChevron open={!collapsed} reveal />
           </CollapsibleTrigger>
-          {collapsed && <span className="text-muted-foreground shrink-0 text-xs tabular-nums"><Summary taskId={taskId} /></span>}
-          {Actions && <Actions taskId={taskId} />}
+          {collapsed && <span className="text-muted-foreground shrink-0 text-xs tabular-nums"><Summary sessionId={sessionId} /></span>}
+          {Actions && <Actions sessionId={sessionId} />}
           <button
             ref={setActivatorNodeRef}
             type="button"
@@ -52,7 +52,7 @@ export function AsideCard({ id, taskId }: { id: AsideCardId; taskId: number }) {
           </button>
         </div>
         <CollapsibleContent className="mt-2">
-          <Body taskId={taskId} />
+          <Body sessionId={sessionId} />
         </CollapsibleContent>
       </Collapsible>
     </section>

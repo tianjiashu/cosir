@@ -18,7 +18,9 @@ describe("current activity facts", () => {
     expect(currentActivity(activity(1, "running"), [toolCallPart("early", "read_file", { args: undefined, status: "pending" })])?.label).toBe("读取文件");
     const call = toolCallPart("read", "read_file", { intent: "检查登录配置", status: "running" });
     expect(currentActivity(activity(1, "running"), [call, { ...call, toolCallId: "other" }])?.label).toBe("检查登录配置 · 另 1 项");
-    expect(currentActivity(activity(1, "running"), [{ ...call, awaitingUser: true }])).toEqual({ label: "等待你的操作", animated: false });
+    // 在等用户决定：那次调用就地画着卡片，回合不再另说一句「等待你的操作」。
+    expect(currentActivity(activity(1, "suspended"), [{ ...call, status: "pending", awaitingUser: true }])).toBeNull();
+    expect(currentActivity(activity(1, "suspended"))).toEqual({ label: "等待继续", animated: false });
     expect(currentActivity(activity(1, "suspended"), [], [{ ...job, status: "settling" }])).toEqual({ label: "等待并入后台结果：检查导出", animated: false });
   });
   it("distinguishes pending queue, background execution, settling, waits and terminal states", () => {

@@ -15,7 +15,7 @@ export type ModelSelection = {
 
 export type ModelSelectionScope =
   | { kind: "workspace"; id: number }
-  | { kind: "task"; id: number };
+  | { kind: "session"; id: number };
 
 const STORAGE_KEY_PREFIX = "cosir:model-config-selection:";
 const selectionSnapshotCache = new Map<string, {
@@ -45,8 +45,8 @@ function notifySelection(scope: ModelSelectionScope): void {
 }
 
 /**
- * 构造 localStorage 中模型选择项的 key。工作区与任务即使使用同一个数字
- * ID，也必须生成不同的 key，避免页面级选择污染任务级选择。
+ * 构造 localStorage 中模型选择项的 key。工作区与会话即使使用同一个数字
+ * ID，也必须生成不同的 key，避免页面级选择污染会话级选择。
  */
 export function scopeSuffix(scope: ModelSelectionScope): string {
   return `${scope.kind}:${scope.id}`;
@@ -102,7 +102,7 @@ function parseStoredSelection(
 /**
  * 读取指定作用域的模型选择结果。
  *
- * 不在 workspace 与 task 之间回落。
+ * 不在 workspace 与 session 之间回落。
  * 任何失败路径（window 不存在、localStorage 被禁用、JSON.parse 失败、字段
  * 缺失或类型不符）均返回 null，不抛异常。
  */
@@ -127,7 +127,7 @@ export function subscribeStoredSelection(
 }
 
 /**
- * 写入指定任务或工作区的模型选择结果。
+ * 写入指定会话或工作区的模型选择结果。
  *
  * @param scope - 当前选择所属的明确作用域。
  * @param selection - 要持久化的完整模型选择。

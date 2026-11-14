@@ -35,8 +35,8 @@ def _child_agent_id_property(payload: dict) -> dict:
 def base_delegate_definition(monkeypatch) -> ToolDefinition:
     """构造不含进程级候选的 delegate_task 基础定义。"""
 
-    monkeypatch.setattr(delegate_task, "get_task_service", lambda: object())
-    monkeypatch.setattr(delegate_task, "get_conversation_run_ledger", lambda: object())
+    monkeypatch.setattr(delegate_task, "get_session_service", lambda: object())
+    monkeypatch.setattr(delegate_task, "get_run_ledger", lambda: object())
     definition = delegate_task.build_delegate_task_definition()
     assert definition is not None
     return definition
@@ -113,30 +113,30 @@ def test_delegate_args_only_validate_structure_and_budget() -> None:
 
 
 @pytest.mark.parametrize("child_agent_id", ["other-workspace-only-agent", "main_agent"])
-def test_delegate_handler_rejects_unavailable_or_non_child_profile_before_task_creation(
+def test_delegate_handler_rejects_unavailable_or_non_child_profile_before_session_creation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     child_agent_id: str,
 ) -> None:
-    """手工提交目录外 ID 或主 Agent ID 时，在创建 child Task 前拒绝。"""
+    """手工提交目录外 ID 或主 Agent ID 时，在创建 child Session 前拒绝。"""
 
-    class _TaskSpy:
+    class _SessionSpy:
         def __init__(self) -> None:
             self.created = False
 
-        def create_task(self, **_kwargs) -> None:
+        def create_session(self, **_kwargs) -> None:
             self.created = True
-            raise AssertionError("不应为无效 agent_id 创建 child Task")
+            raise AssertionError("不应为无效 agent_id 创建 child Session")
 
-    task_spy = _TaskSpy()
-    monkeypatch.setattr(delegate_task, "get_task_service", lambda: task_spy)
-    monkeypatch.setattr(delegate_task, "get_conversation_run_ledger", lambda: object())
+    session_spy = _SessionSpy()
+    monkeypatch.setattr(delegate_task, "get_session_service", lambda: session_spy)
+    monkeypatch.setattr(delegate_task, "get_run_ledger", lambda: object())
     tool = delegate_task.DelegateTaskTool()
     registry = configuration.build_agent_registry()
     monkeypatch.setattr(configuration, "get_agent_registry", lambda: registry)
     context = ToolExecutionContext(
         step_id="step-1",
-        task_id=1,
+        session_id=1,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=2,
@@ -150,7 +150,7 @@ def test_delegate_handler_rejects_unavailable_or_non_child_profile_before_task_c
     )
 
     assert result.status == "error"
-    assert task_spy.created is False
+    assert session_spy.created is False
 
 
 @pytest.mark.parametrize("parent_depth", [0, 1])
@@ -159,7 +159,7 @@ def test_delegate_writes_the_child_depth(
     tmp_path: Path,
     parent_depth: int,
 ) -> None:
-    """子 Task 写成父深度 + 1；到上限时不给派生工具由 ``tools_for_task`` 决定（见其测试）。"""
+    """子 Session 写成父深度 + 1；到上限时不给派生工具由 ``tools_for_session`` 决定（见其测试）。"""
     from types import SimpleNamespace
 
     from app.config.settings import Settings
@@ -167,18 +167,18 @@ def test_delegate_writes_the_child_depth(
     monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
     created: list[dict] = []
 
-    class _Tasks:
-        def get_task(self, task_id: int):
-            return SimpleNamespace(id=task_id, title="父任务", derivation_depth=parent_depth)
+    class _Sessions:
+        def get_session(self, session_id: int):
+            return SimpleNamespace(id=session_id, title="父会话", derivation_depth=parent_depth)
 
-        def create_task(self, **kwargs):
+        def create_session(self, **kwargs):
             created.append(kwargs)
-            raise RuntimeError("stop after recording the child task")
+            raise RuntimeError("stop after recording the child session")
 
-    monkeypatch.setattr(delegate_task, "get_task_service", lambda: _Tasks())
+    monkeypatch.setattr(delegate_task, "get_session_service", lambda: _Sessions())
     monkeypatch.setattr(
         delegate_task,
-        "get_conversation_run_ledger",
+        "get_run_ledger",
         lambda: SimpleNamespace(get_run=lambda _id: SimpleNamespace(model_config_id="test/m1")),
     )
     registry = configuration.build_agent_registry()
@@ -188,7 +188,7 @@ def test_delegate_writes_the_child_depth(
     )
     context = ToolExecutionContext(
         step_id="step-1",
-        task_id=1,
+        session_id=1,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=2,

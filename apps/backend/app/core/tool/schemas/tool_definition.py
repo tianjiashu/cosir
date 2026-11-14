@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from app.core.tool.call_intent import model_parameters_with_intent
 from app.core.tool.presentation import ToolPresentation
+from app.core.tool.schemas.decision_payload import DecisionPayload
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 
 
@@ -51,19 +52,27 @@ class ToolDefinition:
     # ``"execute"`` 批准或驳回后都由 prepare_input 绕过模型、带着决定再次执行同一调用（如交接：
     # 用户交还即作出决定，重放时取回登记并报告资源状态，执行结果让等待占位收尾）；
     # ``"reply"`` 用户的回答作为消息交给模型（如意图澄清）；``None`` 不需要用户决定。
-    # 非 None 的工具一批里只能单独调用（见 ``tool_batch_runner``），每个 Task 同时最多一个等待中的
-    # 调用由工具自己的事实源保证。
+    # 非 None 的工具一批里只能单独调用（见 ``tool_batch_runner``），呈现类别必须是 ``standalone``：
+    # 等待时前端在调用的原位置画成卡片，收在工具组里会被折叠的组藏住（注册表守卫核对）。
     user_decision: Literal["execute", "reply"] | None = None
+    # 决定携带的结构化载荷（见 :class:`DecisionPayload`）；``None`` 表示决定只有批准 / 驳回与附言。
+    # 只对 ``reply`` 类有意义：载荷渲染成给模型的正文，并进等待占位的展示数据。
+    decision_model: type[DecisionPayload] | None = None
+    # 等待中的决定等到什么时候：``"until_user_input"`` 等用户回应——作答、跳过，或用户说了别的话
+    # （那句话就是回应，等待作废）；模型又问一次、发起它的 Run 被停下或失败也结束它（提问，规则见
+    # ``decision_expiry``）。``"until_decided"`` 一直等到用户作出决定（交接要等到交还）。两者都随撤回
+    # 所在回合、Session 删除结束。
+    decision_lifetime: Literal["until_user_input", "until_decided"] = "until_decided"
     # 产出图片给模型看（观察的 ``images``）：本次 Run 的模型不支持图片输入时，准入门禁直接拒绝，
     # 不进 handler——判定只在 ``ToolAccessGate`` 一处，各工具不再各写一遍。
     returns_images: bool = False
-    # 要在用户能操作的界面里才用得了（交互终端、配置草稿）：只给侧栏对话。需要用户作答的工具
+    # 要在用户能操作的界面里才用得了（交互终端、配置草稿）：只给侧栏会话。需要用户作答的工具
     # （``user_decision`` 非空）天然如此，不必重复声明，见 :attr:`requires_user_surface`。
     needs_user_surface: bool = False
 
     @property
     def requires_user_surface(self) -> bool:
-        """是否只能给用户能操作的 Task（``models.task_kind.TaskKind.user_facing``）。"""
+        """是否只能给用户能操作的 Session（``models.session_kind.SessionKind.user_facing``）。"""
         return self.needs_user_surface or self.user_decision is not None
 
     def normalized(self) -> "ToolDefinition":
@@ -78,7 +87,7 @@ class ToolDefinition:
         return replace(self, parameters_schema=strict_parameters_schema(self.args_model))
 
     def to_model_tool_definition(self) -> dict[str, Any]:
-        """导出可固化到 Task 的 strict function 定义。
+        """导出可固化到 Session 的 strict function 定义。
 
         仅做投影：用本类 ``name`` / ``description`` 覆盖 pydantic 类名（如
         ``SearchContentArgs``），确保 registry / tools_node / 前端全链路使用注册名

@@ -17,11 +17,11 @@ from typing import Any
 import pytest
 
 from app.config import configuration
-from app.core.workflow.execution_state.conversation_run_usage_stats import (
-    ConversationRunUsageStats,
-)
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
+from app.core.workflow.execution_state.run_usage_stats import (
+    RunUsageStats,
+)
 from app.service import depends as service_depends
 
 
@@ -92,11 +92,11 @@ def install_runtime_singletons(rc: SimpleNamespace) -> None:
 
     SINGLETONS.setattr(
         service_depends,
-        "get_conversation_run_ledger",
+        "get_run_ledger",
         singleton_getter(lambda: rc.run_state),
     )
     SINGLETONS.setattr(
-        service_depends, "get_task_message_queue", singleton_getter(lambda: rc.message_queue)
+        service_depends, "get_session_message_queue", singleton_getter(lambda: rc.message_queue)
     )
     SINGLETONS.setattr(configuration, "_TOOL_REGISTRY", _StubRegistryProxy(rc))
     SINGLETONS.setattr(configuration, "_TOOL_EXECUTOR", _StubExecutorProxy(rc))
@@ -105,10 +105,10 @@ def install_runtime_singletons(rc: SimpleNamespace) -> None:
 def runtime_stub(**overrides: Any) -> SimpleNamespace:
     rc = SimpleNamespace(
         run=SimpleNamespace(
-            id=2, task_id=1, execution_data=ReactExecutionState(), usage=None
+            id=2, session_id=1, execution_data=ReactExecutionState(), usage=None
         ),
-        # 默认不是侧栏对话 Task：不触发标题支线，需要它的用例显式覆盖 task。
-        task=SimpleNamespace(id=1, task_type="agent_task", title="测试对话"),
+        # 默认不是侧栏会话：不触发标题支线，需要它的用例显式覆盖 session。
+        session=SimpleNamespace(id=1, session_type="delegated", title="测试对话"),
         workspace=SimpleNamespace(id=1, root_path="."),
         agent=SimpleNamespace(
             structured_output=None,
@@ -116,7 +116,7 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
             model=SimpleNamespace(model_config_id="test/m1"),
         ),
         admitted_tools=frozenset(),
-        task_banned=frozenset(),
+        session_banned=frozenset(),
         run_banned=frozenset(),
         preceding_run=None,
         tool_definitions={},
@@ -124,11 +124,11 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
         run_state=run_state_stub(),
         message_queue=SimpleNamespace(ack=lambda _session, ids: set(ids)),
         mailbox=RunMailbox(),
-        task_space=SimpleNamespace(task_tool_schemas=()),
+        session_space=SimpleNamespace(session_tool_schemas=()),
         event_sink=lambda _event: None,
         model=None,
         thinking_channel="",
-        usage_stats=ConversationRunUsageStats(),
+        usage_stats=RunUsageStats(),
         title_branch=None,
         resume_decision=None,
         cancelled=False,

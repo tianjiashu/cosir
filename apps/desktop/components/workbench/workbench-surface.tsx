@@ -17,7 +17,7 @@ type SurfaceProps<K extends WorkbenchTab["kind"]> = {
  */
 const workbenchSurfaces: { [K in WorkbenchTab["kind"]]: ComponentType<SurfaceProps<K>> } = {
   agent: ({ workspace, tab, onClose }) => (
-    <WorkbenchAgentRunSurface taskId={tab.taskId} workspaceId={workspace.workspace_id} onClose={onClose} />
+    <WorkbenchAgentRunSurface sessionId={tab.sessionId} workspaceId={workspace.workspace_id} onClose={onClose} />
   ),
   "agent-configuration-draft": ({ workspace, tab, onClose }) => (
     <AgentConfigurationDraftSurface workspaceId={workspace.workspace_id} tab={tab} onClose={onClose} />

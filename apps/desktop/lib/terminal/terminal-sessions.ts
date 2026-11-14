@@ -38,12 +38,12 @@ export type TerminalTab = {
  * 不会改名为「终端 1」，关闭确认框里引用的标题也就始终指向用户看到的那个标签。
  */
 export function terminalTabs(sessions: readonly TerminalSessionEntry[], selectedId: string | null): TerminalTab[] {
-  const ordinals = new Map(sessions.map((session, index) => [session.sessionId, index + 1]));
-  const visible = sessions.filter((session) => isActiveTerminalSession(session) || session.sessionId === selectedId);
+  const ordinals = new Map(sessions.map((session, index) => [session.terminalSessionId, index + 1]));
+  const visible = sessions.filter((session) => isActiveTerminalSession(session) || session.terminalSessionId === selectedId);
   const single = visible.length === 1;
   return visible.map((session) => ({
     session,
-    title: single ? "终端" : `终端 ${ordinals.get(session.sessionId)}`,
+    title: single ? "终端" : `终端 ${ordinals.get(session.terminalSessionId)}`,
   }));
 }
 
@@ -74,11 +74,11 @@ export function terminalBadge(
   const tabs = terminalTabs(sessions, null);
   // 已结束的会话不在标签栏里，按它在标签栏时的编号称呼（「终端 N」），与用户看到过的名字一致。
   const titleOf = (session: TerminalSessionEntry) => (
-    tabs.find((tab) => tab.session.sessionId === session.sessionId)?.title
+    tabs.find((tab) => tab.session.terminalSessionId === session.terminalSessionId)?.title
       ?? `终端 ${sessions.indexOf(session) + 1}`
   );
   const count = tabs.length;
-  const failed = sessions.filter((session) => isAbnormalTerminalEnd(session) && !acknowledgedEnds.includes(session.sessionId));
+  const failed = sessions.filter((session) => isAbnormalTerminalEnd(session) && !acknowledgedEnds.includes(session.terminalSessionId));
   if (failed.length > 0) {
     const [first] = failed;
     const detail = first.status === "failed" ? "会话失败" : `退出码 ${first.exitCode}`;
@@ -108,7 +108,7 @@ export function mountedTerminalSessionIds(
   selectedId: string | null,
   open: boolean,
 ): readonly string[] {
-  const byId = new Map(sessions.map((session) => [session.sessionId, session]));
+  const byId = new Map(sessions.map((session) => [session.terminalSessionId, session]));
   const kept = current.filter((id) => {
     const session = byId.get(id);
     return session !== undefined && (isActiveTerminalSession(session) || id === selectedId);

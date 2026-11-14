@@ -10,9 +10,9 @@ from app.service import depends
 
 def test_history_uses_real_storage_over_http(backend_env, tmp_path):
     workspace = depends.get_workspace_crud().create("http-contract", str(tmp_path))
-    task = depends.get_task_crud().create(workspace.id, "snapshot-contract")
+    session = depends.get_session_crud().create(workspace.id, "snapshot-contract")
     client = TestClient(app)
-    page = client.get(f"/tasks/{task.id}/assistant/messages?end=0")
+    page = client.get(f"/sessions/{session.id}/assistant/messages?end=0")
     assert page.status_code == 200, page.text
     assert page.json() == {"messages": [], "messageOffset": 0}
 
@@ -20,7 +20,7 @@ def test_history_uses_real_storage_over_http(backend_env, tmp_path):
 @pytest.mark.parametrize("presentation", ["activity", "standalone", "quiet"])
 def test_nested_tool_parts_serialize_through_actual_routes(presentation):
     """服务替身控制载荷；路由、依赖解析和 Pydantic 响应序列化保持真实。"""
-    from app.api.assistant_transport_api import get_assistant_transport_service
+    from app.assistant_transport.api import get_assistant_transport_service
 
     state = empty_snapshot()
     state["messages"] = [
@@ -44,13 +44,13 @@ def test_nested_tool_parts_serialize_through_actual_routes(presentation):
     ]
 
     class Source:
-        def get_history_page(self, task_id, end):
+        def get_history_page(self, session_id, end):
             return {"messages": state["messages"], "messageOffset": 0}
 
     app.dependency_overrides[get_assistant_transport_service] = Source
     try:
         client = TestClient(app)
-        response = client.get("/tasks/1/assistant/messages?end=1")
+        response = client.get("/sessions/1/assistant/messages?end=1")
         assert response.status_code == 200, response.text
         part = response.json()["messages"][0]["parts"][0]
         assert part["presentation"] == presentation

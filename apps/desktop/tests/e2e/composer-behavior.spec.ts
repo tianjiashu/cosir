@@ -48,25 +48,25 @@ async function pasteImages(input: Locator, names: readonly string[]) {
   }, names);
 }
 
-async function openComposer(page: Page, mode: "new" | "task", host: { directory?: string } = {}) {
+async function openComposer(page: Page, mode: "new" | "session", host: { directory?: string } = {}) {
   await installFakeDesktopHost(page, host);
-  await page.goto(mode === "new" ? "/" : "/tasks/100");
+  await page.goto(mode === "new" ? "/" : "/sessions/100");
   if (mode === "new") {
     await page.getByRole("button", { name: "选择工作区" }).click();
     await page.getByRole("option", { name: /demo/ }).click();
   }
-  const input = page.getByLabel(mode === "new" ? "新对话内容" : "消息输入");
+  const input = page.getByLabel(mode === "new" ? "新会话内容" : "消息输入");
   await expect(input).toBeEditable();
   await expect(page.getByRole("combobox", { name: "选择模型" })).toContainText("demo-model");
-  return { input, send: page.getByRole("button", { name: mode === "new" ? "开始对话" : "发送", exact: true }) };
+  return { input, send: page.getByRole("button", { name: mode === "new" ? "开始会话" : "发送", exact: true }) };
 }
 
 test.beforeEach(async ({ page, request }) => {
   await request.post(`${api}/__test__/reset`);
-  for (const taskId of [100, 101]) await request.post(`${api}/__test__/seed-task`, { data: { taskId, title: `草稿${taskId}` } });
+  for (const sessionId of [100, 101]) await request.post(`${api}/__test__/seed-session`, { data: { sessionId, title: `草稿${sessionId}` } });
   await page.addInitScript(() => {
     localStorage.clear();
-    for (const scope of ["workspace:7", "workspace:8", "task:100", "task:101"]) {
+    for (const scope of ["workspace:7", "workspace:8", "session:100", "session:101"]) {
       localStorage.setItem(`cosir:model-config-selection:${scope}`, JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }));
     }
   });
@@ -78,7 +78,7 @@ test("工作区 A→B→A 保留各自草稿，撤销不会带回另一工作区
     const workspaces = await response.json();
     await route.fulfill({ response, json: [...workspaces, { ...workspaces[0], workspace_id: 8, name: "workspace-B", root_path: "/tmp/B" }] });
   });
-  await page.route("**/workspaces/8/tasks", route => route.fulfill({ json: [] }));
+  await page.route("**/workspaces/8/sessions", route => route.fulfill({ json: [] }));
   const { input } = await openComposer(page, "new");
   await input.fill("草稿 A");
   await page.getByRole("button", { name: "选择工作区，当前 demo" }).click();
@@ -100,7 +100,7 @@ test("原生选择框打开期间切换工作区，迟到文件不会写入任�
     const workspaces = await response.json();
     await route.fulfill({ response, json: [...workspaces, { ...workspaces[0], workspace_id: 8, name: "workspace-B", root_path: "/tmp/B" }] });
   });
-  await page.route("**/workspaces/8/tasks", route => route.fulfill({ json: [] }));
+  await page.route("**/workspaces/8/sessions", route => route.fulfill({ json: [] }));
   const { input, send } = await openComposer(page, "new");
   const chooser = await openNativePicker(page);
   await page.getByRole("button", { name: "选择工作区，当前 demo" }).click();
@@ -115,7 +115,7 @@ test("原生选择框打开期间切换工作区，迟到文件不会写入任�
   await expect(send).toBeDisabled();
 });
 
-for (const mode of ["new", "task"] as const) {
+for (const mode of ["new", "session"] as const) {
   test(`${mode} 普通文件删除、撤销、重做与发送失败恢复使用同一文档事实`, async ({ page }) => {
     const { input, send } = await openComposer(page, mode);
     await nativePicker(page);
@@ -134,7 +134,7 @@ for (const mode of ["new", "task"] as const) {
     await input.press(undo);
     await expect(input).toContainText("notes.md");
     let submitted: { message: { parts: { type: string; text: string }[] } } | undefined;
-    await page.route(`${api}/tasks/*/messages`, async route => {
+    await page.route(`${api}/sessions/*/messages`, async route => {
       submitted = route.request().postDataJSON();
       await route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "回归测试拒绝发送", retryable: true } } } });
     });
@@ -175,7 +175,7 @@ for (const mode of ["new", "task"] as const) {
   });
 }
 
-for (const mode of ["new", "task"] as const) {
+for (const mode of ["new", "session"] as const) {
   test(`${mode} 「+」菜单：插入 Skill 与常用提示词，管理打开提示词库，文件夹以目录引用插入`, async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("cosir:favorite-prompts:v1", JSON.stringify([{ id: "p1", title: "代码审查", content: "请审查这次改动" }]));
@@ -219,8 +219,8 @@ for (const mode of ["new", "task"] as const) {
   });
 }
 
-test("Task 草稿离开后恢复普通文件，原生选择迟到结果不会写入新 Task", async ({ page }) => {
-  const { input } = await openComposer(page, "task");
+test("Session 草稿离开后恢复普通文件，原生选择迟到结果不会写入新 Session", async ({ page }) => {
+  const { input } = await openComposer(page, "session");
   await input.fill("草稿 A ");
   await nativePicker(page);
   await page.getByText("草稿101", { exact: true }).click();
@@ -239,9 +239,9 @@ test("Task 草稿离开后恢复普通文件，原生选择迟到结果不会写
 });
 
 test("Shift+Enter 换行，组合输入 Enter 不提交，普通 Enter 只发送一次", async ({ page }) => {
-  const { input } = await openComposer(page, "task");
+  const { input } = await openComposer(page, "session");
   let sends = 0;
-  page.on("request", req => { if (req.url() === `${api}/tasks/100/messages` && req.method() === "POST") sends++; });
+  page.on("request", req => { if (req.url() === `${api}/sessions/100/messages` && req.method() === "POST") sends++; });
   await input.fill("第一行");
   await input.press("End");
   await input.press("Shift+Enter");
@@ -258,8 +258,8 @@ test("Shift+Enter 换行，组合输入 Enter 不提交，普通 Enter 只发送
   expect(sends).toBe(1);
 });
 
-test("Task 保活但已进入配置页时，迟到文件不写入隐藏草稿", async ({ page }) => {
-  const { input } = await openComposer(page, "task");
+test("Session 保活但已进入配置页时，迟到文件不写入隐藏草稿", async ({ page }) => {
+  const { input } = await openComposer(page, "session");
   await input.fill("保留正文");
   const chooser = await openNativePicker(page);
   await page.getByRole("button", { name: "系统配置", exact: true }).click();
@@ -274,7 +274,7 @@ test("重载后撤回带普通文件的消息：附件按快照里的路径放�
   await seedState(apiRequest, 100, completedState(70, { id: "history-user", parts: [
     { type: "text", text: '查看 <file path="/w/history.md" />', status: "completed" },
   ] }, [{ type: "text", text: "历史回复", status: "completed" }]));
-  await openComposer(page, "task");
+  await openComposer(page, "session");
   await page.reload();
   const user = page.locator('[data-role="user"]');
   await user.hover();
@@ -284,7 +284,7 @@ test("重载后撤回带普通文件的消息：附件按快照里的路径放�
   await input.getByRole("button", { name: "移除附件 history.md" }).click();
   await input.press(undo);
   await expect(input).toContainText("history.md");
-  const sendUrl = `${api}/tasks/100/messages`;
+  const sendUrl = `${api}/sessions/100/messages`;
   const request = page.waitForRequest(req => req.url() === sendUrl && req.method() === "POST");
   await page.route(sendUrl, async route => {
     await route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "历史附件回归拒绝", retryable: true } } } });
@@ -298,8 +298,8 @@ test("重载后撤回带普通文件的消息：附件按快照里的路径放�
   await expect(input).toContainText("history.md");
 });
 
-test("Task 图片上传成功但消息提交失败后，正文与完整图片附件均恢复", async ({ page }) => {
-  const { input, send } = await openComposer(page, "task");
+test("Session 图片上传成功但消息提交失败后，正文与完整图片附件均恢复", async ({ page }) => {
+  const { input, send } = await openComposer(page, "session");
   const assetId = "a".repeat(64);
   const locator = `cosir-attachment://${assetId}`;
   await page.route(`${api}/workspaces/7/attachments`, route => route.fulfill({ json: {
@@ -308,8 +308,8 @@ test("Task 图片上传成功但消息提交失败后，正文与完整图片附
   await page.route(`${api}/workspaces/7/attachments/${assetId}*`, route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9X8AAAAASUVORK5CYII=", "base64") }));
   await transfer(input, "paste", "uploaded.png", "image/png", "图片失败恢复");
   await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-tile"]')).toHaveCount(1);
-  const request = page.waitForRequest(req => req.url() === `${api}/tasks/100/messages` && req.method() === "POST");
-  await page.route(`${api}/tasks/100/messages`, route => route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "图片消息回归拒绝", retryable: true } } } }));
+  const request = page.waitForRequest(req => req.url() === `${api}/sessions/100/messages` && req.method() === "POST");
+  await page.route(`${api}/sessions/100/messages`, route => route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "图片消息回归拒绝", retryable: true } } } }));
   await send.click();
   const body = (await request).postDataJSON();
   expect(body.message.parts).toContainEqual({ type: "image", image: locator });

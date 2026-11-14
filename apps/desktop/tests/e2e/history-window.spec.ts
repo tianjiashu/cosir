@@ -9,7 +9,7 @@ import { API_ORIGIN as origin } from "./e2e-env";
  * 长对话的历史窗口：打开时只带最近一段（模拟后端与真实后端同为约 100 条），往上滚接近顶部时
  * 预取上一页插到前面且视口不跳。
  */
-const TASK_ID = 4501;
+const SESSION_ID = 4501;
 const PAIRS = 160;
 const OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 };
 const LAUNCH = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
@@ -32,7 +32,7 @@ const viewport = (page: Page) => page.locator(".aui-thread-root .overflow-y-auto
 
 /** 打开对话并停在底部：不依赖首次落底（曾在已移除的无头 WebKit 项目里偶发停在顶部）。 */
 async function openAtBottom(page: Page): Promise<void> {
-  await page.goto(`/tasks/${TASK_ID}`);
+  await page.goto(`/sessions/${SESSION_ID}`);
   await expect(page.locator(".aui-thread-root [data-index]").first()).toBeVisible();
   await viewport(page).evaluate((element) => { element.scrollTop = element.scrollHeight; });
   await expect(page.getByText(`第 ${PAIRS - 1} 轮回答`, { exact: false })).toBeVisible();
@@ -40,8 +40,8 @@ async function openAtBottom(page: Page): Promise<void> {
 
 test.beforeEach(async ({ request, page }) => {
   await request.post(`${origin}/__test__/reset`);
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: TASK_ID, title: "长对话" } });
-  await seedState(request, TASK_ID, longConversation());
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: SESSION_ID, title: "长对话" } });
+  await seedState(request, SESSION_ID, longConversation());
   await page.setViewportSize({ width: 1280, height: 900 });
 });
 
@@ -89,10 +89,10 @@ test("插入上一页后，视口里的内容停在原处", async ({ page }) => 
 test("对话区被隐藏再显示后，停在顶部的视口不跳", async ({ page, request }) => {
   // 浏览器面板铺满时对话区（main）被 display:none 隐藏；这里直接切换同一个类模拟。用全部加载得下的
   // 短对话停在顶部：顶部是隐藏期间 0 高度最容易引发连续滚动补偿的位置，且不会触发往前翻页。
-  const taskId = TASK_ID + 1;
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId, title: "短对话" } });
-  await seedState(request, taskId, longConversation(40));
-  await page.goto(`/tasks/${taskId}`);
+  const sessionId = SESSION_ID + 1;
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId, title: "短对话" } });
+  await seedState(request, sessionId, longConversation(40));
+  await page.goto(`/sessions/${sessionId}`);
   await expect(page.locator(".aui-thread-root [data-index]").first()).toBeVisible();
   await viewport(page).evaluate((element) => { element.scrollTop = 0; });
   await expect(page.getByText("问题 0", { exact: true })).toBeInViewport();

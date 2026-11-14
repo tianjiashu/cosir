@@ -11,6 +11,6 @@ def test_delegation_and_send_do_not_expose_a_background_switch() -> None:
 
     assert "background" not in DelegateTaskArgs.model_fields
     assert "background" not in SendMessageArgs.model_fields
-    from app.core.tool.multi_agent.args.fork_task_args import ForkTaskArgs
+    from app.core.tool.multi_agent.args.fork_session_args import ForkSessionArgs
 
-    assert "background" not in ForkTaskArgs.model_fields
+    assert "background" not in ForkSessionArgs.model_fields

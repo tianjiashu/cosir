@@ -16,7 +16,7 @@ describe("run launch lock", () => {
     expect(activeRunLaunch(state(status))).toBeNull();
   });
 
-  it("has no lock before the task has a run", () => {
+  it("has no lock before the session has a run", () => {
     expect(activeRunLaunch(null)).toBeNull();
     expect(activeRunLaunch(transportState())).toBeNull();
   });

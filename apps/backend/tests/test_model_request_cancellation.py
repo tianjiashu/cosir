@@ -10,16 +10,16 @@ from openai import APITimeoutError, AsyncOpenAI
 
 from app.config.constant import Constant
 from app.core.llm_provider.openai_model import OpenAIChatModel
-from app.core.workflow.cancel.conversation_run_cancellation_registry import (
-    ConversationRunCancellationRegistry,
+from app.core.workflow.cancel.run_cancellation_registry import (
+    RunCancellationRegistry,
 )
-from app.core.workflow.execution_state.conversation_run_usage_stats import ConversationRunUsageStats
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
 from app.core.workflow.node_helper import model_stream_state_machine as streaming_module
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import model_node, structured_output_node
-from app.models.enums.conversation_run_status import RunTransition
 from app.models.enums.react_route import ReactRoute
+from app.models.enums.run_status import RunTransition
 from tests.runtime_context_stub import run_state_stub, runtime_stub
 
 
@@ -131,7 +131,7 @@ def sdk_model(body):
 
 def bind_node(monkeypatch, model):
     """只替换节点的存储和展示边界，网络读取使用真实 SDK。"""
-    registry = ConversationRunCancellationRegistry()
+    registry = RunCancellationRegistry()
     snapshots, memberships, cancellations = [], [], []
 
     def save(snapshot, **kwargs):
@@ -150,12 +150,12 @@ def bind_node(monkeypatch, model):
         return SimpleNamespace(status=transition.target.value)
 
     runtime = runtime_stub(
-        run=SimpleNamespace(id=7, task_id=1),
-        task=SimpleNamespace(id=1, workspace_id=1),
+        run=SimpleNamespace(id=7, session_id=1),
+        session=SimpleNamespace(id=1, workspace_id=1),
         model=model,
-        usage_stats=ConversationRunUsageStats(),
+        usage_stats=RunUsageStats(),
         run_state=run_state_stub(transition=transition_run),
-        task_space=SimpleNamespace(take_runtime_notices=lambda **kw: None),
+        session_space=SimpleNamespace(take_runtime_notices=lambda **kw: None),
     )
     runtime.is_cancelled = lambda: registry.is_cancelled(7)
     for module in (model_node, structured_output_node):

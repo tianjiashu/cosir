@@ -1,6 +1,6 @@
 """Assistant Transport 请求的 wire schema。"""
 
-from app.assistant_transport.request.task_command_request import (
+from app.assistant_transport.request.session_command_request import (
     DecisionRequest,
     SendMessageRequest,
 )

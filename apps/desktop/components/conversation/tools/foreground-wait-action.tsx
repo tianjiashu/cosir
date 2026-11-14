@@ -2,7 +2,7 @@ import { backgroundTarget, commandPending, useCommandRequest } from "@/lib/assis
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { backgroundToolCall } from "@/lib/assistant/task-commands";
+import { backgroundToolCall } from "@/lib/assistant/session-commands";
 import { notify } from "@/lib/notify";
 import { useForegroundWaits } from "@/lib/background-tasks/background-tasks-store";
 
@@ -16,13 +16,13 @@ import { useForegroundWaits } from "@/lib/background-tasks/background-tasks-stor
  * 样式是一段安静的文字：不打断命令，是等待时的主操作，但不必有按钮外形。请求期间只变淡、文字不变，免得宽度
  * 跳动挤开状态；失败由 toast 说明，再点即重试。
  */
-export function ForegroundWaitAction({ taskId, toolCallId }: { taskId: number; toolCallId: string }) {
-  const foregroundWaits = useForegroundWaits(taskId);
-  const busy = commandPending(useCommandRequest(taskId, backgroundTarget(toolCallId)));
+export function ForegroundWaitAction({ sessionId, toolCallId }: { sessionId: number; toolCallId: string }) {
+  const foregroundWaits = useForegroundWaits(sessionId);
+  const busy = commandPending(useCommandRequest(sessionId, backgroundTarget(toolCallId)));
   if (!foregroundWaits.includes(toolCallId)) return null;
 
   const detach = async () => {
-    const failure = await backgroundToolCall(taskId, toolCallId);
+    const failure = await backgroundToolCall(sessionId, toolCallId);
     if (failure) notify.error(failure);
   };
 

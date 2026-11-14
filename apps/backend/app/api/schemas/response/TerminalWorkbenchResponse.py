@@ -21,4 +21,4 @@ class CreateTerminalSessionResponse(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    session_id: str = Field(serialization_alias="sessionId")
+    terminal_session_id: str = Field(serialization_alias="terminalSessionId")

@@ -6,7 +6,7 @@ from openai.types.chat import ChatCompletionUserMessageParam
 
 from app.core.workflow.message_queue.message_bodies.base import (
     EnqueuedMessageBody,
-    TaskMessageKind,
+    SessionMessageKind,
     WakeScope,
 )
 from app.core.workflow.message_queue.message_bodies.rendering import escape_tag, render_time
@@ -19,11 +19,15 @@ class DecisionBody(EnqueuedMessageBody):
     去向由工具声明（``ToolDefinition.user_decision``），不看决定本身：``execute`` 类工具无论批准还是
     驳回，``prepare_input`` 都绕过模型、带着决定直接执行 ``tool_call_id`` 对应的原调用（参数从
     context 里的原调用取，不随消息保存）——驳回同样要落定工具自己的事实，也只有执行结果能让等待
-    占位收尾；``reply`` 类工具的决定作为消息交给模型。一轮只处理一条需要执行的决定，且先于其他
-    消息处理。用户主动作出的决定可以唤醒挂起的 Run，也能在 Run 已完成、取消或失败后开出新 Run。
+    占位收尾；``reply`` 类工具的决定作为消息交给模型，并入的同一事务把等待占位推到
+    ``completed``（见 ``prepare_input``）。一轮只处理一条需要执行的决定，且先于其他消息处理。用户主动作出的决定可以唤醒挂起的 Run，也能在 Run 已完成、取消或失败后开出新 Run。
+
+    工具声明了载荷（``ToolDefinition.decision_model``）时，决定入口校验后把载荷放进 ``data``、把
+    工具渲染好的回执放进 ``reply``：正文在入队时定稿，渲染不必再读注册表；``data`` 只用于并入时
+    补进占位的展示数据。
     """
 
-    KIND: ClassVar[TaskMessageKind] = "user_decision"
+    KIND: ClassVar[SessionMessageKind] = "user_decision"
     TAG: ClassVar[str] = "user_decision"
     PROMPT_GUIDE: ClassVar[str | None] = (
         "the user's own decision on the call named by `tool_call_id`; `feedback`, if present, "
@@ -36,15 +40,20 @@ class DecisionBody(EnqueuedMessageBody):
     tool_name: str
     decision: Literal["approve", "reject"]
     feedback: str | None = None
+    data: dict[str, object] | None = None
+    reply: str | None = None
 
     def render(self) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
-        fb = ""
-        if self.feedback:
-            fb = f"\nfeedback: {escape_tag(self.feedback, self.TAG)}"
+        if self.reply is not None:
+            inner = escape_tag(self.reply, self.TAG)
+        else:
+            inner = f"decision: {self.decision}"
+            if self.feedback:
+                inner += f"\nfeedback: {escape_tag(self.feedback, self.TAG)}"
         content = (
             f'<{self.TAG} time="{render_time()}" tool_call_id="{self.tool_call_id}" '
             f'tool_name="{self.tool_name}">'
-            f"\ndecision: {self.decision}{fb}\n</{self.TAG}>"
+            f"\n{inner}\n</{self.TAG}>"
         )
         return (
             ChatCompletionUserMessageParam(role="user", content=content),

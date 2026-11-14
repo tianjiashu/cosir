@@ -13,7 +13,7 @@ import {
 } from "@assistant-ui/react";
 
 import { StopButton } from "@/components/conversation-runtime/stop-button";
-import { TaskContextUsage } from "@/components/conversation-runtime/usage-display";
+import { SessionContextUsage } from "@/components/conversation-runtime/usage-display";
 import { ComposerAddMenu } from "@/components/composer/add-menu/add-menu";
 import { ModelSelector } from "@/components/composer/composer-model-selector";
 import { ComposerToolbar } from "@/components/composer/composer-toolbar";
@@ -42,7 +42,7 @@ import { VirtualizedThreadMessages } from "@/components/conversation/thread/virt
 import { ConversationAsideSlot } from "@/components/conversation/thread/conversation-aside";
 import { QueuedMessages } from "@/components/conversation/thread/queued-messages";
 import { AgentInboundMessage } from "@/components/conversation/thread/agent-message";
-import { deleteQueuedTaskMessage, sendQueuedTaskMessageNow, withdrawTaskMessage } from "@/lib/assistant/task-commands";
+import { deleteQueuedSessionMessage, sendQueuedSessionMessageNow, withdrawSessionMessage } from "@/lib/assistant/session-commands";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { UserMessageContent, useHasUserMessageContent } from "@/components/conversation/thread/user-message-content";
 import { UserMessageImages } from "@/components/conversation/thread/user-message-images";
@@ -60,12 +60,12 @@ import { ComposerInsertionProvider } from "@/components/composer/composer-insert
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { notify } from "@/lib/notify";
-import { LinkTaskContext } from "@/components/links/use-open-link";
+import { LinkSessionContext } from "@/components/links/use-open-link";
 
 export type ThreadProps = {
   /** 只渲染 canonical message UI，不提供写入操作。 */
   readonly?: boolean;
-  taskId: number;
+  sessionId: number;
   workspaceId: number;
   toolGroups?: ToolGroupCatalog[];
   selectedToolGroups?: string[];
@@ -78,13 +78,13 @@ export type ThreadProps = {
   onForkMessage?: (messageId: string) => void;
   /** 可写对话必传（由 AssistantThreadSurface 提供）；只读对话不渲染 Composer，不需要。 */
   onResumeBusiness?: () => Promise<void>;
-  /** 用户已请求停止 Task 的当前活动、尚未收敛（Task 级，前端看不到 Run）。 */
+  /** 用户已请求停止 Session 的当前活动、尚未收敛（Session 级，前端看不到 Run）。 */
   cancelling?: boolean;
   performanceProbe?: AssistantPerformanceProbe | null;
 };
 
 const RESUME_FEEDBACK_TIMEOUT_MS = 15_000;
-type ThreadContextValue = Pick<ThreadProps, "forkingMessageId" | "onForkMessage" | "onResumeBusiness" | "workspaceRoot" | "cancelling" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "taskId" | "workspaceId">;
+type ThreadContextValue = Pick<ThreadProps, "forkingMessageId" | "onForkMessage" | "onResumeBusiness" | "workspaceRoot" | "cancelling" | "readonly" | "toolGroups" | "selectedToolGroups" | "onSelectedToolGroupsChange" | "toolGroupsLoading" | "toolGroupsError" | "sessionId" | "workspaceId">;
 const ThreadContext = createContext<ThreadContextValue | null>(null);
 
 /** 线程内部组件只在 Thread 下渲染；缺 Provider 是装配错误，直接暴露。 */
@@ -96,13 +96,13 @@ function useThreadContext(): ThreadContextValue {
 
 const isNewChatView = (state: AssistantState) => state.thread.messages.length === 0;
 
-export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId = null, onForkMessage, onResumeBusiness, cancelling = false, performanceProbe = null }) {
+export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, sessionId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId = null, onForkMessage, onResumeBusiness, cancelling = false, performanceProbe = null }) {
   const isEmpty = useAuiState(isNewChatView);
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
   return (
-    <ThreadContext.Provider value={{ taskId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, cancelling, readonly }}>
+    <ThreadContext.Provider value={{ sessionId, workspaceId, toolGroups, selectedToolGroups, onSelectedToolGroupsChange, toolGroupsLoading, toolGroupsError, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, cancelling, readonly }}>
       <AttachmentWorkspaceContext.Provider value={workspaceId}>
-      <LinkTaskContext.Provider value={taskId}>
+      <LinkSessionContext.Provider value={sessionId}>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
         {/*
           顶部锚点固定最新回合的用户消息，答案在其下方增长，流式 token 不会持续把滚动位置重新
@@ -119,7 +119,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
               <div className={cn("col-start-1 row-start-1 mx-auto flex min-w-0 w-full max-w-conversation flex-col px-4 pt-6", isEmpty && "justify-center")}>
                 <div className="mb-14">
                 <VirtualizedThreadMessages
-                  taskId={taskId}
+                  sessionId={sessionId}
                   components={messageComponents}
                   performanceProbe={performanceProbe}
                 />
@@ -138,7 +138,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
             </div>
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
-      </LinkTaskContext.Provider>
+      </LinkSessionContext.Provider>
       </AttachmentWorkspaceContext.Provider>
     </ThreadContext.Provider>
   );
@@ -192,7 +192,7 @@ const Composer = memo(function Composer() {
   // 运行期配置锁定：活动 Run 期间模型与工具显示 Run 冻结的配置且只读，发送也用这份配置。
   const runLaunch = useActiveRunLaunch();
   // 运行中照常可以发送（后端排进队列，当前 Run 结束后依次处理）；只有停止请求在途时不提交，避免与停止交错。
-  const { cancelling = false, taskId, workspaceRoot } = useThreadContext();
+  const { cancelling = false, sessionId, workspaceRoot } = useThreadContext();
   return (
     <ComposerInsertionProvider>
       <ComposerFeedbackProvider>
@@ -200,7 +200,7 @@ const Composer = memo(function Composer() {
           <div className="min-h-0 min-w-0 w-full">
             <ComposerAttachments />
             <InlineComposerInput
-              persistTaskDraft
+              persistSessionDraft
               placeholder={COMPOSER_PLACEHOLDER}
               className={COMPOSER_EDITOR_CLASS_NAME}
               autoFocus
@@ -213,10 +213,10 @@ const Composer = memo(function Composer() {
             config={(
               <>
                 <ThreadToolGroupSelector lockedLaunch={runLaunch} />
-                <ModelSelector scope={{ kind: "task", id: taskId }} runtimeModelContext locked={runLaunch} />
+                <ModelSelector scope={{ kind: "session", id: sessionId }} runtimeModelContext locked={runLaunch} />
               </>
             )}
-            status={<TaskContextUsage />}
+            status={<SessionContextUsage />}
             action={<ComposerAction />}
           />
           <ComposerFeedback />
@@ -228,7 +228,7 @@ const Composer = memo(function Composer() {
 
 const EMPTY_TOOL_GROUPS: ToolGroupCatalog[] = [];
 
-/** 任务页的「+」菜单：图片交给 assistant-ui composer，Skill 按 Task 所在工作区列出。 */
+/** 会话页的「+」菜单：图片交给 assistant-ui composer，Skill 按 Session 所在工作区列出。 */
 const ThreadComposerAddMenu: FC<{ workspaceRoot?: string }> = ({ workspaceRoot }) => {
   const composer = unstable_useComposerInput();
   const { workspaceId } = useThreadContext();
@@ -259,7 +259,7 @@ const ComposerAction: FC = () => {
   const isDraftEmpty = useAuiState((state) =>
     state.composer.text.trim().length === 0 && state.composer.attachments.length === 0,
   );
-  const { cancelling = false, onResumeBusiness, taskId } = useThreadContext();
+  const { cancelling = false, onResumeBusiness, sessionId } = useThreadContext();
   // 能否恢复是后端事实（cancelled / failed 且最后一个回合没被撤回），前端不推断。
   const canResume = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.activity?.resumable === true);
   const isCancelling = cancelling;
@@ -273,9 +273,9 @@ const ComposerAction: FC = () => {
 
   useEffect(() => {
     void frontendLog("DEBUG", "composer_action_derived", "Composer action 状态发生变化", {
-      data: { taskId, action, isRunning, isDraftEmpty, canResume, isCancelling },
+      data: { sessionId, action, isRunning, isDraftEmpty, canResume, isCancelling },
     });
-  }, [action, canResume, isCancelling, isDraftEmpty, isRunning, taskId]);
+  }, [action, canResume, isCancelling, isDraftEmpty, isRunning, sessionId]);
 
   useEffect(() => {
     if (isRunning || !canResume) {
@@ -294,18 +294,18 @@ const ComposerAction: FC = () => {
       setResumeError(message);
       notify.error("继续运行失败", { error: new UserFacingError(message) });
       void frontendLog("WARNING", "composer_resume_feedback_timeout", "继续运行请求超时未建立连接", {
-        data: { taskId, timeoutMs: RESUME_FEEDBACK_TIMEOUT_MS },
+        data: { sessionId, timeoutMs: RESUME_FEEDBACK_TIMEOUT_MS },
       });
     }, RESUME_FEEDBACK_TIMEOUT_MS);
     return () => window.clearTimeout(timeout);
-  }, [resuming, taskId]);
+  }, [resuming, sessionId]);
 
   if (action === "stop") {
-    return <StopButton taskId={taskId} />;
+    return <StopButton sessionId={sessionId} />;
   }
 
   if (action === "cancelling") {
-    return <StopButton taskId={taskId} isCancelling />;
+    return <StopButton sessionId={sessionId} isCancelling />;
   }
 
   if (action === "resume") {
@@ -323,7 +323,7 @@ const ComposerAction: FC = () => {
         setResumeError(userErrorMessage(error, fallback));
         notify.error("继续运行失败", { error, fallback, action: { label: "重试", onClick: () => void resume() } });
         void frontendLog("ERROR", "composer_resume_failed", "继续运行请求失败", {
-          data: { taskId },
+          data: { sessionId },
           error,
         });
       }
@@ -344,16 +344,12 @@ const ComposerAction: FC = () => {
     );
   }
 
+  // 一个按钮位：有草稿就是发送，停止只在草稿为空时出现（见 `deriveComposerAction`）。Run 活动期间
+  // 发出去是排队还是立即处理由后端定（挂着提问时会立即处理），这里不预告，去向看输入框上方的队列区。
   return (
-    <div className="flex items-center gap-2">
-      {isRunning && <StopButton taskId={taskId} />}
-      <ComposerSendButton
-        aria-label={isRunning ? "加入队列" : "发送"}
-        title={isRunning ? "加入队列：当前运行结束后依次处理，可在队列里改为立即发送" : undefined}
-      >
-        <ArrowUpIcon className="size-4" />
-      </ComposerSendButton>
-    </div>
+    <ComposerSendButton aria-label="发送">
+      <ArrowUpIcon className="size-4" />
+    </ComposerSendButton>
   );
 };
 
@@ -364,11 +360,11 @@ const QUEUED_LABELS: Record<InputDelivery, string> = {
 };
 
 const ThreadMessage: FC = () => {
-  const { taskId } = useThreadContext();
+  const { sessionId } = useThreadContext();
   const role = useAuiState((state) => state.message.role);
   const source = useAuiState((state) => messageSource(state.message.metadata.custom));
   // Agent 消息在这里就分流：它不能进入 UserMessage 的编辑态恢复与排队判定。
-  if (source !== null) return <AgentInboundMessage source={source} taskId={taskId} />;
+  if (source !== null) return <AgentInboundMessage source={source} sessionId={sessionId} />;
   return role === "user" ? <UserMessage /> : <AssistantMessage />;
 };
 
@@ -387,28 +383,28 @@ const UserMessage: FC = () => {
 
 /**
  * 气泡上的「撤回」：撤回这条消息开启的回合，把正文与附件放回输入框（编辑即撤回后改完再发）。只对
- * Task 已停下时的最新一条可用，撤回不通知模型、不撤销已经做过的事。
+ * Session 已停下时的最新一条可用，撤回不通知模型、不撤销已经做过的事。
  */
 const WithdrawMessageButton: FC = () => {
   const message = useAuiState((state) => state.message);
   const canonical = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.messages
     .find((item) => item.id === state.message.id));
-  const { taskId } = useThreadContext();
+  const { sessionId } = useThreadContext();
   const [busy, setBusy] = useState(false);
   const withdraw = async () => {
     if (busy || message.role !== "user" || !canonical) return;
     setBusy(true);
     try {
       await moveMessageToComposer({
-        taskId,
+        sessionId,
         message,
         canonical,
-        remove: () => withdrawTaskMessage(taskId, message.id),
+        remove: () => withdrawSessionMessage(sessionId, message.id),
       });
-      void frontendLog("INFO", "message_withdrawn", "消息已撤回并放回输入框", { data: { taskId, messageId: message.id } });
+      void frontendLog("INFO", "message_withdrawn", "消息已撤回并放回输入框", { data: { sessionId, messageId: message.id } });
     } catch (error) {
       notify.error("撤回失败", { error, fallback: "这条消息可能已不是最新一条，请以对话内容为准" });
-      void frontendLog("WARNING", "message_withdraw_failed", "撤回消息失败", { data: { taskId, messageId: message.id }, error });
+      void frontendLog("WARNING", "message_withdraw_failed", "撤回消息失败", { data: { sessionId, messageId: message.id }, error });
     } finally {
       setBusy(false);
     }
@@ -426,7 +422,7 @@ const UserMessageView: FC = () => {
   const hasContent = useHasUserMessageContent();
   // 渲染失败时的纯文本兜底：只拼正文，胶囊所在位置留空。
   const userText = useAuiState((state) => state.message.parts.map((part) => part.type === "text" ? part.text : "").join(""));
-  const { readonly: readonlyThread, taskId } = useThreadContext();
+  const { readonly: readonlyThread, sessionId } = useThreadContext();
   const readonly = readonlyThread === true;
   const canWithdraw = useAuiState((state) => {
     if (readonly) return false;
@@ -450,7 +446,7 @@ const UserMessageView: FC = () => {
       <div className="flex max-w-[85%] flex-col items-end gap-2">
         <UserMessageImages />
         {hasContent && (
-          <UserMessageBubble taskId={taskId} messageId={messageId}>
+          <UserMessageBubble sessionId={sessionId} messageId={messageId}>
             {/* 正文与行内胶囊是一个整体渲染单元（见 UserMessageContent），按消息隔离而不是按 part。 */}
             <RenderIsolationBoundary
               scope="message"
@@ -508,7 +504,7 @@ const QueuedMessageView: FC = () => {
   const hasContent = useHasUserMessageContent();
   const delivery = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages
     ?.find((message) => message.id === messageId)?.delivery ?? "next_run");
-  const { taskId } = useThreadContext();
+  const { sessionId } = useThreadContext();
   const [busy, setBusy] = useState<QueuedCommand | null>(null);
 
   const canonical = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages
@@ -516,10 +512,10 @@ const QueuedMessageView: FC = () => {
   const moveToComposer = async () => {
     if (message.role !== "user" || !canonical) return;
     await moveMessageToComposer({
-      taskId,
+      sessionId,
       message,
       canonical,
-      remove: () => deleteQueuedTaskMessage(taskId, messageId),
+      remove: () => deleteQueuedSessionMessage(sessionId, messageId),
     });
   };
 
@@ -527,16 +523,16 @@ const QueuedMessageView: FC = () => {
     if (busy !== null) return;
     setBusy(command);
     try {
-      if (command === "send_now") await sendQueuedTaskMessageNow(taskId, messageId);
+      if (command === "send_now") await sendQueuedSessionMessageNow(sessionId, messageId);
       else if (command === "edit") await moveToComposer();
-      else await deleteQueuedTaskMessage(taskId, messageId);
+      else await deleteQueuedSessionMessage(sessionId, messageId);
       void frontendLog("INFO", "queued_message_command_accepted", "排队消息命令已受理", {
-        data: { taskId, messageId, command },
+        data: { sessionId, messageId, command },
       });
     } catch (error) {
       notify.error(QUEUED_COMMAND_FAILURE[command], { error, fallback: "这条消息可能已开始处理，请以对话内容为准" });
       void frontendLog("WARNING", "queued_message_command_failed", "排队消息命令失败", {
-        data: { taskId, messageId, command },
+        data: { sessionId, messageId, command },
         error,
       });
     } finally {
@@ -600,22 +596,22 @@ const QueuedMessageView: FC = () => {
  * 只依赖消息自身事实；不回查 `thread.state`，只读作用域也能正常渲染。
  */
 const AssistantMessage: FC = () => {
-  const { cancelling = false, taskId, readonly = false } = useThreadContext();
+  const { cancelling = false, sessionId, readonly = false } = useThreadContext();
   return (
     <MessagePrimitive.Root data-role="assistant" className="group/message relative -mb-6 px-2 pb-6">
       <div className="text-foreground wrap-break-word">
-        <Turn taskId={taskId} readonly={readonly} cancelling={cancelling} footerAction={<ForkReplyAction />} />
+        <Turn sessionId={sessionId} readonly={readonly} cancelling={cancelling} footerAction={<ForkReplyAction />} />
       </div>
     </MessagePrimitive.Root>
   );
 };
 
-/** 来源是 Task 元数据，不占消息位置、不进入模型输入。 */
+/** 来源是 Session 元数据，不占消息位置、不进入模型输入。 */
 function ForkOrigin() {
   const fork = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.fork);
   if (!fork) return null;
   return <div data-slot="fork-origin" className="text-muted-foreground mx-auto w-full max-w-conversation px-6 py-2 text-xs">
-    继承自「{fork.sourceTitle}」· {fork.taskType === "agent_fork" ? "截至上一条回复 · 历史仅供上下文使用" : "截至所选回复"}
+    继承自「{fork.sourceTitle}」· {fork.sessionType === "agent_fork" ? "截至上一条回复 · 历史仅供上下文使用" : "截至所选回复"}
   </div>;
 }
 
@@ -625,7 +621,7 @@ function ForkReplyAction() {
   const id = useAuiState((state) => state.message.id);
   const inProgress = useAuiState((state) => isActiveRunStatus((state.message.metadata.custom?.activity as TransportActivity | null | undefined)?.status));
   if (readonly || !onForkMessage || inProgress) return null;
-  return <TooltipIconButton tooltip="从这里分叉：开一个新对话，当前对话保持不变" aria-label="从这里分叉" size="sm"
+  return <TooltipIconButton tooltip="从这里分叉：开一个新会话，当前会话保持不变" aria-label="从这里分叉" size="sm"
     disabled={forkingMessageId != null} onClick={() => onForkMessage(id)}>
     {forkingMessageId === id ? <Loader2Icon className="animate-spin" /> : <GitForkIcon />}
   </TooltipIconButton>;

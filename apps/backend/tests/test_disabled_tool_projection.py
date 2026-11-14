@@ -7,10 +7,10 @@ import pytest
 from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
 )
-from app.models.conversation_task_context import (
-    ConversationTaskContextRecord,
-)
 from app.models.message_metadata import ToolMessageMetadata
+from app.models.session_context import (
+    SessionContextRecord,
+)
 
 
 def test_rebuild_pairs_disabled_tool_closure_with_metadata(
@@ -19,9 +19,9 @@ def test_rebuild_pairs_disabled_tool_closure_with_metadata(
     """禁用调用的 ToolMessage 参与冷重建时，必须有完整的状态 metadata。"""
 
     rows = [
-        ConversationTaskContextRecord(
+        SessionContextRecord(
             id=1,
-            task_id=7,
+            session_id=7,
             run_id=1,
             message={
                 "role": "assistant",
@@ -38,9 +38,9 @@ def test_rebuild_pairs_disabled_tool_closure_with_metadata(
             sequence=1,
             turn=1,
         ),
-        ConversationTaskContextRecord(
+        SessionContextRecord(
             id=2,
-            task_id=7,
+            session_id=7,
             run_id=1,
             message={
                 "role": "tool",

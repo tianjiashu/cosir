@@ -8,7 +8,7 @@ import { isMac } from "@/lib/platform";
  * 与 WebView / 系统保留键（⌘Q、⌘W、⌘R 等）以及编辑器内快捷键不冲突。
  */
 export const APP_SHORTCUTS = {
-  newConversation: { keys: "mod+n", label: "新对话" },
+  newConversation: { keys: "mod+n", label: "新会话" },
   toggleSidebar: { keys: "mod+b", label: "切换侧栏" },
   openSettings: { keys: "mod+comma", label: "打开系统配置" },
   commandPalette: { keys: "mod+k", label: "命令面板" },
@@ -48,7 +48,7 @@ export function formatKeys(keys: string): string {
   return isMac ? parts.join("") : parts.join("+");
 }
 
-/** tooltip 文案：「新对话（⌘N）」。 */
+/** tooltip 文案：「新会话（⌘N）」。 */
 export function withShortcut(label: string, id: AppShortcutId): string {
   return `${label}（${shortcutLabel(id)}）`;
 }

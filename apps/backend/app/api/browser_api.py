@@ -11,12 +11,12 @@ from app.app import app
 from app.service.browser.tab_context import BrowserTabContext
 
 
-@app.get("/tasks/{task_id}/browser-context", response_model=BrowserContextResponse)
-async def get_browser_context(task_id: int) -> BrowserContextResponse:
-    """返回该 Task 的标签上限与下载目录；Task 不存在时 404。"""
+@app.get("/sessions/{session_id}/browser-context", response_model=BrowserContextResponse)
+async def get_browser_context(session_id: int) -> BrowserContextResponse:
+    """返回该 Session 的标签上限与下载目录；Session 不存在时 404。"""
 
     try:
-        context = BrowserTabContext.from_task(task_id)
+        context = BrowserTabContext.from_session(session_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail="task not found") from exc
+        raise HTTPException(status_code=404, detail="session not found") from exc
     return BrowserContextResponse.from_domain(context)

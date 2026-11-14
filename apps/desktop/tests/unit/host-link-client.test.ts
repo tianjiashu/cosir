@@ -114,7 +114,7 @@ describe("HostLinkClient", () => {
     const socket = FakeSocket.instances[0];
     socket.open();
 
-    socket.deliver({ id: 1, method: "demo.echo", params: { n: 1 }, meta: { task_id: 7 } });
+    socket.deliver({ id: 1, method: "demo.echo", params: { n: 1 }, meta: { session_id: 7 } });
     socket.deliver({ id: 2, method: "demo.fail", params: {} });
     socket.deliver({ id: 3, method: "demo.crash", params: {} });
     socket.deliver({ id: 4, method: "demo.missing", params: {} });
@@ -122,7 +122,7 @@ describe("HostLinkClient", () => {
 
     expect(socket.sent.slice(1)).toEqual(
       expect.arrayContaining([
-        { id: 1, result: { params: { n: 1 }, meta: { task_id: 7 } } },
+        { id: 1, result: { params: { n: 1 }, meta: { session_id: 7 } } },
         { id: 2, error: { code: "TAB_NOT_FOUND", message: "gone" } },
         { id: 3, error: { code: "INTERNAL", message: "the host method failed unexpectedly" } },
         { id: 4, error: { code: "METHOD_NOT_FOUND", message: "unknown host method: demo.missing" } },
@@ -164,10 +164,10 @@ describe("HostLinkClient", () => {
     const socket = FakeSocket.instances[0];
     socket.open();
 
-    socket.deliver({ method: "demo.dropped", params: { task_ids: [1] } });
+    socket.deliver({ method: "demo.dropped", params: { session_ids: [1] } });
     await settle();
 
-    expect(received).toEqual([{ task_ids: [1] }]);
+    expect(received).toEqual([{ session_ids: [1] }]);
     expect(socket.sent).toHaveLength(1);
   });
 

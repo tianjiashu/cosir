@@ -34,10 +34,10 @@ const search = toolCallPart("search", "web_search", {
 
 test.beforeEach(async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "链接图标" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "链接图标" } });
   await request.post(`${API_ORIGIN}/__test__/seed-state`, {
     data: {
-      taskId: 42,
+      sessionId: 42,
       hold: true,
       state: transportState({
         messages: [userMessage("u", 1, "看看 https://github.com/owner/repo"), assistantMessage("a", 1, [search, { type: "text", text: REPLY }])],
@@ -50,7 +50,7 @@ test.beforeEach(async ({ page, request }) => {
 
 for (const colorScheme of ["light", "dark"] as const) test(`conversation objects carry their icons in ${colorScheme} mode`, async ({ page }) => {
   await page.emulateMedia({ colorScheme });
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const link = (name: string) => page.getByRole("link", { name, exact: true });
 
   await expect(link("有图标的站点").locator("img")).toHaveAttribute("src", "https://icon.example/favicon.ico");
@@ -67,7 +67,7 @@ for (const colorScheme of ["light", "dark"] as const) test(`conversation objects
 });
 
 test("tool result links ask before leaving the app", async ({ page }) => {
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await page.locator('[data-slot="activity-head"]').click();
   await page.locator('[data-tool-call-id="search"]').getByRole("button").first().click();
   const result = page.getByRole("link", { name: "搜索结果", exact: true });

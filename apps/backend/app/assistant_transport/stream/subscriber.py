@@ -10,7 +10,7 @@ from app.assistant_transport.stream.transport_frame import TransportFrame
 
 
 class SubscriberClosed(RuntimeError):
-    """当 task 删除或进程关闭导致 subscriber 关闭时抛出。"""
+    """当 session 删除或进程关闭导致 subscriber 关闭时抛出。"""
 
 
 @dataclass(eq=False)
@@ -64,7 +64,7 @@ class Subscriber:
         if len(self._mutation_queue) >= self.mutation_limit:
             self._mutation_queue.clear()
             self._control_frame = TransportFrame(
-                task_id=frame.task_id,
+                session_id=frame.session_id,
                 kind="resync_required",
                 mutations=(),
                 resync_reason="subscriber_backpressure",
@@ -112,7 +112,7 @@ def _can_coalesce(previous: TransportFrame, current: TransportFrame) -> bool:
         left.kind == "append-text"
         and right.kind == "append-text"
         and left.path == right.path
-        and previous.task_id == current.task_id
+        and previous.session_id == current.session_id
     )
 
 
@@ -121,7 +121,7 @@ def _coalesce(previous: TransportFrame, current: TransportFrame) -> TransportFra
 
     left, right = previous.mutations[0], current.mutations[0]
     return TransportFrame(
-        task_id=current.task_id,
+        session_id=current.session_id,
         kind="mutation",
         mutations=(
             type(left)(

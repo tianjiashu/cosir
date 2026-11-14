@@ -35,7 +35,7 @@ def plan_tool_call_runtime_update(
             extra={
                 "msg": "运行期工具投影目标不存在，跳过事件",
                 "data": {
-                    "task_id": event.task_id,
+                    "session_id": event.session_id,
                     "run_id": event.run_id,
                     "tool_call_id": event.tool_call_id,
                 },
@@ -91,7 +91,7 @@ def _plan_terminal_output(
             extra={
                 "msg": "运行中命令没有初始展示数据，丢弃输出块",
                 "data": {
-                    "task_id": event.task_id,
+                    "session_id": event.session_id,
                     "run_id": event.run_id,
                     "tool_call_id": event.tool_call_id,
                     "seq": event.seq,

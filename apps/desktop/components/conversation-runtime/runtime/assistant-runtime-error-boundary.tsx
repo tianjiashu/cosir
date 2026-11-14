@@ -7,7 +7,7 @@ import {
 import { frontendLog } from "@/lib/logging/frontend-log";
 
 type RuntimeErrorBoundaryProps = {
-  taskId: number;
+  sessionId: number;
   children: ReactNode;
   onRetry: () => void;
 };
@@ -29,7 +29,7 @@ export class AssistantRuntimeErrorBoundary extends Component<
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     void frontendLog("ERROR", "assistant_runtime_render_failed", "Assistant 对话界面渲染失败", {
-      data: { taskId: this.props.taskId, componentStack: info.componentStack ?? "" },
+      data: { sessionId: this.props.sessionId, componentStack: info.componentStack ?? "" },
       error,
     });
   }

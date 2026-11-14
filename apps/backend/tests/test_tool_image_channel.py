@@ -23,7 +23,7 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.message_queue.task_message import MODEL_INPUT_BODIES, ToolImageBody
+from app.core.workflow.message_queue.session_message import MODEL_INPUT_BODIES, ToolImageBody
 from app.service.attachment.attachment_service import AttachmentService
 
 
@@ -91,7 +91,7 @@ def _gate_outcome(supports_image: bool | None):
         else SimpleNamespace(model=SimpleNamespace(supports_image=supports_image))
     )
     context = ToolExecutionContext(
-        task_id=1, workspace_id=1, workspace_root=Path("."), step_id="s", run_id=1, agent=agent
+        session_id=1, workspace_id=1, workspace_root=Path("."), step_id="s", run_id=1, agent=agent
     )
     gate = ToolAccessGate(ToolRegistry([definition]))
     return gate.evaluate(ToolCall("demo_capture", '{"intent":"检查图像"}', "call-1"), context)

@@ -115,7 +115,7 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   await expect(page.getByRole("checkbox", { name: "子Agent工具" })).toBeEnabled();
   await expect(page.getByRole("checkbox", { name: "文件" })).toBeEnabled();
   await expect(page.getByText("1 个工具", { exact: true })).toHaveCount(0);
-  // 从对话进入配置时任务页保活在内容层之下，composer 的「选择模型」可能同样在 DOM 中，故限定到编辑器表单内。
+  // 从对话进入配置时会话页保活在内容层之下，composer 的「选择模型」可能同样在 DOM 中，故限定到编辑器表单内。
   const editorModelSelector = page
     .locator("section")
     .filter({ hasText: "允许的工具组" })

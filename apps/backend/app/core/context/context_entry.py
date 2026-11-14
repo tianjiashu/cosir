@@ -15,5 +15,5 @@ class ContextEntry:
     # 只有用户消息有身份（message_queue 行 id，排队与已消费阶段共用）；其余角色为 None。
     message_id: int | None = None
     metadata: MessageMetadata = field(default_factory=EmptyMessageMetadata)
-    # 所属回合（见 ``ConversationTaskContextModel.turn``）；必填：漏传会被静默记成别的回合。
+    # 所属回合（见 ``SessionContextModel.turn``）；必填：漏传会被静默记成别的回合。
     turn: int = field(kw_only=True)

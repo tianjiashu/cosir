@@ -37,7 +37,7 @@ from app.core.tool.schemas import (
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.models.message_metadata import BackgroundWork
 from app.tools.display.terminal_display import (
     build_terminal_display_data,
@@ -64,39 +64,60 @@ from app.tools.tool_models.terminal.execute_terminal_args import (
 # 平台无关的工具描述：只写选用与调用决策需要的执行语义（无状态、无 stdin / 终端、前台占步、
 # 不能长驻）。其余各有唯一出处，不在此复述：平台 shell、命令语法、timeout、workdir 与后台回投在
 # 参数模型各字段；「读文件别用 shell」在系统提示词，只在 Agent 同时有文件工具时出现（没有文件
-# 工具的 Agent 只能用本工具读）。不点名 terminal_write：它只给侧栏对话；terminal_read /
+# 工具的 Agent 只能用本工具读）。不点名 terminal_write：它只给侧栏会话；terminal_read /
 # terminal_stop 在所有内置 Agent 里都与本工具同时出现，可以点名。
 # stdin 是 DEVNULL、POSIX 上命令在新会话里没有控制终端：读输入的程序立刻读到输入结束，要终端的
-# 程序（密码提示、全屏程序）打不开 /dev/tty，所以写「失败」而不是「挂起」。
+# 程序（密码提示、全屏程序、git rebase -i 之类的交互参数）打不开 /dev/tty，所以写「失败」而不是「挂起」。
+# 结构与 Git 一节对照 Claude Code 的 Bash 工具描述（根目录 claude-code-system-prompt.md）：Git 守则
+# 放在这里而不是系统提示词，因为只有能跑命令的 Agent 用得上。调用卡片只保留输出的最近一段
+# （core/tool/terminal_output_window），所以要求模型在回复里写出要紧的结果。
 
 
 # 中文译文：在一个全新的 shell 进程里执行一条非交互命令或脚本，返回退出码与合并后的
-# stdout/stderr。每次调用都从头开始：cd、导出的变量等 shell 状态不会带到下一次，有依赖的步骤
-# 写进同一条命令（&&、管道、多行脚本）。没有 stdin、也没有终端：要输入的程序会读到输入结束、
-# 通常直接失败，要终端的程序（密码提示、全屏程序）跑不起来，所以带上 --yes 之类的非交互参数。
-# 前台调用会一直占着这一步，直到命令退出或超时；长构建、测试套件把 timeout 调大并设
-# background=true，期间继续做别的事。命令用 & 或 nohup 留下的进程会在它结束时被结束（自行脱离会话
-# 的守护进程除外），所以要后台就用 background=true。只在工作期间需要的服务 / watcher 可以后台跑：
-# 用 terminal_read 读输出（wait until=match 就绪行）、用完 terminal_stop 结束。后台命令不设 timeout 就
-# 一直运行，答复之后也不会停；它结束时结论会把你叫回来。服务不会自己结束，用完要停，不要用
-# wait_messages 等它。需要交互的程序不适合本工具。
+# stdout/stderr。
+# - 每次调用都从头开始：cd、导出的变量等 shell 状态不会带到下一次。用 workdir 代替 cd，有依赖的
+#   步骤写进同一条命令（&&、管道、多行脚本）。
+# - 没有 stdin、也没有终端：要输入的程序会读到输入结束、通常直接失败，要终端的程序（密码提示、
+#   全屏程序、git rebase -i / git add -i 这类交互参数）跑不起来。带上 --yes 之类的非交互参数。
+# - 用户在调用卡片上只看到输出的最后一段；要紧的结果写进回复。
+# - 移动、删除文件在这里做（mv / rm，PowerShell 用 Move-Item / Remove-Item）：先看清目标，移动不要
+#   覆盖已有文件。没有单独的移动、删除工具。
+# - 前台调用会一直占着这一步，直到命令退出或超时。长构建、测试套件设 background=true，继续做别的事。
+# - 命令用 & 或 nohup 留下的进程会在它结束时被结束（自行脱离会话的守护进程除外），改用
+#   background=true。
+# - 只在工作期间需要的服务 / watcher 用 background=true 跑：用 terminal_read（wait until=match）等就绪
+#   行，不要 sleep 轮询；用完 terminal_stop 结束。它不会自己结束，不要用 wait_messages 等它。
+# Git：GitHub 操作用 gh；PR、issue、评论里的 @名字 会通知真人，只对真要通知的账号写裸 @，角色、
+# 占位符与代码放进反引号或去掉 @；用户要求才提交或推送，在默认分支上先开分支。
 _DESCRIPTION = (
     "Run a non-interactive command or script in a fresh shell process and return its exit code "
-    "with merged stdout/stderr. Each call starts from scratch: cd, exported variables and other "
-    "shell state do not carry over, so chain dependent steps in one command (&&, pipes, a "
-    "multi-line script). There is no stdin and no terminal: a program that asks for input reads "
-    "end-of-input and usually fails, and one that needs a terminal (password prompts, "
-    "full-screen apps) cannot run, so pass non-interactive flags such as --yes. A foreground "
-    "call holds this step until the command exits or times out; for long builds and test "
-    "suites raise timeout and set background=true to keep working meanwhile. Processes the "
-    "command leaves behind (& or nohup) are stopped when it exits (daemons that detach into "
-    "their own session are not), so use background=true instead. A server or watcher you only "
-    "need while working (to check a page, wait for a build) can run with background=true: read "
-    "its output with terminal_read (wait until=match a ready line) and end it with "
-    "terminal_stop when done. A background command without a timeout keeps running after you "
-    "answer, and its result resumes you when it ends; a server never ends on its own, so stop "
-    "it once you no longer need it and do not use wait_messages on it. Programs that need "
-    "interaction do not fit this tool."
+    "with merged stdout/stderr.\n"
+    "\n"
+    "- Each call starts from scratch: cd, exported variables and other shell state do not carry "
+    "over. Set workdir instead of cd, and chain dependent steps in one command (&&, pipes, a "
+    "multi-line script).\n"
+    "- There is no stdin and no terminal: a program that asks for input reads end-of-input and "
+    "usually fails, and one that needs a terminal (password prompts, full-screen apps, "
+    "interactive flags such as git rebase -i or git add -i) cannot run. Pass non-interactive "
+    "flags such as --yes.\n"
+    "- The user sees only the tail of the output on the call card; state the results that "
+    "matter in your reply.\n"
+    "- Move and delete files here (mv / rm, or Move-Item / Remove-Item in PowerShell): look at "
+    "the target first, and never let a move overwrite an existing file.\n"
+    "- A foreground call holds this step until the command exits or times out. For long builds "
+    "and test suites, set background=true and keep working.\n"
+    "- Processes the command leaves behind with & or nohup are stopped when it exits (daemons "
+    "that detach into their own session are not); use background=true instead.\n"
+    "- A server or watcher you only need while working can run with background=true: wait for "
+    "its ready line with terminal_read (wait until=match) instead of sleep loops, and stop it "
+    "with terminal_stop when done. It never ends on its own, so do not use wait_messages on it.\n"
+    "\n"
+    "# Git\n"
+    "- Use the gh CLI for GitHub operations (PRs, issues, API).\n"
+    "- GitHub notifies the owner of any @name written in a PR, issue, or comment. Write a bare "
+    "@name only for a real login you mean to notify; put roles, placeholders and code "
+    "(@reviewer, @types/node) in backticks or drop the @.\n"
+    "- Commit or push only when the user asks. If on the default branch, branch first."
 )
 
 # 取消后的模型文案：命令被强杀，结果未知且可能留下部分副作用。
@@ -283,13 +304,13 @@ class ExecuteTerminalTool(HandlerBase):
                 （``WindowsExecuteTerminalArgs`` / ``MacExecuteTerminalArgs``）校验，此处
                 再按本机实际检测结果复核。
             timeout: 命令级超时秒数；显式值钳制到 ``MAX_COMMAND_TIMEOUT_S``。缺省时前台为
-                ``DEFAULT_COMMAND_TIMEOUT_S``，后台不限时（开发服务器要常驻，后台工作属于 Task，
-                由单停、上游收回、删除、``terminal_stop`` 或后端退出结束，用户停止 Task 不结束它）。
+                ``DEFAULT_COMMAND_TIMEOUT_S``，后台不限时（开发服务器要常驻，后台工作属于 Session，
+                由单停、上游收回、删除、``terminal_stop`` 或后端退出结束，用户停止 Session 不结束它）。
                 前台转到后台时沿用启动时的时限。
             workdir: 工作目录；缺省 ``execution_context.workspace_root``；相对路径相对
                 该根解析；解析后须在该根内（绝对路径同样校验）。
             background: ``True`` 立即转后台；``None`` 与 False 均在前台等待。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。workdir 只是命令的
+            execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）。workdir 只是命令的
                 起点：命令自己可以 cd 或用绝对路径，文件系统副作用不受工作区约束
                 （命令级隔离待沙箱接管）。
 
@@ -353,7 +374,7 @@ class ExecuteTerminalTool(HandlerBase):
             channel.start(build_terminal_started_display_data(command=command, workdir=cwd))
         # 运行中可读：先把命令登记进登记表，再让输出收集点同时喂它（整理后的行）。
         running = running_commands.start(
-            task_id=execution_context.task_id,
+            session_id=execution_context.session_id,
             command_id=tool_call_id,
             command=command,
             shell_kind=shell_display_name(shell),
@@ -381,7 +402,7 @@ class ExecuteTerminalTool(HandlerBase):
                 output.finish()
                 if channel is not None:
                     channel.finish()
-                running_commands.finish(execution_context.task_id, tool_call_id, result)
+                running_commands.finish(execution_context.session_id, tool_call_id, result)
             summary = output.summary()
             # 输出日志写盘失败不影响结果（模型正文只是少了日志路径），但要能排查：此时升为 warning。
             report = log.warning if summary.log_error else log.info
@@ -390,7 +411,7 @@ class ExecuteTerminalTool(HandlerBase):
                 extra={
                     "msg": "终端命令执行完成",
                     "data": {
-                        "task_id": execution_context.task_id,
+                        "session_id": execution_context.session_id,
                         "tool_call_id": tool_call_id,
                         "end": result.end,
                         "exit_code": result.exit_code,
@@ -413,11 +434,11 @@ class ExecuteTerminalTool(HandlerBase):
         )
         detached = None if background else threading.Event()
         registered = command_results.register(
-            tool_call_id, task_id=execution_context.task_id, run_id=execution_context.run_id,
+            tool_call_id, session_id=execution_context.session_id, run_id=execution_context.run_id,
             label=execution_context.call_intent, job=job, detached=detached,
         )
         if registered is None:
-            # 拒收（Task 正被收回或后端关闭）：作业已停下，按它的取消结论返回，不留后台占位。
+            # 拒收（Session 正被收回或后端关闭）：作业已停下，按它的取消结论返回，不留后台占位。
             return self._result_observation(cast(CommandConclusion, job.wait(None)))
         if detached is None:
             return self._placeholder_observation(
@@ -432,17 +453,17 @@ class ExecuteTerminalTool(HandlerBase):
                 return self._placeholder_observation(
                     command, cwd, timeout_s, "detached", registered, tool_call_id
                 )
-            if cancellation_registry.is_cancelled(execution_context.task_id):
+            if cancellation_registry.is_cancelled(execution_context.session_id):
                 # Run 取消只停前台等待：与转后台在登记表的锁里裁决，已转后台的命令照常运行。
                 if command_results.cancel_foreground(
-                    execution_context.task_id, tool_call_id
+                    execution_context.session_id, tool_call_id
                 ) == "detached":
                     return self._placeholder_observation(
                         command, cwd, timeout_s, "detached", registered, tool_call_id
                     )
                 conclusion = cast(CommandConclusion, job.wait(None))
                 break
-        outcome = command_results.settle_foreground(execution_context.task_id, tool_call_id)
+        outcome = command_results.settle_foreground(execution_context.session_id, tool_call_id)
         if outcome == "detached" or (outcome == "gone" and detached.is_set()):
             # 转后台先于前台结算：结论已由登记表回投，即使随后被撤销，工具仍须返回后台占位。
             return self._placeholder_observation(

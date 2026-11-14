@@ -28,7 +28,7 @@ export function TerminalTabBar({
   shells: readonly TerminalShell[] | null;
   shellsLoading: boolean;
   createDisabled: boolean;
-  onSelect: (sessionId: string) => void;
+  onSelect: (terminalSessionId: string) => void;
   onClose: (tab: TerminalTab) => void;
   onCreate: (shell: string) => void;
 }) {
@@ -38,11 +38,11 @@ export function TerminalTabBar({
       <div role="tablist" aria-label="终端会话" className="flex min-w-0 items-center gap-1 overflow-x-auto">
         {tabs.map((tab) => (
           <TerminalTabButton
-            key={tab.session.sessionId}
+            key={tab.session.terminalSessionId}
             tab={tab}
-            active={tab.session.sessionId === activeSessionId}
+            active={tab.session.terminalSessionId === activeSessionId}
             showShell={defaultShell !== null && tab.session.shellKind !== defaultShell}
-            onSelect={() => onSelect(tab.session.sessionId)}
+            onSelect={() => onSelect(tab.session.terminalSessionId)}
             onClose={() => onClose(tab)}
           />
         ))}
@@ -77,7 +77,7 @@ function TerminalTabButton({
   const { session } = tab;
   const status = terminalStatusPresentation(session.status);
   return (
-    <div className={panelTabClass(active, "max-w-56")} data-terminal-tab={session.sessionId}>
+    <div className={panelTabClass(active, "max-w-56")} data-terminal-tab={session.terminalSessionId}>
       <button
         type="button"
         role="tab"

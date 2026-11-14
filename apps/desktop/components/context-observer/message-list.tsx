@@ -323,7 +323,7 @@ export function MessageList({
                   </time>
                   <span>
                     {message.sequence === 0
-                      ? "任务系统提示词"
+                      ? "会话系统提示词"
                       : `${message.inherited ? "继承 · " : ""}回合 ${message.turn}`}
                   </span>
                   {cache && (

@@ -68,7 +68,7 @@ def _valid_patch(path: str = "m.txt") -> str:
 
 
 def _context(root: pathlib.Path, run_id: int = 5001) -> ToolExecutionContext:
-    return ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
+    return ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=root, run_id=run_id)
 
 
 def _execute(root: pathlib.Path, patch: str, run_id: int = 5001):

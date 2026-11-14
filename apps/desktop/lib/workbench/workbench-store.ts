@@ -18,7 +18,7 @@ type WorkbenchSession = {
 
 /** 工具产出的草稿：子 Agent 提案只带身份与提示词，其余字段由编辑会话补默认值。 */
 export type AgentDraftInput = {
-  taskId: number;
+  sessionId: number;
   toolCallId: string;
   draft: Pick<AgentConfigurationInput, "agent_id" | "role" | "description" | "system_prompt">;
 };
@@ -26,16 +26,16 @@ export type AgentDraftInput = {
 type WorkbenchState = {
   /**
    * 按工作区分桶，与文件浏览器、终端的分桶方式一致：切换工作区只是换一个桶显示，
-   * 不销毁任何标签或草稿。草稿只在关闭标签（未保存时确认）与删除工作区 / Task 时丢弃。
+   * 不销毁任何标签或草稿。草稿只在关闭标签（未保存时确认）与删除工作区 / Session 时丢弃。
    */
   sessions: Record<number, WorkbenchSession>;
-  openAgent: (workspaceId: number, input: { taskId: number; title: string }) => void;
+  openAgent: (workspaceId: number, input: { sessionId: number; title: string }) => void;
   openAgentConfigurationDraft: (workspaceId: number, input: AgentDraftInput) => void;
   activateTab: (workspaceId: number, tabId: string) => void;
   closeTab: (workspaceId: number, tabId: string) => void;
   forgetWorkspace: (workspaceId: number) => void;
-  /** 删除 Task 后移除属于它们的子 Agent 与草稿标签；只移除，不记「已保存」（见 `rememberSavedDraft`）。 */
-  forgetTasks: (taskIds: readonly number[]) => void;
+  /** 删除 Session 后移除属于它们的子 Agent 与草稿标签；只移除，不记「已保存」（见 `rememberSavedDraft`）。 */
+  forgetSessions: (sessionIds: readonly number[]) => void;
 };
 
 const EMPTY_WORKBENCH_SESSION: WorkbenchSession = { tabs: [], activeTabId: null, savedDraftIds: [] };
@@ -61,7 +61,7 @@ function openTab(
   }
   const tab = create();
   // 新会话是工具产出的原始草稿，此前关闭时记下的「已保存」不再适用。
-  const savedDraftIds = isDraftTab(tab) ? session.savedDraftIds.filter((key) => key !== draftKey(tab.taskId, tab.toolCallId)) : session.savedDraftIds;
+  const savedDraftIds = isDraftTab(tab) ? session.savedDraftIds.filter((key) => key !== draftKey(tab.sessionId, tab.toolCallId)) : session.savedDraftIds;
   return { tabs: [...session.tabs, tab], activeTabId: id, savedDraftIds };
 }
 
@@ -78,17 +78,17 @@ function withoutTabs(session: WorkbenchSession, removed: (tab: WorkbenchTab) => 
 
 /**
  * 关闭草稿标签时记下「已保存」。关闭即丢弃未保存的修改，所以只要保存过，配置文件里留下的就是已保存的版本。
- * 只由关闭标签调用：删除 Task 时卡片随 Task 一起消失，标记无人读取，不记。
+ * 只由关闭标签调用：删除 Session 时卡片随 Session 一起消失，标记无人读取，不记。
  */
 function rememberSavedDraft(session: WorkbenchSession, closed: WorkbenchTab): WorkbenchSession {
   if (!isDraftTab(closed) || closed.session.store.getState().baseline === null) return session;
-  const key = draftKey(closed.taskId, closed.toolCallId);
+  const key = draftKey(closed.sessionId, closed.toolCallId);
   if (session.savedDraftIds.includes(key)) return session;
   return { ...session, savedDraftIds: [...session.savedDraftIds, key] };
 }
 
-/** 工作台按工作区存放而调用 id 只在 Task 内唯一，草稿身份要带上 Task。 */
-export const draftKey = (taskId: number, toolCallId: string) => `${taskId}:${toolCallId}`;
+/** 工作台按工作区存放而调用 id 只在 Session 内唯一，草稿身份要带上 Session。 */
+export const draftKey = (sessionId: number, toolCallId: string) => `${sessionId}:${toolCallId}`;
 
 export const useWorkbenchStore = create<WorkbenchState>((set) => {
   const update = (workspaceId: number, change: (session: WorkbenchSession) => WorkbenchSession) => set((state) => ({
@@ -101,19 +101,19 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => {
   };
   return {
     sessions: {},
-    openAgent: (workspaceId, { taskId, title }) => reveal(workspaceId, (session) => openTab(
+    openAgent: (workspaceId, { sessionId, title }) => reveal(workspaceId, (session) => openTab(
       session,
-      `agent-task:${taskId}`,
-      () => ({ id: `agent-task:${taskId}`, kind: "agent", taskId, title }),
+      `agent-session:${sessionId}`,
+      () => ({ id: `agent-session:${sessionId}`, kind: "agent", sessionId, title }),
       (tab) => ({ ...tab, title }),
     )),
-    openAgentConfigurationDraft: (workspaceId, { taskId, toolCallId, draft }) => reveal(workspaceId, (session) => openTab(
+    openAgentConfigurationDraft: (workspaceId, { sessionId, toolCallId, draft }) => reveal(workspaceId, (session) => openTab(
       session,
-      `agent-config-draft:${draftKey(taskId, toolCallId)}`,
+      `agent-config-draft:${draftKey(sessionId, toolCallId)}`,
       () => ({
-        id: `agent-config-draft:${draftKey(taskId, toolCallId)}`,
+        id: `agent-config-draft:${draftKey(sessionId, toolCallId)}`,
         kind: "agent-configuration-draft",
-        taskId,
+        sessionId,
         toolCallId,
         title: draft.agent_id || "子 Agent 配置草稿",
         session: createAgentEditorSession({ initial: draft, saved: false, scope: "workspace" }),
@@ -130,10 +130,10 @@ export const useWorkbenchStore = create<WorkbenchState>((set) => {
       delete sessions[workspaceId];
       return { sessions };
     }),
-    forgetTasks: (taskIds) => set((state) => ({
+    forgetSessions: (sessionIds) => set((state) => ({
       sessions: Object.fromEntries(Object.entries(state.sessions).map(([workspaceId, session]) => [
         workspaceId,
-        withoutTabs(session, (tab) => "taskId" in tab && taskIds.includes(tab.taskId)),
+        withoutTabs(session, (tab) => "sessionId" in tab && sessionIds.includes(tab.sessionId)),
       ])),
     })),
   };

@@ -1,7 +1,7 @@
 import { MessagePrimitive, useAuiState, useScrollLock } from "@assistant-ui/react";
 import { BotIcon } from "lucide-react";
 import { useMemo, useRef } from "react";
-import { useOpenTask } from "@/components/links/use-open-task";
+import { useOpenSession } from "@/components/links/use-open-session";
 import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { CopyIconButton } from "@/components/ui/copy-icon-button";
 import { DisclosureChevron } from "@/components/ui/disclosure-chevron";
@@ -9,22 +9,22 @@ import type { TransportAgentReport, TransportMessageSource } from "@/lib/assista
 import { agentKey, useDisclosure } from "@/lib/assistant/turn/disclosure-store";
 
 /** 开启回合的 Agent 消息：独立成行，正文就是这条 user 消息的文本。 */
-export function AgentInboundMessage({ source, taskId }: { source: TransportMessageSource; taskId: number }) {
+export function AgentInboundMessage({ source, sessionId }: { source: TransportMessageSource; sessionId: number }) {
   const id = useAuiState((state) => state.message.id);
   const parts = useAuiState((state) => state.message.parts);
   const text = useMemo(() => parts.map((part) => part.type === "text" ? part.text : "").filter(Boolean).join("\n\n"), [parts]);
   return <MessagePrimitive.Root data-role="agent-message" className="px-2">
-    <AgentMessageRow id={id} text={text} source={source} taskId={taskId} />
+    <AgentMessageRow id={id} text={text} source={source} sessionId={sessionId} />
   </MessagePrimitive.Root>;
 }
 
 /**
- * 带来源的输入：行上只说来自谁，正文、复制与跳转都在展开后；不画成用户消息。派生 Task 的汇报在行上另标
+ * 带来源的输入：行上只说来自谁，正文、复制与跳转都在展开后；不画成用户消息。派生 Session 的汇报在行上另标
  * 结局（失败醒目）与「中间结果」：汇报由编排在 Run 落定时生成，结局是事实，不从正文猜。
  */
-export function AgentMessageRow({ id, text, source, taskId }: { id: string; text: string; source: TransportMessageSource; taskId: number }) {
-  const openTask = useOpenTask();
-  const [open, setOpen] = useDisclosure(taskId, agentKey(id), false);
+export function AgentMessageRow({ id, text, source, sessionId }: { id: string; text: string; source: TransportMessageSource; sessionId: number }) {
+  const openSession = useOpenSession();
+  const [open, setOpen] = useDisclosure(sessionId, agentKey(id), false);
   const ref = useRef<HTMLDivElement>(null);
   const lock = useScrollLock(ref, 0);
   return <div ref={ref} data-slot="agent-message" className="flex min-w-0 flex-col gap-3">
@@ -38,8 +38,8 @@ export function AgentMessageRow({ id, text, source, taskId }: { id: string; text
     {open && <div data-slot="agent-message-body" className="min-w-0 pl-5 text-chat leading-7 wrap-break-word">
       <div className="aui-md !space-y-3 leading-6"><StaticMarkdown>{text}</StaticMarkdown></div>
       <div className="text-muted-foreground mt-2 flex items-center gap-2 text-xs">
-        <CopyIconButton label="复制消息原文" getText={() => text} logEvent="agent_message_copy_failed" logData={{ taskId, messageId: id }} />
-        <button type="button" className="hover:text-foreground" onClick={() => void openTask(source.taskId, source.name)}>打开来源任务</button>
+        <CopyIconButton label="复制消息原文" getText={() => text} logEvent="agent_message_copy_failed" logData={{ sessionId, messageId: id }} />
+        <button type="button" className="hover:text-foreground" onClick={() => void openSession(source.sessionId, source.name)}>打开来源会话</button>
       </div>
     </div>}
   </div>;

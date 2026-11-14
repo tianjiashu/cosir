@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 
 from openai.types.chat import ChatCompletionToolMessageParam
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session as DbSession
 
 from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
@@ -13,15 +13,19 @@ from app.core.tool.execute.tool_terminal_projection import (
     terminal_event,
 )
 from app.core.tool.schemas import ToolObservation
+from app.core.workflow.decision_expiry import (
+    ends_on_user_input,
+    expire_decisions,
+)
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.message_queue.task_message import (
+from app.core.workflow.message_queue.session_message import (
     BackgroundResultBody,
     ToolImageBody,
     ToolResultBody,
 )
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.models.message_metadata import ToolMessageMetadata
-from app.storage.store_engines import main_session_factory
+from app.storage.store_engines import main_db_factory
 
 
 def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
@@ -36,7 +40,7 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
         call_id = observation.tool_call_id
         event = terminal_event(
             observation,
-            task_id=runtime.run.task_id,
+            session_id=runtime.run.session_id,
             run_id=runtime.run.id,
             step_id=step_id,
             tool_call_id=call_id,
@@ -64,6 +68,10 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
             },
         )
         emit(event)
+        # 模型又问了一次（典型是停止后恢复）：同一 Session 至多一个等用户回应的等待，旧的作废。
+        # 不另行告知模型——是它自己重新问的。
+        if observation.awaiting_decision and ends_on_user_input(observation.tool_name):
+            expire_decisions(step_id=step_id, keep=frozenset({call_id}))
 
 
 def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
@@ -87,20 +95,20 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
     ).render()
     event = terminal_event(
         observation,
-        task_id=runtime.run.task_id,
+        session_id=runtime.run.session_id,
         run_id=runtime.run.id,
         step_id=step_id,
         tool_call_id=call_id,
     )
-    with main_session_factory().begin() as session:
-        context.add_message(message, metadata=metadata, project_to_transport=False, session=session)
+    with main_db_factory().begin() as db:
+        context.add_message(message, metadata=metadata, project_to_transport=False, db=db)
         written = context.update_tool_result_metadata(
             call_id,
             ToolMessageMetadata(
                 status=event.status, display_data=event.display_data, error=event.error,
                 background=observation.background,
             ),
-            session=session,
+            db=db,
         )
     log.info(
         "tool_decision_result_persisted",
@@ -120,7 +128,7 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
 
 
 def settle_background_placeholder(
-    tool_call_id: str, body: BackgroundResultBody, *, step_id: str, session: Session
+    tool_call_id: str, body: BackgroundResultBody, *, step_id: str, db: DbSession
 ) -> ToolCallStatusChangedEvent | None:
     """在认领结论的事务中结算原占位；返回事务提交后才可发布的卡片事件。"""
     runtime = _runtime_context()
@@ -136,10 +144,10 @@ def settle_background_placeholder(
             error=body.placeholder_error,
             background=current.background.model_copy(update={"ended_at": body.ended_at}),
         ),
-        session=session,
+        db=db,
     )
     return ToolCallStatusChangedEvent(
-        task_id=runtime.run.task_id,
+        session_id=runtime.run.session_id,
         run_id=runtime.run.id,
         step_id=step_id,
         tool_call_id=tool_call_id,

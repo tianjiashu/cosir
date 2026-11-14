@@ -138,7 +138,7 @@ def test_cancelled_tool_call_returns_promptly_and_keeps_connection(pool, tmp_pat
     monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
     first = _bump(pool, server)
     context = ToolExecutionContext(
-        task_id=9001,
+        session_id=9001,
         workspace_id=1,
         workspace_root=Path("."),
         step_id="step-1",

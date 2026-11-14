@@ -47,7 +47,7 @@ def broken_registry(monkeypatch) -> _PermanentlyBrokenRegistry:
 def delegate_registry(broken_registry: _PermanentlyBrokenRegistry) -> ToolRegistry:
     """在注册表持续故障的进程状态下，只装配 delegate_task 的工具注册表。
 
-    直接调用工具类的 ``to_definition``（不实例化 handler，故不解析 Task/Run 服务单例），
+    直接调用工具类的 ``to_definition``（不实例化 handler，故不解析 Session/Run 服务单例），
     使本探针只聚焦「定义构建 + 准入门禁」这一段，不牵连完整工具装配的存储依赖。
     """
 
@@ -97,7 +97,7 @@ def test_broken_registry_admits_invalid_id_through_gate(
     """
 
     gate = ToolAccessGate(delegate_registry)
-    ctx = ToolExecutionContext(step_id="step-1", task_id=1, workspace_id=1, workspace_root=Path.cwd(), run_id=1)
+    ctx = ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=Path.cwd(), run_id=1)
     call = ToolCall(
         tool_name="delegate_task",
         arguments='{"intent": "验证工具行为", "child_agent_id": "fake-id", "agent_name": "t", "message": "p"}',

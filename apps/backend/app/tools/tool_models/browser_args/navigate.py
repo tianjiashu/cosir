@@ -41,7 +41,7 @@ class BrowserNavigateArgs(BaseModel):
     tab: str | None = tab_field()
     new_tab: bool = Field(
         default=False,
-        description="Open the URL in a new tab of this task; tab is ignored when true.",
+        description="Open the URL in a new tab of this session; tab is ignored when true.",
     )
     viewport: BrowserViewport | Literal["auto"] | None = Field(
         default=None,

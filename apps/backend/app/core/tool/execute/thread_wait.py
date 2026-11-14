@@ -20,7 +20,7 @@ _POLL_SECONDS = 0.1
 
 
 class ToolCallStopped(Exception):
-    """等待期间检出 Task 停止或本次调用被单独取消；请求已撤销。"""
+    """等待期间检出 Session 停止或本次调用被单独取消；请求已撤销。"""
 
 
 def wait_for_call(
@@ -46,7 +46,7 @@ def wait_for_call(
         if done:
             return future.result()
         if execution_context is not None and should_stop_call(
-            execution_context.task_id, execution_context.tool_call_id
+            execution_context.session_id, execution_context.tool_call_id
         ):
             future.cancel()
             raise ToolCallStopped

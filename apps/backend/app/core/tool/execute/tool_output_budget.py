@@ -171,7 +171,7 @@ class ToolOutputBudget:
 
         参数:
             observation: handler 返回的原始观察。
-            execution_context: 当前 task/workspace 上下文。
+            execution_context: 当前 session/workspace 上下文。
 
         返回:
             未超限时返回原对象；超限时返回「头 + 截断标记 + 尾」的新对象，正文长度不超过
@@ -251,7 +251,7 @@ class ToolOutputBudget:
         参数:
             observation: 待保存的原始观察，使用其 ``content`` 作为写入内容、
                 ``tool_name`` 仅用于日志诊断。
-            execution_context: 当前 task/workspace 上下文，提供 ``workspace_root``
+            execution_context: 当前 session/workspace 上下文，提供 ``workspace_root``
                 作为 artifact 的写入基准与边界。
 
         返回:

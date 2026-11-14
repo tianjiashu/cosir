@@ -39,7 +39,7 @@ function BootFailure({ error, onRetry }: { error: string; onRetry: () => void })
  * 启动门禁：只负责首次就绪之前（启动页 → 就绪 / BootFailure）。
  *
  * 首次就绪后界面树始终保持挂载；运行期的 starting / failed / stopped 由
- * AppLayout 内的 BackendStatusBanner 呈现，任务页、草稿和 Assistant 会话
+ * AppLayout 内的 BackendStatusBanner 呈现，会话页、草稿和 Assistant 会话
  * 不随后端状态卸载，后端恢复后由会话原地对账。BootFailure 的重试即重启后端：
  * 此时 supervisor 已放弃启动，不存在可被中断的运行。
  */

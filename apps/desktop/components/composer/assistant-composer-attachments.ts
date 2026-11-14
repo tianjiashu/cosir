@@ -3,7 +3,7 @@ import { classifyComposerExternalFiles, type ComposerExternalFileResult } from "
 import { MAX_IMAGES_PER_MESSAGE } from "@/lib/assistant/attachments/attachment-upload";
 import { frontendLog } from "@/lib/logging/frontend-log";
 
-/** 输入框的图片集合：新对话草稿或 assistant-ui composer 各自提供添加与当前数量。 */
+/** 输入框的图片集合：新会话草稿或 assistant-ui composer 各自提供添加与当前数量。 */
 export type ComposerImageSink = {
   add: (file: File) => void | Promise<void>;
   count: () => number;

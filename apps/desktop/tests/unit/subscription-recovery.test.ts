@@ -8,7 +8,7 @@ function setup() {
   const attach = vi.fn(async () => undefined);
   const backend = { available: true, generation: 1 };
   const setIssue = vi.fn();
-  const recovery = new SubscriptionRecovery({ taskId: 7, traceId: "t", attach: () => void attach(), backend: () => backend, setIssue });
+  const recovery = new SubscriptionRecovery({ sessionId: 7, traceId: "t", attach: () => void attach(), backend: () => backend, setIssue });
   recovery.setActive(true);
   return { attach, backend, setIssue, recovery };
 }
@@ -98,7 +98,7 @@ describe("SubscriptionRecovery 有限重连（D4）", () => {
       vi.advanceTimersByTime(2_000);
     }
     attach.mockClear();
-    const issue = { message: "本机后端已恢复，正在同步当前对话…", canResync: true };
+    const issue = { message: "本机后端已恢复，正在同步当前会话…", canResync: true };
     recovery.restored(issue);
     expect(attach).not.toHaveBeenCalled();
     expect(setIssue).toHaveBeenLastCalledWith(issue);

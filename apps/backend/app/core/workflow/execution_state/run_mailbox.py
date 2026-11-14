@@ -1,4 +1,4 @@
-"""Task 级的投递通道：进入一次执行的全部输入，在下一次模型请求前取光。"""
+"""Session 级的投递通道：进入一次执行的全部输入，在下一次模型请求前取光。"""
 
 from __future__ import annotations
 
@@ -8,17 +8,17 @@ import threading
 from collections.abc import Callable
 from typing import cast
 
-from app.core.workflow.message_queue.task_message import NoticeBody, TaskMessage
+from app.core.workflow.message_queue.session_message import NoticeBody, SessionMessage
 
 
 class RunMailbox:
-    """进入 Run 的唯一通道，不是事实源：由 Task 的 actor 持有，每次开始执行时 :meth:`reset`，
+    """进入 Run 的唯一通道，不是事实源：由 Session 的 actor 持有，每次开始执行时 :meth:`reset`，
     不跨重启。
 
     两种条目，按有没有 ``id`` 区分：
 
     - 外部队列行的副本（:meth:`post`，有 ``id``）：事实仍在外部队列，``prepare_input`` 并入时才
-      确认删除；执行结束、取消或进程退出时未确认的留在外部队列，下次执行开始时重新投递。别的 Task、
+      确认删除；执行结束、取消或进程退出时未确认的留在外部队列，下次执行开始时重新投递。别的 Session、
       工具与 HTTP 交来的输入一律先进外部队列，再由调度方投到这里。
     - 本次执行自己产生的通知（:meth:`notify`，没有 ``id``）：工具准入、旧终端失效、续写提示只对
       这次执行的下一次请求有意义，不落库、不需要确认，随 :meth:`reset` 丢弃。只收 ``NoticeBody``，
@@ -40,7 +40,7 @@ class RunMailbox:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         # (优先级, 投递序号, 消息)：序号保证同优先级先进先出，且不比较消息本身。
-        self._heap: list[tuple[int, int, TaskMessage]] = []
+        self._heap: list[tuple[int, int, SessionMessage]] = []
         self._order = itertools.count()
         # 本次执行已收过的外部队列行 id。
         self._seen: set[int] = set()
@@ -51,7 +51,7 @@ class RunMailbox:
             self._heap.clear()
             self._seen.clear()
 
-    def post(self, message: TaskMessage) -> None:
+    def post(self, message: SessionMessage) -> None:
         """投递一条外部队列行的副本；同一行在本次执行内只收一次。"""
         row_id = cast(int, message.id)
         with self._lock:
@@ -63,9 +63,9 @@ class RunMailbox:
     def notify(self, notice: NoticeBody) -> None:
         """投递一条本次执行产生的通知（没有队列行，不需要确认）。"""
         with self._lock:
-            self._push(TaskMessage.of(notice))
+            self._push(SessionMessage.of(notice))
 
-    def take_notices(self) -> list[TaskMessage]:
+    def take_notices(self) -> list[SessionMessage]:
         """按投递顺序取出全部通知（两种来源都在内），其余消息顺序不变。"""
         with self._lock:
             notices = sorted(entry for entry in self._heap if entry[2].kind == "system_notice")
@@ -74,7 +74,7 @@ class RunMailbox:
                 heapq.heapify(self._heap)
             return [entry[2] for entry in notices]
 
-    def take_first(self, predicate: Callable[[TaskMessage], bool]) -> TaskMessage | None:
+    def take_first(self, predicate: Callable[[SessionMessage], bool]) -> SessionMessage | None:
         """按出队顺序取出第一条满足条件的消息，其余消息顺序不变；没有时返回 ``None``。"""
         with self._lock:
             for entry in sorted(self._heap):
@@ -84,7 +84,12 @@ class RunMailbox:
                     return entry[2]
             return None
 
-    def pop(self) -> TaskMessage:
+    def ordered(self) -> list[SessionMessage]:
+        """按出队顺序列出当前全部消息，不取出（并入前要先看一眼会写下什么的调用方用）。"""
+        with self._lock:
+            return [entry[2] for entry in sorted(self._heap)]
+
+    def pop(self) -> SessionMessage:
         with self._lock:
             return heapq.heappop(self._heap)[2]
 
@@ -93,9 +98,9 @@ class RunMailbox:
             return not self._heap
 
     def has_wakeable(self, run_id: int) -> bool:
-        """是否有能推进这个活动 Run 的消息（``TaskMessage.wakes``）；挂起前据此决定直接继续还是挂起。"""
+        """是否有能推进这个活动 Run 的消息（``SessionMessage.wakes``）；挂起前据此决定直接继续还是挂起。"""
         with self._lock:
             return any(entry[2].wakes(run_id) for entry in self._heap)
 
-    def _push(self, message: TaskMessage) -> None:
+    def _push(self, message: SessionMessage) -> None:
         heapq.heappush(self._heap, (type(message.body).PRIORITY, next(self._order), message))

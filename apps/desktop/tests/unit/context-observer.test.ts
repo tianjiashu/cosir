@@ -15,7 +15,7 @@ const row = (
   patch: Partial<ContextMessage> = {},
 ): ContextMessage => ({
   id: sequence,
-  task_id: 42,
+  session_id: 42,
   turn: 1,
   inherited: false,
   sequence,

@@ -1,7 +1,7 @@
-"""Task 消息调度规则：纯函数，不读写数据库、不触碰执行器，可逐条单测。
+"""Session 消息调度规则：纯函数，不读写数据库、不触碰执行器，可逐条单测。
 
-Task 的调度 actor（``TaskActor``）读出最新 Run 与队列，交给这里判定，再执行判定结果。规则只读
-消息属性（``kind`` / ``delivery``）与 Task 的执行阶段，投递方不另加判断。
+Session 的调度 actor（``SessionActor``）读出最新 Run 与队列，交给这里判定，再执行判定结果。规则只读
+消息属性（``kind`` / ``delivery``）与 Session 的执行阶段，投递方不另加判断。
 
 能交接新 Run 的输入（``LAUNCH_INPUT_BODIES``：用户输入与 Agent 消息）都携带发起配置。一个新 Run
 只消费**一条**这样的输入（见 :func:`next_input`），排队消息因此一轮一条依次处理，各用各自发送时的
@@ -15,18 +15,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, cast
 
-from app.core.workflow.message_queue.task_message import (
+from app.core.workflow.message_queue.session_message import (
     LAUNCH_INPUT_BODIES,
+    Delivery,
     LaunchInputBody,
     RunLaunch,
-    TaskMessage,
+    SessionMessage,
 )
-from app.models import ConversationRunRecord
+from app.models import RunRecord
 
 Phase = Literal["driving", "suspended", "idle"]
-"""Task 的执行阶段：调度、取消、恢复与静止只按它判定，不各自组合 Run 状态与执行登记。
+"""Session 的执行阶段：调度、取消、恢复与静止只按它判定，不各自组合 Run 状态与执行登记。
 
-由 ``TaskActor`` 依当前 Run 与执行登记得出，本模块只消费：
+由 ``SessionActor`` 依当前 Run 与执行登记得出，本模块只消费：
 
 - ``driving``：有执行者。以执行登记为准而不看 Run 状态：workflow 先写终态或挂起，执行者还要跑完
   STOP Hook、收束工具调用才释放，这段时间仍算 ``driving``——此时另开执行会出现两个执行者。
@@ -39,7 +40,7 @@ Phase = Literal["driving", "suspended", "idle"]
 class Deliver:
     """把这些消息投进当前执行的 mailbox。"""
 
-    messages: list[TaskMessage]
+    messages: list[SessionMessage]
 
 
 @dataclass(frozen=True)
@@ -64,9 +65,9 @@ Action = Deliver | Wake | StartRun | Stay
 
 def next_action(
     phase: Phase,
-    current: ConversationRunRecord | None,
-    pending: list[TaskMessage],
-    fresh: list[TaskMessage],
+    current: RunRecord | None,
+    pending: list[SessionMessage],
+    fresh: list[SessionMessage],
 ) -> Action:
     """推进规则的唯一实现：有消息就处理，系统通知例外。
 
@@ -101,7 +102,21 @@ def next_action(
     return StartRun(launch) if launch is not None else Stay()
 
 
-def next_input(pending: list[TaskMessage]) -> TaskMessage | None:
+def send_delivery(phase: Phase, *, awaits_user_reply: bool) -> Delivery:
+    """用户发送一条消息时的并入时机。
+
+    - 空闲：``immediate``。取消后队列里可能还留着旧的排队消息，新发送的这条应先跑（见
+      :func:`next_input`）。
+    - 挂起且有决定在等用户回应（提问）：``immediate``，消息唤醒同一个 Run——用户没答、
+      直接说了新的话，这句话就是回应，提问随它开启的新回合作废（``decision_expiry``）。
+    - 其余（驱动中、只在等后台结果的挂起）：``next_run`` 排队，当前 Run 结束后依次处理。
+    """
+    if phase == "idle" or (phase == "suspended" and awaits_user_reply):
+        return "immediate"
+    return "next_run"
+
+
+def next_input(pending: list[SessionMessage]) -> SessionMessage | None:
     """新 Run 要消费的那条输入（用户输入或 Agent 消息）：先取最早的 ``immediate``，没有再取最早
     的 ``next_run``。
 
@@ -115,7 +130,7 @@ def next_input(pending: list[TaskMessage]) -> TaskMessage | None:
     )
 
 
-def initial_messages(pending: list[TaskMessage], *, fresh_run: bool) -> list[TaskMessage]:
+def initial_messages(pending: list[SessionMessage], *, fresh_run: bool) -> list[SessionMessage]:
     """执行开始时投递的消息。
 
     新 Run 接收其余种类的全部消息与 :func:`next_input` 选出的一条输入，其余输入留在队列里等后续

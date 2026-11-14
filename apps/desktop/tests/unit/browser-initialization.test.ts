@@ -14,7 +14,7 @@ vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
 import { BrowserHost } from "@/electron/main/browser/browser-host";
 
 const flush = async () => { for (let i = 0; i < 16; i += 1) await Promise.resolve(); };
-const limits = { limits: { perTask: 1, total: 1 }, downloadDir: "/workspace/.cosir/Download" };
+const limits = { limits: { perSession: 1, total: 1 }, downloadDir: "/workspace/.cosir/Download" };
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -29,7 +29,7 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("BrowserTab 初始化与 Host 清理", () => {
-  it.each(["load", "Page.enable", "Page.setInterceptFileChooserDialog", "Network.enable", "Target.setAutoAttach", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride"])("在 %s 等待中删除 Task，停止后续步骤并释放资源", async (stage) => {
+  it.each(["load", "Page.enable", "Page.setInterceptFileChooserDialog", "Network.enable", "Target.setAutoAttach", "Emulation.setFocusEmulationEnabled", "Emulation.setDeviceMetricsOverride"])("在 %s 等待中删除 Session，停止后续步骤并释放资源", async (stage) => {
     let finish!: () => void;
     const pending = new Promise<void>((resolve) => { finish = resolve; });
     if (stage === "load") contents.loadURL.mockReturnValue(pending);
@@ -39,7 +39,7 @@ describe("BrowserTab 初始化与 Host 清理", () => {
     const rejected = expect(opening).rejects.toMatchObject({ code: "TAB_NOT_FOUND" });
     await flush();
     if (stage !== "load") expect(vi.getTimerCount()).toBe(1);
-    host.dropTasks([1]);
+    host.dropSessions([1]);
     await rejected;
     const callsAtClose = contents.debugger.sendCommand.mock.calls.length;
     expect(contents.close).toHaveBeenCalledTimes(1);
@@ -96,7 +96,7 @@ describe("BrowserTab 初始化与 Host 清理", () => {
   it("初始化完成与导航开始之间取消，不发起网页加载，保留已就绪标签", async () => {
     const host = new BrowserHost(() => null);
     const owner = new AbortController();
-    const opening = host.navigate({ taskId: 1, context: limits, newTab: false, target: { url: "https://example.com" } }, owner.signal);
+    const opening = host.navigate({ sessionId: 1, context: limits, newTab: false, target: { url: "https://example.com" } }, owner.signal);
     // 精确构造 ready 完成后、navigate 续执行前的取消，避免依赖真实线程调度概率。
     const entry = (host as unknown as { tabs: Map<string, { ready: Promise<void> }> }).tabs.get("t1")!;
     void entry.ready.then(() => queueMicrotask(() => owner.abort()));

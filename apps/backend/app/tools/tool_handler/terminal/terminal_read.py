@@ -12,7 +12,7 @@ from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL
 from app.core.workflow.cancel.tool_call_cancellation_registry import should_stop_call
 from app.tools.terminal_runtime.observation.wait import TerminalWait
-from app.tools.tool_handler.terminal.task_terminals import find_terminal
+from app.tools.tool_handler.terminal.session_terminals import find_terminal
 from app.tools.tool_handler.terminal.tool_observation import (
     observation_result,
     with_terminal_errors,
@@ -55,7 +55,7 @@ class TerminalReadTool(HandlerBase):
     ) -> ToolObservation:
 
         def action() -> ToolObservation:
-            terminal = find_terminal(execution_context.task_id, terminal_id)
+            terminal = find_terminal(execution_context.session_id, terminal_id)
             result = terminal.read(
                 start_line=start_line,
                 limit=limit,
@@ -63,7 +63,7 @@ class TerminalReadTool(HandlerBase):
                 pattern=pattern,
                 wait=TerminalWait.model_validate(wait) if wait is not None else None,
                 is_cancelled=lambda: should_stop_call(
-                    execution_context.task_id, execution_context.tool_call_id
+                    execution_context.session_id, execution_context.tool_call_id
                 ),
             )
             return observation_result(self.name, result)

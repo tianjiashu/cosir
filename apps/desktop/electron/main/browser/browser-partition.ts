@@ -5,7 +5,7 @@ import { app, session, type DownloadItem, type WebContents, type WebPreferences 
 import { logDesktopEvent } from "../desktop-log";
 
 /**
- * 内置浏览器的持久分区：全部 Task 共用一个，登录一次处处可用（决定见设计稿「分区粒度」）；与应用自身的
+ * 内置浏览器的持久分区：全部 Session 共用一个，登录一次处处可用（决定见设计稿「分区粒度」）；与应用自身的
  * 默认会话隔离，网页拿不到渲染进程的存储与权限。
  */
 const BROWSER_PARTITION = "persist:cosir-browser";
@@ -32,7 +32,7 @@ export function browserPageWebPreferences(): WebPreferences {
   };
 }
 
-/** 分区级事件按来源网页找到所属 Task 处理；由 `BrowserHost` 实现（它持有全部标签与下载登记）。 */
+/** 分区级事件按来源网页找到所属 Session 处理；由 `BrowserHost` 实现（它持有全部标签与下载登记）。 */
 export type BrowserSessionEvents = {
   download(source: WebContents, item: DownloadItem): void;
 };
@@ -41,7 +41,7 @@ export type BrowserSessionEvents = {
  * 分区级设置，宿主就绪后调用一次：
  * - 站点权限（剪贴板、全屏、通知、定位、摄像头、麦克风、录屏……）一律授权：先能用，询问与限制留给统一的安全设计
  *   （AGENTS.md 待办「安全与权限」）。权限检查走 Electron 默认（授权）；请求只在这里落日志，便于排查谁用了什么。
- * - 下载登记到来源标签所属的 Task，落盘到标签创建时定下的下载目录（`downloads.ts`）。
+ * - 下载登记到来源标签所属的 Session，落盘到标签创建时定下的下载目录（`downloads.ts`）。
  */
 export function configureBrowserSession(events: BrowserSessionEvents): void {
   const browserSession = session.fromPartition(BROWSER_PARTITION);

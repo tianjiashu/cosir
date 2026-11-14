@@ -13,7 +13,7 @@ const STREAM_REVEAL = { animation: "fadeIn", duration: 160, sep: "char", stagger
  * Assistant 正文和 reasoning 的唯一 Markdown 边界。
  * Streamdown 负责不完整 Markdown、代码高亮、公式、Mermaid 图表、CJK 标点与流式淡入；
  * 组件本身不解析内容，也不把渲染结果写回 runtime 或服务端。链接与行内代码里的工作区路径
- * 经 `useMarkdownLinkComponents` 识别、由链接打开入口统一打开（所属 Task 来自 `LinkTaskContext`）。
+ * 经 `useMarkdownLinkComponents` 识别、由链接打开入口统一打开（所属 Session 来自 `LinkSessionContext`）。
  */
 export function MarkdownText() {
   const mermaidOptions = useMermaidOptions();

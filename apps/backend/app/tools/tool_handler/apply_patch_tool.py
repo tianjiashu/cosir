@@ -16,7 +16,7 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_FILE_EDIT
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
@@ -50,8 +50,8 @@ class ApplyPatchTool(HandlerBase):
         "Apply a Git-style unified diff to modify the contents of existing UTF-8 "
         "text files inside the active workspace. It only changes existing files: "
         "it cannot create, delete, or move files, so use 'write_file' to create or "
-        "replace a whole file, 'delete_file' to delete one, and 'move_file' to move "
-        "or rename one. The 'patch' parameter holds the diff text; its description "
+        "replace a whole file, and 'execute_terminal' to delete, move, or rename one. "
+        "The 'patch' parameter holds the diff text; its description "
         "defines the accepted format."
     )
     args_model = ApplyPatchArgs
@@ -112,11 +112,11 @@ class ApplyPatchTool(HandlerBase):
                     + "\nFix every cause listed above, then submit a new Git unified diff. Causes "
                     "that live in a target file itself (missing or irregular file, binary content, "
                     "non-UTF-8 bytes, reserved or blocked path) cannot be fixed by editing the "
-                    "diff: pick another target, or use write_file/delete_file/move_file. This tool "
+                    "diff: pick another target, or use write_file / execute_terminal. This tool "
                     "cannot create, delete, or move files."
                 ),
             )
-        if cancellation_registry.is_cancelled(execution_context.task_id):
+        if cancellation_registry.is_cancelled(execution_context.session_id):
             return tool_cancelled(tool_name=self.name)
         try:
             results = apply_all_with_diff(operations, resolver)

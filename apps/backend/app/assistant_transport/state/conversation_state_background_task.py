@@ -3,7 +3,7 @@
 看板是对话的一个投影，不另存事实：已结束工作的记录在各自后台占位行上（``BackgroundWork``），随工具
 part 进入快照工作副本（后端工作副本保存完整历史，见 ``snapshot_window``）；还在跑的工作来自进程内
 登记表的活条目。所以看板就是「工作副本里带记录的工具 part + 活条目」的纯函数，不读库、不读墙钟，
-撤回移出的回合已在构造 part 时排除；继承来的消息不是本 Task 的工作，这里跳过。
+撤回移出的回合已在构造 part 时排除；继承来的消息不是本 Session 的工作，这里跳过。
 
 ``foreground_waits`` 是另一种事实：正在前台等待、可转到后台的调用，只服务工具卡片的「转到后台」，
 只存在于登记表。工具卡片的状态不读这里——卡片状态的事实源是占位行（part 的 ``status`` /
@@ -49,7 +49,7 @@ _STATUSES = frozenset(get_args(BackgroundTaskStatus))
 _ACTIVE = frozenset({"running", "settling"})
 
 # 展示策略：全部进行中的工作 + 最近结束的这么多条；持久化的历史不删。
-MAX_ENDED_PER_TASK = 20
+MAX_ENDED_PER_SESSION = 20
 
 
 def project_background_work(work: BackgroundWork) -> ConversationBackgroundWork:
@@ -110,7 +110,7 @@ def project_background_tasks(
     ended = sorted(
         (e for e in entries if e["status"] not in _ACTIVE), key=lambda e: e["endedAt"] or ""
     )
-    return active + ended[-MAX_ENDED_PER_TASK:]
+    return active + ended[-MAX_ENDED_PER_SESSION:]
 
 
 def validate_background_work(value: object) -> None:
@@ -139,16 +139,16 @@ def validate_background_tasks(value: object) -> None:
 
     seen: set[str] = set()
     for entry in require_list(value, "snapshot background_tasks"):
-        task = as_shape(entry, ConversationBackgroundTask, "snapshot background result entry")
-        tool_call_id = require_non_empty_str(task["toolCallId"], "background result toolCallId")
+        session = as_shape(entry, ConversationBackgroundTask, "snapshot background result entry")
+        tool_call_id = require_non_empty_str(session["toolCallId"], "background result toolCallId")
         if tool_call_id in seen:
             raise ValueError("snapshot contains duplicate background result toolCallId")
         seen.add(tool_call_id)
-        require_str(task["label"], "background result label")
-        require_str(task["startedAt"], "background result startedAt")
-        require_str(task["endedAt"], "background result endedAt", nullable=True)
-        require_one_of(task["kind"], _KINDS, "background result kind")
-        require_one_of(task["status"], _STATUSES, "background result status")
+        require_str(session["label"], "background result label")
+        require_str(session["startedAt"], "background result startedAt")
+        require_str(session["endedAt"], "background result endedAt", nullable=True)
+        require_one_of(session["kind"], _KINDS, "background result kind")
+        require_one_of(session["status"], _STATUSES, "background result status")
 
 
 def validate_foreground_waits(value: object) -> None:

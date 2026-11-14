@@ -19,7 +19,7 @@ async def test_startup_failure_closes_initialized_runtime_resources(
         async def aclose(self) -> None:
             calls.append("spaces_aclose")
 
-    monkeypatch.setattr(lifespan_module, "task_runtime_spaces", _Spaces())
+    monkeypatch.setattr(lifespan_module, "session_runtime_spaces", _Spaces())
     monkeypatch.setattr(
         lifespan_module,
         "close_service_dependencies",

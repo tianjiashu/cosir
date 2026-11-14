@@ -1,28 +1,28 @@
 """Workspace orchestration service.
 
-单一职责：编排工作区的创建、列表查询、受闸门保护的 task 创建，以及 workspace 级联删除。
-删除 workspace 时在一个 SQLite 写事务内清理任务树、全部子产物和 workspace 记录。
+单一职责：编排工作区的创建、列表查询、受闸门保护的 session 创建，以及 workspace 级联删除。
+删除 workspace 时在一个 SQLite 写事务内清理会话树、全部子产物和 workspace 记录。
 
 职责边界：
-- 负责：工作区创建、列表查询、workspace/task 写闸门和级联删除编排（任务产物删除委托给
-  ``TaskService``，单表写入委托给对应 CRUD）。
-- 不负责：直接 SQL 操作（委托给 ``WorkspaceCrud``/``TaskCrud``）；单任务粒度的级联删除细节
-  （委托给 ``TaskService``）。
+- 负责：工作区创建、列表查询、workspace/session 写闸门和级联删除编排（会话产物删除委托给
+  ``SessionService``，单表写入委托给对应 CRUD）。
+- 不负责：直接 SQL 操作（委托给 ``WorkspaceCrud``/``SessionCrud``）；单会话粒度的级联删除细节
+  （委托给 ``SessionService``）。
 """
 
 from pathlib import Path
 
 from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
-from app.core.tool.multi_agent.task_tool_scope import main_agent_tool_schemas
-from app.models import TaskRecord, WorkspaceRecord
+from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_schemas
+from app.models import SessionRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service import depends as service_depends
 from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.mcp_tested_servers import MCPTestedServers
-from app.storage.store_engines import main_session_factory
+from app.session_runtime.workspace_operation_registry import workspace_operations
+from app.storage.store_engines import main_db_factory
 from app.storage.write_transaction import begin_immediate
-from app.task_runtime.workspace_operation_registry import workspace_operations
 from app.utils.path.workspace_cosir import (
     workspace_agent_config_dir,
     workspace_attachment_dir,
@@ -51,8 +51,8 @@ class WorkspaceService:
         """
 
         self._workspace = service_depends.get_workspace_crud()
-        self._task_crud = service_depends.get_task_crud()
-        self._task_service = service_depends.get_task_service()
+        self._session_crud = service_depends.get_session_crud()
+        self._session_service = service_depends.get_session_service()
 
     def create_workspace(self, name: str, root_path: str) -> WorkspaceRecord:
         """创建或复用工作区：若数据库中已存在相同规范化路径的工作区则复用，否则新建。
@@ -96,7 +96,7 @@ class WorkspaceService:
             normalized_path,
         )
         self._init_cosir_metadata(name, normalized_path)
-        service_depends.get_task_feed().publish_workspaces()
+        service_depends.get_session_feed().publish_workspaces()
         return record
 
     def _find_by_path(self, normalized_path: str) -> WorkspaceRecord | None:
@@ -233,36 +233,36 @@ class WorkspaceService:
         """
         return self._workspace.get(workspace_id)
 
-    def create_task(
+    def create_session(
         self,
         workspace_id: int,
         title: str,
         creation_command_id: str | None = None,
-    ) -> TaskRecord:
-        """在 workspace 结构性写闸门内创建用户 task 容器。
+    ) -> SessionRecord:
+        """在 workspace 结构性写闸门内创建用户 session 容器。
 
         参数:
             workspace_id: 所属 workspace 标识。
-            title: task 标题。
-            creation_command_id: 可选的 provisional Task 来源标记，仅供未接受的首条
+            title: session 标题。
+            creation_command_id: 可选的 provisional Session 来源标记，仅供未接受的首条
                 Assistant Transport 请求做受控清理。
 
         返回:
-            新建的 task 记录。
+            新建的 session 记录。
 
         异常:
             KeyError: 如果 workspace 不存在。
             DeletionBusyError: 如果 workspace 正在结构性删除。
-            sqlalchemy.exc.SQLAlchemyError: 如果 task 创建失败。
+            sqlalchemy.exc.SQLAlchemyError: 如果 session 创建失败。
 
         副作用:
-            向主库写入一个 task，提交后推送该工作区的目录失效；不会启动 ConversationRun。
+            向主库写入一个 session，提交后推送该工作区的目录失效；不会启动 Run。
         """
 
         try:
             with workspace_operations.operation(workspace_id, timeout=10):
                 self._workspace.get(workspace_id)
-                task = self._task_service.create_task(
+                session = self._session_service.create_session(
                     workspace_id,
                     title,
                     creation_command_id=creation_command_id,
@@ -270,13 +270,13 @@ class WorkspaceService:
                 )
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc
-        service_depends.get_task_feed().publish_catalog(task.workspace_id, task.task_type)
-        return task
+        service_depends.get_session_feed().publish_catalog(session.workspace_id, session.session_type)
+        return session
 
     async def delete_workspace_tree(self, workspace_id: int) -> None:
-        """删除 workspace 的用户用例：先在锁外停下其下全部 Task 的 actor，再删除记录。
+        """删除 workspace 的用户用例：先在锁外停下其下全部 Session 的 actor，再删除记录。
 
-        停止与回滚的协议见 ``TaskService.stop_then_delete``，这里只提供「工作区下的全部 Task」与
+        停止与回滚的协议见 ``SessionService.stop_then_delete``，这里只提供「工作区下的全部 Session」与
         「删除工作区」两件事。
 
         异常:
@@ -284,18 +284,18 @@ class WorkspaceService:
             DeletionBusyError: workspace 正被其他结构性操作占用。
         """
 
-        await self._task_service.stop_then_delete(
-            lambda: set(self._task_crud.list_ids_by_workspace(workspace_id)),
+        await self._session_service.stop_then_delete(
+            lambda: set(self._session_crud.list_ids_by_workspace(workspace_id)),
             lambda: self.delete_workspace(workspace_id),
         )
 
     def delete_workspace(self, workspace_id: int) -> None:
-        """在单个事务内原子删除 workspace 及其全部 task 产物；调用方须已停下其下 Task 的 actor。
+        """在单个事务内原子删除 workspace 及其全部 session 产物；调用方须已停下其下 Session 的 actor。
 
-        删除前先校验工作区存在（不存在则抛 ``KeyError``），取得 workspace 闸门（不取各 Task 的
+        删除前先校验工作区存在（不存在则抛 ``KeyError``），取得 workspace 闸门（不取各 Session 的
         闸门：actor 已在 :meth:`delete_workspace_tree` 里停下），再在单个 ``BEGIN IMMEDIATE`` 事务
-        内重新读取 task 树。所有 task 产物与 workspace 行必须一并提交；任一步失败都会整体回滚（停止
-        之后才新建的 Task 会让剩余行检查失败）。提交后才卸载进程内 runtime space。
+        内重新读取 session 树。所有 session 产物与 workspace 行必须一并提交；任一步失败都会整体回滚（停止
+        之后才新建的 Session 会让剩余行检查失败）。提交后才卸载进程内 runtime space。
 
         参数:
             workspace_id: 待删除的工作区标识。
@@ -305,11 +305,11 @@ class WorkspaceService:
 
         异常:
             KeyError: 如果指定工作区不存在。
-            DeletionBusyError: 如果 workspace 或其 task 正在运行不可并发的操作。
+            DeletionBusyError: 如果 workspace 或其 session 正在运行不可并发的操作。
             sqlalchemy.exc.SQLAlchemyError: 如果级联删除失败（事务回滚）。
 
         副作用:
-            删除工作区下全部 task 树（task / turn / run / trace / delegation / context）及其
+            删除工作区下全部 session 树（session / turn / run / trace / delegation / context）及其
             运行期引用；并删除 ``workspaces`` 表记录（旧 Runtime
             事件体系已删除，不再参与级联删除）；提交后推送工作区列表失效，并卸载该根路径在 Agent profile
             注册表中的作用域缓存（见 :meth:`_drop_workspace_config_scopes`）。
@@ -324,32 +324,32 @@ class WorkspaceService:
                         "data": {"workspace_id": workspace_id},
                     },
                 )
-                deleted_task_ids: set[int] = set()
-                with begin_immediate(main_session_factory()) as session:
-                    workspace_record = self._workspace.get_in_session(session, workspace_id)
-                    root_task_ids = self._task_crud.list_root_ids_by_workspace(
-                        workspace_id, session=session
+                deleted_session_ids: set[int] = set()
+                with begin_immediate(main_db_factory()) as db:
+                    workspace_record = self._workspace.get_in_db(db, workspace_id)
+                    root_session_ids = self._session_crud.list_root_ids_by_workspace(
+                        workspace_id, db=db
                     )
-                    for task_id in root_task_ids:
-                        deleted_task_ids |= self._task_service.delete_task_tree_in_session(
-                            task_id, session
+                    for session_id in root_session_ids:
+                        deleted_session_ids |= self._session_service.delete_session_tree_in_db(
+                            session_id, db
                         )
-                    remaining_task_ids = set(
-                        self._task_crud.list_ids_by_workspace(workspace_id, session=session)
+                    remaining_session_ids = set(
+                        self._session_crud.list_ids_by_workspace(workspace_id, db=db)
                     )
-                    if remaining_task_ids:
+                    if remaining_session_ids:
                         raise RuntimeError(
-                            "workspace contains task rows outside a deletable task tree: "
-                            f"{sorted(remaining_task_ids)}"
+                            "workspace contains session rows outside a deletable session tree: "
+                            f"{sorted(remaining_session_ids)}"
                         )
-                    self._workspace.delete_in_session(session, workspace_id)
-                self._task_service.finalize_deleted_task_spaces(frozenset(deleted_task_ids))
+                    self._workspace.delete_in_db(db, workspace_id)
+                self._session_service.finalize_deleted_session_spaces(frozenset(deleted_session_ids))
                 if service_depends.get_workspace_file_watcher.cache_info().currsize:
                     service_depends.get_workspace_file_watcher().close_workspace(workspace_id)
                 self._drop_workspace_config_scopes(workspace_record.root_path)
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc
-        service_depends.get_task_feed().publish_workspaces()
+        service_depends.get_session_feed().publish_workspaces()
         log.info(
             "workspace_deleted",
             extra={"msg": "workspace deleted", "data": {"workspace_id": workspace_id}},

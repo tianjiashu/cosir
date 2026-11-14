@@ -3,17 +3,17 @@ import { expect, test } from "@playwright/test";
 import { frontendLogs, openedSubscriptionCount } from "./frontend-logs";
 import { API_ORIGIN, WEB_ORIGIN } from "./e2e-env";
 
-/** Task 级业务命令端点：发送、撤回、恢复与用户决定（attach / state 不算命令）。 */
-const TASK_COMMAND_PATH = /\/tasks\/\d+\/(?:messages(?:\/[^/]+\/withdraw)?|resume|tool-calls\/[^/]+\/decision)$/;
-function isTaskCommand(url: string): boolean {
-  return TASK_COMMAND_PATH.test(new URL(url).pathname);
+/** Session 级业务命令端点：发送、撤回、恢复与用户决定（attach / state 不算命令）。 */
+const SESSION_COMMAND_PATH = /\/sessions\/\d+\/(?:messages(?:\/[^/]+\/withdraw)?|resume|tool-calls\/[^/]+\/decision)$/;
+function isSessionCommand(url: string): boolean {
+  return SESSION_COMMAND_PATH.test(new URL(url).pathname);
 }
 
 test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
 });
 
-test("新对话 Assistant Transport 被拒绝时不导航、不丢输入并清理 provisional Task", async ({ page, request }) => {
+test("新会话 Assistant Transport 被拒绝时不导航、不丢输入并清理 provisional Session", async ({ page, request }) => {
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
@@ -21,11 +21,11 @@ test("新对话 Assistant Transport 被拒绝时不导航、不丢输入并清�
       JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
-  await page.route(`${API_ORIGIN}/tasks/*/messages`, async (route) => {
+  await page.route(`${API_ORIGIN}/sessions/*/messages`, async (route) => {
     await route.fulfill({
       status: 400,
       contentType: "application/json",
-      body: JSON.stringify({ detail: { error: { code: "INVALID_MESSAGE", message: "测试拒绝新对话", retryable: true } } }),
+      body: JSON.stringify({ detail: { error: { code: "INVALID_MESSAGE", message: "测试拒绝新会话", retryable: true } } }),
     });
   });
 
@@ -33,17 +33,17 @@ test("新对话 Assistant Transport 被拒绝时不导航、不丢输入并清�
   await page.getByRole("button", { name: "选择工作区" }).click();
   await page.getByRole("option", { name: /demo/ }).click();
   await expect(page.getByRole("combobox", { name: "选择模型" })).toContainText("demo-model");
-  const input = page.getByLabel("新对话内容");
+  const input = page.getByLabel("新会话内容");
   await input.fill("保留这段输入");
-  await page.getByRole("button", { name: "开始对话" }).click();
+  await page.getByRole("button", { name: "开始会话" }).click();
 
   await expect(page).toHaveURL(`${WEB_ORIGIN}/`);
-  await expect(page.getByRole("dialog")).toContainText("测试拒绝新对话");
+  await expect(page.getByRole("dialog")).toContainText("测试拒绝新会话");
   await expect(input).toHaveText("保留这段输入");
-  await expect.poll(async () => (await request.get(`${API_ORIGIN}/workspaces/7/tasks`)).json()).toEqual([]);
+  await expect.poll(async () => (await request.get(`${API_ORIGIN}/workspaces/7/sessions`)).json()).toEqual([]);
 });
 
-test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作", async ({ page, request }) => {
+test("新建会话请求、Assistant Transport 流和增量 UI 均正常工作", async ({ page, request }) => {
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
@@ -53,7 +53,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   });
   const assistantRequests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
   page.on("response", (response) => {
-    if (!isTaskCommand(response.url())) return;
+    if (!isSessionCommand(response.url())) return;
     const body = (response.request().postDataJSON() ?? {}) as Record<string, unknown>;
     assistantRequests.push({ url: response.url(), body, status: response.status() });
   });
@@ -94,23 +94,23 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   await expect(fileToolGroup).not.toBeChecked();
   await expect(page.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
   await page.keyboard.press("Escape");
-  await page.getByLabel("新对话内容").fill("你好");
-  await expect(page.getByRole("button", { name: "开始对话" })).toBeEnabled();
-  await page.getByRole("button", { name: "开始对话" }).click();
+  await page.getByLabel("新会话内容").fill("你好");
+  await expect(page.getByRole("button", { name: "开始会话" })).toBeEnabled();
+  await page.getByRole("button", { name: "开始会话" }).click();
 
-  await expect(page).toHaveURL(/\/tasks\/42$/);
+  await expect(page).toHaveURL(/\/sessions\/42$/);
   await expect.poll(() => assistantRequests.length).toBe(1);
-  // 创建后的自动目录同步必须显示新任务，且不能替换 Assistant 会话或中断流。
-  await expect(page.getByRole("navigation", { name: "工作区任务列表" }).getByRole("treeitem").filter({ hasText: "你好" })).toBeVisible();
+  // 创建后的自动目录同步必须显示新会话，且不能替换 Assistant 会话或中断流。
+  await expect(page.getByRole("navigation", { name: "工作区会话列表" }).getByRole("treeitem").filter({ hasText: "你好" })).toBeVisible();
   await expect(page.getByRole("button", { name: "刷新工作区" })).toHaveCount(0);
   expect(assistantRequests[0]?.status).toBe(200);
-  expect(assistantRequests[0]?.url).toMatch(/\/tasks\/42\/messages$/);
+  expect(assistantRequests[0]?.url).toMatch(/\/sessions\/42\/messages$/);
   expect(assistantRequests[0]?.body).toMatchObject({
     message: { role: "user", parts: [{ type: "text", text: "你好" }] },
     modelConfigId: "demo/demo-model",
     disabledToolGroups: ["文件"],
   });
-  // 任务页的工具组取自首条消息冻结进 Run 的配置（快照 activity.launch），不另存本地。
+  // 会话页的工具组取自首条消息冻结进 Run 的配置（快照 activity.launch），不另存本地。
   await expect(page.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
   await expect(page.locator('[data-role="user"]').getByText("你好", { exact: true })).toBeVisible();
   await expect(page.getByText("streaming response", { exact: true }).first()).toBeVisible();
@@ -119,7 +119,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
 
   const messageInput = page.getByLabel("消息输入");
   const secondResponsePromise = page.waitForResponse((response) => (
-    response.url().endsWith("/tasks/42/messages") && response.request().method() === "POST"
+    response.url().endsWith("/sessions/42/messages") && response.request().method() === "POST"
   ));
   await messageInput.fill("请继续");
   await page.getByRole("button", { name: "发送", exact: true }).click();
@@ -131,7 +131,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   const streamBody = await (await request.get(streamLogUrl)).text();
   await expect.poll(() => assistantRequests.length).toBe(2);
   expect(assistantRequests[1]?.status).toBe(200);
-  expect(assistantRequests[1]?.url).toMatch(/\/tasks\/42\/messages$/);
+  expect(assistantRequests[1]?.url).toMatch(/\/sessions\/42\/messages$/);
   expect(assistantRequests[1]?.body.state).toBeUndefined();
   expect(assistantRequests[1]?.body.disabledToolGroups).toEqual(["文件"]);
   expect(streamBody).toContain('"kind":"mutation"');
@@ -140,7 +140,7 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
 
   const logs = await frontendLogs(page);
   expect(logs.filter((entry) => entry.event === "assistant_runtime_unmounted")).toHaveLength(0);
-  // Task 页面只建立一条长订阅：两轮输出都经它到达，命令返回不再重新 attach；运行期间订阅
+  // Session 页面只建立一条长订阅：两轮输出都经它到达，命令返回不再重新 attach；运行期间订阅
   // 若被断开再重连，会多出一条已建立的订阅。
   expect(await openedSubscriptionCount(page)).toBe(1);
   expect(logs.filter((entry) => entry.event === "assistant_transport_subscription_closed")).toHaveLength(0);
@@ -148,16 +148,16 @@ test("新建对话请求、Assistant Transport 流和增量 UI 均正常工作",
   expect(settled.length).toBeGreaterThanOrEqual(1);
   expect(settled.at(-1)?.data?.status).toBe("completed");
   const restoredPage = await page.context().newPage();
-  await restoredPage.goto("/tasks/42");
+  await restoredPage.goto("/sessions/42");
   await expect(restoredPage.getByRole("button", { name: "工具，已关闭 1 组" })).toBeVisible();
   await restoredPage.close();
 });
 
-test("任务页面重挂载时自动恢复未结束的 run", async ({ page, request }) => {
+test("会话页面重挂载时自动恢复未结束的 run", async ({ page, request }) => {
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-config-selection:task:42",
+      "cosir:model-config-selection:session:42",
       JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
@@ -167,9 +167,9 @@ test("任务页面重挂载时自动恢复未结束的 run", async ({ page, requ
   });
 
   const resumeResponse = page.waitForResponse((response) => (
-    response.url().endsWith("/tasks/42/assistant/attach") && response.request().method() === "POST"
+    response.url().endsWith("/sessions/42/assistant/attach") && response.request().method() === "POST"
   ));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await expect(page.locator('[data-role="user"]').getByText("恢复测试", { exact: true })).toBeVisible();
   await expect(page.getByTestId("run-usage-display")).toHaveText("用量统计中…");
   await resumeResponse;
@@ -178,51 +178,51 @@ test("任务页面重挂载时自动恢复未结束的 run", async ({ page, requ
   await expect.poll(async () => (await request.get(`${API_ORIGIN}/__test__/last-stream`)).text()).toContain('"outcome":{"status":"completed"');
 });
 
-test("不同 task 的 Assistant Transport 会话与消息互相隔离", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 100, title: "任务100" } });
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 101, title: "任务101" } });
+test("不同 session 的 Assistant Transport 会话与消息互相隔离", async ({ page, request }) => {
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 100, title: "会话100" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 101, title: "会话101" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-config-selection:task:100",
+      "cosir:model-config-selection:session:100",
       JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
 
-  await page.goto("/tasks/100");
+  await page.goto("/sessions/100");
   await expect(page.getByLabel("消息输入")).toBeVisible();
-  await page.getByLabel("消息输入").fill("task-100-message");
+  await page.getByLabel("消息输入").fill("session-100-message");
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  await expect(page.getByText("task-100-message", { exact: true })).toBeVisible();
+  await expect(page.getByText("session-100-message", { exact: true })).toBeVisible();
   await expect(page.getByText("streaming response", { exact: true })).toBeVisible();
 
-  await page.goto("/tasks/101");
+  await page.goto("/sessions/101");
   await expect(page.getByLabel("消息输入")).toBeVisible();
-  await expect(page.getByText("task-100-message", { exact: true })).toHaveCount(0);
-  await page.getByLabel("消息输入").fill("task-101-message");
+  await expect(page.getByText("session-100-message", { exact: true })).toHaveCount(0);
+  await page.getByLabel("消息输入").fill("session-101-message");
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  await expect(page.getByText("task-101-message", { exact: true })).toBeVisible();
+  await expect(page.getByText("session-101-message", { exact: true })).toBeVisible();
   await expect(page.getByText("streaming response", { exact: true })).toBeVisible();
-  await expect(page.getByText("task-100-message", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("session-100-message", { exact: true })).toHaveCount(0);
 
-  await page.goto("/tasks/100");
-  await expect(page.getByText("task-100-message", { exact: true })).toBeVisible();
-  await expect(page.getByText("task-101-message", { exact: true })).toHaveCount(0);
+  await page.goto("/sessions/100");
+  await expect(page.getByText("session-100-message", { exact: true })).toBeVisible();
+  await expect(page.getByText("session-101-message", { exact: true })).toHaveCount(0);
 });
 
 test("停止按钮通过后端取消当前 run，且不会复用后续命令", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 102, title: "任务102" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 102, title: "会话102" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-config-selection:task:102",
+      "cosir:model-config-selection:session:102",
       JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
 
   const assistantRequests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
   page.on("response", (response) => {
-    if (!isTaskCommand(response.url())) return;
+    if (!isSessionCommand(response.url())) return;
     assistantRequests.push({
       url: response.url(),
       body: (response.request().postDataJSON() ?? {}) as Record<string, unknown>,
@@ -230,20 +230,20 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
     });
   });
 
-  await page.goto("/tasks/102");
+  await page.goto("/sessions/102");
   await expect(page.getByLabel("消息输入")).toBeVisible();
   await expect.poll(() => openedSubscriptionCount(page)).toBe(1);
   await page.getByLabel("消息输入").fill("cancel-me");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("stream", { exact: true })).toBeVisible();
   const cancelResponse = page.waitForResponse((response) => (
-    /\/tasks\/\d+\/cancel$/.test(new URL(response.url()).pathname)
+    /\/sessions\/\d+\/cancel$/.test(new URL(response.url()).pathname)
     && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "停止" }).click();
   await expect((await cancelResponse).status()).toBe(202);
   await expect(page.getByRole("button", { name: "继续运行" })).toBeVisible();
-  // 停止是 Task 命令：不关闭订阅，终态经同一条长订阅到达。
+  // 停止是 Session 命令：不关闭订阅，终态经同一条长订阅到达。
   expect(await openedSubscriptionCount(page)).toBe(1);
   expect(assistantRequests).toHaveLength(1);
 
@@ -255,7 +255,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await expect.poll(() => openedSubscriptionCount(page)).toBe(1);
 
   const resumeResponse = page.waitForResponse((response) => (
-    response.url().endsWith("/tasks/102/resume") && response.request().method() === "POST"
+    response.url().endsWith("/sessions/102/resume") && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "继续运行" }).click();
   await expect((await resumeResponse).status()).toBe(200);
@@ -263,9 +263,9 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   // 业务恢复只投递命令：续跑输出经已有订阅到达，不再额外 attach。
   expect(await openedSubscriptionCount(page)).toBe(1);
   await expect.poll(() => assistantRequests.length).toBe(2);
-  expect(assistantRequests[1]?.url).toMatch(/\/tasks\/102\/resume$/);
+  expect(assistantRequests[1]?.url).toMatch(/\/sessions\/102\/resume$/);
 
-  await page.goto("/tasks/102");
+  await page.goto("/sessions/102");
   await expect(page.getByText("cancel-me", { exact: true })).toBeVisible();
   expect(assistantRequests).toHaveLength(2);
   await page.getByLabel("消息输入").fill("after-stop");
@@ -273,7 +273,7 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
   await expect(page.getByText("after-stop", { exact: true })).toHaveCount(1);
   await expect(page.getByText("streaming response", { exact: true })).toBeVisible();
   await expect.poll(() => assistantRequests.length).toBe(3);
-  expect(assistantRequests[2]?.url).toMatch(/\/tasks\/102\/messages$/);
+  expect(assistantRequests[2]?.url).toMatch(/\/sessions\/102\/messages$/);
   await page.reload();
   await expect(page.getByText("after-stop", { exact: true })).toHaveCount(1);
   await expect.poll(() => assistantRequests.length).toBe(3);
@@ -283,15 +283,15 @@ test("停止按钮通过后端取消当前 run，且不会复用后续命令", a
 });
 
 test("不可恢复时继续运行被同步拒绝，提示错误并复位按钮", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 105, title: "拒绝恢复" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 105, title: "拒绝恢复" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-config-selection:task:105",
+      "cosir:model-config-selection:session:105",
       JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
-  await page.goto("/tasks/105");
+  await page.goto("/sessions/105");
   await page.getByLabel("消息输入").fill("cancel-then-reject");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("stream", { exact: true })).toBeVisible();
@@ -299,7 +299,7 @@ test("不可恢复时继续运行被同步拒绝，提示错误并复位按钮",
   await expect(page.getByRole("button", { name: "继续运行" })).toBeVisible();
 
   // 快照仍说可恢复、后端却已判定不可恢复（如别处刚撤回了最后一个回合）：恢复命令以 409 RUN_NOT_RESUMABLE 同步拒绝。
-  await page.route(`${API_ORIGIN}/tasks/105/resume`, route => route.fulfill({
+  await page.route(`${API_ORIGIN}/sessions/105/resume`, route => route.fulfill({
     status: 409, contentType: "application/json",
     body: JSON.stringify({ detail: { error: { code: "RUN_NOT_RESUMABLE", message: "当前运行不可恢复", retryable: true } } }),
   }));
@@ -317,12 +317,12 @@ test("不可恢复时继续运行被同步拒绝，提示错误并复位按钮",
 });
 
 test("取消后订阅断开时，前端有限重连并解除停止状态", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 103, title: "取消流断开" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 103, title: "取消流断开" } });
   await request.post(`${API_ORIGIN}/__test__/drop-next-cancel-stream`);
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-config-selection:task:103",
+      "cosir:model-config-selection:session:103",
       JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
@@ -332,14 +332,14 @@ test("取消后订阅断开时，前端有限重连并解除停止状态", async
     if (request.url().endsWith("/assistant/attach") && request.method() === "POST") attachRequests.push(request.url());
   });
 
-  await page.goto("/tasks/103");
+  await page.goto("/sessions/103");
   await expect(page.getByLabel("消息输入")).toBeVisible();
   await page.getByLabel("消息输入").fill("cancel-with-dropped-stream");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("stream", { exact: true })).toBeVisible();
   const attachesBeforeCancel = attachRequests.length;
   const cancelResponse = page.waitForResponse((response) => (
-    /\/tasks\/\d+\/cancel$/.test(new URL(response.url()).pathname)
+    /\/sessions\/\d+\/cancel$/.test(new URL(response.url()).pathname)
     && response.request().method() === "POST"
   ));
   await page.getByRole("button", { name: "停止" }).click();
@@ -352,22 +352,22 @@ test("取消后订阅断开时，前端有限重连并解除停止状态", async
 });
 
 test("撤回入口只给最新用户消息：撤回后内容放回输入框，改完照常发送", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 103, title: "任务103" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 103, title: "会话103" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-config-selection:task:103",
+      "cosir:model-config-selection:session:103",
       JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
 
   const assistantRequests: Array<{ url: string; body: Record<string, unknown>; status: number }> = [];
   page.on("response", (response) => {
-    if (!isTaskCommand(response.url())) return;
+    if (!isSessionCommand(response.url())) return;
     assistantRequests.push({ url: response.url(), body: (response.request().postDataJSON() ?? {}) as Record<string, unknown>, status: response.status() });
   });
 
-  await page.goto("/tasks/103");
+  await page.goto("/sessions/103");
   const send = async (text: string) => {
     const nextRequestCount = assistantRequests.length + 1;
     await page.getByLabel("消息输入").fill(text);
@@ -394,7 +394,7 @@ test("撤回入口只给最新用户消息：撤回后内容放回输入框，�
   const withdrawButton = userMessages.last().getByRole("button", { name: "撤回" });
   await expect(withdrawButton).toBeVisible();
   const withdrawResponse = page.waitForResponse((response) => (
-    response.url().endsWith("/tasks/103/messages/user-2/withdraw") && response.request().method() === "POST"
+    response.url().endsWith("/sessions/103/messages/user-2/withdraw") && response.request().method() === "POST"
   ));
   await withdrawButton.click();
   await expect((await withdrawResponse).status()).toBe(200);
@@ -409,21 +409,21 @@ test("撤回入口只给最新用户消息：撤回后内容放回输入框，�
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("second-edited", { exact: true })).toBeVisible();
   await expect.poll(() => assistantRequests.length).toBe(4);
-  expect(assistantRequests[3]?.url).toMatch(/\/tasks\/103\/messages$/);
+  expect(assistantRequests[3]?.url).toMatch(/\/sessions\/103\/messages$/);
   expect(assistantRequests[3]?.body).toMatchObject({ message: { parts: [{ type: "text", text: "second-edited" }] } });
 });
 
 test("撤回被拒时消息保留、输入框不动", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 104, title: "任务104" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 104, title: "会话104" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-config-selection:task:104",
+      "cosir:model-config-selection:session:104",
       JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
 
-  await page.goto("/tasks/104");
+  await page.goto("/sessions/104");
   await page.getByLabel("消息输入").fill("withdraw-failure");
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.getByText("streaming response", { exact: true })).toBeVisible();
@@ -434,7 +434,7 @@ test("撤回被拒时消息保留、输入框不动", async ({ page, request }) 
   const latestUser = page.locator('[data-role="user"]').last();
   await latestUser.hover();
   const failure = page.waitForResponse((response) => (
-    response.url().endsWith("/tasks/104/messages/user-1/withdraw") && response.request().method() === "POST"
+    response.url().endsWith("/sessions/104/messages/user-1/withdraw") && response.request().method() === "POST"
   ));
   await latestUser.getByRole("button", { name: "撤回" }).click();
   await expect((await failure).status()).toBe(409);
@@ -445,23 +445,23 @@ test("撤回被拒时消息保留、输入框不动", async ({ page, request }) 
 });
 
 test("attach 被拒后进入有限重连，订阅恢复后继续接收输出", async ({ page, request }) => {
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 106, title: "重连" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 106, title: "重连" } });
   await page.addInitScript(() => {
     window.localStorage.clear();
     window.localStorage.setItem(
-      "cosir:model-config-selection:task:106",
+      "cosir:model-config-selection:session:106",
       JSON.stringify({ modelConfigId: "demo/demo-model", reasoningEffort: null }),
     );
   });
-  await page.goto("/tasks/106");
+  await page.goto("/sessions/106");
   // 订阅建立后才注入失败：挂载期间 StrictMode 多发的那次 attach 会吃掉注入（见 fail-next-attach）。
   await expect.poll(() => openedSubscriptionCount(page)).toBe(1);
   const attachStatuses: number[] = [];
   page.on("response", (response) => {
-    if (response.url().endsWith("/tasks/106/assistant/attach")) attachStatuses.push(response.status());
+    if (response.url().endsWith("/sessions/106/assistant/attach")) attachStatuses.push(response.status());
   });
   await request.post(`${API_ORIGIN}/__test__/fail-next-attach`);
-  await request.post(`${API_ORIGIN}/__test__/drop-subscriptions`, { data: { taskId: 106 } });
+  await request.post(`${API_ORIGIN}/__test__/drop-subscriptions`, { data: { sessionId: 106 } });
 
   // 断流 → 重连被拒（503）→ 再次重连成功；两次结束都交给有限重连，不需要用户介入。
   await expect.poll(() => openedSubscriptionCount(page)).toBe(2);

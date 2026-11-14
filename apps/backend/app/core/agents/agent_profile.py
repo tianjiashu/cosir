@@ -198,7 +198,7 @@ class AgentProfile:
     delegate_task.message 才是"具体工作单"。
 
     字段：
-        agent_id: 持久化在任务和事件上的稳定 Agent 标识。
+        agent_id: 持久化在会话和事件上的稳定 Agent 标识。
         role: 人类可读的 Agent 角色。
         description: 子 Agent 的职责/能力/适用场景与约束描述（delegate_task 中暴露给父 Agent）；
             主 Agent 不设置此字段。

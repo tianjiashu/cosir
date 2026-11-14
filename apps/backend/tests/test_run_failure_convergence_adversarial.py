@@ -39,14 +39,14 @@ from app.core.llm_provider.model_failure import classify_model_failure
 from app.core.workflow import run_driver
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
-from app.models import conversation_run_failure as failure_catalog
-from app.models.conversation_run_failure import (
+from app.models import run_failure as failure_catalog
+from app.models.enums.error_kind import ErrorKind
+from app.models.enums.run_status import RunStatus, RunTransition
+from app.models.run_failure import (
     run_failure_message,
     run_terminal_error,
 )
-from app.models.conversation_run_record import ConversationRunRecord
-from app.models.enums.conversation_run_status import ConversationRunStatus, RunTransition
-from app.models.enums.error_kind import ErrorKind
+from app.models.run_record import RunRecord
 
 # --------------------------------------------------------------------------------------
 # 测试替身
@@ -82,7 +82,7 @@ class _RecordingRunStateService:
         )
         if self._failure is not None:
             raise self._failure
-        return SimpleNamespace(id=run_id, task_id=3) if self._settles else None
+        return SimpleNamespace(id=run_id, session_id=3) if self._settles else None
 
 
 def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) -> int:
@@ -100,7 +100,7 @@ def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) 
 
 def _drive_run(run_id: int) -> Awaitable[None]:
     """驱动一条 Run（本次执行的事实由 ``RuntimeContext.for_run`` 只凭 Run 装配）。"""
-    return run_driver.RunDriver().drive(SimpleNamespace(id=run_id, task_id=3), None)
+    return run_driver.RunDriver().drive(SimpleNamespace(id=run_id, session_id=3), None)
 
 
 def _make_runtime(
@@ -117,9 +117,9 @@ def _make_runtime(
 
     monkeypatch.setattr(
         run_driver,
-        "get_conversation_run_ledger",
+        "get_run_ledger",
         lambda: SimpleNamespace(
-            get_run=lambda run_id: SimpleNamespace(id=run_id, task_id=3),
+            get_run=lambda run_id: SimpleNamespace(id=run_id, session_id=3),
             transition=run_state_service.transition,
         ),
     )
@@ -140,10 +140,10 @@ def _make_runtime(
     )
     monkeypatch.setattr(
         run_driver,
-        "get_conversation_task_context_service",
+        "get_session_context_service",
         lambda: SimpleNamespace(
             close_unclosed_tool_calls_for_run=lambda *_args: [],
-            claimed_decisions=lambda _task_id: [],
+            claimed_decisions=lambda _session_id: [],
         ),
     )
     return SimpleNamespace(run_agent=_drive_run)
@@ -366,7 +366,7 @@ def test_every_catalog_code_has_non_empty_own_message() -> None:
         if code != Constant.Run.RUN_FAILURE_CODE_UNKNOWN:
             assert message != fallback or code == Constant.Run.RUN_FAILURE_CODE_UNKNOWN, code
         seen[code] = message
-    # 除各取消类 code 共享「已取消本轮对话」外，其余文案应各不相同。
+    # 除各取消类 code 共享「已停止这次运行」外，其余文案应各不相同。
     duplicated = {
         message: [code for code, value in seen.items() if value == message]
         for message in set(seen.values())
@@ -440,7 +440,7 @@ def test_run_failure_message_tolerates_non_string_input() -> None:
 def test_terminal_error_completed_has_no_error_contract() -> None:
     """``completed`` 终态不写错误契约。"""
 
-    assert run_terminal_error(ConversationRunStatus.COMPLETED, "run_failed") is None
+    assert run_terminal_error(RunStatus.COMPLETED, "run_failed") is None
 
 
 @pytest.mark.parametrize(
@@ -461,7 +461,7 @@ def test_terminal_error_rejects_non_identifier_end_reason(end_reason: str | None
     潜在缺陷：若实现直接 ``end_reason or fallback``，自由文本会进入受控 ``code`` 字段。
     """
 
-    error = run_terminal_error(ConversationRunStatus.FAILED, end_reason)
+    error = run_terminal_error(RunStatus.FAILED, end_reason)
     assert error is not None
     assert error["code"].isidentifier()
     if end_reason is None or not end_reason.isidentifier():
@@ -473,11 +473,11 @@ def test_terminal_error_rejects_non_identifier_end_reason(end_reason: str | None
 def test_terminal_error_cancelled_fallback_code() -> None:
     """``cancelled`` 终态在无可用原因时回退取消类兜底 code。"""
 
-    error = run_terminal_error(ConversationRunStatus.CANCELLED, None)
+    error = run_terminal_error(RunStatus.CANCELLED, None)
     assert error is not None
     assert error["code"] == Constant.Run.RUN_FAILURE_CODE_CANCELLED
 
-    error = run_terminal_error(ConversationRunStatus.CANCELLED, "not an identifier")
+    error = run_terminal_error(RunStatus.CANCELLED, "not an identifier")
     assert error is not None
     assert error["code"] == Constant.Run.RUN_FAILURE_CODE_CANCELLED
 
@@ -486,8 +486,8 @@ def test_terminal_error_message_is_non_empty_and_controlled() -> None:
     """任何终态的受控 message 都必须非空且来自文案目录。"""
 
     for status in (
-        ConversationRunStatus.FAILED,
-        ConversationRunStatus.CANCELLED,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
     ):
         for reason in (None, "unknown_free_text", "model_insufficient_quota"):
             error = run_terminal_error(status, reason)
@@ -657,16 +657,16 @@ def test_build_run_error_rejects_malformed_payload(payload: object) -> None:
     run = SimpleNamespace(id=3, error=payload)
     if payload is None:
         assert (
-            run_error(cast(ConversationRunRecord, run)) is None
+            run_error(cast(RunRecord, run)) is None
         )
         return
     if isinstance(payload, dict) and payload.get("message") == "   ":
         # 空白 message 的期望：显式失败（不得静默降级成空白提示）。
         with pytest.raises(ValueError):
-            run_error(cast(ConversationRunRecord, run))
+            run_error(cast(RunRecord, run))
         return
     with pytest.raises(ValueError):
-        run_error(cast(ConversationRunRecord, run))
+        run_error(cast(RunRecord, run))
 
 
 def test_build_run_error_accepts_valid_contract() -> None:
@@ -679,7 +679,7 @@ def test_build_run_error_accepts_valid_contract() -> None:
             "message": run_failure_message("model_insufficient_quota"),
         },
     )
-    assert run_error(cast(ConversationRunRecord, run)) == {
+    assert run_error(cast(RunRecord, run)) == {
         "code": "model_insufficient_quota",
         "message": run_failure_message("model_insufficient_quota"),
     }
@@ -691,7 +691,7 @@ def test_build_run_error_does_not_raise_attribute_error_for_non_mapping() -> Non
     for weird in ("oops", 42, ["a"], object()):
         run = SimpleNamespace(id=3, error=weird)
         with pytest.raises(ValueError):
-            run_error(cast(ConversationRunRecord, run))
+            run_error(cast(RunRecord, run))
 
 
 def test_validate_snapshot_rejects_run_error_with_extra_keys() -> None:

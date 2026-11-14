@@ -16,7 +16,7 @@ import type {
 
 const EMPTY_LAUNCH: TransportRunLaunch = { modelConfigId: null, reasoningEffort: null, disabledToolGroups: [] };
 
-/** 单测共用的 Task 视角 snapshot 构造器：只填契约必填字段，调用方覆盖需要的部分。 */
+/** 单测共用的 Session 视角 snapshot 构造器：只填契约必填字段，调用方覆盖需要的部分。 */
 export function transportState(overrides: Partial<TransportState> = {}): TransportState {
   return { title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [], ...overrides };
 }
@@ -36,13 +36,13 @@ export function userMessage(id: string, turn: number, text = "hello"): Transport
 }
 
 /** Agent 消息：另一个 Agent 交来、开启回合的 user 消息，带发送方。 */
-export function agentMessage(id: string, turn: number, text = "请完成子任务", sourceTaskId = 9): TransportMessage {
-  return { id, role: "user", parts: [textPart(text)], turn, inherited: false, outcome: null, source: { taskId: sourceTaskId, name: "主任务", report: null } };
+export function agentMessage(id: string, turn: number, text = "请完成子会话", sourceSessionId = 9): TransportMessage {
+  return { id, role: "user", parts: [textPart(text)], turn, inherited: false, outcome: null, source: { sessionId: sourceSessionId, name: "主会话", report: null } };
 }
 
 /** 回合途中到达的 Agent 消息。 */
 export function agentMessagePart(id: string, text = "追加要求"): TransportMessagePart {
-  return { type: "agent-message", id, text, source: { taskId: 9, name: "主任务", report: null } };
+  return { type: "agent-message", id, text, source: { sessionId: 9, name: "主会话", report: null } };
 }
 
 /** 回复；第二个参数是它所在的回合。 */
@@ -99,9 +99,9 @@ export function usage(overrides: Partial<TransportUsage> = {}): TransportUsage {
 }
 
 /** snapshot `terminal_sessions` 条目：默认是用户新建、运行中的 zsh 会话。 */
-export function terminalSession(sessionId: string, overrides: Partial<TerminalSessionEntry> = {}): TerminalSessionEntry {
+export function terminalSession(terminalSessionId: string, overrides: Partial<TerminalSessionEntry> = {}): TerminalSessionEntry {
   return {
-    sessionId,
+    terminalSessionId,
     shellKind: "zsh",
     status: "running",
     endReason: null,

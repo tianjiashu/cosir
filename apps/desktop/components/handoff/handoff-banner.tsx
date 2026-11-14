@@ -8,8 +8,8 @@ import { useHandBack } from "@/lib/handoff/use-hand-back";
  * 浏览器面板里的交接提示：Agent 要用户做的事，以及「交还」。面板按标签 id 从
  * `lib/handoff/handoff-store` 取到条目后放在自己的内容上方。
  */
-export function HandoffBanner({ taskId, entry }: { taskId: number; entry: HandoffEntry }) {
-  const { handBack, returning } = useHandBack(taskId, entry.toolCallId);
+export function HandoffBanner({ sessionId, entry }: { sessionId: number; entry: HandoffEntry }) {
+  const { handBack, returning } = useHandBack(sessionId, entry.toolCallId);
   return (
     <div role="alert" data-testid="handoff-banner" className="bg-info/10 text-foreground mx-2 mb-1 flex items-center gap-2 rounded-md px-3 py-1.5 text-xs">
       <HandIcon className="text-info size-3.5 shrink-0" aria-hidden="true" />

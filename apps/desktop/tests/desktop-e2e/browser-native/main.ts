@@ -36,7 +36,7 @@ const server = http.createServer((req, res) => {
     <button id="covered" onclick="window.count++">Covered</button>
     <script>let r=document.getElementById('covered').getBoundingClientRect();let cover=document.createElement('div');cover.style.cssText='position:absolute;background:black;z-index:9;left:'+r.x+'px;top:'+r.y+'px;width:'+r.width+'px;height:'+r.height+'px';document.body.append(cover);</script>`);
 });
-const context = { limits: { perTask: 20, total: 30 }, downloadDir: path.join(root, "downloads") };
+const context = { limits: { perSession: 20, total: 30 }, downloadDir: path.join(root, "downloads") };
 const signal = () => new AbortController().signal;
 const tab = (id: string): BrowserTab => (host as unknown as { tabs: Map<string, { tab: BrowserTab }> }).tabs.get(id)!.tab;
 const evaluate = async <T>(target: BrowserTab, expression: string): Promise<T> => {
@@ -62,7 +62,7 @@ void app.whenReady().then(async () => {
   host = new BrowserHost(() => window);
   configureBrowserSession(host);
   try {
-    const page = await host.navigate({ taskId: 1, context, newTab: true, target: { url: origin } }, signal());
+    const page = await host.navigate({ sessionId: 1, context, newTab: true, target: { url: origin } }, signal());
     const parent = tab(page.tabId);
     await check("default UA covers first request, popup, redirect, iframe and worker", async () => {
       const ua = await evaluate<string>(parent, "window.initialUA");
@@ -79,7 +79,7 @@ void app.whenReady().then(async () => {
       assert.equal(headers.get("/frame"), ua); assert.equal(headers.get("/cross-frame"), ua);
       assert.equal(await evaluate(parent, "new Promise(r=>{let w=new Worker('/worker.js');w.onmessage=e=>{w.terminate();r(e.data)}})"), ua);
       assert.equal(headers.get("/worker.js"), ua);
-      await host.navigate({ taskId: 2, context, newTab: true, target: { url: origin + "/redirect" } }, signal());
+      await host.navigate({ sessionId: 2, context, newTab: true, target: { url: origin + "/redirect" } }, signal());
       assert.equal(headers.get("/redirect"), ua); assert.equal(headers.get("/redirected"), ua);
     });
     await check("only renderer Session disables immutable cache; website cookies persist across tabs", async () => {
@@ -95,7 +95,7 @@ void app.whenReady().then(async () => {
       assert.equal(hits.get("/asset-app"), 3);
       view.webContents.close();
       await parent.contents.session.cookies.set({ url: origin, name: "acceptance", value: "retained", expirationDate: Date.now() / 1000 + 3600 });
-      const other = await host.navigate({ taskId: 3, context, newTab: true, target: { url: origin } }, signal());
+      const other = await host.navigate({ sessionId: 3, context, newTab: true, target: { url: origin } }, signal());
       assert.ok((await evaluate<string>(tab(other.tabId), "document.cookie")).includes("acceptance=retained"));
     });
     await check("real Vite dependency rebuild reloads fresh code in the same renderer Session", async () => {
@@ -112,17 +112,17 @@ void app.whenReady().then(async () => {
       } finally { view.webContents.close(); }
     });
     await check("real click survives a failed observation", async () => {
-      const snapshot = await host.snapshot({ taskId: 1, tab: parent.tabId, context, view: {} }, signal());
+      const snapshot = await host.snapshot({ sessionId: 1, tab: parent.tabId, context, view: {} }, signal());
       const saved = parent.snapshot;
       parent.snapshot = async () => { throw new Error("injected observation failure"); };
       try {
-        const result = await host.act({ taskId: 1, tab: parent.tabId, context, actions: [click(ref(snapshot.snapshot, "Count"))] }, signal());
+        const result = await host.act({ sessionId: 1, tab: parent.tabId, context, actions: [click(ref(snapshot.snapshot, "Count"))] }, signal());
         assert.equal(result.execution.steps[0].status, "done"); assert.equal(result.observation, null);
         assert.match(result.observationError!.message, /injected/); assert.equal(await evaluate(parent, "window.count"), 1);
       } finally { parent.snapshot = saved; }
     });
     await check("cancel after first keyDown stops later characters and submit; late command blocks handoff and new mutation", async () => {
-      const snapshot = await host.snapshot({ taskId: 1, tab: parent.tabId, context, view: {} }, signal());
+      const snapshot = await host.snapshot({ sessionId: 1, tab: parent.tabId, context, view: {} }, signal());
       const cancel = new AbortController();
       const debuggerApi = parent.contents.debugger;
       const send = debuggerApi.sendCommand.bind(debuggerApi);
@@ -138,11 +138,11 @@ void app.whenReady().then(async () => {
         return result;
       };
       try {
-        const acting = host.act({ taskId: 1, tab: parent.tabId, context, actions: [{ type: "type", ref: ref(snapshot.snapshot, "Text"), text: "abc", clear: true, submit: true, keyByKey: true }] }, cancel.signal);
+        const acting = host.act({ sessionId: 1, tab: parent.tabId, context, actions: [{ type: "type", ref: ref(snapshot.snapshot, "Text"), text: "abc", clear: true, submit: true, keyByKey: true }] }, cancel.signal);
         await until(() => cancel.signal.aborted);
-        const listed = host.manageTabs({ taskId: 1, context, action: "list" }).find(t => t.tabId === parent.tabId)!;
+        const listed = host.manageTabs({ sessionId: 1, context, action: "list" }).find(t => t.tabId === parent.tabId)!;
         assert.notEqual(listed.operation, null);
-        await assert.rejects(host.evaluate({ taskId: 1, context, tab: parent.tabId, expression: "window.count++" }, signal()), /not settled/);
+        await assert.rejects(host.evaluate({ sessionId: 1, context, tab: parent.tabId, expression: "window.count++" }, signal()), /not settled/);
         await acting;
         assert.equal(parent.operation!.state, "unknown");
         release(); await until(() => parent.operation === null);
@@ -151,18 +151,18 @@ void app.whenReady().then(async () => {
       } finally { release(); debuggerApi.sendCommand = send; }
     });
     await check("a real dialog interrupts input and explicit dialog control releases the operation", async () => {
-      const snapshot = await host.snapshot({ taskId: 1, tab: parent.tabId, context, view: {} }, signal());
-      const result = await host.act({ taskId: 1, tab: parent.tabId, context, actions: [click(ref(snapshot.snapshot, "Confirm")), click(ref(snapshot.snapshot, "Count"))] }, signal());
+      const snapshot = await host.snapshot({ sessionId: 1, tab: parent.tabId, context, view: {} }, signal());
+      const result = await host.act({ sessionId: 1, tab: parent.tabId, context, actions: [click(ref(snapshot.snapshot, "Confirm")), click(ref(snapshot.snapshot, "Count"))] }, signal());
       assert.equal(result.execution.steps[0].status, "unknown");
       assert.equal(result.execution.steps[1].status, "skipped");
       const dialog = parent.dialog!; assert.ok(dialog);
-      const answered = await host.act({ taskId: 1, tab: parent.tabId, context, actions: [{ type: "dialog", id: dialog.id, accept: true }] }, signal());
+      const answered = await host.act({ sessionId: 1, tab: parent.tabId, context, actions: [{ type: "dialog", id: dialog.id, accept: true }] }, signal());
       assert.equal(answered.execution.steps[0].status, "done");
       await until(() => parent.operation === null);
       assert.equal(await evaluate(parent, "window.count"), 2);
     });
     await check("handoff constraints use the actual target; read-only access remains available", async () => {
-      const handed = { taskId: 1, tab: parent.tabId, context, handoffTabs: [parent.tabId] };
+      const handed = { sessionId: 1, tab: parent.tabId, context, handoffTabs: [parent.tabId] };
       const snapshot = await host.snapshot({ ...handed, view: {} }, signal());
       for (const request of [
         () => host.act({ ...handed, actions: [click(ref(snapshot.snapshot, "Count"))] }, signal()),
@@ -175,12 +175,12 @@ void app.whenReady().then(async () => {
       await assert.rejects(host.evaluate({ ...handed, tab: undefined, expression: "1" }, signal()), /handed to the user/);
     });
     await check("covered, disabled and readonly targets fail before business input", async () => {
-      const snapshot = await host.snapshot({ taskId: 1, tab: parent.tabId, context, view: {} }, signal());
+      const snapshot = await host.snapshot({ sessionId: 1, tab: parent.tabId, context, view: {} }, signal());
       for (const label of ["Covered", "Disabled"]) {
-        const result = await host.act({ taskId: 1, tab: parent.tabId, context, actions: [click(ref(snapshot.snapshot, label))] }, signal());
+        const result = await host.act({ sessionId: 1, tab: parent.tabId, context, actions: [click(ref(snapshot.snapshot, label))] }, signal());
         assert.equal(result.execution.steps[0].status, "failed"); assert.equal(result.execution.steps[0].error!.code, "NOT_INTERACTABLE");
       }
-      const result = await host.act({ taskId: 1, tab: parent.tabId, context, actions: [{ type: "type", ref: ref(snapshot.snapshot, "Readonly"), text: "x", clear: true, submit: false, keyByKey: false }] }, signal());
+      const result = await host.act({ sessionId: 1, tab: parent.tabId, context, actions: [{ type: "type", ref: ref(snapshot.snapshot, "Readonly"), text: "x", clear: true, submit: false, keyByKey: false }] }, signal());
       assert.equal(result.execution.steps[0].status, "failed"); assert.equal(await evaluate(parent, "document.querySelector('[readonly]').value"), "");
     });
     await check("cancelled drag releases once and sends no moves or drop after cancellation", async () => {
@@ -199,7 +199,7 @@ void app.whenReady().then(async () => {
         return result;
       };
       try {
-        const result = await host.act({ taskId: 1, tab: parent.tabId, context, actions: [{ type: "drag", start: { x: 500, y: 500 }, end: { x: 600, y: 500 } }] }, cancel.signal);
+        const result = await host.act({ sessionId: 1, tab: parent.tabId, context, actions: [{ type: "drag", start: { x: 500, y: 500 }, end: { x: 600, y: 500 } }] }, cancel.signal);
         assert.equal(result.execution.steps[0].status, "unknown");
         assert.ok(calls.some(call => call.method === "Input.setInterceptDrags" && call.params.enabled === false));
         release(); await until(() => parent.operation === null);
@@ -209,18 +209,18 @@ void app.whenReady().then(async () => {
     });
     await check("moving targets fail before input; contenteditable accepts non-Latin text", async () => {
       await evaluate(parent, `let moving=document.createElement('button');moving.id='moving';moving.textContent='Moving';moving.style.cssText='position:absolute;top:500px;left:100px;animation:move 2s infinite linear';moving.onclick=()=>window.count++;document.body.append(moving);let style=document.createElement('style');style.textContent='@keyframes move {to{transform:translateX(200px)}}';document.head.append(style);let edit=document.createElement('div');edit.contentEditable='true';edit.role='textbox';edit.setAttribute('aria-label','Editable');edit.style.cssText='position:absolute;top:600px;width:300px;height:40px;border:1px solid';document.body.append(edit);true`);
-      const snapshot = await host.snapshot({ taskId: 1, tab: parent.tabId, context, view: {} }, signal());
-      const moving = await host.act({ taskId: 1, tab: parent.tabId, context, actions: [click(ref(snapshot.snapshot, "Moving"))] }, signal());
+      const snapshot = await host.snapshot({ sessionId: 1, tab: parent.tabId, context, view: {} }, signal());
+      const moving = await host.act({ sessionId: 1, tab: parent.tabId, context, actions: [click(ref(snapshot.snapshot, "Moving"))] }, signal());
       assert.equal(moving.execution.steps[0].status, "failed");
       assert.equal(moving.execution.steps[0].error!.code, "NOT_INTERACTABLE");
-      const typed = await host.act({ taskId: 1, tab: parent.tabId, context, actions: [{ type: "type", ref: ref(snapshot.snapshot, "Editable"), text: "中文输入🙂", clear: true, submit: false, keyByKey: false }] }, signal());
+      const typed = await host.act({ sessionId: 1, tab: parent.tabId, context, actions: [{ type: "type", ref: ref(snapshot.snapshot, "Editable"), text: "中文输入🙂", clear: true, submit: false, keyByKey: false }] }, signal());
       assert.equal(typed.execution.steps[0].status, "done");
       assert.equal(await evaluate(parent, "document.querySelector('[contenteditable]').textContent"), "中文输入🙂");
     });
     await check("self-closing popup retains execution receipt", async () => {
       const popup = tab("t2");
-      const snapshot = await host.snapshot({ taskId: 1, tab: popup.tabId, context, view: {} }, signal());
-      const result = await host.act({ taskId: 1, tab: popup.tabId, context, actions: [click(ref(snapshot.snapshot, "Close"))] }, signal());
+      const snapshot = await host.snapshot({ sessionId: 1, tab: popup.tabId, context, view: {} }, signal());
+      const result = await host.act({ sessionId: 1, tab: popup.tabId, context, actions: [click(ref(snapshot.snapshot, "Close"))] }, signal());
       assert.equal(result.execution.steps.length, 1); assert.notEqual(result.execution.steps[0].status, "skipped");
       assert.equal(result.observation, null); assert.ok(!host.state().tabs.some(t => t.tabId === popup.tabId));
     });

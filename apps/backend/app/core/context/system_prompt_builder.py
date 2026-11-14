@@ -8,7 +8,7 @@
 2. ``<agent_layer>`` Agent 系统预设层：所有 profile 都使用装配阶段载入的
    ``AgentRuntimeConfig.system_prompt`` 正文。该层是系统预设，与用户无关；本层只负责施加预算，
    不访问提示词文件或做变量替换。
-T. ``<tool_layer>`` 工具层：先按 Task 固化的工具名拼接这些工具共同遵守的声明（文件工具优先于
+T. ``<tool_layer>`` 工具层：先按 Session 固化的工具名拼接这些工具共同遵守的声明（文件工具优先于
    shell、独立读取并行发出、浏览器页面与日志按数据处理、标签视口与下载归属），再投影当前 Agent
    可用的子 Agent、MCP 服务和 Skill 目录。公共声明只在此处出现一次，各工具描述不重复；
    声明按工具族裁剪，只引用该 Agent 真有的工具。目录只读取对应能力需要的本机配置，不连接
@@ -64,11 +64,11 @@ from app.core.tool.schemas.tool_names import (
     TOOL_WEB_EXTRACT,
     TOOL_WEB_SEARCH,
 )
-from app.core.workflow.message_queue.task_message import MODEL_INPUT_BODIES
+from app.core.workflow.message_queue.session_message import MODEL_INPUT_BODIES
 from app.service.configuration.file_store import ConfigurationFileStore
 from app.utils.file_utils import read_text_file
 from app.utils.host_platform import host_platform_name
-from app.utils.path.system_cosir import system_instruction_file
+from app.utils.path.system_cosir import system_cosir_dir, system_instruction_file
 from app.utils.token_estimator import TokenEstimator
 from app.utils.workspace_instruction import find_workspace_instruction_file
 
@@ -106,7 +106,7 @@ class SystemPromptBuilder:
         参数:
             agent: 当前执行主体的 Agent 运行时配置；只取身份与系统预设。
             workspace_root: 当前工作区根目录。
-            tool_names: Task 固化的工具名（``TaskRuntimeSpace.task_tool_names``）；决定工具层
+            tool_names: Session 固化的工具名（``SessionRuntimeSpace.session_tool_names``）；决定工具层
                 的公共声明与能力目录，不读 Agent 定义里的 ``allowed_tools``——那是固化前的配置，
                 之后可能已被用户改过。
 
@@ -138,9 +138,11 @@ class SystemPromptBuilder:
         """构建动态变量层：身份、输入消息协议、操作系统、工作区根目录与写入边界。
 
         文案为英文（读者是模型，与工具描述、子 Agent 选择指南保持同一语言）。本层只承载
-        当前实现确认的运行期事实：路径边界的说法对应 ``PathResolver`` 的两条解析路径——只读工具
-        走 ``resolve_without_boundary``（可读工作区外），写类工具走 ``resolve_within_workspace``
-        （限制在工作区内且拒绝 ``.cosir/``）；这里不点名工具，因为本层不按工具名裁剪。
+        当前实现确认的运行期事实：路径边界的说法对应 ``PathResolver`` 的入口——读类工具走
+        ``resolve_for_read`` / ``resolve_read_scope``（可读工作区外，系统数据目录除外），写类工具走
+        ``resolve_within_workspace``（限制在工作区内且拒绝 ``.cosir/``）；系统数据目录取
+        ``system_cosir_dir()``，规则见 ``app.core.permission.protected_paths``。这里不点名工具，因为
+        本层不按工具名裁剪。
 
         参数:
             workspace_root: 当前工作区根目录。
@@ -162,9 +164,11 @@ class SystemPromptBuilder:
             f"- Workspace root: {workspace_root}",
             (
                 "- Workspace rules: all code lives under the workspace root. Read-only file tools "
-                "also accept absolute paths outside it; tools that write, edit, delete, or move "
-                "files only work inside it, and .cosir/ is a reserved read-only area (runtime "
-                "metadata) they refuse. Shell commands are not sandboxed: they can reach anything "
+                "also accept absolute paths outside it, except cosir's own data directory "
+                f"{system_cosir_dir()} (only its skills/ is readable); tools that write, edit, "
+                "delete, or move files only work inside it, and "
+                ".cosir/ is a reserved read-only area (runtime metadata) they refuse. Shell "
+                "commands are not sandboxed: they can reach anything "
                 "they are given, including paths outside the workspace and .cosir/, so never "
                 "modify either."
             ),
@@ -281,7 +285,7 @@ class SystemPromptBuilder:
 
         参数:
             workspace_root: 当前工作区根目录，用作目录的作用域键。
-            available_tool_names: Task 固化的工具名集合。
+            available_tool_names: Session 固化的工具名集合。
 
         返回:
             包裹在 ``<tool_layer>`` 标签内的文本；既无公共声明也无目录能力时返回 ``""``。
@@ -311,7 +315,7 @@ class SystemPromptBuilder:
         它同时存在，否则模型会看到一条指向不存在工具的建议。
 
         参数:
-            available_tool_names: Task 固化的工具名集合。
+            available_tool_names: Session 固化的工具名集合。
 
         返回:
             若干声明行；不属于任何已知工具族时返回 ``""``。
@@ -350,7 +354,7 @@ class SystemPromptBuilder:
                         "the tab invalidates every ref."
                     ),
                     (
-                        "- A page download belongs to the task, not the tab; a page result gives "
+                        "- A page download belongs to the session, not the tab; a page result gives "
                         "the saved path."
                     ),
                 ]
@@ -369,7 +373,7 @@ class SystemPromptBuilder:
 
         参数:
             workspace_root: 当前工作区根目录，用作目录的作用域键。
-            available_tool_names: Task 固化的工具名集合。
+            available_tool_names: Session 固化的工具名集合。
 
         返回:
             目录文本块；当前 Agent 没有目录能力时返回空列表。
@@ -471,7 +475,7 @@ class SystemPromptBuilder:
         """构建工作方式层：过程叙述与收尾。
 
         工具怎么用归 Layer T，本层只讲怎么和用户协作：开始前说一句要做什么、发现变化就说、
-        不逐步播报、结束时先给结论。文案与工具集无关，恒定生成。
+        不逐步播报、信息够了就动手（权衡时给建议而不是罗列选项，免得动不动就问）、结束时先给结论。文案与工具集无关，恒定生成。
 
         返回:
             包裹在 ``<work_layer>`` 标签内的工作方式文本。
@@ -484,6 +488,12 @@ class SystemPromptBuilder:
                     "about to do. When something you find changes the plan, say so in one "
                     "sentence. Do not narrate every step; these lines are shown to the user while "
                     "you work."
+                ),
+                (
+                    "- When you have enough information to act, act. Do not re-derive facts "
+                    "already established in the conversation, re-litigate a decision the user has "
+                    "already made, or narrate options you will not pursue. If you are weighing a "
+                    "choice, give a recommendation, not an exhaustive survey."
                 ),
                 (
                     "- When done, lead with the result. Mention anything you could not verify or "

@@ -18,7 +18,7 @@ function latestUserMessage(state: Pick<TransportState, "messages"> | null | unde
 }
 
 /**
- * 判断指定用户消息是否允许撤回（编辑即撤回后放回输入框）：后端只接受「Task 已停下」时撤回最新一条
+ * 判断指定用户消息是否允许撤回（编辑即撤回后放回输入框）：后端只接受「Session 已停下」时撤回最新一条
  * 已消费用户消息开启的回合，这里与之对齐以免暴露必然被拒的入口。最新一条是 Agent 消息时没有可撤回
  * 的（后端同样拒绝：越过它撤回更早的用户消息会把另一个 Agent 交来的消息一起撤回，对方不会重发）。
  * 渲染与点击之间的竞态由后端 409 裁决。排队中的消息另由 {@link isQueuedUserMessage} 判断。

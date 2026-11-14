@@ -56,7 +56,7 @@ export function ModelConnectionsPanel() {
   const removeModel = async (model: ModelConfig) => {
     const removed = await confirmDelete({
       target: `模型「${model.model_name}」`,
-      consequence: "使用该模型的对话将无法继续选择它。",
+      consequence: "使用该模型的会话将无法继续选择它。",
       action: () => deleteModel.mutateAsync(model),
     });
     if (!removed) return;

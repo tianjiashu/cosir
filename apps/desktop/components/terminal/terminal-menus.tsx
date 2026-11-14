@@ -67,7 +67,7 @@ export function TerminalEndedMenu({
   onOpenEnded,
 }: {
   ended: TerminalSessionEntry[];
-  onOpenEnded: (sessionId: string) => void;
+  onOpenEnded: (terminalSessionId: string) => void;
 }) {
   return (
     <DropdownMenu.Root>
@@ -86,7 +86,7 @@ export function TerminalEndedMenu({
       <DropdownMenu.Portal>
         <DropdownMenu.Content align="end" className={TERMINAL_MENU_CONTENT_CLASS}>
           {ended.map((session) => (
-            <DropdownMenu.Item key={session.sessionId} className={TERMINAL_MENU_ITEM_CLASS} onSelect={() => onOpenEnded(session.sessionId)}>
+            <DropdownMenu.Item key={session.terminalSessionId} className={TERMINAL_MENU_ITEM_CLASS} onSelect={() => onOpenEnded(session.terminalSessionId)}>
               <span className="flex-1 truncate">{session.shellKind}</span>
               <span className="text-muted-foreground text-2xs">
                 {terminalStatusPresentation(session.status).label}{session.exitCode !== null ? ` · ${session.exitCode}` : ""}

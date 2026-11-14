@@ -15,56 +15,56 @@ import { EmptyState } from "@/components/ui/state-panel";
 import { panelTabClass } from "@/components/ui/panel-tokens";
 import { openUserTab } from "@/lib/browser/open-tab";
 import { displayedTab, useBrowserPanelStore } from "@/lib/browser/panel-store";
-import { useTaskBrowserDownloads, useTaskBrowserTabs } from "@/lib/browser/host-state-store";
+import { useSessionBrowserDownloads, useSessionBrowserTabs } from "@/lib/browser/host-state-store";
 import { desktopHost } from "@/lib/desktop-host";
 import { handoffOn, useHandoffStore } from "@/lib/handoff/handoff-store";
 import { handBackHandoff } from "@/lib/handoff/use-hand-back";
 import { tabLabel } from "@/lib/browser/browser-tab-label";
-import { useTaskExecutionStatus } from "@/lib/task-status/task-status-store";
+import { useSessionExecutionStatus } from "@/lib/session-status/session-status-store";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 
 /**
- * 浏览器面板：一个 Task 的标签页（Agent 与用户开的都在这里），独立的停靠面板，不与工作台混排。
+ * 浏览器面板：一个 Session 的标签页（Agent 与用户开的都在这里），独立的停靠面板，不与工作台混排。
  *
- * 标签条只列这个 Task 的标签（宿主事实，经 `host-state-store` 镜像）；显示哪个标签由 `panel-store` 决定（选中项、
+ * 标签条只列这个 Session 的标签（宿主事实，经 `host-state-store` 镜像）；显示哪个标签由 `panel-store` 决定（选中项、
  * 弹窗开出的标签跟随、关闭后回到来源或最新的标签，规则都在那里）。`+` 与空状态里的地址栏都经 `openUserTab`
- * 在这个 Task 里新开标签。关闭标签就是关掉宿主里的标签页（Agent 也就看不到了），与在交互终端里关闭会话一致。
+ * 在这个 Session 里新开标签。关闭标签就是关掉宿主里的标签页（Agent 也就看不到了），与在交互终端里关闭会话一致。
  *
  * 「等你操作」的状态在标签条上各有标记、选中时在网页上方显示提示条（都在原生画面占位区之外）：待答的网页
  * 弹窗优先于交接，因为弹窗不答页面就停着；两者都没有时，Agent 在运行或正在操作这个标签就显示一行提示
  * （`AgentActivityBar`）。关闭交接中的标签即交还：宿主无法把「标签关了」告诉后端，用户在
- * 这里关掉它是唯一能及时唤醒 Agent 的时机；重放时后端报告标签已不在。这个 Task 最近的下载显示在面板底部：下载归
- * Task 不归标签（弹出页下载后常自己关掉），所以与显示哪个标签、有没有标签都无关。
+ * 这里关掉它是唯一能及时唤醒 Agent 的时机；重放时后端报告标签已不在。这个 Session 最近的下载显示在面板底部：下载归
+ * Session 不归标签（弹出页下载后常自己关掉），所以与显示哪个标签、有没有标签都无关。
  */
-export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onClose }: {
-  taskId: number | null;
+export function BrowserPanel({ sessionId, sizing, maximized, onToggleMaximized, onClose }: {
+  sessionId: number | null;
   sizing: DockSizing;
   maximized: boolean;
   onToggleMaximized: () => void;
   onClose: () => void;
 }) {
-  const tabs = useTaskBrowserTabs(taskId);
-  const downloads = useTaskBrowserDownloads(taskId);
-  const selectedId = useBrowserPanelStore((state) => (taskId === null ? undefined : state.selected[taskId]));
+  const tabs = useSessionBrowserTabs(sessionId);
+  const downloads = useSessionBrowserDownloads(sessionId);
+  const selectedId = useBrowserPanelStore((state) => (sessionId === null ? undefined : state.selected[sessionId]));
   const select = useBrowserPanelStore((state) => state.select);
   const active = displayedTab(tabs, selectedId);
   const host = desktopHost;
-  const canOpen = host !== null && taskId !== null;
-  const handoffs = useHandoffStore((state) => (taskId === null ? null : state.tasks[taskId]));
+  const canOpen = host !== null && sessionId !== null;
+  const handoffs = useHandoffStore((state) => (sessionId === null ? null : state.sessions[sessionId]));
   const handoffOf = (tabId: string) => handoffOn(handoffs, tabId);
   const activeHandoff = active ? handoffOf(active.tabId) : null;
-  const agentRunning = useTaskExecutionStatus(taskId) === "running";
+  const agentRunning = useSessionExecutionStatus(sessionId) === "running";
 
   const openTab = (url?: string) => {
     if (!canOpen) return;
-    openUserTab(taskId, url).catch((error: unknown) => notify.error("无法新开标签页", { error }));
+    openUserTab(sessionId, url).catch((error: unknown) => notify.error("无法新开标签页", { error }));
   };
-  // 有标签才有关闭按钮，而标签只来自宿主镜像、按 Task 筛选：走到这里宿主与 Task 必然在。
+  // 有标签才有关闭按钮，而标签只来自宿主镜像、按 Session 筛选：走到这里宿主与 Session 必然在。
   const closeTab = (tabId: string) => {
     const handoff = handoffOf(tabId);
     host!.browser.close(tabId).then(
-      () => { if (handoff) void handBackHandoff(taskId!, handoff.toolCallId); },
+      () => { if (handoff) void handBackHandoff(sessionId!, handoff.toolCallId); },
       (error: unknown) => notify.error("关闭标签页失败", { error }),
     );
   };
@@ -88,7 +88,7 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
                     aria-selected={selected}
                     className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch text-left outline-none"
                     title={`${title}${tab.createdBy === "agent" ? " · Agent 打开" : ""}`}
-                    onClick={() => select(tab.taskId, tab.tabId)}
+                    onClick={() => select(tab.sessionId, tab.tabId)}
                   >
                     {tab.dialog
                       ? <MessageSquareWarningIcon className="text-info size-3.5 shrink-0" aria-label="网页弹窗待处理" />
@@ -124,8 +124,8 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
     >
       {!host ? (
         <EmptyState className="m-4" title="内置浏览器只在桌面应用中可用" />
-      ) : taskId === null ? (
-        <EmptyState className="m-4" icon={<GlobeIcon />} title="打开一个对话后使用浏览器" description="标签页归属于对话：Agent 与你在同一个对话里看到同一组标签。" />
+      ) : sessionId === null ? (
+        <EmptyState className="m-4" icon={<GlobeIcon />} title="打开一个会话后使用浏览器" description="标签页归属于对话：Agent 与你在同一个会话里看到同一组标签。" />
       ) : active ? (
         <>
           {active.dialog && (
@@ -136,7 +136,7 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
               dialog={active.dialog}
             />
           )}
-          {activeHandoff && <HandoffBanner taskId={taskId} entry={activeHandoff} />}
+          {activeHandoff && <HandoffBanner sessionId={sessionId} entry={activeHandoff} />}
           {active.operation === "unknown" && <p role="status" className="px-3 py-2 text-sm text-warning">页面操作尚未确认结束，暂不能继续自动操作。请先检查页面，必要时关闭重开；不要重复提交。</p>}
           {!active.dialog && !activeHandoff && active.operation !== "unknown" && (agentRunning || active.agentBusy) && <AgentActivityBar busy={active.agentBusy} />}
           <BrowserView key={active.tabId} host={host} tabId={active.tabId} url={active.url} loading={active.loading} crashed={active.crashed} />
@@ -144,12 +144,12 @@ export function BrowserPanel({ taskId, sizing, maximized, onToggleMaximized, onC
       ) : (
         <NewTabPrompt onOpen={openTab} />
       )}
-      {host && taskId !== null && downloads.length > 0 && <DownloadBar key={taskId} host={host} downloads={downloads} />}
+      {host && sessionId !== null && downloads.length > 0 && <DownloadBar key={sessionId} host={host} downloads={downloads} />}
     </DockFrame>
   );
 }
 
-/** 这个对话还没有标签页：输入网址直接开一个。 */
+/** 这个会话还没有标签页：输入网址直接开一个。 */
 function NewTabPrompt({ onOpen }: { onOpen: (url: string) => void }) {
   const [address, setAddress] = useState("");
   const submit = (event: FormEvent) => {
@@ -161,7 +161,7 @@ function NewTabPrompt({ onOpen }: { onOpen: (url: string) => void }) {
       <form className="flex w-full max-w-md items-center gap-2" onSubmit={submit}>
         <Input aria-label="网址" className={cn("h-9")} placeholder="输入网址" value={address} spellCheck={false} onChange={(event) => setAddress(event.target.value)} />
       </form>
-      <p className="text-muted-foreground text-center text-xs">Agent 在这个对话里打开的网页也会出现在这里。</p>
+      <p className="text-muted-foreground text-center text-xs">Agent 在这个会话里打开的网页也会出现在这里。</p>
     </div>
   );
 }

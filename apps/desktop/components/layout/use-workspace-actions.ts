@@ -1,4 +1,4 @@
-import { forgetTaskComposerDrafts } from "@/lib/assistant/composer/composer-drafts";
+import { forgetSessionComposerDrafts } from "@/lib/assistant/composer/composer-drafts";
 import { forgetCommands } from "@/lib/assistant/command-request-store";
 import { useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
 import { useFilesStore } from "@/lib/workspace-files/workspace-files-store";
@@ -7,7 +7,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
-import { createWorkspace, deleteTask, deleteWorkspace, forkTask, type StartedConversation } from "@/lib/api/workspaces";
+import { createWorkspace, deleteSession, deleteWorkspace, forkSession, type StartedConversation } from "@/lib/api/workspaces";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { desktopHost } from "@/lib/desktop-host";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
@@ -21,17 +21,17 @@ import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-sto
 import { useWorkbenchStore } from "@/lib/workbench/workbench-store";
 
 export type DeleteTarget =
-  | { kind: "workspace"; id: number; label: string; taskCount: number }
+  | { kind: "workspace"; id: number; label: string; sessionCount: number }
   /** `forkCount` 只用于询问是否一起删除；删哪些以后端为准（它重新收集 fork 后代）。 */
-  | { kind: "task"; id: number; label: string; forkCount: number };
+  | { kind: "session"; id: number; label: string; forkCount: number };
 
 /**
- * 工作区 / 任务的用户动作：开始对话、从文件夹添加工作区、分叉、删除。
+ * 工作区 / 会话的用户动作：开始会话、从文件夹添加工作区、分叉、删除。
  *
  * 只编排「请求 → 导航 → 反馈」：目录不在这里重读，写入提交后由后端推送失效（见 useWorkspaceCatalog），
- * 和后台 Task 引起的变化走同一条路。失败统一经 notify / 确认框呈现，并写结构化日志。
+ * 和后台会话 引起的变化走同一条路。失败统一经 notify / 确认框呈现，并写结构化日志。
  */
-export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: number | null) {
+export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedSessionId: number | null) {
   const navigate = useNavigate();
   const location = useLocation();
   const currentLocationKey = useRef<string | null>(location.key);
@@ -46,12 +46,12 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
   const { selectWorkspace, selectedWorkspaceId, workspaces } = catalog;
 
   const startConversation = useCallback((conversation: StartedConversation) => {
-    navigate(`/tasks/${conversation.task_id}`);
+    navigate(`/sessions/${conversation.session_id}`);
   }, [navigate]);
 
   /**
-   * 从文件夹添加工作区（侧栏区头与新对话页选择器共用）：系统目录选择 → 创建 → 选中新工作区并来到
-   * 新对话页（它随推送进入目录）。用户取消目录选择不算失败；返回是否真的添加了一个。
+   * 从文件夹添加工作区（侧栏区头与新会话页选择器共用）：系统目录选择 → 创建 → 选中新工作区并来到
+   * 新会话页（它随推送进入目录）。用户取消目录选择不算失败；返回是否真的添加了一个。
    * 进行中的再次调用直接忽略，两处入口据 `addingWorkspace` 显示忙碌。
    */
   const addWorkspaceFromFolder = useCallback(async (): Promise<boolean> => {
@@ -80,23 +80,23 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
     }
   }, [location.pathname, navigate, selectWorkspace]);
 
-  // 请求绑定发起时的 Task 和路由；用户切页后迟到的响应只更新目录，不抢回页面。
+  // 请求绑定发起时的 Session 和路由；用户切页后迟到的响应只更新目录，不抢回页面。
   const executeFork = useCallback(async function executeFork(
-    sourceTaskId: number, messageId: string, originLocationKey: string,
+    sourceSessionId: number, messageId: string, originLocationKey: string,
   ) {
     if (forkPending.current) return;
     forkPending.current = true;
     setForkingMessageId(messageId);
     try {
-      const target = await forkTask(sourceTaskId, messageId);
+      const target = await forkSession(sourceSessionId, messageId);
       if (currentLocationKey.current === originLocationKey) {
-        navigate(`/tasks/${target.task_id}`);
+        navigate(`/sessions/${target.session_id}`);
       } else {
-        notify.success("Fork 任务已创建");
+        notify.success("Fork 会话已创建");
       }
     } catch (cause) {
-      void frontendLog("ERROR", "task_fork_failed", "Fork 任务失败", {
-        data: { taskId: sourceTaskId, messageId, status: cause instanceof HttpError ? cause.status : null },
+      void frontendLog("ERROR", "session_fork_failed", "Fork 会话失败", {
+        data: { sessionId: sourceSessionId, messageId, status: cause instanceof HttpError ? cause.status : null },
         error: cause,
       });
       if (cause instanceof HttpError && cause.status === 409) {
@@ -110,7 +110,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
           fallback: "Fork 失败，请重试",
           action: {
             label: "重试",
-            onClick: () => void executeFork(sourceTaskId, messageId, originLocationKey),
+            onClick: () => void executeFork(sourceSessionId, messageId, originLocationKey),
           },
         });
       }
@@ -121,31 +121,31 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
   }, [navigate]);
 
   const forkMessage = useCallback(async (messageId: string) => {
-    if (focusedTaskId === null) return;
-    await executeFork(focusedTaskId, messageId, location.key);
-  }, [executeFork, focusedTaskId, location.key]);
+    if (focusedSessionId === null) return;
+    await executeFork(focusedSessionId, messageId, location.key);
+  }, [executeFork, focusedSessionId, location.key]);
 
   /**
-   * 删除工作区或任务：确认框托管 busy 与失败提示（失败时保持打开可重试）。
+   * 删除工作区或会话：确认框托管 busy 与失败提示（失败时保持打开可重试）。
    * 删除成功后才关闭工作台标签、离开已删除的当前页并刷新侧栏。
    *
-   * 任务有 fork 后代时，确认框多一个「一起删除」：主操作仍是只删这一个（它的 fork 改挂到上一级），
-   * 因为它是两者里更可挽回的那个。删掉了哪些 Task 以后端返回为准，前端只用 `forkCount` 询问。
+   * 会话有 fork 后代时，确认框多一个「一起删除」：主操作仍是只删这一个（它的 fork 改挂到上一级），
+   * 因为它是两者里更可挽回的那个。删掉了哪些 Session 以后端返回为准，前端只用 `forkCount` 询问。
    */
   const requestDelete = useCallback(async (target: DeleteTarget) => {
     const deletingCurrentWorkspace = target.kind === "workspace" && (
       selectedWorkspaceId === target.id
-      || workspaces.some((workspace) => workspace.workspace_id === target.id && workspace.tasks.some((task) => task.task_id === focusedTaskId))
+      || workspaces.some((workspace) => workspace.workspace_id === target.id && workspace.sessions.some((session) => session.session_id === focusedSessionId))
     );
-    let deletedTaskIds: number[] = [];
+    let deletedSessionIds: number[] = [];
     let deletedWithForks = false;
     const run = async (withForks: boolean) => {
       try {
         if (target.kind === "workspace") {
           await deleteWorkspace(target.id);
-          deletedTaskIds = workspaces.find((workspace) => workspace.workspace_id === target.id)?.tasks.map((task) => task.task_id) ?? [];
+          deletedSessionIds = workspaces.find((workspace) => workspace.workspace_id === target.id)?.sessions.map((session) => session.session_id) ?? [];
         } else {
-          deletedTaskIds = (await deleteTask(target.id, { withForks })).deleted_task_ids;
+          deletedSessionIds = (await deleteSession(target.id, { withForks })).deleted_session_ids;
           deletedWithForks = withForks;
         }
       } catch (cause) {
@@ -156,31 +156,31 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
         throw cause;
       }
     };
-    const forkCount = target.kind === "task" ? target.forkCount : 0;
+    const forkCount = target.kind === "session" ? target.forkCount : 0;
     const confirmed = await confirmDelete({
-      target: target.kind === "workspace" ? `工作区「${target.label}」` : `任务「${target.label}」`,
+      target: target.kind === "workspace" ? `工作区「${target.label}」` : `会话「${target.label}」`,
       consequence: target.kind === "workspace"
-        ? `将删除该工作区及其下的 ${target.taskCount} 个任务和全部对话数据。`
+        ? `将删除该工作区及其下的 ${target.sessionCount} 个会话及其全部数据。`
         : forkCount > 0
-          ? `这个任务有 ${forkCount} 个 fork 出来的任务。只删除这个时，它们会提升一级保留下来；也可以一起删除。`
-          : "将删除该任务及其全部对话数据，不影响所属工作区和其他任务。",
+          ? `这个会话有 ${forkCount} 个 fork 出来的会话。只删除这个时，它们会提升一级保留下来；也可以一起删除。`
+          : "将删除该会话及其全部数据，不影响所属工作区和其他会话。",
       confirmLabel: forkCount > 0 ? "只删除这个" : "删除",
       action: () => run(false),
       alternative: forkCount > 0
-        ? { label: `一起删除 ${forkCount + 1} 个任务`, action: () => run(true) }
+        ? { label: `一起删除 ${forkCount + 1} 个会话`, action: () => run(true) }
         : undefined,
     });
     if (!confirmed) return;
-    // 终端工作台、后台工作看板、对话行高缓存与工作台里属于这些 Task 的标签随 Task 删除一并丢弃（后端已清理对应事实）。
-    useTerminalWorkbenchStore.getState().forget(deletedTaskIds);
-    useWorkbenchStore.getState().forgetTasks(deletedTaskIds);
-    useBackgroundTasksStore.getState().forget(deletedTaskIds);
-    useHandoffStore.getState().forget(deletedTaskIds);
-    forgetMessageHeights(deletedTaskIds);
-    forgetCommands(deletedTaskIds);
-    for (const taskId of deletedTaskIds) {
-      useDisclosureStore.getState().clearTask(taskId);
-      forgetTaskComposerDrafts(taskId);
+    // 终端工作台、后台工作看板、对话行高缓存与工作台里属于这些 Session 的标签随 Session 删除一并丢弃（后端已清理对应事实）。
+    useTerminalWorkbenchStore.getState().forget(deletedSessionIds);
+    useWorkbenchStore.getState().forgetSessions(deletedSessionIds);
+    useBackgroundTasksStore.getState().forget(deletedSessionIds);
+    useHandoffStore.getState().forget(deletedSessionIds);
+    forgetMessageHeights(deletedSessionIds);
+    forgetCommands(deletedSessionIds);
+    for (const sessionId of deletedSessionIds) {
+      useDisclosureStore.getState().clearSession(sessionId);
+      forgetSessionComposerDrafts(sessionId);
     }
     if (target.kind === "workspace") {
       useWorkbenchStore.getState().forgetWorkspace(target.id);
@@ -189,11 +189,11 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedTaskId: nu
         selectWorkspace(null);
         navigate("/");
       }
-    } else if (focusedTaskId !== null && deletedTaskIds.includes(focusedTaskId)) {
+    } else if (focusedSessionId !== null && deletedSessionIds.includes(focusedSessionId)) {
       navigate("/");
     }
-    notify.success(target.kind === "workspace" ? "工作区已删除" : deletedWithForks ? `已删除 ${forkCount + 1} 个任务` : "任务已删除");
-  }, [focusedTaskId, navigate, selectWorkspace, selectedWorkspaceId, workspaces]);
+    notify.success(target.kind === "workspace" ? "工作区已删除" : deletedWithForks ? `已删除 ${forkCount + 1} 个会话` : "会话已删除");
+  }, [focusedSessionId, navigate, selectWorkspace, selectedWorkspaceId, workspaces]);
 
   return { startConversation, addWorkspaceFromFolder, addingWorkspace, forkMessage, forkingMessageId, requestDelete };
 }

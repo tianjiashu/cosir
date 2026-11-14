@@ -11,7 +11,7 @@ vi.mock("electron", () => ({ WebContentsView: class {} }));
 function fixture(sendCommand: (method: string, params: Record<string, unknown>) => Promise<unknown>) {
   const contents = { debugger: { sendCommand }, isDestroyed: () => false, isCrashed: () => false } as unknown as WebContents;
   const tab = Object.create(BrowserTab.prototype) as BrowserTab;
-  Object.assign(tab, { contents, tabId: "t1", taskId: 1, document: 0, operation: null,
+  Object.assign(tab, { contents, tabId: "t1", sessionId: 1, document: 0, operation: null,
     events: { onChange: vi.fn(), pausedBy: () => null }, noteAgentInput: vi.fn(),
     session: new CdpSession(contents, () => null, () => undefined),
   });

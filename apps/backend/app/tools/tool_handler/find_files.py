@@ -56,30 +56,18 @@ class FindFilesTool(HandlerBase):
     ) -> ToolObservation:
         """解析文件/目录 scope，执行文件名搜索并收口为 ToolObservation。"""
 
-        resolver = PathResolver(execution_context.workspace_root)
-        device_error = resolver.blocked_device_reason(path)
-        if device_error:
-            return tool_error(
-                self.name,
-                device_error,
-            )
-        resolved_path, path_error = resolver.resolve_without_boundary(path)
+        resolved_path, path_error = PathResolver(
+            execution_context.workspace_root
+        ).resolve_read_scope(path)
         if resolved_path is None:
-            return tool_error(
-                self.name,
-                f"could not search path: {path_error or path}. "
-                "Provide an existing file or directory path relative to the workspace.",
-            )
+            return tool_error(self.name, path_error)
         try:
             scope = SearchScope.from_path(
-                execution_context.workspace_root, resolved_path, execution_context.task_id, time.monotonic() + self.timeout_seconds
+                execution_context.workspace_root,
+                resolved_path,
+                execution_context.session_id,
+                time.monotonic() + self.timeout_seconds,
             )
-            device_error = resolver.blocked_recursive_search_reason(path, resolved_path)
-            if device_error:
-                return tool_error(
-                    self.name,
-                    device_error,
-                )
             page = find_files(
                 scope,
                 pattern,

@@ -19,14 +19,14 @@ describe("parseHttpError", () => {
 
   it("parses FastAPI detail-wrapped structured errors", async () => {
     const error = await parseHttpError(new Response(
-      JSON.stringify({ detail: { error: { code: "TASK_MISMATCH", message: "任务不匹配", retryable: false } } }),
+      JSON.stringify({ detail: { error: { code: "SESSION_MISMATCH", message: "会话不匹配", retryable: false } } }),
       { status: 409 },
     ));
 
     expect(error).toMatchObject({
       status: 409,
-      code: "TASK_MISMATCH",
-      message: "任务不匹配",
+      code: "SESSION_MISMATCH",
+      message: "会话不匹配",
     });
   });
 

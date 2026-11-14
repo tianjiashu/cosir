@@ -5,7 +5,7 @@ import type { BackgroundTaskEntry } from "@/lib/assistant/contract";
 import { completedState, seedState } from "./transport-fixtures";
 import { API_ORIGIN as origin, OUTPUT_DIR } from "./e2e-env";
 
-const TASK_ID = 61;
+const SESSION_ID = 61;
 
 function entry(toolCallId: string, overrides: Partial<BackgroundTaskEntry> = {}): BackgroundTaskEntry {
   return {
@@ -21,8 +21,8 @@ function entry(toolCallId: string, overrides: Partial<BackgroundTaskEntry> = {})
 
 test.beforeEach(async ({ request }) => {
   await request.post(`${origin}/__test__/reset`);
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: TASK_ID, title: "后台任务" } });
-  await seedState(request, TASK_ID, completedState(
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: SESSION_ID, title: "后台任务" } });
+  await seedState(request, SESSION_ID, completedState(
     1,
     { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] },
     [
@@ -32,7 +32,7 @@ test.beforeEach(async ({ request }) => {
   ));
   await request.post(`${origin}/__test__/seed-background-tasks`, {
     data: {
-      taskId: TASK_ID,
+      sessionId: SESSION_ID,
       entries: [
         entry("call-bg", { label: "cd /work && make" }),
         entry("call-old", { status: "completed", endedAt: new Date().toISOString() }),
@@ -43,7 +43,7 @@ test.beforeEach(async ({ request }) => {
 });
 
 test("看板只列后台工作；前台等待在卡片上转到后台后才进看板", async ({ page }) => {
-  await page.goto(`/tasks/${TASK_ID}`);
+  await page.goto(`/sessions/${SESSION_ID}`);
   const entryButton = page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ });
   await expect(entryButton).toBeVisible();
 

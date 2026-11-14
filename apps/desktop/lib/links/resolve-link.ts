@@ -15,7 +15,7 @@ export type FilenameSearch = { kind: "filename-search"; query: string; lines?: L
 export type WebLink = { kind: "web"; url: string; local: boolean; publicHost: string | null };
 
 /**
- * 本机网页文件（`.html` / `.htm`，不带行号）：要看的是渲染结果，在所属 Task 的内置浏览器打开。`url` 是 file 地址、
+ * 本机网页文件（`.html` / `.htm`，不带行号）：要看的是渲染结果，在所属 Session 的内置浏览器打开。`url` 是 file 地址、
  * `path` 是本机绝对路径；`workspace` 是文件在工作区内时的文件面板退路（打不开内置浏览器的界面用它），工作区外为 null。
  * 带行号说明要看的是代码，仍是工作区路径。
  */
@@ -100,7 +100,7 @@ function workspaceTarget(decoded: string, base: LinkBase, lines?: LineRange): Wo
 
 /**
  * 不含 `/` 的裸文件名只有带常见源码 / 文档扩展名时才当作路径，避免把 `obj.method` 误判成文件；
- * 带 `/` 的也要求末段有扩展名，避免 `text/plain`、`/api/tasks`、包名之类被当成文件。
+ * 带 `/` 的也要求末段有扩展名，避免 `text/plain`、`/api/sessions`、包名之类被当成文件。
  */
 const BARE_FILE_EXTENSIONS = new Set([
   "c", "cc", "cpp", "cs", "css", "go", "h", "hpp", "html", "java", "js", "json", "jsx", "kt", "lock",

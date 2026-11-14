@@ -9,9 +9,9 @@ function maxHeightForWindow(): number {
 /**
  * 底部终端面板的高度：拖拽调整、展开 / 还原。
  *
- * 只保存用户拖拽出的高度（全局布局偏好，跨 Task 与重启保留，下限由偏好 store 保证）；实际高度在渲染时
+ * 只保存用户拖拽出的高度（全局布局偏好，跨 Session 与重启保留，下限由偏好 store 保证）；实际高度在渲染时
  * 派生：展开即上限（窗口高度八成），否则把偏好收敛到上限以内。窗口临时变矮不会改写偏好，变回来即恢复。
- * TaskPage 按 taskId 重建，所以高度不能只放在组件 state 里，否则每切一次任务都会回到默认值。
+ * SessionPage 按 sessionId 重建，所以高度不能只放在组件 state 里，否则每切一次会话都会回到默认值。
  */
 export function useTerminalPanelHeight() {
   const preferredHeight = useLayoutPreferences((state) => state.terminalPanelHeight);

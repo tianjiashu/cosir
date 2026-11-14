@@ -28,22 +28,22 @@ def test_every_table_uses_sqlite_autoincrement(table) -> None:
 
 def test_deleted_max_id_is_not_reused(isolated_storage) -> None:
     """删除最大 id 的行后，新行仍拿到更大的 id。"""
-    from app.storage.store_engines import main_session_factory
+    from app.storage.store_engines import main_db_factory
 
-    with main_session_factory().begin() as session:
-        session.execute(
+    with main_db_factory().begin() as db:
+        db.execute(
             text(
                 "INSERT INTO workspaces (name, root_path, created_at, updated_at) "
                 "VALUES ('a', '/a', 't', 't')"
             )
         )
-        first = session.execute(text("SELECT max(id) FROM workspaces")).scalar_one()
-        session.execute(text("DELETE FROM workspaces WHERE id = :id"), {"id": first})
-        session.execute(
+        first = db.execute(text("SELECT max(id) FROM workspaces")).scalar_one()
+        db.execute(text("DELETE FROM workspaces WHERE id = :id"), {"id": first})
+        db.execute(
             text(
                 "INSERT INTO workspaces (name, root_path, created_at, updated_at) "
                 "VALUES ('b', '/b', 't', 't')"
             )
         )
-        second = session.execute(text("SELECT max(id) FROM workspaces")).scalar_one()
+        second = db.execute(text("SELECT max(id) FROM workspaces")).scalar_one()
     assert second > first

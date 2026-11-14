@@ -9,9 +9,9 @@ import pytest
 from app.core.context.context_store import ContextStore
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.message_metadata import UserMessageMetadata
-from app.service.depends import get_conversation_task_context_service
-from app.storage.crud.conversation_run_crud import ConversationRunCrud
-from app.storage.crud.task_crud import TaskCrud
+from app.service.depends import get_session_context_service
+from app.storage.crud.run_crud import RunCrud
+from app.storage.crud.session_crud import SessionCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 
 
@@ -29,10 +29,10 @@ def _turn_of(previous: list, metadata: object) -> int:
 
 
 @pytest.fixture
-def task(isolated_storage, tmp_path):
+def session(isolated_storage, tmp_path):
     workspace = WorkspaceCrud().create("withdraw", str(tmp_path))
-    task = TaskCrud().create(workspace.id, "withdraw", tool_schemas=[])
-    run = ConversationRunCrud().create(task.id, status="completed")
+    session = SessionCrud().create(workspace.id, "withdraw", tool_schemas=[])
+    run = RunCrud().create(session.id, status="completed")
     store = ContextStore()
     rows = [
         ({"role": "user", "content": "first"}, _user("first"), 11),
@@ -44,7 +44,7 @@ def task(isolated_storage, tmp_path):
     ]
     for sequence, (message, metadata, message_id) in enumerate(rows, start=1):
         store.append(
-            task.id,
+            session.id,
             run.id,
             message,
             sequence,
@@ -52,30 +52,30 @@ def task(isolated_storage, tmp_path):
             message_id=message_id,
             turn=_turn_of(rows[: sequence - 1], metadata),
         )
-    return SimpleNamespace(id=task.id, run_id=run.id)
+    return SimpleNamespace(id=session.id, run_id=run.id)
 
 
-def test_latest_user_input_skips_other_user_role_messages(task) -> None:
-    latest = get_conversation_task_context_service().latest_user_input(task.id)
+def test_latest_user_input_skips_other_user_role_messages(session) -> None:
+    latest = get_session_context_service().latest_user_input(session.id)
 
     assert latest is not None
     assert (latest.sequence, latest.message_id) == (3, 12)
 
 
-def test_latest_input_from_an_agent_is_not_an_edit_target(task) -> None:
+def test_latest_input_from_an_agent_is_not_an_edit_target(session) -> None:
     """最新一轮由 Agent 消息开启时没有可编辑目标：越过它改更早的用户输入会把它那一轮一起撤回。"""
     ContextStore().append(
-        task.id,
-        task.run_id,
+        session.id,
+        session.run_id,
         {"role": "user", "content": "<agent_message/>"},
         6,
         metadata=UserMessageMetadata(
             kind="agent_message",
             presentation=UserInputPresentation(text="from parent"),
-            source=MessageSource(task_id=1, name="parent"),
+            source=MessageSource(session_id=1, name="parent"),
         ),
         message_id=14,
         turn=2,
     )
 
-    assert get_conversation_task_context_service().latest_user_input(task.id) is None
+    assert get_session_context_service().latest_user_input(session.id) is None

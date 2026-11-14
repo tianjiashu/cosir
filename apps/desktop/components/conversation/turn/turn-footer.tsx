@@ -9,7 +9,7 @@ import type { TransportActivity, TransportOutcome } from "@/lib/assistant/contra
 import { cn } from "@/lib/utils";
 
 export type TurnFooterProps = {
-  taskId: number;
+  sessionId: number;
   messageId: string;
   turn: number;
   inherited: boolean;
@@ -32,7 +32,7 @@ export type TurnFooterProps = {
  * 这条消息（`group/message`）才出现，弹层打开期间保持可见。只改透明度、不卸载：assistant-ui 的 `autohide`
  * 隐藏时返回 null，悬停会让行高跳动，也会打破估高里按常驻计的 `ASSISTANT_CHROME`。
  */
-export function TurnFooter({ taskId, messageId, turn, inherited, outcome, activity, answerText, hasFinalReply, readonly, action }: TurnFooterProps) {
+export function TurnFooter({ sessionId, messageId, turn, inherited, outcome, activity, answerText, hasFinalReply, readonly, action }: TurnFooterProps) {
   const usage = outcome?.usage ?? activity?.usage ?? null;
   const status = outcome?.status ?? activity?.status ?? null;
   const isLast = useAuiState((state) => state.message.isLast);
@@ -48,11 +48,11 @@ export function TurnFooter({ taskId, messageId, turn, inherited, outcome, activi
         disabled={answerText.trim() === ""}
         getText={() => answerText}
         logEvent="turn_answer_copy_failed"
-        logData={{ taskId, messageId }}
+        logData={{ sessionId, messageId }}
       />
       {action}
       <TurnDiagnosticsActions
-        taskId={taskId}
+        sessionId={sessionId}
         turn={turn}
         inherited={inherited}
         status={status}

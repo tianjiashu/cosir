@@ -6,20 +6,20 @@ export type DelegationDisplay = {
   title?: string;
   role?: string;
   childAgentId?: string;
-  childTaskId?: number;
+  childSessionId?: number;
   status?: TransportRunStatus;
 };
 
-/** `agent-task-result`：`send_message`与 `task_status`。 */
-export type AgentTaskResultDisplay = {
+/** `agent-session-result`：`send_message`与 `session_status`。 */
+export type AgentSessionResultDisplay = {
   operation: "send" | "status";
-  taskId: number;
+  sessionId: number;
   agentName?: string;
   finalOutput?: string;
   endReason?: string;
 };
 
-// 子 Agent 卡片展示的是子 Task 最新 Run 的状态（含 suspended），不是工具调用状态。
+// 子 Agent 卡片展示的是子 Session 最新 Run 的状态（含 suspended），不是工具调用状态。
 const CHILD_AGENT_STATUSES = new Set<TransportRunStatus>([
   "running",
   "suspended",
@@ -53,41 +53,41 @@ export function readDelegationDisplay(value: unknown): DelegationDisplay | null 
   if (data.title !== undefined && readText(data.title) === undefined) return null;
   if (data.role !== undefined && readText(data.role) === undefined) return null;
   if (data.child_agent_id !== undefined && readText(data.child_agent_id) === undefined) return null;
-  if (data.child_task_id !== undefined && positiveId(data.child_task_id) === undefined) return null;
+  if (data.child_session_id !== undefined && positiveId(data.child_session_id) === undefined) return null;
   return {
     title: readText(data.title),
     role: readText(data.role),
     childAgentId: readText(data.child_agent_id),
-    childTaskId: positiveId(data.child_task_id),
+    childSessionId: positiveId(data.child_session_id),
     status: statusValue,
   };
 }
 
-export type ForkDisplay = { title: string; childTaskId: number };
+export type ForkDisplay = { title: string; childSessionId: number };
 
-/** `fork-task-result`（`fork_task`）：分叉对话的标题与定位。 */
+/** `fork-session-result`（`fork_session`）：分叉会话的标题与定位。 */
 export function readForkDisplay(value: unknown): ForkDisplay | null {
   const data = record(value);
-  if (!data || data.kind !== "fork-task-result") return null;
+  if (!data || data.kind !== "fork-session-result") return null;
   const title = readText(data.title);
-  const childTaskId = positiveId(data.child_task_id);
-  if (title === undefined || childTaskId === undefined) return null;
-  return { title, childTaskId };
+  const childSessionId = positiveId(data.child_session_id);
+  if (title === undefined || childSessionId === undefined) return null;
+  return { title, childSessionId };
 }
 
-/** 读 `agent-task-result` 的白名单字段；对方 Run 的状态不在这里，读任务状态推送。 */
-export function readAgentTaskResultDisplay(value: unknown): AgentTaskResultDisplay | null {
+/** 读 `agent-session-result` 的白名单字段；对方 Run 的状态不在这里，读会话状态推送。 */
+export function readAgentSessionResultDisplay(value: unknown): AgentSessionResultDisplay | null {
   const data = record(value);
-  if (!data || data.kind !== "agent-task-result") return null;
+  if (!data || data.kind !== "agent-session-result") return null;
   if (data.operation !== "send" && data.operation !== "status") return null;
-  const taskId = positiveId(data.task_id);
-  if (taskId === undefined) return null;
+  const sessionId = positiveId(data.session_id);
+  if (sessionId === undefined) return null;
   if (data.agent_name !== null && data.agent_name !== undefined && readText(data.agent_name) === undefined) return null;
   if (data.final_output !== null && data.final_output !== undefined && typeof data.final_output !== "string") return null;
   if (data.end_reason !== null && data.end_reason !== undefined && typeof data.end_reason !== "string") return null;
   return {
     operation: data.operation,
-    taskId,
+    sessionId,
     agentName: readText(data.agent_name),
     finalOutput: typeof data.final_output === "string" ? data.final_output : undefined,
     endReason: typeof data.end_reason === "string" ? data.end_reason : undefined,

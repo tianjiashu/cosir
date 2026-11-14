@@ -37,7 +37,7 @@ export function createMainWindow(): BrowserWindow {
     // 保留原生标题栏（与 lib/platform.ts 的 native 形态一致）。
     ...(process.platform === "darwin" ? { titleBarStyle: "hidden", trafficLightPosition: { x: 20, y: 22 } } : {}),
     ...(process.platform === "win32" ? { titleBarStyle: "hidden", titleBarOverlay: titleBarOverlay() } : {}),
-    // macOS 窗口没有自己的图标（用 Dock 图标，见 app-icon.ts）；其余平台的任务栏与 Alt+Tab 取这里。
+    // macOS 窗口没有自己的图标（用 Dock 图标，见 app-icon.ts）；其余平台的会话栏与 Alt+Tab 取这里。
     ...(process.platform !== "darwin" ? { icon: iconPath("icon.png") } : {}),
     webPreferences: {
       session: rendererSession(),

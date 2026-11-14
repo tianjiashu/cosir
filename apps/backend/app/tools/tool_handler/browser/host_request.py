@@ -1,4 +1,4 @@
-"""浏览器工具调用宿主 ``browser.*`` 方法的唯一入口：注入归属 Task 与标签上下文。"""
+"""浏览器工具调用宿主 ``browser.*`` 方法的唯一入口：注入归属 Session 与标签上下文。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ HOST_DEADLINES: Final[dict[str, float]] = {
     "browser.screenshot": 30,
     "browser.snapshot": 30,
     "browser.tabs": 5,
-    "browser.taskIds": 5,
+    "browser.sessionIds": 5,
 }
 # 链路往返的余量：后端比宿主多等这么多，宿主的答复（包括超时答复）总能先到，模型拿得到做到了哪一步。
 _LINK_MARGIN_SECONDS = 5.0
@@ -48,7 +48,7 @@ def call_browser(
 ) -> Any:
     """调用宿主浏览器方法，失败以 ``HostCallError`` 上浮（见 ``call_host``）。
 
-    每个请求都带 ``task_id`` 与标签上下文（上限与下载目录，见 ``tab_context``）：宿主每次都据此
+    每个请求都带 ``session_id`` 与标签上下文（上限与下载目录，见 ``tab_context``）：宿主每次都据此
     刷新上限（页面自己开出的标签没有请求可带，按最近一次请求的上限算），下载目录只在这次请求
     新建标签时用。宿主去掉这三个键后按导出的参数 schema（``tool-args.schema.json``）校验其余
     参数：它要求参数模型的每个字段都在，所以调用方原样传参数模型的全部字段（未填的为 ``None``，
@@ -56,11 +56,11 @@ def call_browser(
     """
 
     request = {
-        "task_id": execution_context.task_id,
+        "session_id": execution_context.session_id,
         **asdict(BrowserTabContext.from_workspace(execution_context.workspace_root)),
         **params,
         "handoff_tabs": [
-            lease.resource_id for lease in handoff_registry.leases(execution_context.task_id)
+            lease.resource_id for lease in handoff_registry.leases(execution_context.session_id)
         ],
     }
     return call_host(

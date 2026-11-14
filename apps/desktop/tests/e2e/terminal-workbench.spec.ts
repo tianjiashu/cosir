@@ -4,14 +4,14 @@ import { API_ORIGIN as origin } from "./e2e-env";
 
 test.beforeEach(async ({ request }) => {
   await request.post(`${origin}/__test__/reset`);
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: 42, title: "终端工作台" } });
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: 42, title: "终端工作台" } });
 });
 
 const panel = (page: Page) => page.getByRole("region", { name: "终端工作台" });
-const screen = (page: Page, sessionId: string) => page.locator(`[data-terminal-session="${sessionId}"] .xterm-rows`);
+const screen = (page: Page, terminalSessionId: string) => page.locator(`[data-terminal-session="${terminalSessionId}"] .xterm-rows`);
 
 test("页头入口打开底部面板并自动新建终端，输入有回显", async ({ page }) => {
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const entry = page.getByRole("button", { name: /^终端，/ });
   await expect(entry).toHaveAttribute("aria-pressed", "false");
   await entry.click();
@@ -31,7 +31,7 @@ test("页头入口打开底部面板并自动新建终端，输入有回显", as
 });
 
 test("「+」新建后按序编号，切换标签不丢内容，有命令运行才确认关闭", async ({ page, request }) => {
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await page.getByRole("button", { name: /^终端，/ }).click();
   await expect(screen(page, "term-1")).toContainText("term-1 $");
   await page.keyboard.type("first");
@@ -49,7 +49,7 @@ test("「+」新建后按序编号，切换标签不丢内容，有命令运行�
   await expect(screen(page, "term-2")).toContainText("second");
 
   // 有命令在执行：关闭前确认。
-  await request.post(`${origin}/__test__/terminal/command`, { data: { taskId: 42, sessionId: "term-2", running: true } });
+  await request.post(`${origin}/__test__/terminal/command`, { data: { sessionId: 42, terminalSessionId: "term-2", running: true } });
   await panel(page).getByRole("button", { name: "关闭 终端 2" }).click();
   const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
   await expect(dialog).toContainText("正在运行的程序");
@@ -67,7 +67,7 @@ test("「+」新建后按序编号，切换标签不丢内容，有命令运行�
 });
 
 test("关闭面板只收起：会话保持，重新打开画面仍在，不再新建", async ({ page }) => {
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const entry = page.getByRole("button", { name: /^终端，/ });
   await entry.click();
   await expect(screen(page, "term-1")).toContainText("term-1 $");
@@ -85,7 +85,7 @@ test("关闭面板只收起：会话保持，重新打开画面仍在，不再�
 });
 
 test("已结束会话只在查看时挂载视图，切走即释放", async ({ page }) => {
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await page.getByRole("button", { name: /^终端，/ }).click();
   await expect(screen(page, "term-1")).toContainText("term-1 $");
   await panel(page).getByRole("button", { name: "新建终端" }).click();
@@ -110,23 +110,23 @@ test("已结束会话只在查看时挂载视图，切走即释放", async ({ pa
 });
 
 test("会话在后端失效时停止重连并平静提示，snapshot 移除后释放视图", async ({ page, request }) => {
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await page.getByRole("button", { name: /^终端，/ }).click();
   await expect(screen(page, "term-1")).toContainText("term-1 $");
 
-  await request.post(`${origin}/__test__/terminal/expire`, { data: { taskId: 42 } });
+  await request.post(`${origin}/__test__/terminal/expire`, { data: { sessionId: 42 } });
   await expect(panel(page).getByTestId("terminal-status")).toContainText("已不在后端");
   await expect(panel(page).getByTestId("terminal-status").getByRole("button", { name: "新建终端" })).toBeVisible();
   await expect(panel(page).locator(".text-destructive")).toHaveCount(0);
 
-  await request.post(`${origin}/__test__/terminal/sync`, { data: { taskId: 42 } });
+  await request.post(`${origin}/__test__/terminal/sync`, { data: { sessionId: 42 } });
   await expect(panel(page).getByRole("tab")).toHaveCount(0);
   await expect(page.locator("[data-terminal-session]")).toHaveCount(0);
   await expect(panel(page)).toContainText("没有运行中的终端");
 });
 
 test("「+」旁的下拉选 shell 新建，非默认 shell 在标签上标出", async ({ page }) => {
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await page.getByRole("button", { name: /^终端，/ }).click();
   await expect(screen(page, "term-1")).toContainText("term-1 $");
 
@@ -138,7 +138,7 @@ test("「+」旁的下拉选 shell 新建，非默认 shell 在标签上标出",
 });
 
 test("搜索只跟随可见会话：切换标签或收起面板即关闭", async ({ page }) => {
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await page.getByRole("button", { name: /^终端，/ }).click();
   await expect(screen(page, "term-1")).toContainText("term-1 $");
   const search = panel(page).getByRole("search");
@@ -164,7 +164,7 @@ test("搜索只跟随可见会话：切换标签或收起面板即关闭", async
 });
 
 test("右键菜单给出复制、粘贴、查找；已打开的查找条再按 Ctrl/Cmd+F 会重新聚焦", async ({ page }) => {
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   await page.getByRole("button", { name: /^终端，/ }).click();
   await expect(screen(page, "term-1")).toContainText("term-1 $");
 
@@ -189,7 +189,7 @@ test("右键菜单给出复制、粘贴、查找；已打开的查找条再按 C
 });
 
 test("面板收起时异常退出在页头标红，打开面板即视为看过", async ({ page, request }) => {
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const entry = page.getByRole("button", { name: /^终端，/ });
   // 页头只画状态点不画数字：会话数在无障碍标签与 tooltip 里，红点只表示「有没看过的异常结束」。
   const attention = entry.locator('[data-status-dot="attention"]');
@@ -202,10 +202,10 @@ test("面板收起时异常退出在页头标红，打开面板即视为看过",
   await expect(attention).toHaveCount(0);
 
   // 正常退出（0）不提醒；非 0 退出标红并在入口说明是哪个终端。
-  await request.post(`${origin}/__test__/terminal/exit`, { data: { taskId: 42, sessionId: "term-1", exitCode: 0 } });
+  await request.post(`${origin}/__test__/terminal/exit`, { data: { sessionId: 42, terminalSessionId: "term-1", exitCode: 0 } });
   await expect(entry).toHaveAccessibleName(/^终端，1 个运行中会话/);
   await expect(attention).toHaveCount(0);
-  await request.post(`${origin}/__test__/terminal/exit`, { data: { taskId: 42, sessionId: "term-2", exitCode: 2 } });
+  await request.post(`${origin}/__test__/terminal/exit`, { data: { sessionId: 42, terminalSessionId: "term-2", exitCode: 2 } });
   await expect(attention).toHaveCount(1);
   await expect(entry).toHaveAccessibleName(/「终端 2」异常结束（退出码 2）/);
 

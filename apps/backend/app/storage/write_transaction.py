@@ -5,18 +5,19 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.orm import sessionmaker
 
 
 @contextmanager
-def begin_immediate(session_factory: sessionmaker[Session]) -> Iterator[Session]:
+def begin_immediate(db_factory: sessionmaker[DbSession]) -> Iterator[DbSession]:
     """开启一个 SQLite ``BEGIN IMMEDIATE`` 事务并在退出时提交或回滚。
 
     参数:
-        session_factory: 绑定主库 engine 的 SQLAlchemy session 工厂。
+        db_factory: 绑定主库 engine 的 SQLAlchemy Session 工厂。
 
     返回:
-        已取得 SQLite 写锁的 Session。
+        已取得 SQLite 写锁的 db。
 
     异常:
         任意异常: 回滚事务后继续向上传播。
@@ -26,11 +27,11 @@ def begin_immediate(session_factory: sessionmaker[Session]) -> Iterator[Session]
         处理不属于主库事务的进程内资源清理。
     """
 
-    with session_factory() as session:
-        session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+    with db_factory() as db:
+        db.connection().exec_driver_sql("BEGIN IMMEDIATE")
         try:
-            yield session
-            session.commit()
+            yield db
+            db.commit()
         except BaseException:
-            session.rollback()
+            db.rollback()
             raise

@@ -23,7 +23,6 @@ describe("toolHeading", () => {
   it("多目标只写首个加 +N，组合目标各段齐全才拼", () => {
     expect(toolHeading("search_content", { pattern: "ToolHeading", path: "app" }).target).toBe('"ToolHeading" in app');
     expect(toolHeading("search_content", { pattern: "x" }).target).toBeNull();
-    expect(toolHeading("move_file", { source_path: "a.txt", destination_path: "b.txt" }).target).toBe("a.txt → b.txt");
     expect(toolHeading("read_image", { paths: ["a.png", "b.png"] }).target).toBe("a.png +1");
     expect(toolHeading("web_extract", { urls: ["https://example.com/a", "https://example.com/b"] }).target).toBe("https://example.com/a +1");
     expect(toolHeading("apply_patch", { patch: "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\ndiff --git a/x.py b/x.py\n" }).target).toBe("x.py");
@@ -43,7 +42,7 @@ describe("toolHeading", () => {
     expect(toolHeading("mcp", { action: "call", server_name: "fs", tool_name: "read" })).toEqual({ title: "调用 MCP", target: "fs/read" });
     expect(toolHeading("mcp", { action: "list", server_name: "fs" }).target).toBe("fs");
     expect(toolHeading("skill", { action: "load", skill_name: "pdf", resource_path: "ref.md" }).target).toBe("pdf/ref.md");
-    expect(toolHeading("send_message", { task_id: 12 }).target).toBe("#12");
+    expect(toolHeading("send_message", { session_id: 12 }).target).toBe("#12");
   });
 
   it("目录里没有的工具退回工具名，没有图标", () => {

@@ -3,18 +3,18 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { completedState, seedState } from "./transport-fixtures";
 import { API_ORIGIN as origin } from "./e2e-env";
 
-const TASK_ID = 62;
+const SESSION_ID = 62;
 
 const rail = (page: Page) => page.getByRole("complementary", { name: "会话侧栏" });
 const railButton = (page: Page) => page.getByRole("button", { name: /^会话侧栏/ });
 const card = (page: Page) => page.getByRole("region", { name: "后台任务" });
 
-/** 给另一个 Task 一条已结束的后台工作：侧栏只在有内容时出现，切换会话的用例要它在新视口里照样出现。 */
-async function seedEndedWork(request: APIRequestContext, taskId: number) {
+/** 给另一个 Session 一条已结束的后台工作：侧栏只在有内容时出现，切换会话的用例要它在新视口里照样出现。 */
+async function seedEndedWork(request: APIRequestContext, sessionId: number) {
   await request.post(`${origin}/__test__/seed-background-tasks`, {
     data: {
-      taskId,
-      entries: [{ toolCallId: `call-done-${taskId}`, kind: "terminal_command", label: "npm run lint", status: "completed", startedAt: new Date(Date.now() - 90_000).toISOString(), endedAt: new Date(Date.now() - 60_000).toISOString() }],
+      sessionId,
+      entries: [{ toolCallId: `call-done-${sessionId}`, kind: "terminal_command", label: "npm run lint", status: "completed", startedAt: new Date(Date.now() - 90_000).toISOString(), endedAt: new Date(Date.now() - 60_000).toISOString() }],
       foregroundWaits: [],
     },
   });
@@ -22,19 +22,19 @@ async function seedEndedWork(request: APIRequestContext, taskId: number) {
 
 test.beforeEach(async ({ page, request }) => {
   await request.post(`${origin}/__test__/reset`);
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: TASK_ID, title: "会话侧栏" } });
-  await seedState(request, TASK_ID, completedState(1, { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] }, [
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: SESSION_ID, title: "会话侧栏" } });
+  await seedState(request, SESSION_ID, completedState(1, { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] }, [
     {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "execute_terminal", args: { command: "make watch" }, status: "pending", background: { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
   ]));
   await request.post(`${origin}/__test__/seed-background-tasks`, {
     data: {
-      taskId: TASK_ID,
+      sessionId: SESSION_ID,
       entries: [{ toolCallId: "call-bg", kind: "terminal_command", label: "cd /work && make", status: "running", startedAt: new Date(Date.now() - 40_000).toISOString(), endedAt: null }],
       foregroundWaits: [],
     },
   });
   await page.setViewportSize({ width: 1600, height: 900 });
-  await page.goto(`/tasks/${TASK_ID}`);
+  await page.goto(`/sessions/${SESSION_ID}`);
   // 等种入的后台条目经 snapshot 到达（角标），之后的断言才不和首帧赛跑。
   await expect(page.getByRole("button", { name: /^会话侧栏，1 个后台任务运行中/ })).toBeVisible();
 });
@@ -106,16 +106,16 @@ test("开关与折叠是全局偏好，刷新后保留；折叠时摘要仍在",
   await expect(card(page)).not.toContainText("cd /work && make");
 });
 
-// 侧栏开关跨 Task 保留，视口却随 Task 重建：新视口必须重新建立尺寸订阅。
+// 侧栏开关跨 Session 保留，视口却随 Session 重建：新视口必须重新建立尺寸订阅。
 test("两栏打开时切换会话：卡片完整可见，仍能随文件栏切换摆放", async ({ page, request }) => {
-  const nextTaskId = TASK_ID + 1;
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: nextTaskId, title: "另一个会话" } });
-  await seedEndedWork(request, nextTaskId);
+  const nextSessionId = SESSION_ID + 1;
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: nextSessionId, title: "另一个会话" } });
+  await seedEndedWork(request, nextSessionId);
   await page.reload();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   await railButton(page).click();
   await page.getByText("另一个会话", { exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(`/tasks/${nextTaskId}$`));
+  await expect(page).toHaveURL(new RegExp(`/sessions/${nextSessionId}$`));
   await expect(rail(page)).toHaveAttribute("data-conversation-aside", "floating");
   await expect(card(page).getByRole("button", { name: "后台任务", exact: true })).toBeInViewport({ ratio: 1 });
   await expect(card(page).getByText("1 已结束", { exact: true })).toBeInViewport({ ratio: 1 });
@@ -150,9 +150,9 @@ test("刷新后展开的侧栏响应视口宽高，文件面板铺满再还原�
 });
 
 test("渲染错误恢复重建视口后侧栏恢复，尺寸更新不重绘整个线程", async ({ page, request }) => {
-  const nextTaskId = TASK_ID + 1;
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: nextTaskId, title: "恢复会话" } });
-  await seedEndedWork(request, nextTaskId);
+  const nextSessionId = SESSION_ID + 1;
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: nextSessionId, title: "恢复会话" } });
+  await seedEndedWork(request, nextSessionId);
   await page.reload();
   await page.getByRole("button", { name: "浏览工作区文件" }).click();
   await railButton(page).click();
@@ -165,7 +165,7 @@ test("渲染错误恢复重建视口后侧栏恢复，尺寸更新不重绘整�
     Object.assign(window, { railThreadProbe: probe });
     Thread.type = (...args: unknown[]) => {
       probe.renders++;
-      if (probe.fail) throw new Error("task rail viewport recovery probe");
+      if (probe.fail) throw new Error("session rail viewport recovery probe");
       return render(...args);
     };
   });
@@ -174,7 +174,7 @@ test("渲染错误恢复重建视口后侧栏恢复，尺寸更新不重绘整�
   await page.evaluate(() => { (window as unknown as { railThreadProbe: { fail: boolean } }).railThreadProbe.fail = false; });
   await Promise.all([
     // 重试重挂 runtime 并请连接重新同步：重开订阅，首帧带回完整状态。
-    page.waitForResponse(`${origin}/tasks/${nextTaskId}/assistant/attach`),
+    page.waitForResponse(`${origin}/sessions/${nextSessionId}/assistant/attach`),
     page.getByRole("button", { name: "重试", exact: true }).click(),
   ]);
   await expect(card(page).getByText("1 已结束", { exact: true })).toBeInViewport({ ratio: 1 });
@@ -264,15 +264,15 @@ test("右侧面板把对话区压窄时，输入框底栏按自身宽度让位�
   await page.screenshot({ path: testInfo.outputPath("narrow-composer.png") });
 });
 
-test("这个 Task 没有过后台工作时，侧栏与页头入口都不出现，对话不留空列", async ({ page, request }) => {
-  const emptyTaskId = TASK_ID + 2;
-  await request.post(`${origin}/__test__/seed-task`, { data: { taskId: emptyTaskId, title: "没有后台工作" } });
-  await page.goto(`/tasks/${emptyTaskId}`);
+test("这个 Session 没有过后台工作时，侧栏与页头入口都不出现，对话不留空列", async ({ page, request }) => {
+  const emptySessionId = SESSION_ID + 2;
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: emptySessionId, title: "没有后台工作" } });
+  await page.goto(`/sessions/${emptySessionId}`);
   await expect(page.getByLabel("消息输入")).toBeVisible();
   await expect(rail(page)).toHaveCount(0);
   await expect(railButton(page)).toHaveCount(0);
 
-  await page.goto(`/tasks/${TASK_ID}`);
+  await page.goto(`/sessions/${SESSION_ID}`);
   await expect(rail(page)).toHaveAttribute("data-conversation-aside", "docked");
   await expect(railButton(page)).toBeVisible();
 });

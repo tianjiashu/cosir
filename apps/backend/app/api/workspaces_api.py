@@ -1,7 +1,7 @@
 """工作区域端点。
 
 本模块承载 workspace 域的全部 HTTP 端点：工作区健康/列表/创建/删除，以及工作区下的
-任务容器管理。
+会话容器管理。
 """
 
 import asyncio
@@ -9,23 +9,23 @@ import asyncio
 from fastapi import Depends, HTTPException
 
 from app.api.schemas import (
-    CreateTaskRequest,
+    CreateSessionRequest,
     CreateWorkspaceRequest,
     DeleteWorkspaceResponse,
     HealthResponse,
-    TaskResponse,
+    SessionResponse,
     WorkspaceResponse,
 )
 from app.app import app
 from app.core.user_input import capsules
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service.depends import (
-    get_task_service,
+    get_session_service,
     get_workspace_service,
 )
-from app.service.task.task_service import TaskService
+from app.service.session.session_service import SessionService
 from app.service.workspace.workspace_service import WorkspaceService
-from app.utils.datetime_utils import TASK_TITLE_LIMIT, preview
+from app.utils.datetime_utils import SESSION_TITLE_LIMIT, preview
 
 
 @app.get("/health")
@@ -118,7 +118,7 @@ async def delete_workspace(
     workspace_id: int,
     workspace_service: WorkspaceService = Depends(get_workspace_service),
 ) -> DeleteWorkspaceResponse:
-    """删除工作区及其下游任务、轮次与运行记录。
+    """删除工作区及其下游会话、轮次与运行记录。
 
     参数:
         workspace_id: 来自路由的工作区标识。
@@ -132,7 +132,7 @@ async def delete_workspace(
 
     副作用:
         经 ``WorkspaceService.delete_workspace_tree``：先停止工作区内的活动执行并等待释放，再级联
-        删除工作区下的任务、轮次、事件、步骤与 durable run。
+        删除工作区下的会话、轮次、事件、步骤与 durable run。
     """
 
     try:
@@ -147,19 +147,19 @@ async def delete_workspace(
     return DeleteWorkspaceResponse(workspace_id=workspace_id, deleted=True)
 
 
-@app.get("/workspaces/{workspace_id}/tasks")
-async def list_workspace_tasks(
+@app.get("/workspaces/{workspace_id}/sessions")
+async def list_workspace_sessions(
     workspace_id: int,
-    task_service: TaskService = Depends(get_task_service),
-) -> list[TaskResponse]:
-    """返回工作区下的任务列表。
+    session_service: SessionService = Depends(get_session_service),
+) -> list[SessionResponse]:
+    """返回工作区下的会话列表。
 
     参数:
         workspace_id: 来自路由的工作区标识。
-        task_service: 通过依赖注入的任务 service。
+        session_service: 通过依赖注入的会话 service。
 
     返回:
-        ``TaskResponse`` 列表。
+        ``SessionResponse`` 列表。
 
     异常:
         HTTPException: 当工作区不存在时抛出。
@@ -170,27 +170,27 @@ async def list_workspace_tasks(
 
     try:
         return [
-            TaskResponse.from_record(
-                task,
+            SessionResponse.from_record(
+                session,
             )
-            for task in task_service.list_tasks_for_workspace(workspace_id)
+            for session in session_service.list_sessions_for_workspace(workspace_id)
         ]
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="workspace not found") from exc
 
 
-@app.post("/workspaces/{workspace_id}/tasks")
-async def create_workspace_task(
+@app.post("/workspaces/{workspace_id}/sessions")
+async def create_workspace_session(
     workspace_id: int,
-    payload: CreateTaskRequest,
+    payload: CreateSessionRequest,
     workspace_service: WorkspaceService = Depends(get_workspace_service),
-) -> TaskResponse:
-    """创建工作区下的任务容器，不启动 ConversationRun。"""
+) -> SessionResponse:
+    """创建工作区下的会话容器，不启动 Run。"""
     try:
-        task = await asyncio.to_thread(
-            workspace_service.create_task,
+        session = await asyncio.to_thread(
+            workspace_service.create_session,
             workspace_id,
-            preview(capsules.plain_text(payload.text), limit=TASK_TITLE_LIMIT) or "新对话",
+            preview(capsules.plain_text(payload.text), limit=SESSION_TITLE_LIMIT) or "新会话",
             payload.creation_command_id,
         )
     except KeyError as exc:
@@ -200,4 +200,4 @@ async def create_workspace_task(
             status_code=409,
             detail={"code": exc.code, "message": exc.message, "retryable": True},
         ) from exc
-    return TaskResponse.from_record(task)
+    return SessionResponse.from_record(session)

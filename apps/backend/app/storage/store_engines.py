@@ -3,7 +3,7 @@
 本模块负责主业务库的 SQLAlchemy 引擎生命周期与业务 schema 初始化：引擎由
 ``engine_cache`` 提供，业务表由 ``initialize_app_schema`` 基于当前 ORM metadata
 创建。日志是固定格式的本地文件，不再创建独立日志数据库
-或日志 session factory。
+或日志 db factory。
 """
 
 from __future__ import annotations
@@ -14,23 +14,24 @@ from threading import RLock
 from typing import cast
 
 from sqlalchemy import Engine, Table
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.orm import sessionmaker
 
-from app.storage.engine_cache import _engine_cache, create_session_factory
+from app.storage.engine_cache import _engine_cache, create_db_factory
 from app.storage.model.base import StorageBase
-from app.storage.model.conversation_run_model import ConversationRunModel
-from app.storage.model.conversation_task_context_model import ConversationTaskContextModel
-from app.storage.model.task_message_model import TaskMessageModel
-from app.storage.model.task_model import TaskModel
+from app.storage.model.run_model import RunModel
+from app.storage.model.session_context_model import SessionContextModel
+from app.storage.model.session_message_model import SessionMessageModel
+from app.storage.model.session_model import SessionModel
 from app.storage.model.workspace_model import WorkspaceModel
 from app.utils.path import system_cosir as paths
 
 APP_MODELS = (
-    TaskMessageModel,
+    SessionMessageModel,
     WorkspaceModel,
-    TaskModel,
-    ConversationRunModel,
-    ConversationTaskContextModel,
+    SessionModel,
+    RunModel,
+    SessionContextModel,
 )
 
 
@@ -46,7 +47,7 @@ class _StorageState:
     """进程级主库引擎状态。"""
 
     main_engine: Engine | None = None
-    main_session_factory: sessionmaker[Session] | None = None
+    main_db_factory: sessionmaker[DbSession] | None = None
     db_file: Path | None = None
 
 
@@ -74,7 +75,7 @@ def init_storage() -> None:
         _state.db_file = paths.DATABASE_FILE
         _state.main_engine = _engine_cache.get(paths.DATABASE_FILE)
         initialize_app_schema(_state.main_engine)
-        _state.main_session_factory = create_session_factory(_state.main_engine)
+        _state.main_db_factory = create_db_factory(_state.main_engine)
 
 
 def main_engine() -> Engine:
@@ -83,10 +84,10 @@ def main_engine() -> Engine:
     return _require(_state.main_engine, "main_engine")
 
 
-def main_session_factory() -> sessionmaker[Session]:
-    """返回已初始化的主库 session factory。"""
+def main_db_factory() -> sessionmaker[DbSession]:
+    """返回已初始化的主库 db factory。"""
 
-    return _require(_state.main_session_factory, "main_session_factory")
+    return _require(_state.main_db_factory, "main_db_factory")
 
 
 def close_storage() -> None:
@@ -96,5 +97,5 @@ def close_storage() -> None:
         if _state.db_file is not None:
             _engine_cache.dispose_path(_state.db_file)
         _state.main_engine = None
-        _state.main_session_factory = None
+        _state.main_db_factory = None
         _state.db_file = None

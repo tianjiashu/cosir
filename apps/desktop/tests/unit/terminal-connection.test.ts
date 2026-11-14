@@ -41,7 +41,7 @@ class FakeSocket {
     this.emit("open", {});
   }
   receive(frame: Record<string, unknown>) {
-    this.emit("message", { data: JSON.stringify({ protocol: "terminal-v2", session_id: "t1", generation: "g1", ...frame }) });
+    this.emit("message", { data: JSON.stringify({ protocol: "terminal-v2", terminal_session_id: "t1", generation: "g1", ...frame }) });
   }
   /** 模拟网络断开：服务端关闭连接。 */
   drop() {
@@ -68,8 +68,8 @@ function setup() {
   const states: TerminalConnectionState[] = [];
   const resets: string[] = [];
   const options: TerminalConnectionOptions = {
-    taskId: 42,
-    sessionId: "t1",
+    sessionId: 42,
+    terminalSessionId: "t1",
     onOutput: (data) => written.push(new TextDecoder().decode(data)),
     onReset: (resume) => {
       resets.push("resync");
@@ -99,7 +99,7 @@ describe("TerminalConnection（terminal-v2）", () => {
 
   it("首帧 attach，连接后可发送 input / resize", () => {
     const { connection, sockets, states } = setup();
-    expect(sockets[0].url).toMatch(/\/tasks\/42\/terminal\/sessions\/t1\/stream\?trace_id=/);
+    expect(sockets[0].url).toMatch(/\/sessions\/42\/terminal\/sessions\/t1\/stream\?trace_id=/);
     expect(connection.sendInput(new Uint8Array([0x6c]))).toBe(false);
     sockets[0].open();
     expect(sockets[0].sent[0]).toEqual({ type: "attach", after_seq: null });
@@ -187,8 +187,8 @@ describe("TerminalConnection（terminal-v2）", () => {
     const pending: Array<() => void> = [];
     const states: TerminalConnectionState[] = [];
     const connection = new TerminalConnection({
-      taskId: 42,
-      sessionId: "t1",
+      sessionId: 42,
+      terminalSessionId: "t1",
       onOutput: () => undefined,
       onReset: (resume) => pending.push(resume),
       onFrame: () => undefined,

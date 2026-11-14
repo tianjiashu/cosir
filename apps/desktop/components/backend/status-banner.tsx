@@ -10,10 +10,10 @@ import { getBackendStatusSnapshot, subscribeBackendStatus } from "@/lib/backend/
  * 首次就绪之后，后端所有非就绪状态的唯一呈现位置。
  *
  * 启动门禁（App 的启动页 / BootFailure）只负责首次就绪之前；之后界面树始终保持
- * 挂载，由本横幅提示 starting / failed / stopped，任务页与草稿不随之卸载。
+ * 挂载，由本横幅提示 starting / failed / stopped，会话页与草稿不随之卸载。
  * - starting：supervisor 正在启动或自动崩溃恢复，无需用户操作。
  * - failed / stopped：自动恢复已耗尽或进程未运行，只提供显式「重启后端」；
- *   此时没有运行中的任务可中断，因此不再二次确认。
+ *   此时没有运行中的会话可中断，因此不再二次确认。
  * 状态由宿主 supervisor 推送，横幅只订阅投影，不自行轮询。
  */
 export function BackendStatusBanner() {
@@ -46,7 +46,7 @@ export function BackendStatusBanner() {
             ? status.message
             : status.state === "stopped"
               ? "本地 Agent 后端未运行"
-              : "本地 Agent 后端正在启动，已打开的对话会在就绪后自动同步…"}
+              : "本地 Agent 后端正在启动，已打开的会话会在就绪后自动同步…"}
         </span>
         {unavailable && (
           <Button type="button" variant="outline" size="sm" onClick={() => void restart()} disabled={restarting}>

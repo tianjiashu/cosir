@@ -2,7 +2,7 @@
 
 一个 xterm 实例对应一条连接：首帧 ``attach`` 后服务端先重放输出、再推送实时输出与尺寸 / 输入标记 /
 退出帧；客户端可发送 ``input`` / ``resize``。
-连接建立时按 Task 归属取到会话 runtime，之后输入直接调用它（只做内存更新与非阻塞入队），输出由订阅的
+连接建立时按 Session 归属取到会话 runtime，之后输入直接调用它（只做内存更新与非阻塞入队），输出由订阅的
 ``asyncio.Queue`` 推送。断开连接只移除订阅，不关闭会话、不取消 Run。
 
 对 runtime 的调用一律经 ``asyncio.to_thread``：它们要拿会话的线程锁，而工具线程会在同一把锁里执行
@@ -39,11 +39,11 @@ from app.tools.terminal_runtime.session.stream import (
 _PROTOCOL_ERROR_CODE = "TERMINAL_STREAM_PROTOCOL_ERROR"
 
 
-@app.websocket("/tasks/{task_id}/terminal/sessions/{session_id}/stream")
+@app.websocket("/sessions/{session_id}/terminal/sessions/{terminal_session_id}/stream")
 async def terminal_session_stream(
     websocket: WebSocket,
-    task_id: int,
-    session_id: str,
+    session_id: int,
+    terminal_session_id: str,
     terminal_service: TerminalSessionService = Depends(get_terminal_session_service),
     trace_id: str | None = None,
 ) -> None:
@@ -52,13 +52,13 @@ async def terminal_session_stream(
     await websocket.accept()
     runtime: TerminalSessionRuntime | None = None
     subscription: TerminalStreamSubscription | None = None
-    log_data = {"task_id": task_id, "session_id": session_id, "trace_id": trace_id}
+    log_data = {"session_id": session_id, "terminal_session_id": terminal_session_id, "trace_id": trace_id}
     try:
         after_seq = _parse_attach(await _receive_frame(websocket))
         try:
-            runtime = terminal_service.require(session_id, task_id)
+            runtime = terminal_service.require(terminal_session_id, session_id)
         except TerminalError as exc:
-            await _send_protocol_error(websocket, session_id, exc.code, _public_error(exc))
+            await _send_protocol_error(websocket, terminal_session_id, exc.code, _public_error(exc))
             return
         try:
             attachment = await asyncio.to_thread(
@@ -69,7 +69,7 @@ async def terminal_session_stream(
             await websocket.close(code=1013, reason="terminal output resync required")
             return
         except TerminalError as exc:
-            await _send_protocol_error(websocket, session_id, exc.code, _public_error(exc))
+            await _send_protocol_error(websocket, terminal_session_id, exc.code, _public_error(exc))
             return
         subscription = attachment.subscription
         log.info(
@@ -83,7 +83,7 @@ async def terminal_session_stream(
             await websocket.send_json(attachment.terminal_event)
             await websocket.close(code=1000)
             return
-        await _serve(websocket, subscription, runtime, session_id)
+        await _serve(websocket, subscription, runtime, terminal_session_id)
     except WebSocketDisconnect:
         pass
     except (ValueError, TypeError) as exc:  # json.JSONDecodeError 是 ValueError 子类
@@ -94,7 +94,7 @@ async def terminal_session_stream(
                 "data": {**log_data, "error": str(exc), "error_type": type(exc).__name__},
             },
         )
-        await _send_protocol_error(websocket, session_id, _PROTOCOL_ERROR_CODE, str(exc))
+        await _send_protocol_error(websocket, terminal_session_id, _PROTOCOL_ERROR_CODE, str(exc))
     finally:
         if runtime is not None and subscription is not None:
             # 收尾也不在事件循环里拿锁；shield 保证连接被取消时订阅照样移除。
@@ -110,11 +110,11 @@ async def _serve(
     websocket: WebSocket,
     subscription: TerminalStreamSubscription,
     runtime: TerminalSessionRuntime,
-    session_id: str,
+    terminal_session_id: str,
 ) -> None:
     """并发运行推送与接收；任一方结束（退出、重同步、断开、协议错误）即收尾另一方。"""
 
-    identity = stream_identity(session_id)
+    identity = stream_identity(terminal_session_id)
 
     send_lock = asyncio.Lock()
 
@@ -179,14 +179,14 @@ async def _handle_client_frame(
     except TerminalWorkerBackpressureError:
         log.warning(
             "terminal_stream_control_backpressure",
-            extra={"msg": "终端控制帧遇到 worker 背压", "data": {"session_id": runtime.session_id}},
+            extra={"msg": "终端控制帧遇到 worker 背压", "data": {"terminal_session_id": runtime.terminal_session_id}},
         )
     except TerminalError as exc:
         log.info(
             "terminal_stream_control_ignored",
             extra={
                 "msg": "终端控制帧因会话状态被忽略",
-                "data": {"session_id": runtime.session_id, "frame": kind, "code": exc.code},
+                "data": {"terminal_session_id": runtime.terminal_session_id, "frame": kind, "code": exc.code},
             },
         )
 
@@ -251,7 +251,7 @@ def _parse_attach(frame: dict[str, object]) -> int | None:
 
 
 async def _send_protocol_error(
-    websocket: WebSocket, session_id: str, code: str, message: str
+    websocket: WebSocket, terminal_session_id: str, code: str, message: str
 ) -> None:
     """尽力发送受控协议错误并关闭连接；连接已断开时静默结束。
 
@@ -262,7 +262,7 @@ async def _send_protocol_error(
     try:
         await websocket.send_json(
             {
-                **stream_identity(session_id),
+                **stream_identity(terminal_session_id),
                 "type": "protocol_error",
                 "code": code,
                 "message": message,
@@ -279,5 +279,5 @@ def _public_error(exc: TerminalError) -> str:
     if exc.code == "TERMINAL_SESSION_NOT_FOUND":
         return "terminal session not found"
     if exc.code == "TERMINAL_SESSION_OWNERSHIP_ERROR":
-        return "terminal session is not owned by this task"
+        return "terminal session is not owned by this session"
     return "terminal stream unavailable"

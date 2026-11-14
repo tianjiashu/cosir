@@ -31,8 +31,8 @@ export type TerminalViewRuntime = {
 };
 
 export type TerminalViewOptions = {
-  taskId: number;
-  sessionId: string;
+  sessionId: number;
+  terminalSessionId: string;
   theme: ITheme;
   /**
    * 读取当前工作区根目录：终端里落在工作区内的绝对路径（可带 `:行[:列]`，规则见 `terminal-links`）可点击，
@@ -64,7 +64,7 @@ const SEARCH_DECORATIONS: ISearchOptions["decorations"] = {
 /**
  * 单个交互终端会话的 xterm 实例与 WS 通道（每会话一份）。
  *
- * 活跃会话在 TaskPage 存活期间常驻：后端预览环形缓冲有上限，卸载后重新 attach 会丢掉超出缓冲的
+ * 活跃会话在 SessionPage 存活期间常驻：后端预览环形缓冲有上限，卸载后重新 attach 会丢掉超出缓冲的
  * 历史，所以切换标签、收起面板只隐藏容器；只在断线重连时按 seq 续传，resync 才清屏重放。已结束
  * 会话只在被查看时存在（何时创建 / 释放由 `terminal-workbench` 决定）。
  *
@@ -129,8 +129,8 @@ export class TerminalView {
     container.addEventListener("paste", this.handlePasteEvent, true);
     this.resizeController = new TerminalResizeController(container, () => this.fit());
     this.connection = new TerminalConnection({
-      taskId: options.taskId,
       sessionId: options.sessionId,
+      terminalSessionId: options.terminalSessionId,
       onOutput: (data) => this.writeOutput(data),
       onReset: (resume) => this.reset(resume),
       onFrame: (frame) => this.handleFrame(frame),
@@ -423,7 +423,7 @@ export class TerminalView {
 
   private log(level: "INFO" | "WARNING", event: string, msg: string, data: Record<string, unknown> = {}, error?: unknown): void {
     void frontendLog(level, event, msg, {
-      data: { taskId: this.options.taskId, sessionId: this.options.sessionId, ...data },
+      data: { sessionId: this.options.sessionId, terminalSessionId: this.options.terminalSessionId, ...data },
       error,
     });
   }

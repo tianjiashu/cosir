@@ -1,7 +1,7 @@
 """能力目录变更的运行时通知：子 Agent、Skill、MCP 服务三种目录共用。
 
-这三种目录在 Task 首次装配时写进系统提示词并固化（``SystemPromptBuilder._build_tool_catalog``），
-之后配置再变也不改写提示词；已在本进程装配过、并且固化了对应工具的 Task 改为收到一条 Task 级
+这三种目录在 Session 首次装配时写进系统提示词并固化（``SystemPromptBuilder._build_tool_catalog``），
+之后配置再变也不改写提示词；已在本进程装配过、并且固化了对应工具的 Session 改为收到一条 Session 级
 通知，下一次推进时写入上下文。本模块不读写配置，由各配置服务在写入成功后发布。
 
 通知只带目录本来就给模型看的字段（名称与描述），不带系统提示词、模型配置、连接参数或凭据；
@@ -24,17 +24,17 @@ from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.tool.schemas.tool_names import TOOL_DELEGATE_TASK, TOOL_MCP, TOOL_SKILL
 from app.core.workflow.message_queue.message_bodies.rendering import escape_tag
-from app.core.workflow.message_queue.task_message import NoticeBody
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.core.workflow.message_queue.session_message import NoticeBody
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.utils.workspace_scope import normalize_scope_path
 
 if TYPE_CHECKING:
-    from app.task_runtime.task_runtime_space import TaskRuntimeSpace
+    from app.session_runtime.session_runtime_space import SessionRuntimeSpace
 
 CatalogName = Literal["agents", "skills", "mcp_servers"]
 CatalogChangeAction = Literal["added", "updated", "removed"]
 
-# 目录 → 让 Task 看得到这份目录的工具：没固化这个工具的 Task 提示词里本来就没有这份目录。
+# 目录 → 让 Session 看得到这份目录的工具：没固化这个工具的 Session 提示词里本来就没有这份目录。
 _CATALOG_TOOLS: dict[CatalogName, str] = {
     "agents": TOOL_DELEGATE_TASK,
     "skills": TOOL_SKILL,
@@ -52,7 +52,7 @@ class CatalogChange:
     """一个目录里一个条目的一次可见变化。
 
     ``shadowed_in(workspace_root, entry_id)`` 只对系统级变更有意义：返回 ``True`` 表示该工作区有
-    同名条目覆盖它，那里的 Task 不通知。子 Agent 不允许 workspace 覆盖系统级，发布方不传。
+    同名条目覆盖它，那里的 Session 不通知。子 Agent 不允许 workspace 覆盖系统级，发布方不传。
     """
 
     catalog: CatalogName
@@ -103,7 +103,7 @@ class CatalogChange:
         return changes
 
     def to_notice(self) -> NoticeBody:
-        """转换为 Task 级系统通知。"""
+        """转换为 Session 级系统通知。"""
 
         scope = "system" if self.scope is None else self.scope
         # 描述来自配置（workspace 的 Skill 描述可能随仓库而来），JSON 编码不转义尖括号，再转义两层
@@ -132,8 +132,8 @@ class CatalogChange:
             metadata=self._log_data(),
         )
 
-    def reaches(self, space: TaskRuntimeSpace) -> bool:
-        """这个 Task 是否看得到本次变化：已装配、不是隐藏 Agent、固化了对应工具、在作用域内且没被覆盖。
+    def reaches(self, space: SessionRuntimeSpace) -> bool:
+        """这个 Session 是否看得到本次变化：已装配、不是隐藏 Agent、固化了对应工具、在作用域内且没被覆盖。
 
         只读 space 记下的 Agent 与工作区（理由见 ``SystemPromptDelta.reaches``），不为判断创建上下文。
         """
@@ -141,7 +141,7 @@ class CatalogChange:
         agent = space.agent
         if agent is None or agent.agent_type is AgentProfileType.HIDDEN:
             return False
-        if _CATALOG_TOOLS[self.catalog] not in space.task_tool_names:
+        if _CATALOG_TOOLS[self.catalog] not in space.session_tool_names:
             return False
         workspace_root = space.current_workspace.root_path
         if self.scope is None:
@@ -149,13 +149,13 @@ class CatalogChange:
         return normalize_scope_path(workspace_root) == normalize_scope_path(self.scope)
 
     def broadcast(self) -> int:
-        """投给命中的已物化 Task，返回投递数。
+        """投给命中的已物化 Session，返回投递数。
 
         配置已经写入，通知是旁路：投递失败只记日志并返回 0，不让配置请求失败。
         """
 
         try:
-            delivered = task_runtime_spaces.broadcast_notice(self.to_notice(), self.reaches)
+            delivered = session_runtime_spaces.broadcast_notice(self.to_notice(), self.reaches)
         except Exception:
             log.exception(
                 "catalog_change_broadcast_failed",
@@ -165,7 +165,7 @@ class CatalogChange:
         log.info(
             "catalog_change_broadcast",
             extra={
-                "msg": "目录变更已广播到相关 Task runtime space",
+                "msg": "目录变更已广播到相关 Session runtime space",
                 "data": {**self._log_data(), "delivered_count": delivered},
             },
         )

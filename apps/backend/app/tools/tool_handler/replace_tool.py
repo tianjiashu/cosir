@@ -28,7 +28,7 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_FILE_EDIT
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
@@ -101,7 +101,7 @@ class ReplaceTool(HandlerBase):
         """在单文件内做模糊查找替换，并统一收口成功/失败观察。
 
         参数:
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
+            execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）；
                 由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
                 破坏性操作以其 ``workspace_root`` 作为路径 containment 的唯一事实源。
             path: 目标文件相对路径（必填）。
@@ -179,7 +179,7 @@ class ReplaceTool(HandlerBase):
                 "Remove the 'N| ' display prefixes from new_string.",
             )
         try:
-            if cancellation_registry.is_cancelled(execution_context.task_id):
+            if cancellation_registry.is_cancelled(execution_context.session_id):
                 return tool_cancelled(
                     tool_name=self.name,
                 )

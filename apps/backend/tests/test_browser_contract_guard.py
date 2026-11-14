@@ -104,7 +104,7 @@ def test_page_sample_renders_header_logs_notes_and_fenced_snapshot(samples: dict
     first, emulation = content.splitlines()[:2]
     assert first == "tab t3 · Sign in · http://127.0.0.1:5173/login · HTTP 404"
     assert emulation == "viewport 390×844 mobile, dark"
-    assert "other tabs in this task: t1" in content
+    assert "other tabs in this session: t1" in content
     assert (
         "new on this page since this tab's last page result: 2 console errors, 1 console warning, "
         "1 failed request (read browser_logs without since to see them; narrow down with level "
@@ -134,14 +134,14 @@ def test_act_observation_failure_for_a_closed_tab_explains_the_stale_header(
     outcome = {**samples["act_observation_failed"]}
     outcome["observation_error"] = {
         "code": "TAB_NOT_FOUND",
-        "message": "tab t3 is not open in this task",
+        "message": "tab t3 is not open in this session",
     }
     content = act_observation("browser_act", outcome, [{"type": "click"}]).content
     assert (
         "the tab was closed; the page header above is the page as it was before the actions."
         in content
     )
-    assert "Pass one of this task's tab ids" in content
+    assert "Pass one of this session's tab ids" in content
 
 
 def test_act_sample_renders_the_failure_and_the_dialog(samples: dict[str, Any]) -> None:

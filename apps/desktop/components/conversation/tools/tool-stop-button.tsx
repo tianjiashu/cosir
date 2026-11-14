@@ -7,8 +7,8 @@ import { cn } from "@/lib/utils";
 import { commandPending, useCommandRequest, type CommandTarget } from "@/lib/assistant/command-request-store";
 
 /** 停止命令的展示状态；失败用 toast 说明。按钮只在目标存活时渲染，所以不用对账。 */
-export function useStopRequest(taskId: number, target: CommandTarget) {
-  const request = useCommandRequest(taskId, target);
+export function useStopRequest(sessionId: number, target: CommandTarget) {
+  const request = useCommandRequest(sessionId, target);
   const stop = async (send: () => Promise<string | null>): Promise<boolean> => {
     const error = await send();
     if (error) notify.error(error);

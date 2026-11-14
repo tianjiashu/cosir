@@ -112,7 +112,7 @@ max-line-length = 120
 # FastAPI 路由用 Depends() 作默认参数是惯用法，B008 在此为误报。
 "app/api/**" = ["B008"]
 # Assistant Transport 同样是 FastAPI 路由边界，依赖注入默认参数是框架契约。
-"app/assistant_transport/assistant_api.py" = ["B008"]
+"app/assistant_transport/api.py" = ["B008"]
 
 [tool.ruff.format]
 quote-style = "double"  # 与现有代码双引号约定一致

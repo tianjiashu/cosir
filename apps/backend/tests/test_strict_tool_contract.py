@@ -15,7 +15,7 @@ from app.config.configuration import get_tool_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
-from app.task_runtime.task_runtime_space import TaskRuntimeSpace
+from app.session_runtime.session_runtime_space import SessionRuntimeSpace
 from app.tools.tool_handler.mcp_tool import MCPTool
 from app.tools.tool_models import TerminalWriteArgs
 from app.tools.tool_models.mcp_args import MCPArgs
@@ -107,7 +107,7 @@ def test_registered_tool_prompts_are_english_and_documented():
 
 
 @pytest.mark.usefixtures("backend_env")
-def test_registered_tools_are_strict_and_survive_task_json_snapshot():
+def test_registered_tools_are_strict_and_survive_session_json_snapshot():
     definitions = get_tool_registry().get_all_definitions()
     assert {"mcp", "browser_handoff", "terminal_write", "execute_terminal"} <= {
         tool.name for tool in definitions
@@ -164,7 +164,7 @@ def test_mcp_json_string_is_decoded_once_at_tool_argument_boundary(monkeypatch):
     )
     monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", _Pool)
     context = ToolExecutionContext(
-        task_id=1, workspace_id=1, workspace_root=Path("."), step_id="step", run_id=1
+        session_id=1, workspace_id=1, workspace_root=Path("."), step_id="step", run_id=1
     )
     observation = MCPTool().execute(**result.arguments, execution_context=context)
     assert observation.status == "success"
@@ -201,17 +201,17 @@ def test_terminal_write_prefills_one_command_line(command):
 
 
 @pytest.mark.parametrize("strict", [None, False, True])
-def test_task_schema_boundary_rejects_old_snapshot_without_rewriting_it(strict):
-    space = object.__new__(TaskRuntimeSpace)
+def test_session_schema_boundary_rejects_old_snapshot_without_rewriting_it(strict):
+    space = object.__new__(SessionRuntimeSpace)
     function = {"name": "read_file", "parameters": strict_parameters_schema(ReadFileArgs)}
     if strict is not None:
         function["strict"] = strict
     original = json.loads(json.dumps(function))
     space.current_task = SimpleNamespace(tool_schemas=[function])
     if strict is True:
-        assert space.task_tool_schemas == (original,)
-        assert space.task_tool_schemas[0] is not function
+        assert space.session_tool_schemas == (original,)
+        assert space.session_tool_schemas[0] is not function
     else:
         with pytest.raises(ValueError, match="strict"):
-            _ = space.task_tool_schemas
+            _ = space.session_tool_schemas
     assert function == original

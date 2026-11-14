@@ -1,7 +1,7 @@
 """系统提示词变更的运行时通知。
 
-Task 的系统提示词首次装配时固化，配置变更不改写它；已在本进程装配过的 Task 改为收到一条带
-unified diff 的 Task 级通知，下一次推进时写入上下文。本模块不读写配置文件，由各文本配置服务在
+Session 的系统提示词首次装配时固化，配置变更不改写它；已在本进程装配过的 Session 改为收到一条带
+unified diff 的 Session 级通知，下一次推进时写入上下文。本模块不读写配置文件，由各文本配置服务在
 写入成功后发布。
 """
 
@@ -14,12 +14,12 @@ from typing import TYPE_CHECKING
 
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileType
-from app.core.workflow.message_queue.task_message import NoticeBody
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.core.workflow.message_queue.session_message import NoticeBody
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.utils.workspace_scope import normalize_scope_path
 
 if TYPE_CHECKING:
-    from app.task_runtime.task_runtime_space import TaskRuntimeSpace
+    from app.session_runtime.session_runtime_space import SessionRuntimeSpace
 
 
 class SystemPromptDeltaSource(str, Enum):
@@ -68,7 +68,7 @@ class SystemPromptDelta:
         return cls(source=source, diff=diff, scope=scope)
 
     def to_notice(self) -> NoticeBody:
-        """转换为 Task 级系统通知：简短的覆盖规则加 diff。"""
+        """转换为 Session 级系统通知：简短的覆盖规则加 diff。"""
 
         scope_line = f"\n作用域：{self.scope}" if self.scope else ""
         content = (
@@ -89,12 +89,12 @@ class SystemPromptDelta:
             metadata={"source": self.source.value, "scope": self.scope},
         )
 
-    def reaches(self, space: TaskRuntimeSpace) -> bool:
-        """这个 Task 是否该收到本次变更。
+    def reaches(self, space: SessionRuntimeSpace) -> bool:
+        """这个 Session 是否该收到本次变更。
 
         只读 space 记下的 Agent 与工作区：``space.agent`` 在本进程首次装配 context 时记下并一直保留；
-        context manager 是弱引用、Run 结束后可能已被回收，按它判断会让空闲 Task 视 GC 时机漏收通知。
-        也不得顺带创建 manager（会读库，新 Task 还会落库系统提示词）。
+        context manager 是弱引用、Run 结束后可能已被回收，按它判断会让空闲 Session 视 GC 时机漏收通知。
+        也不得顺带创建 manager（会读库，新 Session 还会落库系统提示词）。
         """
 
         agent = space.agent
@@ -113,13 +113,13 @@ class SystemPromptDelta:
         return True
 
     def broadcast(self) -> int:
-        """投给命中的已物化 Task，返回投递数。
+        """投给命中的已物化 Session，返回投递数。
 
         配置已经写入，通知是旁路：投递失败只记日志并返回 0，不让保存请求失败。
         """
 
         try:
-            delivered = task_runtime_spaces.broadcast_notice(self.to_notice(), self.reaches)
+            delivered = session_runtime_spaces.broadcast_notice(self.to_notice(), self.reaches)
         except Exception:
             log.exception(
                 "system_prompt_delta_broadcast_failed",
@@ -132,7 +132,7 @@ class SystemPromptDelta:
         log.info(
             "system_prompt_delta_broadcast",
             extra={
-                "msg": "系统提示词变更已广播到进程内 Task runtime space",
+                "msg": "系统提示词变更已广播到进程内 Session runtime space",
                 "data": {
                     "source": self.source.value,
                     "scope": self.scope,

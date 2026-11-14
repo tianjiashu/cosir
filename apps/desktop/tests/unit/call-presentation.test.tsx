@@ -6,7 +6,7 @@ import type { ToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 
 const resolve = (display_data: Record<string, unknown>) => {
   const artifact: ToolArtifact = { presentation: "activity", backendStatus: "completed", awaitingUser: false, background: false, display_data, error: null, errorCode: null };
-  const context: CallViewContext = { artifact, taskId: 1, toolCallId: "c", args: {}, interactive: true, taskCancelling: false };
+  const context: CallViewContext = { artifact, sessionId: 1, toolCallId: "c", toolName: "probe", args: {}, interactive: true, sessionCancelling: false };
   return resolveCallView(context);
 };
 

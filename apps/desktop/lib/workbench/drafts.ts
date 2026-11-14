@@ -18,10 +18,10 @@ export function useWorkbenchTabDirty(tab: WorkbenchTab | undefined): boolean {
  * 工具卡片的「已保存」：标签开着时从会话实时派生（工具草稿一开始就是未保存内容，只有保存才会变干净）；
  * 关闭后读取关闭时记下的标记。
  */
-export function useDraftSaved(workspaceId: number | null, taskId: number, toolCallId: string): boolean {
+export function useDraftSaved(workspaceId: number | null, sessionId: number, toolCallId: string): boolean {
   const tab = useWorkbenchStore((state) => workspaceId === null ? undefined
-    : state.sessions[workspaceId]?.tabs.find((candidate): candidate is WorkbenchDraftTab => isDraftTab(candidate) && candidate.taskId === taskId && candidate.toolCallId === toolCallId));
-  const stamped = useWorkbenchStore((state) => workspaceId !== null && Boolean(state.sessions[workspaceId]?.savedDraftIds.includes(draftKey(taskId, toolCallId))));
+    : state.sessions[workspaceId]?.tabs.find((candidate): candidate is WorkbenchDraftTab => isDraftTab(candidate) && candidate.sessionId === sessionId && candidate.toolCallId === toolCallId));
+  const stamped = useWorkbenchStore((state) => workspaceId !== null && Boolean(state.sessions[workspaceId]?.savedDraftIds.includes(draftKey(sessionId, toolCallId))));
   const dirty = useWorkbenchTabDirty(tab);
   return tab ? !dirty : stamped;
 }

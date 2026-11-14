@@ -13,7 +13,7 @@ import { useElementSize, type ElementSize } from "@/hooks/use-element-size";
  * `sticky` 粘在视口顶部。附注只消费视口尺寸，按宽度决定摆放、按高度限制自身高度；视口宽度不随
  * 附注的摆放变化，所以不会来回抖动。
  *
- * 由提供方决定有没有附注：对话页的任务外面提供，工作台的只读阅读器没有提供方，自然没有附注。
+ * 由提供方决定有没有附注：对话页的会话外面提供，工作台的只读阅读器没有提供方，自然没有附注。
  */
 export type ConversationAside = (viewport: ElementSize) => ReactNode;
 

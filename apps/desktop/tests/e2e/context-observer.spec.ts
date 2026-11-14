@@ -6,7 +6,7 @@ const record = (
   patch: Partial<ContextMessage> = {},
 ): ContextMessage => ({
   id: sequence,
-  task_id: 42,
+  session_id: 42,
   turn: 1,
   inherited: false,
   sequence,
@@ -71,9 +71,9 @@ async function mock(page: Page) {
     if (fail)
       return route.fulfill({
         status: 404,
-        json: { detail: "task or turn not found" },
+        json: { detail: "session or turn not found" },
       });
-    // 按回合查询时附这一回合所属运行的状态事实；不带回合时是整个 Task 的记录。
+    // 按回合查询时附这一回合所属运行的状态事实；不带回合时是整个 Session 的记录。
     return route.fulfill({
       json: url.searchParams.get("turn")
         ? { messages, run: TURN_RUN }
@@ -111,27 +111,27 @@ test("空状态、加载反馈与查询边界", async ({ page }) => {
   const api = await mock(page);
   await page.goto("/context-observer");
   await expect(
-    page.getByText("选择一个任务（可选回合），开始检查上下文"),
+    page.getByText("选择一个会话（可选回合），开始检查上下文"),
   ).toBeVisible();
   await expect(list(page)).toHaveCount(0);
-  await page.getByLabel("Task ID", { exact: true }).fill("1.5");
+  await page.getByLabel("Session ID", { exact: true }).fill("1.5");
   await page.getByRole("button", { name: "查询", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("正整数");
   expect(api.requests.length).toBe(0);
   api.hold();
-  await page.getByLabel("Task ID", { exact: true }).fill("42");
+  await page.getByLabel("Session ID", { exact: true }).fill("42");
   await page.getByRole("button", { name: "查询", exact: true }).click();
   await expect(page.getByLabel("正在加载消息")).toBeVisible();
   api.release();
   await expect(list(page)).toBeVisible();
-  await page.goto("/context-observer?task_id=oops&turn=1");
+  await page.goto("/context-observer?session_id=oops&turn=1");
   await expect(page.getByRole("alert")).toContainText("查询地址无效");
   await page.goto("/context-observer?turn=1");
-  await expect(page.getByRole("alert")).toContainText("要同时给出 Task ID");
+  await expect(page.getByRole("alert")).toContainText("要同时给出 Session ID");
 });
 test("筛选、调用关联与范围内定位", async ({ page }) => {
   await mock(page);
-  await page.goto("/context-observer?task_id=42&turn=1");
+  await page.goto("/context-observer?session_id=42&turn=1");
   await expect(page.getByTestId("context-turn-run")).toContainText("所属运行（整个运行共享）：completed · stop · 1250 tokens");
   await expect(page.getByRole("option", { name: "#101 User", exact: true })).toHaveCount(0);
   await page.getByLabel("按角色筛选").selectOption("assistant");
@@ -161,7 +161,7 @@ test("刷新保留列表与正文位置，失败保留旧结果，新范围不�
   page,
 }) => {
   const api = await mock(page);
-  await page.goto("/context-observer?task_id=42&turn=1");
+  await page.goto("/context-observer?session_id=42&turn=1");
   await page.getByRole("option", { name: "#3 Tool", exact: true }).click();
   const editor = detail(page).locator(".cm-scroller");
   await editor.evaluate((node) => {
@@ -205,7 +205,7 @@ test("刷新保留列表与正文位置，失败保留旧结果，新范围不�
 });
 test("详情用量、JSON、查找与键盘浏览，窄窗口返回保位", async ({ page }) => {
   await mock(page);
-  await page.goto("/context-observer?task_id=42&turn=1");
+  await page.goto("/context-observer?session_id=42&turn=1");
   await list(page).focus();
   await list(page).press("ArrowDown");
   await list(page).press("ArrowDown");
@@ -252,7 +252,7 @@ for (const theme of ["light", "dark"] as const) {
       theme,
     );
     await mock(page);
-    await page.goto("/context-observer?task_id=42&turn=1");
+    await page.goto("/context-observer?session_id=42&turn=1");
     await page.getByRole("option", { name: "#3 Tool", exact: true }).click();
     await expect(detail(page).locator(".cm-content")).toContainText(
       "只读原始内容",
@@ -282,7 +282,7 @@ for (const theme of ["light", "dark"] as const) {
 test("推理原文在独立观测页可查看与复制", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await mock(page);
-  await page.goto("/context-observer?task_id=42&turn=1");
+  await page.goto("/context-observer?session_id=42&turn=1");
   await page.getByRole("option", { name: "#2 Assistant", exact: true }).click();
   await detail(page).getByRole("button", { name: "思考内容", exact: true }).click();
   await expect(detail(page).locator(".cm-content")).toContainText("仅在观测中展示的推理原文");

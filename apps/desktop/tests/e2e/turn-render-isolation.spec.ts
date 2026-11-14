@@ -4,14 +4,14 @@ import { activity, assistantMessage, outcome, toolCallPart, transportState, user
 
 test("耗时只刷新标题；正文增量不重绘未变工具，工具终态仍立即更新", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "渲染隔离" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "渲染隔离" } });
   const call = toolCallPart("read", "read_file", { status: "running", display_data: { kind: "read-file-meta", file_size: 12, line_range: { start: 1, end: 2 } } });
   const state = transportState({
     messages: [userMessage("u", 1), assistantMessage("a", 1, [call, { type: "text", text: "正在解释", status: "running" }])],
     activity: activity(1, "running", { startedAt: new Date(Date.now() - 5000).toISOString() }),
   });
-  await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { taskId: 42, state, hold: true } });
-  await page.goto("/tasks/42");
+  await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { sessionId: 42, state, hold: true } });
+  await page.goto("/sessions/42");
   await page.locator('[data-slot="activity-head"]').click();
   const row = page.locator('[data-slot="turn"] [data-tool-call-id="read"]');
   await expect(row).toBeVisible();
@@ -30,7 +30,7 @@ test("耗时只刷新标题；正文增量不重绘未变工具，工具终态�
   await expect.poll(() => heading.textContent()).not.toBe(before);
   expect(await renders()).toBe(0);
 
-  await request.post(`${API_ORIGIN}/__test__/append-text`, { data: { taskId: 42, messageIndex: 1, partIndex: 1, text: "，继续正文" } });
+  await request.post(`${API_ORIGIN}/__test__/append-text`, { data: { sessionId: 42, messageIndex: 1, partIndex: 1, text: "，继续正文" } });
   await expect(page.getByText("正在解释，继续正文", { exact: true })).toBeVisible();
   expect(await renders()).toBe(0);
 
@@ -39,7 +39,7 @@ test("耗时只刷新标题；正文增量不重绘未变工具，工具终态�
   const end = outcome("completed", { durationMs: 12000 });
   state.activity = activity(1, "completed");
   state.messages[1] = assistantMessage("a", 1, [{ ...call, status: "completed" }, { type: "text", text: "最终答复", finalReply: true, status: "completed" }], end);
-  await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { taskId: 42, state } });
+  await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { sessionId: 42, state } });
   await expect(heading).toHaveText("用时 12秒");
   await expect(page.locator('[data-slot="process-head"]')).toHaveAttribute("aria-expanded", "false");
   await page.locator('[data-slot="process-head"]').click();

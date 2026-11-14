@@ -9,7 +9,7 @@ import { BrowserOperation, type FileChooser } from "@/electron/main/browser/oper
 import type { BrowserTab } from "@/electron/main/browser/browser-tab";
 import type { SendOptions } from "@/electron/main/browser/cdp-session";
 vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
-import { parseAct, parseDropTasks, parseNavigate, parseSnapshot, type PageAction } from "@/electron/main/browser/params";
+import { parseAct, parseDropSessions, parseNavigate, parseSnapshot, type PageAction } from "@/electron/main/browser/params";
 import { addressToUrl, isPageUrl, pageUrl } from "@/electron/main/browser/page-url";
 import { describeTarget } from "@/electron/main/browser/input/targets";
 import { RefRegistry } from "@/electron/main/browser/ref-registry";
@@ -31,7 +31,7 @@ function codeOf(run: () => unknown): string {
 }
 
 describe("params", () => {
-  const base = { task_id: 7, limits: { per_task: 5, total: 20 }, download_dir: "/ws/.cosir/Download" };
+  const base = { session_id: 7, limits: { per_session: 5, total: 20 }, download_dir: "/ws/.cosir/Download" };
   // 后端照 model_dump() 原样发送：参数模型的每个字段都在，未填的为 null（导出的 schema 按这个形状校验）。
   const navigate = (args: Record<string, unknown>) => ({ ...base, url: null, action: null, tab: null, new_tab: false, viewport: null, color_scheme: null, ...args });
   const snapshot = (args: Record<string, unknown>) => ({ ...base, tab: null, scope: "page", find: null, from_line: null, ...args });
@@ -49,7 +49,7 @@ describe("params", () => {
     expect(parseNavigate(navigate({ url: "https://example.com/a" }))).toMatchObject({ target: { url: "https://example.com/a" }, newTab: false });
     expect(parseNavigate(navigate({ url: "https://example.com/a" }))).not.toHaveProperty("emulation");
     expect(parseNavigate(navigate({ action: "back", tab: "t3" }))).toMatchObject({
-      tab: "t3", target: { action: "back" }, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
+      tab: "t3", target: { action: "back" }, context: { limits: { perSession: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
     });
     expect(parseNavigate(navigate({ action: "reload", viewport: { width: 390, height: 844, mobile: true }, color_scheme: "auto" })).emulation)
       .toEqual({ viewport: { width: 390, height: 844, mobile: true }, colorScheme: null });
@@ -57,13 +57,13 @@ describe("params", () => {
     expect(parseNavigate(navigate({ action: "reload", viewport: "auto" })).emulation).toEqual({ viewport: "follow" });
     expect(parseNavigate(navigate({ action: "reload", color_scheme: "dark" })).emulation).toEqual({ colorScheme: "dark" });
     expect(parseSnapshot(snapshot({}))).toEqual({
-      taskId: 7, handoffTabs: [], view: { scope: "page" }, context: { limits: { perTask: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
+      sessionId: 7, handoffTabs: [], view: { scope: "page" }, context: { limits: { perSession: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
     });
     expect(parseSnapshot(snapshot({ from_line: 40, scope: "viewport", find: "Buy" }))).toMatchObject({ view: { scope: "viewport", find: "Buy", fromLine: 40 } });
     // 每个请求都带上下文（宿主据此刷新上限）；参数模型的字段一个都不能少。
-    expect(codeOf(() => parseSnapshot({ task_id: 7, tab: null, scope: "page", find: null, from_line: null }))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseSnapshot({ session_id: 7, tab: null, scope: "page", find: null, from_line: null }))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseSnapshot({ ...base, tab: null }))).toBe("INVALID_PARAMS");
-    expect(parseDropTasks({ task_ids: [1, 2] })).toEqual([1, 2]);
+    expect(parseDropSessions({ session_ids: [1, 2] })).toEqual([1, 2]);
   });
 
   // 目的：Agent 能打开网页与本机文件、写法与地址栏一致；潜在缺陷：生成的 HTML 打不开，或执行 javascript: 地址。
@@ -76,7 +76,7 @@ describe("params", () => {
     expect(codeOf(() => parseNavigate(navigate({ url: "https://exa mple.com" })))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseNavigate(navigate({ action: "home" })))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", tab: "../t1" })))).toBe("INVALID_PARAMS");
-    expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", limits: { per_task: 0, total: 1 } })))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", limits: { per_session: 0, total: 1 } })))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", download_dir: "relative/dir" })))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", viewport: { width: 10, height: 844, mobile: false } })))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseSnapshot(snapshot({ from_line: 0 })))).toBe("INVALID_PARAMS");
@@ -478,7 +478,7 @@ function fakeSession(
     },
   };
   const tab = {
-    taskId: 1, tabId: "t1", documentGeneration: 0,
+    sessionId: 1, tabId: "t1", documentGeneration: 0,
     contents: { isDestroyed: () => false }, noteAgentInput() {}, operationChanged() {}, operationSettled() {},
     refLabel: () => undefined,
     session: { send: <T,>(method: string, params: Record<string, unknown>, options: SendOptions) => {

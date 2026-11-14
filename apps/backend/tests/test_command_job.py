@@ -56,8 +56,8 @@ def test_failed_work_concludes_as_failed() -> None:
 def test_background_registration_delivers_an_already_finished_job(monkeypatch) -> None:
     calls = []
 
-    def enqueue(task_id, tool_call_id, conclusion, *, starts_run=True):
-        calls.append((task_id, tool_call_id, conclusion.result))
+    def enqueue(session_id, tool_call_id, conclusion, *, starts_run=True):
+        calls.append((session_id, tool_call_id, conclusion.result))
         return True
 
     monkeypatch.setattr(CommandResultRegistry, "_enqueue_result", staticmethod(enqueue))
@@ -65,6 +65,6 @@ def test_background_registration_delivers_an_already_finished_job(monkeypatch) -
         lambda: CommandConclusion({"value": 3}), wake=lambda: None, name="job-done",
     )
     assert job.wait(2) is not None
-    work = command_results.register("call-1", task_id=1, run_id=2, label="child", job=job)
+    work = command_results.register("call-1", session_id=1, run_id=2, label="child", job=job)
     assert (work.kind, work.label, work.run_id) == ("terminal_command", "child", 2)
     assert calls == [(1, "call-1", {"value": 3})]

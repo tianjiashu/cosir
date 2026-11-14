@@ -1,6 +1,6 @@
 """单会话执行协调：会话锁保护观察、条件等待、Agent 填入与唯一终态迁移。
 
-service 拥有会话集合、Task 归属与容量；本对象不访问 registry，也不认识应用层。会话锁内只做内存
+service 拥有会话集合、Session 归属与容量；本对象不访问 registry，也不认识应用层。会话锁内只做内存
 操作：会话条目的变化经 service 注入的 ``notify_sessions_changed`` 报出（service 交给单线程副作用执行器
 在锁外重投影）；终态迁移的赢家由 service 在锁外调用 ``dispose_worker`` 清理 worker。因此 worker 读线程
 回调本对象时只会短暂持锁，不做阻塞 IO。
@@ -11,7 +11,7 @@ service 拥有会话集合、Task 归属与容量；本对象不访问 registry�
 - Agent 只能把一行命令填进空提示符（不执行、不等输出），准入只读 shell 集成给出的事实：集成 ready、
   停在提示符、且这个提示符出现后还没有任何输入。用户输入从不被拒，也从不经过准入；
 - worker 握手（最多数秒）不在会话锁内进行：启动期间快照投影、订阅与 WS 输入都要拿会话锁，
-  其中 snapshot 刷新持有全局投影锁，长持会话锁会拖住所有 Task 的投影。
+  其中 snapshot 刷新持有全局投影锁，长持会话锁会拖住所有 Session 的投影。
   握手与 worker 关闭由独立的启动互斥 ``_start_lock`` 串行化。``starting`` 期间用户按键与尺寸照常
   进入 worker 的有序输入队列，握手后按序发出（与真实终端的预输入一致）；Agent 填入的准入先判会话
   状态，只在 ``running`` 后接受。
@@ -69,14 +69,14 @@ _WORKER_EXIT_FAILURES = {
 
 
 @dataclass(frozen=True)
-class SessionSnapshot:
+class TerminalSessionSnapshot:
     """会话在某一时刻的只读事实，取自同一次会话锁内。
 
     是 runtime 唯一的对外投影：工具卡片、模型摘要与 Transport 会话条目都从它派生；camelCase 的
     wire 形状由 ``assistant_transport`` 映射，不在这里产出。
     """
 
-    session_id: str
+    terminal_session_id: str
     shell_kind: str
     created_at: datetime
     status: str
@@ -119,7 +119,7 @@ class TerminalSessionRuntime(ObservedTerminal):
     def __init__(
         self,
         *,
-        task_id: int,
+        session_id: int,
         initial_cwd: str,
         spec: ShellSpec,
         notify_sessions_changed: Callable[[int], None],
@@ -127,10 +127,10 @@ class TerminalSessionRuntime(ObservedTerminal):
         """只建内存状态与 worker 句柄（解析 worker 路径，未配置时抛
         ``TerminalWorkerUnavailableError``），不启动子进程；握手见 :meth:`start`。"""
         # 身份和用途在会话创建后不变；生命周期字段只在会话锁内更新。
-        self.session_id: Final = f"term_{uuid.uuid4().hex[:12]}"
-        # 读取底座按 ``terminal_id`` 统一寻址；会话保留 ``session_id``（服务、WS、snapshot 都在用）。
-        self.terminal_id = self.session_id
-        self.task_id: Final = task_id
+        self.terminal_session_id: Final = f"term_{uuid.uuid4().hex[:12]}"
+        # 读取底座按 ``terminal_id`` 统一寻址；会话保留 ``terminal_session_id``（服务、WS、snapshot 都在用）。
+        self.terminal_id = self.terminal_session_id
+        self.session_id: Final = session_id
         self.initial_cwd: Final = initial_cwd
         self.spec: Final = spec
         self.created_at: Final = datetime.now(UTC)
@@ -147,7 +147,7 @@ class TerminalSessionRuntime(ObservedTerminal):
         self._start_lock = threading.Lock()
         self._disposal_finished = threading.Event()
         self._stream = TerminalStreamBuffer(
-            self.session_id, Constant.Terminal.MAX_RING_BUFFER_BYTES
+            self.terminal_session_id, Constant.Terminal.MAX_RING_BUFFER_BYTES
         )
         self._observation = TerminalObservation(spec.kind, spec.integration)
         self._user_last_input = float("-inf")
@@ -168,7 +168,7 @@ class TerminalSessionRuntime(ObservedTerminal):
     def start(self, on_event: WorkerEventCallback) -> None:
         """在会话锁外完成 worker 握手，成功后迁移为 running。
 
-        握手期间会话可被并发结束（Task 删除、关闭）：``finish`` 照常在会话锁内迁移终态并交出句柄，
+        握手期间会话可被并发结束（Session 删除、关闭）：``finish`` 照常在会话锁内迁移终态并交出句柄，
         worker 的关闭经 :meth:`dispose_worker` 等握手结束后再进行，慢启动与删除交错时句柄不会脱管，
         也不会在 ``worker.start`` 半途被关闭。握手失败的异常抛给 service 收尾。
         """
@@ -191,8 +191,8 @@ class TerminalSessionRuntime(ObservedTerminal):
                 extra={
                     "msg": "终端 worker 已建立，会话与进程诊断信息已关联",
                     "data": {
-                        "task_id": self.task_id,
                         "session_id": self.session_id,
+                        "terminal_session_id": self.terminal_session_id,
                         "worker_instance_id": worker.instance_id,
                         "worker_pid": worker.pid,
                         "shell_executable": self.spec.executable,
@@ -240,8 +240,8 @@ class TerminalSessionRuntime(ObservedTerminal):
             extra={
                 "msg": "终端会话进入终态",
                 "data": {
-                    "task_id": self.task_id,
                     "session_id": self.session_id,
+                    "terminal_session_id": self.terminal_session_id,
                     "status": status,
                     "reason": reason,
                     "exit_code": exit_code,
@@ -282,7 +282,7 @@ class TerminalSessionRuntime(ObservedTerminal):
                 extra={
                     "msg": "Terminal Worker 结束了会话",
                     "data": {
-                        "session_id": self.session_id,
+                        "terminal_session_id": self.terminal_session_id,
                         "reason": reason,
                         "message": event.get("message"),
                     },
@@ -301,7 +301,7 @@ class TerminalSessionRuntime(ObservedTerminal):
                     "terminal_session_input_backpressure",
                     extra={
                         "msg": "前台程序未读取输入，worker 写入队列已满，本次输入被丢弃",
-                        "data": {"session_id": self.session_id},
+                        "data": {"terminal_session_id": self.terminal_session_id},
                     },
                 )
                 with self._condition:
@@ -312,7 +312,7 @@ class TerminalSessionRuntime(ObservedTerminal):
                     extra={
                         "msg": "Terminal Worker 报告非致命错误",
                         "data": {
-                            "session_id": self.session_id,
+                            "terminal_session_id": self.terminal_session_id,
                             "code": code,
                             "message": event.get("message"),
                         },
@@ -333,8 +333,8 @@ class TerminalSessionRuntime(ObservedTerminal):
             extra={
                 "msg": "终端 shell 集成事件",
                 "data": {
-                    "task_id": self.task_id,
                     "session_id": self.session_id,
+                    "terminal_session_id": self.terminal_session_id,
                     "command_number": self._observation.command_counter,
                     "reason": event.get("reason"),
                 },
@@ -382,9 +382,9 @@ class TerminalSessionRuntime(ObservedTerminal):
                 extra={
                     "msg": "Agent 把一行命令填进终端提示符（不执行）",
                     "data": {
-                        "task_id": self.task_id,
-                        "run_id": run_id,
                         "session_id": self.session_id,
+                        "run_id": run_id,
+                        "terminal_session_id": self.terminal_session_id,
                         "tool_call_id": tool_call_id,
                         "command_preview": preview,
                     },
@@ -396,8 +396,8 @@ class TerminalSessionRuntime(ObservedTerminal):
             )
 
     def notify_changed(self) -> None:
-        """影响 snapshot 会话条目的变化（生命周期、集成）：交给 service 在锁外整表重投影该 Task。"""
-        self._notify_sessions_changed(self.task_id)
+        """影响 snapshot 会话条目的变化（生命周期、集成）：交给 service 在锁外整表重投影该 Session。"""
+        self._notify_sessions_changed(self.session_id)
 
     # ------------------------------------------------------------------ 输入仲裁
 
@@ -465,7 +465,7 @@ class TerminalSessionRuntime(ObservedTerminal):
     def _facts(self) -> TerminalFacts:
         """持锁调用：渲染所需的会话侧事实。"""
         return TerminalFacts(
-            terminal_id=self.session_id,
+            terminal_id=self.terminal_session_id,
             kind="session",
             status=self._status,
             ended=self._status not in _ACTIVE,
@@ -486,10 +486,10 @@ class TerminalSessionRuntime(ObservedTerminal):
 
     # ------------------------------------------------------------------ 只读投影
 
-    def snapshot(self) -> SessionSnapshot:
+    def snapshot(self) -> TerminalSessionSnapshot:
         with self._condition:
-            return SessionSnapshot(
-                session_id=self.session_id,
+            return TerminalSessionSnapshot(
+                terminal_session_id=self.terminal_session_id,
                 shell_kind=self.spec.kind,
                 created_at=self.created_at,
                 status=self._status,

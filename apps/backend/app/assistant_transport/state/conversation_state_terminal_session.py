@@ -1,6 +1,6 @@
-"""Task 终端会话列表的 Transport 契约（snapshot 顶层 ``terminal_sessions`` 的条目）。
+"""Session 终端会话列表的 Transport 契约（snapshot 顶层 ``terminal_sessions`` 的条目）。
 
-事实源是进程内的 ``TerminalSessionService``（``task_runtimes`` 各会话的 ``snapshot()``，由
+事实源是进程内的 ``TerminalSessionService``（``session_runtimes`` 各会话的 ``snapshot()``，由
 :func:`to_terminal_session` 映射成本契约的 camelCase 条目）：会话不持久化、不跨后端
 重启，所以列表不从 canonical 记录重建，只在 snapshot 物化与会话变化通知时整表读取。终端画面与输入
 标记的实时细节走每会话 WebSocket，这里只给工作台标签栏与生命周期所需的摘要。
@@ -23,7 +23,7 @@ from app.assistant_transport.state.wire_shape import (
 )
 
 if TYPE_CHECKING:
-    from app.tools.terminal_runtime.session.session_runtime import SessionSnapshot
+    from app.tools.terminal_runtime.session.session_runtime import TerminalSessionSnapshot
 
 TerminalSessionStatus = Literal["starting", "running", "exited", "closed", "failed"]
 TerminalSessionIntegration = Literal["starting", "ready", "unavailable", "off"]
@@ -32,7 +32,7 @@ TerminalSessionIntegration = Literal["starting", "ready", "unavailable", "off"]
 class ConversationTerminalSession(TypedDict):
     """一个终端会话的摘要；活跃会话在前、按创建时间排序，已结束会话只保留最近若干个。"""
 
-    sessionId: str
+    terminalSessionId: str
     shellKind: str
     status: TerminalSessionStatus
     endReason: str | None
@@ -47,14 +47,14 @@ _STATUSES = frozenset(get_args(TerminalSessionStatus))
 _INTEGRATIONS = frozenset(get_args(TerminalSessionIntegration))
 
 
-def to_terminal_session(session: SessionSnapshot) -> ConversationTerminalSession:
+def to_terminal_session(session: TerminalSessionSnapshot) -> ConversationTerminalSession:
     """把终端运行时的会话快照映射成 Transport 条目。
 
     取值词表由 ``validate_terminal_sessions`` 守。
     """
 
     return ConversationTerminalSession(
-        sessionId=session.session_id,
+        terminalSessionId=session.terminal_session_id,
         shellKind=session.shell_kind,
         status=cast(TerminalSessionStatus, session.status),
         endReason=session.end_reason,
@@ -69,16 +69,16 @@ def validate_terminal_sessions(value: object) -> None:
     """精确校验 ``terminal_sessions``：字段集合、取值词表与会话身份唯一。
 
     异常:
-        ValueError: 任一条目不满足契约（字段缺失或多余、取值越界、``sessionId`` 重复）。
+        ValueError: 任一条目不满足契约（字段缺失或多余、取值越界、``terminalSessionId`` 重复）。
     """
 
     seen: set[str] = set()
     for entry in require_list(value, "snapshot terminal_sessions"):
         session = as_shape(entry, ConversationTerminalSession, "snapshot terminal session entry")
-        session_id = require_non_empty_str(session["sessionId"], "terminal session sessionId")
-        if session_id in seen:
-            raise ValueError("snapshot contains duplicate terminal sessionId")
-        seen.add(session_id)
+        terminal_session_id = require_non_empty_str(session["terminalSessionId"], "terminal session terminalSessionId")
+        if terminal_session_id in seen:
+            raise ValueError("snapshot contains duplicate terminal terminalSessionId")
+        seen.add(terminal_session_id)
         require_str(session["shellKind"], "terminal session shellKind")
         require_str(session["createdAt"], "terminal session createdAt")
         require_one_of(session["status"], _STATUSES, "terminal session status")

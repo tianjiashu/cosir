@@ -1,6 +1,5 @@
 from app.tools.display.file_change_display import (
     build_file_change_display_data,
-    build_file_delete_display_data,
 )
 from app.tools.tool_handler.patch_write.patch_diff import FileDiffResult, format_git_diff
 
@@ -23,61 +22,11 @@ def test_display_data_uses_git_patch_without_full_snapshots() -> None:
     assert "after" not in change
 
 
-def test_git_patch_handles_added_deleted_and_moved_files() -> None:
-    assert "--- /dev/null" in format_git_diff(
-        FileDiffResult(path="new.py", status="added", before="", after="value\n")
-    )
-    assert "+++ /dev/null" in format_git_diff(
-        FileDiffResult(path="old.py", status="deleted", before="value\n", after="")
-    )
-    moved = format_git_diff(
-        FileDiffResult(
-            path="old.py",
-            new_path="new.py",
-            status="moved",
-            before="value\n",
-            after="value\n",
-        )
-    )
-    assert "similarity index 100%" in moved
-    assert "rename from old.py" in moved
-    assert "rename to new.py" in moved
+def test_git_patch_marks_added_files_from_dev_null() -> None:
+    patch = format_git_diff(FileDiffResult(path="new.py", status="added", before="", after="value\n"))
 
-
-def test_delete_display_data_carries_only_the_target_and_status() -> None:
-    display = build_file_delete_display_data("logs/old.log")
-
-    assert display == {
-        "kind": "file-changes",
-        "changes": [
-            {
-                "path": "logs/old.log",
-                "new_path": None,
-                "status": "deleted",
-                "patch": None,
-                "insertions": 0,
-                "deletions": 0,
-            }
-        ],
-        "diff_stats": {
-            "total_files": 1,
-            "total_insertions": 0,
-            "total_deletions": 0,
-            "files": [
-                {
-                    "path": "logs/old.log",
-                    "status": "deleted",
-                    "insertions": 0,
-                    "deletions": 0,
-                    "new_path": None,
-                }
-            ],
-        },
-    }
-    # 被删内容不进入展示通道：载荷里不存在任何正文或 Diff 字段。
-    assert "old.log" in display["changes"][0]["path"]
-    assert "patch" in display["changes"][0]
-    assert display["changes"][0]["patch"] is None
+    assert "--- /dev/null" in patch
+    assert "+++ b/new.py" in patch
 
 
 def test_display_data_keeps_the_complete_oversized_patch() -> None:

@@ -1,10 +1,10 @@
-from app.utils.datetime_utils import TASK_TITLE_LIMIT, preview
+from app.utils.datetime_utils import SESSION_TITLE_LIMIT, preview
 
 
-def test_task_title_limit_keeps_preview_within_sidebar_budget() -> None:
-    result = preview("标题 " * 100, limit=TASK_TITLE_LIMIT)
+def test_session_title_limit_keeps_preview_within_sidebar_budget() -> None:
+    result = preview("标题 " * 100, limit=SESSION_TITLE_LIMIT)
 
-    assert len(result) == TASK_TITLE_LIMIT
+    assert len(result) == SESSION_TITLE_LIMIT
     assert result.endswith("...")
 
 

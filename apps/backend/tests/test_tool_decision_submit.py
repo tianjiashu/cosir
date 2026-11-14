@@ -12,10 +12,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.workflow.message_queue.task_message import DecisionBody
-from app.models.conversation_task_context import ConversationTaskContextRecord
-from app.models.errors.task_command_errors import TaskCommandConflictError
+from app.core.workflow.message_queue.session_message import DecisionBody
+from app.models.errors.session_command_errors import SessionCommandConflictError
 from app.models.message_metadata import ToolMessageMetadata
+from app.models.session_context import SessionContextRecord
 from app.service import depends
 from app.service.conversation import tool_decision_service as module
 
@@ -23,19 +23,23 @@ _CALL_ID = "call-hitl"
 
 
 @pytest.fixture
-def awaiting(tmp_path: Path, isolated_storage):
+def awaiting(tmp_path: Path, isolated_storage, monkeypatch: pytest.MonkeyPatch):
+    # 探针工具没有注册：决定不带载荷，按「工具没声明载荷」处理。
+    monkeypatch.setattr(
+        module, "get_tool_registry", lambda: SimpleNamespace(get_tool_definition=lambda _name: None)
+    )
     workspace = depends.get_workspace_crud().create("ws", str(tmp_path))
-    task = depends.get_task_crud().create(workspace.id, "task")
-    run = depends.get_conversation_run_crud().create(task.id, "suspended")
-    crud = depends.get_conversation_task_context_crud()
+    session = depends.get_session_crud().create(workspace.id, "session")
+    run = depends.get_run_crud().create(session.id, "suspended")
+    crud = depends.get_session_context_crud()
     call = {
         "id": _CALL_ID,
         "type": "function",
         "function": {"name": "hitl_tool", "arguments": "{}"},
     }
     crud.create(
-        ConversationTaskContextRecord(
-            task_id=task.id,
+        SessionContextRecord(
+            session_id=session.id,
             run_id=run.id,
             message={"role": "assistant", "content": None, "tool_calls": [call]},
             include_in_context=True,
@@ -43,8 +47,8 @@ def awaiting(tmp_path: Path, isolated_storage):
             turn=1,
         )
     )
-    placeholder = ConversationTaskContextRecord(
-        task_id=task.id,
+    placeholder = SessionContextRecord(
+        session_id=session.id,
         run_id=run.id,
         message={"role": "tool", "tool_call_id": _CALL_ID, "content": "awaiting decision"},
         include_in_context=True,
@@ -53,13 +57,13 @@ def awaiting(tmp_path: Path, isolated_storage):
         turn=1,
     )
     crud.create(placeholder)
-    return SimpleNamespace(task_id=task.id, crud=crud, placeholder=placeholder)
+    return SimpleNamespace(session_id=session.id, crud=crud, placeholder=placeholder)
 
 
-def _queued_decisions(task_id: int) -> list[DecisionBody]:
+def _queued_decisions(session_id: int) -> list[DecisionBody]:
     return [
         message.body
-        for message in depends.get_task_message_queue().pending_nowait(task_id)
+        for message in depends.get_session_message_queue().pending_nowait(session_id)
         if isinstance(message.body, DecisionBody)
     ]
 
@@ -67,10 +71,10 @@ def _queued_decisions(task_id: int) -> list[DecisionBody]:
 def test_claimed_call_is_no_longer_awaiting(awaiting) -> None:
     """``prepare_input`` 接收决定后占位是 running：执行期间再提交被拒，原调用不会被重放第二次。"""
     awaiting.crud.replace_message(
-        awaiting.task_id,
+        awaiting.session_id,
         awaiting.placeholder.sequence,
-        ConversationTaskContextRecord(
-            task_id=awaiting.task_id,
+        SessionContextRecord(
+            session_id=awaiting.session_id,
             run_id=awaiting.placeholder.run_id,
             message=awaiting.placeholder.message,
             include_in_context=True,
@@ -80,21 +84,21 @@ def test_claimed_call_is_no_longer_awaiting(awaiting) -> None:
         ),
     )
 
-    with pytest.raises(TaskCommandConflictError) as caught:
-        module.ToolDecisionService().submit(awaiting.task_id, _CALL_ID, "approve")
+    with pytest.raises(SessionCommandConflictError) as caught:
+        module.ToolDecisionService().submit(awaiting.session_id, _CALL_ID, "approve")
 
     assert caught.value.code == "DECISION_NOT_AWAITED"
-    assert _queued_decisions(awaiting.task_id) == []
+    assert _queued_decisions(awaiting.session_id) == []
 
 
 def test_concurrent_submissions_enqueue_exactly_one(awaiting, monkeypatch: pytest.MonkeyPatch) -> None:
     """用户交还与运行时代为落定同时提交：判定与入队在一个写事务里，后到的一方看到已提交。"""
-    queue = depends.get_task_message_queue()
+    queue = depends.get_session_message_queue()
     original = queue.pending_nowait
     first_checked = threading.Event()
 
-    def slow_first_check(task_id: int, **kwargs):
-        pending = original(task_id, **kwargs)
+    def slow_first_check(session_id: int, **kwargs):
+        pending = original(session_id, **kwargs)
         if not first_checked.is_set():
             # 第一方判定完、入队前停一下，让第二方在这个窗口里判定。
             first_checked.set()
@@ -106,9 +110,9 @@ def test_concurrent_submissions_enqueue_exactly_one(awaiting, monkeypatch: pytes
 
     def submit(decision: str) -> None:
         try:
-            module.ToolDecisionService().submit(awaiting.task_id, _CALL_ID, decision)  # type: ignore[arg-type]
+            module.ToolDecisionService().submit(awaiting.session_id, _CALL_ID, decision)  # type: ignore[arg-type]
             outcomes.append("enqueued")
-        except TaskCommandConflictError as exc:
+        except SessionCommandConflictError as exc:
             outcomes.append(exc.code)
 
     first = threading.Thread(target=submit, args=("approve",))
@@ -120,5 +124,5 @@ def test_concurrent_submissions_enqueue_exactly_one(awaiting, monkeypatch: pytes
     second.join(5)
 
     assert sorted(outcomes) == ["DECISION_ALREADY_SUBMITTED", "enqueued"]
-    [queued] = _queued_decisions(awaiting.task_id)
+    [queued] = _queued_decisions(awaiting.session_id)
     assert queued.decision == "approve"

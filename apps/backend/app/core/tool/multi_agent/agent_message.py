@@ -1,4 +1,4 @@
-"""Agent 消息的入队前准备：委派与追加消息共用，产出待入队的 ``TaskMessage``。
+"""Agent 消息的入队前准备：委派与追加消息共用，产出待入队的 ``SessionMessage``。
 
 和用户输入不同，Agent 文本是纯文本：不解析附件与图片 token，也不带图片。只校验发起配置与非空，
 不写库、不入队、不创建 Run。
@@ -6,10 +6,14 @@
 
 from collections.abc import Sequence
 
-from app.core.workflow.message_queue.task_message import AgentMessageBody, RunLaunch, TaskMessage
+from app.core.workflow.message_queue.session_message import (
+    AgentMessageBody,
+    RunLaunch,
+    SessionMessage,
+)
 from app.models.conversation_input import MessageSource
-from app.models.conversation_run_options import ConversationRunOptions, ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
+from app.models.run_options import ReasoningEffort, RunOptions
 from app.service.depends import get_model_config_service
 
 
@@ -21,7 +25,7 @@ def prepare_agent_message(
     model_config_id: str,
     reasoning_effort: ReasoningEffort | None = None,
     disabled_tool_groups: Sequence[str] = (),
-) -> TaskMessage:
+) -> SessionMessage:
     """组装一条携带发起配置的 Agent 消息（尚未入队）；一律 ``immediate``：没有人替 Agent 点
     「立即发送」。
 
@@ -39,10 +43,10 @@ def prepare_agent_message(
         launch=RunLaunch(
             agent_id=agent_id,
             model_config_id=model_config_id,
-            options=ConversationRunOptions(
+            options=RunOptions(
                 reasoning_effort=reasoning_effort,
                 disabled_tool_groups=list(disabled_tool_groups),
             ),
         ),
     )
-    return TaskMessage.of(body)
+    return SessionMessage.of(body)

@@ -25,7 +25,7 @@ describe("AgentConfigurationDraftTool", () => {
             error: null,
             errorCode: null,
           }}
-          taskId={3}
+          sessionId={3}
           toolCallId="tool-call-1"
         />
       </WorkbenchProvider>,

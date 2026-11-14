@@ -174,7 +174,7 @@ class MCPConfigurationService:
             return None
 
     def _publish(self, before: dict[str, str | None] | None) -> None:
-        """可用服务集合变化时通知固化了 ``mcp`` 工具的 Task。"""
+        """可用服务集合变化时通知固化了 ``mcp`` 工具的 Session。"""
 
         after = self._agent_view()
         if before is None or after is None:

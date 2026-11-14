@@ -8,26 +8,26 @@ import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
-from app.api.assistant_transport_api import (
+from app.api.sessions_api import get_session
+from app.app import app
+from app.assistant_transport.api import (
     assistant_history_page,
     assistant_transport_attach,
 )
-from app.api.tasks_api import get_task
-from app.app import app
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.models.enums.conversation_run_status import RunTransition
-from app.models.task_extra import TaskExtra
+from app.models.enums.run_status import RunTransition
+from app.models.session_extra import SessionExtra
 from app.service.depends import get_workspace_service
 from app.service.recover_service import RecoverService
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
 
-def test_task_route_has_one_get_method() -> None:
+def test_session_route_has_one_get_method() -> None:
     routes = [
         route
         for route in app.routes
         if isinstance(route, APIRoute)
-        and route.path == "/tasks/{task_id}"
+        and route.path == "/sessions/{session_id}"
         and route.methods == {"GET"}
     ]
 
@@ -36,31 +36,31 @@ def test_task_route_has_one_get_method() -> None:
 
 
 @pytest.mark.asyncio
-async def test_task_endpoint_returns_task_response_without_task_level_fork_gate() -> None:
+async def test_session_endpoint_returns_session_response_without_session_level_fork_gate() -> None:
     now = datetime.now(UTC)
     record = SimpleNamespace(
         id=7,
         workspace_id=3,
-        title="conversation_run",
-        extra=TaskExtra(),
+        title="run",
+        extra=SessionExtra(),
         current_run_id=None,
         context_window_total=None,
-        task_type="user",
-        parent_task_id=None,
+        session_type="user",
+        parent_session_id=None,
         created_at=now,
         updated_at=now,
     )
 
-    class _TaskService:
-        def get_task(self, _task_id: int) -> object:
+    class _SessionService:
+        def get_session(self, _session_id: int) -> object:
             return record
 
-        def get_context_window_total(self, _task_id: int) -> int | None:
+        def get_context_window_total(self, _session_id: int) -> int | None:
             return None
 
-    result = await get_task(7, _TaskService())
+    result = await get_session(7, _SessionService())
 
-    assert result.task_id == 7
+    assert result.session_id == 7
     assert result.workspace_id == 3
     assert "fork_available" not in result.model_dump()
 
@@ -69,7 +69,7 @@ def test_attach_route_is_separate_from_business_resume() -> None:
     routes = [
         route
         for route in app.routes
-        if isinstance(route, APIRoute) and route.path == "/tasks/{task_id}/assistant/attach"
+        if isinstance(route, APIRoute) and route.path == "/sessions/{session_id}/assistant/attach"
     ]
 
     assert len(routes) == 1
@@ -77,39 +77,39 @@ def test_attach_route_is_separate_from_business_resume() -> None:
 
 
 class _AttachService:
-    """只认 Task、返回 SSE 记录的替身：attach 路由只负责把记录包成长连接响应。"""
+    """只认 Session、返回 SSE 记录的替身：attach 路由只负责把记录包成长连接响应。"""
 
-    def attach(self, _task_id: int):
+    def attach(self, _session_id: int):
         async def records():
             yield "data: {}\n\n"
 
         return records()
 
 
-def test_attach_subscribes_by_task_as_an_event_stream() -> None:
-    """attach 只按 Task 订阅，不需要也不接受 run_id；响应是不缓存的 SSE 长连接。"""
+def test_attach_subscribes_by_session_as_an_event_stream() -> None:
+    """attach 只按 Session 订阅，不需要也不接受 run_id；响应是不缓存的 SSE 长连接。"""
 
     response = asyncio.run(assistant_transport_attach(1, service=_AttachService()))
 
     assert response.media_type == "text/event-stream"
-    assert response.headers["X-Cosir-Task-Id"] == "1"
+    assert response.headers["X-Cosir-Session-Id"] == "1"
     assert response.headers["Cache-Control"] == "no-cache"
 
 
 @pytest.mark.parametrize(
     "path",
     [
-        "/tasks/{task_id}/messages",
-        "/tasks/{task_id}/queued-messages/{message_id}",
-        "/tasks/{task_id}/messages/{message_id}/withdraw",
-        "/tasks/{task_id}/resume",
-        "/tasks/{task_id}/tool-calls/{tool_call_id}/decision",
-        "/tasks/{task_id}/cancel",
-        "/tasks/{task_id}/tool-calls/{tool_call_id}/cancel",
+        "/sessions/{session_id}/messages",
+        "/sessions/{session_id}/queued-messages/{message_id}",
+        "/sessions/{session_id}/messages/{message_id}/withdraw",
+        "/sessions/{session_id}/resume",
+        "/sessions/{session_id}/tool-calls/{tool_call_id}/decision",
+        "/sessions/{session_id}/cancel",
+        "/sessions/{session_id}/tool-calls/{tool_call_id}/cancel",
     ],
 )
-def test_task_commands_are_addressed_by_task(path: str) -> None:
-    """命令只对 Task 或消息寻址；统一入口 ``/assistant`` 与按 run 寻址的端点不复存在。"""
+def test_session_commands_are_addressed_by_session(path: str) -> None:
+    """命令只对 Session 或消息寻址；统一入口 ``/assistant`` 与按 run 寻址的端点不复存在。"""
 
     paths = {route.path for route in app.routes if isinstance(route, APIRoute)}
     assert path in paths
@@ -130,15 +130,15 @@ def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
         def __exit__(self, *_args: object) -> None:
             return None
 
-    class _SessionFactory:
+    class _DbFactory:
         def begin(self) -> _Transaction:
             return _Transaction()
 
     class _RunCrud:
         def list_recoverable(self) -> list[object]:
             return [
-                SimpleNamespace(id=run_id, task_id=task_id, execution_data=ReactExecutionState())
-                for run_id, task_id in ((7, 1), (8, 2))
+                SimpleNamespace(id=run_id, session_id=session_id, execution_data=ReactExecutionState())
+                for run_id, session_id in ((7, 1), (8, 2))
             ]
 
     class _RunStateService:
@@ -149,25 +149,25 @@ def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
             *,
             end_reason: str | None = None,
             execution_data: object = None,
-            session: object = None,
+            db: object = None,
         ) -> object:
-            assert session is not None
+            assert db is not None
             calls.append((run_id, transition, end_reason))
             return SimpleNamespace(id=run_id)
 
     class _ContextService:
         def close_unclosed_tool_calls_for_run(
-            self, task_id: int, run_id: int, session: object = None
+            self, session_id: int, run_id: int, db: object = None
         ) -> list[str]:
-            assert session is not None
-            repaired.append((task_id, run_id))
+            assert db is not None
+            repaired.append((session_id, run_id))
             return [f"call-{run_id}"]
 
     service = RecoverService.__new__(RecoverService)
     service._run = _RunCrud()
     service._ledger = _RunStateService()
     service._context = _ContextService()
-    service._session_factory = _SessionFactory()
+    service._db_factory = _DbFactory()
 
     result = service.recover_orphaned_runs()
 
@@ -182,7 +182,7 @@ def test_restart_recovery_cancels_run_and_closes_tool_calls() -> None:
 @pytest.mark.asyncio
 async def test_history_page_maps_a_stale_position_to_409() -> None:
     class _TransportService:
-        def get_history_page(self, _task_id: int, end: int) -> dict[str, object]:
+        def get_history_page(self, _session_id: int, end: int) -> dict[str, object]:
             if end > 3:
                 raise ValueError("stale")
             return {"messages": [], "messageOffset": 0}
@@ -197,11 +197,11 @@ async def test_history_page_maps_a_stale_position_to_409() -> None:
     assert caught.value.detail["error"]["code"] == "HISTORY_STALE"
 
 
-async def test_task_gate_waits_without_blocking_event_loop(tmp_path: Path) -> None:
+async def test_session_gate_waits_without_blocking_event_loop(tmp_path: Path) -> None:
     """闸门排队必须发生在工作线程：等待期间事件循环仍要能调度其它协程。
 
-    Task 闸门要跨越 ``TaskActor`` 一批信号处理内的 ``await``；若用同步
-    ``operation()`` 在事件循环线程上抢锁，同一 task 的并发请求会把事件循环整体卡在
+    Session 闸门要跨越 ``SessionActor`` 一批信号处理内的 ``await``；若用同步
+    ``operation()`` 在事件循环线程上抢锁，同一 session 的并发请求会把事件循环整体卡在
     ``acquire`` 上，而持锁者又必须回到事件循环才能释放闸门，等待者遂只能等满超时。
     本用例断言等待期间心跳协程仍在推进。
     """
@@ -210,8 +210,8 @@ async def test_task_gate_waits_without_blocking_event_loop(tmp_path: Path) -> No
     root = tmp_path / "workspace"
     root.mkdir()
     workspace = workspace_service.create_workspace("gate-test", str(root))
-    task = workspace_service.create_task(workspace.id, "gate-test")
-    space = task_runtime_spaces.get_or_create(task.id)
+    session = workspace_service.create_session(workspace.id, "gate-test")
+    space = session_runtime_spaces.get_or_create(session.id)
     acquired = threading.Event()
     release = threading.Event()
 
@@ -245,7 +245,7 @@ async def test_task_gate_waits_without_blocking_event_loop(tmp_path: Path) -> No
         if beating is not None:
             beating.cancel()
             await asyncio.gather(beating, return_exceptions=True)
-        task_runtime_spaces.unload(task.id)
+        session_runtime_spaces.unload(session.id)
 
     assert not holder.is_alive()
 

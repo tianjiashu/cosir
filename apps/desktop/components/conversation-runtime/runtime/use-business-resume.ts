@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 
 import { HttpError } from "@/lib/http/http-error";
-import { resumeTask } from "@/lib/assistant/task-commands";
+import { resumeSession } from "@/lib/assistant/session-commands";
 import type { RuntimeSessionContext } from "@/components/conversation-runtime/runtime/runtime-types";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { getBackendRuntimeSnapshot } from "@/lib/backend/runtime-config";
@@ -12,10 +12,10 @@ export type BusinessResumeController = {
 };
 
 /**
- * 显式业务恢复（`POST /tasks/{id}/resume`），与 transport attach 语义分开。
+ * 显式业务恢复（`POST /sessions/{id}/resume`），与 transport attach 语义分开。
  *
  * 后端处理完才返回：不可恢复时 409 `RUN_NOT_RESUMABLE` 经 HttpError 抛给调用方提示；成功后续跑
- * 输出经 Task 长订阅到达。这里不读响应内容、不按 Run 身份对账，也不管订阅：长订阅断开后的重连只由
+ * 输出经 Session 长订阅到达。这里不读响应内容、不按 Run 身份对账，也不管订阅：长订阅断开后的重连只由
  * 订阅恢复逻辑负责。会话内同时只允许一个恢复请求在途。
  */
 export function useBusinessResume(context: RuntimeSessionContext): BusinessResumeController {
@@ -28,7 +28,7 @@ export function useBusinessResume(context: RuntimeSessionContext): BusinessResum
     }
     const request = (async () => {
       try {
-        await resumeTask(context.taskId, { traceId: context.traceId });
+        await resumeSession(context.sessionId, { traceId: context.traceId });
       } catch (error) {
         if (error instanceof HttpError) {
           throw new UserFacingError(userErrorMessage(error, `继续运行失败（HTTP ${error.status}）`));

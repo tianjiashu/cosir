@@ -21,9 +21,7 @@ describe("single turn heading", () => {
     expect(projectTurnHeading(projectTurn([quiet, text], "settled", done), done, 8000)).toBeNull();
     expect(projectTurnHeading(projectTurn([{ ...text, text: "进展", finalReply: false }, text], "settled", done), done, null))
       .toMatchObject({ label: "用时 8秒", expandable: true });
-    for (const part of [{ ...quiet, status: "failed" as const }, { ...quiet, awaitingUser: true }]) {
-      expect(projectTurnHeading(projectTurn([part, text], "settled", done), done, 8000)?.expandable).toBe(true);
-    }
+    expect(projectTurnHeading(projectTurn([{ ...quiet, status: "failed" as const }, text], "settled", done), done, 8000)?.expandable).toBe(true);
     // 截断文本没有 finalReply，仍是可查看的内容，不能被当作普通完成回复。
     const truncated = outcome("completed", { endReason: "length" });
     expect(projectTurnHeading(projectTurn([{ ...text, finalReply: false }], "settled", truncated), truncated, 8000)?.expandable).toBe(true);

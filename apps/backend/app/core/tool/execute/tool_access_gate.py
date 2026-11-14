@@ -6,8 +6,9 @@
 在本模块，不在管线门面里平铺。
 
 职责边界：
-- 负责：解析工具定义、按 ``allowed_tool_names`` 做 Agent 级门禁、参数解码与校验，并把各类
-  拒绝的原因文案归一为面向模型的富文本观察。
+- 负责：解析工具定义、按 ``allowed_tool_names`` 做 Agent 级门禁、参数解码与校验（规则在
+  ``validation.call_arguments``，与其他需要业务参数的地方同源），并把各类拒绝的原因文案归一为
+  面向模型的富文本观察。
 - 不负责：隔离执行与硬超时强杀、输出预算（以上归 ``ToolHandlerRunner`` /
   ``ToolObservationBudget``）。
 """
@@ -16,8 +17,6 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 
 from app.config.logging.logger import log
-from app.core.llm_provider.message_codec import decode_tool_arguments
-from app.core.tool.call_intent import split_call_arguments
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.schemas import (
     ToolCall,
@@ -26,9 +25,7 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.tool_registry import ToolRegistry
-from app.core.tool.validation.arguments import (
-    validate_tool_arguments,
-)
+from app.core.tool.validation.call_arguments import CallArgumentsError, resolve_call_arguments
 
 
 @dataclass(frozen=True)
@@ -103,7 +100,7 @@ class ToolAccessGate:
 
         参数:
             call: 模型请求的工具调用，含工具名、原始参数串与调用 id。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）。
+            execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）。
             allowed_tool_names: 当前 Agent profile 允许运行的工具名；为 None 表示
                 调用方不增加 Agent 级门禁。
 
@@ -133,8 +130,8 @@ class ToolAccessGate:
             return ToolGateOutcome(
                 denial=tool_error(
                     tool.name,
-                    # 准入拒绝只给「停止调用」这一个信号：禁用来源（Task 类型规则、派生深度、用户
-                    # 关掉的工具组）与持续范围（本 Task / 本轮）由工具准入通知向模型说明，门禁不
+                    # 准入拒绝只给「停止调用」这一个信号：禁用来源（Session 类型规则、派生深度、用户
+                    # 关掉的工具组）与持续范围（本 Session / 本轮）由工具准入通知向模型说明，门禁不
                     # 复述来源，也不承诺「本轮之后就能用」；可用工具集也不回灌——模型本就持有工具
                     # 声明，回灌只会放大提示面。
                     f"tool is not allowed: {tool.name}. "
@@ -156,35 +153,11 @@ class ToolAccessGate:
             )
 
         try:
-            intent, arguments = split_call_arguments(decode_tool_arguments(call.arguments))
-        except ValueError as exc:
-            return ToolGateOutcome(
-                denial=tool_error(
-                    tool.name,
-                    "Invalid tool arguments. "
-                    f"{exc}. Supply intent and correct the arguments before retrying.",
-                    tool_call_id=call.call_id,
-                )
-            )
+            resolved = resolve_call_arguments(tool, call.arguments)
+        except CallArgumentsError as exc:
+            return ToolGateOutcome(denial=tool_error(tool.name, str(exc), tool_call_id=call.call_id))
 
-        validation = validate_tool_arguments(
-            arguments,
-            tool.parameters_schema,
-            tool.args_model,
-        )
-        if not validation.ok:
-            return ToolGateOutcome(
-                denial=tool_error(
-                    tool.name,
-                    f"invalid tool arguments: {validation.error}. "
-                    "This is deterministic, so fix the argument values/types per "
-                    "the tool's parameter schema and call again. The same "
-                    "arguments will always be rejected.",
-                    tool_call_id=call.call_id,
-                )
-            )
-
-        if validation.coercions:
+        if resolved.coercions:
             # 输入适配只还原无损形态（如 "30"→30），是模型未按声明类型传值的信号；
             # 只记字段与类型，不记参数值，避免命令/路径正文进入日志。
             log.warning(
@@ -200,10 +173,10 @@ class ToolAccessGate:
                                 "from_type": item.from_type,
                                 "to_type": item.to_type,
                             }
-                            for item in validation.coercions
+                            for item in resolved.coercions
                         ],
                     },
                 },
             )
 
-        return ToolGateOutcome(tool=tool, arguments=validation.arguments, intent=intent)
+        return ToolGateOutcome(tool=tool, arguments=resolved.arguments, intent=resolved.intent)

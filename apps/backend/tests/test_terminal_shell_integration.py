@@ -46,7 +46,7 @@ def terminal(request: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> A
     monkeypatch.setenv("ZDOTDIR", str(tmp_path))
     service = TerminalSessionService(on_sessions_changed=ignore_session_changes)
     runtime = service.start(
-        task_id=1, cwd=str(tmp_path), shell=shell,
+        session_id=1, cwd=str(tmp_path), shell=shell,
     )
     wait_for_integration(runtime)
     try:
@@ -59,7 +59,7 @@ class _Terminal:
     def __init__(self, service: TerminalSessionService, runtime: Any) -> None:
         self.service = service
         self.runtime = runtime
-        self.session_id: str = runtime.session_id
+        self.terminal_session_id: str = runtime.terminal_session_id
 
     def user_bytes(self, data: bytes) -> None:
         assert self.runtime.user_input(data) == "accepted"
@@ -182,19 +182,19 @@ def test_match_reports_running_command(terminal: _Terminal) -> None:
 
 
 def test_user_raw_input_and_resize(terminal: _Terminal) -> None:
-    service, session_id = terminal.service, terminal.session_id
-    assert service.require(session_id, 1).user_input(b"echo typed-by-user\r") == "accepted"
+    service, terminal_session_id = terminal.service, terminal.terminal_session_id
+    assert service.require(terminal_session_id, 1).user_input(b"echo typed-by-user\r") == "accepted"
     seen = terminal.read(wait=TerminalWait(until="match", pattern="^typed-by-user$",
                                            timeout_ms=5000))
     assert seen.wait_result["end_reason"] == "matched"
     assert "user typed lines" in seen.text
-    service.require(session_id, 1).resize(30, 100)
+    service.require(terminal_session_id, 1).resize(30, 100)
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        if geometry(service, session_id) == (30, 100):
+        if geometry(service, terminal_session_id) == (30, 100):
             break
         time.sleep(0.05)
-    assert geometry(service, session_id) == (30, 100)
+    assert geometry(service, terminal_session_id) == (30, 100)
     size = terminal.run_user("stty size")
     assert any(line.endswith("│30 100") for line in size.text.splitlines()), size.text
 

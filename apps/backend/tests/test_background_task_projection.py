@@ -7,8 +7,8 @@ from dataclasses import replace
 
 import pytest
 
-from app.assistant_transport.service.conversation_task_state_service import (
-    ConversationTaskStateService,
+from app.assistant_transport.service.conversation_state_service import (
+    ConversationStateService,
 )
 from app.assistant_transport.state.conversation_state_background_task import (
     project_background_tasks,
@@ -16,8 +16,8 @@ from app.assistant_transport.state.conversation_state_background_task import (
 )
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.placeholder_settlement import cancel_placeholders
-from app.models.conversation_task_context import ConversationTaskContextRecord
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
+from app.models.session_context import SessionContextRecord
 from app.service import depends
 from app.tools.tool_handler.terminal.command_results import command_results
 from tests.command_job_fakes import FakeCommandJob
@@ -122,12 +122,12 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
 ):
     """登记即可见；撤销出队后先收尾中，结算后为取消，且与冷重建一致。"""
     workspace = depends.get_workspace_crud().create("ws", str(tmp_path))
-    task = depends.get_task_crud().create(workspace.id, "task")
-    run = depends.get_conversation_run_crud().create(task.id, "running")
-    crud = depends.get_conversation_task_context_crud()
+    session = depends.get_session_crud().create(workspace.id, "session")
+    run = depends.get_run_crud().create(session.id, "running")
+    crud = depends.get_session_context_crud()
     crud.create(
-        ConversationTaskContextRecord(
-            task_id=task.id,
+        SessionContextRecord(
+            session_id=session.id,
             run_id=run.id,
             sequence=1,
             include_in_context=True,
@@ -144,22 +144,22 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
             turn=1,
         )
     )
-    service = ConversationTaskStateService()
-    assert service.get_state(task.id)["background_tasks"] == []
+    service = ConversationStateService()
+    assert service.get_state(session.id)["background_tasks"] == []
     work = command_results.register(
         "call-bg",
-        task_id=task.id,
+        session_id=session.id,
         run_id=run.id,
         label="build",
         job=FakeCommandJob(),
     )
-    service.refresh_background_results(task.id)
-    assert [entry["status"] for entry in service.get_state(task.id)["background_tasks"]] == [
+    service.refresh_background_results(session.id)
+    assert [entry["status"] for entry in service.get_state(session.id)["background_tasks"]] == [
         "running"
     ]
     crud.create(
-        ConversationTaskContextRecord(
-            task_id=task.id,
+        SessionContextRecord(
+            session_id=session.id,
             run_id=run.id,
             sequence=2,
             include_in_context=True,
@@ -170,43 +170,43 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
     )
     service.apply_planned(
         ToolCallStatusChangedEvent(
-            task_id=task.id,
+            session_id=session.id,
             run_id=run.id,
             tool_call_id="call-bg",
             status="pending",
             background=work,
         )
     )
-    hot = service.get_state(task.id)["background_tasks"]
+    hot = service.get_state(session.id)["background_tasks"]
     assert hot[0]["status"] == "running"
-    service.republish_from_canonical(task.id)
-    assert hot == service.get_state(task.id)["background_tasks"]
+    service.republish_from_canonical(session.id)
+    assert hot == service.get_state(session.id)["background_tasks"]
 
-    command_results.withdraw_calls(task.id, ["call-bg"])
-    service.refresh_background_results(task.id)
-    assert service.get_state(task.id)["background_tasks"][0]["status"] == "settling"
+    command_results.withdraw_calls(session.id, ["call-bg"])
+    service.refresh_background_results(session.id)
+    assert service.get_state(session.id)["background_tasks"][0]["status"] == "settling"
     monkeypatch.setattr(
         depends.get_conversation_event_projector(),
         "process",
         service.apply_planned,
     )
     assert cancel_placeholders(
-        task.id, ["call-bg"], "cancelled"
-    ) == frozenset({task.id})
-    hot = service.get_state(task.id)["background_tasks"]
+        session.id, ["call-bg"], "cancelled"
+    ) == frozenset({session.id})
+    hot = service.get_state(session.id)["background_tasks"]
     assert hot[0]["status"] == "cancelled" and hot[0]["endedAt"] is not None
-    service.republish_from_canonical(task.id)
-    assert hot == service.get_state(task.id)["background_tasks"]
+    service.republish_from_canonical(session.id)
+    assert hot == service.get_state(session.id)["background_tasks"]
 
 
 def test_withdrawn_rounds_are_not_listed(tmp_path, isolated_storage):
     """编辑撤回的轮次不进工作副本，看板自然不列；规则只在构造 part 时有一份。"""
     workspace = depends.get_workspace_crud().create("ws", str(tmp_path))
-    task = depends.get_task_crud().create(workspace.id, "task")
-    run = depends.get_conversation_run_crud().create(task.id, "completed")
-    crud = depends.get_conversation_task_context_crud()
-    assistant = ConversationTaskContextRecord(
-        task_id=task.id,
+    session = depends.get_session_crud().create(workspace.id, "session")
+    run = depends.get_run_crud().create(session.id, "completed")
+    crud = depends.get_session_context_crud()
+    assistant = SessionContextRecord(
+        session_id=session.id,
         run_id=run.id,
         sequence=1,
         include_in_context=True,
@@ -223,8 +223,8 @@ def test_withdrawn_rounds_are_not_listed(tmp_path, isolated_storage):
         turn=1,
     )
     crud.create(assistant)
-    placeholder = ConversationTaskContextRecord(
-        task_id=task.id,
+    placeholder = SessionContextRecord(
+        session_id=session.id,
         run_id=run.id,
         sequence=2,
         include_in_context=True,
@@ -261,5 +261,5 @@ def test_withdrawn_rounds_are_not_listed(tmp_path, isolated_storage):
             message={"role": "tool", "tool_call_id": "gone", "content": "placeholder"},
         )
     )
-    entries = ConversationTaskStateService().get_state(task.id)["background_tasks"]
+    entries = ConversationStateService().get_state(session.id)["background_tasks"]
     assert [entry["toolCallId"] for entry in entries] == ["kept"]

@@ -84,7 +84,7 @@ export function MessageDetail({
   const copy = () => copyText(text, {
     success: tab === "reasoning" ? "已复制思考内容" : tab === "content" ? "已复制内容" : "已复制 JSON",
     logEvent: "context_message_copy_failed",
-    logData: { taskId: message.task_id, sequence: message.sequence, tab },
+    logData: { sessionId: message.session_id, sequence: message.sequence, tab },
   });
   return (
     <section className="flex h-full min-h-0 flex-col" aria-label="消息详情">
@@ -106,9 +106,9 @@ export function MessageDetail({
             消息元信息
           </summary>
           <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 break-all">
-            <dt className="text-muted-foreground">Task / sequence</dt>
+            <dt className="text-muted-foreground">Session / sequence</dt>
             <dd className="font-mono">
-              {message.task_id} / {message.sequence}
+              {message.session_id} / {message.sequence}
             </dd>
             <dt className="text-muted-foreground">创建时间</dt>
             <dd>{formatTime(message.created_at, true)}</dd>

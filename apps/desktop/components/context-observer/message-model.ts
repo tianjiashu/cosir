@@ -78,7 +78,7 @@ export function messagePreview(message: ContextMessage): string {
   );
 }
 
-/** 只索引已加载消息；与后端查询范围一致，不宣称搜索整个任务。 */
+/** 只索引已加载消息；与后端查询范围一致，不宣称搜索整个会话。 */
 export function indexMessages(messages: ContextMessage[]) {
   return messages.map((message) => ({
     message,
@@ -184,7 +184,7 @@ export function cacheChanges(messages: ContextMessage[]): Map<number, number> {
   return result;
 }
 
-/** 工具结果与发起它的调用互相关联：`tool_call_id` 在 Task 内唯一（含继承来的记录），后台结果可能在后续回合才并入。 */
+/** 工具结果与发起它的调用互相关联：`tool_call_id` 在 Session 内唯一（含继承来的记录），后台结果可能在后续回合才并入。 */
 export function relatedMessages(
   message: ContextMessage,
   messages: ContextMessage[],

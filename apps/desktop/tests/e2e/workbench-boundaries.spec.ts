@@ -3,8 +3,8 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { seedState } from "./transport-fixtures";
 import { API_ORIGIN as origin } from "./e2e-env";
 
-const task = (task_id: number, workspace_id: number) => ({
-  task_id, workspace_id, title: `任务${task_id}`, task_type: "user",
+const session = (session_id: number, workspace_id: number) => ({
+  session_id, workspace_id, title: `会话${session_id}`, session_type: "user",
   created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
 });
 
@@ -18,11 +18,11 @@ async function fixture(page: Page, request: APIRequestContext) {
     workspace_id: id, name: `工作区${id}`, root_path: `/workspace/${id}`,
     created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
   })) }));
-  await page.route(`${origin}/workspaces/7/tasks`, route => route.fulfill({ json: [task(100, 7), task(101, 7)] }));
-  await page.route(`${origin}/workspaces/8/tasks`, route => route.fulfill({ json: [task(200, 8)] }));
+  await page.route(`${origin}/workspaces/7/sessions`, route => route.fulfill({ json: [session(100, 7), session(101, 7)] }));
+  await page.route(`${origin}/workspaces/8/sessions`, route => route.fulfill({ json: [session(200, 8)] }));
   for (const [id, workspace] of [[100, 7], [101, 7], [200, 8], [999, 8], [998, 7]]) {
-    await page.route(`${origin}/tasks/${id}`, route => route.fulfill({ json: task(id, workspace) }));
-    // 对话 state 与 Task 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
+    await page.route(`${origin}/sessions/${id}`, route => route.fulfill({ json: session(id, workspace) }));
+    // 对话 state 与 Session 长订阅由模拟后端持有：订阅需要常驻连接，路由夹具无法保持。
     await seedState(request, id, { title: "测试对话", messages: [], activity: null });
   }
 }
@@ -34,7 +34,7 @@ async function seedDrafts(page: Page) {
     const modulePath = "/lib/workbench/workbench-store.ts";
     const { useWorkbenchStore } = await import(modulePath);
     useWorkbenchStore.getState().openAgentConfigurationDraft(7, {
-      taskId: 100, toolCallId: "draft",
+      sessionId: 100, toolCallId: "draft",
       draft: { agent_id: "未保存Agent", role: "审查", description: "保留这份编辑", system_prompt: "检查代码" },
     });
   });
@@ -57,13 +57,13 @@ async function state(page: Page) {
 }
 
 const switchDialog = (page: Page) => page.getByRole("dialog");
-const taskRow = (page: Page, id: number) => page.getByRole("treeitem", { name: `任务${id}`, exact: true });
+const sessionRow = (page: Page, id: number) => page.getByRole("treeitem", { name: `会话${id}`, exact: true });
 
 test.beforeEach(async ({ page, request }) => fixture(page, request));
 
 test("窗口和侧栏变化限制实际宽度，End 和鼠标拖动均保留主区", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/tasks/100");
+  await page.goto("/sessions/100");
   await seedDrafts(page);
   const resize = page.getByRole("separator", { name: "调整工作台宽度" });
   await resize.focus();
@@ -103,8 +103,8 @@ test("窗口和侧栏变化限制实际宽度，End 和鼠标拖动均保留主�
   await page.screenshot({ path: testInfo.outputPath("bounded-workbench.png") });
 });
 
-test("收起入口保留编辑；切到其他工作区的任务不确认、不丢草稿，切回原样恢复", async ({ page }) => {
-  await page.goto("/tasks/100");
+test("收起入口保留编辑；切到其他工作区的会话不确认、不丢草稿，切回原样恢复", async ({ page }) => {
+  await page.goto("/sessions/100");
   await seedDrafts(page);
   await page.getByRole("textbox", { name: "描述", exact: true }).fill("新的草稿内容");
   await page.getByRole("button", { name: "收起工作台", exact: true }).click();
@@ -113,24 +113,24 @@ test("收起入口保留编辑；切到其他工作区的任务不确认、不�
   await page.getByRole("button", { name: /工作台，1 个标签，点击打开/ }).click();
   await expect(page.getByRole("textbox", { name: "描述", exact: true })).toHaveValue("新的草稿内容");
 
-  await taskRow(page, 200).click();
-  await expect(page).toHaveURL(/\/tasks\/200$/);
+  await sessionRow(page, 200).click();
+  await expect(page).toHaveURL(/\/sessions\/200$/);
   await expect(switchDialog(page)).toHaveCount(0);
   await expect(page.getByRole("complementary", { name: "工作台" })).toHaveCount(0);
   await expect(page.getByRole("tab", { name: /未保存Agent/ })).toHaveCount(0);
 
-  await taskRow(page, 100).click();
-  await expect(page).toHaveURL(/\/tasks\/100$/);
+  await sessionRow(page, 100).click();
+  await expect(page).toHaveURL(/\/sessions\/100$/);
   await expect(page.getByRole("tab", { name: /未保存Agent/ })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "描述", exact: true })).toHaveValue("新的草稿内容");
   expect(await state(page)).toEqual({ tabs: { 7: ["agent-config-draft:100:draft"] }, panel: "workbench" });
 });
 
-test("同工作区任务和配置页保活草稿，真正关闭仍确认", async ({ page }) => {
-  await page.goto("/tasks/100");
+test("同工作区会话和配置页保活草稿，真正关闭仍确认", async ({ page }) => {
+  await page.goto("/sessions/100");
   await seedDrafts(page);
-  await taskRow(page, 101).click();
-  await expect(page).toHaveURL(/\/tasks\/101$/);
+  await sessionRow(page, 101).click();
+  await expect(page).toHaveURL(/\/sessions\/101$/);
   await expect(switchDialog(page)).toHaveCount(0);
   await page.getByRole("button", { name: "系统配置", exact: true }).click();
   await expect(page).toHaveURL(/\/settings\//);
@@ -142,7 +142,7 @@ test("同工作区任务和配置页保活草稿，真正关闭仍确认", async
   expect((await state(page)).tabs[7]).toHaveLength(1);
 });
 
-test("新对话页选择其他工作区和命令面板跳转都不确认，各工作区的工作台互不影响", async ({ page }) => {
+test("新会话页选择其他工作区和命令面板跳转都不确认，各工作区的工作台互不影响", async ({ page }) => {
   await page.goto("/");
   await seedDrafts(page);
   await page.getByRole("button", { name: "选择工作区，当前 工作区7" }).click();
@@ -158,9 +158,9 @@ test("新对话页选择其他工作区和命令面板跳转都不确认，各�
   await page.getByRole("navigation", { name: "当前位置" }).click();
   const modifier = await page.evaluate(() => /mac/i.test(navigator.userAgent) ? "Meta" : "Control");
   await page.keyboard.press(`${modifier}+k`);
-  await page.getByRole("dialog", { name: "命令面板" }).getByRole("combobox").fill("任务100");
-  await page.getByRole("option", { name: /任务100/ }).click();
-  await expect(page).toHaveURL(/\/tasks\/100$/);
+  await page.getByRole("dialog", { name: "命令面板" }).getByRole("combobox").fill("会话100");
+  await page.getByRole("option", { name: /会话100/ }).click();
+  await expect(page).toHaveURL(/\/sessions\/100$/);
   await expect(page.getByRole("complementary", { name: "文件" })).toBeVisible();
   await page.getByRole("button", { name: /工作台，1 个标签，点击打开/ }).click();
   await expect(page.getByRole("tab", { name: /未保存Agent/ })).toBeVisible();
@@ -169,7 +169,7 @@ test("新对话页选择其他工作区和命令面板跳转都不确认，各�
 });
 
 test("切换工作台快捷键收起与展开当前工作区的工作台", async ({ page }) => {
-  await page.goto("/tasks/100");
+  await page.goto("/sessions/100");
   await seedDrafts(page);
   const modifier = await page.evaluate(() => /mac/i.test(navigator.userAgent) ? "Meta" : "Control");
   await page.keyboard.press(`${modifier}+Alt+KeyB`);
@@ -179,7 +179,7 @@ test("切换工作台快捷键收起与展开当前工作区的工作台", async
 });
 
 test("Agent 草稿标签直接反映草稿未保存状态", async ({ page }) => {
-  await page.goto("/tasks/100");
+  await page.goto("/sessions/100");
   await seedDrafts(page);
   const agent = page.getByRole("tab", { name: /未保存Agent/ });
   await expect(agent.locator(".sr-only")).toHaveText("未保存");

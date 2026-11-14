@@ -30,9 +30,9 @@ from app.models.message_metadata import ToolMessageMetadata
 class ModelStreamStateMachine:
     """每个模型请求一个实例；记录阶段和已发出身份，finish 在所有退出路径执行。"""
 
-    def __init__(self, task_id: int, run_id: int, step_id: str) -> None:
+    def __init__(self, session_id: int, run_id: int, step_id: str) -> None:
         self._emit = emit
-        self._task_id = task_id
+        self._session_id = session_id
         self._run_id = run_id
         self._step_id = step_id
         self._phase: ModelActivityPhase | None = None
@@ -114,7 +114,7 @@ class ModelStreamStateMachine:
             self._calls[call_id] = name
             self._emit(
                 ToolCallCreatedEvent(
-                    task_id=self._task_id,
+                    session_id=self._session_id,
                     run_id=self._run_id,
                     step_id=self._step_id,
                     tool_call_id=call_id,
@@ -131,7 +131,7 @@ class ModelStreamStateMachine:
             for call_id, raw in arguments.items():
                 intent, args = display_call_arguments(raw)
                 self._emit(ToolCallIntentEvent(
-                    task_id=self._task_id, run_id=self._run_id, step_id=self._step_id,
+                    session_id=self._session_id, run_id=self._run_id, step_id=self._step_id,
                     tool_call_id=call_id, intent=intent, args=args,
                 ))
         finally:
@@ -148,7 +148,7 @@ class ModelStreamStateMachine:
         for call_id, name in calls.items():
             self._emit(
                 ToolCallStatusChangedEvent(
-                    task_id=self._task_id,
+                    session_id=self._session_id,
                     run_id=self._run_id,
                     step_id=self._step_id,
                     tool_call_id=call_id,
@@ -167,7 +167,7 @@ class ModelStreamStateMachine:
         self._phase = phase
         self._emit(
             ModelActivityEvent(
-                task_id=self._task_id,
+                session_id=self._session_id,
                 run_id=self._run_id,
                 step_id=self._step_id,
                 phase=phase,
@@ -179,7 +179,7 @@ class ModelStreamStateMachine:
             return
         self._emit(
             AssistantTextDeltaEvent(
-                task_id=self._task_id,
+                session_id=self._session_id,
                 run_id=self._run_id,
                 step_id=self._step_id,
                 source_sequence=self._source_sequence,
@@ -197,7 +197,7 @@ class ModelStreamStateMachine:
         self._flush_pending()
         self._emit(
             AssistantPartClosedEvent(
-                task_id=self._task_id,
+                session_id=self._session_id,
                 run_id=self._run_id,
                 step_id=self._step_id,
                 source_sequence=self._source_sequence,

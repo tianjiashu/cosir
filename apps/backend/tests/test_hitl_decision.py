@@ -18,13 +18,17 @@ from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolCall, ToolDefinition
+from app.core.workflow import decision_expiry
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.message_queue.task_message import (
+from app.core.workflow.message_queue.session_message import (
+    AgentMessageBody,
     DecisionBody,
     NoticeBody,
-    TaskMessage,
+    RunLaunch,
+    SessionMessage,
+    UserInputBody,
 )
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
@@ -32,6 +36,7 @@ from app.core.workflow.node_helper.tool_observation_projection import (
     settle_decision_observation,
 )
 from app.core.workflow.nodes import prepare_input_node
+from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.enums.react_route import ReactRoute
 from app.models.message_metadata import ToolMessageMetadata
 from tests.runtime_context_stub import runtime_stub
@@ -58,16 +63,16 @@ def _definition(name: str, *, hitl: bool = False) -> ToolDefinition:
     )
 
 
-def _decision(decision: str = "approve", *, message_id: int | None = 5) -> TaskMessage:
-    return TaskMessage.of(
+def _decision(decision: str = "approve", *, message_id: int | None = 5) -> SessionMessage:
+    return SessionMessage.of(
         DecisionBody(tool_call_id="call-hitl", tool_name="hitl_tool", decision=decision),
         message_id=message_id,
     )
 
 
-def _notice(text: str, message_id: int) -> TaskMessage:
+def _notice(text: str, message_id: int) -> SessionMessage:
     """外部队列里的通知行。"""
-    return TaskMessage.of(
+    return SessionMessage.of(
         NoticeBody(content=text, notice_kind="backend_restarted"), message_id=message_id
     )
 
@@ -99,11 +104,15 @@ class _Context:
     def tool_result_metadata(self, _tool_call_id: str) -> ToolMessageMetadata | None:
         return self.placeholder
 
-    def update_tool_result_metadata(self, tool_call_id, metadata, *, session=None):
+    def update_tool_result_metadata(self, tool_call_id, metadata, *, db=None):
         self.updated.append((tool_call_id, metadata))
-        self.update_sessions.append(session)
+        self.update_sessions.append(db)
         self.placeholder = metadata
         return metadata
+
+    def awaiting_decision_calls(self) -> list[tuple[str, str]]:
+        awaiting = self.placeholder is not None and self.placeholder.awaiting_decision
+        return [("call-hitl", "hitl_tool")] if awaiting else []
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +120,7 @@ class _Context:
 # ---------------------------------------------------------------------------
 
 
-def test_task_message_kind_follows_body_and_roundtrips_through_storage() -> None:
+def test_session_message_kind_follows_body_and_roundtrips_through_storage() -> None:
     message = _decision("reject")
     assert (message.kind, message.project_to_transport) == ("user_decision", False)
 
@@ -122,7 +131,7 @@ def test_task_message_kind_follows_body_and_roundtrips_through_storage() -> None
         delivery="immediate",
         project_to_transport=False,
     )
-    restored = TaskMessage.of_model(row)
+    restored = SessionMessage.of_model(row)
     assert restored.body == message.body
     assert restored.id == 9
 
@@ -162,7 +171,7 @@ def test_mailbox_take_first_removes_only_the_first_match() -> None:
     for message in (_notice("a", 11), first, second):
         mailbox.post(message)
 
-    def is_decision(message: TaskMessage) -> bool:
+    def is_decision(message: SessionMessage) -> bool:
         return message.kind == "user_decision"
 
     assert mailbox.take_first(is_decision) is first
@@ -256,7 +265,7 @@ async def test_single_hitl_call_runs_and_receives_the_decision() -> None:
 
 def test_awaiting_placeholder_projects_pending_and_suspends() -> None:
     observation = tool_awaiting_decision("hitl_tool", "c1")
-    event = terminal_event(observation, task_id=1, run_id=2, step_id="step-1", tool_call_id="c1")
+    event = terminal_event(observation, session_id=1, run_id=2, step_id="step-1", tool_call_id="c1")
 
     assert observation.suspend is True
     assert "awaiting the user's decision" in observation.content
@@ -289,7 +298,7 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
     base = ("messages", 0, "parts", 0)
     for status in ("pending", "completed"):
         mutations = plan_tool_call_status_changed(
-            ToolCallStatusChangedEvent(task_id=1, run_id=2, tool_call_id="c1", status=status),
+            ToolCallStatusChangedEvent(session_id=1, run_id=2, tool_call_id="c1", status=status),
             state,
         )
         assert {m.path: m.value for m in mutations}[(*base, "status")] == status
@@ -301,7 +310,7 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _prepare_rc(acked: dict[int, TaskMessage], decision_mode: str | None = "execute"):
+def _prepare_rc(acked: dict[int, SessionMessage], decision_mode: str | None = "execute"):
     tool = _definition("hitl_tool", hitl=True)
     if decision_mode != "execute":
         tool = dataclasses.replace(tool, user_decision=decision_mode)
@@ -355,8 +364,8 @@ async def test_accepting_a_decision_claims_the_placeholder_in_the_same_transacti
 
     [(call_id, metadata)] = context.updated
     assert (call_id, metadata.status) == ("call-hitl", "running")
-    [session] = context.update_sessions
-    assert session is not None  # 加入了确认的事务，而不是提交后再单独写
+    [db] = context.update_sessions
+    assert db is not None  # 加入了确认的事务，而不是提交后再单独写
     [event] = emitted
     assert (event.tool_call_id, event.status) == ("call-hitl", "running")
 
@@ -385,13 +394,67 @@ async def test_reply_tool_approval_goes_to_the_model_not_the_tool() -> None:
     decision = _decision("approve")
     rc = _prepare_rc({5: decision}, decision_mode="reply")
     rc.mailbox.post(decision)
-    context = _Context()
+    context = _Context(placeholder=ToolMessageMetadata(status="pending"))
 
     result = await _prepare(rc, context)
 
     assert result["next_node"] == ReactRoute.MODEL
     [written] = context.added
     assert "<user_decision" in written["message"]["content"]
+
+
+@pytest.mark.usefixtures("isolated_storage")
+async def test_reply_decision_settles_the_placeholder_with_the_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``reply`` 类没有执行结果：并入决定的同一事务把占位推到 completed，载荷并进展示数据。"""
+    emitted: list[Any] = []
+    monkeypatch.setattr(prepare_input_node, "emit", emitted.append)
+    decision = SessionMessage.of(
+        DecisionBody(
+            tool_call_id="call-hitl",
+            tool_name="hitl_tool",
+            decision="approve",
+            data={"answers": {"Q?": "A"}},
+            reply='The user answered: "Q?"="A".',
+        ),
+        message_id=5,
+    )
+    rc = _prepare_rc({5: decision}, decision_mode="reply")
+    rc.mailbox.post(decision)
+    context = _Context(
+        placeholder=ToolMessageMetadata(status="pending", display_data={"kind": "probe"})
+    )
+
+    await _prepare(rc, context)
+
+    [written] = context.added
+    assert 'The user answered: "Q?"="A".' in written["message"]["content"]
+    assert "decision: approve" not in written["message"]["content"]
+    [(call_id, metadata)] = context.updated
+    assert (call_id, metadata.status) == ("call-hitl", "completed")
+    assert metadata.display_data == {
+        "kind": "probe", "decision": "approve", "answers": {"Q?": "A"},
+    }
+    [db] = context.update_sessions
+    assert db is not None
+    [event] = emitted
+    assert (event.status, event.display_data) == ("completed", metadata.display_data)
+
+
+@pytest.mark.usefixtures("isolated_storage")
+@pytest.mark.parametrize("status", ["completed", "cancelled"])
+async def test_late_reply_decision_is_acked_but_not_written(status: str) -> None:
+    """决定入口校验通过不代表并入时仍在等待：占位已结算（已作答、已作废）的决定只确认、不交给模型。"""
+    decision = _decision("approve")
+    rc = _prepare_rc({5: decision}, decision_mode="reply")
+    rc.mailbox.post(decision)
+    context = _Context(placeholder=ToolMessageMetadata(status=status))
+
+    result = await _prepare(rc, context)
+
+    assert result["next_node"] == ReactRoute.MODEL
+    assert context.added == [] and context.updated == []
 
 
 @pytest.mark.usefixtures("isolated_storage")
@@ -480,7 +543,7 @@ def test_context_finds_call_and_updates_only_tool_result_metadata() -> None:
     manager = RuntimeMessageContextManager.__new__(RuntimeMessageContextManager)
     manager._used_call_ids = set()
     manager._response_call_ids = {}
-    manager.current_task_id = 1
+    manager.current_session_id = 1
     manager.context_store = SimpleNamespace(
         replace_message=lambda record, **_kw: replaced.append(record)
     )
@@ -516,7 +579,7 @@ def test_decision_result_without_display_keeps_the_placeholder_card() -> None:
     manager._used_call_ids = set()
 
     manager._response_call_ids = {}
-    manager.current_task_id = 1
+    manager.current_session_id = 1
     manager.context_store = SimpleNamespace(replace_message=lambda _record, **_kw: None)
     manager._entries = [
         ContextEntry(
@@ -535,3 +598,176 @@ def test_decision_result_without_display_keeps_the_placeholder_card() -> None:
     )
 
     assert (written.status, written.display_data) == ("completed", {"kind": "probe"})
+
+
+# ---------------------------------------------------------------------------
+# 等用户回应的决定（提问）：用户说了别的话就作废
+# ---------------------------------------------------------------------------
+
+
+def _user_input(message_id: int = 7) -> SessionMessage:
+    body = UserInputBody(
+        text="换个做法",
+        launch=RunLaunch(model_config_id="test/m1"),
+        presentation=UserInputPresentation(text="换个做法"),
+    )
+    return SessionMessage.of(body, message_id=message_id)
+
+
+def _question_rc(acked: dict[int, SessionMessage], lifetime: str = "until_user_input"):
+    rc = _prepare_rc(acked, decision_mode="reply")
+    rc.tool_definitions["hitl_tool"] = dataclasses.replace(
+        rc.tool_definitions["hitl_tool"], decision_lifetime=lifetime
+    )
+    return rc
+
+
+@pytest.fixture
+def expiry_events(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    events: list[Any] = []
+    monkeypatch.setattr(decision_expiry, "emit", events.append)
+    return events
+
+
+@pytest.mark.usefixtures("isolated_storage")
+async def test_new_user_message_expires_the_pending_question_and_tells_the_model(
+    expiry_events: list[Any],
+) -> None:
+    """用户没答、直接发了消息：提问作废为「未作答」，通知排在这条消息前面写入。"""
+    message = _user_input()
+    rc = _question_rc({7: message})
+    rc.mailbox.post(message)
+    context = _Context(placeholder=ToolMessageMetadata(status="pending"))
+
+    await _prepare(rc, context)
+
+    [(call_id, metadata)] = context.updated
+    assert (call_id, metadata.status, metadata.error) == ("call-hitl", "cancelled", "未作答")
+    [event] = expiry_events
+    assert (event.tool_call_id, event.status) == ("call-hitl", "cancelled")
+    notice, written = context.added
+    assert "tool_call_id=call-hitl" in notice["message"]["content"]
+    assert "the user sent a new message instead" in notice["message"]["content"]
+    assert "换个做法" in str(written["message"]["content"])
+
+
+@pytest.mark.usefixtures("isolated_storage")
+async def test_answer_queued_before_the_message_still_counts(expiry_events: list[Any]) -> None:
+    """决定在先：提问结算为已作答，随后的消息照常开新回合，没有可作废的提问。"""
+    decision, message = _decision("approve"), _user_input()
+    rc = _question_rc({5: decision, 7: message})
+    rc.mailbox.post(decision)
+    rc.mailbox.post(message)
+    context = _Context(placeholder=ToolMessageMetadata(status="pending"))
+
+    await _prepare(rc, context)
+
+    assert [metadata.status for _, metadata in context.updated] == ["completed"]
+    assert expiry_events == []
+    assert len(context.added) == 2  # 决定与用户消息，没有作废通知
+
+
+@pytest.mark.usefixtures("isolated_storage")
+async def test_answer_queued_after_the_message_is_dropped(expiry_events: list[Any]) -> None:
+    """消息在先：提问先作废，随后并入的决定发现占位已不在等待，只确认、不写入。"""
+    message, decision = _user_input(), _decision("approve", message_id=9)
+    rc = _question_rc({7: message, 9: decision})
+    rc.mailbox.post(message)
+    rc.mailbox.post(decision)
+    context = _Context(placeholder=ToolMessageMetadata(status="pending"))
+
+    await _prepare(rc, context)
+
+    assert [metadata.status for _, metadata in context.updated] == ["cancelled"]
+    assert len(context.added) == 2  # 作废通知与用户消息
+    assert all("<user_decision" not in str(row["message"]["content"]) for row in context.added)
+
+
+@pytest.mark.usefixtures("isolated_storage")
+async def test_decision_awaiting_an_explicit_decision_survives_a_new_user_message(expiry_events: list[Any]) -> None:
+    """一直等到用户决定的等待（交接）不因用户发了新消息而结束。"""
+    message = _user_input()
+    rc = _question_rc({7: message}, lifetime="until_decided")
+    rc.mailbox.post(message)
+    context = _Context(placeholder=ToolMessageMetadata(status="pending"))
+
+    await _prepare(rc, context)
+
+    assert context.updated == [] and expiry_events == []
+    assert len(context.added) == 1
+
+
+@pytest.mark.usefixtures("isolated_storage")
+async def test_a_message_from_another_agent_does_not_expire_the_question(
+    monkeypatch: pytest.MonkeyPatch, expiry_events: list[Any]
+) -> None:
+    """子 Agent 的汇报、别的会话发来的消息与用户答不答无关：提问照常等回答，不通知模型。
+
+    它们同样会开启回合；曾经只要是开回合的输入就作废提问，卡片会在用户没操作时消失。
+    """
+    monkeypatch.setattr(prepare_input_node, "emit", lambda _event: None)
+    body = AgentMessageBody(
+        text="审查完成",
+        launch=RunLaunch(model_config_id="test/m1"),
+        source=MessageSource(session_id=9, name="审查"),
+    )
+    message = SessionMessage.of(body, message_id=7)
+    rc = _question_rc({7: message})
+    rc.mailbox.post(message)
+    context = _Context(placeholder=ToolMessageMetadata(status="pending"))
+
+    await _prepare(rc, context)
+
+    assert context.updated == [] and expiry_events == []
+    [written] = context.added
+    assert "审查完成" in str(written["message"]["content"])
+
+
+@pytest.mark.usefixtures("isolated_storage")
+def test_asking_again_keeps_only_the_new_question(expiry_events: list[Any]) -> None:
+    """模型又问了一次：``keep`` 里的新调用不动，更早的作废。"""
+
+    class _Two(_Context):
+        def awaiting_decision_calls(self) -> list[tuple[str, str]]:
+            return [("call-old", "hitl_tool"), ("call-new", "hitl_tool")]
+
+    rc = _question_rc({})
+    context = _Two(placeholder=ToolMessageMetadata(status="pending"))
+
+    with execution_scope(rc, context):
+        expired = decision_expiry.expire_decisions(
+            step_id="step-1", keep=frozenset({"call-new"})
+        )
+
+    assert expired == ["call-old"]
+    assert [call_id for call_id, _ in context.updated] == ["call-old"]
+
+
+def test_context_lists_the_calls_still_awaiting_the_user() -> None:
+    """作废与未了结事项提醒都要问 context：哪些调用还在等用户。"""
+    from app.core.context.context_entry import ContextEntry
+    from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
+
+    def tool_row(call_id: str, status: str, **metadata: Any) -> ContextEntry:
+        return ContextEntry(
+            {"role": "tool", "tool_call_id": call_id, "content": "awaiting"},
+            1, 4, metadata=ToolMessageMetadata(status=status, **metadata), turn=1,
+        )
+
+    def call(call_id: str) -> dict[str, Any]:
+        return {**_CALL, "id": call_id}
+
+    manager = RuntimeMessageContextManager.__new__(RuntimeMessageContextManager)
+    calls = [call("call-hitl"), call("call-done"), call("call-inherited")]
+    manager._entries = [
+        ContextEntry({"role": "assistant", "content": None, "tool_calls": calls}, 1, 3, turn=1),
+        tool_row("call-hitl", "pending"),
+        tool_row("call-done", "completed"),
+        # 继承来的副本（没有本地 Run）不能作出决定，不算在等。
+        ContextEntry(
+            {"role": "tool", "tool_call_id": "call-inherited", "content": "awaiting"},
+            None, 5, metadata=ToolMessageMetadata(status="pending"), turn=1,
+        ),
+    ]
+
+    assert manager.awaiting_decision_calls() == [("call-hitl", "hitl_tool")]

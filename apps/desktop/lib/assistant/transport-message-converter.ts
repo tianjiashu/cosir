@@ -180,7 +180,7 @@ function convertToolCallPart(part: TransportToolCallPart): ThreadMessage["conten
       ? part.error || "已取消"
       : backendStatus === "failed" ? part.error || "执行失败" : null,
     errorCode: part.errorCode ?? null,
-    childTaskId: part.child_task_id,
+    childSessionId: part.child_session_id,
     agent_role: part.agent_role,
     background: part.background !== undefined,
     startedAt: part.startedAt ?? undefined,

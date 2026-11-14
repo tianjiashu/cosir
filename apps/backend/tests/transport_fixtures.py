@@ -11,7 +11,7 @@ from typing import Any
 
 from app.assistant_transport.projection.user_input_projection import build_presentation_parts
 from app.core.events import InputConsumedEvent
-from app.core.workflow.message_queue.task_message import Delivery
+from app.core.workflow.message_queue.session_message import Delivery
 from app.models.conversation_input import UserInputPresentation
 
 
@@ -34,7 +34,7 @@ def queue_user_input(
 
 
 def consumed(
-    task_id: int,
+    session_id: int,
     run_id: int,
     message_id: int,
     presentation: UserInputPresentation,
@@ -44,7 +44,7 @@ def consumed(
     """用户输入总开一个新回合：默认回合号取消息身份（夹具里每条输入一个回合）；途中来信由调用方
     传它所在回合的号。"""
     return InputConsumedEvent(
-        task_id=task_id,
+        session_id=session_id,
         run_id=run_id,
         message_id=message_id,
         presentation=presentation,

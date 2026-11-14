@@ -8,7 +8,7 @@
 因此必须在 ``app`` 定义之后再导入这些模块，否则会产生未初始化引用。
 
 注意：触发域路由注册时**必须**使用 ``importlib.import_module`` 而非
-``import app.api.tasks_api`` 这类语句。后者会把顶层包名 ``app`` 绑定到当前模块的全局
+``import app.api.sessions_api`` 这类语句。后者会把顶层包名 ``app`` 绑定到当前模块的全局
 命名空间，覆盖掉本模块创建的 FastAPI 实例，导致后续域路由文件通过
 ``from app.app import app`` 取到的是包模块而非 FastAPI 实例。
 """
@@ -40,7 +40,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=[
-        "X-Cosir-Task-Id",
+        "X-Cosir-Session-Id",
         "X-Cosir-Thread-Id",
         "Accept-Ranges",
         "Content-Range",
@@ -60,8 +60,8 @@ install_request_validation_error_handler(app)
 #
 # 必须使用 importlib.import_module 而非 ``import app.api.xxx``：后者会把顶层包名
 # ``app`` 绑定到本模块全局命名空间，覆盖此处创建的 FastAPI 实例。
-importlib.import_module("app.api.tasks_api")
-importlib.import_module("app.api.task_feed_api")
+importlib.import_module("app.api.sessions_api")
+importlib.import_module("app.api.session_feed_api")
 importlib.import_module("app.api.workspaces_api")
 importlib.import_module("app.api.workspace_files_api")
 importlib.import_module("app.api.configuration.models")
@@ -77,4 +77,4 @@ importlib.import_module("app.api.host_link_api")
 importlib.import_module("app.api.browser_api")
 importlib.import_module("app.api.attachments_api")
 importlib.import_module("app.api.tools_api")
-importlib.import_module("app.api.assistant_transport_api")
+importlib.import_module("app.assistant_transport.api")

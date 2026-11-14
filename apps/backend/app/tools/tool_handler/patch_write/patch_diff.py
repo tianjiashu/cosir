@@ -18,11 +18,10 @@ class FileDiffResult:
     """单个文件应用前后的内容快照与状态。
 
     参数:
-        path: 文件相对路径（Move 时为源路径）。
-        status: 变更状态，取值 ``modified`` / ``added`` / ``deleted`` / ``moved``。
+        path: 文件相对路径。
+        status: 变更状态，取值 ``modified`` / ``added``（删除与移动走终端，没有文件工具产出）。
         before: 应用前的内容（Add 传空字符串）。
-        after: 应用后的内容（Delete 传空字符串）。
-        new_path: Move 的目标路径；其它状态为 None。
+        after: 应用后的内容。
 
     返回:
         无。
@@ -38,7 +37,6 @@ class FileDiffResult:
     status: str
     before: str
     after: str
-    new_path: str | None = None
 
 
 def _to_diff_lines(text: str) -> list[str]:
@@ -67,7 +65,7 @@ def format_unified_diff(old_text: str, new_text: str, path: str) -> str:
 
     参数:
         old_text: 应用前的内容（Add 传空字符串）。
-        new_text: 应用后的内容（Delete 传空字符串）。
+        new_text: 应用后的内容。
         path: 文件相对路径，用于 diff 头 ``a/{path}`` / ``b/{path}``。
 
     返回:
@@ -101,8 +99,7 @@ def format_git_diff(result: FileDiffResult) -> str:
         result: 文件变更前后的完整快照与状态。
 
     返回:
-        以 ``diff --git`` 开头的 Git 风格 patch_write。文本未变化时返回空字符串；
-        Move 返回 rename 元数据而不生成伪造的逐行 hunk。
+        以 ``diff --git`` 开头的 Git 风格 patch_write。文本未变化时返回空字符串。
 
     异常:
         无。
@@ -114,25 +111,14 @@ def format_git_diff(result: FileDiffResult) -> str:
         该结果只用于 UI 展示，不携带完整文件正文，也不承担回退或审计职责。
     """
 
-    old_path = result.path
-    new_path = result.new_path or result.path
-    git_header = f"diff --git a/{old_path} b/{new_path}"
-
-    if result.status == "moved":
-        return "\n".join(
-            [
-                git_header,
-                "similarity index 100%",
-                f"rename from {old_path}",
-                f"rename to {new_path}",
-            ]
-        )
+    path = result.path
+    git_header = f"diff --git a/{path} b/{path}"
 
     if result.before == result.after:
         return ""
 
-    old_label = "/dev/null" if result.status == "added" else f"a/{old_path}"
-    new_label = "/dev/null" if result.status == "deleted" else f"b/{new_path}"
+    old_label = "/dev/null" if result.status == "added" else f"a/{path}"
+    new_label = f"b/{path}"
     body = "".join(
         difflib.unified_diff(
             _to_diff_lines(result.before),
@@ -168,9 +154,8 @@ def build_diff_stats(results: list[FileDiffResult]) -> dict:
 
     返回:
         结构化统计字典：``total_files`` / ``total_insertions`` / ``total_deletions`` /
-        ``files[]``（``path`` / ``status`` / ``insertions`` / ``deletions`` /
-        ``new_path``）。``insertions`` 计 ``+`` 行数，``deletions`` 计 ``-`` 行数
-        （均不含 ``@@`` 与上下文行）；Move 计 0/0。
+        ``files[]``（``path`` / ``status`` / ``insertions`` / ``deletions``）。``insertions`` 计
+        ``+`` 行数，``deletions`` 计 ``-`` 行数（均不含 ``@@`` 与上下文行）。
 
     异常:
         无。
@@ -183,24 +168,15 @@ def build_diff_stats(results: list[FileDiffResult]) -> dict:
     total_insertions = 0
     total_deletions = 0
     for result in results:
-        if result.status == "deleted":
-            # 整文件删除计 1 次删除；不依赖回退正文行数，避免大文件/二进制删除读盘。
-            insertions = 0
-            deletions = 1
-        elif result.status == "moved":
-            insertions = 0
-            deletions = 0
-        else:
-            diff = format_unified_diff(result.before, result.after, result.path)
-            insertions = _count_added(diff)
-            deletions = _count_removed(diff)
+        diff = format_unified_diff(result.before, result.after, result.path)
+        insertions = _count_added(diff)
+        deletions = _count_removed(diff)
         files.append(
             {
                 "path": result.path,
                 "status": result.status,
                 "insertions": insertions,
                 "deletions": deletions,
-                "new_path": result.new_path,
             }
         )
         total_insertions += insertions

@@ -1,10 +1,10 @@
 """list_directory 工具实现。
 
 本模块只承载 list_directory 这一个工具。列出项目内目录条目（名称 / 类型 /
-路径），路径安全委托 ``security.ProjectPathResolver``。
+路径），路径安全委托 ``security.PathResolver.resolve_read_scope``。
 
 设计边界：
-- 路径安全委托 ``security.ProjectPathResolver``，不内联路径规则。
+- 路径安全委托 ``security.PathResolver.resolve_read_scope``，不内联路径规则。
 - 只列目录，不读文件内容、不写文件。
 """
 
@@ -99,7 +99,7 @@ class ListDirectoryTool(HandlerBase):
                 ``include_hidden`` 控制）。``os.scandir`` 仅列直接子项，故 glob 只按条目名
                 匹配（带目录前缀的模式无意义）。与 ``include_hidden`` 独立叠加
                 （先按可见性过滤，再按本参数白名单筛选）。
-            execution_context: 本次执行的运行时边界（任务 / 工作区 / 根路径）；
+            execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）；
                 由执行链在执行期强制注入，handler 契约必须接受此 kwarg。
                 本工具只读，但解析相对路径仍需工作区根，故消费其 ``workspace_root``。
 
@@ -119,26 +119,9 @@ class ListDirectoryTool(HandlerBase):
         if path == "":
             path = ""
         root = execution_context.workspace_root
-        resolver = PathResolver(root)
-        device_error = resolver.blocked_device_reason(path)
-        if device_error:
-            return tool_error(
-                self.name,
-                device_error,
-            )
-        resolved, error = resolver.resolve_without_boundary(path)
+        resolved, error = PathResolver(root).resolve_read_scope(path)
         if resolved is None:
-            return tool_error(
-                self.name,
-                f"could not list the directory: {error}. "
-                "Provide a valid directory path.",
-            )
-        device_error = resolver.blocked_device_reason(path, resolved)
-        if device_error:
-            return tool_error(
-                self.name,
-                device_error,
-            )
+            return tool_error(self.name, f"could not list the directory: {error}.")
         if not resolved.exists():
             return tool_error(
                 self.name,

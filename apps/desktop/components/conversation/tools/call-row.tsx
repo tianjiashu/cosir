@@ -21,19 +21,19 @@ import { CallElapsed } from "./call-elapsed";
 import { ToolIcon } from "./tool-icons";
 
 export type CallRowProps = {
-  /** 拥有该调用的任务：工具取消、决定与面板都按 Task 寻址，开合状态也按 Task 分桶。 */
+  /** 拥有该调用的会话：工具取消、决定与面板都按 Session 寻址，开合状态也按 Session 分桶。 */
   /** 上层过程/分组是否可见，不影响独立弹层。 */
   visible?: boolean;
   inherited?: boolean;
-  taskId: number;
+  sessionId: number;
   toolCallId: string;
   toolName: string;
   args: Record<string, unknown>;
   artifact: ToolArtifact;
   /** 只读展示面（子 Agent 阅读器、后台看板）不提供写入交互。 */
   interactive?: boolean;
-  /** 用户已请求停止整个 Task 的当前活动，工具级停止入口随之收起。 */
-  taskCancelling?: boolean;
+  /** 用户已请求停止整个 Session 的当前活动，工具级停止入口随之收起。 */
+  sessionCancelling?: boolean;
 };
 
 const ROW_CLASS = "flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-1.5 -mx-1.5 py-0.5 text-left text-2sm";
@@ -44,6 +44,7 @@ const CLICKABLE_ROW_CLASS = "hover:bg-muted cursor-pointer";
  * 行只说「在做什么」和「出了问题」：运行中标题扫光（`projectCallStatus`），跑过 3 秒标题后出现时长，成功不说话，异常按工具失败、取消、
  * 等你操作、实体异常（视图的 `status`）的优先级出现在元信息。
  *
+ * 等你操作时例外：视图给了等待卡片（`CallPresentation.awaiting`，交接、提问）就原地画成卡片，决定之后变回这一行。
  * 元信息与展开体由 kind 视图注册表按 `display_data.kind` 给出（没有 kind 时只有标题与状态）；已有结构化部分
  * 结果仍可展开。归侧栏的后台工作没有详情与操作，整行是定位到看板的按钮。
  * 可展开时整行是折叠按钮，视图给的行尾动作渲染在按钮之外（避免按钮嵌套），悬停范围因此放在外层；开合记在
@@ -55,23 +56,28 @@ export const CallRow = memo(function CallRow(props: CallRowProps) {
 
 /** 活调用才订阅后台执行；继承记录复用同一个行视图与折叠状态。 */
 function OwnedCallRow(props: CallRowProps) {
-  const workStatus = useBackgroundTasksStore(state => state.tasks[props.taskId]?.find(entry => entry.toolCallId === props.toolCallId)?.status);
+  const workStatus = useBackgroundTasksStore(state => state.sessions[props.sessionId]?.find(entry => entry.toolCallId === props.toolCallId)?.status);
   return <CallRowContent {...props} workStatus={workStatus} />;
 }
 
-function CallRowContent({ taskId, toolCallId, toolName, args, artifact, interactive = true, inherited = false, taskCancelling = false, visible = true, workStatus }: CallRowProps & Pick<CallViewContext, "workStatus">) {
+function CallRowContent({ sessionId, toolCallId, toolName, args, artifact, interactive = true, inherited = false, sessionCancelling = false, visible = true, workStatus }: CallRowProps & Pick<CallViewContext, "workStatus">) {
   const status = artifact.backendStatus;
   const unfinished = status === "pending" || status === "running";
   const failed = status === "failed";
   const cancelled = status === "cancelled";
-  const context: CallViewContext = { taskId, toolCallId, artifact, args, interactive, inherited, taskCancelling, workStatus };
+  const context: CallViewContext = { sessionId, toolCallId, toolName, artifact, args, interactive, inherited, sessionCancelling, workStatus };
   const resolved = resolveCallView(context);
   const detail = resolved?.detail;
   const expandable = detail !== undefined;
   const defaultOpen = detail?.defaultOpen ?? false;
-  const [open, setOpen] = useDisclosure(taskId, callKey(toolCallId), defaultOpen);
+  const [open, setOpen] = useDisclosure(sessionId, callKey(toolCallId), defaultOpen);
   const collapsibleRef = useRef<HTMLDivElement>(null);
   const lockScroll = useScrollLock(collapsibleRef, DISCLOSURE_ANIMATION_MS);
+
+  // 等你操作且视图给了卡片：就地画卡片，取代这一行。
+  if (artifact.awaitingUser && resolved?.awaiting) {
+    return <div data-tool-call-id={toolCallId} data-tool-status={status} className="min-w-0">{resolved.awaiting()}</div>;
+  }
 
   // 标题与 `turn-layout.callTitle` 同源：都按工具目录从参数算出。
   const { title, target } = toolHeading(toolName, args, artifact.intent);
@@ -114,7 +120,7 @@ function CallRowContent({ taskId, toolCallId, toolName, args, artifact, interact
       type="button"
       data-slot="call-row"
       className={cn(ROW_CLASS, CLICKABLE_ROW_CLASS)}
-      onClick={() => useConversationAsideStore.getState().revealBackground(taskId, toolCallId)}
+      onClick={() => useConversationAsideStore.getState().revealBackground(sessionId, toolCallId)}
     >
       <span className="sr-only">在后台任务中查看：</span>
       {contents}

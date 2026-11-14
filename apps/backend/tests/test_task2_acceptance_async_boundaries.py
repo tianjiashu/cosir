@@ -1,4 +1,4 @@
-"""Task 2 final-acceptance regressions for async boundaries and finalization failures."""
+"""Session 2 final-acceptance regressions for async boundaries and finalization failures."""
 
 from __future__ import annotations
 
@@ -9,15 +9,15 @@ from typing import Any
 import pytest
 
 import app.lifespan as lifespan_module
-from app.core.workflow.cancel.conversation_run_cancellation_registry import cancellation_registry
-from app.models.enums.conversation_run_status import ConversationRunStatus
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
+from app.models.enums.run_status import RunStatus
 
 _RUN_ID = 7001
 
 
 class _ThreadCheckedRunService:
-    def __init__(self, *, status: str = ConversationRunStatus.RUNNING.value) -> None:
-        self.run = SimpleNamespace(id=_RUN_ID, task_id=7, status=status)
+    def __init__(self, *, status: str = RunStatus.RUNNING.value) -> None:
+        self.run = SimpleNamespace(id=_RUN_ID, session_id=7, status=status)
         self.owner_thread = threading.get_ident()
         self.get_calls = 0
         # actor 把信号处理异常记录后吞掉：违例另行记下，用例据此断言。
@@ -30,15 +30,15 @@ class _ThreadCheckedRunService:
             raise AssertionError("canonical get_run ran on the event-loop thread")
         return self.run
 
-    def get_task(self, task_id: int) -> SimpleNamespace:
-        self._assert_off_loop("get_task")
-        return SimpleNamespace(id=task_id)
+    def get_session(self, session_id: int) -> SimpleNamespace:
+        self._assert_off_loop("get_session")
+        return SimpleNamespace(id=session_id)
 
-    def get_latest_run(self, _task_id: int) -> SimpleNamespace:
+    def get_latest_run(self, _session_id: int) -> SimpleNamespace:
         self._assert_off_loop("get_latest_run")
         return self.run
 
-    def require_latest_run(self, _task_id: int) -> SimpleNamespace:
+    def require_latest_run(self, _session_id: int) -> SimpleNamespace:
         self._assert_off_loop("require_latest_run")
         return self.run
 

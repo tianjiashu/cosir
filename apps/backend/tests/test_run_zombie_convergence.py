@@ -1,6 +1,6 @@
 """僵尸 running 防治：快照分叉时的丢弃必须留痕。
 
-执行释放与 Run 失败边界的不变量见 ``test_task_actors_execution`` 与
+执行释放与 Run 失败边界的不变量见 ``test_session_actors_execution`` 与
 ``test_run_failure_settlement``。
 """
 
@@ -15,7 +15,7 @@ from app.config.logging.logger import log
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
 _RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
-_TASK_ID = 7
+_SESSION_ID = 7
 
 _SNAPSHOT = {"messages": [], "activity": None, "error": None}
 
@@ -52,7 +52,7 @@ def test_run_status_transition_drop_is_logged() -> None:
     """终态迁移被白名单丢弃时同样必须留痕（completed 不可逆分支）。"""
 
     from app.core.events import RunStatusChangedEvent
-    from app.models.enums.conversation_run_status import ConversationRunStatus
+    from app.models.enums.run_status import RunStatus
 
     settled = {
         **_SNAPSHOT,
@@ -64,7 +64,7 @@ def test_run_status_transition_drop_is_logged() -> None:
             plan_event(
                 RunStatusChangedEvent(
                     changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-                    task_id=_TASK_ID, run_id=11, status=ConversationRunStatus.RUNNING
+                    session_id=_SESSION_ID, run_id=11, status=RunStatus.RUNNING
                 ),
                 settled,
                 {},

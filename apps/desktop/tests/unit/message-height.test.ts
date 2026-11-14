@@ -20,7 +20,7 @@ const running = (...parts: TransportMessagePart[]) => projected(parts, null, tru
 const table = (rows: number) => ["| 名称 | 说明 |", "| --- | --- |", ...Array.from({ length: rows }, (_, row) => `| 项${row} | 描述${row} |`)].join("\n");
 
 describe("estimateMessageHeight", () => {
-  it("传 Task 时也复用内容投影，开合、跨 Task 和新消息版本仍改变估高", () => {
+  it("传 Session 时也复用内容投影，开合、跨 Session 和新消息版本仍改变估高", () => {
     const project = vi.spyOn(turnLayout, "projectTurn");
     try {
       const parts = [text("进展。".repeat(150), false), call("c1"), call("c2"), text("最终回复")];
@@ -41,8 +41,8 @@ describe("estimateMessageHeight", () => {
       expect(project).toHaveBeenCalledTimes(2);
     } finally {
       project.mockRestore();
-      useDisclosureStore.getState().clearTask(801);
-      useDisclosureStore.getState().clearTask(802);
+      useDisclosureStore.getState().clearSession(801);
+      useDisclosureStore.getState().clearSession(802);
     }
   });
 
@@ -72,7 +72,7 @@ describe("estimateMessageHeight", () => {
     expect(estimateMessageHeight(long, 9)).toBe(53 + 24 + 240 + 28);
     useDisclosureStore.getState().set(9, "user:u", true);
     expect(estimateMessageHeight(long, 9)).toBe(53 + 24 + 30 * 23 + 28);
-    useDisclosureStore.getState().clearTask(9);
+    useDisclosureStore.getState().clearSession(9);
     expect(estimateMessageHeight(long, 9)).toBe(53 + 24 + 240 + 28);
   });
 
@@ -101,7 +101,7 @@ describe("estimateMessageHeight", () => {
     expect(estimateMessageHeight(stopped)).toBeGreaterThan(estimateMessageHeight(complete) + 200);
     useDisclosureStore.getState().set(8, "process:a", true);
     expect(estimateMessageHeight(complete, 8)).toBeGreaterThan(estimateMessageHeight(complete));
-    useDisclosureStore.getState().clearTask(8);
+    useDisclosureStore.getState().clearSession(8);
   });
 
   it("compresses completed and active calls while budgeting all progress prose", () => {
@@ -112,19 +112,20 @@ describe("estimateMessageHeight", () => {
   });
 
   it("artifact and decision heights are independent of folded history", () => {
-    const plain = assistant(call("c"));
-    const waiting = assistant(call("c", "pending", { awaitingUser: true }));
-    expect(estimateMessageHeight(waiting)).toBeGreaterThan(estimateMessageHeight(plain) + 96);
+    // 等你操作的独立调用就地画成卡片：比同一位置的一行调用高。
+    const settled = assistant(call("c", "completed", { presentation: "standalone" }));
+    const waiting = assistant(call("c", "pending", { presentation: "standalone", awaitingUser: true }));
+    expect(estimateMessageHeight(waiting)).toBeGreaterThan(estimateMessageHeight(settled) + 60);
     const changes = (paths: string[]) => assistant(call("w", "completed", { display_data: { kind: "file-changes", changes: paths.map((path) => ({ path, status: "modified" })) } }));
     expect(estimateMessageHeight(changes(["a", "b", "c"])) - estimateMessageHeight(changes(["a"]))).toBe(56);
   });
 
   it("long Agent input starts compact and only grows on explicit disclosure", () => {
-    const msg = { ...user(text("内容".repeat(1000))), metadata: { custom: { source: { taskId: 2, name: "审查" } } } } as unknown as ThreadMessage;
+    const msg = { ...user(text("内容".repeat(1000))), metadata: { custom: { source: { sessionId: 2, name: "审查" } } } } as unknown as ThreadMessage;
     expect(estimateMessageHeight(msg, 8)).toBeLessThan(100);
     useDisclosureStore.getState().set(8, "agent:u", true);
     expect(estimateMessageHeight(msg, 8)).toBeGreaterThan(500);
-    useDisclosureStore.getState().clearTask(8);
+    useDisclosureStore.getState().clearSession(8);
   });
 
 });
@@ -132,7 +133,7 @@ describe("estimateMessageHeight", () => {
 describe("message height cache", () => {
   afterEach(() => forgetMessageHeights([1, 2]));
 
-  it("按 Task 与列宽记住实测行高，列宽变了整桶作废", () => {
+  it("按 Session 与列宽记住实测行高，列宽变了整桶作废", () => {
     rememberMessageHeight(1, 720, "m1", 640);
     rememberMessageHeight(1, 720, "m2", 96);
     expect(rememberedMessageHeight(1, 720, "m1")).toBe(640);
@@ -162,10 +163,10 @@ describe("message height cache", () => {
     useDisclosureStore.getState().set(1, "process:a", true);
     expect(rememberedMessageHeight(1, 720, "a", first)).toBeUndefined();
     expect(rememberedMessageHeight(1, 720, "other")).toBe(96);
-    useDisclosureStore.getState().clearTask(1);
+    useDisclosureStore.getState().clearSession(1);
   });
 
-  it("Task 删除后丢弃其行高", () => {
+  it("Session 删除后丢弃其行高", () => {
     rememberMessageHeight(1, 720, "m1", 640);
     forgetMessageHeights([1]);
     expect(rememberedMessageHeight(1, 720, "m1")).toBeUndefined();

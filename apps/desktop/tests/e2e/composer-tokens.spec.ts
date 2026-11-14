@@ -25,12 +25,12 @@ async function setDocument(input: Locator, content: JSONContent[]) {
 
 test.beforeEach(async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 100, title: "行内标签" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 100, title: "行内标签" } });
   await seedState(request, 100, completedState(70, {
     id: "history-user",
     parts: [{ type: "text", text: '查看 <ref path="src/main.ts" />', status: "completed" }],
   }, [{ type: "text", text: "历史回复", status: "completed" }]));
-  await page.goto("/tasks/100");
+  await page.goto("/sessions/100");
   await expect(page.getByLabel("消息输入", { exact: true })).toBeEditable();
 });
 

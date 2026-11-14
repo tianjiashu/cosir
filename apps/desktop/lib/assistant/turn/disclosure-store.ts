@@ -2,15 +2,15 @@ import { forgetDisclosureHeight } from "./message-height-cache";
 import { create } from "zustand";
 
 /**
- * 回合内各区的开合状态，按 Task 分桶、不持久化。
+ * 回合内各区的开合状态，按 Session 分桶、不持久化。
  *
  * 为什么不放组件局部 state：虚拟列表卸载再挂载会丢开合。这里只记用户覆盖（true / false），没有覆盖时
  * 由组件按规则给默认值（过程区有最终回复且正常完成时收起；普通工具组和时间线终端详情默认收起），所以阶段变化不会被旧覆盖卡住——
  * 覆盖只在用户点过之后才存在。
  *
  * 键：`process:{messageId}`（过程区）、`call:{toolCallId}`（调用行与后台看板条目：同一次调用的详情）、
- * `activity:{messageId}:{intervalKey}`（工具区间）、`user:{messageId}`（长用户消息的「显示全部」）。Task 删除时
- * `clearTask` 整桶丢掉。
+ * `activity:{messageId}:{intervalKey}`（工具区间）、`user:{messageId}`（长用户消息的「显示全部」）。Session 删除时
+ * `clearSession` 整桶丢掉。
  */
 export type DisclosureKey = `terminal-reader:${string}` | `terminal-command:${string}` | `process:${string}` | `call:${string}` | `activity:${string}:${string}` | `agent:${string}` | `file:${string}:${string}` | `user:${string}`;
 
@@ -25,35 +25,35 @@ export const callKey = (toolCallId: string): DisclosureKey => `call:${toolCallId
 type Overrides = Readonly<Record<string, boolean>>;
 
 type DisclosureState = {
-  /** taskId → 该 Task 内的用户覆盖。 */
-  tasks: Readonly<Record<number, Overrides>>;
+  /** sessionId → 该 Session 内的用户覆盖。 */
+  sessions: Readonly<Record<number, Overrides>>;
   terminalPositions: Readonly<Record<number, Readonly<Record<string, number>>>>;
-  setTerminalPosition: (taskId: number, callId: string, line: number) => void;
-  set: (taskId: number, key: DisclosureKey, open: boolean) => void;
+  setTerminalPosition: (sessionId: number, callId: string, line: number) => void;
+  set: (sessionId: number, key: DisclosureKey, open: boolean) => void;
   /** 清掉某个键的覆盖，之后回到默认规则。 */
-  reset: (taskId: number, key: DisclosureKey) => void;
-  clearTask: (taskId: number) => void;
+  reset: (sessionId: number, key: DisclosureKey) => void;
+  clearSession: (sessionId: number) => void;
 };
 
 export const useDisclosureStore = create<DisclosureState>()((set) => ({
-  tasks: {},
+  sessions: {},
   terminalPositions: {},
-  setTerminalPosition: (taskId, callId, line) => set((state) => ({ terminalPositions: {
-    ...state.terminalPositions, [taskId]: { ...state.terminalPositions[taskId], [callId]: line },
+  setTerminalPosition: (sessionId, callId, line) => set((state) => ({ terminalPositions: {
+    ...state.terminalPositions, [sessionId]: { ...state.terminalPositions[sessionId], [callId]: line },
   } })),
-  set: (taskId, key, open) => {
-    forgetDisclosureHeight(taskId, key);
+  set: (sessionId, key, open) => {
+    forgetDisclosureHeight(sessionId, key);
     set((state) => ({
-    tasks: { ...state.tasks, [taskId]: { ...state.tasks[taskId], [key]: open } },
+    sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId], [key]: open } },
   }));
   },
-  reset: (taskId, key) => set((state) => {
-    forgetDisclosureHeight(taskId, key);
-    const bucket = state.tasks[taskId];
+  reset: (sessionId, key) => set((state) => {
+    forgetDisclosureHeight(sessionId, key);
+    const bucket = state.sessions[sessionId];
     if (!bucket || !(key in bucket)) return state;
-    return { tasks: { ...state.tasks, [taskId]: without(bucket, key) } };
+    return { sessions: { ...state.sessions, [sessionId]: without(bucket, key) } };
   }),
-  clearTask: (taskId) => set((state) => !(taskId in state.tasks) && !(taskId in state.terminalPositions) ? state : ({ tasks: without(state.tasks, taskId), terminalPositions: without(state.terminalPositions, taskId) })),
+  clearSession: (sessionId) => set((state) => !(sessionId in state.sessions) && !(sessionId in state.terminalPositions) ? state : ({ sessions: without(state.sessions, sessionId), terminalPositions: without(state.terminalPositions, sessionId) })),
 }));
 
 function without<T>(record: Readonly<Record<PropertyKey, T>>, key: PropertyKey): Record<PropertyKey, T> {
@@ -63,13 +63,13 @@ function without<T>(record: Readonly<Record<PropertyKey, T>>, key: PropertyKey):
 }
 
 /** 某个键的开合：有用户覆盖按覆盖，否则按调用方给的默认值。非 React 场景用。 */
-export function resolveDisclosure(taskId: number, key: DisclosureKey, defaultOpen: boolean): boolean {
-  return useDisclosureStore.getState().tasks[taskId]?.[key] ?? defaultOpen;
+export function resolveDisclosure(sessionId: number, key: DisclosureKey, defaultOpen: boolean): boolean {
+  return useDisclosureStore.getState().sessions[sessionId]?.[key] ?? defaultOpen;
 }
 
 /** React 订阅版：只订阅这一个键，默认值变化（如阶段从运行中到结束）时无覆盖的键随之变化。 */
-export function useDisclosure(taskId: number, key: DisclosureKey, defaultOpen: boolean): [boolean, (open: boolean) => void] {
-  const open = useDisclosureStore((state) => state.tasks[taskId]?.[key] ?? defaultOpen);
+export function useDisclosure(sessionId: number, key: DisclosureKey, defaultOpen: boolean): [boolean, (open: boolean) => void] {
+  const open = useDisclosureStore((state) => state.sessions[sessionId]?.[key] ?? defaultOpen);
   const setOpen = useDisclosureStore((state) => state.set);
-  return [open, (next) => setOpen(taskId, key, next)];
+  return [open, (next) => setOpen(sessionId, key, next)];
 }

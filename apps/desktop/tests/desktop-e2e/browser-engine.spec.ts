@@ -102,15 +102,15 @@ const PAGES: Record<string, string> = {
     ${Array.from({ length: 800 }, (_, i) => `<a href="#i${i}">Item ${i}</a><br>`).join("")}`,
 };
 
-const roomy = { perTask: 5, total: 50 };
+const roomy = { perSession: 5, total: 50 };
 
 let server: http.Server;
 let origin: string;
 let app: ElectronApplication;
 
-const LIMITS = { perTask: 2, total: 3 };
+const LIMITS = { perSession: 2, total: 3 };
 const DOWNLOAD_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "cosir-browser-downloads-"));
-const context = (limits: { perTask: number; total: number }) => ({ limits, downloadDir: DOWNLOAD_DIR });
+const context = (limits: { perSession: number; total: number }) => ({ limits, downloadDir: DOWNLOAD_DIR });
 
 test.beforeAll(async () => {
   server = http.createServer((request, response) => {
@@ -173,7 +173,7 @@ function call(method: "navigate" | "snapshot" | "act" | "screenshot" | "manageTa
     const { host } = (globalThis as unknown as { browserHarness: { host: Record<string, (...args: unknown[]) => Promise<unknown>> } }).browserHarness;
     try {
       // 每个请求都带标签上下文（宿主据此刷新上限）；用例没指定时给宽松的上限。
-      const withContext = { context: { limits: { perTask: 5, total: 50 }, downloadDir }, ...request };
+      const withContext = { context: { limits: { perSession: 5, total: 50 }, downloadDir }, ...request };
       return { ok: true as const, value: await host[method](withContext, new AbortController().signal) as unknown as Page };
     } catch (error) {
       const failure = error as { code?: string; message?: string };
@@ -217,18 +217,18 @@ function wireParams(method: string, params: Record<string, unknown>): Record<str
 }
 
 /** 按后端发来的线上形状调用方法（经注册表、schema 校验与 `wire.ts`），覆盖链路两端的适配层。 */
-function link(method: string, taskId: number, params: Record<string, unknown>): Promise<LinkOutcome> {
+function link(method: string, sessionId: number, params: Record<string, unknown>): Promise<LinkOutcome> {
   params = wireParams(method, params);
-  return app.evaluate(async (_electron, { method, taskId, params, downloadDir }) => {
+  return app.evaluate(async (_electron, { method, sessionId, params, downloadDir }) => {
     const { invoke } = (globalThis as unknown as { browserHarness: { invoke: (method: string, params: unknown) => Promise<unknown> } }).browserHarness;
     try {
-      const value = await invoke(method, { task_id: taskId, limits: { per_task: 5, total: 50 }, download_dir: downloadDir, ...params });
+      const value = await invoke(method, { session_id: sessionId, limits: { per_session: 5, total: 50 }, download_dir: downloadDir, ...params });
       return { ok: true as const, value: value as Record<string, unknown> };
     } catch (error) {
       const failure = error as { code?: string; message?: string };
       return { ok: false as const, code: failure.code ?? "UNKNOWN", message: failure.message ?? String(error) };
     }
-  }, { method, taskId, params, downloadDir: DOWNLOAD_DIR });
+  }, { method, sessionId, params, downloadDir: DOWNLOAD_DIR });
 }
 
 function valueOf(outcome: LinkOutcome): Record<string, unknown> {
@@ -243,7 +243,7 @@ function observedValueOf(outcome: LinkOutcome): Record<string, unknown> {
   return { ...value, ...value.observation as Record<string, unknown> };
 }
 
-const navigate = (taskId: number, target: Record<string, unknown>, tab?: string) => call("navigate", { taskId, tab, target, context: context(LIMITS) });
+const navigate = (sessionId: number, target: Record<string, unknown>, tab?: string) => call("navigate", { sessionId, tab, target, context: context(LIMITS) });
 
 test("opens a tab on first navigation and returns a snapshot with refs", async () => {
   const page = pageOf(await navigate(1, { url: `${origin}/form` }));
@@ -254,7 +254,7 @@ test("opens a tab on first navigation and returns a snapshot with refs", async (
   expect(page.snapshot).toMatch(/link "Next" \[ref=e\d+\]/);
 });
 
-test("supports history navigation within the task's current tab", async () => {
+test("supports history navigation within the session's current tab", async () => {
   await navigate(1, { url: `${origin}/second` });
   const back = await navigate(1, { action: "back" });
   expect(back).toMatchObject({ ok: true, value: { tabId: "t1", title: "Form" } });
@@ -271,17 +271,17 @@ test("reports load failures with the Chromium error", async () => {
 // 目的：弹窗交给人或 Agent 作答；潜在缺陷：confirm() 被自动取消（用户无法确认删除），或页面停住后 CDP 挂到超时。
 test("pauses on JavaScript dialogs until the agent or the user answers", async () => {
   const opened = pageOf(await navigate(1, { url: `${origin}/dialog` }));
-  const shown = opened.dialog ?? pageOf(await call("snapshot", { taskId: 1 })).dialog;
+  const shown = opened.dialog ?? pageOf(await call("snapshot", { sessionId: 1 })).dialog;
   expect(shown).toMatchObject({ type: "confirm", message: "Continue?", defaultText: "" });
-  expect(await call("screenshot", { taskId: 1, fullPage: false })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
-  expect(await call("act", { taskId: 1, actions: [{ type: "press", key: "Tab" }] })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
+  expect(await call("screenshot", { sessionId: 1, fullPage: false })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
+  expect(await call("act", { sessionId: 1, actions: [{ type: "press", key: "Tab" }] })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
   // 调用开始时已有的弹窗必须按编号作答。
-  expect(await call("act", { taskId: 1, actions: [{ type: "dialog", accept: true }] })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
-  const answered = pageOf(await call("act", { taskId: 1, actions: [{ type: "dialog", accept: true, id: shown!.id }] })) as ActPage;
+  expect(await call("act", { sessionId: 1, actions: [{ type: "dialog", accept: true }] })).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
+  const answered = pageOf(await call("act", { sessionId: 1, actions: [{ type: "dialog", accept: true, id: shown!.id }] })) as ActPage;
   expect(answered).toMatchObject({ execution: { steps: Array(1).fill({ status: "done" }), interruption: null }, dialog: null, title: "answered:true" });
 
   await navigate(1, { url: `${origin}/prompt` });
-  await expect.poll(async () => pageOf(await call("snapshot", { taskId: 1 })).dialog?.type).toBe("prompt");
+  await expect.poll(async () => pageOf(await call("snapshot", { sessionId: 1 })).dialog?.type).toBe("prompt");
   const summary = await app.evaluate(() => {
     type Harness = { host: { state(): { tabs: { dialog: { id: number } }[] }; userAnswerDialog(tab: string, id: number, answer: unknown): void } };
     const { host } = (globalThis as unknown as { browserHarness: Harness }).browserHarness;
@@ -290,14 +290,14 @@ test("pauses on JavaScript dialogs until the agent or the user answers", async (
     return dialog;
   });
   expect(summary).toMatchObject({ type: "prompt", message: "Your name?", defaultText: "x" });
-  await expect.poll(async () => pageOf(await call("snapshot", { taskId: 1 })).title).toBe("name:Ada");
+  await expect.poll(async () => pageOf(await call("snapshot", { sessionId: 1 })).title).toBe("name:Ada");
 });
 
 // 目的：「点删除 + 确认」一次完成；潜在缺陷：弹窗让点击被误判失败，或后续动作挂到 CDP 超时。
 test("answers a dialog opened by an action in the same batch", async () => {
   const page = pageOf(await navigate(1, { url: `${origin}/delete` }));
   const button = refOf(page.snapshot, "button", "Delete");
-  const outcome = pageOf(await call("act", { taskId: 1, actions: [clickOn(button), { type: "dialog", accept: false }] })) as ActPage;
+  const outcome = pageOf(await call("act", { sessionId: 1, actions: [clickOn(button), { type: "dialog", accept: false }] })) as ActPage;
   expect(outcome).toMatchObject({ execution: { steps: [{ status: "unknown" }, { status: "done" }], interruption: { code: "DIALOG_OPEN" } }, title: "deleted:false" });
 });
 
@@ -306,7 +306,7 @@ test("answers a dialog opened by an action in the same batch", async () => {
 test("keeps scripted navigation to local files from leaving the page", async () => {
   await navigate(1, { url: `${origin}/escape` });
   await new Promise((resolve) => setTimeout(resolve, 500));
-  expect(await call("snapshot", { taskId: 1 })).toMatchObject({ ok: true, value: { url: `${origin}/escape`, title: "Escape" } });
+  expect(await call("snapshot", { sessionId: 1 })).toMatchObject({ ok: true, value: { url: `${origin}/escape`, title: "Escape" } });
 });
 
 // 目的：Agent 能按路径打开生成的本机 HTML，样式与同目录链接照常可用；潜在缺陷：本机文件被当成非网页拦下，或本机页面
@@ -321,11 +321,11 @@ test("opens local files by path and follows links between them", async () => {
   expect(String(page.url)).toMatch(/^file:\/\/.*\/%E9%A6%96%E9%A1%B5%20%E7%A4%BA%E4%BE%8B\.html$/);
   expect(valueOf(await link("browser.evaluate", 31, { expression: "getComputedStyle(document.querySelector('h1')).color" })).value).toBe('"rgb(255, 0, 0)"');
   const next = refOf(String(page.snapshot), "link", "Next");
-  await call("act", { taskId: 31, actions: [clickOn(next)] });
-  await expect.poll(async () => pageOf(await call("snapshot", { taskId: 31 })).title).toBe("Next local");
-  // 标签计入全局上限，后面的上限用例按「此前只有 Task 1 的标签」计数。
+  await call("act", { sessionId: 31, actions: [clickOn(next)] });
+  await expect.poll(async () => pageOf(await call("snapshot", { sessionId: 31 })).title).toBe("Next local");
+  // 标签计入全局上限，后面的上限用例按「此前只有 Session 1 的标签」计数。
   await app.evaluate(() => {
-    (globalThis as unknown as { browserHarness: { host: { dropTasks(ids: number[]): void } } }).browserHarness.host.dropTasks([31]);
+    (globalThis as unknown as { browserHarness: { host: { dropSessions(ids: number[]): void } } }).browserHarness.host.dropSessions([31]);
   });
 });
 
@@ -336,7 +336,7 @@ test("grants site permissions", async () => {
   expect(valueOf(await link("browser.evaluate", 32, { expression: state("clipboard-write") })).value).toBe('"granted"');
   expect(valueOf(await link("browser.evaluate", 32, { expression: state("geolocation") })).value).toBe('"granted"');
   await app.evaluate(() => {
-    (globalThis as unknown as { browserHarness: { host: { dropTasks(ids: number[]): void } } }).browserHarness.host.dropTasks([32]);
+    (globalThis as unknown as { browserHarness: { host: { dropSessions(ids: number[]): void } } }).browserHarness.host.dropSessions([32]);
   });
 });
 
@@ -347,29 +347,29 @@ test("recovers from a renderer crash by navigating again", async () => {
     host.tabs.get("t1")!.tab.view.webContents.forcefullyCrashRenderer();
   });
   await expect.poll(async () => {
-    const outcome = await call("snapshot", { taskId: 1 });
+    const outcome = await call("snapshot", { sessionId: 1 });
     return outcome.ok ? "ok" : outcome.code;
   }).toBe("PAGE_CRASHED");
   expect(await navigate(1, { url: `${origin}/second` })).toMatchObject({ ok: true, value: { title: "Second" } });
 });
 
 // 目的：标签归属是硬边界、上限生效、删除后回收；潜在缺陷：子 Agent 操作父 Agent 的页面或标签无限增长。
-test("keeps tabs per task, enforces limits and drops a task's tabs", async () => {
-  const taskOneTab = pageOf(await navigate(1, { url: `${origin}/second` })).tabId;
+test("keeps tabs per session, enforces limits and drops a session's tabs", async () => {
+  const sessionOneTab = pageOf(await navigate(1, { url: `${origin}/second` })).tabId;
   expect(await navigate(2, { url: `${origin}/second` })).toMatchObject({ ok: true });
-  expect(await call("snapshot", { taskId: 2, tab: taskOneTab })).toMatchObject({ ok: false, code: "TAB_NOT_FOUND" });
+  expect(await call("snapshot", { sessionId: 2, tab: sessionOneTab })).toMatchObject({ ok: false, code: "TAB_NOT_FOUND" });
   expect(await navigate(3, { url: `${origin}/second` })).toMatchObject({ ok: true });
   expect(await navigate(4, { url: `${origin}/second` })).toMatchObject({ ok: false, code: "TAB_LIMIT" });
   // 后端在链路连上时按这份清单对账回收（删除通知丢失时的兜底）。
-  const owners = async () => (valueOf(await link("browser.taskIds", 0, {})) as { task_ids: number[] }).task_ids;
+  const owners = async () => (valueOf(await link("browser.sessionIds", 0, {})) as { session_ids: number[] }).session_ids;
   expect(await owners()).toEqual(expect.arrayContaining([1, 2, 3]));
 
   await app.evaluate(() => {
-    (globalThis as unknown as { browserHarness: { host: { dropTasks(ids: number[]): void } } }).browserHarness.host.dropTasks([2, 3]);
+    (globalThis as unknown as { browserHarness: { host: { dropSessions(ids: number[]): void } } }).browserHarness.host.dropSessions([2, 3]);
   });
   expect(await owners()).not.toEqual(expect.arrayContaining([2]));
   expect(await owners()).not.toEqual(expect.arrayContaining([3]));
-  expect(await call("snapshot", { taskId: 2 })).toMatchObject({ ok: false, code: "TAB_NOT_FOUND" });
+  expect(await call("snapshot", { sessionId: 2 })).toMatchObject({ ok: false, code: "TAB_NOT_FOUND" });
   expect(await navigate(4, { url: `${origin}/second` })).toMatchObject({ ok: true });
 });
 
@@ -381,8 +381,8 @@ test("presents a standard Chrome user agent", async () => {
 
 // 目的：工作台同一时刻只挂一个原生画面、摘下后回到后台视口；潜在缺陷：切标签后旧画面残留在窗口上盖住页面。
 test("places one tab at a time on the window and freezes a frame", async () => {
-  const first = pageOf(await call("navigate", { taskId: 6, target: { url: `${origin}/form` }, context: context(roomy) })).tabId;
-  const second = pageOf(await call("navigate", { taskId: 7, target: { url: `${origin}/second` }, context: context(roomy) })).tabId;
+  const first = pageOf(await call("navigate", { sessionId: 6, target: { url: `${origin}/form` }, context: context(roomy) })).tabId;
+  const second = pageOf(await call("navigate", { sessionId: 7, target: { url: `${origin}/second` }, context: context(roomy) })).tabId;
 
   const placement = await app.evaluate((_electron, { first, second }) => {
     type Harness = {
@@ -428,7 +428,7 @@ test("places one tab at a time on the window and freezes a frame", async () => {
 
 test("drops the placement when the window's document is replaced", async () => {
   // 整页刷新时面板的卸载清理不执行，没人再发 place(null)：宿主自己随文档作废摆放。
-  const tabId = pageOf(await call("navigate", { taskId: 8, target: { url: `${origin}/form` }, context: context(roomy) })).tabId;
+  const tabId = pageOf(await call("navigate", { sessionId: 8, target: { url: `${origin}/form` }, context: context(roomy) })).tabId;
 
   const result = await app.evaluate(async (_electron, { tabId, origin }) => {
     type Harness = {
@@ -462,12 +462,12 @@ function refOf(snapshot: string, role: string, name: string): string {
 type ActPage = Page & { execution: { steps: { status: string }[]; interruption: { code: string; message: string } | null } };
 
 test("acts on the page through refs: select, wait, type and submit", async () => {
-  const page = pageOf(await call("navigate", { taskId: 20, target: { url: `${origin}/act` }, context: context(roomy) }));
+  const page = pageOf(await call("navigate", { sessionId: 20, target: { url: `${origin}/act` }, context: context(roomy) }));
   const select = refOf(page.snapshot, "combobox", "Color");
   const load = refOf(page.snapshot, "button", "Load");
   const query = refOf(page.snapshot, "textbox", "Query");
 
-  const first = pageOf(await call("act", { taskId: 20, actions: [
+  const first = pageOf(await call("act", { sessionId: 20, actions: [
     { type: "select", ref: select, values: ["Blue"] },
     clickOn(load),
     { type: "wait_for", text: "loaded later", seconds: 5 },
@@ -475,18 +475,18 @@ test("acts on the page through refs: select, wait, type and submit", async () =>
   expect(first).toMatchObject({ execution: { steps: Array(3).fill({ status: "done" }), interruption: null }, title: "color:b" });
   expect(first.snapshot).toContain("loaded later");
 
-  const submitted = pageOf(await call("act", { taskId: 20, actions: [{ type: "type", ref: query, text: "cosir", clear: true, submit: true, keyByKey: false }] })) as ActPage;
+  const submitted = pageOf(await call("act", { sessionId: 20, actions: [{ type: "type", ref: query, text: "cosir", clear: true, submit: true, keyByKey: false }] })) as ActPage;
   expect(submitted).toMatchObject({ execution: { steps: Array(1).fill({ status: "done" }), interruption: null }, title: "Done" });
   expect(submitted.url).toBe(`${origin}/done?q=cosir`);
 
   // 目的：导航后旧 ref 一律失效；潜在缺陷：旧序号恰好指到新页面的另一个元素，点错东西。
-  const stale = pageOf(await call("act", { taskId: 20, actions: [clickOn(load)] })) as ActPage;
+  const stale = pageOf(await call("act", { sessionId: 20, actions: [clickOn(load)] })) as ActPage;
   expect(stale).toMatchObject({ execution: { interruption: { code: "REF_STALE" } }, title: "Done" });
 });
 
 // 目的：长页面后半段的元素也能读到并操作，ref 跨快照不变；潜在缺陷：截断之后的内容对 Agent 永远不可见。
 test("pages long snapshots with stable refs, then hovers, presses shortcuts and scrolls areas", async () => {
-  const page = pageOf(await call("navigate", { taskId: 24, target: { url: `${origin}/rich` }, context: context(roomy) }));
+  const page = pageOf(await call("navigate", { sessionId: 24, target: { url: `${origin}/rich` }, context: context(roomy) }));
   const note = page.snapshot.split("\n").at(-1)!;
   expect(note).toMatch(/read on with from_line=\d+$/);
   const menu = refOf(page.snapshot, "button", "Menu");
@@ -495,12 +495,12 @@ test("pages long snapshots with stable refs, then hovers, presses shortcuts and 
   // 按截断提示一页页往下读，直到最后一页。
   let rest = page.snapshot;
   for (let next = rest.match(/read on with from_line=(\d+)$/); next; next = rest.match(/read on with from_line=(\d+)$/)) {
-    rest = pageOf(await call("snapshot", { taskId: 24, view: { fromLine: Number(next[1]) } })).snapshot;
+    rest = pageOf(await call("snapshot", { sessionId: 24, view: { fromLine: Number(next[1]) } })).snapshot;
   }
   const last = refOf(rest, "link", "Item 799");
-  expect(refOf(pageOf(await call("snapshot", { taskId: 24, view: { fromLine: 1 } })).snapshot, "button", "Menu")).toBe(menu);
+  expect(refOf(pageOf(await call("snapshot", { sessionId: 24, view: { fromLine: 1 } })).snapshot, "button", "Menu")).toBe(menu);
 
-  const acted = pageOf(await call("act", { taskId: 24, actions: [
+  const acted = pageOf(await call("act", { sessionId: 24, actions: [
     { type: "wait_for", textGone: "Loading", seconds: 5 },
     { type: "hover", target: { ref: menu } },
     { type: "press", key: "k", modifiers: ["ControlOrMeta"] },
@@ -512,29 +512,29 @@ test("pages long snapshots with stable refs, then hovers, presses shortcuts and 
   expect(acted.snapshot).toContain("Hidden item");
 
   // 目的：滚到底要报出来；潜在缺陷：无限滚动的批次空转，模型以为加载了更多。
-  const end = pageOf(await call("act", { taskId: 24, actions: [{ type: "scroll", direction: "down", ref: inside }] })) as ActPage;
+  const end = pageOf(await call("act", { sessionId: 24, actions: [{ type: "scroll", direction: "down", ref: inside }] })) as ActPage;
   expect(end).toMatchObject({ execution: { interruption: { code: "SCROLL_END", message: "this area is already at the bottom" } } });
 });
 
 // 目的：有些站点让 body 而不是 html 滚动；潜在缺陷：滚动目标固定为 document.scrollingElement，body 是真实滚动器时
 // 不滚却报「已经到底」，模型以为内容读完。
 test("scrolls the page when body is the scroll container, with and without a ref", async () => {
-  const page = pageOf(await call("navigate", { taskId: 30, target: { url: `${origin}/body-scroll` }, context: context(roomy) }));
+  const page = pageOf(await call("navigate", { sessionId: 30, target: { url: `${origin}/body-scroll` }, context: context(roomy) }));
   const top = refOf(page.snapshot, "button", "Top");
   const scrollTop = async () => Number(valueOf(await link("browser.evaluate", 30, { expression: "document.body.scrollTop" })).value as string);
 
-  const byPage = pageOf(await call("act", { taskId: 30, actions: [{ type: "scroll", direction: "down" }] })) as ActPage;
+  const byPage = pageOf(await call("act", { sessionId: 30, actions: [{ type: "scroll", direction: "down" }] })) as ActPage;
   expect(byPage).toMatchObject({ execution: { steps: [{ status: "done" }], interruption: null } });
   const afterPage = await scrollTop();
   expect(afterPage).toBeGreaterThan(0);
 
-  const byRef = pageOf(await call("act", { taskId: 30, actions: [{ type: "scroll", direction: "down", ref: top }] })) as ActPage;
+  const byRef = pageOf(await call("act", { sessionId: 30, actions: [{ type: "scroll", direction: "down", ref: top }] })) as ActPage;
   expect(byRef).toMatchObject({ execution: { steps: [{ status: "done" }], interruption: null } });
   expect(await scrollTop()).toBeGreaterThan(afterPage);
 
   let ended: ActPage | null = null;
   for (let index = 0; index < 8 && ended === null; index += 1) {
-    const outcome = pageOf(await call("act", { taskId: 30, actions: [{ type: "scroll", direction: "down" }] })) as ActPage;
+    const outcome = pageOf(await call("act", { sessionId: 30, actions: [{ type: "scroll", direction: "down" }] })) as ActPage;
     if (outcome.execution.interruption?.code === "SCROLL_END") ended = outcome;
   }
   expect(ended?.execution.interruption).toMatchObject({ code: "SCROLL_END", message: "the page is already at the bottom" });
@@ -543,10 +543,10 @@ test("scrolls the page when body is the scroll container, with and without a ref
 
 // 目的：普通 html 视口页滚到底要报「已到底」而不是「页面不可滚」；潜在缺陷：可滚性判定换了、文案分支还用旧谓词。
 test("reports already at the bottom on an ordinary page", async () => {
-  pageOf(await call("navigate", { taskId: 34, target: { url: `${origin}/viewport` }, context: context(roomy) }));
+  pageOf(await call("navigate", { sessionId: 34, target: { url: `${origin}/viewport` }, context: context(roomy) }));
   let ended: ActPage | null = null;
   for (let index = 0; index < 20 && ended === null; index += 1) {
-    const page = pageOf(await call("act", { taskId: 34, actions: [{ type: "scroll", direction: "down" }] })) as ActPage;
+    const page = pageOf(await call("act", { sessionId: 34, actions: [{ type: "scroll", direction: "down" }] })) as ActPage;
     if (page.execution.interruption?.code === "SCROLL_END") ended = page;
   }
   expect(ended?.execution.interruption).toMatchObject({ code: "SCROLL_END", message: "the page is already at the bottom" });
@@ -556,39 +556,39 @@ test("reports already at the bottom on an ordinary page", async () => {
 // 目的：常见 reset 让 html/body 都是 100% 高、body 写 overflow，真实滚动器仍是 html/viewport；潜在缺陷：把 body 当滚动器，
 // 不滚却报「已经到底」，把原本正常的页面改坏（P1-2 修复的回归面）。
 test("keeps scrolling when html and body are both full height", async () => {
-  for (const [taskId, pagePath] of [[31, "/height-only"], [32, "/height-only-scroll"]] as const) {
-    const page = pageOf(await call("navigate", { taskId, target: { url: `${origin}${pagePath}` }, context: context(roomy) }));
+  for (const [sessionId, pagePath] of [[31, "/height-only"], [32, "/height-only-scroll"]] as const) {
+    const page = pageOf(await call("navigate", { sessionId, target: { url: `${origin}${pagePath}` }, context: context(roomy) }));
     const top = refOf(page.snapshot, "button", "Top");
-    const scrollY = async () => Number(valueOf(await link("browser.evaluate", taskId, { expression: "window.scrollY" })).value as string);
+    const scrollY = async () => Number(valueOf(await link("browser.evaluate", sessionId, { expression: "window.scrollY" })).value as string);
 
-    const byPage = pageOf(await call("act", { taskId, actions: [{ type: "scroll", direction: "down" }] })) as ActPage;
+    const byPage = pageOf(await call("act", { sessionId, actions: [{ type: "scroll", direction: "down" }] })) as ActPage;
     expect(byPage).toMatchObject({ execution: { steps: [{ status: "done" }], interruption: null } });
     const afterPage = await scrollY();
     expect(afterPage).toBeGreaterThan(0);
 
-    const byRef = pageOf(await call("act", { taskId, actions: [{ type: "scroll", direction: "down", ref: top }] })) as ActPage;
+    const byRef = pageOf(await call("act", { sessionId, actions: [{ type: "scroll", direction: "down", ref: top }] })) as ActPage;
     expect(byRef).toMatchObject({ execution: { steps: [{ status: "done" }], interruption: null } });
     expect(await scrollY()).toBeGreaterThan(afterPage);
   }
 });
 
 // 目的：Agent 能把本机文件交给网页——经它的点击打开的选文件框，或直接交给文件输入框；潜在缺陷：选文件框被拦下后
-// 无路可走，或文件没进输入框、页面读到空文件。也核对 target=_blank 链接开成同一 Task 的标签。
-test("uploads through the file chooser an action opened, and opens target=_blank links as tabs of the same task", async () => {
+// 无路可走，或文件没进输入框、页面读到空文件。也核对 target=_blank 链接开成同一 Session 的标签。
+test("uploads through the file chooser an action opened, and opens target=_blank links as tabs of the same session", async () => {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cosir-upload-")), "report.txt");
   fs.writeFileSync(file, "hello");
-  const page = pageOf(await call("navigate", { taskId: 21, target: { url: `${origin}/act` }, context: context(roomy) }));
+  const page = pageOf(await call("navigate", { sessionId: 21, target: { url: `${origin}/act` }, context: context(roomy) }));
   const upload = refOf(page.snapshot, "button", "Upload");
   const popup = refOf(page.snapshot, "link", "Popup");
-  const after = pageOf(await call("act", { taskId: 21, actions: [clickOn(upload), { type: "upload", paths: [file] }, clickOn(popup)] })) as ActPage;
+  const after = pageOf(await call("act", { sessionId: 21, actions: [clickOn(upload), { type: "upload", paths: [file] }, clickOn(popup)] })) as ActPage;
   expect(after).toMatchObject({ execution: { steps: Array(3).fill({ status: "done" }), interruption: null } });
   const chosen = "(() => { const [f] = document.querySelector('input[type=file]').files; return f.name + ':' + f.size; })()";
   expect(valueOf(await link("browser.evaluate", 21, { expression: chosen })).value).toBe('"report.txt:5"');
   await expect.poll(async () => {
-    const tabs = await call("manageTabs", { taskId: 21, action: "list" });
+    const tabs = await call("manageTabs", { sessionId: 21, action: "list" });
     return tabs.ok ? (tabs.value as unknown as unknown[]).length : 0;
   }).toBe(2);
-  const notes = [...after.notes, ...pageOf(await call("snapshot", { taskId: 21 })).notes].join("\n");
+  const notes = [...after.notes, ...pageOf(await call("snapshot", { sessionId: 21 })).notes].join("\n");
   expect(notes).toContain("the page opened a file chooser");
   expect(notes).toMatch(/opened .*\/second in a new tab t\d+/);
 
@@ -601,52 +601,52 @@ test("uploads through the file chooser an action opened, and opens target=_blank
 // 目的：用户正在页面上操作时 Agent 不抢；潜在缺陷：Agent 的点击打断用户的登录输入。
 test("refuses to act while the user is typing in the page", async () => {
   // 唯一的地址：按地址找网页视图，不能与别的用例的标签重名。
-  const page = pageOf(await call("navigate", { taskId: 22, target: { url: `${origin}/act?typing` }, context: context(roomy) }));
+  const page = pageOf(await call("navigate", { sessionId: 22, target: { url: `${origin}/act?typing` }, context: context(roomy) }));
   await app.evaluate(({ webContents }, tabUrl) => {
     const contents = webContents.getAllWebContents().find((item) => item.getURL() === tabUrl)!;
     contents.sendInputEvent({ type: "keyDown", keyCode: "A" });
   }, page.url);
   // sendInputEvent 异步派发：等事件到达页面，再让 Agent 动手。
   await new Promise((resolve) => setTimeout(resolve, 200));
-  const refused = await call("act", { taskId: 22, actions: [{ type: "press", key: "Tab" }] });
+  const refused = await call("act", { sessionId: 22, actions: [{ type: "press", key: "Tab" }] });
   expect(refused).toMatchObject({ ok: false, code: "USER_ACTIVE" });
 });
 
-test("screenshots in CSS pixels and manages the task's tabs", async () => {
-  await call("navigate", { taskId: 23, target: { url: `${origin}/form` }, context: context(roomy) });
-  const second = pageOf(await call("navigate", { taskId: 23, newTab: true, target: { url: `${origin}/second` }, context: context(roomy) }));
+test("screenshots in CSS pixels and manages the session's tabs", async () => {
+  await call("navigate", { sessionId: 23, target: { url: `${origin}/form` }, context: context(roomy) });
+  const second = pageOf(await call("navigate", { sessionId: 23, newTab: true, target: { url: `${origin}/second` }, context: context(roomy) }));
 
-  const shot = await call("screenshot", { taskId: 23, fullPage: false });
+  const shot = await call("screenshot", { sessionId: 23, fullPage: false });
   expect(shot.ok).toBe(true);
   const size = await app.evaluate(({ nativeImage }, image) => nativeImage.createFromDataURL(image).getSize(), (shot as unknown as { value: { image: string } }).value.image);
   expect(size).toEqual({ width: 1280, height: 800 });
 
-  const listed = await call("manageTabs", { taskId: 23, action: "list" });
+  const listed = await call("manageTabs", { sessionId: 23, action: "list" });
   expect(listed).toMatchObject({ ok: true, value: [{ current: false }, { tabId: second.tabId, current: true, title: "Second" }] });
   const first = (listed as unknown as { value: { tabId: string }[] }).value[0].tabId;
-  expect(await call("manageTabs", { taskId: 23, action: "select", tab: first })).toMatchObject({ ok: true, value: [{ tabId: first, current: true }, { current: false }] });
-  expect(await call("manageTabs", { taskId: 23, action: "close", tab: first })).toMatchObject({ ok: true, value: [{ tabId: second.tabId, current: true }] });
+  expect(await call("manageTabs", { sessionId: 23, action: "select", tab: first })).toMatchObject({ ok: true, value: [{ tabId: first, current: true }, { current: false }] });
+  expect(await call("manageTabs", { sessionId: 23, action: "close", tab: first })).toMatchObject({ ok: true, value: [{ tabId: second.tabId, current: true }] });
 });
 
-// 目的：初始化前就归 Host 持有；删除 Task 同时回收真实 Chromium 资源，迟到初始化不能复活标签。
+// 目的：初始化前就归 Host 持有；删除 Session 同时回收真实 Chromium 资源，迟到初始化不能复活标签。
 test("drops a tab during initialization and destroys its webContents", async () => {
   const result = await app.evaluate(async () => {
     type HarnessHost = {
-      userOpen(taskId: number, context: { limits: { perTask: number; total: number }; downloadDir: string }): Promise<string>;
-      manageTabs(request: { taskId: number; action: "list"; context: unknown }): { tabId: string }[];
-      dropTasks(ids: number[]): void;
+      userOpen(sessionId: number, context: { limits: { perSession: number; total: number }; downloadDir: string }): Promise<string>;
+      manageTabs(request: { sessionId: number; action: "list"; context: unknown }): { tabId: string }[];
+      dropSessions(ids: number[]): void;
       tabs: Map<string, { tab: { view: Electron.WebContentsView } }>;
     };
     const { host } = (globalThis as unknown as { browserHarness: { host: HarnessHost } }).browserHarness;
-    const context = { limits: { perTask: 5, total: 50 }, downloadDir: "/tmp" };
+    const context = { limits: { perSession: 5, total: 50 }, downloadDir: "/tmp" };
     const opening = host.userOpen(99, context);
-    const listed = host.manageTabs({ taskId: 99, action: "list", context });
+    const listed = host.manageTabs({ sessionId: 99, action: "list", context });
     const contents = host.tabs.get(listed[0].tabId)!.tab.view.webContents;
     const destroyed = new Promise<void>((resolve) => contents.once("destroyed", () => resolve()));
-    host.dropTasks([99]);
+    host.dropSessions([99]);
     const code = await opening.then(() => "opened", (error: { code: string }) => error.code);
     await destroyed;
-    return { listed: listed.length, code, destroyed: contents.isDestroyed(), remaining: host.manageTabs({ taskId: 99, action: "list", context }) };
+    return { listed: listed.length, code, destroyed: contents.isDestroyed(), remaining: host.manageTabs({ sessionId: 99, action: "list", context }) };
   });
   expect(result).toEqual({ listed: 1, code: "TAB_NOT_FOUND", destroyed: true, remaining: [] });
 });
@@ -654,18 +654,18 @@ test("drops a tab during initialization and destroys its webContents", async () 
 
 // 目的：弹窗式登录要把结果交回来源页；潜在缺陷：重开新标签丢了 opener，登录成功但来源页永远收不到。
 test("keeps the opener for windows the page opens, and drops them when they close themselves", async () => {
-  const page = pageOf(await call("navigate", { taskId: 30, target: { url: `${origin}/opener` }, context: context(roomy) }));
+  const page = pageOf(await call("navigate", { sessionId: 30, target: { url: `${origin}/opener` }, context: context(roomy) }));
   const signIn = refOf(page.snapshot, "button", "Sign in");
   // 备注读一次就清空：每次快照的都收起来。
-  const notes = [...pageOf(await call("act", { taskId: 30, actions: [clickOn(signIn)] })).notes];
+  const notes = [...pageOf(await call("act", { sessionId: 30, actions: [clickOn(signIn)] })).notes];
   const look = async () => {
-    const opener = pageOf(await call("snapshot", { taskId: 30, tab: page.tabId }));
+    const opener = pageOf(await call("snapshot", { sessionId: 30, tab: page.tabId }));
     notes.push(...opener.notes);
     return opener.title;
   };
   await expect.poll(look).toBe("got:token-123");
   await expect.poll(async () => {
-    const tabs = await call("manageTabs", { taskId: 30, action: "list" });
+    const tabs = await call("manageTabs", { sessionId: 30, action: "list" });
     return tabs.ok ? (tabs.value as unknown as unknown[]).length : -1;
   }).toBe(1);
   await look();
@@ -673,10 +673,10 @@ test("keeps the opener for windows the page opens, and drops them when they clos
   expect(notes.join("\n")).toMatch(/tab t\d+ \(opened by this page\) closed itself/);
 });
 
-// 目的：下载落到 Task 的下载目录并告诉 Agent 路径；潜在缺陷：下载被静默丢掉，Agent 以为导出没反应。
+// 目的：下载落到 Session 的下载目录并告诉 Agent 路径；潜在缺陷：下载被静默丢掉，Agent 以为导出没反应。
 test("saves downloads into the tab's download directory and reports them", async () => {
-  const page = pageOf(await call("navigate", { taskId: 31, target: { url: `${origin}/download` }, context: context(roomy) }));
-  const clicked = pageOf(await call("act", { taskId: 31, actions: [clickOn(refOf(page.snapshot, "link", "Export"))] }));
+  const page = pageOf(await call("navigate", { sessionId: 31, target: { url: `${origin}/download` }, context: context(roomy) }));
+  const clicked = pageOf(await call("act", { sessionId: 31, actions: [clickOn(refOf(page.snapshot, "link", "Export"))] }));
   const target = path.join(DOWNLOAD_DIR, "report.csv");
   await expect.poll(() => fs.existsSync(target) && fs.readFileSync(target, "utf8")).toBe("a,b\n1,2\n");
   const downloads = await app.evaluate((_electron, tabId) => {
@@ -685,14 +685,14 @@ test("saves downloads into the tab's download directory and reports them", async
   }, page.tabId);
   expect(downloads).toMatchObject([{ filename: "report.csv", path: target, state: "completed" }]);
   // 小文件可能在动作返回前就下完：「完成」备注随动作结果或之后的快照到来。
-  const notes = [...clicked.notes, ...pageOf(await call("snapshot", { taskId: 31 })).notes].join("\n");
+  const notes = [...clicked.notes, ...pageOf(await call("snapshot", { sessionId: 31 })).notes].join("\n");
   expect(notes).toContain(`finished: ${target}`);
 });
 
 // 目的：默认视口跟随面板、按真实大小显示，点击与截图都按它；潜在缺陷：固定视口被缩到看不清，或视口跟上后合成点击
 // 仍按旧缩放换算、落到别处。
 test("follows the panel size at full scale once it settles and clicks accurately", async () => {
-  const page = pageOf(await call("navigate", { taskId: 33, target: { url: `${origin}/far` }, context: context(roomy) }));
+  const page = pageOf(await call("navigate", { sessionId: 33, target: { url: `${origin}/far` }, context: context(roomy) }));
   const tabId = page.tabId;
   await app.evaluate((_electron, tabId) => {
     (globalThis as unknown as { browserHarness: { host: { place(tabId: string, rect: unknown): void } } }).browserHarness.host.place(tabId, { x: 0, y: 0, width: 640, height: 400 });
@@ -701,10 +701,10 @@ test("follows the panel size at full scale once it settles and clicks accurately
     type Harness = { host: { tabs: Map<string, { tab: { view: Electron.WebContentsView } }> } };
     return (globalThis as unknown as { browserHarness: Harness }).browserHarness.host.tabs.get(tabId)!.tab.view.webContents.executeJavaScript("innerWidth");
   }, tabId)).toBe(640);
-  const snapshot = pageOf(await call("snapshot", { taskId: 33 }));
-  const clicked = pageOf(await call("act", { taskId: 33, actions: [clickOn(refOf(snapshot.snapshot, "button", "Far"))] }));
+  const snapshot = pageOf(await call("snapshot", { sessionId: 33 }));
+  const clicked = pageOf(await call("act", { sessionId: 33, actions: [clickOn(refOf(snapshot.snapshot, "button", "Far"))] }));
   expect(clicked.title, JSON.stringify(clicked)).toBe("far clicked");
-  const shot = await call("screenshot", { taskId: 33, fullPage: false });
+  const shot = await call("screenshot", { sessionId: 33, fullPage: false });
   const size = await app.evaluate(({ nativeImage }, image) => nativeImage.createFromDataURL(image).getSize(), (shot as unknown as { value: { image: string } }).value.image);
   // 截图是可视视口、不含常驻滚动条：/far 在 640×400 下两向都滚动，系统显示经典滚动条时（macOS「自动」且接了鼠标、
   // Windows）每边少 15px。按页面自己报告的可视区域比，与系统滚动条设置无关；倍率或缩放出错时仍对不上。
@@ -724,7 +724,7 @@ test("follows the panel size at full scale once it settles and clicks accurately
 // 按视图坐标落到别处。
 test("keeps a pinned viewport and clicks accurately while the tab is shown scaled", async () => {
   const page = pageOf(await call("navigate", {
-    taskId: 32, target: { url: `${origin}/far` }, context: context(roomy),
+    sessionId: 32, target: { url: `${origin}/far` }, context: context(roomy),
     emulation: { viewport: { width: 1280, height: 800, mobile: false } },
   }));
   const width = await app.evaluate(async (_electron, tabId) => {
@@ -735,9 +735,9 @@ test("keeps a pinned viewport and clicks accurately while the tab is shown scale
     return host.tabs.get(tabId)!.tab.view.webContents.executeJavaScript("innerWidth");
   }, page.tabId);
   expect(width).toBe(1280);
-  const clicked = pageOf(await call("act", { taskId: 32, actions: [clickOn(refOf(page.snapshot, "button", "Far"))] }));
+  const clicked = pageOf(await call("act", { sessionId: 32, actions: [clickOn(refOf(page.snapshot, "button", "Far"))] }));
   expect(clicked.title, JSON.stringify(clicked)).toBe("far clicked");
-  const shot = await call("screenshot", { taskId: 32, fullPage: false });
+  const shot = await call("screenshot", { sessionId: 32, fullPage: false });
   const size = await app.evaluate(({ nativeImage }, image) => nativeImage.createFromDataURL(image).getSize(), (shot as unknown as { value: { image: string } }).value.image);
   expect(size).toEqual({ width: 1280, height: 800 });
   await app.evaluate((_electron, tabId) => {
@@ -745,72 +745,72 @@ test("keeps a pinned viewport and clicks accurately while the tab is shown scale
   }, page.tabId);
 });
 
-/** 当前 Task 的标签 id 列表。 */
-async function tabIds(taskId: number): Promise<string[]> {
-  const tabs = await call("manageTabs", { taskId, action: "list" });
+/** 当前 Session 的标签 id 列表。 */
+async function tabIds(sessionId: number): Promise<string[]> {
+  const tabs = await call("manageTabs", { sessionId, action: "list" });
   return tabs.ok ? (tabs.value as unknown as { tabId: string }[]).map((item) => item.tabId) : [];
 }
 
 // 目的：页面开出的窗口一加载就弹窗时等人作答；潜在缺陷：初始化撞上弹窗失败，标签被直接关掉。
 test("keeps a window that alerts while loading until its dialog is answered", async () => {
-  const page = pageOf(await call("navigate", { taskId: 40, target: { url: `${origin}/popup-alert` } }));
-  await call("act", { taskId: 40, actions: [clickOn(refOf(page.snapshot, "button", "Open"))] });
+  const page = pageOf(await call("navigate", { sessionId: 40, target: { url: `${origin}/popup-alert` } }));
+  await call("act", { sessionId: 40, actions: [clickOn(refOf(page.snapshot, "button", "Open"))] });
   await expect.poll(() => tabIds(40)).toHaveLength(2);
   const popup = (await tabIds(40))[1];
-  const paused = pageOf(await call("snapshot", { taskId: 40, tab: popup }));
+  const paused = pageOf(await call("snapshot", { sessionId: 40, tab: popup }));
   expect(paused.dialog).toMatchObject({ type: "alert", message: "Sign-in failed" });
-  const answered = pageOf(await call("act", { taskId: 40, tab: popup, actions: [{ type: "dialog", accept: true, id: paused.dialog!.id }] })) as ActPage;
+  const answered = pageOf(await call("act", { sessionId: 40, tab: popup, actions: [{ type: "dialog", accept: true, id: paused.dialog!.id }] })) as ActPage;
   expect(answered).toMatchObject({ execution: { steps: Array(1).fill({ status: "done" }), interruption: null }, dialog: null, title: "after alert" });
 });
 
 // 目的：过时的作答不落到新弹窗上；潜在缺陷：用户点的是上一个弹窗的「确定」，却确认了紧接着弹出的那个。
 test("ignores an answer meant for a dialog that is no longer showing", async () => {
-  await call("navigate", { taskId: 41, target: { url: `${origin}/two-dialogs` } });
-  await expect.poll(async () => pageOf(await call("snapshot", { taskId: 41 })).dialog?.type).toBe("alert");
-  const first = pageOf(await call("snapshot", { taskId: 41 })).dialog!;
-  await call("act", { taskId: 41, actions: [{ type: "dialog", accept: true, id: first.id }] });
-  await expect.poll(async () => pageOf(await call("snapshot", { taskId: 41 })).dialog?.type).toBe("confirm");
+  await call("navigate", { sessionId: 41, target: { url: `${origin}/two-dialogs` } });
+  await expect.poll(async () => pageOf(await call("snapshot", { sessionId: 41 })).dialog?.type).toBe("alert");
+  const first = pageOf(await call("snapshot", { sessionId: 41 })).dialog!;
+  await call("act", { sessionId: 41, actions: [{ type: "dialog", accept: true, id: first.id }] });
+  await expect.poll(async () => pageOf(await call("snapshot", { sessionId: 41 })).dialog?.type).toBe("confirm");
   await app.evaluate((_electron, { id }) => {
-    type Harness = { host: { state(): { tabs: { tabId: string; taskId: number }[] }; userAnswerDialog(tab: string, id: number, answer: unknown): void } };
+    type Harness = { host: { state(): { tabs: { tabId: string; sessionId: number }[] }; userAnswerDialog(tab: string, id: number, answer: unknown): void } };
     const { host } = (globalThis as unknown as { browserHarness: Harness }).browserHarness;
-    const tab = host.state().tabs.find((item) => item.taskId === 41)!;
+    const tab = host.state().tabs.find((item) => item.sessionId === 41)!;
     host.userAnswerDialog(tab.tabId, id, { accept: true });
   }, { id: first.id });
-  expect(pageOf(await call("snapshot", { taskId: 41 })).dialog).toMatchObject({ type: "confirm", message: "second?" });
+  expect(pageOf(await call("snapshot", { sessionId: 41 })).dialog).toMatchObject({ type: "confirm", message: "second?" });
 });
 
 // 目的：同进程的标签一起停住时指明去哪答；潜在缺陷：来源标签的 CDP 空等 10 秒报「无响应」。
 test("tells a tab that shares a paused process which tab to answer", async () => {
-  const page = pageOf(await call("navigate", { taskId: 42, target: { url: `${origin}/popup-confirm` } }));
-  await call("act", { taskId: 42, actions: [clickOn(refOf(page.snapshot, "button", "Open"))] });
+  const page = pageOf(await call("navigate", { sessionId: 42, target: { url: `${origin}/popup-confirm` } }));
+  await call("act", { sessionId: 42, actions: [clickOn(refOf(page.snapshot, "button", "Open"))] });
   await expect.poll(() => tabIds(42)).toHaveLength(2);
   const popup = (await tabIds(42))[1];
-  await expect.poll(async () => pageOf(await call("snapshot", { taskId: 42, tab: popup })).dialog?.type).toBe("confirm");
+  await expect.poll(async () => pageOf(await call("snapshot", { sessionId: 42, tab: popup })).dialog?.type).toBe("confirm");
   const started = Date.now();
-  const opener = await call("snapshot", { taskId: 42, tab: page.tabId });
+  const opener = await call("snapshot", { sessionId: 42, tab: page.tabId });
   expect(opener).toMatchObject({ ok: false, code: "DIALOG_OPEN" });
-  expect(opener.ok ? "" : opener.message).toContain(`tab ${popup} (this task)`);
+  expect(opener.ok ? "" : opener.message).toContain(`tab ${popup} (this session)`);
   expect(Date.now() - started).toBeLessThan(5_000);
-  const dialog = pageOf(await call("snapshot", { taskId: 42, tab: popup })).dialog!;
-  await call("act", { taskId: 42, tab: popup, actions: [{ type: "dialog", accept: true, id: dialog.id }] });
-  expect(await call("snapshot", { taskId: 42, tab: page.tabId })).toMatchObject({ ok: true });
+  const dialog = pageOf(await call("snapshot", { sessionId: 42, tab: popup })).dialog!;
+  await call("act", { sessionId: 42, tab: popup, actions: [{ type: "dialog", accept: true, id: dialog.id }] });
+  expect(await call("snapshot", { sessionId: 42, tab: page.tabId })).toMatchObject({ ok: true });
 });
 
-// 目的：下载归 Task 不归标签；潜在缺陷：弹出页下载后自己关闭，下载被一起取消、结果也没人收到。
+// 目的：下载归 Session 不归标签；潜在缺陷：弹出页下载后自己关闭，下载被一起取消、结果也没人收到。
 test("finishes a download started by a window that then closes itself", async () => {
-  const page = pageOf(await call("navigate", { taskId: 43, target: { url: `${origin}/popup-download` } }));
-  const notes = [...pageOf(await call("act", { taskId: 43, actions: [clickOn(refOf(page.snapshot, "button", "Export"))] })).notes];
+  const page = pageOf(await call("navigate", { sessionId: 43, target: { url: `${origin}/popup-download` } }));
+  const notes = [...pageOf(await call("act", { sessionId: 43, actions: [clickOn(refOf(page.snapshot, "button", "Export"))] })).notes];
   await expect.poll(async () => {
-    notes.push(...pageOf(await call("snapshot", { taskId: 43 })).notes);
+    notes.push(...pageOf(await call("snapshot", { sessionId: 43 })).notes);
     return (await tabIds(43)).length;
   }).toBe(1);
   await expect.poll(async () => {
-    notes.push(...pageOf(await call("snapshot", { taskId: 43 })).notes);
+    notes.push(...pageOf(await call("snapshot", { sessionId: 43 })).notes);
     return notes.join("\n");
   }).toMatch(/the download "report.*\.csv" finished/);
   const states = await app.evaluate(() => {
-    const { host } = (globalThis as unknown as { browserHarness: { host: { state(): { downloads: { taskId: number; state: string }[] } } } }).browserHarness;
-    return host.state().downloads.filter((item) => item.taskId === 43).map((item) => item.state);
+    const { host } = (globalThis as unknown as { browserHarness: { host: { state(): { downloads: { sessionId: number; state: string }[] } } } }).browserHarness;
+    return host.state().downloads.filter((item) => item.sessionId === 43).map((item) => item.state);
   });
   expect(states).toEqual(["completed"]);
 });
@@ -953,7 +953,7 @@ test("emulates a viewport and colour scheme before loading, and keeps them acros
   expect(valueOf(await link("browser.evaluate", 53, { expression: probe })).value).toBe("[390,true,true]");
   await link("browser.navigate", 53, { url: `${origin}/responsive?again` });
   expect(valueOf(await link("browser.evaluate", 53, { expression: probe })).value).toBe("[390,true,true]");
-  const shot = await call("screenshot", { taskId: 53, fullPage: false });
+  const shot = await call("screenshot", { sessionId: 53, fullPage: false });
   const size = await app.evaluate(({ nativeImage }, image) => nativeImage.createFromDataURL(image).getSize(), (shot as unknown as { value: { image: string } }).value.image);
   expect(size).toEqual({ width: 390, height: 844 });
   await app.evaluate((_electron, tabId) => {
@@ -969,13 +969,13 @@ test("emulates a viewport and colour scheme before loading, and keeps them acros
 // 目的：「看起来可点」的无语义元素也能被 Agent 指定，链接带地址；潜在缺陷：`<div onclick>` 被当成容器折叠掉，模型读得到
 // 文字却点不到；cursor 继承让卡片里每一层都拿到 ref。
 test("gives refs to elements that only look clickable, once per card, and shows link addresses", async () => {
-  const page = pageOf(await call("navigate", { taskId: 60, target: { url: `${origin}/clickable` }, context: context(roomy) }));
+  const page = pageOf(await call("navigate", { sessionId: 60, target: { url: `${origin}/clickable` }, context: context(roomy) }));
   const card = page.snapshot.match(/generic \[ref=(e\d+)\] \[cursor=pointer\]\n\s+- text "Open card/)?.[1];
   expect(card, page.snapshot).toBeDefined();
   expect(page.snapshot.match(/\[cursor=pointer\]/g)).toHaveLength(1);
   expect(page.snapshot).toMatch(/link "Next" \[ref=e\d+\] url="\/second\?q=1"/);
   expect(page.snapshot).toContain('url="https://example.com/x"');
-  const clicked = pageOf(await call("act", { taskId: 60, actions: [clickOn(card)] }));
+  const clicked = pageOf(await call("act", { sessionId: 60, actions: [clickOn(card)] }));
   expect(clicked.title).toBe("card");
 });
 

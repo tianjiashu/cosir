@@ -6,10 +6,11 @@ import { webExtractView, webSearchView } from "./call-views/web-views";
 import { contentSearchView, directoryListView, fileListView } from "./call-views/workspace-list-views";
 import { asRecord } from "./display-data-readers";
 import { browserPageView } from "./call-views/browser-page-view";
-import { agentTaskResultView, delegationView, forkTaskView } from "./call-views/child-task-views";
+import { agentSessionResultView, delegationView, forkSessionView } from "./call-views/child-session-views";
 import { fileChangesView } from "./call-views/file-changes-view";
 import { terminalResultView } from "./call-views/terminal-result-view";
 import { terminalSessionView } from "./call-views/terminal-session-view";
+import { userQuestionView } from "./call-views/user-question-view";
 
 /**
  * `display_data.kind` → 调用行视图。这是前端唯一的工具展示路由：只按 kind，不按工具名、不按静态展示声明。
@@ -30,9 +31,10 @@ export const CALL_VIEWS: Readonly<Record<string, CallView>> = {
   "terminal-session": terminalSessionView,
   "file-changes": fileChangesView,
   "delegation-result": delegationView,
-  "fork-task-result": forkTaskView,
-  "agent-task-result": agentTaskResultView,
+  "fork-session-result": forkSessionView,
+  "agent-session-result": agentSessionResultView,
   "browser-page": browserPageView,
+  "user-question": userQuestionView,
 };
 
 /** 按 kind 解析一次；未知 kind 或无效载荷退化纯行，不猜工具名。归侧栏的调用在这里收成一行，新视图无需自己判断。 */
@@ -40,5 +42,5 @@ export function resolveCallView(context: CallViewContext): CallPresentation | nu
   const data = asRecord(context.artifact.display_data);
   if (typeof data.kind !== "string" || !Object.hasOwn(CALL_VIEWS, data.kind)) return null;
   const view = CALL_VIEWS[data.kind]?.(data, context) ?? null;
-  return view && detailsLiveInRail(context) ? { ...view, detail: undefined, actions: undefined, overlay: undefined } : view;
+  return view && detailsLiveInRail(context) ? { ...view, detail: undefined, actions: undefined, overlay: undefined, awaiting: undefined } : view;
 }

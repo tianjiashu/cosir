@@ -175,8 +175,8 @@ async def _request_log_extra(request) -> dict:
     # 入口层仅绑定 trace_id（由 merge_log_context(trace_id=...) 完成，D4）；
     # 从 path 提取的业务实体 ID 收敛进 data，不再作为独立链路键。
     data: dict[str, object] = {}
-    if path_ids["task_id"]:
-        data["task_id"] = path_ids["task_id"]
+    if path_ids["session_id"]:
+        data["session_id"] = path_ids["session_id"]
     if path_ids["run_id"]:
         data["run_id"] = path_ids["run_id"]
     extra = {
@@ -220,7 +220,7 @@ def _request_body_summary(value: object) -> dict[str, Any]:
         "keys": sorted(str(key) for key in value),
         "json_type": "object",
     }
-    for key in ("taskId", "workspaceId", "threadId", "modelConfigId", "reasoningEffort"):
+    for key in ("sessionId", "workspaceId", "threadId", "modelConfigId", "reasoningEffort"):
         if key in value and isinstance(value[key], str | int | float | bool):
             summary[key] = value[key]
 
@@ -318,7 +318,7 @@ def _extract_path_ids(path: str) -> dict[str, str]:
         path: 请求路径。
 
     返回:
-        包含 task_id 和 run_id 的字典；无法解析时值为空字符串。
+        包含 session_id 和 run_id 的字典；无法解析时值为空字符串。
 
     异常:
         无。
@@ -328,11 +328,11 @@ def _extract_path_ids(path: str) -> dict[str, str]:
     """
 
     segments = [segment for segment in path.split("/") if segment]
-    values = {"task_id": "", "run_id": ""}
+    values = {"session_id": "", "run_id": ""}
     for index, segment in enumerate(segments[:-1]):
         next_value = segments[index + 1]
-        if segment == "tasks":
-            values["task_id"] = next_value
+        if segment == "sessions":
+            values["session_id"] = next_value
         elif segment == "runs":
             values["run_id"] = next_value
     return values

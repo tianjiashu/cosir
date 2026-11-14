@@ -7,7 +7,6 @@ export const STOPPING_FEEDBACK: ActivityFeedback = { label: "正在停止…", a
 /** 只读当前回复与后台登记，不扫描历史、不从意图推断执行状态。 */
 export function currentActivity(activity: TransportActivity | null, calls: readonly TransportToolCallPart[] = [], background: readonly BackgroundTaskEntry[] = []): ActivityFeedback | null {
   if (!activity || !["running", "suspended"].includes(activity.status)) return null;
-  if (calls.some(call => call.awaitingUser)) return { label: "等待你的操作", animated: false };
   const jobs = background.filter(job => job.status === "running" || job.status === "settling");
   const suffix = jobs.length ? ` · 后台 ${jobs.length} 项` : "";
   const model = activity.modelActivity;
@@ -21,8 +20,10 @@ export function currentActivity(activity: TransportActivity | null, calls: reado
   }
   if (jobs.length) {
     const allSettling = jobs.every(job => job.status === "settling");
-    const label = jobs.length === 1 ? jobs[0].label : `${jobs.length} 项任务`;
+    const label = jobs.length === 1 ? jobs[0].label : `${jobs.length} 项会话`;
     return { label: `${allSettling ? "等待并入后台结果" : "后台执行"}：${label}`, animated: !allSettling && activity.status === "running" };
   }
-  return activity.status === "suspended" ? { label: "等待继续", animated: false } : { label: "正在处理", animated: true };
+  if (activity.status !== "suspended") return { label: "正在处理", animated: true };
+  // 在等用户决定时不另说一句：那次调用就地画着卡片（或标着「等你操作」的一行），再说一遍是重复。
+  return calls.some(call => call.awaitingUser) ? null : { label: "等待继续", animated: false };
 }

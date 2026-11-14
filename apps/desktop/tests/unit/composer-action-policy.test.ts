@@ -8,7 +8,7 @@ import {
 import { activity, agentMessage, agentMessagePart, assistantMessage, queuedMessage, transportState, userMessage } from "./transport-fixtures";
 
 describe("conversation actions", () => {
-  it("只在 Task 已停下时允许撤回最新一条已并入的用户消息，只看活动是否已落定", () => {
+  it("只在 Session 已停下时允许撤回最新一条已并入的用户消息，只看活动是否已落定", () => {
     const snapshot = transportState({
       messages: [userMessage("u1", 1), assistantMessage("assistant-u1", 1), userMessage("u2", 2)],
       activity: activity(2, "completed"),

@@ -27,7 +27,7 @@ test.beforeEach(async ({ request, page }) => {
   pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${API_ORIGIN}/__test__/seed-task`, { data: { taskId: 42, title: "命令输出体验" } });
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "命令输出体验" } });
 });
 test.afterEach(() => expect(pageErrors).toEqual([]));
 const command = "cd /Users/example/workspace && printf 'long command'\n" + "printf 'more command arguments' ".repeat(12);
@@ -55,7 +55,7 @@ for (const theme of ["light", "dark"]) test(`${theme}: real output, command once
   await page.addInitScript(theme => localStorage.setItem("cosir.theme-preference", theme), theme);
   await page.setViewportSize({ width: 1100, height: 900 });
   await seedState(request, 42, state(samples.ansi.display));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const call = await openCall(page);
   await expect(call.locator('[data-slot="call-row"]')).not.toContainText("cd /");
   await expect(call.locator('[data-terminal-command]')).toHaveCount(1);
@@ -87,7 +87,7 @@ for (const theme of ["light", "dark"]) test(`${theme}: real output, command once
 
 test("reader keeps scroll position through streaming, completion, close and reopen", async ({ page, request }) => {
   await seedState(request, 42, state(samples.ansi.display));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   // 订阅建立后改为运行中，避免测试服务自动推进演示执行者。
   await expect(page.locator('[data-slot="process-head"]')).toBeVisible();
   const live = state(samples.ansi.display);
@@ -126,7 +126,7 @@ test("reader keeps scroll position through streaming, completion, close and reop
 test("preview keeps ANSI colors and does not clip mixed Chinese and ASCII lines", async ({ page, request }) => {
   const line = "审核台问 AI + 工具（合并 #1123 #1124 #1125 #1139 #1140）".repeat(3);
   await seedState(request, 42, state({ ...samples.ansi.display, output: `\u001b[31m失败 1 项\u001b[0m\n${line}\n` }));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const preview = (await openCall(page)).locator('[data-terminal-mode="preview"]');
   expect(await preview.getByText("失败 1 项", { exact: true }).evaluate((element) => (element as HTMLElement).style.color)).not.toBe("");
   await expect(preview).toContainText(line);
@@ -135,7 +135,7 @@ test("preview keeps ANSI colors and does not clip mixed Chinese and ASCII lines"
 
 test("retained buffer copy is explicit, raw download includes all real output, copy failures are visible", async ({ page, request }) => {
   await seedState(request, 42, state(samples.long.display));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const call = await openCall(page);
   await expect(call.getByText(/^还有 \d+ 行$/)).toBeVisible();
   await call.getByRole("button", { name: "查看输出" }).click();
@@ -155,7 +155,7 @@ for (const scenario of ["nonzero", "empty", "timeout", "cancelled"]) test(`${sce
   const sample = samples[scenario === "cancelled" ? "ansi" : scenario];
   const status = scenario === "timeout" ? "failed" : scenario === "cancelled" ? "cancelled" : "completed";
   await seedState(request, 42, state(sample.display, status));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const call = await openCall(page);
   await expect(call).toHaveAttribute("data-tool-status", status);
   if (scenario === "empty") await expect(call.getByText("无输出", { exact: true })).toBeVisible();
@@ -170,7 +170,7 @@ test("a short command clipped by a narrow column still has an expand action", as
   const shortCommand = "printf '" + "中文参数".repeat(20) + "'";
   expect(shortCommand.length).toBeLessThan(100);
   await seedState(request, 42, state(samples.empty.display, "running", shortCommand));
-  await page.goto("/tasks/42");
+  await page.goto("/sessions/42");
   const call = await openCall(page);
   await expect(call.getByRole("button", { name: "显示完整命令" })).toBeVisible();
   await call.getByRole("button", { name: "显示完整命令" }).click();

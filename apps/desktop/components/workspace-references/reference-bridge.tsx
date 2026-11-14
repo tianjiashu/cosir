@@ -36,7 +36,7 @@ const Context = createContext<Bridge | null>(null);
 export const ReferenceTargetScope = createContext<string | null>(null);
 export const useReferenceBridge = () => useContext(Context);
 
-/** 只连接当前可见 Composer，避免把文件引用插入后台保活的 Task。 */
+/** 只连接当前可见 Composer，避免把文件引用插入后台保活的 Session。 */
 export function ReferenceBridgeProvider({
   target,
   workspaceId,

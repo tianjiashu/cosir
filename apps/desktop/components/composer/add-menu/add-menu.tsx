@@ -21,7 +21,7 @@ import { SkillPage } from "./skill-page";
 type AddMenuPage = "root" | "skills" | "prompts";
 
 type ComposerAddMenuProps = {
-  /** 图片交给所在输入框（新对话草稿或 assistant-ui composer）；普通文件与文件夹以 `<file>` 胶囊插入正文。 */
+  /** 图片交给所在输入框（新会话草稿或 assistant-ui composer）；普通文件与文件夹以 `<file>` 胶囊插入正文。 */
   images: ComposerImageSink;
   /** 文件夹对话框的起点。 */
   workspaceRoot?: string;
@@ -36,7 +36,7 @@ function asDirectoryCapsulePath(path: string): string {
 }
 
 /**
- * 输入框的「+」添加菜单：往正文里放内容的唯一入口，新对话页与任务页共用。
+ * 输入框的「+」添加菜单：往正文里放内容的唯一入口，新会话页与会话页共用。
  *
  * 第一层四行：文件或图片、文件夹直接打开选择框；Skill、常用提示词进入二级页（可搜索）。插入一律经
  * `ComposerInsertionContext` 落在用户最后的光标处，菜单不知道自己在哪个输入框里。

@@ -57,7 +57,7 @@ from tests.transport_fixtures import consumed
 _RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 _RUN_ID = 960001
-_TASK_ID = 12
+_SESSION_ID = 12
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +103,7 @@ class _MemorySnapshotOwner:
     def __init__(self, state: ConversationStateSnapshot) -> None:
         self.state = state
 
-    def get_state(self, _task_id: int) -> ConversationStateSnapshot:
+    def get_state(self, _session_id: int) -> ConversationStateSnapshot:
         import copy
 
         return copy.deepcopy(self.state)
@@ -116,7 +116,7 @@ class _MemorySnapshotOwner:
             mutation.apply_to(self.state)
         validate_snapshot(self.state)
         return TransportFrame(
-            task_id=event.task_id,
+            session_id=event.session_id,
             kind="mutation",
             mutations=mutations,
         )
@@ -146,12 +146,12 @@ def _batch_runtime(
 ) -> Any:
     """``_execute_call`` 所需的最小 ``RuntimeContext``；投影记账见 :func:`_projected_batch`。
 
-    执行上下文由 ``_execute_call`` 按调用从这里的 run / task / workspace / event_sink 构造。
+    执行上下文由 ``_execute_call`` 按调用从这里的 run / session / workspace / event_sink 构造。
     """
 
     return runtime_stub(
-        run=SimpleNamespace(id=_RUN_ID, task_id=_TASK_ID),
-        task=SimpleNamespace(id=_TASK_ID),
+        run=SimpleNamespace(id=_RUN_ID, session_id=_SESSION_ID),
+        session=SimpleNamespace(id=_SESSION_ID),
         workspace=SimpleNamespace(id=1, root_path=str(workspace_root)),
         event_sink=event_sink or (lambda _event: None),
         tool_executor=executor,
@@ -167,9 +167,9 @@ def _projected_batch(*call_ids: str) -> ToolBatch:
 
 @pytest.fixture(autouse=True)
 def _clean_registry() -> Any:
-    tool_call_cancellation_registry.clear_task(_TASK_ID)
+    tool_call_cancellation_registry.clear_session(_SESSION_ID)
     yield
-    tool_call_cancellation_registry.clear_task(_TASK_ID)
+    tool_call_cancellation_registry.clear_session(_SESSION_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +203,7 @@ async def test_cancel_path_never_touches_shared_projection(
     tool = _make_process_tool("probe_no_projection")
     context = ToolExecutionContext(
         step_id="step-1",
-        task_id=_TASK_ID,
+        session_id=_SESSION_ID,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=_RUN_ID,
@@ -214,7 +214,7 @@ async def test_cancel_path_never_touches_shared_projection(
     timer = threading.Timer(
         0.3,
         tool_call_cancellation_registry.mark_cancelled,
-        args=(_TASK_ID, "call-cancel"),
+        args=(_SESSION_ID, "call-cancel"),
     )
     timer.start()
     try:
@@ -252,21 +252,21 @@ def _seed_running_execute_terminal(projector: ConversationEventProjector, call_i
     """在真实 projector 上初始化一个 ``execute_terminal`` 的 running part。"""
 
     projector.process(
-        RunInitializedEvent(created_at=_RUN_CREATED_AT, task_id=_TASK_ID, run_id=_RUN_ID)
+        RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=_SESSION_ID, run_id=_RUN_ID)
     )
     # 生产口径：先投影排队消息，再发只带消息身份的消费事件。
-    projector.process(consumed(_TASK_ID, _RUN_ID, 1, UserInputPresentation(text="test")))
+    projector.process(consumed(_SESSION_ID, _RUN_ID, 1, UserInputPresentation(text="test")))
     projector.process(
         RunStatusChangedEvent(
             changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             run_id=_RUN_ID,
             status="running",
         )
     )
     projector.process(
         ToolCallCreatedEvent(
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             run_id=_RUN_ID,
             turn=1,
             tool_call_id=call_id,
@@ -275,7 +275,7 @@ def _seed_running_execute_terminal(projector: ConversationEventProjector, call_i
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             run_id=_RUN_ID,
             tool_call_id=call_id,
             status="running",
@@ -333,7 +333,7 @@ def test_real_cancel_projection_keeps_streamed_output(
     _seed_running_execute_terminal(projector, "call-t")
     projector.process(
         ToolCallRuntimeUpdateEvent(
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             run_id=_RUN_ID,
             tool_call_id="call-t",
             seq=0,
@@ -346,7 +346,7 @@ def test_real_cancel_projection_keeps_streamed_output(
     streamed = "already streamed output\n"
     projector.process(
         ToolCallRuntimeUpdateEvent(
-            task_id=_TASK_ID,
+            session_id=_SESSION_ID,
             run_id=_RUN_ID,
             tool_call_id="call-t",
             seq=0,

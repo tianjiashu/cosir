@@ -68,7 +68,7 @@ export function useOpenWorkspacePath(): WorkspacePathOpener | null {
       resolve: (rawPath) => toWorkspacePath(workspaceRoot, rawPath),
       openFile: async (path, options = {}) => {
         const navigation = beginFileNavigation();
-        // 用户点的链接不随发起组件卸载失效（虚拟行滚走、切 Task），只有换工作区或被后续导航取代才放弃。
+        // 用户点的链接不随发起组件卸载失效（虚拟行滚走、切 Session），只有换工作区或被后续导航取代才放弃。
         const isCurrent = () => isCurrentWorkspace(workspaceId) && navigation.isCurrent();
         try {
           // 引用是路径指针，先确认目标还在：文件删除后打开会留下一个坏标签。

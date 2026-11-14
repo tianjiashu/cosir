@@ -1,7 +1,7 @@
 """针对 ``WorkspaceService.create_workspace`` 的「复用或创建」语义的单元测试。
 
 覆盖：同路径复用、跨平台大小写不敏感复用、新建分支、.cosir 元数据初始化（含降级）、
-非法 root_path 校验，以及同类的 list/get/create_task/delete 等配套行为以达成覆盖率。
+非法 root_path 校验，以及同类的 list/get/create_session/delete 等配套行为以达成覆盖率。
 测试彼此独立，均依赖 ``storage`` fixture 隔离数据库。
 """
 
@@ -13,13 +13,13 @@ from sqlalchemy import func, select
 
 from app.service.depends import (
     close_service_dependencies,
-    get_task_crud,
+    get_session_crud,
     get_workspace_crud,
     get_workspace_service,
 )
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.storage.model.workspace_model import WorkspaceModel
-from app.storage.store_engines import init_storage, main_session_factory
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
+from app.storage.store_engines import init_storage, main_db_factory
 from app.utils.path import system_cosir as paths
 
 
@@ -27,7 +27,7 @@ from app.utils.path import system_cosir as paths
 def storage(tmp_path: Path, install_process_singletons):
     """为创建/复用测试提供隔离的主库和 checkpoint 路径（复用既有模式）。
 
-    创建 task 与删除 workspace 会读 agent 目录与工具系统（未装配即 ``RuntimeError``）；单例必须在
+    创建 session 与删除 workspace 会读 agent 目录与工具系统（未装配即 ``RuntimeError``）；单例必须在
     主库初始化之后安装。
     """
 
@@ -40,17 +40,17 @@ def storage(tmp_path: Path, install_process_singletons):
     )
     init_storage()
     install_process_singletons()
-    task_runtime_spaces.close()
+    session_runtime_spaces.close()
     yield
-    task_runtime_spaces.close()
+    session_runtime_spaces.close()
     close_service_dependencies()
     paths.reset()
 
 
 def _count() -> int:
     """统计 workspaces 表当前行数。"""
-    with main_session_factory()() as session:
-        return int(session.scalar(select(func.count()).select_from(WorkspaceModel)) or 0)
+    with main_db_factory()() as db:
+        return int(db.scalar(select(func.count()).select_from(WorkspaceModel)) or 0)
 
 
 def _make_dir(tmp_path: Path, name: str) -> Path:
@@ -241,32 +241,32 @@ def test_list_workspaces(storage, tmp_path) -> None:
     assert names == {"a", "b"}
 
 
-def test_create_task_creates_task(storage, tmp_path) -> None:
-    # 目的：验证 create_task 在写闸门内为 workspace 创建 task
+def test_create_session_creates_session(storage, tmp_path) -> None:
+    # 目的：验证 create_session 在写闸门内为 workspace 创建 session
     # 并返回记录。潜在缺陷：未创建或异常类型错误。
     service = get_workspace_service()
-    root = _make_dir(tmp_path, "ws_task")
+    root = _make_dir(tmp_path, "ws_session")
 
     workspace = service.create_workspace("ws", str(root))
-    task = service.create_task(workspace.id, "my task")
+    session = service.create_session(workspace.id, "my session")
 
-    assert task.id is not None
-    assert task.id > 0
-    assert get_task_crud().list_ids_by_workspace(workspace.id) == [task.id]
+    assert session.id is not None
+    assert session.id > 0
+    assert get_session_crud().list_ids_by_workspace(workspace.id) == [session.id]
 
 
 def test_delete_workspace_removes_record(storage, tmp_path) -> None:
-    # 目的：验证 delete_workspace 级联删除 task 并移除 workspace
+    # 目的：验证 delete_workspace 级联删除 session 并移除 workspace
     # 记录。潜在缺陷：记录残留或事务未提交。
     service = get_workspace_service()
     root = _make_dir(tmp_path, "ws_delete")
 
     workspace = service.create_workspace("ws", str(root))
-    get_task_crud().create(workspace.id, "root")
+    get_session_crud().create(workspace.id, "root")
 
     service.delete_workspace(workspace.id)
 
     assert _count() == 0
-    assert get_task_crud().list_ids_by_workspace(workspace.id) == []
+    assert get_session_crud().list_ids_by_workspace(workspace.id) == []
     with pytest.raises(KeyError):
         get_workspace_crud().get(workspace.id)

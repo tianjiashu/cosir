@@ -7,12 +7,12 @@ import { BackgroundTasksActions, BackgroundTasksBody, BackgroundTasksSummary, us
 type AsideCardDefinition = {
   title: string;
   /** 这张卡此刻有没有可说的；没有时卡片不渲染，所有卡片都没有时侧栏与页头入口一起不出现。 */
-  useHasContent: (taskId: number | null) => boolean;
+  useHasContent: (sessionId: number | null) => boolean;
   /** 折叠时标题行右侧的一句摘要。 */
-  Summary: ComponentType<{ taskId: number }>;
+  Summary: ComponentType<{ sessionId: number }>;
   /** 标题行右侧的卡片级操作，折叠与展开时都在；没有可做的事时自己返回 null。 */
-  Actions?: ComponentType<{ taskId: number }>;
-  Body: ComponentType<{ taskId: number }>;
+  Actions?: ComponentType<{ sessionId: number }>;
+  Body: ComponentType<{ sessionId: number }>;
 };
 
 /**
@@ -27,8 +27,8 @@ export const CONVERSATION_ASIDE_CARDS: Record<AsideCardId, AsideCardDefinition> 
  * 侧栏有没有任何内容：侧栏本身与页头入口共用这一个判定。逐个调用各卡片的 `useHasContent`——卡片 id 是
  * 模块常量、顺序固定，每次渲染调用顺序一致；用 `||` 拼在后面而不是短路，保证每个 hook 每次都被调用。
  */
-export function useConversationAsideHasContent(taskId: number | null): boolean {
+export function useConversationAsideHasContent(sessionId: number | null): boolean {
   let hasContent = false;
-  for (const id of CONVERSATION_ASIDE_CARD_IDS) hasContent = CONVERSATION_ASIDE_CARDS[id].useHasContent(taskId) || hasContent;
+  for (const id of CONVERSATION_ASIDE_CARD_IDS) hasContent = CONVERSATION_ASIDE_CARDS[id].useHasContent(sessionId) || hasContent;
   return hasContent;
 }

@@ -27,14 +27,14 @@ pytestmark = [
     requires_terminal_worker,
 ]
 
-_TASK_ID = 31
+_SESSION_ID = 31
 
 
 @pytest.fixture
 def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, dict[str, Any]]]:
     calls: list[tuple[str | None, str, dict[str, Any]]] = []
 
-    def deliver(task_id, tool_call_id, conclusion, *, starts_run=True) -> bool:
+    def deliver(session_id, tool_call_id, conclusion, *, starts_run=True) -> bool:
         calls.append(
             (tool_call_id, "execute_terminal", {**conclusion.result, "card": conclusion.display_data})
         )
@@ -42,14 +42,14 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
 
     monkeypatch.setattr(CommandResultRegistry, "_enqueue_result", staticmethod(deliver))
     yield calls
-    command_results.drop_task(_TASK_ID)
+    command_results.drop_session(_SESSION_ID)
 
 
 def _context(tmp_path: Path, tool_call_id: str) -> ToolExecutionContext:
     return ToolExecutionContext(
         call_intent="test",
         step_id="step-1",
-        task_id=_TASK_ID,
+        session_id=_SESSION_ID,
         workspace_id=1,
         workspace_root=tmp_path,
         run_id=1,
@@ -70,7 +70,7 @@ def test_foreground_command_returns_its_result_without_registering(tmp_path, del
     )
     assert observation.status == "success" and not observation.background
     assert observation.content.startswith("[exit_code=0]") and "hello" in observation.content
-    assert not registered(command_results, _TASK_ID, "call-fg")
+    assert not registered(command_results, _SESSION_ID, "call-fg")
     assert delivered == []
 
 
@@ -117,8 +117,8 @@ def test_detached_foreground_command_keeps_running_without_suspending(tmp_path, 
         )
     )
     thread.start()
-    _wait_for(lambda: registered(command_results, _TASK_ID, "call-detach"))
-    assert command_results.detach(_TASK_ID, "call-detach") == "detached"
+    _wait_for(lambda: registered(command_results, _SESSION_ID, "call-detach"))
+    assert command_results.detach(_SESSION_ID, "call-detach") == "detached"
     thread.join(2)
     observation = box["observation"]
     assert observation.background and not observation.suspend
@@ -134,9 +134,9 @@ def test_cancelling_a_background_command_kills_its_process_tree(tmp_path, delive
         background=True,
         execution_context=_context(tmp_path, "call-cancel"),
     )
-    assert "call-cancel" in command_results.live_background(_TASK_ID)
-    command_results.withdraw_calls(_TASK_ID, ["call-cancel"])
-    assert command_results.live_background(_TASK_ID) == {}
+    assert "call-cancel" in command_results.live_background(_SESSION_ID)
+    command_results.withdraw_calls(_SESSION_ID, ["call-cancel"])
+    assert command_results.live_background(_SESSION_ID) == {}
     time.sleep(2.5)
     # 进程树被杀：命令没有跑完；撤销后的结论被登记表丢弃，不回投。
     assert not marker.exists()
@@ -178,7 +178,7 @@ def test_local_backend_kills_the_command_when_stopped(tmp_path) -> None:
 
 def test_parent_stop_retains_real_output_without_delivery(tmp_path, delivered) -> None:
     """停止先结束进程，最终输出写回原卡；不把取消结论回投模型。"""
-    from app.core.workflow.cancel.conversation_run_cancellation_registry import (
+    from app.core.workflow.cancel.run_cancellation_registry import (
         cancellation_registry,
     )
     marker = tmp_path / "ready"
@@ -187,11 +187,11 @@ def test_parent_stop_retains_real_output_without_delivery(tmp_path, delivered) -
         background=True, execution_context=_context(tmp_path, "call-parent-stop"),
     )
     _wait_for(marker.exists)
-    cancellation_registry.request_cancel(_TASK_ID, "user")
+    cancellation_registry.request_cancel(_SESSION_ID, "user")
     try:
-        displays = command_results.recall_task(_TASK_ID)
+        displays = command_results.recall_session(_SESSION_ID)
     finally:
-        cancellation_registry.consume(_TASK_ID)
+        cancellation_registry.consume(_SESSION_ID)
     assert "已收集" in displays["call-parent-stop"]["output"]
     assert delivered == []
 
@@ -217,7 +217,7 @@ def test_foreground_cancel_retains_real_output(tmp_path) -> None:
         )
         _wait_for(marker.exists)
         assert command_results.request_cancel(
-            _TASK_ID, "call-cancel-output", driving=False
+            _SESSION_ID, "call-cancel-output", driving=False
         )
         observation = result.result(timeout=5)
     assert observation.status == "cancelled"

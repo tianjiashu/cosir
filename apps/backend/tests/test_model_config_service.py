@@ -16,13 +16,13 @@ from app.models.errors.input_errors import UserInputRejectedError
 from app.models.model_config_file import ModelEntry
 from app.service.depends import (
     close_service_dependencies,
-    get_conversation_run_crud,
     get_model_config_service,
-    get_task_crud,
+    get_run_crud,
+    get_session_crud,
     get_workspace_crud,
 )
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.storage.store_engines import init_storage
-from app.task_runtime.task_runtime_space_registry import task_runtime_spaces
 from app.utils.path import system_cosir as paths
 from tests.model_config_fixtures import create_model_config
 
@@ -36,9 +36,9 @@ def storage(tmp_path: Path) -> Iterator[None]:
     db_dir.mkdir()
     paths.override(DATABASE_FILE=db_dir / "app.sqlite3", LOG_DIR=db_dir / "logs")
     init_storage()
-    task_runtime_spaces.close()
+    session_runtime_spaces.close()
     yield
-    task_runtime_spaces.close()
+    session_runtime_spaces.close()
     close_service_dependencies()
     paths.reset()
 
@@ -49,10 +49,10 @@ def _entry(name: str, window: int = 8, **capabilities: bool) -> ModelEntry:
 
 def _run_for(model_config_id: str) -> int:
     workspace = get_workspace_crud().create("coding-agent", str(Path.cwd()))
-    task = get_task_crud().create(workspace.id, "root")
+    session = get_session_crud().create(workspace.id, "root")
     return (
-        get_conversation_run_crud()
-        .create(task.id, status="failed", model_config_id=model_config_id)
+        get_run_crud()
+        .create(session.id, status="failed", model_config_id=model_config_id)
         .id
     )
 
@@ -175,7 +175,7 @@ def test_deleting_models_keeps_the_run_id_and_the_model_comes_back_under_the_sam
 
     service.delete_connection(config.connection.id)
 
-    assert get_conversation_run_crud().get(run_id).model_config_id == "deepseek/chat"
+    assert get_run_crud().get(run_id).model_config_id == "deepseek/chat"
     with pytest.raises(KeyError):
         service.get_config("deepseek/chat")
     with pytest.raises(UserInputRejectedError):
@@ -183,7 +183,7 @@ def test_deleting_models_keeps_the_run_id_and_the_model_comes_back_under_the_sam
     restored = create_model_config(
         name="DeepSeek", base_url="u", api_key="k", model_name="chat", context_window_k=64
     )
-    assert restored.id == get_conversation_run_crud().get(run_id).model_config_id
+    assert restored.id == get_run_crud().get(run_id).model_config_id
 
 
 def test_http_routes_return_written_connections_and_map_errors() -> None:

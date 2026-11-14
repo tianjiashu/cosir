@@ -58,6 +58,18 @@ def test_frontend_catalog_covers_every_registered_tool() -> None:
     assert registered <= catalog, f"前端工具目录缺少：{sorted(registered - catalog)}"
 
 
+@pytest.mark.usefixtures("backend_env")
+def test_tools_awaiting_a_user_decision_are_standalone() -> None:
+    """等用户决定的调用在对话里就地画成卡片；收在工具组里会随组折叠，用户看不到要他操作。"""
+    grouped = sorted(
+        definition.name
+        for definition in get_tool_registry().get_all_definitions()
+        if definition.user_decision is not None
+        and definition.conversation_presentation != "standalone"
+    )
+    assert grouped == [], f"需要用户决定的工具必须是独立工具：{grouped}"
+
+
 def test_frontend_catalog_matches_tool_names() -> None:
     assert _frontend_catalog_tools() == set(ALL_TOOL_NAMES)
 
