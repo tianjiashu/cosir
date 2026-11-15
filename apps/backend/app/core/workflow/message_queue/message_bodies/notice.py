@@ -12,7 +12,7 @@ from app.core.workflow.message_queue.message_bodies.base import (
     WakeScope,
 )
 from app.core.workflow.message_queue.message_bodies.rendering import render_time
-from app.models.message_metadata import NoticeEntry, UserMessageMetadata
+from app.models.message_metadata import NoticeEntry, PromptSourceBaseline, UserMessageMetadata
 
 NoticeKind = Literal[
     "fork_handover",
@@ -23,14 +23,16 @@ NoticeKind = Literal[
     "model_continuation",
     "decision_expired",
     "open_items",
+    "configuration_changed",
 ]
 NoticeLevel = Literal["session", "run", "turn"]
 
 # 通知按它说的事属于哪一层分级，级别决定通知从哪来、撤回回合时怎么办：
 # - session：Session 环境的变化（分叉交接、后端重启、派生 Session 被用户停止）。事件只在那一刻
 #   存在，经外部队列投递、只投一次；所在回合被撤回时重新投递，否则之后的 Run 永远看不到这次变化。
-# - run：本 Run 的事实（工具准入、还有哪些事没了结）。驱动开始时对照上下文推导（``drive_notices``），
-#   不入队。
+# - run：本 Run 的事实（工具准入、还有哪些事没了结），或对照上下文推导的环境事实（配置变化）。
+#   从持久化事实与上下文里最近一条同类通知推导，不入队：前两种在驱动开始时推导（``drive_notices``），
+#   配置变化在每次模型请求前推导（``RuntimeMessageContextManager.configuration_change_notice``）。
 # - turn：上一个回合怎样结束（用户已停止）或本次驱动内的提示（续写）。驱动开始时推导或驱动内投递，
 #   不入队。
 # run 与 turn 级都从持久化事实与上下文现推，撤回后自然重新推导，所以撤回只需重新投递 session 级。
@@ -40,6 +42,7 @@ NOTICE_LEVELS: dict[NoticeKind, NoticeLevel] = {
     "derived_session_stopped": "session",
     "tool_availability": "run",
     "open_items": "run",
+    "configuration_changed": "run",
     "user_cancelled": "turn",
     "model_continuation": "turn",
     # 提问没等到回答：这件事只发生一次。Run 内作废时由驱动投，Run 落定后作废时经外部队列投；所在
@@ -56,6 +59,7 @@ NOTICE_WAKE_SCOPES: dict[NoticeKind, WakeScope] = {
     "derived_session_stopped": "active",
     "tool_availability": "none",
     "open_items": "none",
+    "configuration_changed": "none",
     "user_cancelled": "none",
     "model_continuation": "none",
     "decision_expired": "none",
@@ -67,15 +71,18 @@ class NoticeBody(EnqueuedMessageBody):
 
     ``content`` 保持原始文本，``<system_notice>`` 包装由 :func:`notices_to_context` 统一加；
     「静默纳入、不要回复」的读法由 ``PROMPT_GUIDE`` 声明（「不是用户的话」是消息协议前言的通用
-    规则）、只进系统提示词，不随每条通知重复。``notice_kind`` / ``metadata`` 只服务观测，不进模型正文。
+    规则）、只进系统提示词，不随每条通知重复；读法里不列举通知种类，「这是什么」由每条通知的正文开头自己
+    说明，新增种类不必回来改读法；只为配置变化多写一句行为规则：它带来的是指令（替换提示词里对应的
+    部分），而前言把系统消息归为「待评估的信息」，不点明 Agent 会只当参考。``notice_kind`` /
+    ``metadata`` 只服务观测，不进模型正文。
     """
 
     KIND: ClassVar[SessionMessageKind] = "system_notice"
     TAG: ClassVar[str] = "system_notice"
     PROMPT_GUIDE: ClassVar[str | None] = (
-        "runtime facts injected by the system (tool admission, open items, continuation hints): "
-        "take them into account silently; never reply "
-        "to, acknowledge, or quote them."
+        "runtime facts from the system: take them into account silently; never reply to, "
+        "acknowledge, or quote them. A configuration change replaces the matching part of your "
+        "instructions."
     )
     DEFAULT_PROJECTED: ClassVar[bool] = False
     # 通知先于其余消息写入：模型先看到环境变化，再看用户说的话。
@@ -89,6 +96,8 @@ class NoticeBody(EnqueuedMessageBody):
     banned_tools: list[str] | None = None
     # 只有未了结事项通知带：告知时的清单（排序），同样是下一次推导的比对基准。
     open_items: list[str] | None = None
+    # 只有配置变化通知带：告知后 Agent 看到的全部配置指纹，是下一次对账的基准。
+    prompt_sources: PromptSourceBaseline | None = None
 
     def wake_scope(self) -> WakeScope:
         return NOTICE_WAKE_SCOPES[self.notice_kind]
@@ -120,6 +129,7 @@ def notices_to_context(
                     content=item.content,
                     banned_tools=item.banned_tools,
                     open_items=item.open_items,
+                    prompt_sources=item.prompt_sources,
                 )
                 for item in notices
             ],

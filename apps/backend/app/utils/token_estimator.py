@@ -58,6 +58,23 @@ class TokenEstimator:
         # 不作为计费依据。非空文本至少计 1 token（即使极短纯英文）。
         return max(1, tokens)
 
+    @classmethod
+    def truncate(cls, text: str, max_tokens: int) -> str:
+        """截出估算 token 不超过 ``max_tokens`` 的最长前缀（二分查找字符边界，纯启发式）。
+
+        系统提示词各层的预算闸门共用它；未超限时原样返回。
+        """
+        if cls.estimate(text) <= max_tokens:
+            return text
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if cls.estimate(text[:mid]) <= max_tokens:
+                lo = mid
+            else:
+                hi = mid - 1
+        return text[:lo]
+
     @staticmethod
     def _is_cjk(ch: str) -> bool:
         """判断单个字符是否属于中日韩（CJK）相关区间（含中文常用字符与全角标点）。

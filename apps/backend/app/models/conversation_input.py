@@ -29,7 +29,7 @@ class AgentReport(BaseModel):
 
 class MessageSource(BaseModel):
     """Agent 消息的发送方：去哪儿看它（``session_id``）、叫它什么（``name``，发送时的显示名快照），以及
-    这条消息是不是它的汇报（``report``）。
+    这条消息是不是它的汇报（``report``），以及它是不是收件方的派生方（``from_deriver``）。
 
     委派与追加消息的来源是父 Session，派生 Session 的汇报来源是它自己。名字是快照，来源改名或被删不回写
     已发出的消息。
@@ -41,6 +41,10 @@ class MessageSource(BaseModel):
     session_id: int
     name: str
     report: AgentReport | None = None
+    # 发送方是不是收件 Session 的派生方（``SessionRecord.derived_by``）：委派与 Agent fork 的任务说明、派生方
+    # 后来追加的消息都是。只给模型看（渲染成 ``relation="parent"``，见 ``AgentMessageBody``）：其他 Agent
+    # 的消息是待评估的信息，派生方的消息是这个 Session 的任务；不投影到前端。
+    from_deriver: bool = False
 
 
 class UserInputPresentation(BaseModel):

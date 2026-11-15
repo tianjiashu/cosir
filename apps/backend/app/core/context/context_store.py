@@ -18,7 +18,11 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.config.logging.logger import log
 from app.core.context.context_entry import ContextEntry
-from app.models.message_metadata import MessageMetadata, empty_message_metadata
+from app.models.message_metadata import (
+    MessageMetadata,
+    SystemMessageMetadata,
+    empty_message_metadata,
+)
 from app.models.session_context import (
     SessionContextRecord,
     run_last_turn_withdrawn,
@@ -183,13 +187,17 @@ class ContextStore:
         return self.to_system_prompt_entry(session_id, existing)
 
     def create_system_prompt(
-        self, session_id: int, prompt: ChatCompletionSystemMessageParam
+        self,
+        session_id: int,
+        prompt: ChatCompletionSystemMessageParam,
+        metadata: SystemMessageMetadata,
     ) -> ContextEntry:
         """持久化新 Session 的完整系统提示词并返回其 canonical entry。
 
         参数:
             session_id: 提示词所属 Session。
             prompt: 由 ``SystemPromptBuilder`` 生成的完整系统提示词。
+            metadata: 生成它时各配置来源的指纹（初始基准），与提示词同一行落库。
 
         返回:
             sequence 固定为 0、``run_id`` 为 None 的新 system entry。
@@ -211,6 +219,7 @@ class ContextStore:
             include_in_context=True,
             sequence=SESSION_SYSTEM_PROMPT_SEQUENCE,
             turn=SESSION_SYSTEM_PROMPT_TURN,
+            metadata=metadata,
         )
         self._crud.create(record)
         log.info(

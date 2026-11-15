@@ -120,6 +120,8 @@ def test_question_and_explicit_reply_are_two_ordinary_messages(env, tmp_path) ->
         assert not command_results.live_background(sender)
     assert env.enqueued == [(_PARENT, "agent-message:A or B?"), (_CHILD, "agent-message:A")]
     assert not env.delivered
+    # 只有派生方发给自己派生的 Session 才标为 parent：子 Agent 据此把它当任务，其余按信息评估。
+    assert [prepared["source"].from_deriver for prepared in env.prepared] == [False, True]
 
 
 def test_peers_can_send_but_self_and_other_workspace_are_refused(env, tmp_path, monkeypatch) -> None:

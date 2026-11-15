@@ -217,7 +217,9 @@ class DelegateTaskTool(HandlerBase):
                 child_session.id,
                 prepare_agent_message(
                     message,
-                    source=MessageSource(session_id=parent_session.id, name=parent_session.title),
+                    source=MessageSource(
+                        session_id=parent_session.id, name=parent_session.title, from_deriver=True
+                    ),
                     agent_id=child_agent_id,
                     model_config_id=model_config_id,
                     reasoning_effort=reasoning_effort,

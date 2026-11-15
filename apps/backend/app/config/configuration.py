@@ -27,7 +27,6 @@ from app.core.agents.agent_profile_registry import (
 from app.core.tool.tool_registry import ToolRegistry
 
 if TYPE_CHECKING:
-    from app.core.agents.agent_profile import AgentProfile
     from app.core.tool.execute.tool_executor import ToolExecutor
 
 _AGENT_REGISTRY: AgentProfileRegistry | None = None
@@ -76,79 +75,26 @@ def get_agent_registry() -> AgentProfileRegistry:
     return _AGENT_REGISTRY
 
 
-def build_agent_registry(
-    main_agent_system_prompt: str = "",
-    *,
-    main_agent_max_steps: int = 300,
-) -> AgentProfileRegistry:
-    """构建进程级 Registry：补齐内置子 Agent 的配置文件，再注册代码维护的主 Agent。
+def build_agent_registry() -> AgentProfileRegistry:
+    """构建进程级 Registry，并补齐内置子 Agent 的配置文件。
 
-    子 Agent（含内置的）一律来自配置文件，不在此处读取：Registry 在某个作用域首次被读取时经注入的
-    ``AgentProfileScopeSource`` 自行装载，因此运行期新建的 workspace 同样能被解析到。内置子 Agent 的
-    文件在这里、系统作用域首次装载之前补齐，写入目录取自同一个来源映射，保证装载时读得到。
+    Registry 不在这里装载任何 profile：主 Agent 与子 Agent 都在作用域被读取时由
+    ``AgentProfileScopeSource`` 从配置文件生成，签名变了就重读（见 ``AgentProfileRegistry``）。内置子
+    Agent 的文件在这里补齐，写入目录取自同一个来源映射，保证读取时读得到。
 
-    主 Agent 由代码构造并注册到 system 作用域，先于配置文件进索引，同名文件因此顶替不了它；它的
-    prompt 由系统配置 service 从用户文件读取后注入，用户尚未配置时传空串（不生成 ``<agent_layer>``）。
-    ``max_steps`` 由装配层传入，默认值与 ``Settings`` 的默认配置一致。
-
-    构造器在本地延迟导入：``app.core.agents.define_agents`` 与配置 service 在模块级又会回引
-    ``app.config.configuration``，顶层导入会形成循环。
-
-    返回:
-        已播种完成的 ``AgentProfileRegistry``。
+    构造器在本地延迟导入：配置 service 在模块级又会回引 ``app.config.configuration``，顶层导入会形成循环。
 
     副作用:
-        可能在系统 ``.cosir/agents`` 下写入缺失的内置子 Agent 文件（失败只记日志）；构造并填充一个
-        全新的 registry 实例（调用方持有，不写入进程级单例）。
+        可能在系统 ``.cosir/agents`` 下写入缺失的内置子 Agent 文件（失败只记日志）；构造一个全新的
+        registry 实例（调用方持有，不写入进程级单例）。
     """
 
     from app.core.agents.agent_profile_source import AgentProfileScopeSource
-    from app.core.agents.define_agents import main_agent
     from app.service.configuration.agents.builtin_agents import seed_builtin_agent_files
 
     registry = AgentProfileRegistry(AgentProfileScopeSource())
     seed_builtin_agent_files(registry.source.directory(AgentProfileRegistry.SYSTEM_WORKSPACE))
-    registry.register(
-        AgentProfileRegistry.SYSTEM_WORKSPACE,
-        main_agent(system_prompt=main_agent_system_prompt, max_steps=main_agent_max_steps),
-    )
     return registry
-
-
-def replace_main_agent_profile(
-    *,
-    system_prompt: str | None = None,
-    max_steps: int | None = None,
-) -> AgentProfile:
-    """按当前 Registry profile 重建并替换主 Agent。
-
-    参数:
-        system_prompt: 新的主 Agent prompt；为 ``None`` 时保留当前正文。
-        max_steps: 新的单轮最大步数；为 ``None`` 时保留当前预算。
-
-    返回:
-        已替换进 Registry 的新主 Agent profile。
-
-    异常:
-        RuntimeError: Registry 未初始化，或其中不存在主 Agent profile。
-
-    副作用:
-        原子替换进程级 Registry 中的主 Agent profile。已经从旧 profile 派生的 Run 不受影响，
-        后续从 Registry 解析 profile 的新 Run 使用新配置。
-    """
-
-    from app.core.agents.define_agents import main_agent
-
-    registry = get_agent_registry()
-    current = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
-    if current is None:
-        raise RuntimeError("main agent profile is unavailable")
-    replacement = main_agent(
-        system_prompt=current.system_prompt if system_prompt is None else system_prompt,
-        max_steps=current.max_steps if max_steps is None else max_steps,
-    )
-    registry.replace(AgentProfileRegistry.SYSTEM_WORKSPACE, replacement)
-    return replacement
 
 
 def set_tool_registry(registry: ToolRegistry) -> None:

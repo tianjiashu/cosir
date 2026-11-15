@@ -82,9 +82,9 @@ class UserInputBody(EnqueuedMessageBody):
         "the user's own words to you. Capsules in it are pointers the user attached: "
         "`<file path>` is a local file, `<ref path>` a workspace path (an empty path means "
         "the workspace root) with optional `lines` or `page`, `<skill name path>` a Skill "
-        "the user picked. Read them with read_file (PDFs through a Skill or script); for "
-        "`<skill>`, read its `path` or call skill(action='load') first, then follow it. "
-        "`image_paths` lists attached images by local path."
+        "the user picked for this request (load it, then follow it). `image_paths` lists the "
+        "local paths of the images attached to this message; the images themselves are "
+        "included."
     )
     PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = True

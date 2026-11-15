@@ -10,9 +10,35 @@ from app.models.enums.tool_call_status import ToolCallEventStatus
 
 
 class EmptyMessageMetadata(BaseModel):
-    """system/developer/function 消息没有额外持久化信息。"""
+    """developer/function 消息没有额外持久化信息。"""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class PromptSourceEntry(BaseModel):
+    """Agent 已看到的一个配置条目：指纹判断变没变，原文用来算差异（配置变化通知只发 diff）。
+
+    原文只存在 metadata 里、不进模型请求；指纹不一定由原文算出（Skill 条目原文是名称与描述，指纹含正文）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    fingerprint: str
+    text: str
+
+
+PromptSourceBaseline = dict[str, dict[str, PromptSourceEntry]]
+"""Agent 已看到的配置：来源键 → 条目键 → 条目（见 ``core.context.prompt_sources``）。"""
+
+
+class SystemMessageMetadata(BaseModel):
+    """Session 固定系统提示词（seq 0）的附属信息：生成它时各配置来源的指纹。
+
+    提示词创建后不再改写，这份指纹就是「Agent 一开始看到的配置」，是之后判断配置变化的初始基准；
+    分叉原样复制这一行，基准随之继承。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    prompt_sources: PromptSourceBaseline
 
 
 MessageKind = Literal[
@@ -39,13 +65,15 @@ TURN_INPUT_KINDS: frozenset[MessageKind] = frozenset({"user_input", "agent_messa
 class NoticeEntry(BaseModel):
     """合成进一条 ``<system_notice>`` 的单条通知：撤回回合时据此重新投递 Session 级通知，工具准入
     通知的推导据 ``banned_tools`` 对照上次告知的禁用集合，未了结事项通知据 ``open_items`` 对照上次
-    告知的清单（见 ``NOTICE_LEVELS``）。"""
+    告知的清单，配置变化通知据 ``prompt_sources`` 对照上次告知后的配置指纹（见 ``NOTICE_LEVELS``）。"""
 
     model_config = ConfigDict(extra="forbid")
     notice_kind: str
     content: str
     banned_tools: list[str] | None = None
     open_items: list[str] | None = None
+    # 配置变化通知的基准：告知后 Agent 看到的全部配置指纹（见 ``SystemMessageMetadata``）。
+    prompt_sources: PromptSourceBaseline | None = None
 
 
 class UserMessageMetadata(BaseModel):
@@ -139,7 +167,11 @@ class ToolMessageMetadata(BaseModel):
 
 
 MessageMetadata = (
-    EmptyMessageMetadata | UserMessageMetadata | AssistantMessageMetadata | ToolMessageMetadata
+    EmptyMessageMetadata
+    | SystemMessageMetadata
+    | UserMessageMetadata
+    | AssistantMessageMetadata
+    | ToolMessageMetadata
 )
 
 
@@ -152,7 +184,9 @@ def parse_message_metadata(role: str, value: object) -> MessageMetadata:
         metadata_type = AssistantMessageMetadata
     elif role == "tool":
         metadata_type = ToolMessageMetadata
-    elif role in {"system", "developer", "function"}:
+    elif role == "system":
+        metadata_type = SystemMessageMetadata
+    elif role in {"developer", "function"}:
         metadata_type = EmptyMessageMetadata
     else:
         raise ValueError(f"unsupported message role: {role}")

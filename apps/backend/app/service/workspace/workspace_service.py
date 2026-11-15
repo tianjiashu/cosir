@@ -14,6 +14,7 @@ from pathlib import Path
 
 from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
+from app.core.context.prompt_sources.cache import projection_cache
 from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_schemas
 from app.models import SessionRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
@@ -349,11 +350,11 @@ class WorkspaceService:
 
     @staticmethod
     def _drop_workspace_config_scopes(root_path: str) -> None:
-        """卸载已删除 workspace 的 Agent 配置作用域缓存，并丢掉它的 MCP 本机测试记录。
+        """卸载已删除 workspace 的 Agent 配置作用域与提示词来源投影缓存，并丢掉它的 MCP 本机测试记录。
 
-        为什么需要：Agent 配置注册表按「作用域只装载一次」缓存（见 ``AgentProfileRegistry``）。workspace 删除后同一
-        路径可能被重新创建（``create_workspace`` 复用同路径记录），若保留缓存就再也读不到新目录
-        内容，已删除的 Agent 也会一直留在进程内。MCP 测试记录按工作区路径存放，同一路径换成
+        为什么需要：Agent 配置注册表为每个读过的作用域留一份快照（见 ``AgentProfileRegistry``），
+        workspace 删除后不再有人读它，丢掉快照释放内存（再读时按签名从磁盘重建，内容不会过时）。
+        MCP 测试记录按工作区路径存放，同一路径换成
         另一个仓库时命令字面可能相同、内容却变了，所以一并丢掉、要求重新测试。清理在数据库提交成功后
         进行，与运行期缓存回收同一时机。
 
@@ -371,4 +372,5 @@ class WorkspaceService:
         """
 
         get_agent_registry().drop_scope(root_path)
+        projection_cache.drop_scope(root_path)
         MCPMachineState.drop_scope(ExtensionScope.workspace(root_path))

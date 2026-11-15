@@ -2,8 +2,9 @@
 
 步与步之间的停止都在这里落定；模型请求中、工具执行中的取消仍由 model 节点与工具运行器就地中断。
 mailbox 是进入 Run 的唯一通道：外部队列行的副本确认（删除外部队列行）与 context 写入同一事务提交，
-消息不会丢也不会并入两次；执行内通知没有队列行，写入即可。全部通知（两种来源）先写、合成
-一条 ``<system_notice>``，其余消息再按优先级逐条写。本节点不读外部队列、不按模型截断、不持
+消息不会丢也不会并入两次；执行内通知没有队列行，写入即可。写入前先对账配置（``RuntimeMessageContextManager.configuration_change_notice``：
+Agent 看到的配置变了就投一条净差异通知）。全部通知（两种来源）先写、合成一条 ``<system_notice>``，
+其余消息再按优先级逐条写。本节点不读外部队列、不按模型截断、不持
 Session 闸门。Run 首次并入用户输入后，顺带启动标题支线（``branch.session_title``，每个 Run 至多
 一次），它与主线并行、不影响流转。
 
@@ -96,6 +97,7 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
         if routed is not None:
             return {**route_state(state.step_count, ReactRoute.TOOLS), "batch": routed, "wait_for_input": False}
     await asyncio.to_thread(_expire_decisions_on_user_input, step_id)
+    await asyncio.to_thread(_reconcile_configuration)
     notices = rc.mailbox.take_notices()
     if notices:
         await asyncio.to_thread(_write_notices, notices)
@@ -114,6 +116,14 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
         patch["title_requested"] = True
     # 下一模型步不再看上一批观察或复用本次挂起请求。
     return patch
+
+
+def _reconcile_configuration() -> None:
+    """Agent 看到的配置变了就投一条净差异通知，与本批其余通知合成一条写入；工作线程执行。"""
+    rc = _runtime_context()
+    notice = _message_context().configuration_change_notice(rc.agent)
+    if notice is not None:
+        rc.mailbox.notify(notice)
 
 
 def _expire_decisions_on_user_input(step_id: str) -> None:

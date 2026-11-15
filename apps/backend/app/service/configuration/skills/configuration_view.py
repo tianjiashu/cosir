@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from app.core.context.system_prompt_builder import SystemPromptBuilder
+from app.core.context.prompt_sources.sources.skills import render_skill_catalog
 from app.service.configuration.skills.catalog import (
     SKILL_FILE_NAME,
     SkillCatalog,
@@ -103,7 +103,7 @@ class SkillCatalogView:
             (info for info in effective.values() if info.offered_to_model),
             key=lambda info: info.name,
         )
-        catalog_text = SystemPromptBuilder.render_skill_catalog(
+        catalog_text = render_skill_catalog(
             (info.name, info.description) for info in offered
         )
         return cls(groups, len(offered), TokenEstimator.estimate(catalog_text))

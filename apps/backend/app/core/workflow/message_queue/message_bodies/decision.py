@@ -30,8 +30,8 @@ class DecisionBody(EnqueuedMessageBody):
     KIND: ClassVar[SessionMessageKind] = "user_decision"
     TAG: ClassVar[str] = "user_decision"
     PROMPT_GUIDE: ClassVar[str | None] = (
-        "the user's own decision on the call named by `tool_call_id`; `feedback`, if present, "
-        "is in their own words."
+        "the user's own decision on the call it continues; `feedback`, if present, is in their "
+        "own words."
     )
     PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = False

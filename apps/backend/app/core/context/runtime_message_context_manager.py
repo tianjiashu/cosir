@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal, cast
 
 from openai.lib.streaming.chat import ParsedChatCompletionSnapshot
@@ -27,6 +28,8 @@ from app.core.context.context_store import (
     SESSION_SYSTEM_PROMPT_SEQUENCE,
     ContextStore,
 )
+from app.core.context.prompt_sources.source import SourceContext
+from app.core.context.prompt_sources.view import PromptSourceView
 from app.core.context.tool_call_closure import (
     ContextProtocolError,
     ToolCallClosurePlan,
@@ -35,6 +38,7 @@ from app.core.context.tool_call_closure import (
 )
 from app.core.context.vision_input import resolve_messages_for_model
 from app.core.llm_provider.message_codec import assistant_message
+from app.core.workflow.message_queue.message_bodies.notice import NoticeBody
 from app.models import (
     RunRecord,
     WorkspaceRecord,
@@ -44,6 +48,8 @@ from app.models.message_metadata import (
     AssistantMessageMetadata,
     MessageMetadata,
     NoticeEntry,
+    PromptSourceBaseline,
+    SystemMessageMetadata,
     ToolMessageMetadata,
     UserMessageMetadata,
     empty_message_metadata,
@@ -52,6 +58,7 @@ from app.models.session_context import (
     SessionContextRecord,
 )
 from app.utils.message_content import content_to_text
+from app.utils.workspace_instruction import find_workspace_instruction_file
 
 
 def _is_turn_input(
@@ -112,22 +119,25 @@ class RuntimeMessageContextManager:
     _max_turn: int = field(default=0, init=False)
     _run_turn: int | None = field(default=None, init=False)
     _run_shown: bool = field(default=False, init=False)
+    # 本次驱动定位到的工作区指令文件（见 ``SourceContext.workspace_instruction``）；每次 begin_run 重新定位。
+    _workspace_instruction: tuple[Path, Path] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         """恢复 Session 固定系统提示词；其余消息由 :meth:`begin_run` 加载。
 
-        新 Session 使用当前配置构建并持久化完整 system prompt；已有 Session 始终恢复首次持久化的
-        内容，因此配置变化不会改写历史 Session 的模型消息前缀。
+        新 Session 使用当前配置构建并持久化完整 system prompt，连同生成它时各配置来源的指纹；已有
+        Session 始终恢复首次持久化的内容，因此配置变化不会改写历史 Session 的模型消息前缀。
         """
         store = self.context_store
         self._system_entry = store.get_system_prompt(self.current_session_id)
         if self._system_entry is None:
-            system_prompt_text = SystemPromptBuilder.build(
+            prompt = SystemPromptBuilder.build(
                 self.agent, self.workspace.root_path, self.tool_names, self.writable_root
             )
             self._system_entry = store.create_system_prompt(
                 self.current_session_id,
-                {"role": "system", "content": system_prompt_text},
+                {"role": "system", "content": prompt.text},
+                SystemMessageMetadata(prompt_sources=prompt.baseline),
             )
 
     def begin_run(self, run: RunRecord) -> None:
@@ -160,6 +170,9 @@ class RuntimeMessageContextManager:
             _is_turn_input(r.message, r.metadata, r.project_to_transport)
             or _is_visible_reply(r.message)
             for r in written
+        )
+        self._workspace_instruction = find_workspace_instruction_file(
+            Path(self.workspace.root_path)
         )
 
     @property
@@ -346,6 +359,57 @@ class RuntimeMessageContextManager:
         )
         self._track(entry, in_context=include_in_context)
         return entry
+
+    @property
+    def prompt_source_baseline(self) -> PromptSourceBaseline:
+        """Agent 当前看到的配置：上下文里最近一条配置变化通知记下的，没有就是系统提示词生成时的。
+
+        取自上下文而不是进程内记忆（与 ``drive_notices`` 同一做法）：撤回移出通知后基准随之回退，分叉随
+        系统行与通知行继承，重启后照样成立。内存列表倒序扫描，每步一次的成本可以忽略。
+        """
+        latest = self.latest_notice("configuration_changed")
+        if latest is not None and latest[1].prompt_sources is not None:
+            return latest[1].prompt_sources
+        metadata = cast(ContextEntry, self._system_entry).metadata
+        return cast(SystemMessageMetadata, metadata).prompt_sources
+
+    def configuration_change_notice(self, agent: AgentRuntimeConfig) -> NoticeBody | None:
+        """对账配置：当前配置相对 Agent 已看到的基准有变化时返回净差异通知，没有变化时返回 ``None``。
+
+        系统提示词创建时固化，之后子 Agent、MCP、Skill、AGENTS.md、Agent 预设或回复语言再变，Agent
+        都看不到；这里说明变了什么，并把告知后的全部条目随通知落库，成为下一次对账的基准。生成提示词、
+        记下基准、对账都在本对象：三者必须用同一份投影与同一套适用规则。
+
+        - prepare_input 在每次模型请求前调用，而不是只在驱动开始时：运行中改了 AGENTS.md，下一步就该
+          生效。读盘的来源按文件签名缓存（``prompt_sources.cache``），签名没变时只是几次 stat；工作区
+          指令文件每次驱动定位一次（见 ``SourceContext.workspace_instruction``）。
+        - 通知不唤醒、不开新 Run（``NOTICE_WAKE_SCOPES``）：空闲的 Session 等下次推进时再对账，到时只说
+          净差异，改了又改回去就什么都不说。
+        - 子 Agent、分叉 Session 走同一条路：哪些来源适用由 Session 固化的工具名与传入的 Agent 决定，
+          不按 Session 类型区分。
+
+        参数:
+            agent: 本次驱动装配时解析的 Agent（``RuntimeContext.agent``）；驱动中途改了预设，下一次驱动
+                （挂起后唤醒、恢复或新 Run）才会告知。
+
+        副作用:
+            经各来源读取配置；不写库，通知由 prepare_input 与本批其余通知一起写入，写入后就是新的基准。
+        """
+
+        view = PromptSourceView.collect(
+            SourceContext(
+                self.workspace.root_path,
+                frozenset(self.tool_names),
+                agent,
+                self._workspace_instruction,
+            )
+        )
+        content = view.describe_changes(self.prompt_source_baseline)
+        if not content:
+            return None
+        return NoticeBody(
+            content=content, notice_kind="configuration_changed", prompt_sources=view.baseline()
+        )
 
     def latest_notice(self, notice_kind: str) -> tuple[int | None, NoticeEntry] | None:
         """上下文里最近一条 ``notice_kind`` 通知与它所在行的 Run（继承行为 ``None``）。

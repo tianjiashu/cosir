@@ -262,3 +262,14 @@ def test_build_baseline_covers_applicable_sources_and_tracks_content(
     assert first.baseline["workspace_instructions"] != second.baseline["workspace_instructions"]
     assert first.baseline["agent_preset"] == second.baseline["agent_preset"]
     assert "v2" in second.text
+
+
+def test_capsule_reading_follows_the_tools_the_session_has():
+    """胶囊怎么读是工具用法：只在有对应工具时写进工具层，消息协议只讲语法。"""
+
+    with_both = _tool_layer(["read_file", "skill"])
+    assert "Read `<file>` and `<ref>` capsules from the user with read_file" in with_both
+    assert "skill(action='load') before following it" in with_both
+    without = _tool_layer(["execute_terminal"])
+    assert "capsule" not in without
+    assert "read_file" not in spb.SystemPromptBuilder._build_message_context("/workspace")

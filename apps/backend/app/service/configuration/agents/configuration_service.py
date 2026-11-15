@@ -1,8 +1,8 @@
 """system/workspace 作用域的子 Agent JSON 配置 service。
 
-本 service 以 ``AgentProfileRegistry`` 作为运行时事实源，以作用域对应的 `.cosir/agents/*.json` 作为
-持久化载体。所有配置写入都复用 ``parse_agent_profile_document`` 完成校验，并在文件操作成功
-后同步注册表；本 service 不实现第二套 profile 加载或状态缓存。写入收 ``AgentConfiguration``、
+作用域对应的 `.cosir/agents/*.json` 是唯一事实源。写入复用 ``parse_agent_profile_document`` 完成校验后
+只写文件；``AgentProfileRegistry`` 按文件签名在下一次读取时看到变化，本 service 不同步注册表、也不实现
+第二套 profile 加载或状态缓存。读取（列表、存在性）走注册表。写入收 ``AgentConfiguration``、
 读取给 ``AgentConfigurationEntry``，界面需要的展示字段由 API 层按条目投影。
 """
 
@@ -35,7 +35,7 @@ _AGENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 class AgentConfigurationService:
-    """管理指定作用域子 Agent 的持久化文件与进程内注册表同步。
+    """管理指定作用域子 Agent 的持久化文件。
 
     ``workspace_root`` 为空时管理 system 作用域；传入 workspace 根路径时只管理该 workspace
     的本地文件。系统内置子 Agent 可以修改、不能删除，workspace 配置不会覆盖 system 作用域。
@@ -86,26 +86,21 @@ class AgentConfigurationService:
         return [self._entry(profile) for profile in profiles]
 
     def create(self, document: AgentConfiguration) -> AgentConfigurationEntry:
-        """校验并创建当前作用域的 Agent JSON。
+        """校验并创建当前作用域的 Agent JSON；注册表按文件签名在下一次读取时看到它。
 
-        落盘前先确保该作用域已装载，避免「先注册、后首次读取」时新文件被读回并与内存项撞成重复，
-        产生与实际不符的告警。
+        当前作用域已能解析到同名 Agent（本作用域的另一个文件、主 Agent，或 workspace 上会遮住它的
+        系统级 Agent）时拒绝：写下去也不会生效。
         """
 
         self._validate_agent_id(document.agent_id)
-        self.registry.ensure_scope_loaded(self.scope)
         target = self._path_for(document.agent_id)
         with file_store.locked(target):
             if target.exists():
                 raise FileExistsError(document.agent_id)
             profile = self._profile_from_document(document, target)
-            if not self.registry.register(self.scope, profile):
+            if self.registry.resolve(self.scope, document.agent_id) is not None:
                 raise AgentConfigurationError(f"Agent 已注册，不允许重复创建: {document.agent_id}")
-            try:
-                file_store.write_json(target, document.to_json_document(), root=self.directory)
-            except Exception:
-                self.registry.unregister(self.scope, profile.agent_id)
-                raise
+            file_store.write_json(target, document.to_json_document(), root=self.directory)
         return self._saved(profile, target)
 
     def update(self, agent_id: str, document: AgentConfiguration) -> AgentConfigurationEntry:
@@ -121,7 +116,6 @@ class AgentConfigurationService:
             raise KeyError(agent_id)
         with file_store.locked(target):
             file_store.write_json(target, document.to_json_document(), root=self.directory)
-            self.registry.replace(self.scope, profile)
         return self._saved(profile, target)
 
     def delete(self, agent_id: str) -> None:
@@ -138,7 +132,6 @@ class AgentConfigurationService:
             raise KeyError(agent_id)
         with file_store.locked(target):
             file_store.delete_file(target, root=self.directory)
-            self.registry.unregister(self.scope, agent_id)
         log.info(
             "configuration_agent_deleted",
             extra={

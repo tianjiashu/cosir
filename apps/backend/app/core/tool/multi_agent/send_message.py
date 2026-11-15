@@ -80,7 +80,11 @@ class SendMessageTool(HandlerBase):
                     session_id,
                     prepare_agent_message(
                         message,
-                        source=MessageSource(session_id=sender.id, name=sender.title),
+                        source=MessageSource(
+                            session_id=sender.id,
+                            name=sender.title,
+                            from_deriver=target.derived_by(sender.id),
+                        ),
                         agent_id=launch.agent_id,
                         model_config_id=launch.model_config_id,
                         reasoning_effort=launch.reasoning_effort,

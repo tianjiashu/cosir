@@ -41,9 +41,7 @@ from app.core.events.event_sink import set_event_sink
 from app.core.tool.background_commands import set_background_commands
 from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.service.browser.tab_reclaim import schedule_tab_reclaim
-from app.service.configuration.instructions.main_agent_prompt_service import (
-    MainAgentPromptConfigurationService,
-)
+from app.service.configuration import file_store
 from app.service.depends import (
     close_service_dependencies,
     get_conversation_event_projector,
@@ -57,7 +55,11 @@ from app.tools.tool_handler.terminal.command_results import command_results
 from app.tools.tool_registration import build_tool_registry
 from app.utils.json_utils import JsonFileError, read_json_object
 from app.utils.path import system_cosir as paths
-from app.utils.path.system_cosir import system_cosir_dir
+from app.utils.path.system_cosir import (
+    system_cosir_dir,
+    system_instruction_file,
+    system_main_agent_prompt_file,
+)
 
 
 def _on_background_changed(session_id: int) -> None:
@@ -146,8 +148,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
 
     副作用:
         按启动顺序安装日志管线、加载配置、初始化服务依赖、创建系统级 ``.cosir`` 目录、
-        构建 Agent 注册表（注册主 Agent、补齐缺失的内置子 Agent 配置文件；配置文件由注册表在作用域
-        首次被读取时按需装载）、装配工具系统，再收敛遗留 Run，并在就绪后写入 ``ready`` 启动状态；关闭时
+        构建 Agent 注册表（补齐缺失的内置子 Agent 配置文件；主 Agent 与子 Agent 由注册表读取作用域时
+        从配置文件生成，按文件签名重读）、装配工具系统，再收敛遗留 Run，并在就绪后写入 ``ready`` 启动状态；关闭时
         关闭 Run 执行与终端会话、flush 观测数据、关闭服务依赖，最后写入 ``stopped``
         启动状态并卸载日志管线。日志管线共安装两次：先按当前 ``paths.LOG_DIR`` 建立最小
         管线，覆盖配置加载与依赖初始化的失败窗口；``Settings.load()`` 触发 ``paths.reset()``
@@ -169,16 +171,10 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         backup_count=Constant.Logging.BACKUP_COUNT,
     )
     _ensure_system_cosir_dir()
-    # 确保系统级 Agent 配置目录存在，作为用户手工放置自定义配置的固定位置。
-    # 配置内容不在此处装载：registry 在各作用域首次被读取时按需装载，因此启动之后
-    # 才创建的 workspace（或运行期新放入的 JSON）无需重启后端就能被解析到；坏配置由装载来源
-    # 记日志并降级，不影响 Run。
+    # 确保系统级 Agent 配置目录存在，作为用户手工放置自定义配置的固定位置。配置内容不在此处装载：
+    # registry 读取作用域时按文件签名重读，运行期新建的 workspace、手动改动的配置都无需重启。
     ensure_system_agent_config_dir()
-    main_agent_prompt = MainAgentPromptConfigurationService().read().content
-    agent_registry = build_agent_registry(
-        main_agent_prompt,
-        main_agent_max_steps=Settings.MAIN_AGENT_MAX_STEPS,
-    )
+    agent_registry = build_agent_registry()
     set_agent_registry(agent_registry)
     set_tool_registry(build_tool_registry())
 
@@ -323,14 +319,20 @@ def _ensure_system_cosir_dir() -> None:
         无：目录创建失败只记 error 日志，不向上抛出，避免元数据目录不可用阻断后端启动。
 
     副作用:
-        在 ``system_cosir_dir()`` 创建目录（已存在则幂等跳过）；创建成功
+        在 ``system_cosir_dir()`` 创建目录与空白的全局 ``AGENTS.md``、主 Agent 提示词（已存在则幂等跳过）；创建成功
         写 ``system_cosir_initialized`` info 日志，失败写 ``system_cosir_init_failed``
         error 日志。
     """
 
     cosir_dir = system_cosir_dir()
+    instruction_file = system_instruction_file()
     try:
         cosir_dir.mkdir(parents=True, exist_ok=True)
+        # 全局 AGENTS.md 与主 Agent 提示词先建成空文件，用户可以就地编辑；读取方（系统提示词、Agent
+        # 注册表）只读它们，不在读取时建文件。
+        for blank_file in (instruction_file, system_main_agent_prompt_file()):
+            if not blank_file.exists():
+                file_store.write_text_atomic(blank_file, "", root=cosir_dir)
     except OSError as exc:
         log.error(
             "system_cosir_init_failed",

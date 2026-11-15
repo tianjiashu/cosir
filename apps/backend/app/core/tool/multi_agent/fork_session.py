@@ -139,7 +139,9 @@ class ForkSessionTool(HandlerBase):
 
             assignment = prepare_agent_message(
                 message,
-                source=MessageSource(session_id=parent_session.id, name=parent_session.title),
+                source=MessageSource(
+                    session_id=parent_session.id, name=parent_session.title, from_deriver=True
+                ),
                 agent_id=launch.agent_id,
                 model_config_id=launch.model_config_id,
                 reasoning_effort=launch.reasoning_effort,

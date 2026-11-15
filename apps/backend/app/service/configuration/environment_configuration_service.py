@@ -235,31 +235,19 @@ class EnvironmentConfigurationService:
 
     @staticmethod
     def reload_runtime_settings() -> None:
-        """重新加载当前后端进程的系统环境配置，并重装配受其影响的进程级组件。
+        """经运行时配置的唯一加载入口 ``Settings.load`` 重新加载系统 ``.env`` 到当前进程。
 
-        先经运行时配置的唯一加载入口 ``Settings.load`` 刷新 ``Settings`` 与进程环境，再用新值
-        替换 Registry 中的主 Agent profile。主 Agent 的 ``max_steps`` 属于 profile 配置，不能
-        只更新 ``Settings``；否则 Registry 仍会继续向后续 Run 提供旧值。
-
-        只替换共享 Registry 中的 profile，不改动已经合成出运行时配置或 workflow state 的
-        执行过程，因此新 ``max_steps`` 只对下一轮新建 Run 生效。
-
-        返回:
-            无。
+        主 Agent 的 ``max_steps`` 不用另外同步：它算在 Agent 注册表系统作用域的签名里，下一次读取就按新值
+        重建主 Agent；已经开始的 Run 用的是自己装配时的配置，不受影响。
 
         异常:
             OSError / ValueError: 配置文件读取失败或配置值无法解析，交由 API 层映射为配置错误。
-            RuntimeError: Agent Registry 尚未装配时抛出（配置早于应用启动完成时才会出现）。
 
         副作用:
-            重新读取系统 `.env`，更新 ``Settings`` 类级字段与派生路径，并替换进程级主 Agent
-            profile；不改动运行中的 Run。
+            重新读取系统 `.env`，更新 ``Settings`` 类级字段与派生路径。
         """
 
         Settings.load()
-        from app.config.configuration import replace_main_agent_profile
-
-        replace_main_agent_profile(max_steps=Settings.MAIN_AGENT_MAX_STEPS)
 
     @staticmethod
     def _validate_value(field: EnvironmentField, value: Any) -> str:

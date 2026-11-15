@@ -67,7 +67,8 @@ def find_workspace_instruction_file(root: str | Path) -> tuple[Path, Path] | Non
             try:
                 with os.scandir(directory) as entries:
                     for entry in entries:
-                        if entry.name.lower() == target:
+                        # 只认文件：名叫 AGENTS.md 的目录不是指令，照常往下找。
+                        if entry.name.lower() == target and entry.is_file():
                             try:
                                 relative = Path(entry.path).relative_to(workspace_root)
                             except ValueError:
