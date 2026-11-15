@@ -11,11 +11,7 @@ from pathlib import Path
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.service.configuration.file_store import ConfigurationFileStore
-from app.service.configuration.runtime_notices.system_prompt_delta import (
-    SystemPromptDelta,
-    SystemPromptDeltaSource,
-)
+from app.service.configuration import file_store
 from app.utils.token_estimator import TokenEstimator
 from app.utils.workspace_instruction import find_workspace_instruction_file
 
@@ -43,7 +39,6 @@ class WorkspaceInstructionConfigurationService:
         """绑定已校验的 workspace 根目录，不在构造阶段读写文件。"""
 
         self.root = Path(workspace_root)
-        self.store = ConfigurationFileStore()
 
     def read(self) -> WorkspaceInstructionDocument:
         """读取当前运行时会选中的指令文件，缺失时返回 workspace 根文件的空文档。
@@ -56,14 +51,14 @@ class WorkspaceInstructionConfigurationService:
         path = found[1] if found is not None else self.root / "AGENTS.md"
         if not path.exists():
             return self._document("", path=path, exists=False)
-        raw = self.store.read_text(path, root=self.root)
+        raw = file_store.read_text(path, root=self.root)
         return self._document(raw, path=path, exists=True)
 
     def update(self, content: str) -> WorkspaceInstructionDocument:
         """校验 token 预算并原子更新当前有效指令文件。
 
         没有既有候选时写入 workspace 根目录 ``AGENTS.md``；已有嵌套候选时保持其路径不变，
-        以保证配置页面与运行时的有效文件一致。写入后把变更以增量通知这个 workspace 里已装配的 Session。
+        以保证配置页面与运行时的有效文件一致。已固化系统提示词的 Session 不受影响。
         """
 
         document = self.read()
@@ -73,7 +68,7 @@ class WorkspaceInstructionConfigurationService:
                 "workspace AGENTS.md 超出 token 预算: "
                 f"{next_document.token_length} > {next_document.max_tokens}"
             )
-        self.store.write_text_atomic(document.path, content, root=self.root)
+        file_store.write_text_atomic(document.path, content, root=self.root)
         log.info(
             "configuration_workspace_instruction_written",
             extra={
@@ -81,14 +76,6 @@ class WorkspaceInstructionConfigurationService:
                 "data": {"workspace_root": str(self.root), "path": str(document.path)},
             },
         )
-        delta = SystemPromptDelta.between(
-            source=SystemPromptDeltaSource.WORKSPACE_INSTRUCTIONS,
-            previous=document.content,
-            current=content,
-            scope=str(self.root),
-        )
-        if delta is not None:
-            delta.broadcast()
         return next_document
 
     def _document(self, content: str, *, path: Path, exists: bool) -> WorkspaceInstructionDocument:

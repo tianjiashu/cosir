@@ -21,7 +21,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 
-from app.service.configuration.mcp_configuration import ScopedMCPServer
+from app.service.configuration.mcp.configuration import ScopedMCPServer
 
 # 异常说明进入模型上下文与日志，只保留足够定位的长度。
 _MAX_ERROR_CHARS = 300

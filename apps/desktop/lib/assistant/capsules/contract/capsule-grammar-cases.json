@@ -70,19 +70,19 @@
     },
     {
       "name": "Skill：后端补完整路径后的形态",
-      "text": "<skill name=\"review-code\" path=\"/Users/me/proj/.cosir/skills/review-code/SKILL.md\" />",
+      "text": "<skill name=\"review-code\" path=\"/Users/me/proj/.agents/skills/review-code/SKILL.md\" />",
       "segments": [
         {
           "type": "capsule",
           "capsule": {
             "kind": "skill",
             "name": "review-code",
-            "path": "/Users/me/proj/.cosir/skills/review-code/SKILL.md"
+            "path": "/Users/me/proj/.agents/skills/review-code/SKILL.md"
           }
         }
       ],
       "plain": "review-code",
-      "canonical": "<skill name=\"review-code\" path=\"/Users/me/proj/.cosir/skills/review-code/SKILL.md\" />"
+      "canonical": "<skill name=\"review-code\" path=\"/Users/me/proj/.agents/skills/review-code/SKILL.md\" />"
     },
     {
       "name": "属性值按 XML 实体转义并可还原",

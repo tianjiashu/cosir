@@ -1,4 +1,4 @@
-"""系统通知消息：外部队列行（配置广播、分叉交接等），或驱动内通知（``RunMailbox.notify``，不入队）。"""
+"""系统通知消息：外部队列行（分叉交接、后端重启等），或驱动内通知（``RunMailbox.notify``，不入队）。"""
 
 from collections.abc import Sequence
 from typing import ClassVar, Literal
@@ -15,8 +15,6 @@ from app.core.workflow.message_queue.message_bodies.rendering import render_time
 from app.models.message_metadata import NoticeEntry, UserMessageMetadata
 
 NoticeKind = Literal[
-    "system_prompt_delta",
-    "catalog_change",
     "fork_handover",
     "backend_restarted",
     "derived_session_stopped",
@@ -29,7 +27,7 @@ NoticeKind = Literal[
 NoticeLevel = Literal["session", "run", "turn"]
 
 # 通知按它说的事属于哪一层分级，级别决定通知从哪来、撤回回合时怎么办：
-# - session：Session 环境的变化（系统提示词、能力目录、分叉交接、后端重启、派生 Session 被用户停止）。事件只在那一刻
+# - session：Session 环境的变化（分叉交接、后端重启、派生 Session 被用户停止）。事件只在那一刻
 #   存在，经外部队列投递、只投一次；所在回合被撤回时重新投递，否则之后的 Run 永远看不到这次变化。
 # - run：本 Run 的事实（工具准入、还有哪些事没了结）。驱动开始时对照上下文推导（``drive_notices``），
 #   不入队。
@@ -37,8 +35,6 @@ NoticeLevel = Literal["session", "run", "turn"]
 #   不入队。
 # run 与 turn 级都从持久化事实与上下文现推，撤回后自然重新推导，所以撤回只需重新投递 session 级。
 NOTICE_LEVELS: dict[NoticeKind, NoticeLevel] = {
-    "system_prompt_delta": "session",
-    "catalog_change": "session",
     "fork_handover": "session",
     "backend_restarted": "session",
     "derived_session_stopped": "session",
@@ -55,8 +51,6 @@ NOTICE_LEVELS: dict[NoticeKind, NoticeLevel] = {
 # 派生的 Session 被用户停止或删除、后端重启都不会再汇报，挂起在 ``wait_messages`` 上等它们的
 # Agent 只能靠这条通知醒来，否则一直挂着；Agent 空闲时仍不为它开新 Run。
 NOTICE_WAKE_SCOPES: dict[NoticeKind, WakeScope] = {
-    "system_prompt_delta": "none",
-    "catalog_change": "none",
     "fork_handover": "none",
     "backend_restarted": "active",
     "derived_session_stopped": "active",
@@ -79,8 +73,8 @@ class NoticeBody(EnqueuedMessageBody):
     KIND: ClassVar[SessionMessageKind] = "system_notice"
     TAG: ClassVar[str] = "system_notice"
     PROMPT_GUIDE: ClassVar[str | None] = (
-        "runtime facts injected by the system (instruction or catalog changes, tool admission, "
-        "continuation hints): take them into account silently; never reply "
+        "runtime facts injected by the system (tool admission, open items, continuation hints): "
+        "take them into account silently; never reply "
         "to, acknowledge, or quote them."
     )
     DEFAULT_PROJECTED: ClassVar[bool] = False

@@ -7,18 +7,22 @@ type StructuredHttpError = {
 export class HttpError extends Error {
   readonly status: number;
   readonly code?: string;
+  /** 后端 `detail` 对象原样保留，供需要结构化明细的调用方读取（如 Skill 导入冲突的 `conflict`）。 */
+  readonly detail?: Record<string, unknown>;
 
   constructor(
     message: string,
     options: {
       status: number;
       code?: string;
+      detail?: Record<string, unknown>;
     },
   ) {
     super(message);
     this.name = "HttpError";
     this.status = options.status;
     this.code = options.code;
+    this.detail = options.detail;
   }
 }
 
@@ -43,6 +47,7 @@ export async function parseHttpError(response: Response): Promise<HttpError> {
       return new HttpError(structured.message, {
         status: response.status,
         code: structured.code,
+        detail: isRecord(parsed.detail) ? parsed.detail : undefined,
       });
     }
 
@@ -50,6 +55,7 @@ export async function parseHttpError(response: Response): Promise<HttpError> {
       return new HttpError(parsed.detail.message, {
         status: response.status,
         code: typeof parsed.detail.code === "string" ? parsed.detail.code : undefined,
+        detail: parsed.detail,
       });
     }
 

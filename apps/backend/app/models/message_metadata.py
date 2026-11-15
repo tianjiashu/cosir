@@ -61,9 +61,8 @@ class UserMessageMetadata(BaseModel):
     后台结论可能在发起调用之后的回合才并入，撤回据它判断这行回答的是哪次调用（见
     ``turn_withdrawal_service``）。不对应某次调用的后台结论（重启结论）为 ``None``。
 
-    ``notices`` 只用于合成通知行（``kind="notice"``）：记下合成进来的每条通知。系统提示词增量、
-    子 Agent 目录变更这类环境通知只投递一次，所在的一轮被撤回时要据此重新投递，否则之后的 Run
-    永远看不到这次变化。
+    ``notices`` 只用于合成通知行（``kind="notice"``）：记下合成进来的每条通知。分叉交接、后端重启
+    这类 Session 级通知只投递一次，所在的回合被撤回时要据此重新投递，否则之后的 Run 永远看不到。
     """
 
     model_config = ConfigDict(extra="forbid")

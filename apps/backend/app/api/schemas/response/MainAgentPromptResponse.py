@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.service.configuration.main_agent_prompt_configuration_service import (
+from app.service.configuration.instructions.main_agent_prompt_service import (
     MainAgentPromptDocument,
 )
 

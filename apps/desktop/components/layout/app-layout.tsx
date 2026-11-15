@@ -28,7 +28,7 @@ import { PageHeader, type Crumb } from "@/components/layout/page-header";
 import { useWorkspaceActions } from "@/components/layout/use-workspace-actions";
 import { useWorkspaceCatalog, type WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
-import { findSettingsTab, SYSTEM_SETTINGS_TABS, WORKSPACE_SETTINGS_TABS } from "@/components/settings/settings-tabs";
+import { findSettingsTab, settingsTabParam, SYSTEM_SETTINGS_TABS, WORKSPACE_SETTINGS_TABS } from "@/components/settings/settings-tabs";
 import { SessionPage } from "@/components/session/session-page";
 import { SessionStatusBadges } from "@/components/session-status/session-status-indicator";
 import { StatusDot } from "@/components/ui/status-dot";
@@ -217,17 +217,23 @@ export function AppLayout() {
   );
 
   const crumbs = useMemo<Crumb[]>(() => {
+    // Skill 详情页在标签之后多一级：标签那一级变成可返回的链接。
+    const tabCrumbs = (tab: { id: string; label: string } | undefined, basePath: string): Crumb[] =>
+      params.skillName === undefined
+        ? [{ label: tab?.label ?? "未知分类" }]
+        : [{ label: tab?.label ?? "未知分类", to: `${basePath}/${tab?.id}` }, { label: params.skillName }];
     if (section === "settings") {
-      const tab = findSettingsTab(SYSTEM_SETTINGS_TABS, params.tab);
-      return [{ label: "系统配置", to: "/settings" }, { label: tab?.label ?? "未知分类" }];
+      const tab = findSettingsTab(SYSTEM_SETTINGS_TABS, settingsTabParam({ tab: params.tab, skillName: params.skillName }));
+      return [{ label: "系统配置", to: "/settings" }, ...tabCrumbs(tab, "/settings")];
     }
     if (section === "workspace-settings") {
       const workspace = catalog.workspaces.find((candidate) => candidate.workspace_id === workspaceConfigurationId);
-      const tab = findSettingsTab(WORKSPACE_SETTINGS_TABS, params.tab);
+      const tab = findSettingsTab(WORKSPACE_SETTINGS_TABS, settingsTabParam({ tab: params.tab, skillName: params.skillName }));
+      const basePath = `/workspaces/${workspaceConfigurationId}/settings`;
       return [
         { label: workspace?.name ?? "工作区", to: conversationPath },
-        { label: "工作区配置", to: `/workspaces/${workspaceConfigurationId}/settings` },
-        { label: tab?.label ?? "未知分类" },
+        { label: "工作区配置", to: basePath },
+        ...tabCrumbs(tab, basePath),
       ];
     }
     if (section === "observer") return [{ label: "会话观测" }];
@@ -236,7 +242,7 @@ export function AppLayout() {
       { label: catalog.activeWorkspace?.name ?? "工作区" },
       { label: catalog.activeSession?.title || "会话" },
     ];
-  }, [catalog.activeSession?.title, catalog.activeWorkspace?.name, catalog.workspaces, conversationPath, focusedUnstarted, params.tab, routeSessionId, section, workspaceConfigurationId]);
+  }, [catalog.activeSession?.title, catalog.activeWorkspace?.name, catalog.workspaces, conversationPath, focusedUnstarted, params.skillName, params.tab, routeSessionId, section, workspaceConfigurationId]);
 
   const showSessionLayer = section === "conversation" && routeSessionId !== null;
   const outletContext = useMemo<AppOutletContext>(() => ({ catalog, actions }), [actions, catalog]);

@@ -350,7 +350,7 @@ export function MCPConfigurationPanel({ workspaceId }: { workspaceId: ExtensionS
       )}
 
       <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) void closeEditor(); }}>
-        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editingName ? "编辑 MCP 服务" : "添加 MCP 服务"}</DialogTitle>
           </DialogHeader>

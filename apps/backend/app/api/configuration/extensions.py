@@ -13,22 +13,37 @@ from pathlib import Path
 from app.api.configuration.errors import raise_configuration_error
 from app.api.schemas.request.MCPServersUpdateRequest import MCPServersUpdateRequest
 from app.api.schemas.request.MCPServerTestRequest import MCPServerTestRequest
-from app.api.schemas.request.SkillEnabledUpdateRequest import SkillEnabledUpdateRequest
+from app.api.schemas.request.SkillsEnabledUpdateRequest import SkillsEnabledUpdateRequest
 from app.api.schemas.request.SkillsImportRequest import SkillsImportRequest
 from app.api.schemas.response.MCPServersResponse import (
     MCPServerConfigResponse,
     MCPServersResponse,
 )
 from app.api.schemas.response.MCPServerTestResponse import MCPServerTestResponse
-from app.api.schemas.response.SkillDeleteResponse import SkillDeleteResponse
-from app.api.schemas.response.SkillDocumentResponse import SkillDocumentResponse
+from app.api.schemas.response.SkillCatalogViewResponse import (
+    SkillCatalogViewResponse,
+    SkillEntryResponse,
+    SkillGroupResponse,
+    SkippedSkillResponse,
+)
+from app.api.schemas.response.SkillDetailResponse import (
+    SkillDetailResponse,
+    SkillFileContentResponse,
+    SkillFileResponse,
+)
 from app.api.schemas.response.SkillInfoResponse import SkillInfoResponse
 from app.app import app
-from app.service.configuration.mcp_configuration import MCPServerConfig, ScopedMCPServer
-from app.service.configuration.mcp_configuration_service import MCPConfigurationService
-from app.service.configuration.mcp_tested_servers import MCPTestedServers
-from app.service.configuration.skill_catalog import SkillInfo
-from app.service.configuration.skill_configuration_service import SkillConfigurationService
+from app.service.configuration.mcp.configuration import MCPServerConfig, ScopedMCPServer
+from app.service.configuration.mcp.configuration_service import MCPConfigurationService
+from app.service.configuration.mcp.tested_servers import MCPTestedServers
+from app.service.configuration.skills.catalog import SkillInfo
+from app.service.configuration.skills.configuration_service import SkillConfigurationService
+from app.service.configuration.skills.configuration_view import (
+    SkillCatalogView,
+    SkillEntry,
+    SkillGroup,
+)
+from app.service.configuration.skills.skill_import import SkillImporter
 from app.service.configuration.workspace_configuration_root import resolve_workspace_root
 
 _WORKSPACE = "/workspaces/{workspace_id}/configuration"
@@ -149,48 +164,76 @@ def _mcp_servers_response(servers: list[ScopedMCPServer]) -> MCPServersResponse:
 
 @app.get("/configuration/skills", response_model=list[SkillInfoResponse])
 async def list_system_skills() -> list[SkillInfoResponse]:
-    """列出系统 Skill 目录中的有效技能及启用状态。"""
+    """列出系统级生效的 Skill（输入框选择器用）。"""
 
     return _list_skills(None)
 
 
 @app.get(f"{_WORKSPACE}/skills", response_model=list[SkillInfoResponse])
 async def list_workspace_skills(workspace_id: int) -> list[SkillInfoResponse]:
-    """列出工作区看得到的 Skill（系统级与工作区合并，同名时工作区覆盖）。"""
+    """列出工作区看得到的生效 Skill（系统级与工作区合并，同名时工作区覆盖）。"""
 
     return _list_skills(workspace_id)
 
 
-@app.get("/configuration/skills/{name}", response_model=SkillDocumentResponse)
-async def get_system_skill(name: str) -> SkillDocumentResponse:
+@app.get("/configuration/skill-catalog", response_model=SkillCatalogViewResponse)
+async def get_system_skill_catalog() -> SkillCatalogViewResponse:
+    """系统级配置页的目录：Skill、处境与 Agent 目录体量。"""
+
+    return _skill_catalog(None)
+
+
+@app.get(f"{_WORKSPACE}/skill-catalog", response_model=SkillCatalogViewResponse)
+async def get_workspace_skill_catalog(workspace_id: int) -> SkillCatalogViewResponse:
+    """工作区配置页的分组目录：本工作区在前，继承来的系统级在后（只读）。"""
+
+    return _skill_catalog(workspace_id)
+
+
+@app.put("/configuration/skills/enabled")
+async def update_system_skills_enabled(payload: SkillsEnabledUpdateRequest) -> dict[str, object]:
+    """一次启用或停用若干个系统级 Skill。"""
+
+    return _set_skills_enabled(None, payload)
+
+
+@app.put(f"{_WORKSPACE}/skills/enabled")
+async def update_workspace_skills_enabled(
+    workspace_id: int, payload: SkillsEnabledUpdateRequest
+) -> dict[str, object]:
+    """一次启用或停用工作区自己的若干个 Skill；含继承来的系统级 Skill 时整体拒绝（400）。"""
+
+    return _set_skills_enabled(workspace_id, payload)
+
+
+@app.get("/configuration/skills/{name}", response_model=SkillDetailResponse)
+async def get_system_skill(name: str) -> SkillDetailResponse:
     """读取系统级 Skill 的只读详情，不受启用状态限制。"""
 
     return _read_skill(None, name)
 
 
-@app.get(f"{_WORKSPACE}/skills/{{name}}", response_model=SkillDocumentResponse)
-async def get_workspace_skill(workspace_id: int, name: str) -> SkillDocumentResponse:
+@app.get(f"{_WORKSPACE}/skills/{{name}}", response_model=SkillDetailResponse)
+async def get_workspace_skill(workspace_id: int, name: str) -> SkillDetailResponse:
     """读取工作区看得到的一个 Skill 的只读详情。"""
 
     return _read_skill(workspace_id, name)
 
 
-@app.put("/configuration/skills/{name}/enabled", response_model=SkillInfoResponse)
-async def update_system_skill_enabled(
-    name: str, payload: SkillEnabledUpdateRequest
-) -> SkillInfoResponse:
-    """启用或停用一个系统级 Skill。"""
+@app.get("/configuration/skills/{name}/file", response_model=SkillFileContentResponse)
+async def get_system_skill_file(name: str, path: str) -> SkillFileContentResponse:
+    """读取系统级 Skill 目录内一个文本文件的只读预览。"""
 
-    return _set_skill_enabled(None, name, payload)
+    return _preview_skill_file(None, name, path)
 
 
-@app.put(f"{_WORKSPACE}/skills/{{name}}/enabled", response_model=SkillInfoResponse)
-async def update_workspace_skill_enabled(
-    workspace_id: int, name: str, payload: SkillEnabledUpdateRequest
-) -> SkillInfoResponse:
-    """启用或停用工作区自己的一个 Skill；继承来的系统级 Skill 只读（400）。"""
+@app.get(f"{_WORKSPACE}/skills/{{name}}/file", response_model=SkillFileContentResponse)
+async def get_workspace_skill_file(
+    workspace_id: int, name: str, path: str
+) -> SkillFileContentResponse:
+    """读取工作区看得到的一个 Skill 目录内文本文件的只读预览。"""
 
-    return _set_skill_enabled(workspace_id, name, payload)
+    return _preview_skill_file(workspace_id, name, path)
 
 
 @app.post("/configuration/skills/import", response_model=SkillInfoResponse, status_code=201)
@@ -207,20 +250,6 @@ def import_workspace_skill(workspace_id: int, payload: SkillsImportRequest) -> S
     return _import_skill(workspace_id, payload)
 
 
-@app.delete("/configuration/skills/{name}", response_model=SkillDeleteResponse)
-async def delete_system_skill(name: str) -> SkillDeleteResponse:
-    """删除系统目录内的 Skill。"""
-
-    return _delete_skill(None, name)
-
-
-@app.delete(f"{_WORKSPACE}/skills/{{name}}", response_model=SkillDeleteResponse)
-async def delete_workspace_skill(workspace_id: int, name: str) -> SkillDeleteResponse:
-    """删除工作区自己的 Skill；继承来的系统级 Skill 只读（400）。"""
-
-    return _delete_skill(workspace_id, name)
-
-
 def _skill_service(workspace_id: int | None) -> SkillConfigurationService:
     return SkillConfigurationService(workspace_root=_scope_root(workspace_id))
 
@@ -232,55 +261,102 @@ def _list_skills(workspace_id: int | None) -> list[SkillInfoResponse]:
         raise_configuration_error(exc)
 
 
-def _read_skill(workspace_id: int | None, name: str) -> SkillDocumentResponse:
+def _skill_catalog(workspace_id: int | None) -> SkillCatalogViewResponse:
     try:
-        document = _skill_service(workspace_id).read(name)
-        return SkillDocumentResponse(
-            **_skill_response(document.info).model_dump(), content=document.body
+        return _skill_catalog_response(_skill_service(workspace_id).view())
+    except Exception as exc:
+        raise_configuration_error(exc)
+
+
+def _read_skill(workspace_id: int | None, name: str) -> SkillDetailResponse:
+    try:
+        detail = _skill_service(workspace_id).read(name)
+        return SkillDetailResponse(
+            **_skill_response(detail.info).model_dump(),
+            content=detail.body,
+            location=detail.location,
+            also_at=list(detail.also_at),
+            directory=str(detail.directory),
+            metadata=detail.metadata,
+            files=[
+                SkillFileResponse(path=item.path, size=item.size, binary=item.binary)
+                for item in detail.files
+            ],
+            files_truncated=detail.files_truncated,
         )
     except Exception as exc:
         raise_configuration_error(exc)
 
 
-def _set_skill_enabled(
-    workspace_id: int | None, name: str, payload: SkillEnabledUpdateRequest
-) -> SkillInfoResponse:
+def _preview_skill_file(workspace_id: int | None, name: str, path: str) -> SkillFileContentResponse:
     try:
-        return _skill_response(_skill_service(workspace_id).set_enabled(name, payload.enabled))
+        content = _skill_service(workspace_id).preview_file(name, path)
+        return SkillFileContentResponse(path=path, content=content)
+    except Exception as exc:
+        raise_configuration_error(exc)
+
+
+def _set_skills_enabled(
+    workspace_id: int | None, payload: SkillsEnabledUpdateRequest
+) -> dict[str, object]:
+    try:
+        _skill_service(workspace_id).set_enabled(payload.names, payload.enabled)
+        return {}
     except Exception as exc:
         raise_configuration_error(exc)
 
 
 def _import_skill(workspace_id: int | None, payload: SkillsImportRequest) -> SkillInfoResponse:
     try:
-        service = _skill_service(workspace_id)
+        importer = SkillImporter(workspace_root=_scope_root(workspace_id))
         if payload.source_type == "directory":
-            skill = service.import_directory(payload.source_path)
+            skill = importer.import_directory(payload.source_path, payload.resolution)
         else:
-            skill = service.import_archive(payload.source_path)
+            skill = importer.import_archive(payload.source_path, payload.resolution)
         return _skill_response(skill)
     except Exception as exc:
         raise_configuration_error(exc)
 
 
-def _delete_skill(workspace_id: int | None, name: str) -> SkillDeleteResponse:
-    try:
-        _skill_service(workspace_id).delete(name)
-        return SkillDeleteResponse(name=name, deleted=True)
-    except Exception as exc:
-        raise_configuration_error(exc)
-
-
 def _skill_response(skill: SkillInfo) -> SkillInfoResponse:
-    """把目录型领域对象投影为不暴露本机路径的 HTTP 响应。"""
+    """把目录型领域对象投影为不暴露本机路径的列表项（本机路径只在详情里给「在文件夹中显示」用）。"""
 
     return SkillInfoResponse(
         name=skill.name,
         description=skill.description,
         enabled=skill.enabled,
         scope=skill.scope.kind,
+        kind=skill.root.kind,
         overrides=skill.overrides,
+        warnings=list(skill.warnings),
+        manual_only=skill.manual_only,
+        has_scripts=skill.has_scripts,
     )
+
+
+def _skill_catalog_response(view: SkillCatalogView) -> SkillCatalogViewResponse:
+    return SkillCatalogViewResponse(
+        agent_skills=view.agent_skills,
+        agent_tokens=view.agent_tokens,
+        groups=[_skill_group_response(group) for group in view.groups],
+    )
+
+
+def _skill_group_response(group: SkillGroup) -> SkillGroupResponse:
+    return SkillGroupResponse(
+        scope=group.root.scope.kind,
+        kind=group.root.kind,
+        location=group.root.location,
+        skipped=[
+            SkippedSkillResponse(directory=item.directory, reason=item.reason)
+            for item in group.skipped
+        ],
+        skills=[_skill_entry_response(entry) for entry in group.entries],
+    )
+
+
+def _skill_entry_response(entry: SkillEntry) -> SkillEntryResponse:
+    return SkillEntryResponse(**_skill_response(entry.info).model_dump(), standing=entry.standing)
 
 
 def _scope_root(workspace_id: int | None) -> Path | None:

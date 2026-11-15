@@ -25,7 +25,7 @@ from typing import ClassVar
 
 from dotenv import dotenv_values
 
-from app.service.configuration.file_store import ConfigurationFileStore
+from app.service.configuration import file_store
 from app.utils.path import system_cosir as paths
 
 
@@ -96,7 +96,7 @@ class Settings:
         if not env_file.exists():
             Settings._LOADED_ENV_VALUES = {}
             return
-        content = ConfigurationFileStore.read_text(env_file, root=paths.SYSTEM_COSIR_DIR)
+        content = file_store.read_text(env_file, root=paths.SYSTEM_COSIR_DIR)
         file_values: dict[str, str] = {}
         for key, value in dotenv_values(stream=StringIO(content)).items():
             if value is None:

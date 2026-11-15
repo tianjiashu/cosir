@@ -4,7 +4,7 @@
 放在 service 层是因为 ``core/context`` 构建系统提示词目录也要读它，而 core 不得导入 ``app.tools``。
 
 两个作用域（系统级、workspace 级）各有一份 ``mcp_servers.json``，只放连接定义；「本机测试通过」
-不在这里，而在系统级的测试记录（``mcp_tested_servers``）里，workspace 文件随仓库共享也带不进来。
+不在这里，而在系统级的测试记录（``mcp/tested_servers``）里，workspace 文件随仓库共享也带不进来。
 """
 
 from __future__ import annotations
@@ -15,11 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config.logging.logger import log
+from app.service.configuration import file_store
 from app.service.configuration.extension_scope import ExtensionScope
-from app.service.configuration.mcp_tested_servers import MCPTestedServers
+from app.service.configuration.mcp.tested_servers import MCPTestedServers
 
 
 class MCPServerConfig(BaseModel):
@@ -58,6 +59,34 @@ class MCPConfiguration(BaseModel):
 
     servers: list[MCPServerConfig] = Field(default_factory=list)
 
+    @classmethod
+    def read(cls, scope: ExtensionScope) -> MCPConfiguration:
+        """读取一个作用域的 MCP 配置；尚未创建配置文件时视为空服务目录。
+
+        异常:
+            MCPConfigurationError: 配置文件无法读取、格式无效或服务名称重复。
+        """
+
+        configuration = file_store.read_json_model(
+            scope.mcp_servers_file,
+            cls,
+            error=MCPConfigurationError,
+            label="MCP 配置",
+            event="mcp_configuration",
+            log_data={"scope": scope.key},
+        )
+        names = [server.name for server in configuration.servers]
+        if len(names) != len(set(names)):
+            log.error(
+                "mcp_configuration_invalid",
+                extra={
+                    "msg": "MCP 配置文件中的服务名称重复",
+                    "data": {"scope": scope.key, "server_count": len(names)},
+                },
+            )
+            raise MCPConfigurationError("MCP 配置中的服务名称必须唯一")
+        return configuration
+
 
 class MCPConfigurationError(ValueError):
     """MCP 配置文件无法解析或违反配置契约。"""
@@ -94,49 +123,6 @@ class ScopedMCPServer:
         return server_connection_fingerprint(self.config)
 
 
-def read_mcp_configuration(scope: ExtensionScope) -> MCPConfiguration:
-    """读取一个作用域的 MCP 配置；尚未创建配置文件时视为空服务目录。"""
-
-    path = scope.mcp_servers_file
-    try:
-        content = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return MCPConfiguration()
-    except OSError as exc:
-        log.error(
-            "mcp_configuration_read_failed",
-            extra={
-                "msg": "读取 MCP 配置失败",
-                "data": {"scope": scope.key, "error_type": type(exc).__name__},
-            },
-        )
-        raise MCPConfigurationError("MCP 配置文件无法读取") from exc
-
-    try:
-        configuration = MCPConfiguration.model_validate_json(content)
-    except (ValidationError, ValueError) as exc:
-        log.error(
-            "mcp_configuration_invalid",
-            extra={
-                "msg": "MCP 配置文件格式无效",
-                "data": {"scope": scope.key, "error_type": type(exc).__name__},
-            },
-        )
-        raise MCPConfigurationError("MCP 配置文件格式无效") from exc
-
-    names = [server.name for server in configuration.servers]
-    if len(names) != len(set(names)):
-        log.error(
-            "mcp_configuration_invalid",
-            extra={
-                "msg": "MCP 配置文件中的服务名称重复",
-                "data": {"scope": scope.key, "server_count": len(names)},
-            },
-        )
-        raise MCPConfigurationError("MCP 配置中的服务名称必须唯一")
-    return configuration
-
-
 def visible_servers(workspace_root: str | Path | None) -> list[ScopedMCPServer]:
     """某个工作区（``None`` 为系统级）看得到的服务：workspace 层同名覆盖系统层。
 
@@ -144,11 +130,11 @@ def visible_servers(workspace_root: str | Path | None) -> list[ScopedMCPServer]:
     """
 
     system = ExtensionScope.system()
-    system_servers = [ScopedMCPServer(system, item) for item in read_mcp_configuration(system).servers]
+    system_servers = [ScopedMCPServer(system, item) for item in MCPConfiguration.read(system).servers]
     if workspace_root is None:
         return system_servers
     workspace = ExtensionScope.workspace(workspace_root)
-    workspace_configs = read_mcp_configuration(workspace).servers
+    workspace_configs = MCPConfiguration.read(workspace).servers
     workspace_names = {item.name for item in workspace_configs}
     system_names = {item.name for item in system_servers}
     return [server for server in system_servers if server.name not in workspace_names] + [

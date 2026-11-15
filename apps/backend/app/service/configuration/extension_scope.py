@@ -1,8 +1,8 @@
 """Skill 与 MCP 配置的作用域：系统级或某个 workspace。
 
-两个作用域在各自的 ``.cosir`` 下使用完全相同的布局（``skills/``、``config/skills.json``、
-``config/mcp_servers.json``），所以路径、作用域键与「Agent 看到的分层」都从这一个值对象取，
-Skill 目录、MCP 配置、本机测试记录、连接池和目录变更通知不各自拼接。
+两个作用域在各自的 ``.cosir`` 下使用完全相同的配置布局（``config/skills.json``、``config/mcp_servers.json``），
+所以路径、作用域键与「Agent 看到的分层」都从这一个值对象取，MCP 配置、Skill 停用名单、本机测试记录与
+连接池不各自拼接。Skill 目录每层有两种身份，归 ``skills/skill_root.SkillRoot``，不在这里。
 
 Agent 看到的是分层合并结果：系统层在下、当前 workspace 层在上，同名时 workspace 覆盖系统。
 合并规则由各能力的读取模块实现，这里只提供层序。
@@ -18,13 +18,11 @@ from app.utils.path.system_cosir import (
     system_cosir_dir,
     system_mcp_servers_file,
     system_skills_config_file,
-    system_skills_dir,
 )
 from app.utils.path.workspace_cosir import (
     workspace_cosir_dir,
     workspace_mcp_servers_file,
     workspace_skills_config_file,
-    workspace_skills_dir,
 )
 from app.utils.workspace_scope import SYSTEM_SCOPE, normalize_scope_path
 
@@ -72,12 +70,6 @@ class ExtensionScope:
         if self.workspace_root is None:
             return system_cosir_dir()
         return workspace_cosir_dir(self.workspace_root)
-
-    @property
-    def skills_dir(self) -> Path:
-        if self.workspace_root is None:
-            return system_skills_dir()
-        return workspace_skills_dir(self.workspace_root)
 
     @property
     def skills_config_file(self) -> Path:

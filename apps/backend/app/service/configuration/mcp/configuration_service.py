@@ -3,28 +3,21 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from app.config.logging.logger import log
+from app.service.configuration import file_store
 from app.service.configuration.extension_scope import ExtensionScope
-from app.service.configuration.file_store import ConfigurationFileStore
-from app.service.configuration.mcp_configuration import (
+from app.service.configuration.mcp.configuration import (
     MCPConfiguration,
     MCPConfigurationError,
     MCPServerConfig,
     ScopedMCPServer,
-    available_servers,
-    read_mcp_configuration,
     server_connection_fingerprint,
     visible_servers,
 )
-from app.service.configuration.mcp_tested_servers import MCPTestedServers
-from app.service.configuration.runtime_notices.catalog_change import (
-    CatalogChange,
-    broadcast_catalog_changes,
-)
+from app.service.configuration.mcp.tested_servers import MCPTestedServers
 from app.tools.mcp.client import describe_exception, list_server_tools
 
 MCP_TEST_TIMEOUT_SECONDS = 20
@@ -49,7 +42,6 @@ class MCPConfigurationService:
 
     def __init__(self, *, workspace_root: Path | None = None) -> None:
         self.scope = ExtensionScope(workspace_root)
-        self.store = ConfigurationFileStore()
 
     def visible(self) -> list[ScopedMCPServer]:
         """本作用域配置页看得到的服务（workspace 级含继承的系统服务）。"""
@@ -66,23 +58,15 @@ class MCPConfigurationService:
         names = [server.name for server in servers]
         if len(names) != len(set(names)):
             raise ValueError("MCP 服务名称必须唯一")
-        serialized = (
-            json.dumps(
-                MCPConfiguration(servers=servers).model_dump(mode="json"),
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n"
-        )
-        with self.store.locked(self.scope.mcp_servers_file):
-            before = self._agent_view()
-            self.store.write_text_atomic(
-                self.scope.mcp_servers_file, serialized, root=self.scope.cosir_dir
+        with file_store.locked(self.scope.mcp_servers_file):
+            file_store.write_json(
+                self.scope.mcp_servers_file,
+                MCPConfiguration(servers=servers),
+                root=self.scope.cosir_dir,
             )
             MCPTestedServers.keep_only(
                 self.scope, [ScopedMCPServer(self.scope, server) for server in servers]
             )
-        self._publish(before)
         log.info(
             "configuration_mcp_servers_written",
             extra={
@@ -104,7 +88,7 @@ class MCPConfigurationService:
             async with asyncio.timeout(MCP_TEST_TIMEOUT_SECONDS):
                 tools = await list_server_tools(server)
         except TimeoutError:
-            self._revoke_and_publish(server)
+            self._revoke(server)
             log.warning(
                 "configuration_mcp_server_test_timed_out",
                 extra={
@@ -114,7 +98,7 @@ class MCPConfigurationService:
             )
             return MCPServerTestResult(success=False, tools=[], error="连接测试超时")
         except Exception as exc:
-            self._revoke_and_publish(server)
+            self._revoke(server)
             log.warning(
                 "configuration_mcp_server_test_failed",
                 extra={
@@ -127,9 +111,7 @@ class MCPConfigurationService:
                 },
             )
             return MCPServerTestResult(success=False, tools=[], error=describe_exception(exc))
-        before = self._agent_view()
         MCPTestedServers.record_pass(server)
-        self._publish(before)
         return MCPServerTestResult(
             success=True, tools=tools, agent_available=self._is_saved(server)
         )
@@ -142,7 +124,7 @@ class MCPConfigurationService:
         """
 
         try:
-            saved = read_mcp_configuration(self.scope).servers
+            saved = MCPConfiguration.read(self.scope).servers
         except MCPConfigurationError:
             return False
         return any(
@@ -150,10 +132,8 @@ class MCPConfigurationService:
             for item in saved
         )
 
-    def _revoke_and_publish(self, server: ScopedMCPServer) -> None:
-        before = self._agent_view()
+    def _revoke(self, server: ScopedMCPServer) -> None:
         if MCPTestedServers.revoke(server):
-            self._publish(before)
             log.info(
                 "configuration_mcp_server_test_revoked",
                 extra={
@@ -161,40 +141,3 @@ class MCPConfigurationService:
                     "data": {"scope": self.scope.key, "server_name": server.name},
                 },
             )
-
-    def _agent_view(self) -> dict[str, str | None] | None:
-        """Agent 在本作用域看到的服务名（目录只列名字，描述为 ``None``）；配置读不出时为 ``None``。
-
-        读不出（文件损坏）时不比较也不通知：用户正是要经保存修好它，不能因为旧文件坏了就拒绝保存。
-        """
-
-        try:
-            return {server.name: None for server in available_servers(self.scope.workspace_root)}
-        except MCPConfigurationError:
-            return None
-
-    def _publish(self, before: dict[str, str | None] | None) -> None:
-        """可用服务集合变化时通知固化了 ``mcp`` 工具的 Session。"""
-
-        after = self._agent_view()
-        if before is None or after is None:
-            return
-        broadcast_catalog_changes(
-            CatalogChange.between(
-                "mcp_servers",
-                scope=None if self.scope.workspace_root is None else self.scope.key,
-                before=before,
-                after=after,
-                shadowed_in=_workspace_defines if self.scope.workspace_root is None else None,
-            )
-        )
-
-
-def _workspace_defines(workspace_root: str, name: str) -> bool:
-    """工作区自己的配置里是否有同名服务（启用与否都会遮住系统级同名服务）。"""
-
-    try:
-        configuration = read_mcp_configuration(ExtensionScope.workspace(workspace_root))
-    except MCPConfigurationError:
-        return False
-    return any(server.name == name for server in configuration.servers)

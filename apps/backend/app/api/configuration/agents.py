@@ -17,7 +17,7 @@ from app.api.configuration.errors import raise_configuration_error
 from app.api.schemas.request.AgentConfigurationRequest import AgentConfigurationRequest
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
 from app.app import app
-from app.service.configuration.agent_configuration_service import (
+from app.service.configuration.agents.configuration_service import (
     AgentConfigurationService,
 )
 

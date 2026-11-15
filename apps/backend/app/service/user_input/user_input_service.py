@@ -30,8 +30,8 @@ from app.models.conversation_input import UserInputPresentation
 from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
 from app.service.attachment.attachment_service import AttachmentService
-from app.service.configuration.skill_catalog import SkillCatalog
-from app.service.configuration.skill_configuration import SkillConfigurationError
+from app.service.configuration.skills.catalog import SkillCatalog
+from app.service.configuration.skills.configuration import SkillConfigurationError
 from app.service.depends import get_model_config_service, get_session_crud, get_workspace_service
 
 

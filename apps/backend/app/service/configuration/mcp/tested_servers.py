@@ -15,19 +15,18 @@
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.config.logging.logger import log
-from app.service.configuration.file_store import ConfigurationFileStore
+from app.service.configuration import file_store
 from app.utils.path.system_cosir import system_cosir_dir, system_mcp_tested_servers_file
 
 if TYPE_CHECKING:
     from app.service.configuration.extension_scope import ExtensionScope
-    from app.service.configuration.mcp_configuration import ScopedMCPServer
+    from app.service.configuration.mcp.configuration import ScopedMCPServer
 
 
 class MCPTestedServers(BaseModel):
@@ -74,7 +73,7 @@ class MCPTestedServers(BaseModel):
     def record_pass(cls, server: ScopedMCPServer) -> None:
         """记下一次成功测试；同名服务其他配置的记录保留（测草稿不影响已保存配置）。"""
 
-        with ConfigurationFileStore.locked(system_mcp_tested_servers_file()):
+        with file_store.locked(system_mcp_tested_servers_file()):
             record = cls.read()
             fingerprints = record.scopes.setdefault(server.scope.key, {}).setdefault(server.name, [])
             if server.fingerprint not in fingerprints:
@@ -88,7 +87,7 @@ class MCPTestedServers(BaseModel):
         只撤销指纹相同的那一条：测试失败的是草稿时，不影响已保存配置的测试结果。
         """
 
-        with ConfigurationFileStore.locked(system_mcp_tested_servers_file()):
+        with file_store.locked(system_mcp_tested_servers_file()):
             record = cls.read()
             names = record.scopes.get(server.scope.key, {})
             fingerprints = names.get(server.name, [])
@@ -108,7 +107,7 @@ class MCPTestedServers(BaseModel):
         """
 
         current = {server.name: server.fingerprint for server in saved}
-        with ConfigurationFileStore.locked(system_mcp_tested_servers_file()):
+        with file_store.locked(system_mcp_tested_servers_file()):
             record = cls.read()
             names = record.scopes.get(scope.key, {})
             kept = {
@@ -126,7 +125,7 @@ class MCPTestedServers(BaseModel):
     def drop_scope(cls, scope: ExtensionScope) -> None:
         """丢掉一个作用域的全部测试记录（工作区删除后调用：同一路径再登记的工作区要重新测试）。"""
 
-        with ConfigurationFileStore.locked(system_mcp_tested_servers_file()):
+        with file_store.locked(system_mcp_tested_servers_file()):
             record = cls.read()
             if record.scopes.pop(scope.key, None) is not None:
                 record._write()
@@ -141,7 +140,4 @@ class MCPTestedServers(BaseModel):
             del self.scopes[scope_key]
 
     def _write(self) -> None:
-        serialized = json.dumps(self.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
-        ConfigurationFileStore.write_text_atomic(
-            system_mcp_tested_servers_file(), serialized, root=system_cosir_dir()
-        )
+        file_store.write_json(system_mcp_tested_servers_file(), self, root=system_cosir_dir())

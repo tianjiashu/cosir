@@ -35,7 +35,7 @@ from typing import Any, TextIO, TypeVar
 from mcp import ClientSession, types
 
 from app.config.logging.logger import log
-from app.service.configuration.mcp_configuration import ScopedMCPServer
+from app.service.configuration.mcp.configuration import ScopedMCPServer
 from app.tools.mcp.client import (
     MCPToolNotFoundError,
     describe_exception,

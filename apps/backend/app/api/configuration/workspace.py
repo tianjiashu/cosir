@@ -1,7 +1,7 @@
 """workspace 基本配置 HTTP 路由。
 
 本模块只负责 workspace ID、请求 schema 和响应 schema 的转换；文件安全、内容校验、Agent
-Registry 同步及提示词变更广播分别由 configuration service 负责。
+Registry 同步分别由 configuration service 负责。
 """
 
 from __future__ import annotations
@@ -15,13 +15,13 @@ from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurati
 from app.api.schemas.response.WorkspaceFileIgnoreResponse import WorkspaceFileIgnoreResponse
 from app.api.schemas.response.WorkspaceInstructionResponse import WorkspaceInstructionResponse
 from app.app import app
-from app.service.configuration.agent_configuration_service import AgentConfigurationService
+from app.service.configuration.agents.configuration_service import AgentConfigurationService
+from app.service.configuration.instructions.workspace_instruction_service import (
+    WorkspaceInstructionConfigurationService,
+)
 from app.service.configuration.workspace_configuration_root import resolve_workspace_root
 from app.service.configuration.workspace_fileignore_configuration_service import (
     WorkspaceFileIgnoreConfigurationService,
-)
-from app.service.configuration.workspace_instruction_configuration_service import (
-    WorkspaceInstructionConfigurationService,
 )
 
 

@@ -27,7 +27,7 @@ from app.core.tool.schemas import (
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_MCP
 from app.service import depends as service_depends
-from app.service.configuration.mcp_configuration import (
+from app.service.configuration.mcp.configuration import (
     MCPConfigurationError,
     ScopedMCPServer,
     available_servers,

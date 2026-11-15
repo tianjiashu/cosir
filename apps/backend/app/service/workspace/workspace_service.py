@@ -19,7 +19,7 @@ from app.models import SessionRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service import depends as service_depends
 from app.service.configuration.extension_scope import ExtensionScope
-from app.service.configuration.mcp_tested_servers import MCPTestedServers
+from app.service.configuration.mcp.tested_servers import MCPTestedServers
 from app.session_runtime.workspace_operation_registry import workspace_operations
 from app.storage.store_engines import main_db_factory
 from app.storage.write_transaction import begin_immediate
@@ -27,7 +27,7 @@ from app.utils.path.workspace_cosir import (
     workspace_agent_config_dir,
     workspace_attachment_dir,
     workspace_cosir_dir,
-    workspace_skills_dir,
+    workspace_cosir_skills_dir,
 )
 
 
@@ -137,16 +137,17 @@ class WorkspaceService:
             无；目录创建失败仅记 error 日志，不向上抛出。
 
         副作用:
-            在 ``<root_path>/.cosir`` 及 ``Attachment`` / ``agents`` / ``skills`` 子目录创建目录
-            （已存在则幂等跳过）。
+            在 ``<root_path>/.cosir`` 及 ``Attachment`` / ``agents`` / ``skills`` 子目录创建目录（已存在则幂等
+            跳过）。共享 Skill 目录 ``.agents/skills`` 不预建：它在 ``.cosir`` 外、归其他工具，空目录只会
+            出现在用户仓库里。
         """
         cosir_dir = workspace_cosir_dir(normalized_path)
-        # agents / skills 是用户放置自定义子 Agent 与 Skill 的位置：装载路径只在
-        # 目录存在时读到内容，因此不建目录就等于「配置永远为空，且用户不知道往哪放」。
+        # agents / skills 是用户放置自定义子 Agent 与 cosir 专属 Skill 的位置：装载路径只在目录存在时
+        # 读到内容，因此不建目录就等于「配置永远为空，且用户不知道往哪放」。
         children = (
             workspace_attachment_dir(normalized_path),
             workspace_agent_config_dir(normalized_path),
-            workspace_skills_dir(normalized_path),
+            workspace_cosir_skills_dir(normalized_path),
         )
         try:
             cosir_dir.mkdir(parents=True, exist_ok=True)

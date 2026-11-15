@@ -7,7 +7,7 @@ from app.api.schemas.request.MainAgentPromptUpdateRequest import MainAgentPrompt
 from app.api.schemas.response.MainAgentPromptResponse import MainAgentPromptResponse
 from app.app import app
 from app.config.configuration import replace_main_agent_profile
-from app.service.configuration.main_agent_prompt_configuration_service import (
+from app.service.configuration.instructions.main_agent_prompt_service import (
     MainAgentPromptConfigurationService,
 )
 

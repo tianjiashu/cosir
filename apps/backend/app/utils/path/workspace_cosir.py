@@ -1,8 +1,8 @@
 """Workspace 级 ``.cosir`` 目录路径计算（leaf 层纯路径工具）。
 
 单一职责：给出 workspace 内 ``.cosir`` 目录及其子目录与文件（附件、浏览器下载、工具产物、
-Agent 配置、Skill、MCP 配置、文件面板设置等）的路径。只做路径运算，
-**不创建目录、不读写文件、不依赖业务模型**。
+Agent 配置、cosir 专属 Skill、Skill 启停、MCP 配置、文件面板设置等）的路径；共享 Skill 目录见
+``shared_skills``。只做路径运算，**不创建目录、不读写文件、不依赖业务模型**。
 
 为什么集中：``.cosir`` 基名与子目录规则此前在 ``workspace_service``、``attachment_service``、
 ``image_utils`` 三处各自拼接，口径容易漂移；本模块是唯一允许拼接 ``.cosir`` 基名的位置。
@@ -24,7 +24,7 @@ COSIR_AGENT_CONFIG_DIR_NAME: str = "agents"
 COSIR_INSTRUCTION_FILE_NAME: str = "AGENTS.md"
 COSIR_MAIN_AGENT_PROMPT_FILE_NAME: str = "main_agent_system_prompt.md"
 COSIR_ENV_FILE_NAME: str = ".env"
-# Skill 与 MCP 的配置布局在系统级与 workspace 级 ``.cosir`` 下完全一致，名字只在这里定义一次。
+# Skill 启停与 MCP 的配置布局在系统级与 workspace 级 ``.cosir`` 下完全一致，名字只在这里定义一次。
 COSIR_CONFIG_DIR_NAME: str = "config"
 COSIR_SKILLS_DIR_NAME: str = "skills"
 COSIR_SKILLS_CONFIG_FILE_NAME: str = "skills.json"
@@ -87,8 +87,8 @@ def workspace_file_browser_settings_file(workspace_root: str | Path) -> Path:
     return workspace_cosir_dir(workspace_root) / COSIR_FILE_BROWSER_SETTINGS_FILE_NAME
 
 
-def workspace_skills_dir(workspace_root: str | Path) -> Path:
-    """返回 workspace Skill 目录路径（``<workspace>/.cosir/skills``）。"""
+def workspace_cosir_skills_dir(workspace_root: str | Path) -> Path:
+    """返回 workspace 的 cosir 专属 Skill 目录（``<workspace>/.cosir/skills``）：只有 cosir 读。"""
 
     return workspace_cosir_dir(workspace_root) / COSIR_SKILLS_DIR_NAME
 
@@ -129,10 +129,10 @@ __all__ = [
     "workspace_attachment_dir",
     "workspace_attachment_staging_dir",
     "workspace_cosir_dir",
+    "workspace_cosir_skills_dir",
     "workspace_download_dir",
     "workspace_file_browser_settings_file",
     "workspace_mcp_servers_file",
     "workspace_skills_config_file",
-    "workspace_skills_dir",
     "workspace_tool_artifact_dir",
 ]

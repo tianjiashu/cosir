@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING
 from app.core.agents.agent_profile_registry import (
     AgentProfileRegistry,
 )
-from app.core.agents.define_agents import only_read_child_agent
 from app.core.tool.tool_registry import ToolRegistry
 
 if TYPE_CHECKING:
@@ -82,46 +81,37 @@ def build_agent_registry(
     *,
     main_agent_max_steps: int = 300,
 ) -> AgentProfileRegistry:
-    """构建只包含代码内置 profile 的进程级 Registry。
+    """构建进程级 Registry：补齐内置子 Agent 的配置文件，再注册代码维护的主 Agent。
 
-    内置 agent 构造器在本地延迟导入（``app.core.agents.define_agents`` 在模块级又会
-    回引 ``app.config.configuration``，顶层导入会形成循环；只有本函数真正消费这些
-    构造器，故在此处导入即可打破循环且不改变任何职责边界）。
+    子 Agent（含内置的）一律来自配置文件，不在此处读取：Registry 在某个作用域首次被读取时经注入的
+    ``AgentProfileScopeSource`` 自行装载，因此运行期新建的 workspace 同样能被解析到。内置子 Agent 的
+    文件在这里、系统作用域首次装载之前补齐，写入目录取自同一个来源映射，保证装载时读得到。
 
+    主 Agent 由代码构造并注册到 system 作用域，先于配置文件进索引，同名文件因此顶替不了它；它的
+    prompt 由系统配置 service 从用户文件读取后注入，用户尚未配置时传空串（不生成 ``<agent_layer>``）。
+    ``max_steps`` 由装配层传入，默认值与 ``Settings`` 的默认配置一致。
 
-    代码内置 Agent 由代码构造并注册到 `system` 作用域；主 Agent prompt 由系统配置
-    service 从用户文件读取后注入，用户尚未配置时传空串（主 Agent 不生成 ``<agent_layer>``）。
-    主 Agent 的 ``max_steps`` 由装配层传入，默认值与 ``Settings`` 的默认配置一致。
-    用户 JSON（系统级与 workspace 级）不在此处读取：Registry 在某个作用域首次被读取时经注入的
-    ``AgentProfileScopeSource`` 自行装载，因此运行期新建的 workspace 同样能被解析到。
+    构造器在本地延迟导入：``app.core.agents.define_agents`` 与配置 service 在模块级又会回引
+    ``app.config.configuration``，顶层导入会形成循环。
 
     返回:
         已播种完成的 ``AgentProfileRegistry``。
 
-    异常:
-        AgentProfileConfigError: 代码内置 profile 存在重复 ID。
-
     副作用:
-        构造并填充一个全新的 registry 实例（调用方持有，不写入进程级单例）。
-
-    本函数是「启动时注册全局可用 Agent」的单一事实来源，供 ``api`` 层依赖注入与
-    ``service`` 层（如 agent_id 合法性校验）复用，避免知识重复与跨层依赖。
-
+        可能在系统 ``.cosir/agents`` 下写入缺失的内置子 Agent 文件（失败只记日志）；构造并填充一个
+        全新的 registry 实例（调用方持有，不写入进程级单例）。
     """
 
     from app.core.agents.agent_profile_source import AgentProfileScopeSource
-    from app.core.agents.define_agents import (
-        general_child_agent,
-        main_agent,
-    )
+    from app.core.agents.define_agents import main_agent
+    from app.service.configuration.agents.builtin_agents import seed_builtin_agent_files
 
     registry = AgentProfileRegistry(AgentProfileScopeSource())
-    for profile in (
-        general_child_agent(),
-        only_read_child_agent(),
+    seed_builtin_agent_files(registry.source.directory(AgentProfileRegistry.SYSTEM_WORKSPACE))
+    registry.register(
+        AgentProfileRegistry.SYSTEM_WORKSPACE,
         main_agent(system_prompt=main_agent_system_prompt, max_steps=main_agent_max_steps),
-    ):
-        registry.register_builtin(profile)
+    )
     return registry
 
 

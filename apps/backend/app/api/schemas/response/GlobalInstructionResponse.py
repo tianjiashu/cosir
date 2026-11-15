@@ -4,7 +4,9 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.service.configuration.instruction_configuration_service import GlobalInstructionDocument
+from app.service.configuration.instructions.global_instruction_service import (
+    GlobalInstructionDocument,
+)
 
 
 class GlobalInstructionResponse(BaseModel):

@@ -1,6 +1,5 @@
 """模型配置领域服务：连接与其下模型，事实源是模型配置文件。"""
 
-import json
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
@@ -17,7 +16,7 @@ from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.model_config_file import ModelConfigFile, ModelConnectionEntry, ModelEntry
 from app.models.model_config_record import ModelConfigRecord
-from app.service.configuration.file_store import ConfigurationFileStore
+from app.service.configuration import file_store
 from app.service.model_config.connection_test_result import ModelConfigTestResult
 from app.service.model_config.probe_failure_messages import probe_failure_message
 from app.utils.path.system_cosir import system_cosir_dir, system_model_config_file
@@ -37,9 +36,6 @@ class ModelConfigService:
     写入的字段由 API 边界校验过，这里用 ``model_copy`` 合并，不再重复字段校验。
     """
 
-    def __init__(self) -> None:
-        self._store = ConfigurationFileStore()
-
     @property
     def path(self) -> Path:
         return system_model_config_file()
@@ -54,7 +50,7 @@ class ModelConfigService:
 
         if not self.path.exists():
             return ModelConfigFile()
-        content = self._store.read_text(self.path, root=system_cosir_dir())
+        content = file_store.read_text(self.path, root=system_cosir_dir())
         try:
             return ModelConfigFile.model_validate_json(content)
         except ValidationError as exc:
@@ -277,11 +273,10 @@ class ModelConfigService:
     ) -> ModelConfigFile:
         """在文件锁内读出、按 ``change`` 得到新的连接列表、整体校验后原子写回。"""
 
-        with self._store.locked(self.path):
+        with file_store.locked(self.path):
             # 重新构造而不是 model_copy：要让整份文件再过一遍唯一性校验。
             written = ModelConfigFile(connections=change(self.read()))
-            content = json.dumps(written.model_dump(mode="json"), ensure_ascii=False, indent=2)
-            self._store.write_text_atomic(self.path, content + "\n", root=system_cosir_dir())
+            file_store.write_json(self.path, written, root=system_cosir_dir())
         return written
 
     async def test_draft(

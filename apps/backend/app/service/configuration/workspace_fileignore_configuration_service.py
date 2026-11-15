@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.config.logging.logger import log
-from app.service.configuration.file_store import ConfigurationFileStore
+from app.service.configuration import file_store
 from app.tools.tool_handler.search.gitignore_rules import (
     build_gitwildmatch_spec,
     valid_rule_lines,
@@ -47,21 +47,20 @@ class WorkspaceFileIgnoreConfigurationService:
         self.root = Path(workspace_root)
         self.cosir_dir = workspace_cosir_dir(self.root)
         self.path = ignore_file_path(self.root)
-        self.store = ConfigurationFileStore()
 
     def read(self) -> WorkspaceFileIgnoreDocument:
         """读取规则文件；缺失时返回空正文但不创建文件。"""
 
         if not self.path.exists():
             return self._document("", exists=False)
-        content = self.store.read_text(self.path, root=self.cosir_dir)
+        content = file_store.read_text(self.path, root=self.cosir_dir)
         return self._document(content, exists=True)
 
     def update(self, content: str) -> WorkspaceFileIgnoreDocument:
         """校验标准 gitignore 语法、大小和规则数后原子写入规则文件。"""
 
         self._validate(content)
-        self.store.write_text_atomic(self.path, content, root=self.cosir_dir)
+        file_store.write_text_atomic(self.path, content, root=self.cosir_dir)
         log.info(
             "configuration_workspace_fileignore_written",
             extra={

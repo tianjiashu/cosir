@@ -125,7 +125,7 @@ class SessionRuntimeSpace:
     def session_tool_names(self) -> tuple[str, ...]:
         """Session 工具面的唯一出口：固化 schema 里的工具名，顺序沿用 schema。
 
-        系统提示词的工具目录与工作方式层、目录更新广播都按它判断「这个 Session 能用什么」；Agent
+        系统提示词的工具目录与工作方式层按它判断「这个 Session 能用什么」；Agent
         配置之后再改不影响它。本 Run 准入（再减去派生限制）见 ``RuntimeContext.admitted_tools``。
         """
         return tuple(schema["name"] for schema in self.session_tool_schemas)
@@ -297,7 +297,7 @@ class SessionRuntimeSpace:
             当外部不再持有该 manager 时弱引用自然失效，下次访问从持久化 context 恢复。
 
         并发:
-            初始化锁只保护槽位创建；配置广播与 workflow 的访问不依赖同一 Session 操作闸门。
+            初始化锁只保护槽位创建；workflow 的访问不依赖同一 Session 操作闸门。
             锁内重检避免两个并发访问者分别构造 manager。
         """
 

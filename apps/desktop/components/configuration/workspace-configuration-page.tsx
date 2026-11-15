@@ -47,7 +47,7 @@ function WorkspaceFileIgnorePanel({ workspaceId }: { workspaceId: number }) {
 /**
  * 工作区配置（/workspaces/:id/settings/:tab）。路由以 workspaceId 为 key 挂载本页，切换工作区不会带走草稿。
  */
-export function WorkspaceConfigurationPage({ workspaceId, workspaceName, tab }: { workspaceId: number; workspaceName: string; tab: WorkspaceSettingsTabId }) {
+export function WorkspaceConfigurationPage({ workspaceId, workspaceName, tab, skillName }: { workspaceId: number; workspaceName: string; tab: WorkspaceSettingsTabId; skillName?: string }) {
   const instructionAdapter = useMemo<ConfigurationDocumentAdapter<MarkdownDocumentContract>>(() => ({
     queryKey: queryKeys.instruction("workspace", workspaceId),
     label: "工作区 AGENTS.md",
@@ -73,7 +73,7 @@ export function WorkspaceConfigurationPage({ workspaceId, workspaceName, tab }: 
       {tab === "instructions" && <MarkdownConfigurationPanel adapter={instructionAdapter} placeholder="写入当前工作区的项目约束…" saveLabel="保存 AGENTS.md" />}
       {tab === "fileignore" && <WorkspaceFileIgnorePanel workspaceId={workspaceId} />}
       {tab === "mcp" && <MCPConfigurationPanel workspaceId={workspaceId} />}
-      {tab === "skills" && <SkillConfigurationPanel workspaceId={workspaceId} />}
+      {tab === "skills" && <SkillConfigurationPanel workspaceId={workspaceId} skillName={skillName} />}
     </SettingsPageLayout>
   );
 }

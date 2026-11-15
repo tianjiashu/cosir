@@ -41,6 +41,11 @@ export const WORKSPACE_SETTINGS_TABS = [
 
 export type WorkspaceSettingsTabId = (typeof WORKSPACE_SETTINGS_TABS)[number]["id"];
 
+/** Skill 详情页（`…/settings/skills/:skillName`）属于 Skills 标签：标签由路由形状决定，路由与页头共用这一处。 */
+export function settingsTabParam(params: Record<string, string | undefined>): string | undefined {
+  return params.skillName === undefined ? params.tab : "skills";
+}
+
 export function findSettingsTab<Id extends string>(
   tabs: readonly SettingsTab<Id>[],
   id: string | undefined,

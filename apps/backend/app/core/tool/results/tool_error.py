@@ -18,11 +18,11 @@ from app.core.tool.schemas import ToolObservation
 from app.core.tool.schemas.tool_names import (
     TOOL_APPLY_PATCH,
     TOOL_DELEGATE_TASK,
+    TOOL_EDIT_FILE,
     TOOL_EXECUTE_TERMINAL,
     TOOL_FIND_FILES,
     TOOL_FORK_SESSION,
     TOOL_READ_FILE,
-    TOOL_EDIT_FILE,
     TOOL_SEARCH_CONTENT,
     TOOL_WEB_FETCH,
     TOOL_WEB_SEARCH,

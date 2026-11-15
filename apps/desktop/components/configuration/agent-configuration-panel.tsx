@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useStore } from "zustand";
-import { ChevronLeftIcon, Code2Icon, Loader2Icon, PlusIcon, SaveIcon, Settings2Icon, ShieldCheckIcon, Trash2Icon } from "lucide-react";
+import { ChevronLeftIcon, Code2Icon, Loader2Icon, PlusIcon, SaveIcon, Settings2Icon, Trash2Icon } from "lucide-react";
 
 import { AgentConfigurationForm } from "@/components/configuration/agent-configuration-form";
 import { Alert } from "@/components/ui/alert";
@@ -141,20 +141,16 @@ export function AgentConfigurationPanel({ workspaceId }: { workspaceId: number |
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <h3 className="min-w-0 truncate font-medium">{agent.agent_id}</h3>
-                    <Badge size="sm" tone={agent.source === "builtin" ? "neutral" : "primary"}>
+                    <Badge size="sm" tone={agent.source === "builtin" ? "neutral" : "primary"} title={agent.source === "builtin" ? "内置子 Agent：可以修改，不能删除" : undefined}>
                       {agent.source === "builtin" ? "内置" : "自定义"}
                     </Badge>
                   </div>
                 </div>
               </div>
-              {agent.editable || agent.deletable ? (
-                <div className="flex gap-1">
-                  {agent.editable && <Button variant="ghost" size="icon-sm" onClick={() => setEditing(agent)} aria-label={`编辑 ${agent.agent_id}`}><Settings2Icon /></Button>}
-                  {agent.deletable && <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => void removeAgent(agent)} aria-label={`删除 ${agent.agent_id}`}><Trash2Icon /></Button>}
-                </div>
-              ) : (
-                <span className="text-muted-foreground flex size-7 shrink-0 items-center justify-center" role="img" aria-label="内置子 Agent，不可编辑或删除" title="内置子 Agent，不可编辑或删除"><ShieldCheckIcon className="size-4" /></span>
-              )}
+              <div className="flex gap-1">
+                <Button variant="ghost" size="icon-sm" onClick={() => setEditing(agent)} aria-label={`编辑 ${agent.agent_id}`}><Settings2Icon /></Button>
+                {agent.deletable && <Button variant="ghost" size="icon-sm" className="text-destructive" onClick={() => void removeAgent(agent)} aria-label={`删除 ${agent.agent_id}`}><Trash2Icon /></Button>}
+              </div>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               <Badge shape="tag">{agent.allowed_tool_groups.length} 个工具组</Badge>

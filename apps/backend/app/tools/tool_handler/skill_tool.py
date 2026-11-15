@@ -14,8 +14,8 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_SKILL
-from app.service.configuration.skill_catalog import SkillCatalog, SkillLoadError
-from app.service.configuration.skill_configuration import SkillConfigurationError
+from app.service.configuration.skills.catalog import SkillCatalog, SkillLoadError
+from app.service.configuration.skills.configuration import SkillConfigurationError
 from app.tools.display.skill_display import (
     build_skill_content_display_data,
     build_skill_list_display_data,
@@ -65,7 +65,7 @@ class SkillTool(HandlerBase):
         catalog = SkillCatalog.visible_from(execution_context.workspace_root)
         try:
             if action == "list":
-                skills = [skill for skill in catalog.list_skills() if skill.enabled]
+                skills = [skill for skill in catalog.list_skills() if skill.offered_to_model]
                 payload = [
                     {"name": skill.name, "description": skill.description} for skill in skills
                 ]

@@ -61,8 +61,7 @@ class AgentConfiguration:
 class AgentConfigurationEntry:
     """注册表里一个子 Agent 的配置事实。
 
-    ``path`` 为它的配置文件（内置 Agent 没有文件，为 ``None``）；``builtin`` 的 Agent 由代码定义，
-    配置中心只能读取。
+    ``path`` 为它的配置文件；``builtin`` 的是系统内置子 Agent（同样来自配置文件），可以修改、不能删除。
     """
 
     configuration: AgentConfiguration

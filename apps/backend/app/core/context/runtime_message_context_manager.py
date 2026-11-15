@@ -83,7 +83,7 @@ class RuntimeMessageContextManager:
     """
 
     current_session_id: int
-    # 只用其身份与执行资源（角色、提示词）构建 Session 首个系统提示词，及供配置广播过滤。
+    # 只用其身份与执行资源（角色、提示词）构建 Session 首个系统提示词。
     agent: AgentRuntimeConfig
     # Session 固化的工具名（``SessionRuntimeSpace.session_tool_names``），决定首个系统提示词的
     # 工具目录层与工作方式层。

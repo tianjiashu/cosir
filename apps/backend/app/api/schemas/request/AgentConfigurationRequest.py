@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config.configuration import get_tool_registry
-from app.service.configuration.agent_configuration import AgentConfiguration
+from app.service.configuration.agents.configuration import AgentConfiguration
 
 
 class AgentConfigurationRequest(BaseModel):

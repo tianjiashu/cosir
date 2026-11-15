@@ -11,7 +11,7 @@ from app.api.configuration.errors import raise_configuration_error
 from app.api.schemas.request.GlobalInstructionUpdateRequest import GlobalInstructionUpdateRequest
 from app.api.schemas.response.GlobalInstructionResponse import GlobalInstructionResponse
 from app.app import app
-from app.service.configuration.instruction_configuration_service import (
+from app.service.configuration.instructions.global_instruction_service import (
     InstructionConfigurationService,
 )
 

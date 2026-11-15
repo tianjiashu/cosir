@@ -2,6 +2,7 @@
 
 - 系统级固定路径与 ``.cosir`` 子目录：``app.utils.path.system_cosir``
 - workspace 级 ``.cosir`` 路径：``app.utils.path.workspace_cosir``
+- 共享 Skill 目录（``.agents/skills``，不在 ``.cosir`` 下）：``app.utils.path.shared_skills``
 - 路径校验（保留子树判定）：``app.utils.path.validation``
 - 相对路径基础校验：``app.utils.path.relative_path``
 """
@@ -25,7 +26,6 @@ from app.utils.path.system_cosir import (
     system_mcp_servers_file,
     system_model_config_file,
     system_skills_config_file,
-    system_skills_dir,
 )
 from app.utils.path.validation import is_within_cosir
 from app.utils.path.workspace_cosir import (
@@ -73,7 +73,6 @@ __all__ = [
     "system_mcp_servers_file",
     "system_model_config_file",
     "system_skills_config_file",
-    "system_skills_dir",
     "workspace_agent_config_dir",
     "workspace_attachment_dir",
     "workspace_attachment_staging_dir",

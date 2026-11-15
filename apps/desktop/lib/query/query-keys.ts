@@ -26,6 +26,10 @@ export const queryKeys = {
   skillsAll: ["cosir", "skills"] as const,
   skills: (workspaceId: number | null) => ["cosir", "skills", workspaceId ?? "system"] as const,
   skill: (workspaceId: number | null, name: string) => ["cosir", "skills", workspaceId ?? "system", "document", name] as const,
+  skillFile: (workspaceId: number | null, name: string, path: string) =>
+    ["cosir", "skills", workspaceId ?? "system", "document", name, "file", path] as const,
+  // 分组目录挂在同一作用域的 Skill 前缀下：任何 Skill 写入失效前缀时一并重拉。
+  skillCatalog: (workspaceId: number | null) => ["cosir", "skills", workspaceId ?? "system", "catalog"] as const,
   toolGroups: () => ["cosir", "tool-groups"] as const,
   modelConnections: () => ["cosir", "model-connections"] as const,
   sessionObservation: (query: unknown) => ["cosir", "session-observation", query] as const,

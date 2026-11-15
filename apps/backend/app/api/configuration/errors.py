@@ -13,6 +13,9 @@ from typing import NoReturn
 
 from fastapi import HTTPException
 
+from app.api.schemas.response.SkillImportConflictResponse import SkillImportConflictResponse
+from app.service.configuration.skills.skill_import import SkillImportConflict
+
 
 def raise_configuration_error(exc: Exception) -> NoReturn:
     """把配置中心抛出的异常映射为 ``HTTPException``。
@@ -24,8 +27,9 @@ def raise_configuration_error(exc: Exception) -> NoReturn:
         无返回；签名标注 ``NoReturn``，所有分支都以抛出结束。
 
     异常:
-        HTTPException: 404（``KeyError``，目标配置不存在）、409（``FileExistsError``，
-            同名配置已存在）、400（``ConfigurationPathError`` / ``AgentConfigurationError`` /
+        HTTPException: 404（``KeyError``，目标配置不存在）、409（``SkillImportConflict``，导入与现有
+            同名 Skill 冲突，``detail.conflict`` 带明细；``FileExistsError``，同名配置已存在）、
+            400（``ConfigurationPathError`` / ``AgentConfigurationError`` /
             ``InstructionConfigurationError`` / ``EnvironmentConfigurationError`` /
             ``AgentProfileConfigError`` / ``ValueError``，请求内容或路径不合法）、
             500（``PermissionError``，本机文件不可写；``ConfigurationFileError`` / ``OSError``，
@@ -36,6 +40,15 @@ def raise_configuration_error(exc: Exception) -> NoReturn:
     if isinstance(exc, KeyError):
         raise HTTPException(
             status_code=404, detail={"code": "configuration_not_found", "message": "配置不存在"}
+        ) from exc
+    if isinstance(exc, SkillImportConflict):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "skill_import_conflict",
+                "message": str(exc),
+                "conflict": SkillImportConflictResponse.from_conflict(exc).model_dump(),
+            },
         ) from exc
     if isinstance(exc, FileExistsError):
         raise HTTPException(

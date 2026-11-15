@@ -177,17 +177,17 @@ function EnvironmentEditor({ groups }: { groups: EnvironmentGroup[] }) {
 /**
  * 系统配置中心（/settings/:tab）。标签来自路由，布局与导航由 SettingsPageLayout 统一提供。
  */
-export function SystemConfigurationPage({ tab }: { tab: SystemSettingsTabId }) {
+export function SystemConfigurationPage({ tab, skillName }: { tab: SystemSettingsTabId; skillName?: string }) {
   return (
     <SettingsPageLayout tabs={SYSTEM_SETTINGS_TABS} basePath="/settings" navLabel="系统配置分类">
       {tab === "appearance" && <AppearanceSettingsPanel />}
       {tab === "agents" && <AgentConfigurationPanel workspaceId={null} />}
       {tab === "models" && <ModelConnectionsPanel />}
-      {tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} requireContent description="保存后实时生效，不影响前缀缓存。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent 提示词" />}
-      {tab === "instructions" && <MarkdownConfigurationPanel adapter={globalInstructionConfigurationAdapter} description="保存后实时生效，不影响前缀缓存。" placeholder="在这里写入系统级工作约束…" saveLabel="保存全局 AGENTS.md" />}
+      {tab === "main-agent" && <MarkdownConfigurationPanel adapter={mainAgentPromptConfigurationAdapter} requireContent description="保存后对新会话生效。" placeholder="定义主 Agent 的执行协议…" saveLabel="保存主 Agent 提示词" />}
+      {tab === "instructions" && <MarkdownConfigurationPanel adapter={globalInstructionConfigurationAdapter} description="保存后对新会话生效。" placeholder="在这里写入系统级工作约束…" saveLabel="保存全局 AGENTS.md" />}
       {tab === "environment" && <EnvironmentPanel />}
       {tab === "mcp" && <MCPConfigurationPanel workspaceId={null} />}
-      {tab === "skills" && <SkillConfigurationPanel workspaceId={null} />}
+      {tab === "skills" && <SkillConfigurationPanel workspaceId={null} skillName={skillName} />}
     </SettingsPageLayout>
   );
 }

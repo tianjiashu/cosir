@@ -1,224 +1,160 @@
-import { skillsQueryOptions } from "@/lib/query/query-options";
-import { useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { Loader2Icon, PlusIcon, PuzzleIcon, Trash2Icon } from "lucide-react";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { RefreshCwIcon, SearchIcon } from "lucide-react";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
+import { SkillDetail } from "@/components/configuration/skill-detail";
+import { SkillImportMenu } from "@/components/configuration/skill-import-menu";
+import { SkillRootGroup } from "@/components/configuration/skill-root-group";
+import { invalidateSkills, useSkillActions } from "@/components/configuration/use-skill-actions";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
-import { Switch } from "@/components/ui/switch";
-import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
-import { StaticMarkdown } from "@/components/markdown/static-markdown";
-import {
-  deleteSkill,
-  getSkill,
-  importSkill,
-  ownScope,
-  setSkillEnabled,
-  type ExtensionScopeId,
-  type Skill,
-} from "@/lib/api/extensions";
-import { confirmDelete } from "@/lib/confirm/confirm-store";
-import { desktopHost } from "@/lib/desktop-host";
-import { pickLocalFiles } from "@/lib/desktop-host/pick-local-files";
-import { UserFacingError } from "@/lib/errors/user-facing-error";
+import { Input } from "@/components/ui/input";
+import { ErrorState, LoadingState } from "@/components/ui/state-panel";
+import { getSkillCatalog, ownScope, type ExtensionScopeId, type SkillCatalogView } from "@/lib/api/extensions";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
-
-type ImportSource = "directory" | "archive";
+import { diffSkillCatalogs } from "@/lib/skills/skill-catalog-diff";
+import { bulkToggleTargets, searchSkillGroups, type SearchedSkillGroup } from "@/lib/skills/skill-catalog-search";
+import { effectiveRootLabels } from "@/lib/skills/skill-directory";
 
 /**
- * 写入后让受影响的列表重拉：工作区列表含继承来的系统级 Skill，所以系统级写入失效全部作用域
- * （各工作区页与输入框选择器），工作区写入只失效该工作区。
+ * 一个作用域的 Skills 页：`skillName` 有值时显示这个 Skill 的详情页（路由 `…/settings/skills/:skillName`），
+ * 否则显示按根目录（作用域 × 身份）分组的目录。`workspaceId` 为 `null` 时管理系统级；否则管理该工作区这一层，
+ * 继承来的系统级分组只读。
  */
-function invalidateSkills(queryClient: QueryClient, workspaceId: ExtensionScopeId) {
-  void queryClient.invalidateQueries({
-    queryKey: workspaceId === null ? queryKeys.skillsAll : queryKeys.skills(workspaceId),
-  });
+export function SkillConfigurationPanel({ workspaceId, skillName }: { workspaceId: ExtensionScopeId; skillName?: string }) {
+  if (skillName !== undefined) return <SkillDetail key={skillName} workspaceId={workspaceId} name={skillName} />;
+  return <SkillCatalogPage workspaceId={workspaceId} />;
 }
 
 /**
- * 一个作用域的 Skill 导入、启停与只读详情管理。`workspaceId` 为 `null` 时管理系统级 Skill；
- * 否则管理该工作区的 `.cosir/skills`，同时列出继承来的系统级 Skill（只读）。
+ * 分组目录页。用户来这里要回答：Agent 现在能用哪些、代价多大（顶部摘要）；每个 Skill 还有谁能看到、为什么
+ * 某个没生效（按身份分卡，越靠上越优先，被覆盖的写明被谁覆盖）；哪些该开该关（搜索、对搜索结果批量启停）；
+ * 具体某个是什么（进详情）。谁生效、谁被覆盖全部取自后端视图，这里只做展示与搜索。
+ *
+ * 后端每次请求都现读目录，滞后的只有页面缓存：用其他工具装完 Skill 回来，点「重新扫描」重读。
+ * 已开着的会话不受影响（系统提示词在会话创建时固定），配置变化的通知以后统一做。
  */
-export function SkillConfigurationPanel({ workspaceId }: { workspaceId: ExtensionScopeId }) {
+function SkillCatalogPage({ workspaceId }: { workspaceId: ExtensionScopeId }) {
+  const pageScope = ownScope(workspaceId);
+  const actions = useSkillActions(workspaceId);
   const queryClient = useQueryClient();
-  const scope = ownScope(workspaceId);
-  const scopeLabel = workspaceId === null ? "系统 Skill 目录" : "工作区的 .cosir/skills 目录";
-  // 原生文件选择框打开期间按钮尚未禁用，用同步标记挡住连击造成的重复弹框。
-  const pickingSource = useRef(false);
-  const [detailName, setDetailName] = useState<string | null>(null);
-  const linkComponents = useMarkdownLinkComponents("configuration", { webOnly: true });
-
-  const skillsQuery = useQuery({
-    ...skillsQueryOptions(workspaceId),
-  });
-  const detailQuery = useQuery({
-    queryKey: queryKeys.skill(workspaceId, detailName ?? ""),
-    queryFn: ({ signal }) => getSkill(workspaceId, detailName!, { signal }),
-    enabled: detailName !== null,
+  const [query, setQuery] = useState("");
+  const catalogQuery = useQuery({
+    queryKey: queryKeys.skillCatalog(workspaceId),
+    queryFn: ({ signal }) => getSkillCatalog(workspaceId, { signal }),
   });
 
-  const toggleMutation = useMutation({
-    mutationFn: (skill: Skill) => setSkillEnabled(workspaceId, skill.name, !skill.enabled),
-    onSuccess: (_updated, skill) => {
-      invalidateSkills(queryClient, workspaceId);
-      notify.success(`已${skill.enabled ? "停用" : "启用"} ${skill.name}`);
-    },
-    onError: (error, skill) => notify.error(`${skill.enabled ? "停用" : "启用"} ${skill.name} 失败`, { error, fallback: "保存 Skill 状态失败" }),
-  });
+  const groups = catalogQuery.data?.groups ?? [];
+  const searching = query.trim() !== "";
+  const searched = searchSkillGroups(groups, query);
+  const own = searched.filter(({ group }) => group.scope === pageScope);
+  // 继承来的空目录在这一页动不了，系统页已经显示，这里不列。
+  const inherited = searched.filter(({ group }) => group.scope !== pageScope && (group.skills.length > 0 || group.skipped.length > 0));
+  const bulk = bulkToggleTargets(searched, pageScope);
+  const hasSkills = groups.some((group) => group.skills.length > 0);
+  const effectiveLabels = effectiveRootLabels(groups, pageScope);
+  const importLocation = groups.find((group) => group.scope === pageScope && group.kind === "cosir")?.location;
 
-  const importMutation = useMutation({
-    mutationFn: ({ sourcePath, sourceType }: { sourcePath: string; sourceType: ImportSource }) =>
-      importSkill(workspaceId, sourcePath, sourceType),
-    onSuccess: (skill) => {
-      invalidateSkills(queryClient, workspaceId);
-      notify.success(`已导入 ${skill.name}`, {
-        description: skill.overrides ? `文件已复制到${scopeLabel}，并覆盖系统级同名 Skill。` : `文件已复制到${scopeLabel}。`,
-      });
-    },
-    onError: (error) => notify.error("导入 Skill 失败", { error, fallback: "导入 Skill 失败，请检查所选目录或 ZIP" }),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (name: string) => deleteSkill(workspaceId, name),
-    onSuccess: (_result, name) => {
-      invalidateSkills(queryClient, workspaceId);
-      if (detailName === name) setDetailName(null);
-      notify.success(`已删除 ${name}`);
-    },
-  });
-
-  const busy = toggleMutation.isPending || deleteMutation.isPending || importMutation.isPending;
-
-  async function selectAndImport(sourceType: ImportSource) {
-    if (pickingSource.current || importMutation.isPending) return;
-    pickingSource.current = true;
-    let sourcePath: string | null;
-    try {
-      if (!desktopHost) throw new UserFacingError("只能在桌面应用中导入 Skill");
-      sourcePath = sourceType === "directory"
-        ? await desktopHost.dialog.openDirectory({ title: "选择要导入的 Skill 文件夹" })
-        : (await pickLocalFiles({ accept: ".zip" }))[0]?.path || null;
-    } catch (error) {
-      void frontendLog("ERROR", "skill_import_picker_failed", "打开 Skill 导入选择框失败", { data: { sourceType }, error });
-      notify.error("无法打开文件选择框", { error, fallback: "请重试或重启应用" });
-      return;
-    } finally {
-      pickingSource.current = false;
-    }
-    if (!sourcePath) return;
-    importMutation.mutate({ sourcePath, sourceType });
+  // 一并失效输入框选择器与详情页：它们读的是同一批目录。
+  async function rescan() {
+    const before = catalogQuery.data;
+    await invalidateSkills(queryClient, workspaceId);
+    const after = queryClient.getQueryData<SkillCatalogView>(queryKeys.skillCatalog(workspaceId));
+    if (!before || !after || queryClient.getQueryState(queryKeys.skillCatalog(workspaceId))?.status === "error") return;
+    const { added, removed } = diffSkillCatalogs(before, after);
+    notify.success(added === 0 && removed === 0 ? "扫描完成，没有变化" : `扫描完成：新增 ${added} 个，移除 ${removed} 个`);
   }
 
-  async function removeSkill(skill: Skill) {
-    await confirmDelete({
-      target: `Skill「${skill.name}」`,
-      warning: skill.overrides
-        ? `${scopeLabel}中的文件会一并删除，之后改用系统级同名 Skill。`
-        : `${scopeLabel}中的文件会一并删除。`,
-      action: () => deleteMutation.mutateAsync(skill.name),
-      failureFallback: "删除 Skill 失败",
-    });
-  }
+  const renderGroups = (groups: SearchedSkillGroup[], editable: boolean) => groups.map(({ group, skills }) => (
+    <SkillRootGroup
+      key={`${group.scope}:${group.kind}`}
+      group={group}
+      skills={skills}
+      workspaceId={workspaceId}
+      editable={editable}
+      searching={searching}
+      busy={actions.busy}
+      effectiveLabels={effectiveLabels}
+      onToggleSkill={actions.toggle}
+    />
+  ));
 
   return (
-    <section className="space-y-5" aria-labelledby="skill-configuration-heading">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1.5">
+    <section className="space-y-4" aria-labelledby="skill-configuration-heading">
+      <header className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-1">
           <h2 id="skill-configuration-heading" className="text-lg font-semibold">Skills</h2>
-          {workspaceId !== null && (
-            <p className="text-muted-foreground text-sm">导入到本工作区的 Skill 只在这里可用；与系统级同名时，本工作区的版本优先。</p>
-          )}
+          {catalogQuery.data && <AgentCatalogSummary view={catalogQuery.data} workspaceId={workspaceId} />}
         </div>
-        <div className="flex gap-2">
-          <Button onClick={() => void selectAndImport("directory")} disabled={!skillsQuery.data || importMutation.isPending}>
-            {importMutation.isPending ? <Loader2Icon className="animate-spin" /> : <PlusIcon />}
-            导入 Skill 文件夹
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="outline" size="sm" disabled={catalogQuery.isFetching} onClick={() => void rescan()}>
+            <RefreshCwIcon className={catalogQuery.isFetching ? "animate-spin" : undefined} />重新扫描
           </Button>
-          <Button variant="outline" onClick={() => void selectAndImport("archive")} disabled={!skillsQuery.data || importMutation.isPending}>
-            {importMutation.isPending ? <Loader2Icon className="animate-spin" /> : <PlusIcon />}
-            导入 ZIP
-          </Button>
+          <SkillImportMenu workspaceId={workspaceId} location={importLocation} />
         </div>
       </header>
 
-      {skillsQuery.isPending ? (
+      {catalogQuery.isPending ? (
         <LoadingState label="正在读取 Skills…" />
-      ) : skillsQuery.isError ? (
+      ) : catalogQuery.isError ? (
         <ErrorState
-          message={userErrorMessage(skillsQuery.error, "读取 Skill 列表失败")}
-          onRetry={() => void skillsQuery.refetch()}
+          message={userErrorMessage(catalogQuery.error, "读取 Skill 目录失败")}
+          onRetry={() => void catalogQuery.refetch()}
           retryLabel="重新读取"
         />
-      ) : skillsQuery.data.length === 0 ? (
-        <EmptyState
-          icon={<PuzzleIcon />}
-          title="还没有 Skill"
-          description={`导入本机 Skill 文件夹后会复制到${scopeLabel}，可以在这里启用、停用或查看内容。`}
-        />
       ) : (
-        <div className="space-y-3">
-          {skillsQuery.data.map((skill) => {
-            // 工作区里继承来的系统级 Skill 只读：启停与删除要去系统设置。
-            const inherited = skill.scope !== scope;
-            return (
-              <Card key={skill.name} className="flex flex-wrap items-start gap-3 p-4">
-                <PuzzleIcon className="text-muted-foreground mt-0.5 size-4 shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button type="button" className="truncate text-left text-sm font-medium hover:underline" onClick={() => setDetailName(skill.name)}>{skill.name}</button>
-                    <Badge size="sm" tone={skill.enabled ? "primary" : "neutral"}>
-                      {skill.enabled ? "已启用" : "已停用"}
-                    </Badge>
-                    {inherited && <Badge size="sm" tone="neutral">系统继承</Badge>}
-                    {skill.overrides && <Badge size="sm" tone="neutral">覆盖系统同名</Badge>}
-                  </div>
-                  <p className="text-muted-foreground mt-1 line-clamp-2 text-xs">{skill.description}</p>
-                  <Button variant="link" size="sm" className="mt-1 h-auto px-0 py-0 text-xs" onClick={() => setDetailName(skill.name)}>查看说明</Button>
-                </div>
-                {inherited ? (
-                  <span className="text-muted-foreground self-center text-xs">在系统设置中管理</span>
-                ) : <>
-                  <Switch checked={skill.enabled} aria-label={`${skill.enabled ? "停用" : "启用"} Skill ${skill.name}`} disabled={busy} onClick={() => toggleMutation.mutate(skill)} />
-                  <Button variant="ghost" size="icon" aria-label={`删除 Skill ${skill.name}`} disabled={busy} onClick={() => void removeSkill(skill)}><Trash2Icon /></Button>
-                </>}
-              </Card>
-            );
-          })}
-        </div>
-      )}
-
-      <Dialog open={detailName !== null} onOpenChange={(open) => { if (!open) setDetailName(null); }}>
-        <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{detailQuery.data?.name ?? "Skill 说明"}</DialogTitle>
-            <DialogDescription>{detailQuery.data?.description ?? "只读预览 Skill.md 内容。"}</DialogDescription>
-          </DialogHeader>
-          {detailQuery.isPending ? (
-            <LoadingState label="正在读取说明…" className="py-8" />
-          ) : detailQuery.isError ? (
-            <ErrorState
-              message={userErrorMessage(detailQuery.error, "读取 Skill 详情失败")}
-              onRetry={() => void detailQuery.refetch()}
-            />
-          ) : (
-            <div className="aui-md max-h-[60vh] overflow-y-auto rounded-lg border bg-muted/20 p-4 leading-6">
-              <StaticMarkdown components={linkComponents} className="!space-y-3">{detailQuery.data.content}</StaticMarkdown>
+        <>
+          {hasSkills && <div className="flex flex-wrap items-center gap-2">
+            <div className="relative min-w-48 flex-1">
+              <SearchIcon className="text-muted-foreground pointer-events-none absolute top-2 left-2.5 size-4" aria-hidden="true" />
+              <Input className="pl-8 text-sm" aria-label="搜索 Skill" placeholder="搜索名称或描述…" value={query} onChange={(event) => setQuery(event.target.value)} />
             </div>
+            {searching && bulk.enabled.length > 0 && (
+              <Button variant="outline" size="sm" disabled={actions.busy} onClick={() => actions.setEnabled(bulk.enabled, false)}>停用这 {bulk.enabled.length} 个</Button>
+            )}
+            {searching && bulk.disabled.length > 0 && (
+              <Button variant="outline" size="sm" disabled={actions.busy} onClick={() => actions.setEnabled(bulk.disabled, true)}>启用这 {bulk.disabled.length} 个</Button>
+            )}
+          </div>}
+
+          {searched.length === 0 && <p className="text-muted-foreground py-6 text-center text-sm">没有符合条件的 Skill</p>}
+          {/* 后端已按优先级排好：本层在前，同层专属在前。工作区页分「本工作区」与「继承自系统级」两节。 */}
+          {workspaceId === null ? (
+            <div className="space-y-3">{renderGroups(own, true)}</div>
+          ) : (
+            <>
+              {own.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-muted-foreground text-xs font-medium">本工作区</h3>
+                  {renderGroups(own, true)}
+                </div>
+              )}
+              {inherited.length > 0 && (
+                <div className="space-y-3">
+                  <h3 className="text-muted-foreground text-xs font-medium">继承自系统级 · 在系统设置中管理</h3>
+                  {renderGroups(inherited, false)}
+                </div>
+              )}
+            </>
           )}
-        </DialogContent>
-      </Dialog>
+        </>
+      )}
     </section>
+  );
+}
+
+/** Agent 实际看到的目录条数与体量：数字来自后端，用提示词同一个渲染函数估算。 */
+function AgentCatalogSummary({ view, workspaceId }: { view: SkillCatalogView; workspaceId: ExtensionScopeId }) {
+  return (
+    <div className="text-muted-foreground space-y-0.5 text-sm">
+      <p>
+        {workspaceId === null ? "Agent 能用 " : "在这个工作区里，Agent 能用 "}
+        <span className="text-foreground font-medium">{view.agent_skills}</span> 个 Skill
+        {view.agent_skills > 0 && <>，目录约 <span className="text-foreground font-medium">{view.agent_tokens.toLocaleString("zh-CN")}</span> token，每个新会话的系统提示词都会带上</>}
+        {workspaceId === null && "（工作区还可以另加自己的）"}。
+      </p>
+      <p className="text-xs">改动对新会话生效，已开着的会话沿用开始时的目录。</p>
+    </div>
   );
 }

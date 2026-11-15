@@ -13,7 +13,7 @@
 ``<DATA_DIR>/.cosir/config/mcp_servers.json``
 ``<DATA_DIR>/.cosir/config/mcp_tested_servers.json``（两个作用域的 MCP 本机测试记录）
 ``<DATA_DIR>/.cosir/config/skills.json``
-``<DATA_DIR>/.cosir/skills/``
+``<DATA_DIR>/.cosir/skills/``（cosir 专属 Skill；共享的 ``.agents/skills`` 见 ``app.utils.path.shared_skills``）
 
 本模块只做路径推导，不创建目录、不读写文件。目录创建由桌面宿主、日志配置和存储初始化
 各自负责；``Settings.load`` 在加载系统 ``.env`` 后调用 ``reset``，使环境变量与固定路径重新对齐。
@@ -191,8 +191,8 @@ def system_model_config_file() -> Path:
     return system_cosir_dir() / COSIR_CONFIG_DIR_NAME / _MODEL_CONFIG_FILE_NAME
 
 
-def system_skills_dir() -> Path:
-    """返回系统级 Skill 目录路径。"""
+def system_cosir_skills_dir() -> Path:
+    """返回系统级 cosir 专属 Skill 目录：只有 cosir 读，Agent 文件工具对它只读（见 ``ProtectedPaths``）。"""
 
     return system_cosir_dir() / COSIR_SKILLS_DIR_NAME
 
@@ -246,7 +246,7 @@ __all__ = [
     "system_mcp_servers_file",
     "system_model_config_file",
     "system_mcp_tested_servers_file",
-    "system_skills_dir",
+    "system_cosir_skills_dir",
     "system_skills_config_file",
     "system_agent_config_dir",
     "system_env_file",

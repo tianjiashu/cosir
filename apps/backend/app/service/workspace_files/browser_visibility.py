@@ -14,7 +14,7 @@ from pathlib import Path, PurePosixPath
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.config.logging.logger import log
-from app.service.configuration.file_store import ConfigurationFileStore
+from app.service.configuration import file_store
 from app.utils.path.workspace_cosir import (
     workspace_cosir_dir,
     workspace_file_browser_settings_file,
@@ -72,12 +72,11 @@ class BrowserVisibilityStore:
     def __init__(self, root: Path) -> None:
         self.root = workspace_cosir_dir(root)
         self.path = workspace_file_browser_settings_file(root)
-        self.store = ConfigurationFileStore()
 
     def read(self) -> BrowserVisibility:
         if not self.path.exists():
             return self._settings(_Document())
-        content = self.store.read_text(self.path, root=self.root)
+        content = file_store.read_text(self.path, root=self.root)
         try:
             document = _Document.model_validate_json(content)
         except ValidationError as exc:
@@ -93,13 +92,13 @@ class BrowserVisibilityStore:
 
     def change(self, paths: list[str], *, ignored: bool) -> VisibilityChange:
         requested = set(_Document(ignored_paths=paths).ignored_paths)
-        with self.store.locked(self.path):
+        with file_store.locked(self.path):
             current = set(self.read().ignored_paths)
             changed = requested - current if ignored else requested & current
             updated = current | requested if ignored else current - requested
             document = _Document.model_construct(ignored_paths=sorted(updated))
             if changed:
-                self.store.write_text_atomic(
+                file_store.write_text_atomic(
                     self.path,
                     document.model_dump_json(indent=2) + "\n",
                     root=self.root,

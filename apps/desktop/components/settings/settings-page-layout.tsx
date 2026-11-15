@@ -9,6 +9,10 @@ import { cn } from "@/lib/utils";
  *
  * 标签是路由（`${basePath}/${id}`），可直接链接、前进后退；切换标签时的未保存修改
  * 由 AppLayout 的路由拦截统一询问，这里不再自行确认。页面标题与返回由 PageHeader 承担。
+ *
+ * 内容滚动区自带 8px 横向留白（`-mx-2 px-2`，借外层内边距，内容位置不变）：滚动区只设纵向滚动时，
+ * 浏览器也会把横向变成可滚动，贴边的内容一超出就冒出横向滚动条，焦点环与阴影也会被裁掉。
+ * 面板里的吸顶条可以用 `-mx-2` 铺满这圈留白，盖住从它下面滚过去的内容边缘。
  */
 export function SettingsPageLayout<Id extends string>({
   tabs,
@@ -43,8 +47,8 @@ export function SettingsPageLayout<Id extends string>({
       </nav>
       {/* 只有内容区滚动，导航不动。内容列至少撑满内容区且高度确定：普通面板随内容变长、由内容区滚动，
           文档类面板（Markdown 编辑）用 flex-1 填满剩余高度，保存栏不会被挤出视口。 */}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto pb-6">
-        <div aria-hidden="true" className="scroll-fade-top" />
+      <div className="-mx-2 flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-2 pb-6">
+        <div aria-hidden="true" className="scroll-fade-top -mx-2" />
         {/* 上内边距在渐隐层之后：初始时渐隐只盖住留白，不盖住内容。 */}
         <div className="flex shrink-0 grow flex-col gap-4 pt-6">
           {intro}

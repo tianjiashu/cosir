@@ -38,4 +38,14 @@ describe("parseHttpError", () => {
       message: "HTTP request failed with status 500",
     });
   });
+
+  it("keeps the detail object so callers can read structured payloads", async () => {
+    const error = await parseHttpError(new Response(
+      JSON.stringify({ detail: { code: "skill_import_conflict", message: "冲突", conflict: { name: "review" } } }),
+      { status: 409 },
+    ));
+
+    expect(error.code).toBe("skill_import_conflict");
+    expect(error.detail?.conflict).toEqual({ name: "review" });
+  });
 });

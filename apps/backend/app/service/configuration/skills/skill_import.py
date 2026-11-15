@@ -1,37 +1,39 @@
-"""一个作用域（系统级或 workspace 级）内 Agent Skill 的发现、启停、导入和删除用例。
+"""把本机 Skill 文件夹或 ZIP 导入一个作用域的 cosir 专属目录（``.cosir/skills``）。
 
-写操作只作用于本作用域自己的目录与启用名单：workspace 配置页能看到继承来的系统级 Skill，
-但不能启停、覆盖写入或删除它们。
+只写专属目录：在 cosir 里导入就是给 cosir 用，不应出现在读共享目录 ``.agents/skills`` 的 Codex 等工具里。
+来源是用户经原生选择器选中的本机路径，属于进程外输入：先限量复制或解压进暂存点目录，按严格标准校验，
+再原子移到位。
+
+装之前先判定它和本页看得到的同名 Skill 的关系（按指纹与根目录优先级，事实全部来自 ``SkillCatalog``）：
+
+- ``identical``：同名的生效条目与它内容相同，导入对 Agent 没有任何变化，不接受；
+- ``replace``：本作用域专属目录里已有同名、内容不同的（不论目录名），用户选「替换」才装，旧目录删除；
+- ``override``：别处（共享目录、系统级）有同名、内容不同的，用户选「仍然导入」才装，别处那份原样保留。
+
+判定与安装在同一把锁里完成，用户确认后的第二次请求重新判定一次：两次之间关系变了就再次抛出冲突，
+不信任前端记住的旧结论。
 """
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import stat
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import BinaryIO
+from typing import BinaryIO, ClassVar, Literal
 
 from app.config.logging.logger import log
+from app.service.configuration import file_store
 from app.service.configuration.extension_scope import ExtensionScope
-from app.service.configuration.file_store import ConfigurationFileStore
-from app.service.configuration.runtime_notices.catalog_change import (
-    CatalogChange,
-    broadcast_catalog_changes,
-)
-from app.service.configuration.skill_catalog import (
+from app.service.configuration.skills.catalog import (
     SkillCatalog,
-    SkillDocument,
     SkillInfo,
     read_skill_metadata,
 )
-from app.service.configuration.skill_configuration import (
-    SkillConfiguration,
-    read_skill_configuration,
-)
+from app.service.configuration.skills.configuration import SkillConfiguration
+from app.service.configuration.skills.skill_root import SkillRoot
 
 MAX_SKILL_IMPORT_FILES = 512
 MAX_SKILL_IMPORT_ENTRIES = 1024
@@ -45,92 +47,40 @@ WINDOWS_RESERVED_NAMES = frozenset(
 )
 
 
-class SkillConfigurationService:
-    """管理一个作用域的 Skill 文件和启用名单；``workspace_root`` 为空即系统级。"""
+SkillImportResolution = Literal["replace", "override"]
+SkillImportRelation = Literal["identical", "replace", "override"]
+
+
+class SkillImportConflict(Exception):
+    """导入与现有同名 Skill 冲突，要用户决定；接入层映射为 409 并带上明细。
+
+    ``existing`` 是本页看得到的全部同名条目，按优先级从高到低。``identical`` 没有可选的处理方式。
+    """
+
+    _MESSAGES: ClassVar[dict[SkillImportRelation, str]] = {
+        "identical": "已经有这个 Skill 了，内容相同",
+        "replace": "cosir 专属目录里已有同名 Skill，内容不同",
+        "override": "别处已有同名 Skill，内容不同",
+    }
+
+    def __init__(
+        self, relation: SkillImportRelation, incoming: SkillInfo, existing: tuple[SkillInfo, ...]
+    ) -> None:
+        super().__init__(f"{self._MESSAGES[relation]}：{incoming.name}")
+        self.relation = relation
+        self.incoming = incoming
+        self.existing = existing
+
+
+class SkillImporter:
+    """导入 Skill 到一个作用域的专属目录；``workspace_root`` 为空即系统级。"""
 
     def __init__(self, *, workspace_root: Path | None = None) -> None:
         self.scope = ExtensionScope(workspace_root)
-        self.store = ConfigurationFileStore()
 
-    @property
-    def catalog(self) -> SkillCatalog:
-        """本作用域配置页看得到的目录：系统级只有系统层，workspace 级是两层合并。"""
-
-        return SkillCatalog.visible_from(self.scope.workspace_root)
-
-    def list(self) -> list[SkillInfo]:
-        """列出可见 Skill 及其启用状态、所属作用域与覆盖关系。"""
-
-        return self.catalog.list_skills()
-
-    def read(self, name: str) -> SkillDocument:
-        """读取指定 Skill 的说明正文；配置界面查看不受启用状态限制。"""
-
-        return self.catalog.read_document(name)
-
-    def set_enabled(self, name: str, enabled: bool) -> SkillInfo:
-        """启用或停用本作用域的一个 Skill，返回更新后的条目。
-
-        异常:
-            KeyError: 没有这个 Skill。
-            ValueError: 它属于另一个作用域（例如在 workspace 页启停系统级 Skill）。
-        """
-
-        with self.store.locked(self.scope.skills_config_file):
-            self._own(name)
-            before = self._agent_view()
-            configuration = read_skill_configuration(self.scope)
-            if configuration.enabled_skills is None:
-                # 名单文件不存在时等于「本作用域全部启用」，第一次启停时把这个隐含名单落成显式名单。
-                names = [
-                    skill.name
-                    for skill in self.catalog.list_skills()
-                    if skill.scope.key == self.scope.key
-                ]
-            else:
-                names = list(configuration.enabled_skills)
-            if enabled and name not in names:
-                names.append(name)
-            if not enabled:
-                names = [item for item in names if item != name]
-            self._write_configuration(SkillConfiguration(enabled_skills=names))
-        self._publish(before)
-        log.info(
-            "configuration_skill_enabled_written",
-            extra={
-                "msg": "Skill 启用状态已保存",
-                "data": {"scope": self.scope.key, "skill_name": name, "enabled": enabled},
-            },
-        )
-        return self.catalog.find(name)
-
-    def _agent_view(self) -> dict[str, str | None]:
-        """Agent 在本作用域看到的 Skill 目录（启用项的名称 → 描述），用来比较变更前后。"""
-
-        return {skill.name: skill.description for skill in self.catalog.list_skills() if skill.enabled}
-
-    def _publish(self, before: dict[str, str | None]) -> None:
-        """写入已提交后，通知固化了 ``skill`` 工具的 Session 目录有哪些可见变化。"""
-
-        broadcast_catalog_changes(
-            CatalogChange.between(
-                "skills",
-                scope=None if self.scope.workspace_root is None else self.scope.key,
-                before=before,
-                after=self._agent_view(),
-                shadowed_in=SkillCatalog.workspace_defines if self.scope.workspace_root is None else None,
-            )
-        )
-
-    def _own(self, name: str) -> SkillInfo:
-        """取本作用域自己的 Skill；继承来的条目只读。"""
-
-        info = self.catalog.find(name)
-        if info.scope.key != self.scope.key:
-            raise ValueError("这个 Skill 继承自系统级，请在系统设置中修改")
-        return info
-
-    def import_directory(self, source_path: str) -> SkillInfo:
+    def import_directory(
+        self, source_path: str, resolution: SkillImportResolution | None = None
+    ) -> SkillInfo:
         """从原生选择器选中的目录复制并安装；拒绝目录内部链接，根目录链接按用户选择解析。"""
 
         source = self._resolve_selected_path(source_path)
@@ -140,7 +90,7 @@ class SkillConfigurationService:
         total_bytes = 0
         file_count = 0
         entry_count = 0
-        with self._staging_directory("skill-import-") as temporary:
+        with self._staging_directory() as temporary:
             staging = Path(temporary) / source.name
             staging.mkdir()
             for current, directory_names, file_names in os.walk(
@@ -176,9 +126,11 @@ class SkillConfigurationService:
                     total_bytes = checked_total_bytes
             if file_count == 0:
                 raise ValueError("所选文件夹中没有可导入的 Skill 文件")
-            return self._install_staged_skill(staging)
+            return self._install_staged_skill(staging, resolution)
 
-    def import_archive(self, source_path: str) -> SkillInfo:
+    def import_archive(
+        self, source_path: str, resolution: SkillImportResolution | None = None
+    ) -> SkillInfo:
         """从原生文件选择器选中的 ZIP 中限量解压并安装 Skill。"""
 
         source = self._resolve_selected_path(source_path)
@@ -210,7 +162,7 @@ class SkillConfigurationService:
                     raise ValueError("ZIP 中必须包含单个 Skill 文件夹")
 
                 selected_name = next(iter(root_names))
-                with self._staging_directory("skill-import-") as temporary:
+                with self._staging_directory() as temporary:
                     staging = Path(temporary) / selected_name
                     staging.mkdir()
                     total_bytes = 0
@@ -229,64 +181,112 @@ class SkillConfigurationService:
                             copied = self._copy_import_stream(source_file, target, previous_total_bytes)
                         if copied != entry.file_size:
                             raise ValueError("Skill ZIP 文件大小在导入过程中发生变化")
-                    return self._install_staged_skill(staging)
+                    return self._install_staged_skill(staging, resolution)
         except zipfile.BadZipFile as exc:
             raise ValueError("无法读取 Skill ZIP 文件") from exc
 
-    def _install_staged_skill(self, staging: Path) -> SkillInfo:
-        """校验暂存目录并原子安装到本作用域，配置写入失败时回滚目录。
+    def _install_staged_skill(
+        self, staging: Path, resolution: SkillImportResolution | None
+    ) -> SkillInfo:
+        """按严格标准校验暂存目录，判定冲突后原子安装到本作用域；配置写入失败时回滚目录。
 
-        只拒绝本作用域内的同名目录：workspace 导入与系统级同名的 Skill 是有意的覆盖。
+        导入前若停用过同名 Skill，导入即重新启用（用户刚选了它，留着停用名单会让新文件不可用）。
+
+        异常:
+            ValueError: 不符合 Agent Skills 标准。
+            SkillImportConflict: 有冲突，且 ``resolution`` 与判定出的关系不符（或关系为 ``identical``）。
+            FileExistsError: 目标目录被另一个声明了不同名称的 Skill 占用。
         """
 
-        with self.store.locked(self.scope.skills_config_file):
-            before = self._agent_view()
-            configuration = read_skill_configuration(self.scope)
-            info = read_skill_metadata(staging, self.scope, configuration)
-            destination = self.scope.skills_dir / info.name
-            if destination.exists():
-                raise FileExistsError(f"已存在同名 Skill：{info.name}")
-            destination.parent.mkdir(parents=True, exist_ok=True)
+        with file_store.locked(self.scope.skills_config_file):
+            configuration = SkillConfiguration.read(self.scope)
+            root = SkillRoot(self.scope, "cosir")
+            info = read_skill_metadata(staging, root, configuration)
+            if info.warnings:
+                raise ValueError(f"Skill 不符合标准：{'；'.join(info.warnings)}")
+            relation, existing = self._relation(info)
+            if relation is not None and (relation == "identical" or resolution != relation):
+                log.info(
+                    "configuration_skill_import_conflict",
+                    extra={
+                        "msg": "Skill 导入与现有同名 Skill 冲突，等用户决定",
+                        "data": {
+                            "scope": self.scope.key,
+                            "skill_name": info.name,
+                            "relation": relation,
+                            "resolution": resolution,
+                        },
+                    },
+                )
+                raise SkillImportConflict(relation, info, existing)
+            # 替换的是专属目录里那条同名 Skill，它的文件夹名可能与名称不同。
+            replaced = next(item for item in existing if item.root == root) if relation == "replace" else None
+            destination = root.directory / info.name
+            if destination.exists() and (replaced is None or destination != replaced.directory):
+                raise FileExistsError(f"专属目录里的「{info.name}」文件夹已被另一个 Skill 占用")
+            # 旧目录先移进暂存目录（同盘、原子），新目录装好且配置写成后随暂存目录一起清掉；失败就移回来。
+            backup = staging.parent / ".replaced"
+            if replaced is not None:
+                replaced.directory.rename(backup)
             staging.rename(destination)
 
             try:
-                if configuration.enabled_skills is not None:
-                    enabled_names = list(configuration.enabled_skills)
-                    if info.name not in enabled_names:
-                        enabled_names.append(info.name)
-                    self._write_configuration(SkillConfiguration(enabled_skills=enabled_names))
+                if not configuration.skill_enabled(info.name):
+                    disabled = [item for item in configuration.disabled_skills if item != info.name]
+                    configuration.model_copy(update={"disabled_skills": disabled}).write(self.scope)
             except Exception:
                 try:
                     shutil.rmtree(destination)
+                    if replaced is not None:
+                        backup.rename(replaced.directory)
                 except OSError:
                     log.exception(
                         "configuration_skill_import_rollback_failed",
                         extra={
-                            "msg": "Skill 导入配置写入失败，且未能清理已复制目录",
+                            "msg": "Skill 导入配置写入失败，且未能还原目录",
                             "data": {"scope": self.scope.key, "skill_name": info.name},
                         },
                     )
                 raise
 
-        self._publish(before)
         log.info(
             "configuration_skill_imported",
             extra={
                 "msg": "Skill 已导入",
-                "data": {"scope": self.scope.key, "skill_name": info.name},
+                "data": {"scope": self.scope.key, "skill_name": info.name, "relation": relation},
             },
         )
-        return self.catalog.find(info.name)
+        return SkillCatalog.visible_from(self.scope.workspace_root).find(info.name)
 
-    def _staging_directory(self, prefix: str) -> tempfile.TemporaryDirectory[str]:
-        """导入 / 删除用的暂存目录：放在 ``.cosir`` 根下而不是 skills 目录里。
+    def _relation(self, incoming: SkillInfo) -> tuple[SkillImportRelation | None, tuple[SkillInfo, ...]]:
+        """导入的 Skill 与本页看得到的同名条目是什么关系；没有同名的返回 ``(None, ())``。
 
-        放在 skills 目录里会在导入期间被目录扫描当成「元数据无效的 Skill」告警；放在同一个
-        ``.cosir`` 下保证与 skills 目录同盘，``rename`` 仍是原子的。
+        ``identical`` 只看生效条目：生效的那份已经是这个内容，装进来对 Agent 没有变化；更低处恰好有一份
+        相同的不算，因为装进来会改变生效的内容。
         """
 
-        self.scope.cosir_dir.mkdir(parents=True, exist_ok=True)
-        return tempfile.TemporaryDirectory(prefix=f".{prefix}", dir=self.scope.cosir_dir)
+        scans = SkillCatalog.visible_from(self.scope.workspace_root).scans()
+        existing = tuple(
+            info for scan in reversed(scans) for info in scan.skills if info.name == incoming.name
+        )
+        if not existing:
+            return None, ()
+        if SkillCatalog.merge(scans)[incoming.name].fingerprint == incoming.fingerprint:
+            return "identical", existing
+        own = SkillRoot(self.scope, "cosir")
+        return ("replace" if any(info.root == own for info in existing) else "override"), existing
+
+    def _staging_directory(self) -> tempfile.TemporaryDirectory[str]:
+        """导入用的暂存目录：专属 Skill 目录里的点目录。
+
+        三个约束决定了位置：与目标同盘，``rename`` 才是原子的；扫描跳过点目录，导入期间不会被当成 Skill；
+        校验读暂存的 ``SKILL.md`` 走 Skill 统一读取入口，要守受保护路径——系统 ``.cosir`` 只有 ``skills/``
+        可读，放在它的上一级会被拒（曾经的缺陷）。专属目录只有 cosir 读，其他工具看不到这个临时目录。
+        """
+
+        directory = SkillRoot(self.scope, "cosir").directory
+        directory.mkdir(parents=True, exist_ok=True)
+        return tempfile.TemporaryDirectory(prefix=".import-", dir=directory)
 
     @staticmethod
     def _is_ignored_import_path(path: PurePosixPath) -> bool:
@@ -336,44 +336,6 @@ class SkillConfigurationService:
                     raise ValueError("Skill 文件总大小超过 128 MiB 上限")
                 target_file.write(chunk)
         return copied_bytes
-
-    def delete(self, name: str) -> None:
-        """删除本作用域的一个 Skill，并从显式启用名单中移除其名称。
-
-        异常:
-            KeyError: 没有这个 Skill。
-            ValueError: 它继承自系统级。
-        """
-
-        with self.store.locked(self.scope.skills_config_file):
-            info = self._own(name)
-            before = self._agent_view()
-            with self._staging_directory("skill-delete-") as temporary:
-                staged_directory = Path(temporary) / name
-                info.directory.rename(staged_directory)
-                try:
-                    configuration = read_skill_configuration(self.scope)
-                    if configuration.enabled_skills is not None:
-                        enabled_names = [item for item in configuration.enabled_skills if item != name]
-                        self._write_configuration(SkillConfiguration(enabled_skills=enabled_names))
-                except Exception:
-                    staged_directory.rename(info.directory)
-                    raise
-        self._publish(before)
-        log.info(
-            "configuration_skill_deleted",
-            extra={"msg": "Skill 已删除", "data": {"scope": self.scope.key, "skill_name": name}},
-        )
-
-    def _write_configuration(self, configuration: SkillConfiguration) -> None:
-        serialized = (
-            json.dumps(configuration.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
-        )
-        self.store.write_text_atomic(
-            self.scope.skills_config_file,
-            serialized,
-            root=self.scope.cosir_dir,
-        )
 
     @staticmethod
     def _relative_import_path(value: str) -> PurePosixPath:

@@ -17,10 +17,9 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from app.core.workflow.message_queue.session_message import NoticeBody, SessionMessage
+from app.core.workflow.message_queue.session_message import SessionMessage
 from app.session_runtime.session_runtime_space import SessionRuntimeSpace
 
 if TYPE_CHECKING:
@@ -129,38 +128,6 @@ class SessionRuntimeSpaceRegistry:
 
         with self._guard:
             return self._spaces.get(session_id)
-
-    def broadcast_notice(
-        self, notice: NoticeBody, reaches: Callable[[SessionRuntimeSpace], bool]
-    ) -> int:
-        """把一条 Session 级通知写入命中的已物化 Session 的外部队列（每个 Session 一笔事务），返回投递数。
-
-        只发给已物化的 Session：它们的 actor 已在监听，通知随下一次推进写入。不创建新的 space、不启动
-        Run、不打断正在进行的模型请求。``reaches`` 抛出的异常原样上浮。
-        """
-
-        session_ids = [space.session_id for space in self.existing_spaces() if reaches(space)]
-        for session_id in session_ids:
-            self.enqueue(session_id, SessionMessage.of(notice))
-        return len(session_ids)
-
-    def existing_spaces(self) -> tuple[SessionRuntimeSpace, ...]:
-        """返回当前进程中已经物化的 Session runtime space 快照。
-
-        返回:
-            按登记快照复制出的 space 元组。返回值不会包含尚未运行过的 Session，也不会触发新的
-            space 创建；调用方可以在释放 registry 锁后执行通知过滤和入队。
-
-        异常:
-            无。
-
-        副作用:
-            无。返回的是既有 ``SessionRuntimeSpace`` 实例引用，space 自身生命周期仍由 registry
-            管理。
-        """
-
-        with self._guard:
-            return tuple(self._spaces.values())
 
     def mark_deleted(self, session_id: int) -> None:
         """记下 Session 已在本进程删除：之后不再物化它的 space，快照读取与订阅一律拒绝。

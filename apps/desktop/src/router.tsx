@@ -5,6 +5,7 @@ import { SessionObserverPage } from "@/components/session-observer/session-obser
 import { NewConversation } from "@/components/new-conversation/new-conversation";
 import {
   findSettingsTab,
+  settingsTabParam,
   SYSTEM_SETTINGS_TABS,
   WORKSPACE_SETTINGS_TABS,
 } from "@/components/settings/settings-tabs";
@@ -51,8 +52,11 @@ function SessionRoute() {
 }
 
 function SystemSettingsRoute() {
-  const tab = findSettingsTab(SYSTEM_SETTINGS_TABS, useLeafParams().tab);
-  return tab ? <SystemConfigurationPage tab={tab.id} /> : <Navigate to={`/settings/${SYSTEM_SETTINGS_TABS[0].id}`} replace />;
+  const params = useLeafParams();
+  const tab = findSettingsTab(SYSTEM_SETTINGS_TABS, settingsTabParam(params));
+  return tab
+    ? <SystemConfigurationPage tab={tab.id} skillName={params.skillName} />
+    : <Navigate to={`/settings/${SYSTEM_SETTINGS_TABS[0].id}`} replace />;
 }
 
 function WorkspaceSettingsRoute() {
@@ -62,10 +66,10 @@ function WorkspaceSettingsRoute() {
   if (!Number.isInteger(workspaceId) || workspaceId <= 0) {
     return <EmptyState title="工作区标识无效" description="请从侧栏重新选择工作区。" className="m-6" />;
   }
-  const tab = findSettingsTab(WORKSPACE_SETTINGS_TABS, params.tab);
+  const tab = findSettingsTab(WORKSPACE_SETTINGS_TABS, settingsTabParam(params));
   if (!tab) return <Navigate to={`/workspaces/${workspaceId}/settings/${WORKSPACE_SETTINGS_TABS[0].id}`} replace />;
   const workspaceName = catalog.workspaces.find((workspace) => workspace.workspace_id === workspaceId)?.name ?? "当前工作区";
-  return <WorkspaceConfigurationPage key={workspaceId} workspaceId={workspaceId} workspaceName={workspaceName} tab={tab.id} />;
+  return <WorkspaceConfigurationPage key={workspaceId} workspaceId={workspaceId} workspaceName={workspaceName} tab={tab.id} skillName={params.skillName} />;
 }
 
 function NotFoundRoute() {
@@ -82,8 +86,10 @@ export function createAppRouter() {
         { path: "sessions/:sessionId", element: <SessionRoute />, handle: conversation },
         { path: "settings", element: <SystemSettingsRoute />, handle: settings },
         { path: "settings/:tab", element: <SystemSettingsRoute />, handle: settings },
+        { path: "settings/skills/:skillName", element: <SystemSettingsRoute />, handle: settings },
         { path: "workspaces/:workspaceId/settings", element: <WorkspaceSettingsRoute />, handle: workspaceSettings },
         { path: "workspaces/:workspaceId/settings/:tab", element: <WorkspaceSettingsRoute />, handle: workspaceSettings },
+        { path: "workspaces/:workspaceId/settings/skills/:skillName", element: <WorkspaceSettingsRoute />, handle: workspaceSettings },
         { path: "session-observer", element: <SessionObserverPage />, handle: observer },
         { path: "*", element: <NotFoundRoute />, handle: { section: "conversation" } },
       ],

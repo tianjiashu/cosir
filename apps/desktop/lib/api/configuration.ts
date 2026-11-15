@@ -11,7 +11,6 @@ export type AgentConfiguration = {
   model_settings: Record<string, unknown>;
   source: "builtin" | "user_file" | string;
   path: string | null;
-  editable: boolean;
   deletable: boolean;
   validation_status: string;
   validation_error: string | null;

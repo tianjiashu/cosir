@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from app.api.configuration import extensions
 from app.app import app
 from app.service.configuration.mcp import configuration_service as mcp_configuration_service
-from app.service.configuration.skills import configuration_service as skill_configuration_service
+from app.service.configuration.skills.configuration import SkillConfiguration
 
 _SEARCH_TOOLS = [{"name": "search", "description": "Search", "input_schema": {"type": "object"}}]
 
@@ -336,9 +336,13 @@ def test_workspace_skills_override_system_and_writes_stay_in_scope(
     source_root = tmp_path / "import-source"
     _write_skill(source_root, "shared", "workspace version")
 
+    request = {"source_path": str(source_root / "shared"), "source_type": "directory"}
+    # 系统级有同名、内容不同的：先问用户，确认「仍然导入」后才装。
+    conflict = client.post("/workspaces/7/configuration/skills/import", json=request)
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["conflict"]["relation"] == "override"
     imported = client.post(
-        "/workspaces/7/configuration/skills/import",
-        json={"source_path": str(source_root / "shared"), "source_type": "directory"},
+        "/workspaces/7/configuration/skills/import", json={**request, "resolution": "override"}
     )
 
     assert imported.status_code == 201, imported.text
@@ -370,7 +374,7 @@ def test_workspace_skills_override_system_and_writes_stay_in_scope(
     assert not (system_cosir / "config" / "skills.json").exists()
 
 
-def test_skill_import_reports_name_conflict_without_replacing_existing_skill(
+def test_skill_import_asks_before_replacing_a_same_name_cosir_skill(
     system_cosir_skills, client, tmp_path, system_cosir
 ) -> None:
     skills_root = system_cosir_skills
@@ -384,6 +388,7 @@ def test_skill_import_reports_name_conflict_without_replacing_existing_skill(
     )
 
     assert response.status_code == 409
+    assert response.json()["detail"]["conflict"]["relation"] == "replace"
     assert "duplicate description" in (skills_root / "duplicate" / "SKILL.md").read_text()
 
 
@@ -455,12 +460,10 @@ def test_skill_import_rolls_back_when_enabled_configuration_cannot_be_written(
     # 停用过同名 Skill：导入要把它从停用名单里移除，于是必须写配置。
     config_path.write_text('{"disabled_skills": ["new-skill"]}', encoding="utf-8")
 
-    def fail_write(self, configuration):
+    def fail_write(self, scope):
         raise OSError("configuration is not writable")
 
-    monkeypatch.setattr(
-        skill_configuration_service.SkillConfigurationService, "_write_configuration", fail_write
-    )
+    monkeypatch.setattr(SkillConfiguration, "write", fail_write)
     source_root = tmp_path / "import-source"
     _write_skill(source_root, "new-skill")
     response = client.post(

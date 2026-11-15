@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { API_ORIGIN } from "./e2e-env";
+import { installFakeDesktopHost } from "./fake-desktop-host";
 
 test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
@@ -97,4 +98,49 @@ test("工作区 Skills 页按身份分卡：摘要、覆盖关系、导入落点
   await page.getByRole("textbox", { name: "搜索 Skill" }).fill("review");
   await page.getByRole("button", { name: "停用这 1 个" }).click();
   await expect.poll(() => enabledRequests).toEqual([{ names: ["review"], enabled: false }]);
+});
+
+test("导入撞上专属目录里的同名 Skill：弹窗说明新旧两份，确认替换后带上选择再导入", async ({ page }) => {
+  await installFakeDesktopHost(page, { directory: "/tmp/import-source/review" });
+  const importRequests: unknown[] = [];
+  await page.route(`${API_ORIGIN}/workspaces/7/configuration/skill-catalog`, (route) => route.fulfill({ json: catalog }));
+  await page.route(`${API_ORIGIN}/workspaces/7/configuration/skills/import`, async (route) => {
+    const body = route.request().postDataJSON() as { resolution?: string };
+    importRequests.push(body);
+    if (body.resolution === "replace") {
+      await route.fulfill({ status: 201, json: skill("review", { kind: "cosir" }) });
+      return;
+    }
+    await route.fulfill({
+      status: 409,
+      json: {
+        detail: {
+          code: "skill_import_conflict",
+          message: "cosir 专属目录里已有同名 Skill，内容不同：review",
+          conflict: {
+            name: "review",
+            relation: "replace",
+            description: "导入的新版本",
+            existing: [{ scope: "workspace", kind: "cosir", location: "~/proj/.cosir/skills/review", description: "旧版本", same_content: false }],
+          },
+        },
+      },
+    });
+  });
+  await page.goto(`/workspaces/7/settings/skills`);
+
+  await page.getByRole("button", { name: "导入" }).click();
+  await page.getByRole("menuitem", { name: "Skill 文件夹…" }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("替换「review」？")).toBeVisible();
+  await expect(dialog.getByText(/现有：旧版本/)).toBeVisible();
+  await expect(dialog.getByText(/导入：导入的新版本/)).toBeVisible();
+  await dialog.getByRole("button", { name: "替换" }).click();
+
+  await expect(page.getByText("已替换 review")).toBeVisible();
+  await expect.poll(() => importRequests).toEqual([
+    { source_path: "/tmp/import-source/review", source_type: "directory" },
+    { source_path: "/tmp/import-source/review", source_type: "directory", resolution: "replace" },
+  ]);
 });

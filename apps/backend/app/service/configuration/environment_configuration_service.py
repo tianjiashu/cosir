@@ -28,7 +28,7 @@ from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.models.environment.environment_change import EnvironmentChange
 from app.models.environment.environment_field import EnvironmentField
-from app.service.configuration.file_store import ConfigurationFileStore
+from app.service.configuration import file_store
 from app.utils.path.system_cosir import system_cosir_dir, system_env_file
 
 
@@ -66,7 +66,6 @@ class EnvironmentConfigurationService:
 
         self.env_file = system_env_file()
         self.root = system_cosir_dir()
-        self.store = ConfigurationFileStore()
 
     def read(self) -> list[dict[str, Any]]:
         """返回白名单字段的脱敏来源快照。
@@ -186,14 +185,14 @@ class EnvironmentConfigurationService:
             if change.operation != "replace":
                 raise EnvironmentConfigurationError(f"不支持的环境配置操作: {change.operation}")
             values[name] = self._validate_value(field, change.value)
-        with self.store.locked(self.env_file):
+        with file_store.locked(self.env_file):
             current = (
-                self.store.read_text(self.env_file, root=self.root)
+                file_store.read_text(self.env_file, root=self.root)
                 if self.env_file.exists()
                 else ""
             )
             next_content = self._apply_values(current, values)
-            self.store.write_text_atomic(self.env_file, next_content, root=self.root)
+            file_store.write_text_atomic(self.env_file, next_content, root=self.root)
         if reload_after_write:
             self.reload_runtime_settings()
         log.info(
@@ -268,7 +267,7 @@ class EnvironmentConfigurationService:
     def _read_values(self, path: Path) -> dict[str, str]:
         if not path.exists():
             return {}
-        content = self.store.read_text(path, root=self.root)
+        content = file_store.read_text(path, root=self.root)
         return {
             key: value
             for key, value in dotenv_values(stream=StringIO(content)).items()

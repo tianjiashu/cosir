@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel
 
-from app.service.configuration.workspace_instruction_configuration_service import (
+from app.service.configuration.instructions.workspace_instruction_service import (
     WorkspaceInstructionDocument,
 )
 

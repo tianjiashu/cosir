@@ -41,7 +41,7 @@ from app.core.events.event_sink import set_event_sink
 from app.core.tool.background_commands import set_background_commands
 from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.service.browser.tab_reclaim import schedule_tab_reclaim
-from app.service.configuration.main_agent_prompt_configuration_service import (
+from app.service.configuration.instructions.main_agent_prompt_service import (
     MainAgentPromptConfigurationService,
 )
 from app.service.depends import (
@@ -146,8 +146,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
 
     副作用:
         按启动顺序安装日志管线、加载配置、初始化服务依赖、创建系统级 ``.cosir`` 目录、
-        播种 Agent 注册表（注册表只播种代码内置 profile，用户 JSON 由注册表在作用域首次被读取时
-        按需装载）、装配工具系统，再收敛遗留 Run，并在就绪后写入 ``ready`` 启动状态；关闭时
+        构建 Agent 注册表（注册主 Agent、补齐缺失的内置子 Agent 配置文件；配置文件由注册表在作用域
+        首次被读取时按需装载）、装配工具系统，再收敛遗留 Run，并在就绪后写入 ``ready`` 启动状态；关闭时
         关闭 Run 执行与终端会话、flush 观测数据、关闭服务依赖，最后写入 ``stopped``
         启动状态并卸载日志管线。日志管线共安装两次：先按当前 ``paths.LOG_DIR`` 建立最小
         管线，覆盖配置加载与依赖初始化的失败窗口；``Settings.load()`` 触发 ``paths.reset()``
