@@ -4,6 +4,7 @@ import { MessagePrimitive, useAuiState, type ThreadUserMessage } from "@assistan
 import { FileChip, SkillChip } from "@/components/composer/token-chips";
 import { MarkdownText } from "@/components/markdown/markdown-text";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
+import { useOpenLink } from "@/components/links/use-open-link";
 import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { ReferenceChip } from "@/components/workspace-references/reference-chip";
 import { userMessageSegments } from "@/lib/assistant/turn/user-message-segments";
@@ -19,7 +20,7 @@ export function UserMessageContent() {
   // 本组件只挂在用户消息下，parts 恒为用户消息的内容形状。
   const parts = useAuiState((state) => state.message.parts) as ThreadUserMessage["content"];
   const segments = useMemo(() => userMessageSegments(parts), [parts]);
-  const components = useMarkdownLinkComponents("message", { icons: true });
+  const components = useMarkdownLinkComponents(useOpenLink("message"), { icons: true });
 
   if (segments.every((segment) => segment.type === "text")) {
     return (

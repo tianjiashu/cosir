@@ -1,7 +1,7 @@
 import { modelConnectionsQueryOptions } from "@/lib/query/query-options";
 import { useQuery } from "@tanstack/react-query";
 
-import { type ModelConfig, type ModelConfigFile, type ModelConnection } from "@/lib/api/model-connections";
+import { type ModelConfig, type ModelConnectionsFile, type ModelConnection } from "@/lib/api/model-connections";
 
 export type ModelCatalogModel = {
   optionId: string;
@@ -9,7 +9,6 @@ export type ModelCatalogModel = {
   /** 所属连接的名称：选择器的分组标题。 */
   connectionName: string;
   modelName: string;
-  contextWindowK: number;
   /** 「连接 · 模型」：不在分组列表里时（如已选值、摘要）用它说清是哪个连接的模型。 */
   label: string;
   supportsReasoningEffort: boolean;
@@ -24,7 +23,6 @@ export type ModelCatalog = {
 export type ModelCatalogSnapshot = {
   status: "loading" | "ready" | "error";
   catalog: ModelCatalog | null;
-  error: Error | null;
 };
 
 export function modelOptionId(modelConfigId: string): string {
@@ -42,11 +40,15 @@ function mapModel(connection: ModelConnection, config: ModelConfig): ModelCatalo
     modelConfigId: config.config_id,
     connectionName: connection.name,
     modelName: config.model_name,
-    contextWindowK: config.context_window_k,
     label: `${connection.name} · ${config.model_name}`,
     supportsReasoningEffort: config.supports_reasoning_effort,
     supportsImage: config.supports_image,
   };
+}
+
+/** 选择器里一个模型选项的公共部分（按连接分组、连接名可搜）；各选择器再叠加自己的推理强度与触发器文字。 */
+export function catalogModelOption(model: ModelCatalogModel) {
+  return { id: model.optionId, name: model.modelName, group: model.connectionName, keywords: [model.connectionName] };
 }
 
 /** 按连接顺序、连接内按加入顺序展开成一个列表；同一连接的模型相邻，选择器据此分组。 */
@@ -56,7 +58,7 @@ export function buildModelCatalog(connections: readonly ModelConnection[]): Mode
 }
 
 /** 模块级稳定引用：react-query 的 `select` 换了引用就会重算，内联函数会让每次渲染都得到新目录。 */
-function catalogOfFile(file: ModelConfigFile): ModelCatalog {
+function catalogOfFile(file: ModelConnectionsFile): ModelCatalog {
   return buildModelCatalog(file.connections);
 }
 
@@ -73,7 +75,6 @@ export function useModelCatalog(): ModelCatalogSnapshot & { retry: () => void } 
   return {
     status: query.isError ? "error" : query.isSuccess ? "ready" : "loading",
     catalog: query.data ?? null,
-    error: query.error,
     retry: () => void query.refetch(),
   };
 }

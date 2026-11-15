@@ -211,4 +211,13 @@ def read_json_model(
                 "data": {**log_data, "error_type": type(exc).__name__},
             },
         )
-        raise error(f"{label}文件格式无效") from exc
+        raise error(f"{label}文件格式无效{_invariant_reason(exc)}") from exc
+
+
+def _invariant_reason(exc: ValidationError) -> str:
+    """模型自己声明的不变量（如「服务名称必须唯一」）原样告诉用户；字段类型等结构错误只说格式无效。"""
+
+    for item in exc.errors():
+        if item["type"] == "value_error":
+            return f"：{str(item['msg']).removeprefix('Value error, ')}"
+    return ""

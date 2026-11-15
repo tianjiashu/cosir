@@ -230,7 +230,7 @@ test("折叠箭头平时隐藏，悬停或键盘聚焦时显示，且不推动�
 test("配置页隐藏侧栏与按钮，回到对话后恢复", async ({ page }) => {
   await expect(rail(page)).toBeVisible();
   await page.getByRole("button", { name: "系统配置", exact: true }).click();
-  await expect(page).toHaveURL(/\/settings/);
+  await expect(page).toHaveURL(/\/configuration/);
   await expect(rail(page)).toHaveCount(0);
   await expect(railButton(page)).toHaveCount(0);
   await page.goBack();

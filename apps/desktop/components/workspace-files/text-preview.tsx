@@ -21,7 +21,7 @@ import { SearchIcon } from "lucide-react";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { ReadingToolbar, type ReadingNavigation } from "./reading-toolbar";
 import { useTextFind } from "./text-find";
-import { OutlineButton } from "./outline-button";
+import { OutlineButton, revealSourceLine } from "@/components/markdown/outline-button";
 import type { TextViewerHandle } from "@/components/text-viewer/readonly-text-viewer";
 import { CodePreview } from "./code-preview";
 import { MarkdownPreview } from "./markdown-preview";
@@ -210,11 +210,7 @@ export function TextPreview({
             <OutlineButton
               text={page.data.text}
               partial={!wholeFile}
-              onSelect={({ line }) => {
-                if (rendered)
-                  markdownHost.current?.querySelector(`[data-source-line="${line}"]`)?.scrollIntoView({ block: "start" });
-                else editor.current?.revealLine(line);
-              }}
+              onSelect={({ line }) => revealSourceLine(line, rendered, markdownHost.current, editor.current)}
             />
           )}
         </>}

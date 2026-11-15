@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { RefreshCwIcon, SparklesIcon } from "lucide-react";
 
+import { configurationPath } from "@/components/configuration/configuration-tabs";
 import { buttonVariants } from "@/components/ui/button";
 
 import type { ModelCatalogSnapshot } from "@/lib/model/catalog";
@@ -37,7 +38,7 @@ export function ModelAvailability({
   const frame = variant === "field"
     ? "border-input flex h-9 w-full min-w-0 items-center gap-1.5 rounded-lg border px-3 text-sm"
     : "inline-flex h-8 min-w-0 items-center gap-1.5 px-2 text-xs";
-  const configure = <Link to="/settings/models" className={buttonVariants({ variant: "link", size: "sm" })}>配置模型</Link>;
+  const configure = <Link to={configurationPath(null, "models")} className={buttonVariants({ variant: "link", size: "sm" })}>配置模型</Link>;
   const label = (text: string) => <span className="min-w-0 truncate" title={text}>{text}</span>;
 
   if (status === "loading") {

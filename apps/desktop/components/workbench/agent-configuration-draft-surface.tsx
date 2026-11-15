@@ -2,11 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useStore } from "zustand";
 import { BotIcon, Loader2Icon, SaveIcon } from "lucide-react";
 
-import { AgentConfigurationForm } from "@/components/configuration/agent-configuration-form";
+import { AgentConfigurationForm } from "@/components/configuration/agents/agent-configuration-form";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
-import { createAgentConfiguration, updateAgentConfiguration, type ConfigurationScope } from "@/lib/api/configuration";
+import type { ConfigurationScope } from "@/lib/api/configuration-scope";
+import { saveAgentConfiguration } from "@/lib/api/configuration";
 import type { PersistAgent } from "@/lib/agent-editor/agent-editor-session";
 import { confirmCloseWorkbenchTab } from "@/lib/workbench/drafts";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
@@ -33,14 +34,10 @@ export function AgentConfigurationDraftSurface({
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const toolGroupsQuery = useQuery({
-    ...toolGroupsQueryOptions(),
-  });
+  const toolGroupsQuery = useQuery(toolGroupsQueryOptions());
 
   const owner = (scope: ConfigurationScope) => (scope === "workspace" ? workspaceId : null);
-  const persist: PersistAgent = (input, { scope, agentId }) => (
-    agentId ? updateAgentConfiguration(owner(scope), agentId, input) : createAgentConfiguration(owner(scope), input)
-  );
+  const persist: PersistAgent = (input, { scope, agentId }) => saveAgentConfiguration(owner(scope), agentId, input);
   const saveMutation = useMutation({
     mutationFn: () => tab.session.save(persist),
     onSuccess: (saved) => {

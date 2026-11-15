@@ -9,10 +9,9 @@ describe("configuration API", () => {
   it("routes sub-Agent CRUD to the system or the workspace collection", async () => {
     requestJson.mockResolvedValue({ agent_id: "reviewer" });
     const {
-      createAgentConfiguration,
       deleteAgentConfiguration,
       getAgentConfigurations,
-      updateAgentConfiguration,
+      saveAgentConfiguration,
     } = await import("@/lib/api/configuration");
     const input = {
       agent_id: "reviewer",
@@ -29,11 +28,11 @@ describe("configuration API", () => {
     expect(requestJson).toHaveBeenLastCalledWith("/configuration/agents", undefined);
     await getAgentConfigurations(3);
     expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agents", undefined);
-    await createAgentConfiguration(null, input);
+    await saveAgentConfiguration(null, null, input);
     expect(requestJson).toHaveBeenLastCalledWith("/configuration/agents", expect.objectContaining({ method: "POST" }));
-    await createAgentConfiguration(3, input);
+    await saveAgentConfiguration(3, null, input);
     expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agents", expect.objectContaining({ method: "POST" }));
-    await updateAgentConfiguration(3, "a/b", input);
+    await saveAgentConfiguration(3, "a/b", input);
     expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agents/a%2Fb", expect.objectContaining({ method: "PUT" }));
     await deleteAgentConfiguration(null, "reviewer");
     expect(requestJson).toHaveBeenLastCalledWith("/configuration/agents/reviewer", { method: "DELETE" });
@@ -44,8 +43,8 @@ describe("configuration API", () => {
   it("sends agent model overrides without configuration version metadata", async () => {
     jsonRequestInit.mockClear();
     requestJson.mockResolvedValueOnce({ agent_id: "reviewer" });
-    const { updateAgentConfiguration } = await import("@/lib/api/configuration");
-    await updateAgentConfiguration(null, "reviewer", {
+    const { saveAgentConfiguration } = await import("@/lib/api/configuration");
+    await saveAgentConfiguration(null, "reviewer", {
       agent_id: "reviewer",
       role: "child",
       description: "review",

@@ -35,15 +35,13 @@ export type ModelConnectionFields = {
   api_key: string;
 };
 
-export type ModelConfigTestResult = {
-  success: boolean;
-  elapsed_ms: number | null;
-  error_code?: string | null;
-  error_message?: string | null;
-};
+/** 探活结果：失败时后端必带受控的失败说明。 */
+export type ModelConfigTestResult =
+  | { success: true; elapsed_ms: number | null }
+  | { success: false; elapsed_ms: number | null; error_message: string };
 
-/** 模型配置文件：路径（设置页展示，供用户直接编辑）与全部连接；文件写坏时 400 并指出出错位置。 */
-export type ModelConfigFile = {
+/** 模型配置文件：路径（配置页展示，供用户直接编辑）与全部连接；文件写坏时 400 并指出出错位置。 */
+export type ModelConnectionsFile = {
   path: string;
   connections: ModelConnection[];
 };
@@ -53,8 +51,8 @@ const ROOT = "/configuration/model-connections";
 const modelPath = (connectionId: string, modelName: string) =>
   `${ROOT}/${connectionId}/models/${encodeURIComponent(modelName)}`;
 
-export const getModelConfigFile = (options?: RequestOptions) =>
-  requestJson<ModelConfigFile>(ROOT, options);
+export const getModelConnections = (options?: RequestOptions) =>
+  requestJson<ModelConnectionsFile>(ROOT, options);
 
 /** 新建连接与它的首批模型（至少一个模型）；返回写入后的连接。 */
 export const createModelConnection = (input: ModelConnectionFields & { models: ModelConfigFields[] }) =>

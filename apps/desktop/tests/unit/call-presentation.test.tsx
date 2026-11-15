@@ -36,6 +36,12 @@ describe("detail availability without building body", () => {
     expect(resolve({ kind, ...fields })?.detail).toBeUndefined();
   });
 
+  it("mcp call results with images expand to thumbnails", () => {
+    const presentation = resolve({ kind: "mcp-tool-result", action: "call", server_name: "shots", tool_name: "capture", images: ["a".repeat(64)] });
+    expect(presentation?.meta).toBe("shots · capture · 1 张图片");
+    expect(renderToStaticMarkup(<>{presentation!.detail!.render()}</>)).toContain("MCP 工具返回的图片");
+  });
+
   it("does not enumerate a large list until the body is requested", () => {
     let reads = 0;
     const files = Array.from({ length: 1000 }, (_, i) => ({ get path() { reads++; return `file-${i}.ts`; } }));

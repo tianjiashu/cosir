@@ -21,8 +21,8 @@ import subprocess
 import time
 from collections.abc import MutableMapping
 
+from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.tools.shell.command_environment import HOST_VARIABLE_PREFIX
 from app.tools.shell.host_shells import user_default_shell
 from app.utils.host_platform import is_windows
 
@@ -71,7 +71,7 @@ def apply_login_shell_environment(environ: MutableMapping[str, str] | None = Non
         return
     changed = []
     for key, value in resolved.items():
-        if key.startswith(HOST_VARIABLE_PREFIX) or key in _NOT_MERGED:
+        if key.startswith(Constant.HostEnvironment.VARIABLE_PREFIX) or key in _NOT_MERGED:
             continue
         if target.get(key) != value:
             target[key] = value

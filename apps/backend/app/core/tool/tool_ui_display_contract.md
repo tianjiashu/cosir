@@ -81,7 +81,7 @@
 | user-question | questions[{question,header,options[{label,description,preview?}],multi_select}]（参数原样）；作答后补 decision（approve / reject）、answers{问题原文: label 或自由文字，多选为列表}、annotations{问题原文: {notes}}；全部跳过只有 decision=reject；作废（未作答）不补字段，状态为 cancelled |
 | deliverables | files[{path,absolute_path,caption}]：Agent 声明的成果文件，只含通过校验的；path 用于显示与打开（工作区内为相对路径），absolute_path 只交给宿主「在文件夹中显示」；卡片在产物区，调用行只在失败时出现 |
 | next-step | ask、replies[1–2]：回复下方的一个问题与按钮，第一个是推荐；不是等待中的决定，后端不登记，点按钮即替用户发出标签原文；前端只在会话最后一条正常完成的回复上显示，同一回合只认最后一次 |
-| mcp-tool-result | action=call: server_name/tool_name/scope；action=list: servers[{server_name,scope,tools,error?}]，`scope` 为 system / workspace，单服务 error 不改变整个调用的生命周期 |
+| mcp-tool-result | action=call: server_name/tool_name/scope/images（结果图片的附件 asset id，卡片显示缩略图）；action=list: servers[{server_name,scope,tools[{name,description}],error?}]（输入 schema 只给模型），`scope` 为 system / workspace，单服务 error 不改变整个调用的生命周期 |
 | skill-content | action=list: skills[{name,description,scope}]；action=load: skill_name/resource_path/scope，正文只进模型上下文 |
 
 `terminal-result` 的实时预览由命令启动时的初始展示（`terminal_command_started`，命令与工作目录）建立、输出块只往上追加，与终态展示数据使用同一窗口规则（`trim_output_window`）：卡片只保留最近一段，终态展示数据到达后整体覆盖实时预览，前端不自己截断。

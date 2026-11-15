@@ -1,5 +1,5 @@
 /**
- * 多处共用的查询：查询键与拉取函数在这里成对定义一次，调用方 `useQuery({ ...xxxQueryOptions(), enabled })`。
+ * 查询键与拉取函数在这里成对定义一次（不论有几处调用），调用方 `useQuery(xxxQueryOptions())`，需要选项时展开再加。
  * 这里定义的键只配这里的拉取函数，调用方不再各写一份：同一个键挂两个不同的拉取函数时，
  * 失效刷新会用最后挂上的那个观察者的函数，可能拉错数据或报错。
  * 调用点各自的选项（`enabled`、`staleTime` 等）留在调用点。
@@ -10,7 +10,7 @@ import { getAgentConfigurations } from "@/lib/api/configuration";
 import { getToolGroups } from "@/lib/api/tool-groups";
 import { getFileInfo } from "@/lib/api/workspace-files";
 import { getMCPServers, getSkills } from "@/lib/api/extensions";
-import { getModelConfigFile } from "@/lib/api/model-connections";
+import { getModelConnections } from "@/lib/api/model-connections";
 import { queryKeys } from "@/lib/query/query-keys";
 
 export const toolGroupsQueryOptions = () => queryOptions({
@@ -47,6 +47,6 @@ export const mcpServersQueryOptions = (workspaceId: number | null) => queryOptio
  */
 export const modelConnectionsQueryOptions = () => queryOptions({
   queryKey: queryKeys.modelConnections(),
-  queryFn: ({ signal }) => getModelConfigFile({ signal }),
+  queryFn: ({ signal }) => getModelConnections({ signal }),
   refetchOnWindowFocus: true,
 });

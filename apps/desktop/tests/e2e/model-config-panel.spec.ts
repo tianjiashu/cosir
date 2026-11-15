@@ -40,6 +40,10 @@ function mockModelBackend(page: Page, initial: Connection[], { failing = new Set
       return route.fulfill({ json: ok ? { success: true, elapsed_ms: 8 } : { success: false, elapsed_ms: 5, error_message: "模型不存在" } });
     }
     calls.writes.push({ method: request.method(), path, body });
+    if (request.method() === "DELETE" && !path.slice(ROOT.length + 1).includes("/")) {
+      connections.splice(connections.findIndex((item) => item.connection_id === path.slice(ROOT.length + 1)), 1);
+      return route.fulfill({ json: {} });
+    }
     if (path === ROOT) {
       const { models, ...fields } = body as Omit<Connection, "connection_id"> & { models: Model[] };
       const id = String(fields.name).toLowerCase();
@@ -78,7 +82,7 @@ test("新建连接：Shift 连选多个模型，测试并保存只存通过的�
     discovered: ["qwen-a", "qwen-b", "qwen-c", "qwen-d", "qwen-bad"],
   });
 
-  await page.goto("/settings/models");
+  await page.goto("/configuration/models");
   await expect(page.getByText("还没有模型连接")).toBeVisible();
   await page.getByRole("button", { name: "添加连接" }).click();
   const editor = page.getByRole("region", { name: "添加连接" });
@@ -127,7 +131,7 @@ test("新建连接：Shift 连选多个模型，测试并保存只存通过的�
 test("已有连接：添加模型时标出已添加，改 Key 先测试再保存，模型能力在行内编辑", async ({ page }, testInfo) => {
   const { calls } = mockModelBackend(page, [demo], { discovered: ["demo-model", "other-model"] });
 
-  await page.goto("/settings/models");
+  await page.goto("/configuration/models");
   await expect(page.getByText(FILE_PATH)).toBeVisible();
   const card = page.getByRole("region", { name: "连接 Demo" });
   await card.getByRole("button", { name: "添加模型" }).click();
@@ -156,6 +160,23 @@ test("已有连接：添加模型时标出已添加，改 Key 先测试再保存
   expect(calls.writes.at(-1)).toMatchObject({ method: "PUT", path: `${ROOT}/demo/models/demo-model`, body: { supports_image: true } });
   await card.getByText("other-model").hover();
   await page.screenshot({ path: testInfo.outputPath("model-connections.png"), fullPage: true });
+});
+
+// 潜在缺陷：删除别的连接会顺带关掉正在编辑的连接，未保存的修改不提示就丢了。
+test("删除连接只关掉作用在它上面的编辑器，别的连接上没保存的修改还在", async ({ page }) => {
+  const other: Connection = { ...demo, connection_id: "packy", name: "Packy", models: [{ ...demo.models[0]!, config_id: "packy/qwen-a", connection_id: "packy", model_name: "qwen-a" }] };
+  mockModelBackend(page, [demo, other]);
+
+  await page.goto("/configuration/models");
+  const demoCard = page.getByRole("region", { name: "连接 Demo" });
+  await demoCard.getByRole("button", { name: "编辑连接 Demo" }).click();
+  const nameField = demoCard.getByRole("textbox", { name: "连接名称" });
+  await nameField.fill("Demo 改名中");
+
+  await page.getByRole("region", { name: "连接 Packy" }).getByRole("button", { name: "删除连接 Packy" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "删除", exact: true }).click();
+  await expect(page.getByRole("region", { name: "连接 Packy" })).toHaveCount(0);
+  await expect(nameField).toHaveValue("Demo 改名中");
 });
 
 test("输入框的模型选择器按连接分组", async ({ page }) => {

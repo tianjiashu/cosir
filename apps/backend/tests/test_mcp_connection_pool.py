@@ -18,8 +18,9 @@ from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.mcp.configuration import MCPServerConfig, ScopedMCPServer
-from app.service.configuration.mcp.tested_servers import MCPTestedServers
-from app.tools.mcp.client import MCPToolNotFoundError, call_result_text, is_connection_failure
+from app.service.configuration.mcp.machine_state import MCPMachineState
+from app.tools.mcp.call_result import MCPCallResult
+from app.tools.mcp.client import MCPToolNotFoundError, is_connection_failure
 from app.tools.mcp.connection_pool import MCPConnectionPool
 from app.tools.tool_handler.mcp_tool import MCPTool
 from app.utils.path import system_cosir
@@ -69,7 +70,7 @@ def _server(name: str = "stateful", *extra_args: str) -> ScopedMCPServer:
 
 def _bump(pool: MCPConnectionPool, server: ScopedMCPServer) -> dict:
     result = pool.submit(pool.call_tool(server, "bump", {})).result(timeout=30)
-    return json.loads(call_result_text(result))
+    return json.loads(MCPCallResult.from_sdk(result).text)
 
 
 def test_calls_reuse_one_connection_and_server_process(pool, tmp_path):
@@ -134,7 +135,7 @@ def test_cancelled_tool_call_returns_promptly_and_keeps_connection(pool, tmp_pat
     config_path.write_text(
         json.dumps({"servers": [server.config.model_dump(mode="json")]}), encoding="utf-8"
     )
-    MCPTestedServers.record_pass(server)
+    MCPMachineState.record_pass(server)
     monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
     first = _bump(pool, server)
     context = ToolExecutionContext(

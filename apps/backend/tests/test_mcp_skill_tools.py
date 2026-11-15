@@ -20,10 +20,11 @@ from app.service.configuration.mcp.configuration import (
     available_servers,
     visible_servers,
 )
-from app.service.configuration.mcp.tested_servers import MCPTestedServers
+from app.service.configuration.mcp.machine_state import MCPMachineState
 from app.service.configuration.skills.catalog import SkillCatalog, SkillLoadError
 from app.service.configuration.skills.configuration import SkillConfiguration
-from app.tools.mcp.client import _stdio_parameters, call_result_text, list_server_tools
+from app.tools.mcp.call_result import MCPCallResult
+from app.tools.mcp.client import _stdio_parameters, list_server_tools
 from app.tools.mcp.connection_pool import MCPConnectionPool
 from app.tools.tool_handler.mcp_tool import MCPTool
 from app.tools.tool_handler.skill_tool import SkillTool
@@ -190,8 +191,8 @@ def test_mcp_available_servers_require_enabled_and_local_test_record(tmp_path):
     untested = MCPServerConfig(name="untested", command="python")
     _write_mcp_servers(workspace / ".cosir", tested, disabled, untested)
     scope = ExtensionScope.workspace(workspace)
-    MCPTestedServers.record_pass(ScopedMCPServer(scope, tested))
-    MCPTestedServers.record_pass(ScopedMCPServer(scope, disabled))
+    MCPMachineState.record_pass(ScopedMCPServer(scope, tested))
+    MCPMachineState.record_pass(ScopedMCPServer(scope, disabled))
 
     assert [server.name for server in available_servers(workspace)] == ["tested"]
     # 同一服务在另一个工作区没有测试记录。
@@ -226,15 +227,15 @@ def test_mcp_test_record_keeps_saved_config_when_a_draft_is_tested(tmp_path):
     scope = ExtensionScope.workspace(_workspace(tmp_path))
     saved = ScopedMCPServer(scope, MCPServerConfig(name="one", command="python"))
     draft = ScopedMCPServer(scope, MCPServerConfig(name="one", command="node"))
-    MCPTestedServers.record_pass(saved)
+    MCPMachineState.record_pass(saved)
 
-    MCPTestedServers.record_pass(draft)
-    assert MCPTestedServers.read().passed(saved)
-    assert MCPTestedServers.revoke(draft) is True
-    assert MCPTestedServers.read().passed(saved)
-    assert MCPTestedServers.revoke(draft) is False
-    assert MCPTestedServers.revoke(saved) is True
-    assert not MCPTestedServers.read().passed(saved)
+    MCPMachineState.record_pass(draft)
+    assert MCPMachineState.read().passed(saved)
+    assert MCPMachineState.revoke(draft) is True
+    assert MCPMachineState.read().passed(saved)
+    assert MCPMachineState.revoke(draft) is False
+    assert MCPMachineState.revoke(saved) is True
+    assert not MCPMachineState.read().passed(saved)
 
 
 def test_mcp_test_record_is_pruned_on_save_and_dropped_with_the_workspace(tmp_path):
@@ -244,17 +245,17 @@ def test_mcp_test_record_is_pruned_on_save_and_dropped_with_the_workspace(tmp_pa
     removed = ScopedMCPServer(scope, MCPServerConfig(name="removed", command="python"))
     stale_draft = ScopedMCPServer(scope, MCPServerConfig(name="kept", command="node"))
     for server in (kept, removed, stale_draft):
-        MCPTestedServers.record_pass(server)
+        MCPMachineState.record_pass(server)
 
-    MCPTestedServers.keep_only(scope, [kept])
-    record = MCPTestedServers.read()
+    MCPMachineState.keep_only(scope, [kept])
+    record = MCPMachineState.read()
 
     assert record.passed(kept)
     # 删掉的服务再加回同一配置、残留的草稿指纹，都要重新测试。
     assert not record.passed(removed)
     assert not record.passed(stale_draft)
-    MCPTestedServers.drop_scope(scope)
-    assert scope.key not in MCPTestedServers.read().scopes
+    MCPMachineState.drop_scope(scope)
+    assert scope.key not in MCPMachineState.read().scopes
 
 
 def test_mcp_tool_does_not_discover_or_call_an_untested_server(tmp_path, monkeypatch):
@@ -273,6 +274,7 @@ def test_mcp_tool_does_not_discover_or_call_an_untested_server(tmp_path, monkeyp
 
     assert json.loads(listing.content) == []
     assert call.status == "error"
+    assert "has not passed a connection test" in call.content
 
 
 def test_mcp_configuration_rejects_duplicate_names(tmp_path):
@@ -344,7 +346,7 @@ def test_mcp_http_transports_list_and_call_tools(transport, path):
             await server_task
 
         assert [tool["name"] for tool in tools] == ["echo"]
-        assert json.loads(call_result_text(result)) == {"echo": "ok"}
+        assert json.loads(MCPCallResult.from_sdk(result).text) == {"echo": "ok"}
 
     asyncio.run(exercise_transport())
 
@@ -360,21 +362,55 @@ def test_mcp_configuration_requires_transport_specific_endpoint():
     assert config.url == "HTTPS://example.com/sse"
 
 
-def test_stdio_parameters_pass_explicit_environment_and_scope_cwd(tmp_path, monkeypatch):
-    """MCP 子进程接收服务专属变量（SDK 另行补入默认白名单）；workspace 服务在工作区根目录运行。"""
+def test_stdio_parameters_pass_explicit_environment_and_run_where_used(tmp_path, monkeypatch):
+    """MCP 子进程只接收服务专属变量（SDK 另行补入默认白名单）；在哪个工作区里用就在哪运行。"""
 
     monkeypatch.setenv("MODEL_PROVIDER_SECRET", "must-not-be-inherited")
     config = MCPServerConfig(name="stdio", command="mcp-server", env={"SERVER_KEY": "value"})
     workspace = _workspace(tmp_path)
 
-    system_parameters = _stdio_parameters(ScopedMCPServer(ExtensionScope.system(), config))
+    outside = ScopedMCPServer(ExtensionScope.system(), config)
+    system_in_workspace = ScopedMCPServer(ExtensionScope.system(), config, used_in=workspace)
+    outside_parameters = _stdio_parameters(outside.connection_config(), outside.cwd)
     workspace_parameters = _stdio_parameters(
-        ScopedMCPServer(ExtensionScope.workspace(workspace), config)
+        system_in_workspace.connection_config(), system_in_workspace.cwd
     )
 
-    assert system_parameters.env == {"SERVER_KEY": "value"}
-    assert system_parameters.cwd is None
+    assert outside_parameters.env == {"SERVER_KEY": "value"}
+    assert outside_parameters.cwd is None
     assert Path(workspace_parameters.cwd) == workspace
+
+
+# 潜在缺陷：系统级服务在所有工作区共用一条连接，stdio 进程不在工作区里运行、服务状态在工作区之间串用。
+def test_system_server_gets_one_connection_per_workspace_it_is_used_in(tmp_path, monkeypatch):
+    first, second = _workspace(tmp_path, "first"), _workspace(tmp_path, "second")
+    config = _cwd_server("system")
+    _write_mcp_servers(tmp_path / "system-cosir", config)
+    MCPMachineState.record_pass(ScopedMCPServer(ExtensionScope.system(), config))
+    monkeypatch.setattr(system_cosir, "LOG_DIR", tmp_path / "logs")
+    pool = MCPConnectionPool()
+    monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
+    tool = MCPTool()
+
+    def whoami(workspace: Path) -> dict:
+        result = tool.execute(
+            action="call",
+            server_name="test-server",
+            tool_name="whoami",
+            arguments={},
+            execution_context=_context(workspace),
+        )
+        assert result.status == "success", result.content
+        return json.loads(result.content)
+
+    try:
+        cwds = [Path(whoami(first)["cwd"]).resolve(), Path(whoami(second)["cwd"]).resolve()]
+        connection_count = len(pool._connections)
+    finally:
+        pool.close()
+
+    assert cwds == [first.resolve(), second.resolve()]
+    assert connection_count == 2
 
 
 _CWD_SERVER_CODE = (
@@ -394,6 +430,42 @@ def _cwd_server(marker: str) -> MCPServerConfig:
     )
 
 
+_ROOTS_SERVER_CODE = (
+    "from mcp.server.fastmcp import Context, FastMCP\n"
+    "server = FastMCP('roots-server')\n"
+    "@server.tool()\n"
+    "async def roots(ctx: Context) -> dict:\n"
+    "    try:\n"
+    "        result = await ctx.session.list_roots()\n"
+    "    except Exception as exc:\n"
+    "        return {'error': type(exc).__name__}\n"
+    "    return {'roots': [str(root.uri) for root in result.roots]}\n"
+    "server.run(transport='stdio')\n"
+)
+
+
+# 潜在缺陷：filesystem、git 这类服务不知道当前工作区，只能在启动参数里写死路径。
+def test_servers_used_in_a_workspace_are_told_its_root(tmp_path, monkeypatch):
+    workspace = _workspace(tmp_path)
+    config = MCPServerConfig(name="roots-server", command=sys.executable, args=["-c", _ROOTS_SERVER_CODE])
+    monkeypatch.setattr(system_cosir, "LOG_DIR", tmp_path / "logs")
+    pool = MCPConnectionPool()
+
+    def ask(server: ScopedMCPServer) -> dict:
+        result = pool.submit(pool.call_tool(server, "roots", {})).result(timeout=30)
+        return json.loads(MCPCallResult.from_sdk(result).text)
+
+    try:
+        inside = ask(ScopedMCPServer(ExtensionScope.system(), config, used_in=workspace))
+        outside = ask(ScopedMCPServer(ExtensionScope.system(), config))
+    finally:
+        pool.close()
+
+    assert inside == {"roots": [workspace.resolve().as_uri()]}
+    # 不在任何工作区里（系统级配置页）时不声明 roots 能力。
+    assert "error" in outside
+
+
 def test_mcp_tool_keeps_same_named_workspace_servers_apart(tmp_path, monkeypatch):
     """两个工作区的同名服务各自连接、各在自己的工作区运行，互不顶替。"""
 
@@ -401,7 +473,7 @@ def test_mcp_tool_keeps_same_named_workspace_servers_apart(tmp_path, monkeypatch
     for workspace, marker in ((first, "first"), (second, "second")):
         config = _cwd_server(marker)
         _write_mcp_servers(workspace / ".cosir", config)
-        MCPTestedServers.record_pass(ScopedMCPServer(ExtensionScope.workspace(workspace), config))
+        MCPMachineState.record_pass(ScopedMCPServer(ExtensionScope.workspace(workspace), config))
     monkeypatch.setattr(system_cosir, "LOG_DIR", tmp_path / "logs")
     pool = MCPConnectionPool()
     monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
@@ -426,6 +498,9 @@ def test_mcp_tool_keeps_same_named_workspace_servers_apart(tmp_path, monkeypatch
         pool.close()
 
     assert json.loads(listing.content)[0]["tools"][0]["name"] == "whoami"
+    # 目录只给名称与简短说明（schema 按需单独查），卡片的展示数据也一样。
+    assert set(json.loads(listing.content)[0]["tools"][0]) == {"name", "description"}
+    assert set(listing.display_data["servers"][0]["tools"][0]) == {"name", "description"}
     assert json.loads(listing.content)[0]["scope"] == "workspace"
     assert [item["marker"] for item in results] == ["first", "second", "first"]
     assert [Path(item["cwd"]).resolve() for item in results] == [
@@ -465,3 +540,74 @@ def test_skill_tool_lists_and_loads_workspace_visible_skills(tmp_path):
     assert str((workspace / ".agents" / "skills" / "local").resolve()) in loaded.content
     assert loaded.content.endswith("工作区正文\n")
     assert disabled.status == "error"
+
+
+_ECHO_SERVER_CODE = (
+    "from mcp.server.fastmcp import FastMCP\n"
+    "server = FastMCP('echo-server')\n"
+    "calls = []\n"
+    "@server.tool(description='Echo a value back. ' + 'Long explanation. ' * 40)\n"
+    "def echo(value: str) -> dict:\n"
+    "    calls.append(value)\n"
+    "    return {'echo': value, 'calls': len(calls)}\n"
+    "@server.tool(description='Count words in a text')\n"
+    "def count_words(text: str) -> int:\n"
+    "    return len(text.split())\n"
+    "server.run(transport='stdio')\n"
+)
+
+
+@pytest.fixture
+def echo_tool(tmp_path, monkeypatch):
+    """一个已测试通过的工作区 stdio 服务（echo 与 count_words 两个工具）与指向它的 MCP 工具。"""
+
+    workspace = _workspace(tmp_path)
+    config = MCPServerConfig(name="echo", command=sys.executable, args=["-c", _ECHO_SERVER_CODE])
+    _write_mcp_servers(workspace / ".cosir", config)
+    MCPMachineState.record_pass(ScopedMCPServer(ExtensionScope.workspace(workspace), config))
+    monkeypatch.setattr(system_cosir, "LOG_DIR", tmp_path / "logs")
+    pool = MCPConnectionPool()
+    monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
+    tool = MCPTool()
+
+    def run(**kwargs):
+        return tool.execute(execution_context=_context(workspace), **kwargs)
+
+    yield run
+    pool.close()
+
+
+# 潜在缺陷：服务多了以后一次给出全部 schema，超出工具输出上限被截断，模型看不到要用的工具。
+def test_listing_is_a_compact_catalog_with_keyword_filter_and_schema_on_request(echo_tool):
+    listing = json.loads(echo_tool(action="list").content)
+    filtered = json.loads(echo_tool(action="list", query="WORDS text").content)
+    detail = json.loads(echo_tool(action="list", server_name="echo", tool_name="echo").content)
+    unknown = echo_tool(action="list", server_name="echo", tool_name="missing")
+
+    [echo, count] = listing[0]["tools"]
+    assert set(echo) == {"name", "description"}
+    assert len(echo["description"]) == 200 and echo["description"].endswith("…")
+    assert count == {"name": "count_words", "description": "Count words in a text"}
+    assert [item["name"] for item in filtered[0]["tools"]] == ["count_words"]
+    [echo_detail] = detail[0]["tools"]
+    assert echo_detail["input_schema"]["required"] == ["value"]
+    assert unknown.status == "error" and "no tool named missing" in unknown.content
+
+
+# 潜在缺陷：参数错了要等服务端报错才知道，且报错质量参差不齐。
+def test_arguments_are_checked_against_the_tool_schema_before_calling(echo_tool):
+    rejected = echo_tool(action="call", server_name="echo", tool_name="echo", arguments={})
+    accepted = echo_tool(action="call", server_name="echo", tool_name="echo", arguments={"value": "hi"})
+
+    assert rejected.status == "error"
+    assert "was not sent" in rejected.content and '"required": ["value"]' in rejected.content
+    # 被拒的那次没有到达服务：服务端只记到一次调用。
+    assert json.loads(accepted.content) == {"echo": "hi", "calls": 1}
+
+
+def test_lookup_needs_the_server_name():
+    result = MCPTool().execute(
+        action="list", tool_name="echo", execution_context=_context(Path("."))
+    )
+
+    assert result.status == "error" and "server_name is required" in result.content

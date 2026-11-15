@@ -89,9 +89,9 @@ export function CommandPalette({ open, onOpenChange, workspaces, onSelectSession
               {model.actions.map((command) => <CommandRow key={command.id} command={command} onRun={runCommand} />)}
             </CommandGroup>
           ) : null}
-          {model.settings.length > 0 ? (
+          {model.configuration.length > 0 ? (
             <CommandGroup heading="配置">
-              {model.settings.map((command) => <CommandRow key={command.id} command={command} onRun={runCommand} />)}
+              {model.configuration.map((command) => <CommandRow key={command.id} command={command} onRun={runCommand} />)}
             </CommandGroup>
           ) : null}
         </CommandList>

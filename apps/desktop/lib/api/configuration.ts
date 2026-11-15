@@ -1,3 +1,4 @@
+import { configurationApiPath } from "@/lib/api/configuration-scope";
 import { jsonRequestInit, requestJson, type RequestOptions } from "@/lib/http/client";
 
 export type AgentConfiguration = {
@@ -10,11 +11,9 @@ export type AgentConfiguration = {
   model_config_id: string | null;
   model_settings: Record<string, unknown>;
   source: "builtin" | "user_file" | string;
-  path: string | null;
   deletable: boolean;
   validation_status: string;
   validation_error: string | null;
-  file_name: string | null;
 };
 
 export type AgentConfigurationInput = Pick<
@@ -29,40 +28,12 @@ export type AgentConfigurationInput = Pick<
   | "model_settings"
 >;
 
-export type GlobalInstructionConfiguration = {
-  content: string;
-  path: string;
-  token_length: number;
-  max_tokens: number;
-  effective_on: "next_run";
-};
-
-export type MainAgentPromptConfiguration = {
-  content: string;
-  path: string;
-  token_length: number;
-  max_tokens: number;
-  source: "user_file" | string;
-  effective_on: "next_run";
-};
-
-export type WorkspaceInstructionConfiguration = {
-  content: string;
-  path: string;
-  relative_path: string;
-  token_length: number;
-  max_tokens: number;
-  exists: boolean;
-  effective_on: "next_run" | string;
-};
-
-export type WorkspaceFileIgnoreConfiguration = {
-  content: string;
-  path: string;
-  exists: boolean;
-  rule_count: number;
-  max_rules: number;
-};
+/**
+ * 指令类 Markdown 文档（全局 / 工作区 AGENTS.md、主 Agent 提示词）。后端还返回路径、来源等字段，前端只用
+ * 正文与 Token 预算；.fileignore 只用正文（规则上限由后端校验）。
+ */
+export type InstructionDocument = { content: string; max_tokens: number };
+export type FileIgnoreDocument = { content: string };
 
 export type EnvironmentField = {
   name: string;
@@ -70,13 +41,8 @@ export type EnvironmentField = {
   component: "input" | "password" | "checkbox" | "select";
   label: string;
   secret: boolean;
-  default: string | number | boolean | null;
   value: string | number | boolean | null;
-  disk_value: string | number | boolean | null;
-  configured: boolean;
   masked: boolean;
-  source: "process" | "file" | "default";
-  process_override: boolean;
   options: Array<{ value: string; label: string }>;
   placeholder: string | null;
   clearable: boolean;
@@ -91,20 +57,8 @@ export type EnvironmentGroup = {
   fields: EnvironmentField[];
 };
 
-/** 子 Agent 配置的作用域：系统级，或某个工作区自己的。 */
-export type ConfigurationScope = "system" | "workspace";
-
-/**
- * 子 Agent 配置的拥有者统一以 `workspaceId` 表达（null 为系统级，与查询键同一约定）；
- * 路径、请求体里的作用域名都由它推出，调用方不再另传一份。
- */
-export function configurationScope(workspaceId: number | null): ConfigurationScope {
-  return workspaceId === null ? "system" : "workspace";
-}
-
 function agentConfigurationPath(workspaceId: number | null, agentId?: string) {
-  const root = workspaceId === null ? "/configuration/agents" : `/workspaces/${workspaceId}/configuration/agents`;
-  return agentId === undefined ? root : `${root}/${encodeURIComponent(agentId)}`;
+  return configurationApiPath(workspaceId, agentId === undefined ? "/agents" : `/agents/${encodeURIComponent(agentId)}`);
 }
 
 /** 某一作用域自己的子 Agent 配置（工作区列表不含继承来的系统级配置）。 */
@@ -112,32 +66,37 @@ export function getAgentConfigurations(workspaceId: number | null, options?: Req
   return requestJson<AgentConfiguration[]>(agentConfigurationPath(workspaceId), options);
 }
 
-export function createAgentConfiguration(workspaceId: number | null, input: AgentConfigurationInput): Promise<AgentConfiguration> {
+function createAgentConfiguration(workspaceId: number | null, input: AgentConfigurationInput): Promise<AgentConfiguration> {
   return requestJson<AgentConfiguration>(agentConfigurationPath(workspaceId), jsonRequestInit(input, { method: "POST" }));
 }
 
-export function updateAgentConfiguration(workspaceId: number | null, agentId: string, input: AgentConfigurationInput): Promise<AgentConfiguration> {
+function updateAgentConfiguration(workspaceId: number | null, agentId: string, input: AgentConfigurationInput): Promise<AgentConfiguration> {
   return requestJson<AgentConfiguration>(agentConfigurationPath(workspaceId, agentId), jsonRequestInit(input, { method: "PUT" }));
+}
+
+/** 保存一份子 Agent 配置：已保存过（有 `agentId`）就更新它，否则在该作用域新建。 */
+export function saveAgentConfiguration(workspaceId: number | null, agentId: string | null, input: AgentConfigurationInput): Promise<AgentConfiguration> {
+  return agentId ? updateAgentConfiguration(workspaceId, agentId, input) : createAgentConfiguration(workspaceId, input);
 }
 
 export async function deleteAgentConfiguration(workspaceId: number | null, agentId: string): Promise<void> {
   await requestJson(agentConfigurationPath(workspaceId, agentId), { method: "DELETE" });
 }
 
-export function getGlobalInstructionConfiguration(options?: RequestOptions): Promise<GlobalInstructionConfiguration> {
-  return requestJson<GlobalInstructionConfiguration>("/configuration/global-instructions", options);
+export function getGlobalInstructionConfiguration(options?: RequestOptions): Promise<InstructionDocument> {
+  return requestJson<InstructionDocument>("/configuration/global-instructions", options);
 }
 
-export function updateGlobalInstructionConfiguration(content: string): Promise<GlobalInstructionConfiguration> {
-  return requestJson<GlobalInstructionConfiguration>("/configuration/global-instructions", jsonRequestInit({ content }, { method: "PUT" }));
+export function updateGlobalInstructionConfiguration(content: string): Promise<InstructionDocument> {
+  return requestJson<InstructionDocument>("/configuration/global-instructions", jsonRequestInit({ content }, { method: "PUT" }));
 }
 
-export function getMainAgentPromptConfiguration(options?: RequestOptions): Promise<MainAgentPromptConfiguration> {
-  return requestJson<MainAgentPromptConfiguration>("/configuration/main-agent-prompt", options);
+export function getMainAgentPromptConfiguration(options?: RequestOptions): Promise<InstructionDocument> {
+  return requestJson<InstructionDocument>("/configuration/main-agent-prompt", options);
 }
 
-export function updateMainAgentPromptConfiguration(content: string): Promise<MainAgentPromptConfiguration> {
-  return requestJson<MainAgentPromptConfiguration>("/configuration/main-agent-prompt", jsonRequestInit({ content }, { method: "PUT" }));
+export function updateMainAgentPromptConfiguration(content: string): Promise<InstructionDocument> {
+  return requestJson<InstructionDocument>("/configuration/main-agent-prompt", jsonRequestInit({ content }, { method: "PUT" }));
 }
 
 export function getEnvironmentConfiguration(options?: RequestOptions): Promise<{ groups: EnvironmentGroup[] }> {
@@ -148,18 +107,26 @@ export function updateEnvironmentConfiguration(changes: Record<string, { operati
   return requestJson("/configuration/environment", jsonRequestInit({ changes }, { method: "PUT" }));
 }
 
-export function getWorkspaceInstructionConfiguration(workspaceId: number, options?: RequestOptions): Promise<WorkspaceInstructionConfiguration> {
-  return requestJson<WorkspaceInstructionConfiguration>(`/workspaces/${workspaceId}/configuration/instructions`, options);
+export function getWorkspaceInstructionConfiguration(workspaceId: number, options?: RequestOptions): Promise<InstructionDocument> {
+  return requestJson<InstructionDocument>(configurationApiPath(workspaceId, "/instructions"), options);
 }
 
-export function updateWorkspaceInstructionConfiguration(workspaceId: number, content: string): Promise<WorkspaceInstructionConfiguration> {
-  return requestJson<WorkspaceInstructionConfiguration>(`/workspaces/${workspaceId}/configuration/instructions`, jsonRequestInit({ content }, { method: "PUT" }));
+export function updateWorkspaceInstructionConfiguration(workspaceId: number, content: string): Promise<InstructionDocument> {
+  return requestJson<InstructionDocument>(configurationApiPath(workspaceId, "/instructions"), jsonRequestInit({ content }, { method: "PUT" }));
 }
 
-export function getWorkspaceFileIgnoreConfiguration(workspaceId: number, options?: RequestOptions): Promise<WorkspaceFileIgnoreConfiguration> {
-  return requestJson<WorkspaceFileIgnoreConfiguration>(`/workspaces/${workspaceId}/configuration/fileignore`, options);
+export function getWorkspaceFileIgnoreConfiguration(workspaceId: number, options?: RequestOptions): Promise<FileIgnoreDocument> {
+  return requestJson<FileIgnoreDocument>(configurationApiPath(workspaceId, "/fileignore"), options);
 }
 
-export function updateWorkspaceFileIgnoreConfiguration(workspaceId: number, content: string): Promise<WorkspaceFileIgnoreConfiguration> {
-  return requestJson<WorkspaceFileIgnoreConfiguration>(`/workspaces/${workspaceId}/configuration/fileignore`, jsonRequestInit({ content }, { method: "PUT" }));
+export function updateWorkspaceFileIgnoreConfiguration(workspaceId: number, content: string): Promise<FileIgnoreDocument> {
+  return requestJson<FileIgnoreDocument>(configurationApiPath(workspaceId, "/fileignore"), jsonRequestInit({ content }, { method: "PUT" }));
+}
+
+/**
+ * 把 MCP 配置引用、尚未设置的变量写进系统 `.env`（系统级，任何作用域的配置页都写同一处）。
+ * 值只写不读；写入后后端重载进程环境，下一次建连即生效。
+ */
+export function setEnvironmentVariables(values: Record<string, string>): Promise<Record<string, never>> {
+  return requestJson("/configuration/environment/variables", jsonRequestInit({ values }, { method: "PUT" }));
 }

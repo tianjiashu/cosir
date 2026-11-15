@@ -12,7 +12,7 @@ async function openMainAgentPrompt(page: Page, content: string) {
   await page.route(`${API_ORIGIN}/configuration/main-agent-prompt`, (route) => route.fulfill({
     json: { content, path: ".cosir/main_agent_system_prompt.md", token_length: 5, max_tokens: 20000, source: "user_file", effective_on: "next_run" },
   }));
-  await page.goto("/settings/main-agent");
+  await page.goto("/configuration/main-agent");
   const editor = page.getByRole("textbox", { name: "Markdown 源码编辑器" });
   await expect(editor).toBeVisible();
   return editor;

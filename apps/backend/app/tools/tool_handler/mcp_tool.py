@@ -36,13 +36,15 @@ from app.tools.display.mcp_display import (
     build_mcp_call_display_data,
     build_mcp_catalog_display_data,
 )
+from app.tools.mcp.call_result import MCPCallResult
 from app.tools.mcp.client import (
-    MCPToolCallError,
+    MCPToolArgumentsError,
     MCPToolNotFoundError,
-    call_result_text,
-    describe_exception,
-    tool_catalog,
+    tool_detail,
+    tool_summary,
 )
+from app.tools.mcp.failure import MCPFailure
+from app.tools.mcp.result_images import StoredResultImages
 from app.tools.tool_models.mcp_args import MCPArgs
 
 # 单次调用（含必要的建连）的时限；thread 工具没有执行器硬超时，由 handler 自己执行。
@@ -55,12 +57,19 @@ class MCPTool(HandlerBase):
     """以一个固定工具入口提供 MCP 服务发现和工具调用。"""
 
     name = TOOL_MCP
+    # 中文译文：发现并调用已配置 MCP 服务的工具。action='list' 返回各服务的工具名与简短说明，可用
+    # server_name 只看一个服务、用 query 按关键词筛；同时给 server_name 与 tool_name 时返回这个工具的完整
+    # 输入 schema。action='call' 调用工具，arguments 是 JSON 对象字符串；参数不合格时本地拒绝，报错里带
+    # schema。list 时 arguments 传 '{}'。连接在多次调用间保持，有状态的服务会保留会话状态。
     description = (
-        "Discover and call tools from configured MCP servers. Use action='list' first to get "
-        "server names, tool names, descriptions, and input schemas; then use action='call' "
-        "with the selected server, tool, and a JSON-encoded object string in arguments. "
-        "For discovery, set tool_name=null and arguments='{}'. Server connections persist "
-        "across calls, so stateful servers keep their session state."
+        "Discover and call tools from configured MCP servers. action='list' returns each server's "
+        "tool names with short descriptions; narrow it with server_name and with query (keywords "
+        "matched against tool names and descriptions). Set both server_name and tool_name in "
+        "'list' to get that tool's full input schema. action='call' invokes a tool with arguments "
+        "as a JSON-encoded object string; arguments that do not match the tool's schema are "
+        "rejected before reaching the server, and the error includes the schema. Use "
+        "arguments='{}' for 'list'. Server connections persist across calls, so stateful servers "
+        "keep their session state."
     )
     args_model = MCPArgs
     timeout_seconds = CALL_TIMEOUT_SECONDS
@@ -72,6 +81,7 @@ class MCPTool(HandlerBase):
         server_name: str | None = None,
         tool_name: str | None = None,
         arguments: dict[str, Any] | None = None,
+        query: str | None = None,
         *,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
@@ -90,7 +100,13 @@ class MCPTool(HandlerBase):
             )
 
         if action == "list":
-            return self._list(servers, server_name, execution_context)
+            if tool_name is not None and server_name is None:
+                return tool_error(
+                    self.name,
+                    "server_name is required to look up a tool's schema. "
+                    "Use action='list' to find which server has the tool.",
+                )
+            return self._list(servers, server_name, tool_name, query, execution_context)
 
         if server_name is None or tool_name is None:
             return tool_error(
@@ -107,8 +123,11 @@ class MCPTool(HandlerBase):
         self,
         servers: list[ScopedMCPServer],
         server_name: str | None,
+        tool_name: str | None,
+        query: str | None,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
+        """目录（名称与简短说明，可按关键词筛）或一个工具的完整 schema（给了 ``tool_name`` 时）。"""
         selected = [
             server for server in servers if server_name is None or server.name == server_name
         ]
@@ -135,6 +154,17 @@ class MCPTool(HandlerBase):
         except ToolCallStopped:
             return tool_cancelled(self.name)
         except TimeoutError:
+            log.warning(
+                "mcp_discovery_timed_out",
+                extra={
+                    "msg": "MCP 工具发现超时",
+                    "data": {
+                        "session_id": execution_context.session_id,
+                        "servers": [server.pool_key for server in selected],
+                        "timeout_seconds": CALL_TIMEOUT_SECONDS,
+                    },
+                },
+            )
             return tool_error(
                 self.name,
                 f"MCP discovery timed out after {CALL_TIMEOUT_SECONDS:.0f} seconds. "
@@ -144,7 +174,7 @@ class MCPTool(HandlerBase):
         catalog: list[dict[str, Any]] = []
         for server, outcome in zip(selected, outcomes, strict=True):
             if isinstance(outcome, BaseException):
-                error = describe_exception(outcome)
+                error = MCPFailure.from_exception(outcome, server).for_model()
                 log.error(
                     "mcp_server_discovery_failed",
                     extra={
@@ -160,9 +190,15 @@ class MCPTool(HandlerBase):
                     {
                         "server_name": server.name,
                         "scope": server.scope.kind,
-                        "tools": tool_catalog(outcome),
+                        "tools": _catalog_tools(outcome, tool_name, query),
                     }
                 )
+        if tool_name is not None and catalog and "error" not in catalog[0] and not catalog[0]["tools"]:
+            return tool_error(
+                self.name,
+                f"MCP server {server_name} has no tool named {tool_name}. "
+                "Use action='list' with this server_name to see its tools.",
+            )
         return _catalog_observation(catalog)
 
     def _call(
@@ -174,59 +210,49 @@ class MCPTool(HandlerBase):
     ) -> ToolObservation:
         pool = service_depends.get_mcp_connection_pool()
         try:
-            result = wait_for_call(
-                pool.submit(pool.call_tool(server, tool_name, arguments)),
-                execution_context,
-                CALL_TIMEOUT_SECONDS,
+            result = MCPCallResult.from_sdk(
+                wait_for_call(
+                    pool.submit(pool.call_tool(server, tool_name, arguments)),
+                    execution_context,
+                    CALL_TIMEOUT_SECONDS,
+                )
             )
-            content = call_result_text(result)
         except ToolCallStopped:
             return tool_cancelled(self.name)
         except TimeoutError:
+            _log_call_failure(server, tool_name, execution_context, "timeout")
             return tool_error(
                 self.name,
                 f"MCP call timed out after {CALL_TIMEOUT_SECONDS:.0f} seconds; the request was "
                 "abandoned but the server may still have acted on it. Check its state before "
                 "retrying.",
             )
+        except MCPToolArgumentsError as exc:
+            _log_call_failure(server, tool_name, execution_context, "invalid_arguments", error=str(exc))
+            return tool_error(
+                self.name,
+                f"{exc}. The request was not sent. Fix the arguments to match this input schema "
+                f"and call again: {json.dumps(exc.schema, ensure_ascii=False)}",
+            )
         except MCPToolNotFoundError as exc:
+            _log_call_failure(server, tool_name, execution_context, "tool_not_found")
             return tool_error(
                 self.name,
                 f"{exc}. " "List the server's tools again and use a valid tool name.",
             )
-        except MCPToolCallError as exc:
+        except Exception as exc:
+            failure = MCPFailure.from_exception(exc, server)
+            _log_call_failure(server, tool_name, execution_context, failure.kind, error=failure.detail)
+            return tool_error(self.name, failure.for_model())
+
+        if result.is_error:
+            _log_call_failure(server, tool_name, execution_context, "server_reported_error")
             return tool_error(
                 self.name,
-                f"{str(exc) or 'MCP server reported a tool call failure'}. "
+                f"{result.text or 'MCP server reported a tool call failure'}. "
                 "Check the arguments and the server's response before deciding whether to retry.",
             )
-        except Exception as exc:
-            error = describe_exception(exc)
-            log.error(
-                "mcp_tool_call_failed",
-                extra={
-                    "msg": "MCP 工具调用失败",
-                    "data": {
-                        "scope": server.scope.key,
-                        "server_name": server.name,
-                        "tool_name": tool_name,
-                        "error": error,
-                    },
-                },
-            )
-            return tool_error(
-                self.name,
-                f"MCP call failed: {error}. "
-                "Check server status, tool name, and arguments, then retry.",
-            )
-
-        return tool_success(
-            self.name,
-            content,
-            display_data=build_mcp_call_display_data(
-                server_name=server.name, tool_name=tool_name, scope=server.scope.kind
-            ),
-        )
+        return _call_observation(server, tool_name, result, execution_context)
 
     def to_definition(self) -> ToolDefinition:
         """返回可注册的 MCP 工具定义。"""
@@ -242,6 +268,54 @@ class MCPTool(HandlerBase):
         )
 
 
+def _call_observation(
+    server: ScopedMCPServer,
+    tool_name: str,
+    result: MCPCallResult,
+    execution_context: ToolExecutionContext,
+) -> ToolObservation:
+    """成功结果：图片存进工作区附件（``StoredResultImages``），经工具图片通道交给模型。
+
+    MCP 工具只是有时带图，不能像专门看图的工具那样声明 ``returns_images`` 由门禁整个拒绝；模型
+    看不了图时由 observe 统一改写成说明（``withhold_unviewable_images``），这里不判断模型能力。
+    """
+
+    images = StoredResultImages.store(
+        result.images,
+        workspace_id=execution_context.workspace_id,
+        name=f"mcp-{server.name}",
+        log_data={
+            "session_id": execution_context.session_id,
+            "server_name": server.name,
+            "tool_name": tool_name,
+        },
+    )
+    return tool_success(
+        TOOL_MCP,
+        "\n".join(part for part in [result.text, *images.notes] if part),
+        display_data=build_mcp_call_display_data(
+            server_name=server.name,
+            tool_name=tool_name,
+            scope=server.scope.kind,
+            images=images.asset_ids,
+        ),
+        images=images.paths,
+    )
+
+
+def _catalog_tools(tools: list[types.Tool], tool_name: str | None, query: str | None) -> list[dict[str, Any]]:
+    """给了 ``tool_name`` 只回这一个工具的完整条目；否则回摘要，``query`` 的每个词都要出现在名称或说明里。"""
+
+    if tool_name is not None:
+        return [tool_detail(tool) for tool in tools if tool.name == tool_name]
+    terms = (query or "").casefold().split()
+    return [
+        tool_summary(tool)
+        for tool in tools
+        if all(term in f"{tool.name} {tool.description or ''}".casefold() for term in terms)
+    ]
+
+
 def _catalog_observation(catalog: list[dict[str, Any]]) -> ToolObservation:
     return tool_success(
         TOOL_MCP,
@@ -251,10 +325,38 @@ def _catalog_observation(catalog: list[dict[str, Any]]) -> ToolObservation:
 
 
 def _server_not_found(server_name: str) -> ToolObservation:
+    # 可用 = 已配置、已启用且当前连接定义在本机测试通过（``available_servers``），三者缺一都落到这里。
     return tool_error(
         TOOL_MCP,
-        f"Enabled MCP server not found: {server_name}. "
-        "Use action='list' to see available servers.",
+        f"MCP server not available: {server_name}. It is not configured, is disabled, or has not "
+        "passed a connection test on this machine. Use action='list' to see available servers.",
+    )
+
+
+def _log_call_failure(
+    server: ScopedMCPServer,
+    tool_name: str,
+    execution_context: ToolExecutionContext,
+    reason: str,
+    *,
+    error: str | None = None,
+) -> None:
+    """调用失败的唯一日志出口：执行器不记录 handler 返回的错误观察，这里不记就查不到。"""
+
+    log.warning(
+        "mcp_tool_call_failed",
+        extra={
+            "msg": "MCP 工具调用失败",
+            "data": {
+                "session_id": execution_context.session_id,
+                "tool_call_id": execution_context.tool_call_id,
+                "scope": server.scope.key,
+                "server_name": server.name,
+                "tool_name": tool_name,
+                "reason": reason,
+                "error": error,
+            },
+        },
     )
 
 

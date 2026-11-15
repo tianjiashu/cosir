@@ -21,7 +21,7 @@ vi.mock("@/lib/notify", () => ({ notify: { info: notifyInfo, error: vi.fn(), suc
 
 import { ExternalLinkRow } from "@/components/conversation/tools/call-views/detail-parts";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
-import { LinkSessionContext, useOpenLink, type LinkOpener } from "@/components/links/use-open-link";
+import { LinkSessionContext, useOpenLink, useWebOnlyLinkOpener, type LinkOpener } from "@/components/links/use-open-link";
 import { markdownRehypePlugins } from "@/components/markdown/markdown-rendering-config";
 import { ReferenceBridgeProvider } from "@/components/workspace-references/reference-bridge";
 import { useDockStore } from "@/lib/layout/dock-store";
@@ -139,7 +139,10 @@ describe("useOpenLink", () => {
 
 function renderMarkdown(text: string, options?: { documentDir?: string; webOnly?: boolean }) {
   function Doc() {
-    const components = useMarkdownLinkComponents("document", options);
+    // 只认网页是一种打开方式（打开器），不是链接组件的开关。
+    const web = useWebOnlyLinkOpener("document");
+    const opener = useOpenLink("document");
+    const components = useMarkdownLinkComponents(options?.webOnly ? web : opener, { documentDir: options?.documentDir });
     return <Streamdown mode="static" rehypePlugins={markdownRehypePlugins} components={components}>{text}</Streamdown>;
   }
   return renderToStaticMarkup(inWorkspace(<Doc />));
@@ -157,7 +160,7 @@ describe("markdown links", () => {
     // 文件面板的 Markdown 没有所属 Session，本机网页退回文件面板。
     expect(renderMarkdown("[r](out/report.html)")).toContain('title="在文件面板打开 out/report.html"');
     function InSession() {
-      const components = useMarkdownLinkComponents("message");
+      const components = useMarkdownLinkComponents(useOpenLink("message"));
       return <Streamdown mode="static" rehypePlugins={markdownRehypePlugins} components={components}>{"[r](out/report.html)"}</Streamdown>;
     }
     const html = renderToStaticMarkup(inWorkspace(<LinkSessionContext.Provider value={3}><InSession /></LinkSessionContext.Provider>));
@@ -226,7 +229,7 @@ it("selecting the already active file cancels an older pending link", async () =
 describe("link icons", () => {
   function renderLinks(icons: boolean, text: string) {
     function Doc() {
-      const components = useMarkdownLinkComponents("message", { icons });
+      const components = useMarkdownLinkComponents(useOpenLink("message"), { icons });
       return <Streamdown mode="static" rehypePlugins={markdownRehypePlugins} components={components}>{text}</Streamdown>;
     }
     return renderToStaticMarkup(inWorkspace(<Doc />));

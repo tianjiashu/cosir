@@ -1,17 +1,23 @@
+import { configurationApiPath, type ConfigurationScope } from "@/lib/api/configuration-scope";
 import { jsonRequestInit, requestJson, type RequestOptions } from "@/lib/http/client";
 
 /** MCP 连接测试需要启动服务进程并握手，Skill 导入需要复制 / 解压目录，均明显长于默认 JSON 超时。 */
 const LONG_OPERATION_TIMEOUT_MS = 120_000;
 
-/**
- * Skill 与 MCP 配置的作用域。工作区看到的是两层合并结果：同名时工作区覆盖系统级；
- * 在工作区里，`scope === "system"` 的条目是继承来的，只读。
- */
-export type ExtensionScope = "system" | "workspace";
-
 export type MCPTransport = "stdio" | "sse" | "streamable_http";
 
-/** 一个 MCP 服务的可编辑连接配置（保存与测试的请求体）。 */
+/**
+ * 远程服务的 OAuth 参数（整块可为 `null`：自动注册客户端、回调端口随机）。服务不支持自动注册时填预先注册的
+ * `client_id`，回调地址为 `http://127.0.0.1:<callback_port>/callback`；`client_secret` 只能写成 `${变量名}`。
+ */
+export type MCPOAuthConfiguration = {
+  client_id: string;
+  client_secret: string;
+  callback_port: number | null;
+  scope: string;
+};
+
+/** 一个 MCP 服务的可编辑连接配置（保存与测试的请求体）；值里可写 `${变量名}` 引用本机环境变量。 */
 export type MCPServerConfiguration = {
   name: string;
   transport: MCPTransport;
@@ -20,14 +26,33 @@ export type MCPServerConfiguration = {
   env: Record<string, string>;
   url: string;
   headers: Record<string, string>;
+  oauth: MCPOAuthConfiguration | null;
   enabled: boolean;
 };
 
-/** 配置页列出的一个可见服务：`tested` 取自本机测试记录。 */
+/**
+ * 服务配置引用的一个环境变量（`${NAME}`）的值从哪来，不带值：`cosir` 在 cosir 的系统 `.env` 里（配置页可改），
+ * `shell` 来自用户的 shell 环境（优先于 `.env`，配置页改不动）；`has_default` 表示没设置时有默认值兜底。
+ */
+export type MCPVariableStatus = {
+  name: string;
+  source: "unset" | "cosir" | "shell";
+  has_default: boolean;
+};
+
+/** 后端由本机事实推出的主状态（规则只在后端 `configuration_view`）：停用 > 缺变量 > 需要授权 > 待测试 > 可用。 */
+export type MCPServerStatus = "disabled" | "missing_variables" | "authorization_required" | "untested" | "available";
+
+/**
+ * 配置页列出的一个可见服务：`variables` 是它引用的环境变量；`literal_fields` 是工作区服务里直接写了值的
+ * env / headers 字段（如 `env.API_KEY`），用于提醒改成变量。
+ */
 export type MCPServer = MCPServerConfiguration & {
-  tested: boolean;
-  scope: ExtensionScope;
+  status: MCPServerStatus;
+  scope: ConfigurationScope;
   overrides: boolean;
+  variables: MCPVariableStatus[];
+  literal_fields: string[];
 };
 
 type MCPDiscoveredTool = {
@@ -36,11 +61,21 @@ type MCPDiscoveredTool = {
   input_schema: Record<string, unknown>;
 };
 
+/** 一次连接测试（或登录授权）的结果：成功时带发现的工具，失败时带归类后的原因与 `failure_kind`。 */
 export type MCPServerTestResult = {
+  status: "completed";
   success: boolean;
   tools: MCPDiscoveredTool[];
   error: string | null;
+  failure_kind: string | null;
   agent_available: boolean;
+};
+
+/** 登录授权停在浏览器这一步：打开 `authorization_url`，再按 `flow_id` 等最终结果。 */
+export type MCPAuthorizationPending = {
+  status: "authorization_required";
+  flow_id: string;
+  authorization_url: string;
 };
 
 /**
@@ -57,7 +92,7 @@ export type Skill = {
   name: string;
   description: string;
   enabled: boolean;
-  scope: ExtensionScope;
+  scope: ConfigurationScope;
   kind: SkillRootKind;
   overrides: boolean;
   warnings: string[];
@@ -79,7 +114,7 @@ export type SkillEntry = Skill & {
  * 相对路径）；`skipped` 是无法加载的子目录及原因。后端按优先级从高到低排好（本层在前，同层专属在前）。
  */
 export type SkillGroup = {
-  scope: ExtensionScope;
+  scope: ConfigurationScope;
   kind: SkillRootKind;
   location: string;
   skipped: { directory: string; reason: string }[];
@@ -111,24 +146,15 @@ export type SkillDetail = Skill & {
   files_truncated: boolean;
 };
 
-/** `null` 为系统级配置；否则为该工作区的配置（列表含继承来的系统级条目）。 */
-export type ExtensionScopeId = number | null;
-
-function extensionPath(workspaceId: ExtensionScopeId, path: string): string {
-  return workspaceId === null ? `/configuration${path}` : `/workspaces/${workspaceId}/configuration${path}`;
+export function getMCPServers(workspaceId: number | null, options?: RequestOptions): Promise<{ servers: MCPServer[] }> {
+  return requestJson(configurationApiPath(workspaceId, "/mcp-servers"), options);
 }
 
-/** 写操作只作用于请求所在的作用域。 */
-export function ownScope(workspaceId: ExtensionScopeId): ExtensionScope {
-  return workspaceId === null ? "system" : "workspace";
-}
-
-export function getMCPServers(workspaceId: ExtensionScopeId, options?: RequestOptions): Promise<{ servers: MCPServer[] }> {
-  return requestJson(extensionPath(workspaceId, "/mcp-servers"), options);
-}
-
-/** 只取可编辑字段：保存与测试的请求体里不能带 `tested` / `scope` 等展示字段。 */
-export function mcpServerConfiguration(server: MCPServerConfiguration): MCPServerConfiguration {
+/**
+ * 只取可编辑字段：调用方可以直接传带展示字段的 `MCPServer`，请求体在这一处收窄（后端 extra=forbid，
+ * 不能带 `status` / `scope` 等展示字段）。
+ */
+function mcpServerConfiguration(server: MCPServerConfiguration): MCPServerConfiguration {
   return {
     name: server.name,
     transport: server.transport,
@@ -137,52 +163,81 @@ export function mcpServerConfiguration(server: MCPServerConfiguration): MCPServe
     env: server.env,
     url: server.url,
     headers: server.headers,
+    oauth: server.oauth,
     enabled: server.enabled,
   };
 }
 
 /** 整表替换本作用域自己的服务；调用方只传本作用域的条目，不能混入继承来的系统级服务。 */
-export function saveMCPServers(workspaceId: ExtensionScopeId, servers: MCPServerConfiguration[]): Promise<{ servers: MCPServer[] }> {
+export function saveMCPServers(workspaceId: number | null, servers: MCPServerConfiguration[]): Promise<{ servers: MCPServer[] }> {
   return requestJson(
-    extensionPath(workspaceId, "/mcp-servers"),
+    configurationApiPath(workspaceId, "/mcp-servers"),
     jsonRequestInit({ servers: servers.map(mcpServerConfiguration) }, { method: "PUT" }),
   );
 }
 
-export function testMCPServer(workspaceId: ExtensionScopeId, server: MCPServerConfiguration): Promise<MCPServerTestResult> {
+/** 连接测试：从不打开浏览器，需要授权时结果的 `failure_kind` 为 `authorization_required`。 */
+export function testMCPServer(workspaceId: number | null, server: MCPServerConfiguration): Promise<MCPServerTestResult> {
   return requestJson(
-    extensionPath(workspaceId, "/mcp-servers/test"),
+    configurationApiPath(workspaceId, "/mcp-servers/test"),
     jsonRequestInit(mcpServerConfiguration(server), { method: "POST", timeoutMs: LONG_OPERATION_TIMEOUT_MS }),
   );
 }
 
-export function getSkills(workspaceId: ExtensionScopeId, options?: RequestOptions): Promise<Skill[]> {
-  return requestJson(extensionPath(workspaceId, "/skills"), options);
+/** 开始登录授权：可能直接得出结果（已有可用令牌），也可能要用户去浏览器（按 `status` 区分）。 */
+export function authorizeMCPServer(
+  workspaceId: number | null,
+  server: MCPServerConfiguration,
+): Promise<MCPServerTestResult | MCPAuthorizationPending> {
+  return requestJson(
+    configurationApiPath(workspaceId, "/mcp-servers/authorize"),
+    jsonRequestInit(mcpServerConfiguration(server), { method: "POST", timeoutMs: LONG_OPERATION_TIMEOUT_MS }),
+  );
 }
 
-export function getSkill(workspaceId: ExtensionScopeId, name: string, options?: RequestOptions): Promise<SkillDetail> {
-  return requestJson(extensionPath(workspaceId, `/skills/${encodeURIComponent(name)}`), options);
+/** 浏览器授权最长等 5 分钟（后端时限），另留链路余量。 */
+const AUTHORIZATION_WAIT_TIMEOUT_MS = 330_000;
+
+/** 等一次登录授权结束；授权 id 全局唯一，不分作用域。 */
+export function waitMCPAuthorization(flowId: string): Promise<MCPServerTestResult> {
+  return requestJson(
+    `/configuration/mcp-authorizations/${encodeURIComponent(flowId)}/wait`,
+    jsonRequestInit({}, { method: "POST", timeoutMs: AUTHORIZATION_WAIT_TIMEOUT_MS }),
+  );
+}
+
+/** 放弃一次登录授权：后端结束等待、关掉回调监听。 */
+export function cancelMCPAuthorization(flowId: string): Promise<Record<string, never>> {
+  return requestJson(`/configuration/mcp-authorizations/${encodeURIComponent(flowId)}`, { method: "DELETE" });
+}
+
+export function getSkills(workspaceId: number | null, options?: RequestOptions): Promise<Skill[]> {
+  return requestJson(configurationApiPath(workspaceId, "/skills"), options);
+}
+
+export function getSkill(workspaceId: number | null, name: string, options?: RequestOptions): Promise<SkillDetail> {
+  return requestJson(configurationApiPath(workspaceId, `/skills/${encodeURIComponent(name)}`), options);
 }
 
 /** Skill 目录内一个文本文件的只读预览；`path` 相对 Skill 目录。 */
 export function getSkillFile(
-  workspaceId: ExtensionScopeId,
+  workspaceId: number | null,
   name: string,
   path: string,
   options?: RequestOptions,
 ): Promise<{ path: string; content: string }> {
   const query = new URLSearchParams({ path });
-  return requestJson(extensionPath(workspaceId, `/skills/${encodeURIComponent(name)}/file?${query}`), options);
+  return requestJson(configurationApiPath(workspaceId, `/skills/${encodeURIComponent(name)}/file?${query}`), options);
 }
 
-export function getSkillCatalog(workspaceId: ExtensionScopeId, options?: RequestOptions): Promise<SkillCatalogView> {
-  return requestJson(extensionPath(workspaceId, "/skill-catalog"), options);
+export function getSkillCatalog(workspaceId: number | null, options?: RequestOptions): Promise<SkillCatalogView> {
+  return requestJson(configurationApiPath(workspaceId, "/skill-catalog"), options);
 }
 
 /** 一次启用或停用若干个本作用域的生效 Skill；含继承来的条目时后端整体拒绝，只写一次配置。 */
-export function setSkillsEnabled(workspaceId: ExtensionScopeId, names: string[], enabled: boolean): Promise<Record<string, never>> {
+export function setSkillsEnabled(workspaceId: number | null, names: string[], enabled: boolean): Promise<Record<string, never>> {
   return requestJson(
-    extensionPath(workspaceId, "/skills/enabled"),
+    configurationApiPath(workspaceId, "/skills/enabled"),
     jsonRequestInit({ names, enabled }, { method: "PUT" }),
   );
 }
@@ -198,17 +253,17 @@ export type SkillImportConflict = {
   name: string;
   relation: "identical" | SkillImportResolution;
   description: string;
-  existing: { scope: ExtensionScope; kind: SkillRootKind; location: string; description: string; same_content: boolean }[];
+  existing: { scope: ConfigurationScope; kind: SkillRootKind; location: string; description: string; same_content: boolean }[];
 };
 
 export function importSkill(
-  workspaceId: ExtensionScopeId,
+  workspaceId: number | null,
   source_path: string,
   source_type: "directory" | "archive",
   resolution?: SkillImportResolution,
 ): Promise<Skill> {
   return requestJson(
-    extensionPath(workspaceId, "/skills/import"),
+    configurationApiPath(workspaceId, "/skills/import"),
     jsonRequestInit({ source_path, source_type, resolution }, { method: "POST", timeoutMs: LONG_OPERATION_TIMEOUT_MS }),
   );
 }

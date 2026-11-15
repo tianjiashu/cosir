@@ -1,27 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { SkillEntry, SkillGroup } from "@/lib/api/extensions";
 import { bulkToggleTargets, searchSkillGroups } from "@/lib/skills/skill-catalog-search";
-
-function entry(name: string, overrides: Partial<SkillEntry> = {}): SkillEntry {
-  return {
-    name,
-    description: `${name} 的说明`,
-    enabled: true,
-    scope: "system",
-    kind: "shared",
-    overrides: false,
-    warnings: [],
-    manual_only: false,
-    has_scripts: false,
-    standing: "effective",
-    ...overrides,
-  };
-}
-
-function group(skills: SkillEntry[], overrides: Partial<SkillGroup> = {}): SkillGroup {
-  return { scope: "system", kind: "shared", location: "~/.agents/skills", skipped: [], skills, ...overrides };
-}
+import { skillEntry as entry, skillGroup as group } from "./skill-catalog-fixtures";
 
 describe("skill catalog search", () => {
   it("returns every group untouched, empty ones included, when the query is blank", () => {

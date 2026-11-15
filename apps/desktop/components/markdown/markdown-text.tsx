@@ -1,6 +1,7 @@
 import { StreamdownTextPrimitive } from "@assistant-ui/react-streamdown";
 
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
+import { useOpenLink } from "@/components/links/use-open-link";
 import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/components/markdown/markdown-rendering-config";
 
 /**
@@ -17,7 +18,7 @@ const STREAM_REVEAL = { animation: "fadeIn", duration: 160, sep: "char", stagger
  */
 export function MarkdownText() {
   const mermaidOptions = useMermaidOptions();
-  const components = useMarkdownLinkComponents("message", { icons: true });
+  const components = useMarkdownLinkComponents(useOpenLink("message"), { icons: true });
   return (
     <StreamdownTextPrimitive
       mode="streaming"

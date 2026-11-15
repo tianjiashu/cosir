@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { EnvironmentFieldControl } from "@/components/configuration/environment-configuration-form";
+import { EnvironmentFieldControl } from "@/components/configuration/environment/environment-form";
 import type { EnvironmentField } from "@/lib/api/configuration";
 
 const maskedSecret: EnvironmentField = {
@@ -10,13 +10,8 @@ const maskedSecret: EnvironmentField = {
   component: "password",
   label: "API Key",
   secret: true,
-  default: null,
   value: null,
-  disk_value: null,
-  configured: true,
   masked: true,
-  source: "file",
-  process_override: false,
   options: [],
   placeholder: null,
   clearable: true,

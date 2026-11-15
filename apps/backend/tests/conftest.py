@@ -30,7 +30,7 @@ from app.core.context.context_store import ContextStore
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.tool_registry import ToolRegistry
 from app.service.configuration import extension_scope
-from app.service.configuration.mcp import tested_servers as mcp_tested_servers
+from app.service.configuration.mcp import machine_state as mcp_machine_state
 from app.service.configuration.skills import skill_root
 from app.service.conversation.session_context_service import (
     SessionContextService,
@@ -251,11 +251,11 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     # 用户主目录的 ``.agents/skills``、不随数据根走，主目录指到 ``tmp_path / "home"``。
     monkeypatch.setattr(skill_root, "system_cosir_skills_dir", lambda: system_cosir_root / "skills")
     monkeypatch.setattr(shared_skills, "user_home_dir", lambda: tmp_path / "home")
-    monkeypatch.setattr(mcp_tested_servers, "system_cosir_dir", lambda: system_cosir_root)
+    monkeypatch.setattr(mcp_machine_state, "system_cosir_dir", lambda: system_cosir_root)
     monkeypatch.setattr(
-        mcp_tested_servers,
-        "system_mcp_tested_servers_file",
-        lambda: system_cosir_root / "config" / "mcp_tested_servers.json",
+        mcp_machine_state,
+        "system_mcp_machine_state_file",
+        lambda: system_cosir_root / "config" / "mcp_machine_state.json",
     )
     # 模型配置文件同理：每次现读，且测试会写它。
     monkeypatch.setattr(model_config_service, "system_cosir_dir", lambda: system_cosir_root)

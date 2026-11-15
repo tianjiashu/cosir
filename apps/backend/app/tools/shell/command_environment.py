@@ -15,9 +15,8 @@
 
 import os
 
+from app.config.constant import Constant
 from app.config.settings import Settings
-
-HOST_VARIABLE_PREFIX = "CODING_AGENT_"
 
 
 def user_command_environment() -> dict[str, str]:
@@ -25,5 +24,5 @@ def user_command_environment() -> dict[str, str]:
     return {
         key: value
         for key, value in os.environ.items()
-        if not key.startswith(HOST_VARIABLE_PREFIX) and not Settings.is_file_loaded_value(key)
+        if not key.startswith(Constant.HostEnvironment.VARIABLE_PREFIX) and not Settings.is_file_loaded_value(key)
     }

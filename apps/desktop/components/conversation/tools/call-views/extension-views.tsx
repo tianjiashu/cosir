@@ -1,17 +1,32 @@
+import { useMemo } from "react";
+import { useAttachmentWorkspaceId } from "@/components/conversation/thread/attachment-context";
+import { ImageStrip } from "@/components/image/image-strip";
+import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
 import type { CallView } from "../call-view";
 import { asRecord, readArray, readRecords } from "../display-data-readers";
 import { DETAIL_ROW_CLASS, DetailEmpty, listDetail } from "./detail-parts";
 
+/** 结果图片按对话图片的统一外观横排；地址按消息附件同一规则解析。 */
+function MCPResultImages({ assetIds }: { assetIds: string[] }) {
+  const workspaceId = useAttachmentWorkspaceId();
+  const images = useMemo(
+    () => assetIds.map((assetId) => ({ src: attachmentContentUrl(assetId, workspaceId), alt: "MCP 工具返回的图片" })),
+    [assetIds, workspaceId],
+  );
+  return <ImageStrip images={images} label="MCP 工具返回的图片" />;
+}
+
 /**
  * `mcp-tool-result`：`list` 列出服务与其工具，工作区自己的服务（`scope === "workspace"`）在列表与调用行都标「工作区」；`call` 的结果正文只进模型上下文，
- * 卡片只显示调用了哪个服务的哪个工具，因此没有展开内容。
+ * 卡片显示调用了哪个服务的哪个工具，结果带图片（`images` 为附件 asset id）时展开可看缩略图。
  */
 export const mcpView: CallView = (data) => {
+  const images = readArray(data.images).filter((item): item is string => typeof item === "string");
   return {
     meta: data.action === "call"
-      ? `${String(data.server_name ?? "MCP 服务")} · ${String(data.tool_name ?? "工具")}${data.scope === "workspace" ? " · 工作区" : ""}`
+      ? `${String(data.server_name ?? "MCP 服务")} · ${String(data.tool_name ?? "工具")}${data.scope === "workspace" ? " · 工作区" : ""}${images.length > 0 ? ` · ${images.length} 张图片` : ""}`
       : `${readArray(data.servers).length} 个服务`,
-    detail: data.action === "list" ? {
+    detail: data.action === "call" ? (images.length > 0 ? { render: () => <MCPResultImages assetIds={images} /> } : undefined) : {
       render: () => {
         const servers = readArray(data.servers).map(asRecord);
         if (servers.length === 0) return <DetailEmpty>没有已启用的 MCP 服务</DetailEmpty>;
@@ -43,7 +58,7 @@ export const mcpView: CallView = (data) => {
           </ul>
         );
       },
-    } : undefined,
+    },
   };
 };
 

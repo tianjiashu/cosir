@@ -307,6 +307,16 @@ class Constant:
         # 打开、重连与重新同步只传最近这一段，更早的历史随用户往上翻按页取。
         HISTORY_WINDOW_MESSAGES: int = 100
 
+    class HostEnvironment:
+        """宿主拉起后端时注入的环境变量（端口、数据目录、宿主链路 token 等）共用的名字前缀。
+
+        这些变量是宿主与后端的契约，不属于用户：用户命令的子进程环境去掉它们（``command_environment``），
+        登录 shell 环境合并时跳过它们（``login_environment``），MCP 配置也不能引用它们
+        （``mcp/variable_expansion``，否则工作区配置能把宿主 token 发到任意服务）。
+        """
+
+        VARIABLE_PREFIX: str = "CODING_AGENT_"
+
     class Boot:
         """后端启动状态文件（bootstate）的阶段常量。
 

@@ -37,12 +37,15 @@ class ToolArgumentValidation:
         coercions: 本次校验**之前**发生的宽容归一事实（strict 白名单内，见
             ``argument_coercion``）；无归一时为空元组。仅供可观测落盘，不参与判定——
             归一后仍以 strict 校验结果为准。
+        schema_invalid: 失败原因是 schema 自身非法而不是参数不合格。schema 来自进程外
+            （如 MCP 服务声明）的调用方据此区分「参数错了」与「对方的 schema 坏了」。
     """
 
     ok: bool
     arguments: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     coercions: tuple[ArgumentCoercion, ...] = ()
+    schema_invalid: bool = False
 
 
 def validate_tool_arguments(
@@ -128,11 +131,15 @@ def validate_tool_arguments(
         )
 
     try:
+        # 实例的 validate 不检查 schema 本身，非法 schema 会在校验中途抛出别的异常；先查 schema，
+        # 才能兑现「schema 非法也归一化为失败、不向外抛」的契约（schema 可能来自进程外，如 MCP 服务）。
+        Draft202012Validator.check_schema(schema)
         Draft202012Validator(schema).validate(dict(arguments))
     except SchemaError as exc:
         return ToolArgumentValidation(
             ok=False,
             error=(f"Tool argument schema definition is invalid: {exc.message}"),
+            schema_invalid=True,
         )
     except JsonSchemaValidationError as exc:
         path = getattr(exc, "json_path", "") or ""

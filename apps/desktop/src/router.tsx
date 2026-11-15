@@ -1,14 +1,14 @@
 import { createBrowserRouter, Navigate, useMatches } from "react-router-dom";
 
-import { AppLayout, useAppOutlet, type RouteHandle } from "@/components/layout/app-layout";
+import { AppLayout, parseRouteId, useAppOutlet, type RouteHandle } from "@/components/layout/app-layout";
 import { SessionObserverPage } from "@/components/session-observer/session-observer-page";
 import { NewConversation } from "@/components/new-conversation/new-conversation";
 import {
-  findSettingsTab,
-  settingsTabParam,
-  SYSTEM_SETTINGS_TABS,
-  WORKSPACE_SETTINGS_TABS,
-} from "@/components/settings/settings-tabs";
+  configurationPath,
+  resolveConfigurationTab,
+  SYSTEM_CONFIGURATION_TABS,
+  WORKSPACE_CONFIGURATION_TABS,
+} from "@/components/configuration/configuration-tabs";
 import { SystemConfigurationPage } from "@/components/configuration/system-configuration-page";
 import { EmptyState } from "@/components/ui/state-panel";
 import { WorkspaceConfigurationPage } from "@/components/configuration/workspace-configuration-page";
@@ -22,8 +22,8 @@ import { WorkspaceConfigurationPage } from "@/components/configuration/workspace
  */
 
 const conversation: RouteHandle = { section: "conversation", files: true };
-const settings: RouteHandle = { section: "settings" };
-const workspaceSettings: RouteHandle = { section: "workspace-settings" };
+const configuration: RouteHandle = { section: "configuration" };
+const workspaceConfiguration: RouteHandle = { section: "workspace-configuration" };
 const observer: RouteHandle = { section: "observer" };
 
 /** 当前叶子路由的参数（布局路由下统一从叶子匹配读取）。 */
@@ -47,27 +47,26 @@ function NewConversationRoute() {
 }
 
 function SessionRoute() {
-  const sessionId = Number(useLeafParams().sessionId);
-  return Number.isInteger(sessionId) && sessionId > 0 ? null : <EmptyState title="会话标识无效" description="请从侧栏重新选择会话。" className="m-6" />;
+  return parseRouteId(useLeafParams().sessionId) !== null ? null : <EmptyState title="会话标识无效" description="请从侧栏重新选择会话。" className="m-6" />;
 }
 
-function SystemSettingsRoute() {
+function SystemConfigurationRoute() {
   const params = useLeafParams();
-  const tab = findSettingsTab(SYSTEM_SETTINGS_TABS, settingsTabParam(params));
+  const tab = resolveConfigurationTab(SYSTEM_CONFIGURATION_TABS, params);
   return tab
     ? <SystemConfigurationPage tab={tab.id} skillName={params.skillName} />
-    : <Navigate to={`/settings/${SYSTEM_SETTINGS_TABS[0].id}`} replace />;
+    : <Navigate to={configurationPath(null, SYSTEM_CONFIGURATION_TABS[0].id)} replace />;
 }
 
-function WorkspaceSettingsRoute() {
+function WorkspaceConfigurationRoute() {
   const { catalog } = useAppOutlet();
   const params = useLeafParams();
-  const workspaceId = Number(params.workspaceId);
-  if (!Number.isInteger(workspaceId) || workspaceId <= 0) {
+  const workspaceId = parseRouteId(params.workspaceId);
+  if (workspaceId === null) {
     return <EmptyState title="工作区标识无效" description="请从侧栏重新选择工作区。" className="m-6" />;
   }
-  const tab = findSettingsTab(WORKSPACE_SETTINGS_TABS, settingsTabParam(params));
-  if (!tab) return <Navigate to={`/workspaces/${workspaceId}/settings/${WORKSPACE_SETTINGS_TABS[0].id}`} replace />;
+  const tab = resolveConfigurationTab(WORKSPACE_CONFIGURATION_TABS, params);
+  if (!tab) return <Navigate to={configurationPath(workspaceId, WORKSPACE_CONFIGURATION_TABS[0].id)} replace />;
   const workspaceName = catalog.workspaces.find((workspace) => workspace.workspace_id === workspaceId)?.name ?? "当前工作区";
   return <WorkspaceConfigurationPage key={workspaceId} workspaceId={workspaceId} workspaceName={workspaceName} tab={tab.id} skillName={params.skillName} />;
 }
@@ -84,12 +83,12 @@ export function createAppRouter() {
       children: [
         { index: true, element: <NewConversationRoute />, handle: conversation },
         { path: "sessions/:sessionId", element: <SessionRoute />, handle: conversation },
-        { path: "settings", element: <SystemSettingsRoute />, handle: settings },
-        { path: "settings/:tab", element: <SystemSettingsRoute />, handle: settings },
-        { path: "settings/skills/:skillName", element: <SystemSettingsRoute />, handle: settings },
-        { path: "workspaces/:workspaceId/settings", element: <WorkspaceSettingsRoute />, handle: workspaceSettings },
-        { path: "workspaces/:workspaceId/settings/:tab", element: <WorkspaceSettingsRoute />, handle: workspaceSettings },
-        { path: "workspaces/:workspaceId/settings/skills/:skillName", element: <WorkspaceSettingsRoute />, handle: workspaceSettings },
+        { path: "configuration", element: <SystemConfigurationRoute />, handle: configuration },
+        { path: "configuration/:tab", element: <SystemConfigurationRoute />, handle: configuration },
+        { path: "configuration/skills/:skillName", element: <SystemConfigurationRoute />, handle: configuration },
+        { path: "workspaces/:workspaceId/configuration", element: <WorkspaceConfigurationRoute />, handle: workspaceConfiguration },
+        { path: "workspaces/:workspaceId/configuration/:tab", element: <WorkspaceConfigurationRoute />, handle: workspaceConfiguration },
+        { path: "workspaces/:workspaceId/configuration/skills/:skillName", element: <WorkspaceConfigurationRoute />, handle: workspaceConfiguration },
         { path: "session-observer", element: <SessionObserverPage />, handle: observer },
         { path: "*", element: <NotFoundRoute />, handle: { section: "conversation" } },
       ],

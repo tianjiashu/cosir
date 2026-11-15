@@ -33,6 +33,6 @@ describe("model catalog mapping", () => {
       ["Local", "org/llama"],
     ]);
     expect(models[0]?.label).toBe("Packy · qwen-a");
-    expect(byOptionId.get("model-config:local/org/llama")?.contextWindowK).toBe(128);
+    expect(byOptionId.get("model-config:local/org/llama")?.modelConfigId).toBe("local/org/llama");
   });
 });

@@ -35,8 +35,10 @@ from typing import Any, TextIO, TypeVar
 from mcp import ClientSession, types
 
 from app.config.logging.logger import log
+from app.core.tool.validation.arguments import validate_tool_arguments
 from app.service.configuration.mcp.configuration import ScopedMCPServer
 from app.tools.mcp.client import (
+    MCPToolArgumentsError,
     MCPToolNotFoundError,
     describe_exception,
     is_connection_failure,
@@ -58,15 +60,18 @@ _STDERR_LOG_MAX_BYTES = 5 * 1024 * 1024
 
 
 class MCPConnectionPool:
-    """按「作用域 + 服务名」持有 MCP 长连接（两个 workspace 的同名服务互不顶替）；协程方法只能在池的事件循环上运行（经 :meth:`submit` 提交）。"""
+    """按连接身份（``ScopedMCPServer.pool_key``：定义作用域 + 使用的工作区 + 服务名）持有 MCP 长连接。
+
+    协程方法只能在池的事件循环上运行（经 :meth:`submit` 提交）。
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._closed = False
-        self._connections: dict[tuple[str, str], _Connection] = {}
-        self._open_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._connections: dict[tuple[str, str, str], _Connection] = {}
+        self._open_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
         self._reaper: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------------
@@ -146,15 +151,37 @@ class MCPConnectionPool:
         tool_name: str,
         arguments: dict[str, Any],
     ) -> types.CallToolResult:
-        """调用服务上的一个工具；目录里没有该工具时先刷新一次目录再判定。
+        """调用服务上的一个工具：先确认工具存在（目录里没有时刷新一次），再按它声明的输入 schema
+        校验参数，合格才发给服务。
+
+        校验用连接上缓存的目录，不多发请求；参数不合格时请求不出本机，报错带上 schema 让模型照着改。
+        服务声明的 schema 本身不合法时不拦调用（那是服务的问题，拦下会让它的所有工具都用不了），
+        只记日志，交给服务自己判断参数。
 
         异常:
             MCPToolNotFoundError: 刷新后的目录里仍没有该工具。
+            MCPToolArgumentsError: 参数不符合工具声明的输入 schema。
         """
 
         async with self._use(server) as connection:
-            if not await connection.has_tool(tool_name):
+            tool = await connection.find_tool(tool_name)
+            if tool is None:
                 raise MCPToolNotFoundError(server.name, tool_name)
+            validation = validate_tool_arguments(arguments, tool.inputSchema)
+            if not validation.ok and not validation.schema_invalid:
+                raise MCPToolArgumentsError(server.name, tool_name, validation.error, tool.inputSchema)
+            if validation.schema_invalid:
+                log.warning(
+                    "mcp_tool_schema_invalid",
+                    extra={
+                        "msg": "MCP 工具声明的输入 schema 不合法，跳过本地参数校验",
+                        "data": {
+                            "server_name": server.name,
+                            "tool_name": tool_name,
+                            "error": validation.error,
+                        },
+                    },
+                )
             return await connection.session.call_tool(tool_name, arguments)
 
     @asynccontextmanager
@@ -174,7 +201,7 @@ class MCPConnectionPool:
             connection.last_used = time.monotonic()
 
     async def _acquire(self, server: ScopedMCPServer) -> _Connection:
-        fingerprint = server.fingerprint
+        fingerprint = server.connection_fingerprint()
         lock = self._open_locks.setdefault(server.pool_key, asyncio.Lock())
         async with lock:
             current = self._connections.get(server.pool_key)
@@ -320,12 +347,13 @@ class _Connection:
             self._tools = (await self.session.list_tools()).tools
         return self._tools
 
-    async def has_tool(self, tool_name: str) -> bool:
-        if any(tool.name == tool_name for tool in await self.tools()):
-            return True
+    async def find_tool(self, tool_name: str) -> types.Tool | None:
+        found = next((tool for tool in await self.tools() if tool.name == tool_name), None)
+        if found is not None:
+            return found
         # 服务可能新增了工具却没发 list_changed 通知：刷新一次再判定。
         self._tools = None
-        return any(tool.name == tool_name for tool in await self.tools())
+        return next((tool for tool in await self.tools() if tool.name == tool_name), None)
 
     async def _own(self) -> None:
         errlog = _open_stderr_log(self.server) if self.server.config.transport == "stdio" else None
@@ -379,16 +407,17 @@ class _Connection:
 def _open_stderr_log(server: ScopedMCPServer) -> TextIO | None:
     """打开该 stdio 服务的 stderr 日志，超限先轮转一次。
 
-    系统级服务写 ``<LOG_DIR>/mcp/<server>.stderr.log``；workspace 服务的文件名再带上工作区路径的
-    短哈希，两个工作区的同名服务不写进同一个文件。日志是诊断旁路：打不开时记录并返回 ``None``
-    （退回后端 stderr），不阻断建连。
+    一条连接一个文件：不在工作区里用的系统级服务写 ``<LOG_DIR>/mcp/<server>.stderr.log``；在工作区里用的
+    （无论定义在哪）文件名再带上「定义作用域 + 使用的工作区」的短哈希，同名服务的不同连接不写进同一个
+    文件。日志是诊断旁路：打不开时记录并返回 ``None``（退回后端 stderr），不阻断建连。
     """
 
     directory: Path = system_cosir.LOG_DIR / "mcp"
     safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", server.name)
-    if server.scope.workspace_root is not None:
-        scope_hash = hashlib.sha256(server.scope.key.encode("utf-8")).hexdigest()[:8]
-        safe_name = f"{safe_name}.{scope_hash}"
+    if server.used_in is not None:
+        scope_key, used_key, _ = server.pool_key
+        connection_hash = hashlib.sha256(f"{scope_key}|{used_key}".encode()).hexdigest()[:8]
+        safe_name = f"{safe_name}.{connection_hash}"
     path = directory / f"{safe_name}.stderr.log"
     try:
         directory.mkdir(parents=True, exist_ok=True)

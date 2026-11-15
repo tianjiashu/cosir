@@ -48,7 +48,7 @@ const mainAgentPrompt = {
 
 test("Markdown 配置：保存期间的新编辑保留，离开需要确认", async ({ page }) => {
   const document = await routeDocument(page, "/configuration/main-agent-prompt", mainAgentPrompt);
-  await page.goto("/settings/main-agent");
+  await page.goto("/configuration/main-agent");
   const editor = page.getByRole("textbox", { name: "Markdown 源码编辑器" });
   await expect(editor).toHaveText("# 主 Agent 协议");
   await expect(page.getByText("有未保存更改", { exact: true })).toHaveCount(0);
@@ -71,7 +71,7 @@ test("Markdown 配置：保存期间的新编辑保留，离开需要确认", as
 
 test("Markdown 配置：保存失败提示在编辑后清除", async ({ page }) => {
   const document = await routeDocument(page, "/configuration/main-agent-prompt", mainAgentPrompt);
-  await page.goto("/settings/main-agent");
+  await page.goto("/configuration/main-agent");
   const editor = page.getByRole("textbox", { name: "Markdown 源码编辑器" });
   await editor.fill("# 会失败");
   await page.keyboard.press("ControlOrMeta+s");
@@ -83,7 +83,7 @@ test("Markdown 配置：保存失败提示在编辑后清除", async ({ page }) 
 
 test("Markdown 配置：不可保存时按钮与快捷键都不发请求", async ({ page }) => {
   const document = await routeDocument(page, "/configuration/main-agent-prompt", mainAgentPrompt);
-  await page.goto("/settings/main-agent");
+  await page.goto("/configuration/main-agent");
   const editor = page.getByRole("textbox", { name: "Markdown 源码编辑器" });
   const save = page.getByRole("button", { name: /保存主 Agent 提示词/ });
 
@@ -111,7 +111,7 @@ test("全局 AGENTS.md 允许保存空内容", async ({ page }) => {
     max_tokens: 32768,
     effective_on: "next_run",
   });
-  await page.goto("/settings/instructions");
+  await page.goto("/configuration/instructions");
   await page.getByRole("textbox", { name: "Markdown 源码编辑器" }).fill("");
   await page.getByRole("button", { name: /保存全局 AGENTS\.md/ }).click();
   await expect.poll(() => document.submitted).toEqual([""]);
@@ -127,7 +127,7 @@ test(".fileignore：保存期间的新编辑保留，失败提示在编辑后清
     rule_count: 1,
     max_rules: 500,
   });
-  await page.goto("/workspaces/7/settings/fileignore");
+  await page.goto("/workspaces/7/configuration/fileignore");
   const editor = page.getByRole("textbox");
   await expect(editor).toHaveValue("node_modules/\n");
   const save = page.getByRole("button", { name: "保存 .fileignore" });
@@ -153,9 +153,32 @@ test(".fileignore：保存期间的新编辑保留，失败提示在编辑后清
   await expect(editor).toHaveValue("dist/\ncoverage/\n");
 });
 
+test(".fileignore 与 Markdown 文档一致：标出未保存更改，⌘S 保存", async ({ page }) => {
+  const document = await routeDocument(page, "/workspaces/7/configuration/fileignore", {
+    content: "node_modules/\n",
+    path: ".cosir/.fileignore",
+    exists: true,
+    rule_count: 1,
+    max_rules: 500,
+  });
+  await page.goto("/workspaces/7/configuration/fileignore");
+  const editor = page.getByRole("textbox");
+  await expect(editor).toHaveValue("node_modules/\n");
+  const unsaved = page.getByText("有未保存更改");
+  await expect(unsaved).toHaveCount(0);
+
+  await editor.fill("dist/\n");
+  await expect(unsaved).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => document.submitted).toEqual(["dist/\n"]);
+  await document.succeed();
+  await expect(page.getByText(".fileignore已保存", { exact: true })).toBeVisible();
+  await expect(unsaved).toHaveCount(0);
+});
+
 test("Markdown 编辑器的格式快捷键优先于同键的全局快捷键", async ({ page }) => {
   await routeDocument(page, "/configuration/main-agent-prompt", mainAgentPrompt);
-  await page.goto("/settings/main-agent");
+  await page.goto("/configuration/main-agent");
   const sidebar = page.getByRole("navigation", { name: "工作区会话列表" });
   await expect(sidebar).toBeVisible();
   const editor = page.getByRole("textbox", { name: "Markdown 源码编辑器" });

@@ -11,7 +11,6 @@ function model(modelConfigId: string, supportsReasoningEffort = true): ModelCata
     modelConfigId,
     connectionName: "c",
     modelName: modelConfigId,
-    contextWindowK: 128,
     label: modelConfigId,
     supportsReasoningEffort,
     supportsImage: false,

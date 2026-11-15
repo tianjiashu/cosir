@@ -28,7 +28,7 @@ import { shortcutLabel, type ShortcutId } from "@/lib/keyboard/shortcuts";
 
 import "./sidebar-interaction.css";
 
-export type SidebarSection = "conversation" | "settings" | "workspace-settings" | "observer";
+export type SidebarSection = "conversation" | "configuration" | "workspace-configuration" | "observer";
 
 type AppSidebarProps = {
   catalog: WorkspaceCatalog;
@@ -39,8 +39,8 @@ type AppSidebarProps = {
   /** 开始新会话；带 `workspaceId` 时在该工作区开始（侧栏工作区行的「+」）。 */
   onNewConversation: (workspaceId?: number) => void;
   onSelectSession: (session: WorkspaceSession, workspaceId: number) => void;
-  onOpenSettings: () => void;
-  onOpenWorkspaceSettings: (workspaceId: number) => void;
+  onOpenConfiguration: () => void;
+  onOpenWorkspaceConfiguration: (workspaceId: number) => void;
   onOpenObserver: () => void;
   /** 顶部的搜索：打开命令面板（它按会话标题与工作区名搜索），侧栏不另做一套搜索。 */
   onOpenSearch: () => void;
@@ -69,8 +69,8 @@ export function AppSidebar({
   newConversationActive,
   onNewConversation,
   onSelectSession,
-  onOpenSettings,
-  onOpenWorkspaceSettings,
+  onOpenConfiguration,
+  onOpenWorkspaceConfiguration,
   onOpenObserver,
   onOpenSearch,
   onAddWorkspace,
@@ -122,7 +122,7 @@ export function AppSidebar({
                     label={`工作区 ${workspace.name}`}
                     tabIndex={tabIndex}
                     actions={[
-                      { label: "工作区配置", icon: <Settings2Icon />, onSelect: () => onOpenWorkspaceSettings(workspace.workspace_id) },
+                      { label: "工作区配置", icon: <Settings2Icon />, onSelect: () => onOpenWorkspaceConfiguration(workspace.workspace_id) },
                       {
                         label: "删除工作区",
                         icon: <Trash2Icon />,
@@ -174,7 +174,7 @@ export function AppSidebar({
         </nav>
 
       <div className="mt-auto flex shrink-0 flex-col gap-0.5 p-2">
-        <SidebarLink active={section === "settings"} icon={<Settings2Icon className="size-4" />} label="系统配置" shortcut="openSettings" onClick={onOpenSettings} />
+        <SidebarLink active={section === "configuration"} icon={<Settings2Icon className="size-4" />} label="系统配置" shortcut="openConfiguration" onClick={onOpenConfiguration} />
         <SidebarLink active={section === "observer"} icon={<ActivityIcon className="size-4" />} label="会话观测" onClick={onOpenObserver} />
       </div>
     </div>

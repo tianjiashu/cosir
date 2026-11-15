@@ -65,8 +65,8 @@ export function MarkdownPreview({
     if (host.current) host.current.scrollTop = scrollTop;
   }, []);
   const documentDir = parentPath(path);
-  const links = useMarkdownLinkComponents("document", { documentDir });
   const opener = useOpenLink("document");
+  const links = useMarkdownLinkComponents(opener, { documentDir });
   const components = useMemo(
     () => ({
       ...links,

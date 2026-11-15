@@ -6,7 +6,7 @@ import {
   buildCommandPaletteModel,
   filterCommandPaletteSessions,
 } from "@/components/command-palette/command-palette-model";
-import { SYSTEM_SETTINGS_TABS } from "@/components/settings/settings-tabs";
+import { SYSTEM_CONFIGURATION_TABS } from "@/components/configuration/configuration-tabs";
 import type { WorkspaceTreeSource } from "@/components/session-tree/workspace-tree-model";
 import type { WorkspaceSession } from "@/lib/api/workspaces";
 
@@ -60,25 +60,25 @@ describe("command palette model", () => {
     expect(filterCommandPaletteSessions(many, "会话")).toHaveLength(MATCHED_SESSION_LIMIT);
   });
 
-  it("offers the new conversation action and every system settings tab plus context observer", () => {
+  it("offers the new conversation action and every system configuration tab plus context observer", () => {
     const model = buildCommandPaletteModel([], "");
     expect(model.actions).toEqual([expect.objectContaining({ kind: "new-conversation", label: "新会话", shortcut: "newConversation" })]);
-    expect(model.settings.map((command) => command.kind === "navigate" && command.path)).toEqual([
-      ...SYSTEM_SETTINGS_TABS.map((tab) => `/settings/${tab.id}`),
+    expect(model.configuration.map((command) => command.kind === "navigate" && command.path)).toEqual([
+      ...SYSTEM_CONFIGURATION_TABS.map((tab) => `/configuration/${tab.id}`),
       "/session-observer",
     ]);
   });
 
   it("filters commands by label and keywords", () => {
-    expect(buildCommandPaletteModel([], "mcp").settings.map((command) => command.label)).toEqual(["MCP 服务"]);
-    expect(buildCommandPaletteModel([], "context").settings.map((command) => command.label)).toEqual(["会话观测"]);
+    expect(buildCommandPaletteModel([], "mcp").configuration.map((command) => command.label)).toEqual(["MCP 服务"]);
+    expect(buildCommandPaletteModel([], "context").configuration.map((command) => command.label)).toEqual(["会话观测"]);
     const settingsKeyword = buildCommandPaletteModel([], "设置");
-    expect(settingsKeyword.settings).toHaveLength(SYSTEM_SETTINGS_TABS.length);
+    expect(settingsKeyword.configuration).toHaveLength(SYSTEM_CONFIGURATION_TABS.length);
     expect(settingsKeyword.actions).toEqual([]);
     expect(buildCommandPaletteModel([], "新建").actions.map((command) => command.label)).toEqual(["新会话"]);
     // 重启后端只在调用方允许时（开发期宿主）列出。
     expect(buildCommandPaletteModel([], "重启").actions).toEqual([]);
     expect(buildCommandPaletteModel([], "重启", { canRestartBackend: true }).actions.map((command) => command.label)).toEqual(["重启后端"]);
-    expect(buildCommandPaletteModel(workspaces, "zzz")).toEqual({ sessions: [], actions: [], settings: [] });
+    expect(buildCommandPaletteModel(workspaces, "zzz")).toEqual({ sessions: [], actions: [], configuration: [] });
   });
 });

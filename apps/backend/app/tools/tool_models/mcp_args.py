@@ -20,7 +20,17 @@ class MCPArgs(BaseModel):
     )
     tool_name: str | None = Field(
         default=None,
-        description="Tool name from the selected server; use null for 'list', required for 'call'.",
+        description=(
+            "Tool name from the selected server; required for 'call'. In 'list', set it together "
+            "with server_name to get that tool's full input schema, or null to browse."
+        ),
+    )
+    query: str | None = Field(
+        default=None,
+        description=(
+            "For 'list': keywords that must all appear in a tool's name or description; null to "
+            "list every tool. Ignored by 'call'."
+        ),
     )
     # MCP 的远端参数是开放对象；模型只提交 JSON 字符串，由同一 Pydantic 输入边界解析。
     # 对外声明 string，避免把远端任意键错误包装为 strict 的封闭对象。

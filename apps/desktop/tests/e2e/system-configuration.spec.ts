@@ -19,7 +19,7 @@ test("系统配置入口固定在左侧栏底部", async ({ page }) => {
   expect(settingsBox!.y).toBeGreaterThan(sidebarBox!.y + sidebarBox!.height - 140);
 });
 
-test("系统配置中心从 settings 路由打开并支持配置编辑", async ({ page }) => {
+test("系统配置中心从 configuration 路由打开并支持配置编辑", async ({ page }) => {
   const reviewer = {
     agent_id: "reviewer",
     role: "child",
@@ -37,7 +37,8 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
     file_name: "reviewer.json",
   };
   // 列表读集合 URL；保存/新建走条项 URL（PUT/POST /configuration/agents/{id}），必须返回单个对象。
-  await page.route(/\/configuration\/agents(\/[^/]+)?$/, (route) => (
+  // 只认后端地址：页面源码模块（如 /components/configuration/agents/*.tsx）的路径也会命中同样的后缀。
+  await page.route((url) => url.origin === API_ORIGIN && /^\/configuration\/agents(\/[^/]+)?$/.test(url.pathname), (route) => (
     route.request().method() === "GET"
       ? route.fulfill({ json: [reviewer] })
       : route.fulfill({ json: reviewer })
@@ -90,14 +91,14 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
     },
   }));
 
-  await page.goto("/settings");
+  await page.goto("/configuration");
 
-  // /settings 重定向到导航的第一个分类（不绑定是哪一个，顺序归 settings-tabs）；页面标题由统一的页面头部面包屑承担。
+  // /configuration 重定向到导航的第一个分类（不绑定是哪一个，顺序归 configuration-tabs）；页面标题由统一的页面头部面包屑承担。
   const settingsNav = page.getByRole("navigation", { name: "系统配置分类" });
   await expect(settingsNav.getByRole("link").first()).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("navigation", { name: "当前位置" })).toContainText("系统配置");
   await settingsNav.getByRole("link", { name: "子 Agent" }).click();
-  await expect(page).toHaveURL(/\/settings\/agents$/);
+  await expect(page).toHaveURL(/\/configuration\/agents$/);
   await expect(page.getByText("集中管理子 Agent、全局指令与运行环境。敏感值只在本机配置文件中保存，不会进入对话或日志。", { exact: true })).toHaveCount(0);
   await expect(settingsNav.getByRole("link", { name: "子 Agent" })).toBeVisible();
   await expect(settingsNav.getByRole("link", { name: "全局 AGENTS.md" })).toBeVisible();
@@ -134,11 +135,11 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
 
   // 模型配置不再只能从 composer 下拉进入，配置中心有独立的「模型」标签。
   await settingsNav.getByRole("link", { name: "模型", exact: true }).click();
-  await expect(page).toHaveURL(/\/settings\/models$/);
+  await expect(page).toHaveURL(/\/configuration\/models$/);
   await expect(page.getByRole("region", { name: "连接 Demo" })).toBeVisible();
 
   await settingsNav.getByRole("link", { name: "全局 AGENTS.md" }).click();
-  await expect(page).toHaveURL(/\/settings\/instructions$/);
+  await expect(page).toHaveURL(/\/configuration\/instructions$/);
   await expect(page.getByText("保存后对新会话生效。", { exact: true })).toBeVisible();
   // 字节计数已移除，只保留 Token 估算。
   await expect(page.getByText("字节", { exact: true })).toHaveCount(0);
@@ -175,7 +176,7 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   await expect(page.getByRole("button", { name: "保存变量" })).toBeDisabled();
 });
 
-test("设置页各分类都不横向溢出：吸顶条铺满留白、贴边内容不冒出横向滚动条", async ({ page }) => {
+test("配置页各分类都不横向溢出：吸顶条铺满留白、贴边内容不冒出横向滚动条", async ({ page }) => {
   // 环境变量页带吸顶的保存条（-mx-2 铺满内容区留白），是最容易撑出横向滚动的一页。
   await page.route(`${API_ORIGIN}/configuration/environment`, (route) => route.fulfill({
     json: {
@@ -206,12 +207,12 @@ test("设置页各分类都不横向溢出：吸顶条铺满留白、贴边内�
   await page.setViewportSize({ width: 1280, height: 760 });
 
   for (const tab of ["appearance", "agents", "models", "main-agent", "instructions", "environment", "mcp", "skills"]) {
-    await page.goto(`/settings/${tab}`);
-    await expect(page.getByRole("navigation", { name: "系统配置分类" }).locator('[aria-current="page"]')).toHaveAttribute("href", `/settings/${tab}`);
+    await page.goto(`/configuration/${tab}`);
+    await expect(page.getByRole("navigation", { name: "系统配置分类" }).locator('[aria-current="page"]')).toHaveAttribute("href", `/configuration/${tab}`);
     const overflow = await page.locator(".scroll-fade-top").evaluate((fade) => {
       const scroller = fade.parentElement!;
       return scroller.scrollWidth - scroller.clientWidth;
     });
-    expect(overflow, `/settings/${tab} 的内容区横向溢出`).toBe(0);
+    expect(overflow, `/configuration/${tab} 的内容区横向溢出`).toBe(0);
   }
 });

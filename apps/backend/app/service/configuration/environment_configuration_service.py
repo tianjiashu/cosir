@@ -20,6 +20,7 @@ from typing import Any
 
 from dotenv import dotenv_values
 
+from app.config.constant import Constant
 from app.config.environment_field_catalog import (
     ENVIRONMENT_FIELDS,
     ENVIRONMENT_GROUPS,
@@ -39,6 +40,7 @@ class EnvironmentConfigurationError(ValueError):
 # ``.env`` 的行内 ``KEY=`` 语法只服务于本模块的写回逻辑，属该文件的持久化格式细节，
 # 因此不随白名单字段目录一起移入 ``app.models``。
 _ENV_KEY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=")
+_ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class EnvironmentConfigurationService:
@@ -185,6 +187,41 @@ class EnvironmentConfigurationService:
             if change.operation != "replace":
                 raise EnvironmentConfigurationError(f"不支持的环境配置操作: {change.operation}")
             values[name] = self._validate_value(field, change.value)
+        self._write(values, reload_after_write=reload_after_write)
+        log.info(
+            "configuration_environment_written",
+            extra={"msg": "系统环境配置已保存", "data": {"field_count": len(values)}},
+        )
+        return self.read()
+
+    def set_user_variables(self, values: Mapping[str, str]) -> None:
+        """把用户自己的变量（如 MCP 配置引用的密钥）写进系统 ``.env`` 并重载进程环境。
+
+        与 :meth:`update` 分工：那里只管白名单字段，这里只管白名单以外的键，所以白名单字段不能从这里
+        改（各有校验规则）；宿主契约变量（``Constant.HostEnvironment.VARIABLE_PREFIX``）也不能写。
+        写入后经 ``Settings.load`` 注入 ``os.environ``：MCP 下一次建连即可展开到新值；这些键照旧不进用户
+        命令的环境（``command_environment`` 按注入记录剔除）。值不回读、不进日志。
+
+        异常:
+            EnvironmentConfigurationError: 键名不合法、属于白名单字段或宿主契约变量，或值为空。
+        """
+
+        for name, value in values.items():
+            if not _ENV_NAME_RE.fullmatch(name):
+                raise EnvironmentConfigurationError(f"环境变量名不合法：{name}")
+            if name in ENVIRONMENT_FIELDS:
+                raise EnvironmentConfigurationError(f"{name} 请在环境配置里修改")
+            if name.startswith(Constant.HostEnvironment.VARIABLE_PREFIX):
+                raise EnvironmentConfigurationError(f"{name} 是 cosir 内部变量，不能修改")
+            if not isinstance(value, str) or not value:
+                raise EnvironmentConfigurationError(f"{name} 的值不能为空")
+        self._write(dict(values), reload_after_write=True)
+        log.info(
+            "configuration_user_variables_written",
+            extra={"msg": "用户变量已写入系统 .env", "data": {"names": sorted(values)}},
+        )
+
+    def _write(self, values: Mapping[str, str | None], *, reload_after_write: bool) -> None:
         with file_store.locked(self.env_file):
             current = (
                 file_store.read_text(self.env_file, root=self.root)
@@ -195,11 +232,6 @@ class EnvironmentConfigurationService:
             file_store.write_text_atomic(self.env_file, next_content, root=self.root)
         if reload_after_write:
             self.reload_runtime_settings()
-        log.info(
-            "configuration_environment_written",
-            extra={"msg": "系统环境配置已保存", "data": {"field_count": len(values)}},
-        )
-        return self.read()
 
     @staticmethod
     def reload_runtime_settings() -> None:

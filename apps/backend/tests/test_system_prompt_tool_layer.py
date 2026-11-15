@@ -156,7 +156,7 @@ def test_tool_layer_injects_workspace_visible_mcp_and_skill_catalogs(tmp_path) -
     """只向声明了对应工具的 Agent 注入本工作区可用的服务和 Skill 元数据（系统级与工作区合并）。"""
 
     from app.service.configuration.extension_scope import ExtensionScope
-    from app.service.configuration.mcp.tested_servers import MCPTestedServers
+    from app.service.configuration.mcp.machine_state import MCPMachineState
 
     system_cosir = tmp_path / "system-cosir"
     workspace = tmp_path / "ws"
@@ -179,11 +179,11 @@ def test_tool_layer_injects_workspace_visible_mcp_and_skill_catalogs(tmp_path) -
             json.dumps({"servers": [item.model_dump(mode="json") for item in configs]}),
             encoding="utf-8",
         )
-    MCPTestedServers.record_pass(
+    MCPMachineState.record_pass(
         mcp_configuration.ScopedMCPServer(ExtensionScope.system(), servers[system_cosir][0])
     )
     for config in servers[workspace / ".cosir"]:
-        MCPTestedServers.record_pass(
+        MCPMachineState.record_pass(
             mcp_configuration.ScopedMCPServer(ExtensionScope.workspace(workspace), config)
         )
     for root, name, description in (

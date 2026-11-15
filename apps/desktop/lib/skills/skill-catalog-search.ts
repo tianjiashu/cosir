@@ -1,4 +1,5 @@
-import type { ExtensionScope, SkillEntry, SkillGroup } from "@/lib/api/extensions";
+import type { ConfigurationScope } from "@/lib/api/configuration-scope";
+import type { SkillEntry, SkillGroup } from "@/lib/api/extensions";
 
 export type SearchedSkillGroup = { group: SkillGroup; skills: SkillEntry[] };
 
@@ -22,7 +23,7 @@ export function searchSkillGroups(groups: SkillGroup[], query: string): Searched
  * 批量启停能作用到的条目：搜索结果里本作用域这一层生效的条目（继承来的只读，被覆盖的改不到它自己），
  * 按当前状态分成「可停用」与「可启用」两组名称。
  */
-export function bulkToggleTargets(searched: SearchedSkillGroup[], pageScope: ExtensionScope): { enabled: string[]; disabled: string[] } {
+export function bulkToggleTargets(searched: SearchedSkillGroup[], pageScope: ConfigurationScope): { enabled: string[]; disabled: string[] } {
   const targets = searched
     .flatMap(({ skills }) => skills)
     .filter((entry) => entry.standing === "effective" && entry.scope === pageScope);

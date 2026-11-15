@@ -133,7 +133,7 @@ test("同工作区会话和配置页保活草稿，真正关闭仍确认", async
   await expect(page).toHaveURL(/\/sessions\/101$/);
   await expect(switchDialog(page)).toHaveCount(0);
   await page.getByRole("button", { name: "系统配置", exact: true }).click();
-  await expect(page).toHaveURL(/\/settings\//);
+  await expect(page).toHaveURL(/\/configuration\//);
   await expect(page.getByRole("tab", { name: /未保存Agent/ })).toBeVisible();
   await expect(switchDialog(page)).toHaveCount(0);
   await page.getByRole("button", { name: "关闭 未保存Agent", exact: true }).click();

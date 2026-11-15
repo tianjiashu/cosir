@@ -57,7 +57,7 @@ export const SHORTCUTS = {
   // ---- 全局 ----
   newConversation: { keys: "mod+n", label: "新会话", scope: "global" },
   toggleSidebar: { keys: "mod+b", label: "切换侧栏", scope: "global" },
-  openSettings: { keys: "mod+comma", label: "打开系统配置", scope: "global" },
+  openConfiguration: { keys: "mod+comma", label: "打开系统配置", scope: "global" },
   commandPalette: { keys: "mod+k", label: "命令面板", scope: "global" },
   // 与 VS Code 一致：所有平台都是 Ctrl+`（macOS 的 ⌘` 是系统切换窗口）。终端把它让给应用，不送入 shell。
   toggleTerminal: { keys: "ctrl+backquote", label: "切换终端", scope: "global" },
@@ -66,7 +66,7 @@ export const SHORTCUTS = {
   // Windows 不用 Ctrl+Shift+R：开发期视图菜单的强制刷新占着它。
   toggleConversationAside: { keys: { mac: "mod+alt+r", other: "ctrl+shift+period" }, label: "切换会话侧栏", scope: "global" },
 
-  // ---- Markdown 配置面板（只在挂载期间绑定） ----
+  // ---- 单文本配置文档面板（Markdown 文档与 .fileignore，只在挂载期间绑定） ----
   saveConfiguration: { keys: "mod+s", label: "保存", scope: "configEditor" },
 
   // ---- Markdown 编辑器（`markdown-editor-keymap.ts`） ----
@@ -89,7 +89,7 @@ export const SHORTCUTS = {
 
   // ---- 对话里的卡片与选择器 ----
   questionSubmit: { keys: "mod+enter", label: "提交回答", scope: "questionCard" },
-  selectAllModels: { keys: "mod+a", label: "显示全部模型", scope: "modelPicker" },
+  selectAllModels: { keys: "mod+a", label: "全选当前搜索结果", scope: "modelPicker" },
 } as const satisfies Record<string, ShortcutDefinition>;
 
 export type ShortcutId = keyof typeof SHORTCUTS;

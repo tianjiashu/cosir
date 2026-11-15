@@ -6,6 +6,7 @@ import { markdown } from "@codemirror/lang-markdown";
 
 import { editorTheme, useEditorSyntaxTheme } from "@/components/code-editor/code-editor-theme";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
+import { useWebOnlyLinkOpener } from "@/components/links/use-open-link";
 import { handleMarkdownKeydown } from "@/components/markdown-editor/markdown-editor-keymap";
 import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { ViewToggle } from "@/components/ui/view-toggle";
@@ -129,7 +130,7 @@ export function MarkdownEditor({
   const source = useRef<SourceEditorHandle>(null);
   const preview = useRef<HTMLDivElement>(null);
   const previewLine = useRef(1);
-  const links = useMarkdownLinkComponents("configuration", { webOnly: true });
+  const links = useMarkdownLinkComponents(useWebOnlyLinkOpener("configuration"));
 
   useLayoutEffect(() => {
     if (rendered) scrollPreviewToLine(preview.current!, previewLine.current);

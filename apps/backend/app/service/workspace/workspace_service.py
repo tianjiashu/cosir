@@ -19,7 +19,7 @@ from app.models import SessionRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service import depends as service_depends
 from app.service.configuration.extension_scope import ExtensionScope
-from app.service.configuration.mcp.tested_servers import MCPTestedServers
+from app.service.configuration.mcp.machine_state import MCPMachineState
 from app.session_runtime.workspace_operation_registry import workspace_operations
 from app.storage.store_engines import main_db_factory
 from app.storage.write_transaction import begin_immediate
@@ -371,4 +371,4 @@ class WorkspaceService:
         """
 
         get_agent_registry().drop_scope(root_path)
-        MCPTestedServers.drop_scope(ExtensionScope.workspace(root_path))
+        MCPMachineState.drop_scope(ExtensionScope.workspace(root_path))

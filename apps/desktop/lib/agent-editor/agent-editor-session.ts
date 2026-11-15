@@ -1,8 +1,9 @@
 import { createStore } from "zustand/vanilla";
 
-import type { AgentConfiguration, AgentConfigurationInput, ConfigurationScope } from "@/lib/api/configuration";
+import type { ConfigurationScope } from "@/lib/api/configuration-scope";
+import type { AgentConfiguration, AgentConfigurationInput } from "@/lib/api/configuration";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
-import { modelSettingsFromForm, modelSettingsToForm, type ModelSettingsForm } from "@/lib/model/settings-form";
+import { modelSettingsFromForm, modelSettingsToForm, type ModelSettingsForm } from "@/lib/agent-editor/model-settings-form";
 
 /** 表单值：数字与模型参数保持输入框原文，保存时再统一校验转换。 */
 type AgentEditorForm = Omit<AgentConfigurationInput, "max_steps" | "model_settings"> & {

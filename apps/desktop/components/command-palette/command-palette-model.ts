@@ -1,7 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import { ActivityIcon, RotateCwIcon, SquarePenIcon } from "lucide-react";
 
-import { SYSTEM_SETTINGS_TABS } from "@/components/settings/settings-tabs";
+import { configurationPath, SYSTEM_CONFIGURATION_TABS } from "@/components/configuration/configuration-tabs";
 import type { WorkspaceTreeSource } from "@/components/session-tree/workspace-tree-model";
 import type { WorkspaceSession } from "@/lib/api/workspaces";
 import type { ShortcutId } from "@/lib/keyboard/shortcuts";
@@ -36,7 +36,7 @@ type SearchableCommand = { command: CommandPaletteCommand; keywords: readonly st
 export type CommandPaletteModel = {
   sessions: CommandPaletteSessionEntry[];
   actions: CommandPaletteCommand[];
-  settings: CommandPaletteCommand[];
+  configuration: CommandPaletteCommand[];
 };
 
 /** 无查询词时只列最近更新的几条，作为「快速回到最近会话」；有查询词时放宽但仍截断，避免长列表。 */
@@ -56,9 +56,9 @@ const RESTART_BACKEND_COMMAND: SearchableCommand = {
   keywords: ["重启", "后端", "restart", "backend"],
 };
 
-const SETTINGS_COMMANDS: readonly SearchableCommand[] = [
-  ...SYSTEM_SETTINGS_TABS.map((tab): SearchableCommand => ({
-    command: { kind: "navigate", id: `settings:${tab.id}`, label: tab.label, path: `/settings/${tab.id}`, icon: tab.icon },
+const CONFIGURATION_COMMANDS: readonly SearchableCommand[] = [
+  ...SYSTEM_CONFIGURATION_TABS.map((tab): SearchableCommand => ({
+    command: { kind: "navigate", id: `configuration:${tab.id}`, label: tab.label, path: configurationPath(null, tab.id), icon: tab.icon },
     keywords: ["配置", "设置", "系统配置", "settings", tab.id],
   })),
   {
@@ -107,6 +107,6 @@ export function buildCommandPaletteModel(
   return {
     sessions: filterCommandPaletteSessions(workspaces, query),
     actions: filterCommands(canRestartBackend ? [...ACTION_COMMANDS, RESTART_BACKEND_COMMAND] : ACTION_COMMANDS, terms),
-    settings: filterCommands(SETTINGS_COMMANDS, terms),
+    configuration: filterCommands(CONFIGURATION_COMMANDS, terms),
   };
 }

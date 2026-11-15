@@ -1,27 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { SkillEntry, SkillGroup } from "@/lib/api/extensions";
+import type { SkillGroup } from "@/lib/api/extensions";
 import { diffSkillCatalogs } from "@/lib/skills/skill-catalog-diff";
-
-function entry(name: string, overrides: Partial<SkillEntry> = {}): SkillEntry {
-  return {
-    name,
-    description: `${name} 的说明`,
-    enabled: true,
-    scope: "system",
-    kind: "shared",
-    overrides: false,
-    warnings: [],
-    manual_only: false,
-    has_scripts: false,
-    standing: "effective",
-    ...overrides,
-  };
-}
-
-function group(skills: SkillEntry[], overrides: Partial<SkillGroup> = {}): SkillGroup {
-  return { scope: "system", kind: "shared", location: "~/.agents/skills", skipped: [], skills, ...overrides };
-}
+import { skillEntry as entry, skillGroup as group } from "./skill-catalog-fixtures";
 
 describe("skill catalog diff", () => {
   it("counts rescanned skills per scope, so a same-name workspace skill is its own entry", () => {

@@ -103,8 +103,8 @@ def workspace_skills_config_file(workspace_root: str | Path) -> Path:
 def workspace_mcp_servers_file(workspace_root: str | Path) -> Path:
     """返回 workspace MCP 服务配置文件路径（``<workspace>/.cosir/config/mcp_servers.json``）。
 
-    文件可能随仓库共享，只放连接定义；「本机测试通过」记录在系统级，见
-    ``system_cosir.system_mcp_tested_servers_file``。
+    文件可能随仓库共享，只放连接定义；「本机测试通过」与 OAuth 凭据记录在系统级，见
+    ``system_cosir.system_mcp_machine_state_file``。
     """
 
     return workspace_cosir_dir(workspace_root) / COSIR_CONFIG_DIR_NAME / COSIR_MCP_SERVERS_FILE_NAME

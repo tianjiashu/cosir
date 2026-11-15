@@ -139,6 +139,7 @@ def test_mcp_json_string_is_decoded_once_at_tool_argument_boundary(monkeypatch):
         "action": "call",
         "server_name": "server",
         "tool_name": "remote",
+        "query": None,
         "arguments": json.dumps(value),
     }
     schema = strict_parameters_schema(MCPArgs)
@@ -215,3 +216,13 @@ def test_session_schema_boundary_rejects_old_snapshot_without_rewriting_it(stric
         with pytest.raises(ValueError, match="strict"):
             _ = space.session_tool_schemas
     assert function == original
+
+
+def test_invalid_server_schema_is_reported_separately_from_bad_arguments() -> None:
+    """schema 自身非法时归一化为失败并标明原因，不向外抛：schema 可能来自进程外（如 MCP 服务）。"""
+
+    broken = validate_tool_arguments({"x": 1}, {"type": "not-a-type"})
+    wrong = validate_tool_arguments({}, {"type": "object", "required": ["x"]})
+
+    assert (broken.ok, broken.schema_invalid) == (False, True)
+    assert (wrong.ok, wrong.schema_invalid) == (False, False)

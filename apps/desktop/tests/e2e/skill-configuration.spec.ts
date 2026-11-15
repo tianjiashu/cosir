@@ -59,23 +59,28 @@ test("工作区 Skills 页按身份分卡：摘要、覆盖关系、导入落点
     enabledRequests.push(route.request().postDataJSON());
     await route.fulfill({ json: {} });
   });
-  await page.goto(`/workspaces/7/settings/skills`);
+  await page.goto(`/workspaces/7/configuration/skills`);
 
   // 摘要直接给出 Agent 能用几个、目录多大。
-  await expect(page.getByText("在这个工作区里，Agent 能用 3 个 Skill")).toBeVisible();
+  await expect(page.getByText("这个工作区里 Agent 可用 3 个")).toBeVisible();
   await expect(page.getByText("1,234")).toBeVisible();
 
-  // 本工作区两张卡（空的专属卡也在，告诉用户往哪放）；继承来的系统级空专属目录不列。
+  // 本工作区两节（空的专属一节也在，告诉用户往哪放），节标题自带作用域；继承来的系统级空专属目录不列。
   await expect(page.getByText(".cosir/skills", { exact: true })).toBeVisible();
   await expect(page.getByText("还没有。用右上角「导入」放进来，只有 cosir 使用。")).toBeVisible();
   await expect(page.getByText(".agents/skills", { exact: true })).toBeVisible();
-  await expect(page.getByText("继承自系统级 · 在系统设置中管理")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "本工作区 · cosir 专属" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "系统级 · 共享" })).toBeVisible();
+  await expect(page.getByText("· 只读")).toBeVisible();
   await expect(page.getByText("~/.agents/skills", { exact: true })).toBeVisible();
   await expect(page.getByText("~/.cosir/skills", { exact: true })).toHaveCount(0);
-  // 被覆盖的系统级同名 Skill 写明被谁覆盖、不给开关；无法加载的目录只计数。
-  await expect(page.getByRole("link", { name: "被「本工作区 · 共享」的同名 Skill 覆盖 →" })).toBeVisible();
+  // 被覆盖的系统级同名 Skill 只留短标签、悬停说明被谁覆盖，不给开关；无法加载的目录只计数一次。
+  const shadowed = page.getByRole("link", { name: "已被覆盖" });
+  await expect(shadowed).toBeVisible();
+  await shadowed.hover();
+  await expect(page.getByText("被「本工作区 · 共享」的同名 Skill 覆盖，点击查看生效的那份")).toBeVisible();
   await expect(page.getByRole("switch", { name: "停用 Skill review" })).toHaveCount(1);
-  await expect(page.getByText("1 个无法加载")).toBeVisible();
+  await expect(page.getByText("1 个无法加载")).toHaveCount(1);
 
   // 导入菜单写明落在专属目录、其他工具看不到。
   await page.getByRole("button", { name: "导入" }).click();
@@ -127,7 +132,7 @@ test("导入撞上专属目录里的同名 Skill：弹窗说明新旧两份，�
       },
     });
   });
-  await page.goto(`/workspaces/7/settings/skills`);
+  await page.goto(`/workspaces/7/configuration/skills`);
 
   await page.getByRole("button", { name: "导入" }).click();
   await page.getByRole("menuitem", { name: "Skill 文件夹…" }).click();
@@ -143,4 +148,50 @@ test("导入撞上专属目录里的同名 Skill：弹窗说明新旧两份，�
     { source_path: "/tmp/import-source/review", source_type: "directory" },
     { source_path: "/tmp/import-source/review", source_type: "directory", resolution: "replace" },
   ]);
+});
+
+test("Skill 详情：文件夹默认收起、可展开，正文里的相对链接与行内代码路径打开 Skill 自己的文件", async ({ page }) => {
+  const detail = {
+    ...skill("report-kit", { scope: "system", kind: "cosir" }),
+    content: "# 复盘\n\n写法见 [写法说明](references/style.md)，运行 `scripts/build.py`，不存在的 [旧文件](references/gone.md)。\n",
+    location: "~/.cosir/skills/report-kit",
+    also_at: [],
+    directory: "/home/me/.cosir/skills/report-kit",
+    metadata: {},
+    files: [
+      { path: "SKILL.md", size: 120, binary: false },
+      { path: "references/style.md", size: 30, binary: false },
+      { path: "scripts/build.py", size: 9, binary: false },
+      { path: "scripts/helpers/fmt.py", size: 4, binary: false },
+    ],
+    files_truncated: false,
+  };
+  await page.route(`${API_ORIGIN}/configuration/skills/report-kit`, (route) => route.fulfill({ json: detail }));
+  await page.route(new RegExp(`${API_ORIGIN}/configuration/skills/report-kit/file\\?`), (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path");
+    return route.fulfill({ json: { path, content: path === "references/style.md" ? "# 写法\n\n短句。\n" : "print('build')\n" } });
+  });
+  await page.goto("/configuration/skills/report-kit");
+
+  const files = page.getByRole("navigation", { name: "Skill 文件" });
+  // 默认收起：只看到文件夹与文件数，里面的文件不显示。
+  const scripts = files.getByRole("button", { name: /scripts/ });
+  await expect(scripts).toHaveAttribute("aria-expanded", "false");
+  await expect(files.getByText("build.py")).toHaveCount(0);
+  await scripts.click();
+  await expect(files.getByText("build.py")).toBeVisible();
+  await expect(files.getByRole("button", { name: /helpers/ })).toHaveAttribute("aria-expanded", "false");
+
+  // 正文里的相对链接：在阅读区打开、树里展开到它；不存在的文件是纯文本。
+  const reader = page.getByRole("region", { name: "阅读 SKILL.md" });
+  await expect(reader.getByRole("link", { name: "旧文件" })).toHaveCount(0);
+  await reader.getByRole("link", { name: "写法说明" }).click();
+  await expect(page.getByRole("region", { name: "阅读 references/style.md" }).getByText("短句。")).toBeVisible();
+  await expect(files.getByRole("button", { name: /references/ })).toHaveAttribute("aria-expanded", "true");
+  await expect(files.getByRole("button", { name: /style\.md/ })).toHaveAttribute("aria-current", "true");
+
+  // 行内代码里的路径同样打开对应文件。
+  await files.getByRole("button", { name: /SKILL\.md/ }).click();
+  await page.getByRole("region", { name: "阅读 SKILL.md" }).getByRole("button", { name: "scripts/build.py" }).click();
+  await expect(page.getByRole("region", { name: "阅读 scripts/build.py" })).toBeVisible();
 });

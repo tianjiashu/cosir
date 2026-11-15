@@ -12,14 +12,14 @@ from pathlib import Path
 
 from app.api.configuration.errors import raise_configuration_error
 from app.api.schemas.request.MCPServersUpdateRequest import MCPServersUpdateRequest
-from app.api.schemas.request.MCPServerTestRequest import MCPServerTestRequest
 from app.api.schemas.request.SkillsEnabledUpdateRequest import SkillsEnabledUpdateRequest
 from app.api.schemas.request.SkillsImportRequest import SkillsImportRequest
-from app.api.schemas.response.MCPServersResponse import (
-    MCPServerConfigResponse,
-    MCPServersResponse,
+from app.api.schemas.response.MCPServersResponse import MCPServersResponse
+from app.api.schemas.response.MCPServerTestResponse import (
+    MCPAuthorizationPendingResponse,
+    MCPServerAuthorizeResponse,
+    MCPServerTestResponse,
 )
-from app.api.schemas.response.MCPServerTestResponse import MCPServerTestResponse
 from app.api.schemas.response.SkillCatalogViewResponse import (
     SkillCatalogViewResponse,
     SkillEntryResponse,
@@ -33,9 +33,12 @@ from app.api.schemas.response.SkillDetailResponse import (
 )
 from app.api.schemas.response.SkillInfoResponse import SkillInfoResponse
 from app.app import app
-from app.service.configuration.mcp.configuration import MCPServerConfig, ScopedMCPServer
-from app.service.configuration.mcp.configuration_service import MCPConfigurationService
-from app.service.configuration.mcp.tested_servers import MCPTestedServers
+from app.service.configuration.mcp.configuration import MCPServerConfig
+from app.service.configuration.mcp.configuration_service import (
+    MCPConfigurationService,
+    MCPServerTestResult,
+    PendingAuthorization,
+)
 from app.service.configuration.skills.catalog import SkillInfo
 from app.service.configuration.skills.configuration_service import SkillConfigurationService
 from app.service.configuration.skills.configuration_view import (
@@ -85,19 +88,56 @@ async def update_workspace_mcp_servers(
 
 
 @app.post("/configuration/mcp-servers/test", response_model=MCPServerTestResponse)
-async def test_system_mcp_server(payload: MCPServerTestRequest) -> MCPServerTestResponse:
-    """短连接测试一份系统级 MCP 服务配置（可以尚未保存）。"""
+async def test_system_mcp_server(payload: MCPServerConfig) -> MCPServerTestResponse:
+    """短连接测试一份系统级 MCP 服务配置（可以尚未保存）；从不打开浏览器。"""
 
     return await _test_mcp_server(None, payload)
 
 
 @app.post(f"{_WORKSPACE}/mcp-servers/test", response_model=MCPServerTestResponse)
 async def test_workspace_mcp_server(
-    workspace_id: int, payload: MCPServerTestRequest
+    workspace_id: int, payload: MCPServerConfig
 ) -> MCPServerTestResponse:
-    """短连接测试一份工作区 MCP 服务配置（在工作区根目录运行 stdio 服务）。"""
+    """短连接测试一份工作区 MCP 服务配置（在工作区根目录运行 stdio 服务）；从不打开浏览器。"""
 
     return await _test_mcp_server(workspace_id, payload)
+
+
+@app.post("/configuration/mcp-servers/authorize", response_model=MCPServerAuthorizeResponse)
+async def authorize_system_mcp_server(payload: MCPServerConfig) -> MCPServerAuthorizeResponse:
+    """开始登录授权一份系统级 MCP 服务配置（可以尚未保存）。"""
+
+    return await _authorize_mcp_server(None, payload)
+
+
+@app.post(f"{_WORKSPACE}/mcp-servers/authorize", response_model=MCPServerAuthorizeResponse)
+async def authorize_workspace_mcp_server(
+    workspace_id: int, payload: MCPServerConfig
+) -> MCPServerAuthorizeResponse:
+    """开始登录授权一份工作区 MCP 服务配置。"""
+
+    return await _authorize_mcp_server(workspace_id, payload)
+
+
+@app.post("/configuration/mcp-authorizations/{flow_id}/wait", response_model=MCPServerTestResponse)
+async def wait_mcp_authorization(flow_id: str) -> MCPServerTestResponse:
+    """等一次登录授权结束（用户在浏览器里完成、取消或超时）；授权按 id 全局唯一，不分作用域。"""
+
+    try:
+        return _test_response(await MCPConfigurationService.wait_authorization(flow_id))
+    except Exception as exc:
+        raise_configuration_error(exc)
+
+
+@app.delete("/configuration/mcp-authorizations/{flow_id}")
+async def cancel_mcp_authorization(flow_id: str) -> dict:
+    """放弃一次登录授权：后端结束等待并关掉回调监听。"""
+
+    try:
+        MCPConfigurationService.cancel_authorization(flow_id)
+    except Exception as exc:
+        raise_configuration_error(exc)
+    return {}
 
 
 def _mcp_service(workspace_id: int | None) -> MCPConfigurationService:
@@ -106,7 +146,7 @@ def _mcp_service(workspace_id: int | None) -> MCPConfigurationService:
 
 def _list_mcp_servers(workspace_id: int | None) -> MCPServersResponse:
     try:
-        return _mcp_servers_response(_mcp_service(workspace_id).visible())
+        return MCPServersResponse.from_entries(_mcp_service(workspace_id).visible())
     except Exception as exc:
         raise_configuration_error(exc)
 
@@ -115,45 +155,41 @@ def _update_mcp_servers(
     workspace_id: int | None, payload: MCPServersUpdateRequest
 ) -> MCPServersResponse:
     try:
-        servers = [
-            MCPServerConfig.model_validate(server.model_dump()) for server in payload.servers
-        ]
-        return _mcp_servers_response(_mcp_service(workspace_id).update(servers))
+        return MCPServersResponse.from_entries(_mcp_service(workspace_id).update(payload.servers))
     except Exception as exc:
         raise_configuration_error(exc)
 
 
-async def _test_mcp_server(
-    workspace_id: int | None, payload: MCPServerTestRequest
-) -> MCPServerTestResponse:
+async def _test_mcp_server(workspace_id: int | None, payload: MCPServerConfig) -> MCPServerTestResponse:
     try:
         service = _mcp_service(workspace_id)
-        server = MCPServerConfig.model_validate(payload.model_dump())
     except Exception as exc:
         raise_configuration_error(exc)
-    result = await service.test(server)
+    return _test_response(await service.test(payload))
+
+
+async def _authorize_mcp_server(
+    workspace_id: int | None, payload: MCPServerConfig
+) -> MCPServerAuthorizeResponse:
+    try:
+        service = _mcp_service(workspace_id)
+    except Exception as exc:
+        raise_configuration_error(exc)
+    result = await service.authorize(payload)
+    if isinstance(result, PendingAuthorization):
+        return MCPAuthorizationPendingResponse(
+            flow_id=result.flow_id, authorization_url=result.authorization_url
+        )
+    return _test_response(result)
+
+
+def _test_response(result: MCPServerTestResult) -> MCPServerTestResponse:
     return MCPServerTestResponse(
         success=result.success,
         tools=result.tools,
         error=result.error,
+        failure_kind=result.failure_kind,
         agent_available=result.agent_available,
-    )
-
-
-def _mcp_servers_response(servers: list[ScopedMCPServer]) -> MCPServersResponse:
-    tested = MCPTestedServers.read()
-    return MCPServersResponse(
-        servers=[
-            MCPServerConfigResponse.model_validate(
-                {
-                    **server.config.model_dump(),
-                    "tested": tested.passed(server),
-                    "scope": server.scope.kind,
-                    "overrides": server.overrides,
-                }
-            )
-            for server in servers
-        ]
     )
 
 

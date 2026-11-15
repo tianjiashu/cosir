@@ -3,21 +3,21 @@ import { SparklesIcon } from "lucide-react";
 import { useAuiState } from "@assistant-ui/react";
 
 import {
-  ModelSelectorContent as OfficialModelSelectorContent,
-  ModelSelectorEffort as OfficialModelSelectorEffort,
-  ModelSelectorList as OfficialModelSelectorList,
-  ModelSelectorRoot as OfficialModelSelectorRoot,
-  ModelSelectorSearch as OfficialModelSelectorSearch,
-  ModelSelectorTrigger as OfficialModelSelectorTrigger,
-  ModelSelectorValue as OfficialModelSelectorValue,
-  DEFAULT_EFFORT_OPTIONS as BACKEND_REASONING_EFFORTS,
+  ModelSelectorContent,
+  ModelSelectorEffort,
+  ModelSelectorList,
+  ModelSelectorRoot,
+  ModelSelectorSearch,
+  ModelSelectorTrigger,
+  ModelSelectorValue,
+  DEFAULT_EFFORT_OPTIONS,
   type ModelOption,
 } from "@/components/model/model-selector";
 import { ModelAvailability } from "@/components/model/model-availability";
 import type { TransportRunLaunch } from "@/lib/assistant/contract";
 import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-state-operations";
 import { RUN_LAUNCH_LOCKED_HINT } from "@/lib/assistant/run-launch";
-import { useModelCatalog, type ModelCatalogModel } from "@/lib/model/catalog";
+import { catalogModelOption, useModelCatalog, type ModelCatalogModel } from "@/lib/model/catalog";
 import {
   resolveModelSelection,
   selectionFor,
@@ -35,16 +35,8 @@ type ModelSelectorProps = {
   locked: TransportRunLaunch | null;
 };
 
-function toOfficialModel(model: ModelCatalogModel): ModelOption {
-  return {
-    id: model.optionId,
-    name: model.modelName,
-    group: model.connectionName,
-    keywords: [model.connectionName],
-    efforts: model.supportsReasoningEffort
-      ? BACKEND_REASONING_EFFORTS
-      : undefined,
-  };
+function toModelOption(model: ModelCatalogModel): ModelOption {
+  return { ...catalogModelOption(model), efforts: model.supportsReasoningEffort ? DEFAULT_EFFORT_OPTIONS : undefined };
 }
 
 function SelectorView({
@@ -59,7 +51,7 @@ function SelectorView({
   onSelectionChange: (selection: ModelSelection) => void;
 }) {
   const officialModels = useMemo(
-    () => catalogModels.map(toOfficialModel),
+    () => catalogModels.map(toModelOption),
     [catalogModels],
   );
   const selectedModel = catalogModels.find(
@@ -75,7 +67,7 @@ function SelectorView({
       className="flex min-w-0 max-w-full flex-wrap items-center gap-2"
       title={disabled ? RUN_LAUNCH_LOCKED_HINT : undefined}
     >
-      <OfficialModelSelectorRoot
+      <ModelSelectorRoot
         models={officialModels}
         value={selectedOptionId}
         effort={selection.reasoningEffort ?? undefined}
@@ -92,7 +84,7 @@ function SelectorView({
           });
         }}
       >
-        <OfficialModelSelectorTrigger
+        <ModelSelectorTrigger
           variant="ghost"
           size="sm"
           className="min-w-0 max-w-full @lg:max-w-60"
@@ -100,19 +92,19 @@ function SelectorView({
           disabled={disabled}
         >
           <SparklesIcon className="text-muted-foreground size-3.5 shrink-0" />
-          <OfficialModelSelectorValue className="min-w-0" />
-        </OfficialModelSelectorTrigger>
-        <OfficialModelSelectorContent
+          <ModelSelectorValue className="min-w-0" />
+        </ModelSelectorTrigger>
+        <ModelSelectorContent
           side="top"
           align="start"
           searchable
           className="w-72"
         >
-          <OfficialModelSelectorSearch placeholder="搜索模型…" />
-          <OfficialModelSelectorList />
-          <OfficialModelSelectorEffort label="推理强度" />
-        </OfficialModelSelectorContent>
-      </OfficialModelSelectorRoot>
+          <ModelSelectorSearch placeholder="搜索模型…" />
+          <ModelSelectorList />
+          <ModelSelectorEffort label="推理强度" />
+        </ModelSelectorContent>
+      </ModelSelectorRoot>
     </div>
   );
 }

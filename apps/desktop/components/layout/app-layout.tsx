@@ -28,7 +28,7 @@ import { PageHeader, type Crumb } from "@/components/layout/page-header";
 import { useWorkspaceActions } from "@/components/layout/use-workspace-actions";
 import { useWorkspaceCatalog, type WorkspaceCatalog } from "@/components/layout/use-workspace-catalog";
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
-import { findSettingsTab, settingsTabParam, SYSTEM_SETTINGS_TABS, WORKSPACE_SETTINGS_TABS } from "@/components/settings/settings-tabs";
+import { configurationPath, resolveConfigurationTab, SYSTEM_CONFIGURATION_TABS, WORKSPACE_CONFIGURATION_TABS } from "@/components/configuration/configuration-tabs";
 import { SessionPage } from "@/components/session/session-page";
 import { SessionStatusBadges } from "@/components/session-status/session-status-indicator";
 import { StatusDot } from "@/components/ui/status-dot";
@@ -67,7 +67,8 @@ export function useAppOutlet(): AppOutletContext {
 
 const NARROW_VIEWPORT_QUERY = "(max-width: 1024px)";
 
-function parsePositiveId(value: string | undefined): number | null {
+/** 路由里的会话、工作区标识：正整数，否则为 null（由各路由给出「标识无效」）。 */
+export function parseRouteId(value: string | undefined): number | null {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
@@ -94,8 +95,8 @@ export function AppLayout() {
   const section = (leaf?.handle as RouteHandle | undefined)?.section ?? "conversation";
   const params = leaf?.params ?? {};
 
-  const routeSessionId = section === "conversation" ? parsePositiveId(params.sessionId) : null;
-  const workspaceConfigurationId = section === "workspace-settings" ? parsePositiveId(params.workspaceId) : null;
+  const routeSessionId = section === "conversation" ? parseRouteId(params.sessionId) : null;
+  const workspaceConfigurationId = section === "workspace-configuration" ? parseRouteId(params.workspaceId) : null;
 
   // 最近一个会话：对话区为当前路由会话；其余区域沿用上一次的会话（保活）。
   const [keptSessionId, setKeptSessionId] = useState<number | null>(routeSessionId);
@@ -145,7 +146,7 @@ export function AppLayout() {
 
   // ---- 应用级快捷键（登记见 lib/keyboard/shortcuts.ts）；新会话在导航意图处、工作台与会话侧栏由各自的 hook 注册 ----
   useAppHotkey("toggleSidebar", toggleSidebar);
-  useAppHotkey("openSettings", () => navigate("/settings"));
+  useAppHotkey("openConfiguration", () => navigate(configurationPath(null)));
 
   // ---- 终端工作台：入口在页头，面板在 SessionPage 内，二者经按 sessionId 分桶的 store 协作 ----
   // 对话页的 Session：终端与会话侧栏都只属于对话区，配置 / 观测页不显示。
@@ -222,14 +223,14 @@ export function AppLayout() {
       params.skillName === undefined
         ? [{ label: tab?.label ?? "未知分类" }]
         : [{ label: tab?.label ?? "未知分类", to: `${basePath}/${tab?.id}` }, { label: params.skillName }];
-    if (section === "settings") {
-      const tab = findSettingsTab(SYSTEM_SETTINGS_TABS, settingsTabParam({ tab: params.tab, skillName: params.skillName }));
-      return [{ label: "系统配置", to: "/settings" }, ...tabCrumbs(tab, "/settings")];
+    if (section === "configuration") {
+      const tab = resolveConfigurationTab(SYSTEM_CONFIGURATION_TABS, { tab: params.tab, skillName: params.skillName });
+      return [{ label: "系统配置", to: configurationPath(null) }, ...tabCrumbs(tab, configurationPath(null))];
     }
-    if (section === "workspace-settings") {
+    if (section === "workspace-configuration") {
       const workspace = catalog.workspaces.find((candidate) => candidate.workspace_id === workspaceConfigurationId);
-      const tab = findSettingsTab(WORKSPACE_SETTINGS_TABS, settingsTabParam({ tab: params.tab, skillName: params.skillName }));
-      const basePath = `/workspaces/${workspaceConfigurationId}/settings`;
+      const tab = resolveConfigurationTab(WORKSPACE_CONFIGURATION_TABS, { tab: params.tab, skillName: params.skillName });
+      const basePath = configurationPath(workspaceConfigurationId);
       return [
         { label: workspace?.name ?? "工作区", to: conversationPath },
         { label: "工作区配置", to: basePath },
@@ -259,8 +260,8 @@ export function AppLayout() {
       newConversationActive={section === "conversation" && (location.pathname === "/" || focusedUnstarted)}
       onNewConversation={startNewConversation}
       onSelectSession={selectSession}
-      onOpenSettings={() => navigate("/settings")}
-      onOpenWorkspaceSettings={(workspaceId) => navigate(`/workspaces/${workspaceId}/settings`)}
+      onOpenConfiguration={() => navigate(configurationPath(null))}
+      onOpenWorkspaceConfiguration={(workspaceId) => navigate(configurationPath(workspaceId))}
       onOpenObserver={() => navigate(focusedSessionId ? `/session-observer?session_id=${focusedSessionId}` : "/session-observer", { state: { returnTo: focusedSessionId ? `/sessions/${focusedSessionId}` : undefined } })}
       onOpenSearch={() => setPaletteOpen(true)}
       onAddWorkspace={() => void actions.addWorkspaceFromFolder()}

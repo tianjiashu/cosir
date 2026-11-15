@@ -173,6 +173,25 @@ def to_tool_model_message(observation: ToolObservation) -> ChatCompletionToolMes
     }
 
 
+def withhold_unviewable_images(batch: ToolBatch) -> None:
+    """本次 Run 的模型看不了图时，把观察带的图片换成正文里的一句说明。
+
+    「图片只进能看图的模型」在这里一处守住。专门看图的工具（声明 ``returns_images``）已在准入门禁被
+    拒，不会走到这里；这里兜住的是只是有时带图的工具（如 MCP）。必须在写 tool 消息之前调用：说明
+    要进 tool 消息正文，之后 ``write_tool_images`` 也就没有图可写。图片文件已存进附件目录，卡片照常显示。
+    """
+    with_images = [o for o in batch.observations if o.status == "success" and o.images]
+    if not with_images or _runtime_context().agent.model.supports_image:
+        return
+    for observation in with_images:
+        note = (
+            f"[{len(observation.images)} image(s) returned by this tool are not shown: "
+            "the current model cannot read images]"
+        )
+        observation.content = f"{observation.content}\n{note}" if observation.content else note
+        observation.images = ()
+
+
 def write_tool_images(batch: ToolBatch) -> None:
     """把本批成功观察带的图片直接写进 context：每个调用一条带图的 user 消息。
 
