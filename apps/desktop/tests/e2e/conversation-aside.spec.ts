@@ -238,12 +238,13 @@ test("配置页隐藏侧栏与按钮，回到对话后恢复", async ({ page }) 
 });
 
 test("快捷键切换会话侧栏", async ({ page }) => {
-  const modifier = await page.evaluate(() => /mac/i.test(navigator.userAgent) ? "Meta" : "Control");
+  // 应用按 navigator.platform（与浏览器所在系统一致）选键位：macOS ⌘⌥R，其他平台 Ctrl+Shift+.。
+  const shortcut = process.platform === "darwin" ? "Meta+Alt+KeyR" : "Control+Shift+Period";
   await page.locator("body").click({ position: { x: 600, y: 400 } });
   await expect(rail(page)).toBeVisible();
-  await page.keyboard.press(`${modifier}+Alt+KeyR`);
+  await page.keyboard.press(shortcut);
   await expect(rail(page)).toHaveCount(0);
-  await page.keyboard.press(`${modifier}+Alt+KeyR`);
+  await page.keyboard.press(shortcut);
   await expect(rail(page)).toBeVisible();
 });
 

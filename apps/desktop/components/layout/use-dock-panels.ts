@@ -1,5 +1,4 @@
 import { useCallback, useMemo } from "react";
-import { useHotkeys } from "react-hotkeys-hook";
 
 import { useElementSize } from "@/hooks/use-element-size";
 import type { DockSizing } from "@/components/layout/dock-frame";
@@ -7,7 +6,7 @@ import { PANEL_DOCK_GUTTER } from "@/components/ui/panel-dock";
 import { useSessionBrowserTabs } from "@/lib/browser/host-state-store";
 import { useBrowserPanelStore } from "@/lib/browser/panel-store";
 import { useDockStore } from "@/lib/layout/dock-store";
-import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS } from "@/lib/keyboard/shortcuts";
+import { useAppHotkey } from "@/lib/keyboard/shortcuts";
 import { useWorkspaceWorkbench } from "@/lib/workbench/workbench-store";
 import { DOCK_PANEL_WIDTH, useLayoutPreferences, type DockPanel } from "@/lib/layout/preferences";
 
@@ -51,7 +50,7 @@ export function useDockPanels({ workspaceId, filesVisible, conversationSessionId
     const store = useDockStore.getState();
     store.setMaximized(!store.maximized);
   }, []);
-  useHotkeys(APP_SHORTCUTS.toggleWorkbench.keys, () => toggle("workbench"), { ...APP_HOTKEY_OPTIONS, enabled: available.workbench }, [toggle, available.workbench]);
+  useAppHotkey("toggleWorkbench", () => toggle("workbench"), { enabled: available.workbench });
 
   const [containerRef, { width: availableWidth }] = useElementSize<HTMLDivElement>();
   const widths = useLayoutPreferences((state) => state.dockWidths);

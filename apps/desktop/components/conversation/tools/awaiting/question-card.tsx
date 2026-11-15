@@ -17,7 +17,7 @@ import {
   clearQuestionDraft, setQuestionDraft, setQuestionIndex, useQuestionDraftStore, useQuestionProgress,
 } from "@/lib/assistant/turn/question-draft-store";
 import { HttpError } from "@/lib/http/http-error";
-import { formatKeys } from "@/lib/keyboard/shortcuts";
+import { matchesShortcut, shortcutLabel } from "@/lib/keyboard/shortcuts";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
@@ -150,7 +150,7 @@ export function QuestionCard({ sessionId, toolCallId, toolName, args, artifact, 
     advance();
   };
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey) || !answered || submitting) return;
+    if (!matchesShortcut(event, "questionSubmit") || !answered || submitting) return;
     event.preventDefault();
     advance();
   };
@@ -214,7 +214,7 @@ export function QuestionCard({ sessionId, toolCallId, toolName, args, artifact, 
               <Button type="button" size="sm" variant="outline" disabled={submitting} onClick={skip}>跳过</Button>
               <Button type="button" size="sm" disabled={!answered || submitting} onClick={advance} className={cn(submitting && "cursor-progress")}>
                 {submitting ? "提交中…" : last ? "提交" : "下一题"}
-                {!submitting && <Kbd className="bg-transparent text-current opacity-70">{formatKeys("mod+enter")}</Kbd>}
+                {!submitting && <Kbd className="bg-transparent text-current opacity-70">{shortcutLabel("questionSubmit")}</Kbd>}
               </Button>
             </div>
           </>

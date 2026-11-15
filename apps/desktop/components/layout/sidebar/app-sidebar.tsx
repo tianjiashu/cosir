@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import {
+  ActivityIcon,
   FolderPlusIcon,
   Loader2Icon,
   PinIcon,
@@ -15,6 +16,7 @@ import type { WorkspaceCatalog } from "@/components/layout/use-workspace-catalog
 import type { DeleteTarget } from "@/components/layout/use-workspace-actions";
 import { forkDescendantIds } from "@/components/session-tree/session-tree-model";
 import { RowActionsMenu } from "@/components/session-tree/row-actions-menu";
+import { SESSION_MARKER_GAP, SESSION_MARKER_WIDTH } from "@/components/session-tree/workspace-tree-row";
 import { WorkspaceTree } from "@/components/session-tree/workspace-tree";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
@@ -22,7 +24,9 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import type { WorkspaceSession } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { usePinnedSessionsStore } from "@/lib/pinned-sessions-store";
-import { withShortcut, type AppShortcutId } from "@/lib/keyboard/shortcuts";
+import { shortcutLabel, type ShortcutId } from "@/lib/keyboard/shortcuts";
+
+import "./sidebar-interaction.css";
 
 export type SidebarSection = "conversation" | "settings" | "workspace-settings" | "observer";
 
@@ -30,15 +34,17 @@ type AppSidebarProps = {
   catalog: WorkspaceCatalog;
   focusedSessionId: number | null;
   section: SidebarSection;
+  /** 此刻就在新会话页（`/` 或未开始的会话）：「新会话」显示选中，再点一次不会被误以为没反应。 */
+  newConversationActive: boolean;
   /** 开始新会话；带 `workspaceId` 时在该工作区开始（侧栏工作区行的「+」）。 */
   onNewConversation: (workspaceId?: number) => void;
   onSelectSession: (session: WorkspaceSession, workspaceId: number) => void;
   onOpenSettings: () => void;
   onOpenWorkspaceSettings: (workspaceId: number) => void;
   onOpenObserver: () => void;
-  /** 区头的搜索：打开命令面板（它按会话标题与工作区名搜索），侧栏不另做一套搜索。 */
+  /** 顶部的搜索：打开命令面板（它按会话标题与工作区名搜索），侧栏不另做一套搜索。 */
   onOpenSearch: () => void;
-  /** 区头的添加工作区（`useWorkspaceActions.addWorkspaceFromFolder`）。 */
+  /** 「工作区」区头的添加工作区（`useWorkspaceActions.addWorkspaceFromFolder`）。 */
   onAddWorkspace: () => void;
   addingWorkspace: boolean;
   onRequestDelete: (target: DeleteTarget) => void;
@@ -47,7 +53,8 @@ type AppSidebarProps = {
 };
 
 /**
- * 应用侧栏：新会话、「工作区」区头（搜索、添加工作区）、工作区 / 会话树、底部的系统配置与会话观测入口。
+ * 应用侧栏：顶部的全局入口（新会话、搜索，常显快捷键）、「工作区」区头（添加工作区）、工作区 / 会话树、
+ * 底部的系统配置与会话观测入口。
  *
  * 铺在窗口底色（canvas）上，不画边线：与主区的分隔靠两者明度差，底部入口靠 mt-auto 的留白。
  *
@@ -59,6 +66,7 @@ export function AppSidebar({
   catalog,
   focusedSessionId,
   section,
+  newConversationActive,
   onNewConversation,
   onSelectSession,
   onOpenSettings,
@@ -83,16 +91,14 @@ export function AppSidebar({
       {/* 窗口最上方一行：标题栏拖动区，左侧让出红绿灯，与页面头部的左内边距一致（侧栏开关因此不随侧栏移动）。 */}
       <div className="app-drag-region flex h-14 shrink-0 items-center pl-[max(1rem,var(--titlebar-inset-left))]">{headerControls}</div>
 
-      <div className="shrink-0 px-3 pt-1 pb-3">
-        <SidebarLink active={false} icon={<SquarePenIcon className="size-4" />} label="新会话" shortcut="newConversation" onClick={() => onNewConversation()} />
+      <div className="flex shrink-0 flex-col gap-0.5 px-2 pt-1 pb-3">
+        <SidebarLink active={newConversationActive} icon={<SquarePenIcon className="size-4" />} label="新会话" shortcut="newConversation" onClick={() => onNewConversation()} />
+        <SidebarLink active={false} icon={<SearchIcon className="size-4" />} label="搜索会话" shortcut="commandPalette" onClick={onOpenSearch} />
       </div>
       <nav className="flex min-h-0 flex-1 flex-col px-2 pb-4" aria-label="工作区会话列表">
         <div className="flex h-7 shrink-0 items-center gap-0.5 pr-1 pl-2">
           <h2 className="text-muted-foreground min-w-0 flex-1 truncate text-xs">工作区</h2>
-          <TooltipIconButton tooltip={withShortcut("搜索会话", "commandPalette")} aria-label="搜索会话" className="text-muted-foreground size-6" onClick={onOpenSearch}>
-            <SearchIcon />
-          </TooltipIconButton>
-          <TooltipIconButton tooltip="添加工作区" aria-label="添加工作区" className="text-muted-foreground size-6" disabled={addingWorkspace} onClick={onAddWorkspace}>
+          <TooltipIconButton tooltip="添加工作区" aria-label="添加工作区" className="sidebar-icon-button text-muted-foreground size-6" disabled={addingWorkspace} onClick={onAddWorkspace}>
             {addingWorkspace ? <Loader2Icon className="animate-spin" /> : <FolderPlusIcon />}
           </TooltipIconButton>
         </div>
@@ -129,7 +135,7 @@ export function AppSidebar({
                     variant="ghost"
                     size="icon-sm"
                     tabIndex={tabIndex}
-                    className="text-muted-foreground"
+                    className="sidebar-icon-button text-muted-foreground"
                     aria-label={`在 ${workspace.name} 中新建会话`}
                     title={`在 ${workspace.name} 中新建会话`}
                     onClick={() => onNewConversation(workspace.workspace_id)}
@@ -167,32 +173,39 @@ export function AppSidebar({
         )}
         </nav>
 
-      <div className="mt-auto flex shrink-0 flex-col gap-1 p-3">
+      <div className="mt-auto flex shrink-0 flex-col gap-0.5 p-2">
         <SidebarLink active={section === "settings"} icon={<Settings2Icon className="size-4" />} label="系统配置" shortcut="openSettings" onClick={onOpenSettings} />
-        <SidebarLink active={section === "observer"} icon={<SearchIcon className="size-4" />} label="会话观测" onClick={onOpenObserver} />
+        <SidebarLink active={section === "observer"} icon={<ActivityIcon className="size-4" />} label="会话观测" onClick={onOpenObserver} />
       </div>
     </div>
   );
 }
 
+/**
+ * 侧栏的一级入口行。外观与会话树行同源：悬停 / 当前底色来自 `.sidebar-nav-item`，图标格与间距取树的
+ * 标记列常量，所以入口图标、文字与工作区行在同一条竖线上。登记了快捷键的行在右侧常显组合键（文案取自
+ * `shortcutLabel`，与实际绑定和平台一致：macOS「⌘N」、Windows「Ctrl+N」）；`aria-label` 只读名称，
+ * 组合键不进可访问名称。
+ */
 function SidebarLink({ active, icon, label, shortcut, onClick }: {
   active: boolean;
   icon: ReactNode;
   label: string;
-  shortcut?: AppShortcutId;
+  shortcut?: ShortcutId;
   onClick: () => void;
 }) {
   return (
-    <Button
-      variant={active ? "secondary" : "ghost"}
-      className="w-full justify-start gap-2"
+    <button
+      type="button"
+      className="sidebar-nav-item flex h-8 w-full shrink-0 items-center pr-2 text-sm"
+      style={{ gap: SESSION_MARKER_GAP }}
       onClick={onClick}
       aria-label={label}
       aria-current={active ? "page" : undefined}
-      title={shortcut ? withShortcut(label, shortcut) : undefined}
     >
-      {icon}
-      <span className="truncate">{label}</span>
-    </Button>
+      <span className="flex shrink-0 justify-center" style={{ width: SESSION_MARKER_WIDTH }}>{icon}</span>
+      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
+      {shortcut ? <kbd className="text-muted-foreground shrink-0 font-sans text-xs tracking-wide">{shortcutLabel(shortcut)}</kbd> : null}
+    </button>
   );
 }

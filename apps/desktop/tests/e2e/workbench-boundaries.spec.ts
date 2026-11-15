@@ -156,8 +156,7 @@ test("新会话页选择其他工作区和命令面板跳转都不确认，各�
   await expect(page.getByRole("complementary", { name: "文件" })).toBeVisible();
 
   await page.getByRole("navigation", { name: "当前位置" }).click();
-  const modifier = await page.evaluate(() => /mac/i.test(navigator.userAgent) ? "Meta" : "Control");
-  await page.keyboard.press(`${modifier}+k`);
+  await page.keyboard.press("ControlOrMeta+k");
   await page.getByRole("dialog", { name: "命令面板" }).getByRole("combobox").fill("会话100");
   await page.getByRole("option", { name: /会话100/ }).click();
   await expect(page).toHaveURL(/\/sessions\/100$/);
@@ -171,10 +170,11 @@ test("新会话页选择其他工作区和命令面板跳转都不确认，各�
 test("切换工作台快捷键收起与展开当前工作区的工作台", async ({ page }) => {
   await page.goto("/sessions/100");
   await seedDrafts(page);
-  const modifier = await page.evaluate(() => /mac/i.test(navigator.userAgent) ? "Meta" : "Control");
-  await page.keyboard.press(`${modifier}+Alt+KeyB`);
+  // 应用按 navigator.platform（与浏览器所在系统一致）选键位：macOS ⌘⌥B，其他平台 Ctrl+Shift+B。
+  const shortcut = process.platform === "darwin" ? "Meta+Alt+KeyB" : "Control+Shift+KeyB";
+  await page.keyboard.press(shortcut);
   await expect(page.getByRole("complementary", { name: "工作台" })).toHaveCount(0);
-  await page.keyboard.press(`${modifier}+Alt+KeyB`);
+  await page.keyboard.press(shortcut);
   await expect(page.getByRole("complementary", { name: "工作台" })).toBeVisible();
 });
 

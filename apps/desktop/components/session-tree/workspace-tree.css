@@ -1,20 +1,5 @@
-/* 导航当前项与键盘焦点分离；颜色只消费应用主题 token。 */
-.workspace-tree-row {
-  border-radius: var(--radius-md);
-  color: var(--foreground);
-  outline: none;
-  transition: background-color 150ms;
-}
-
-.workspace-tree-row:hover {
-  background: color-mix(in oklab, var(--foreground) 4%, transparent);
-}
-
-.workspace-tree-row[data-current] {
-  background: color-mix(in oklab, var(--foreground) 8%, transparent);
-}
-
-/* 当前 Session 只靠底色标出，不加粗：中文加粗会变宽，切换会话时标题的截断位置会跳。 */
+/* 导航当前项与键盘焦点分离。悬停、当前底色与焦点框来自侧栏共用的 `.sidebar-nav-item`
+   （sidebar-interaction.css），这里只放树自己的特例。 */
 
 /* 工作区成为当前项只表示「新会话将建在这里」，不是所在页面：去掉底色，
    只加粗并点亮图标，底色留给当前 Session，二者不会被误读为同一种选中。不用 --info 着色：
@@ -33,11 +18,6 @@
 
 .workspace-tree-row[data-current][data-kind="workspace"] .workspace-tree-group-icon {
   color: var(--foreground);
-}
-
-.workspace-tree-row:focus-visible {
-  outline: 2px solid var(--muted-foreground);
-  outline-offset: -2px;
 }
 
 .workspace-tree-row .text-muted-foreground {
@@ -183,6 +163,5 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .workspace-tree-row,
   .workspace-tree-group-chevron { transition: none; }
 }

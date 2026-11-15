@@ -3,6 +3,7 @@ import { CheckIcon, SearchIcon } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { matchesShortcut } from "@/lib/keyboard/shortcuts";
 import { toggleSelection } from "@/lib/selection/range-selection";
 import { cn } from "@/lib/utils";
 import type { ModelDiscovery } from "./use-model-discovery";
@@ -51,7 +52,7 @@ export function ModelPicker({
     onChange(next);
   };
   const moveFocus = (event: KeyboardEvent<HTMLDivElement>) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+    if (matchesShortcut(event, "selectAllModels")) {
       event.preventDefault();
       setVisible(true);
       return;

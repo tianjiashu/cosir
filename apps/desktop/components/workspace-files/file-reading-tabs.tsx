@@ -2,7 +2,8 @@ import { Tabs, DropdownMenu, ContextMenu } from "radix-ui";
 import { XIcon, ChevronDownIcon, TriangleAlertIcon } from "lucide-react";
 import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ReadingCommandsContext, type ReadingCommand, type ReadingCommandRegistry } from "@/lib/workspace-files/reading-commands";
+import { READING_COMMAND_SHORTCUTS, READING_COMMANDS, ReadingCommandsContext, type ReadingCommand, type ReadingCommandRegistry } from "@/lib/workspace-files/reading-commands";
+import { matchesShortcut } from "@/lib/keyboard/shortcuts";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { workspaceFiles, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
 import { WorkspaceFileIcon } from "./file-icon";
@@ -35,9 +36,6 @@ function FileTabName({ workspaceId, path, label, pinned }: { workspaceId: number
   );
 }
 
-/** 阅读器快捷命令的按键（小写），与 `APP_SHORTCUTS` 的 findInFile / addToChat 对应。 */
-const COMMAND_KEYS: Record<string, ReadingCommand> = { f: "find", l: "addToChat" };
-
 /**
  * 文件标签的根：Radix Tabs 管理焦点与 ARIA 关联，并承载阅读器快捷命令的按键边界（`reading-commands`）。
  *
@@ -66,8 +64,8 @@ export function FileReadingTabs({
         ref={ref}
         data-testid="workspace-files-surface"
         onKeyDownCapture={(event) => {
-          if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
-          const action = actions.current[COMMAND_KEYS[event.key.toLowerCase()]];
+          const command = READING_COMMANDS.find((candidate) => matchesShortcut(event, READING_COMMAND_SHORTCUTS[candidate]));
+          const action = command && actions.current[command];
           if (!action) return;
           event.preventDefault();
           event.stopPropagation();

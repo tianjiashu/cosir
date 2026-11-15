@@ -62,6 +62,8 @@ async function box(locator: Locator) {
 for (const theme of ["light", "dark"]) {
   test(`${theme}：长标题不溢出，选中与悬停分离，行内删除操作不引起位移`, async ({ page, request }, testInfo) => {
     await page.setViewportSize({ width: 1280, height: 800 });
+    // 关掉底色过渡（侧栏样式按 reduced-motion 关闭），读到的计算色就是终值。
+    await page.emulateMedia({ reducedMotion: "reduce" });
     await seedSidebar(page, request, theme);
     await page.goto("/sessions/100");
     const selected = row(page, longTitle);
@@ -96,6 +98,20 @@ for (const theme of ["light", "dark"]) {
     await other.hover();
     await expect.poll(() => other.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(selectedColor);
     await expect(other).toHaveAttribute("aria-selected", "false");
+    const hoverColor = await other.evaluate((element) => getComputedStyle(element).backgroundColor);
+
+    // 入口行与会话树同源：悬停底色相同，图标与工作区图标在同一条竖线上。
+    const newConversation = page.getByRole("button", { name: "新会话", exact: true });
+    const settings = page.getByRole("button", { name: "系统配置", exact: true });
+    await settings.hover();
+    await expect.poll(() => settings.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(hoverColor);
+    expect((await box(newConversation.locator("svg"))).x).toBeCloseTo((await box(workspace.locator("svg").first())).x, 0);
+    // 侧栏开关的 aria-expanded 表示侧栏展开，不是菜单展开：平时不带底色。
+    await expect(page.getByRole("button", { name: "切换侧栏" })).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    // 侧栏里的图标按钮悬停同样看得见。
+    const addWorkspace = page.getByRole("button", { name: "添加工作区", exact: true });
+    await addWorkspace.hover();
+    await expect.poll(() => addWorkspace.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(hoverColor);
 
     await selected.hover();
     const menuButton = selected.getByRole("button", { name: `更多操作：${longTitle}`, exact: true });
@@ -110,9 +126,13 @@ for (const theme of ["light", "dark"]) {
     await page.getByRole("navigation", { name: "当前位置" }).click();
     await page.locator("aside").first().screenshot({ path: testInfo.outputPath(`${theme}-sidebar.png`) });
 
-    await page.getByRole("button", { name: "新会话", exact: true }).click();
-    // 新会话页（背后是工作区未开始的会话，不在侧栏里）在侧栏上表现为工作区被选中。
+    await newConversation.click();
+    // 新会话页（背后是工作区未开始的会话，不在侧栏里）在侧栏上表现为工作区被选中，「新会话」是当前项，
+    // 底色与当前会话相同。
     await expect(page.getByRole("heading", { name: /想做什么/ })).toBeVisible();
+    await expect(newConversation).toHaveAttribute("aria-current", "page");
+    await page.mouse.move(800, 400);
+    await expect.poll(() => newConversation.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(selectedColor);
     await expect(workspace).toHaveAttribute("aria-current", "true");
     await expect(selected).toHaveAttribute("aria-selected", "false");
     await expect(page.getByRole("treeitem", { selected: true })).toHaveCount(1);
@@ -354,8 +374,12 @@ test("运行中与打开过的会话留在可见范围内，离开后也不消�
   await expect(row(page, "批量会话 0")).toHaveCount(0);
   await expect(row(page, "展开其余 1 个")).toBeVisible();
 
-  await page.getByRole("button", { name: "新会话", exact: true }).click();
-  await expect(page).toHaveURL(`${WEB_ORIGIN}/`);
+  const newConversation = page.getByRole("button", { name: "新会话", exact: true });
+  await expect(newConversation).not.toHaveAttribute("aria-current", "page");
+  await newConversation.click();
+  // 新会话页就是未开始的会话：`/` 会接着转到它，所以只断言已离开 202。
+  await expect(page).not.toHaveURL(/\/sessions\/202$/);
+  await expect(newConversation).toHaveAttribute("aria-current", "page");
   await expect(row(page, "批量会话 2")).toBeVisible();
 });
 

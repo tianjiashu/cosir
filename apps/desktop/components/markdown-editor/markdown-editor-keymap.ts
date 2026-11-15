@@ -2,6 +2,7 @@ import { EditorSelection, type EditorState, type TransactionSpec } from "@codemi
 import { EditorView } from "codemirror";
 
 import { isImeComposing } from "@/lib/keyboard/ime";
+import { matchesShortcut, type ShortcutId } from "@/lib/keyboard/shortcuts";
 
 type InlineMarkdownMarker = "**" | "*" | "~~" | "`";
 type BlockMarkdownKind = "bullet" | "ordered" | "quote";
@@ -220,6 +221,18 @@ export function indentMarkdownList(state: EditorState, outdent = false): Transac
   return { changes: changeSet, selection: state.selection.map(changeSet) };
 }
 
+/** 编辑器的格式命令；键位登记在 `lib/keyboard/shortcuts.ts`（作用范围 markdownEditor）。 */
+const MARKDOWN_COMMANDS: readonly (readonly [ShortcutId, (state: EditorState) => TransactionSpec])[] = [
+  ["markdownBold", (state) => toggleInlineMarkdown(state, "**")],
+  ["markdownItalic", (state) => toggleInlineMarkdown(state, "*")],
+  ["markdownStrike", (state) => toggleInlineMarkdown(state, "~~")],
+  ["markdownLink", (state) => insertMarkdownLink(state)],
+  ["markdownCode", (state) => toggleInlineMarkdown(state, "`")],
+  ["markdownOrderedList", (state) => toggleBlockMarkdown(state, "ordered")],
+  ["markdownBulletList", (state) => toggleBlockMarkdown(state, "bullet")],
+  ["markdownQuote", (state) => toggleBlockMarkdown(state, "quote")],
+];
+
 /**
  * 处理 Markdown 编辑器的快捷键事件。
  *
@@ -231,19 +244,11 @@ export function handleMarkdownKeydown(view: EditorView, event: KeyboardEvent): b
   if (isImeComposing(event, view.composing)) return false;
 
   const modifier = event.metaKey || event.ctrlKey;
-  const key = event.key.toLowerCase();
-  const code = event.code;
+  const command = MARKDOWN_COMMANDS.find(([id]) => matchesShortcut(event, id));
   let transaction: TransactionSpec | null = null;
 
-  if (modifier && !event.altKey) {
-    if (key === "b" && !event.shiftKey) transaction = toggleInlineMarkdown(view.state, "**");
-    else if (key === "i" && !event.shiftKey) transaction = toggleInlineMarkdown(view.state, "*");
-    else if (key === "x" && event.shiftKey) transaction = toggleInlineMarkdown(view.state, "~~");
-    else if (key === "k" && !event.shiftKey) transaction = insertMarkdownLink(view.state);
-    else if (key === "`" && !event.shiftKey) transaction = toggleInlineMarkdown(view.state, "`");
-    else if ((key === "7" || code === "Digit7") && event.shiftKey) transaction = toggleBlockMarkdown(view.state, "ordered");
-    else if ((key === "8" || code === "Digit8") && event.shiftKey) transaction = toggleBlockMarkdown(view.state, "bullet");
-    else if ((key === "9" || code === "Digit9") && event.shiftKey) transaction = toggleBlockMarkdown(view.state, "quote");
+  if (command) {
+    transaction = command[1](view.state);
   } else if (!modifier && !event.altKey && event.key === "Enter") {
     transaction = continueMarkdownList(view.state);
   } else if (!modifier && !event.altKey && event.key === "Tab") {

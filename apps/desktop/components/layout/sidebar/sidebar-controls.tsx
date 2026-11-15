@@ -1,5 +1,6 @@
 import { PanelLeftIcon, SquarePenIcon } from "lucide-react";
 
+import "@/components/layout/sidebar/sidebar-interaction.css";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { withShortcut } from "@/lib/keyboard/shortcuts";
 
@@ -24,13 +25,13 @@ export function SidebarControls({ open, onToggle, onNewConversation }: {
         tooltip={withShortcut(open ? "收起侧栏" : "展开侧栏", "toggleSidebar")}
         aria-label="切换侧栏"
         aria-expanded={open}
-        className="size-7"
+        className="sidebar-icon-button size-7"
         onClick={onToggle}
       >
         <PanelLeftIcon />
       </TooltipIconButton>
       {!open && (
-        <TooltipIconButton tooltip={withShortcut("新会话", "newConversation")} aria-label="新会话" className="size-7" onClick={onNewConversation}>
+        <TooltipIconButton tooltip={withShortcut("新会话", "newConversation")} aria-label="新会话" className="sidebar-icon-button size-7" onClick={onNewConversation}>
           <SquarePenIcon />
         </TooltipIconButton>
       )}

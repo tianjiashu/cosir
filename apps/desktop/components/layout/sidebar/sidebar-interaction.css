@@ -1,0 +1,55 @@
+/*
+ * 侧栏交互视觉的唯一来源：会话树行、顶部与底部的入口行、侧栏里的图标按钮都只消费这里的悬停 / 当前底色。
+ *
+ * 用前景色叠加而不用 --muted / --secondary：侧栏铺在 --canvas 上，那两个 token 与它明度几乎相同，
+ * 借用 Button 的 ghost / secondary 变体时悬停与选中都看不出来。叠加色在任何底色上强弱一致
+ * （侧栏收起后侧栏开关挂在页头的 --background 上，同样成立）。
+ *
+ * 刻意不放进 @layer：Tailwind 的变体类在 layer 里，未分层的规则总是胜出，挂上这些类的 Button
+ * 不必逐个改写 hover / aria-expanded 颜色。
+ */
+
+.sidebar-nav-item,
+.sidebar-icon-button {
+  border-radius: var(--radius-md);
+  transition: background-color 150ms;
+}
+
+.sidebar-nav-item {
+  color: var(--foreground);
+  outline: none;
+}
+
+/* 接管 Button ghost 变体自带的底色（如 aria-expanded:bg-muted），图标按钮的底色只由下面几条决定。 */
+.sidebar-icon-button {
+  background: transparent;
+}
+
+/* 键盘焦点与当前项分离：焦点只画框，不借用底色。 */
+.sidebar-nav-item:focus-visible {
+  outline: 2px solid var(--muted-foreground);
+  outline-offset: -2px;
+}
+
+.sidebar-nav-item:hover,
+.sidebar-icon-button:hover {
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+
+/* 当前项只靠底色标出，不加粗：中文加粗会变宽，切换时标题的截断位置会跳。
+   图标按钮只在它弹出的菜单开着时加深：侧栏开关也带 aria-expanded（表示侧栏展开），不算。 */
+.sidebar-nav-item[aria-current],
+.sidebar-icon-button[aria-haspopup][aria-expanded="true"],
+.sidebar-icon-button:active {
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+}
+
+.sidebar-icon-button:hover,
+.sidebar-icon-button[aria-haspopup][aria-expanded="true"] {
+  color: var(--foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-nav-item,
+  .sidebar-icon-button { transition: none; }
+}

@@ -2,6 +2,7 @@ import { createContext, useContext, type ReactNode } from "react";
 import { BotIcon, ChevronDownIcon, ChevronRightIcon, FolderIcon, GitForkIcon, PinIcon } from "lucide-react";
 import type { NodeApi, NodeRendererProps, RowRendererProps } from "react-arborist";
 
+import "@/components/layout/sidebar/sidebar-interaction.css";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/format/relative-time";
 import { cn } from "@/lib/utils";
@@ -23,7 +24,7 @@ export function WorkspaceTreeRow({ node, innerRef, attrs, children }: RowRendere
       {...attrs}
       ref={innerRef}
       style={{ ...attrs.style, minWidth: 0 }}
-      className="workspace-tree-row"
+      className="sidebar-nav-item workspace-tree-row"
       aria-label={sidebarNodeLabel(item)}
       aria-selected={current}
       aria-current={current ? (item.kind === "session" ? "page" : "true") : undefined}
@@ -183,10 +184,13 @@ const ROOT_SESSION_LEVEL = 1;
  */
 const ROOT_SESSION_INDENT = 0;
 const FORK_INDENT = 12;
-/** 状态标记列宽：只容纳状态点或 Fork 图标；引导线位置据此推算，宽度只在这里定义。 */
-const SESSION_MARKER_WIDTH = 20;
-/** 标记与标题的间距，与 `.workspace-tree-session` 的 `gap` 一致。 */
-const SESSION_MARKER_GAP = 8;
+/**
+ * 状态标记列宽：只容纳状态点或 Fork 图标；引导线位置据此推算，宽度只在这里定义。
+ * 侧栏入口行（`SidebarLink`）的图标格也取它，入口图标与工作区图标因此落在同一条竖线上。
+ */
+export const SESSION_MARKER_WIDTH = 20;
+/** 标记与标题的间距，与 `.workspace-tree-session` 的 `gap` 一致；入口行的图标与文字间距同样取它。 */
+export const SESSION_MARKER_GAP = 8;
 
 type BranchGuide = "pass" | "none" | "tee" | "end";
 

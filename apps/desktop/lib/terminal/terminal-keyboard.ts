@@ -1,3 +1,5 @@
+import { matchesShortcut } from "@/lib/keyboard/shortcuts";
+
 /**
  * 交互终端的按键归属规则（纯函数，沿用 VS Code 约定）。
  *
@@ -5,7 +7,7 @@
  * - macOS：Cmd+C / Cmd+V 复制粘贴，Ctrl+C 恒为中断。
  * - 作为中断送入的 Ctrl+C 与其他按键一样走普通输入通道（后端从不拒绝用户输入）；作为复制的 Ctrl+C
  *   不产生任何输入，因此后端不会把它记为用户在打字、不会让 Agent 的输入等待。
- * - Ctrl/Cmd+F 打开面板内搜索；Ctrl+` 交给应用快捷键开关面板，不送入终端。
+ * - 面板内搜索与切换终端（让给应用开关面板，不送入终端）的键位登记在 `lib/keyboard/shortcuts.ts`。
  * - 输入法组合中（IME）一律交给 xterm，不拦截。
  * - macOS 的行编辑键改发 shell 认识的序列（`{ send }`）：xterm 6 把 Option+方向键编成 `ESC[1;3D`，
  *   zsh / bash 默认没有绑定；Cmd+方向键与 Cmd+Backspace 则什么都不发。Windows 不翻译：Ctrl+方向键、
@@ -33,9 +35,9 @@ export function resolveTerminalKeyAction(
 ): TerminalKeyAction {
   if (event.isComposing) return "terminal";
   const key = event.key.toLowerCase();
-  if (event.ctrlKey && !event.metaKey && !event.altKey && event.code === "Backquote") return "app";
-  const commandKey = isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
-  if (commandKey && !event.altKey && !event.shiftKey && key === "f") return "search";
+  const keyboard = isMac ? "darwin" : "win32";
+  if (matchesShortcut(event, "toggleTerminal", keyboard)) return "app";
+  if (matchesShortcut(event, "terminalSearch", keyboard)) return "search";
   if (isMac) {
     if (!event.ctrlKey && !event.shiftKey) {
       const sequence = event.altKey && !event.metaKey

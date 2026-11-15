@@ -1,4 +1,3 @@
-import { useHotkeys } from "react-hotkeys-hook";
 import { Loader2Icon, SaveIcon } from "lucide-react";
 
 import { MarkdownEditor } from "@/components/markdown-editor/markdown-editor";
@@ -10,7 +9,7 @@ import { useConfigurationDocument, type ConfigurationDocumentAdapter } from "@/c
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { estimateMarkdownTokens, type MarkdownDocumentContract } from "@/lib/configuration-document";
 import { useUnsavedChanges } from "@/lib/unsaved-changes";
-import { APP_SHORTCUTS, shortcutLabel } from "@/lib/keyboard/shortcuts";
+import { shortcutLabel, useAppHotkey } from "@/lib/keyboard/shortcuts";
 
 type MarkdownConfigurationPanelProps = {
   adapter: ConfigurationDocumentAdapter<MarkdownDocumentContract>;
@@ -45,12 +44,7 @@ export function MarkdownConfigurationPanel({
     if (!blocked) state.save();
   };
   useUnsavedChanges(adapter.label, state.dirty);
-  useHotkeys(
-    APP_SHORTCUTS.saveConfiguration.keys,
-    save,
-    { enableOnFormTags: true, enableOnContentEditable: true, preventDefault: true },
-    [blocked, state.save],
-  );
+  useAppHotkey("saveConfiguration", save);
   if (!document) {
     return state.loadError
       ? <ErrorState className="my-10" message={userErrorMessage(state.loadError, "读取 Markdown 配置失败")} onRetry={state.reload} retryLabel="重新读取" />

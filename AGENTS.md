@@ -249,7 +249,8 @@ Electron 桌面应用
 
 ## 前端架构
 
-- React 负责页面、用户交互、HTTP/SSE 客户端和渲染状态；Electron main 进程负责窗口与本地进程控制。前端不得直接访问 SQLite、Agent Runtime 或工作区文件来绕过后端业务边界。
+- React 负责页面、用户交互、HTTP/SSE 客户端和渲染状态，不得直接访问 SQLite、Agent Runtime 或工作区文件来绕过后端业务边界。
+- 快捷键只在 `lib/keyboard/shortcuts.ts` 登记（分平台键位、作用范围、文案），绑定与展示都从这里取；内层先处理，全局跳过已处理的事件，冲突与保留键由单测守住。
 - 后端 snapshot 是对话、Run、usage 和 tool parts 的权威读取来源。Assistant UI runtime state 只用于当前渲染和传输控制，不得原样写回后端作为事实。
 - 新会话页就是所选工作区未开始的会话（`SessionRecord.unstarted`：用户会话且从未有过 Run）：`/` 只负责取或建它（`PUT /workspaces/{id}/unstarted-session`，每个工作区至多一个、反复复用、不回收）并转过去，输入、草稿、终端与浏览器标签都是会话页那一套；它不进侧栏（目录在 `useWorkspaceCatalog` 一处分出），版面由会话页空态经 `EmptyThreadFrameContext` 套 `NewConversationFrame`，判定只看会话的 `unstarted`；首个 Run 建立后原地成为普通会话。模型选择的回落链只在 `lib/model/model-selection-store.ts`（会话显式选择 → 最近 Run → 分叉继承 → 工作区默认 → 第一个模型），换模型同时成为工作区默认，不在会话间复制。
 - `AppLayout`（react-router 布局路由，路由表见 `src/router.tsx`）是 workspace/session 导航的稳定容器；`SessionPage`、初始 snapshot 和 Assistant runtime 按 `sessionId` 建立，并由布局直接渲染：切到配置或上下文观测时最近的会话页保活，只有进入其他会话或新会话才替换。普通 workspace 数据刷新不应无故卸载正在执行的 Assistant runtime。

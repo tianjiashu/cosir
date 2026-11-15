@@ -1,9 +1,8 @@
 import { useCallback, useRef } from "react";
-import { useHotkeys } from "react-hotkeys-hook";
 
 import { countRunning, useBackgroundTasks } from "@/lib/background-tasks/background-tasks-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS } from "@/lib/keyboard/shortcuts";
+import { useAppHotkey } from "@/lib/keyboard/shortcuts";
 import { selectConversationAsideVisible, useConversationAsideStore } from "@/lib/conversation-aside/conversation-aside-store";
 
 import { useConversationAsideHasContent } from "./aside-card-registry";
@@ -35,7 +34,7 @@ export function useConversationAside(sessionId: number | null) {
     setVisible(false);
     buttonRef.current?.focus();
   }, [setVisible]);
-  useHotkeys(APP_SHORTCUTS.toggleConversationAside.keys, toggle, { ...APP_HOTKEY_OPTIONS, enabled: sessionId !== null && hasContent }, [toggle]);
+  useAppHotkey("toggleConversationAside", toggle, { enabled: sessionId !== null && hasContent });
 
   return { visible, runningCount, hasContent, buttonRef, toggle, close };
 }

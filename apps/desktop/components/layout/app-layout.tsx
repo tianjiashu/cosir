@@ -1,6 +1,6 @@
 import { ReferenceBridgeProvider, ReferenceTargetScope } from "@/components/workspace-references/reference-bridge";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Outlet,
   useLocation,
@@ -41,7 +41,7 @@ import { desktopHost } from "@/lib/desktop-host";
 import { useDockPanels } from "./use-dock-panels";
 import { useUnsavedRouteGuard } from "./use-unsaved-route-guard";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { APP_HOTKEY_OPTIONS, APP_SHORTCUTS, withShortcut } from "@/lib/keyboard/shortcuts";
+import { useAppHotkey, withShortcut } from "@/lib/keyboard/shortcuts";
 import {
   selectTerminalSession,
   useTerminalBadge,
@@ -116,8 +116,6 @@ export function AppLayout() {
   // 工作台显示聚焦会话所在工作区的桶（无会话时为选中工作区）；归属尚在加载时暂不显示，不销毁任何内容。
   const workbenchWorkspace = catalog.workspaces.find((workspace) => workspace.workspace_id === catalog.activeSessionWorkspaceId);
   const workbenchWorkspaceId = workbenchWorkspace?.workspace_id ?? null;
-  // 快捷键先于导航函数注册，经 ref 调用最新的实现。
-  const startNewConversationRef = useRef<(workspaceId?: number) => void>(() => undefined);
   const actions = useWorkspaceActions(catalog, focusedSessionId);
 
   // ---- 侧栏：宽屏停靠（可收起并记住），窄屏抽屉 ----
@@ -145,10 +143,9 @@ export function AppLayout() {
   }, [location.pathname]);
   useHotkeys("escape", () => setDrawerOpen(false), { enabled: drawerOpen, enableOnFormTags: true });
 
-  // ---- 应用级快捷键（登记见 lib/keyboard/shortcuts.ts）；工作台与会话侧栏的快捷键由各自的 hook 注册 ----
-  useHotkeys(APP_SHORTCUTS.newConversation.keys, () => startNewConversationRef.current(), APP_HOTKEY_OPTIONS);
-  useHotkeys(APP_SHORTCUTS.toggleSidebar.keys, () => toggleSidebar(), APP_HOTKEY_OPTIONS, [toggleSidebar]);
-  useHotkeys(APP_SHORTCUTS.openSettings.keys, () => navigate("/settings"), APP_HOTKEY_OPTIONS, [navigate]);
+  // ---- 应用级快捷键（登记见 lib/keyboard/shortcuts.ts）；新会话在导航意图处、工作台与会话侧栏由各自的 hook 注册 ----
+  useAppHotkey("toggleSidebar", toggleSidebar);
+  useAppHotkey("openSettings", () => navigate("/settings"));
 
   // ---- 终端工作台：入口在页头，面板在 SessionPage 内，二者经按 sessionId 分桶的 store 协作 ----
   // 对话页的 Session：终端与会话侧栏都只属于对话区，配置 / 观测页不显示。
@@ -160,7 +157,7 @@ export function AppLayout() {
   const toggleTerminal = useCallback(() => {
     if (conversationSessionId !== null) useTerminalWorkbenchStore.getState().toggle(conversationSessionId);
   }, [conversationSessionId]);
-  useHotkeys(APP_SHORTCUTS.toggleTerminal.keys, toggleTerminal, { ...APP_HOTKEY_OPTIONS, enabled: conversationSessionId !== null }, [toggleTerminal]);
+  useAppHotkey("toggleTerminal", toggleTerminal, { enabled: conversationSessionId !== null });
 
   // ---- 会话侧栏：开关、摆放、页头角标与快捷键见 useConversationAside ----
   const rail = useConversationAside(conversationSessionId);
@@ -182,7 +179,7 @@ export function AppLayout() {
 
   // ---- 命令面板（⌘K）：搜索会话、开始新会话、跳转配置 ----
   const [paletteOpen, setPaletteOpen] = useState(false);
-  useHotkeys(APP_SHORTCUTS.commandPalette.keys, () => setPaletteOpen(true), APP_HOTKEY_OPTIONS);
+  useAppHotkey("commandPalette", () => setPaletteOpen(true));
 
   // ---- 导航意图 ----
   // 开始新会话的唯一入口（侧栏「新会话」与工作区「+」、⌘N、命令面板）：带工作区时先显式选中它，
@@ -192,7 +189,7 @@ export function AppLayout() {
     if (workspaceId !== undefined) selectWorkspace(workspaceId);
     navigate("/");
   }, [navigate, selectWorkspace]);
-  startNewConversationRef.current = startNewConversation;
+  useAppHotkey("newConversation", () => startNewConversation());
   const selectSession = useCallback((session: { session_id: number }) => {
     navigate(`/sessions/${session.session_id}`);
   }, [navigate]);
@@ -253,6 +250,7 @@ export function AppLayout() {
       // 未开始的会话不在侧栏里：新会话页在侧栏上表现为它所在的工作区被选中。
       focusedSessionId={focusedUnstarted ? null : focusedSessionId}
       section={section}
+      newConversationActive={section === "conversation" && (location.pathname === "/" || focusedUnstarted)}
       onNewConversation={startNewConversation}
       onSelectSession={selectSession}
       onOpenSettings={() => navigate("/settings")}
@@ -456,7 +454,7 @@ export function AppLayout() {
         onOpenChange={setPaletteOpen}
         workspaces={catalog.workspaces}
         onSelectSession={selectSession}
-        onNewConversation={() => startNewConversationRef.current()}
+        onNewConversation={() => startNewConversation()}
         onNavigate={navigate}
         onRestartBackend={canRestartBackendRuntime() ? () => confirmBackendRestart("command_palette") : undefined}
       />

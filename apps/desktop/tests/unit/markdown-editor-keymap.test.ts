@@ -10,6 +10,7 @@ import {
   toggleBlockMarkdown,
   toggleInlineMarkdown,
 } from "@/components/markdown-editor/markdown-editor-keymap";
+import { isMac } from "@/lib/platform";
 
 function applyTransaction(state: EditorState, transaction: ReturnType<typeof toggleInlineMarkdown> | null) {
   return transaction ? state.update(transaction).state : state;
@@ -102,8 +103,9 @@ describe("markdown editor shortcuts", () => {
     const event = {
       key: "*",
       code: "Digit8",
-      metaKey: true,
-      ctrlKey: false,
+      // 修饰键跟随运行平台（Node 的 navigator.platform 取宿主系统），本测试在 macOS / Windows 上都成立。
+      metaKey: isMac,
+      ctrlKey: !isMac,
       altKey: false,
       shiftKey: true,
       preventDefault: vi.fn(),

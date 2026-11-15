@@ -2,6 +2,7 @@ import { useRef, type ReactNode } from "react";
 import { MoreHorizontalIcon } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 
+import "@/components/layout/sidebar/sidebar-interaction.css";
 import { Button } from "@/components/ui/button";
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
 import { cn } from "@/lib/utils";
@@ -33,7 +34,7 @@ export function RowActionsMenu({ label, tabIndex, actions }: {
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <Button ref={triggerRef} variant="ghost" size="icon-sm" tabIndex={tabIndex} className="text-muted-foreground" aria-label={`更多操作：${label}`} title="更多操作">
+        <Button ref={triggerRef} variant="ghost" size="icon-sm" tabIndex={tabIndex} className="sidebar-icon-button text-muted-foreground" aria-label={`更多操作：${label}`} title="更多操作">
           <MoreHorizontalIcon className="size-4" />
         </Button>
       </DropdownMenu.Trigger>

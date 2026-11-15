@@ -74,7 +74,7 @@ test("Markdown 配置：保存失败提示在编辑后清除", async ({ page }) 
   await page.goto("/settings/main-agent");
   const editor = page.getByRole("textbox", { name: "Markdown 源码编辑器" });
   await editor.fill("# 会失败");
-  await page.keyboard.press("Control+s");
+  await page.keyboard.press("ControlOrMeta+s");
   await document.fail("磁盘只读");
   await expect(page.getByText("磁盘只读")).toBeVisible();
   await editor.fill("# 再试一次");
@@ -90,16 +90,16 @@ test("Markdown 配置：不可保存时按钮与快捷键都不发请求", async
   // 主 Agent 提示词不允许为空。
   await editor.fill("   ");
   await expect(save).toBeDisabled();
-  await page.keyboard.press("Control+s");
+  await page.keyboard.press("ControlOrMeta+s");
 
   // 超出 Token 预算。
   await editor.fill("超出预算 ".repeat(80));
   await expect(save).toBeDisabled();
-  await page.keyboard.press("Control+s");
+  await page.keyboard.press("ControlOrMeta+s");
 
   await editor.fill("# 合规");
   await expect(save).toBeEnabled();
-  await page.keyboard.press("Control+s");
+  await page.keyboard.press("ControlOrMeta+s");
   await expect.poll(() => document.submitted).toEqual(["# 合规"]);
 });
 
@@ -151,4 +151,30 @@ test(".fileignore：保存期间的新编辑保留，失败提示在编辑后清
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
   await expect(editor).toHaveValue("dist/\ncoverage/\n");
+});
+
+test("Markdown 编辑器的格式快捷键优先于同键的全局快捷键", async ({ page }) => {
+  await routeDocument(page, "/configuration/main-agent-prompt", mainAgentPrompt);
+  await page.goto("/settings/main-agent");
+  const sidebar = page.getByRole("navigation", { name: "工作区会话列表" });
+  await expect(sidebar).toBeVisible();
+  const editor = page.getByRole("textbox", { name: "Markdown 源码编辑器" });
+  await editor.fill("重点");
+  await page.keyboard.press("ControlOrMeta+a");
+
+  // ⌘B / Ctrl+B 在编辑器里只加粗，不收起侧栏。
+  await page.keyboard.press("ControlOrMeta+b");
+  await expect(editor).toHaveText("**重点**");
+  await expect(sidebar).toBeVisible();
+
+  // ⌘K / Ctrl+K 在编辑器里只插入链接，不打开命令面板。
+  await page.keyboard.press("End");
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(editor).toContainText("](");
+  await expect(page.getByRole("dialog", { name: "命令面板" })).toHaveCount(0);
+
+  // 离开编辑器后，同一组键回到全局。
+  await editor.blur();
+  await page.keyboard.press("ControlOrMeta+k");
+  await expect(page.getByRole("dialog", { name: "命令面板" })).toBeVisible();
 });
