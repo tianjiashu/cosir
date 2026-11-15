@@ -51,7 +51,6 @@ svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-widt
 .chip:hover,.chip:focus-within,.chip.hover{background:var(--muted)}
 .chip .main{height:100%;display:inline-flex;align-items:center;gap:8px;padding:0 12px 0 8px;border:0;background:transparent;border-radius:inherit;text-align:left;min-width:0}
 .chip .main:focus-visible,.chip .reveal:focus-visible{outline:2px solid var(--ring,oklch(0.708 0 0));outline-offset:-2px}
-.chip .main:disabled{cursor:default;color:inherit}
 .badge{flex:none;height:20px;min-width:20px;padding:0 6px;border:1px solid var(--border);border-radius:999px;display:inline-grid;place-items:center;font:600 9.5px/1 var(--sans);letter-spacing:.04em;color:var(--muted-foreground);text-transform:uppercase}
 .badge svg{width:12px;height:12px}
 .chip .name{font-size:14px;font-weight:500;display:flex;min-width:0;max-width:260px}
@@ -59,7 +58,7 @@ svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-widt
 .chip .meta{flex:none;font-size:12px;color:var(--muted-foreground);font-variant-numeric:tabular-nums;display:inline-flex}
 .chip .reveal{display:none;flex:none;width:28px;height:28px;margin:0 4px 0 -8px;border:0;border-radius:6px;background:transparent;color:var(--muted-foreground);place-items:center}
 .chip .reveal:hover{color:var(--foreground);background:color-mix(in oklab,var(--foreground) 8%,transparent)}
-.chip:hover .reveal,.chip:focus-within .reveal,.chip.hover .reveal,.chip.denied .reveal{display:inline-grid}
+.chip:hover .reveal,.chip:focus-within .reveal,.chip.hover .reveal{display:inline-grid}
 .chip:hover .meta.swap,.chip:focus-within .meta.swap,.chip.hover .meta.swap{display:none}
 .chip.gone{border-style:dashed;box-shadow:none;background:transparent;height:36px;gap:8px;padding:0 12px 0 8px}
 .chip.gone .name{color:var(--muted-foreground);font-weight:400;text-decoration:line-through}
@@ -130,7 +129,6 @@ tbody tr:hover{background:var(--muted)}
 .aside li:hover{background:var(--muted)}
 .aside li>span:not(.ft){overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
 .aside li>.ft,.aside li>svg{width:22px;flex:none;text-align:center}
-.aside li.gone{color:var(--muted-foreground);text-decoration:line-through}
 .aside li em{font-style:normal;font-size:11px;color:var(--muted-foreground)}
 </style>
 </head>
@@ -153,7 +151,7 @@ tbody tr:hover{background:var(--muted)}
   <div class="bar">
     <div>
       <h1>交付物与文件预览 · 界面设计稿</h1>
-      <p class="lede">配套 <code>deliverables-and-file-preview-design.md</code> 第 11 节。颜色、圆角、字号照抄产品的设计令牌；文档与视频的缩略图是占位画法，实现时换成系统缩略图。</p>
+      <p class="lede">配套 <code>design.md</code> 第 11 节。颜色、圆角、字号照抄产品的设计令牌；文档与视频的缩略图是占位画法，实现时换成系统缩略图。</p>
     </div>
     <button class="btn" id="theme">切换深浅色</button>
   </div>
@@ -203,16 +201,15 @@ tbody tr:hover{background:var(--muted)}
       <p class="cap">C · 异常状态</p>
       <div class="dlv"><div class="chips">
         <span class="chip gone"><span class="badge">DOCX</span><span class="name"><span class="head">草稿_旧版</span><span class="tail">.docx</span></span><span class="meta">已不存在</span></span>
-        <span class="chip gone"><span class="badge">MD</span><span class="name"><span class="head">notes</span><span class="tail">.md</span></span><span class="meta">链接已失效</span></span>
-        <div class="chip denied"><button class="main" disabled><span class="badge warn" style="border-color:currentColor"><svg class="i"><use href="#lock"/></svg></span><span class="name"><span class="head">桌面截图</span><span class="tail">.png</span></span><span class="meta warn">无访问权限</span></button><button class="reveal" title="在文件夹中显示" aria-label="在文件夹中显示"><svg class="i"><use href="#reveal"/></svg></button></div>
+        <span class="chip gone"><span class="badge">MD</span><span class="name"><span class="head">notes</span><span class="tail">.md</span></span><span class="meta">无法访问</span></span>
         <div class="chip "><button class="main"><span class="badge">XLSX</span><span class="name"><span class="head">供应商报价单</span><span class="tail">.xlsx</span></span><span class="meta swap">46 KB</span></button><button class="reveal" title="在文件夹中显示" aria-label="在文件夹中显示"><svg class="i"><use href="#reveal"/></svg></button></div>
       </div></div>
       <ul class="spec">
         <li>不存在：虚线边框、划线、不可点，不用警示色（文件被移走是正常事）</li>
-        <li>链接已失效（第二枚）：链接越出工作区或记录，与不存在同样处理，不用锁</li>
-        <li>没有权限：锁形角标加警示色文字，主按钮不可用，「在文件夹中显示」常显</li>
-        <li>工作区外（第四枚）：外观与普通胶囊一致；阶段五之前点它是「在文件夹中显示」</li>
-        <li>缩略图没到之前先显示角标胶囊或占位方块，到了再换</li>
+        <li>无法访问（第二枚）：读文件信息得到 403，原因本轮分不开（越界链接、没有读权限、系统拒绝），用中性说法，不用锁</li>
+                <li>工作区外（第三枚）：外观与普通胶囊一致，大小是交付时的值；主操作是「在文件夹中显示」</li>
+        <li>其他读取失败（5xx、网络）：胶囊照常，大小一格写「—」，点开由打开链路报错</li>
+        <li>缩略图没到之前先显示占位方块，到了再换，尺寸不变</li>
       </ul>
     </div>
 
@@ -279,7 +276,7 @@ tbody tr:hover{background:var(--muted)}
     </div>
     <div class="panel">
       <div class="tabs"><span class="tab on">操作录屏.mov</span></div>
-      <div class="tool"><span class="path">~/Desktop/操作录屏.mov</span><span>工作区外 · 只读</span></div>
+      <div class="tool"><span class="path">media/操作录屏.mov</span></div>
       <div class="stage"><span class="big"></span></div>
       <div class="ctl"><span>0:00</span><span class="track"></span><span>0:09</span></div>
     </div>
@@ -289,7 +286,6 @@ tbody tr:hover{background:var(--muted)}
     <li>认不出的二进制（中）：没有缩略图也没有快速查看，用通用图标，文案换一种</li>
     <li>「以文本方式查看」降为文字链接：它几乎总是乱码，不该和有用的出口同权重</li>
     <li>视频（右）：黑底等比居中，用浏览器原生控件；播不了时整块换成左侧的空态并说明原因</li>
-    <li>工作区外的标签在工具栏右侧标「工作区外 · 只读」，没有「加入对话」与文件树定位</li>
   </ul>
 
   <h2>4. 会话侧栏：「产出」卡</h2>
@@ -303,14 +299,14 @@ tbody tr:hover{background:var(--muted)}
         <li><svg class="i"><use href="#globe"/></svg><span>本地预览</span></li>
         <li><span class="ft c-pdf">PDF</span><span>合同终稿.pdf</span></li>
         <li><svg class="i"><use href="#folder"/></svg><span>dist</span></li>
-        <li class="gone"><svg class="i"><use href="#file"/></svg><span>草稿_旧版.docx</span></li>
+        <li><svg class="i"><use href="#file"/></svg><span>草稿_旧版.docx</span></li>
       </ul>
     </div>
     <ul class="spec" style="margin:0">
       <li>单行：类型标记加名称，不显示大小与说明（详情在对话里的卡片上）</li>
       <li>点击行为与对话里的卡片完全一致</li>
       <li>同一个目标交付多次只留一行，取最近一次</li>
-      <li>不存在的条目划线变灰，留在列表里（让用户知道交付过）</li>
+      <li>不探测文件是否存在：清单常驻、条目会积累，逐条探测就是几十个请求；点击时由打开链路确认</li>
       <li>没有任何交付物时整张卡不出现；数量只在折叠时显示在标题右侧（侧栏卡片现有行为）</li>
     </ul>
   </div>
