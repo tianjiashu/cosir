@@ -33,7 +33,7 @@ from app.core.events import (
 )
 from app.core.tool.schemas import ToolObservation
 from app.models.conversation_input import UserInputPresentation
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_metadata import SystemMessageMetadata, ToolMessageMetadata
 from app.models.session_context import SessionContextRecord
 from tests.transport_fixtures import consumed
 
@@ -297,8 +297,8 @@ class _RecordingContextStore:
     def get_system_prompt(self, session_id: int) -> ContextEntry | None:
         return None
 
-    def create_system_prompt(self, session_id: int, message: Any) -> ContextEntry:
-        return ContextEntry(message, None, -1, turn=1)
+    def create_system_prompt(self, session_id: int, message: Any, metadata: Any) -> ContextEntry:
+        return ContextEntry(message, None, -1, metadata=metadata, turn=1)
 
     def append(
         self,
@@ -339,7 +339,13 @@ def _memory_manager(
     manager.workspace = SimpleNamespace(id=7, root_path="")
     manager.context_store = context_store
     manager.current_run_id = _RUN_ID
-    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1, turn=1)
+    manager._system_entry = ContextEntry(
+        {"role": "system", "content": "system"},
+        None,
+        -1,
+        metadata=SystemMessageMetadata(prompt_sources={}),
+        turn=1,
+    )
     manager._entries = []
     manager._message_sequence = next_sequence
     return manager

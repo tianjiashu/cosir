@@ -22,7 +22,7 @@ import pytest
 
 from app.config.configuration import build_agent_registry
 from app.core.agents import agent_profile_source
-from app.core.agents.agent_profile import AgentProfile, AgentProfileType
+from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.service.configuration.agents.configuration import AgentConfiguration
@@ -50,20 +50,6 @@ def _write_agent(workspace: Path, agent_id: str, *, role: str = "reader") -> Pat
         encoding="utf-8",
     )
     return path
-
-
-def _file_agent_profile(agent_id: str, *, role: str) -> AgentProfile:
-    """构造一个符合注册契约的 CHILD profile（``workflow=None`` 跳过工作流装配）。"""
-
-    return AgentProfile(
-        agent_id=agent_id,
-        role=role,
-        description=f"Probe {role}",
-        allowed_tools=["read_file"],
-        agent_type=AgentProfileType.CHILD,
-        system_prompt="probe",
-
-    )
 
 
 def test_workspace_created_after_startup_resolves_without_restart(tmp_path: Path) -> None:
@@ -149,25 +135,23 @@ def test_system_baseline_wins_regardless_of_read_order(
     workspace = tmp_path / "workspace"
     _write_agent(workspace, "shared", role="workspace-reader")
 
-    # 顺序一：先注册 workspace 同名 profile —— 必须被拒绝，且 system 文件正常入库。
-    registering = AgentProfileRegistry(AgentProfileScopeSource())
-    assert registering.register(
-        workspace, _file_agent_profile("shared", role="workspace-reader")
-    ) is False
-    assert registering.resolve_local(workspace, "shared") is None
-    assert registering.resolve_local(
+    # 顺序一：先读 workspace 作用域 —— 同名文件被 system 遮住，system 文件正常可见。
+    workspace_first = AgentProfileRegistry(AgentProfileScopeSource())
+    assert workspace_first.resolve_local(workspace, "shared") is None
+    assert workspace_first.resolve_local(
         AgentProfileRegistry.SYSTEM_WORKSPACE, "shared"
     ) is not None
 
-    # 顺序二：workspace 目录内也存在同名文件 —— 解析仍命中 system 基线。
+    # 顺序二：先读 system 作用域 —— 解析仍命中 system 基线。
     resolving = AgentProfileRegistry(AgentProfileScopeSource())
+    resolving.resolve_local(AgentProfileRegistry.SYSTEM_WORKSPACE, "shared")
     resolved = resolving.resolve(workspace, "shared")
     assert resolved is not None
     assert resolved.role == "system-reader"
 
 
-def test_scope_is_loaded_only_once(tmp_path: Path) -> None:
-    """同一作用域只装载一次：重复读取不再读盘。"""
+def test_scope_is_loaded_only_once_while_unchanged(tmp_path: Path) -> None:
+    """配置没变时只装载一次：重复读取不再读盘。"""
 
     loads: list[str] = []
 
@@ -222,19 +206,18 @@ def test_concurrent_first_access_loads_scope_once(tmp_path: Path) -> None:
 
 
 def test_drop_scope_rereads_directory_after_recreate(tmp_path: Path) -> None:
-    """workspace 删除后同路径重建：drop_scope 清掉装载标记，重建后的目录内容可被重新装载。"""
+    """进程外删改下一次读取就生效；drop_scope 只释放快照，之后照样从磁盘重建。"""
 
     workspace = tmp_path / "workspace"
     stale = _write_agent(workspace, "first-agent")
     registry = AgentProfileRegistry(AgentProfileScopeSource())
     assert registry.resolve(workspace, "first-agent") is not None
 
-    # 进程外改动（旧文件删除、新文件写入）不会被已装载作用域感知——同路径重建的 workspace
-    # 会复用同一作用域键，这正是必须由删除路径显式 drop_scope 的原因。
+    # 进程外改动（旧文件删除、新文件写入）下一次读取就被看到；drop_scope 只释放快照，之后照样从磁盘重建。
     stale.unlink()
     _write_agent(workspace, "second-agent")
-    assert registry.resolve(workspace, "first-agent") is not None
-    assert registry.resolve(workspace, "second-agent") is None
+    assert registry.resolve(workspace, "first-agent") is None
+    assert registry.resolve(workspace, "second-agent") is not None
 
     registry.drop_scope(workspace)
 

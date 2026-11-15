@@ -12,11 +12,11 @@ from app.app import app
 from app.config import configuration
 from app.config.configuration import build_agent_registry
 from app.config.constant import Constant
+from app.config.settings import Settings
 from app.core.agents import agent_profile_source
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.agents.define_agents import main_agent
 from app.service.configuration.instructions.main_agent_prompt_service import (
     MainAgentPromptConfigurationError,
     MainAgentPromptConfigurationService,
@@ -74,71 +74,60 @@ def test_main_prompt_update_validates_budget_and_writes_atomically(tmp_path: Pat
     assert target.read_text(encoding="utf-8") == "新的主 Agent 协议"
 
 
-def test_build_agent_registry_uses_configured_main_prompt() -> None:
-    """Registry 中的主 Agent profile 应使用装配层传入的有效 prompt。"""
+@pytest.fixture
+def system_data(tmp_path: Path) -> Path:
+    """主 Agent 提示词文件的位置（conftest 的 ``isolate_scope_config_dirs`` 已把它隔离到用例临时目录）。"""
 
-    registry = build_agent_registry(main_agent_system_prompt="用户配置的主 Agent 协议")
+    return tmp_path / "system-cosir" / "main_agent_system_prompt.md"
+
+
+def _main_profile(registry: AgentProfileRegistry):
     profile = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
-
     assert profile is not None
+    return profile
+
+
+def test_registry_main_agent_reads_the_prompt_file(system_data: Path) -> None:
+    """主 Agent 的预设正文来自提示词文件；手动改文件，下一次解析就是新正文。"""
+
+    system_data.parent.mkdir(parents=True, exist_ok=True)
+    system_data.write_text("用户配置的主 Agent 协议", encoding="utf-8")
+    registry = build_agent_registry()
+
+    profile = _main_profile(registry)
     assert profile.system_prompt == "用户配置的主 Agent 协议"
     assert profile.agent_type is AgentProfileType.MAIN
 
-
-def test_build_agent_registry_uses_configured_main_max_steps() -> None:
-    """Registry 装配应把环境层传入的主 Agent 步数写入 profile。"""
-
-    registry = build_agent_registry(main_agent_max_steps=17)
-    profile = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
-
-    assert profile is not None
-    assert profile.max_steps == 17
+    system_data.write_text("手动改过的协议", encoding="utf-8")
+    assert _main_profile(registry).system_prompt == "手动改过的协议"
 
 
-def test_replace_main_agent_profile_preserves_prompt_when_budget_changes(
-    monkeypatch: pytest.MonkeyPatch,
+def test_registry_main_agent_follows_max_steps_setting(
+    system_data: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """重载预算时应只替换 max_steps，并保留当前主 Agent prompt。"""
+    """步数上限算在系统作用域的签名里：环境配置改了，下一次解析就按新值重建，正文保留。"""
 
-    registry = build_agent_registry("当前协议", main_agent_max_steps=17)
+    system_data.parent.mkdir(parents=True, exist_ok=True)
+    system_data.write_text("当前协议", encoding="utf-8")
+    monkeypatch.setattr(Settings, "MAIN_AGENT_MAX_STEPS", 17)
+    registry = build_agent_registry()
+    assert _main_profile(registry).max_steps == 17
+
+    monkeypatch.setattr(Settings, "MAIN_AGENT_MAX_STEPS", 42)
+
+    profile = _main_profile(registry)
+    assert profile.max_steps == 42
+    assert profile.system_prompt == "当前协议"
+
+
+def test_update_api_saves_the_file_and_registry_sees_it(
+    system_data: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PUT 只写文件；注册表按签名在下一次解析时拿到新正文，不需要另行同步。"""
+
+    registry = build_agent_registry()
+    assert _main_profile(registry).system_prompt == ""
     monkeypatch.setattr(configuration, "_AGENT_REGISTRY", registry)
-
-    replacement = configuration.replace_main_agent_profile(max_steps=42)
-
-    assert replacement.system_prompt == "当前协议"
-    assert replacement.max_steps == 42
-    current = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
-    assert current is replacement
-
-
-def test_update_api_replaces_registry_profile_after_file_save(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """PUT 配置成功后应同时返回新正文并替换进程内主 Agent profile。"""
-
-    target = tmp_path / ".cosir" / "main_agent_system_prompt.md"
-    service = MainAgentPromptConfigurationService(
-        path=target,
-        root=target.parent,
-    )
-    registry = build_agent_registry("旧协议", main_agent_max_steps=17)
-    monkeypatch.setattr(
-        main_agent_prompt_api,
-        "MainAgentPromptConfigurationService",
-        lambda: service,
-    )
-    monkeypatch.setattr(
-        main_agent_prompt_api,
-        "replace_main_agent_profile",
-        lambda *, system_prompt=None, max_steps=None: registry.replace(
-            AgentProfileRegistry.SYSTEM_WORKSPACE,
-            main_agent(
-                system_prompt=system_prompt or "",
-                max_steps=profile_max_steps(registry, max_steps),
-            ),
-        ),
-    )
 
     response = asyncio.run(
         main_agent_prompt_api.update_main_agent_prompt_configuration(
@@ -146,42 +135,13 @@ def test_update_api_replaces_registry_profile_after_file_save(
         )
     )
 
-    profile = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
     assert response.content == "新协议"
-    assert target.read_text(encoding="utf-8") == "新协议"
-    assert profile is not None
-    assert profile.system_prompt == "新协议"
-    assert profile.max_steps == 17
+    assert system_data.read_text(encoding="utf-8") == "新协议"
+    assert _main_profile(registry).system_prompt == "新协议"
 
 
-def test_update_api_is_registered_as_http_endpoint(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_update_api_is_registered_as_http_endpoint(system_data: Path) -> None:
     """配置中心应把主 Agent prompt 更新暴露为标准 HTTP 接口。"""
-
-    target = tmp_path / ".cosir" / "main_agent_system_prompt.md"
-    service = MainAgentPromptConfigurationService(
-        path=target,
-        root=target.parent,
-    )
-    registry = build_agent_registry("旧协议", main_agent_max_steps=17)
-    monkeypatch.setattr(
-        main_agent_prompt_api,
-        "MainAgentPromptConfigurationService",
-        lambda: service,
-    )
-    monkeypatch.setattr(
-        main_agent_prompt_api,
-        "replace_main_agent_profile",
-        lambda *, system_prompt=None, max_steps=None: registry.replace(
-            AgentProfileRegistry.SYSTEM_WORKSPACE,
-            main_agent(
-                system_prompt=system_prompt or "",
-                max_steps=profile_max_steps(registry, max_steps),
-            ),
-        ),
-    )
 
     response = TestClient(app).put(
         "/configuration/main-agent-prompt",
@@ -190,13 +150,4 @@ def test_update_api_is_registered_as_http_endpoint(
 
     assert response.status_code == 200
     assert response.json()["content"] == "HTTP 新协议"
-
-
-def profile_max_steps(registry: AgentProfileRegistry, max_steps: int | None) -> int:
-    """返回测试替身应沿用的主 Agent 步数。"""
-
-    if max_steps is not None:
-        return max_steps
-    profile = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
-    assert profile is not None
-    return profile.max_steps
+    assert system_data.read_text(encoding="utf-8") == "HTTP 新协议"

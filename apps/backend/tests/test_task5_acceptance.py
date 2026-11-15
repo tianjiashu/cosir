@@ -24,7 +24,11 @@ from app.models import RunError, RunStatus
 from app.models.conversation_input import UserInputPresentation
 from app.models.enums.run_status import RunTransition
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
+from app.models.message_metadata import (
+    SystemMessageMetadata,
+    ToolMessageMetadata,
+    UserMessageMetadata,
+)
 from app.models.session_extra import SessionForkLaunch
 from app.service.recover_service import RecoverService
 from app.service.session.fork_source import ForkCut, ForkSource
@@ -362,6 +366,7 @@ def test_real_sqlite_fork_preserves_canonical_identity(
     store.context.create_system_prompt(
         store.session.id,
         {"role": "system", "content": "fixed system prompt"},
+        SystemMessageMetadata(prompt_sources={}),
     )
     target = store.sessions.create(store.workspace.id, "fork")
     with store.factory.begin() as db:

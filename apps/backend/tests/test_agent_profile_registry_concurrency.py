@@ -2,13 +2,11 @@
 
 覆盖两条契约：
 
-1. 写操作（``register`` / ``replace`` / ``unregister``）的「判定 + 提交」在同一临界区内完成，
-   因此同一 key 被多线程同时注册时只允许一个线程成功；
-2. 读操作在同一临界区内读取索引，与并发写入交错时既不会抛
-   ``RuntimeError: dictionary changed size during iteration``，也不会读到半装填状态。
+1. 并发读到同一个配置变化时只重读一次（装载锁内二次比对签名）；
+2. 配置在读取期间不断变化时，``list`` / ``resolve`` 既不抛异常，也不读到半装填状态（快照整体替换）。
 
 不覆盖配置目录读取、作用域隔离与冲突裁决规则（见 ``test_agent_profile_config.py`` 与
-``test_system_prompt_tool_layer.py``）。
+``test_lazy_loading_adversarial.py``）。
 """
 
 from __future__ import annotations
@@ -17,7 +15,7 @@ import threading
 
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.agents.agent_profile_source import AgentProfileScopeSource
+from tests.static_agent_source import StaticAgentSource
 
 _SCOPE = AgentProfileRegistry.SYSTEM_WORKSPACE
 _WRITER_ROUNDS = 2000
@@ -25,7 +23,7 @@ _JOIN_TIMEOUT = 10.0
 
 
 def _profile(agent_id: str) -> AgentProfile:
-    """构造一个满足注册契约的 CHILD profile（``workflow=None`` 跳过工作流装配）。"""
+    """构造一个 CHILD profile（``workflow=None`` 跳过工作流装配）。"""
 
     return AgentProfile(
         agent_id=agent_id,
@@ -34,24 +32,25 @@ def _profile(agent_id: str) -> AgentProfile:
         allowed_tools=["read_file"],
         agent_type=AgentProfileType.CHILD,
         system_prompt="probe",
-
     )
 
 
-def test_concurrent_register_of_same_key_accepts_exactly_one() -> None:
-    """同一 key 被多线程同时注册时，只有一个线程能成功。"""
+def test_concurrent_reads_of_one_change_load_once() -> None:
+    loads: list[str] = []
+    lock = threading.Lock()
 
-    registry = AgentProfileRegistry(AgentProfileScopeSource())
-    profile = _profile("duplicated")
+    class _CountingSource(StaticAgentSource):
+        def load(self, scope: str) -> list[AgentProfile]:
+            with lock:
+                loads.append(scope)
+            return super().load(scope)
+
+    registry = AgentProfileRegistry(_CountingSource({_SCOPE: [_profile("only")]}))
     barrier = threading.Barrier(8)
-    results: list[bool] = []
-    results_lock = threading.Lock()
 
     def worker() -> None:
         barrier.wait(timeout=_JOIN_TIMEOUT)
-        accepted = registry.register(_SCOPE, profile)
-        with results_lock:
-            results.append(accepted)
+        assert registry.resolve(_SCOPE, "only") is not None
 
     threads = [threading.Thread(target=worker) for _ in range(8)]
     for thread in threads:
@@ -59,24 +58,23 @@ def test_concurrent_register_of_same_key_accepts_exactly_one() -> None:
     for thread in threads:
         thread.join(timeout=_JOIN_TIMEOUT)
 
-    assert len(results) == 8
-    assert results.count(True) == 1
-    assert registry.resolve(_SCOPE, "duplicated") is not None
+    assert loads == [_SCOPE]
 
 
-def test_reads_are_safe_while_writes_are_in_flight() -> None:
-    """注册/卸载交错进行时，``list`` 与 ``resolve`` 不抛异常且只看到完整快照。"""
+def test_reads_are_safe_while_configuration_changes() -> None:
+    """配置不断增删时，``list`` 与 ``resolve`` 不抛异常且只看到完整快照。"""
 
-    registry = AgentProfileRegistry(AgentProfileScopeSource())
+    source = StaticAgentSource({_SCOPE: []})
+    registry = AgentProfileRegistry(source)
     done = threading.Event()
     failures: list[BaseException] = []
 
     def writer(prefix: str, start: threading.Barrier) -> None:
         start.wait(timeout=_JOIN_TIMEOUT)
         for index in range(_WRITER_ROUNDS):
-            agent_id = f"{prefix}-{index}"
-            registry.register(_SCOPE, _profile(agent_id))
-            registry.unregister(_SCOPE, agent_id)
+            # 整体换掉列表：与真实来源「每次读到的是一整份文件」一致。
+            source.profiles[_SCOPE] = [_profile(f"{prefix}-{index}")]
+            source.profiles[_SCOPE] = []
 
     def reader(start: threading.Barrier) -> None:
         start.wait(timeout=_JOIN_TIMEOUT)
@@ -106,5 +104,4 @@ def test_reads_are_safe_while_writes_are_in_flight() -> None:
         thread.join(timeout=_JOIN_TIMEOUT)
 
     assert not failures
-    # 每个 writer 都是「注册后立即卸载」，写完卸载后索引应回到空状态。
     assert registry.list(_SCOPE) == []

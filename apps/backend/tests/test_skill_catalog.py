@@ -15,7 +15,10 @@ from fastapi.testclient import TestClient
 
 from app.api.configuration import extensions
 from app.app import app
-from app.core.context import system_prompt_builder as spb
+from app.core.agents.define_agents import main_agent
+from app.core.context.prompt_sources.registry import SKILLS
+from app.core.context.prompt_sources.source import SourceContext
+from app.core.context.prompt_sources.sources.skills import render_skill_catalog
 from app.core.tool.schemas import TOOL_SKILL, ToolExecutionContext
 from app.service.configuration.skills.catalog import SkillCatalog
 from app.service.configuration.skills.configuration_view import SkillCatalogView
@@ -315,7 +318,9 @@ def test_manual_only_skills_stay_out_of_the_model_catalog_but_load(system_shared
 
     listing = SkillTool().execute(action="list", execution_context=context)
     loaded = SkillTool().execute(action="load", skill_name="deploy", execution_context=context)
-    layer = spb.SystemPromptBuilder._build_tool_layer(str(workspace), (TOOL_SKILL,))
+    layer = SKILLS.render(
+        SKILLS.project(SourceContext.locate(str(workspace), frozenset({TOOL_SKILL}), main_agent()))
+    )
 
     assert [item["name"] for item in json.loads(listing.content)] == ["review"]
     assert loaded.status == "success"
@@ -429,7 +434,7 @@ def test_agent_catalog_size_matches_the_prompt_catalog(client, home) -> None:
 
     view = client.get("/configuration/skill-catalog").json()
 
-    expected = spb.SystemPromptBuilder.render_skill_catalog(
+    expected = render_skill_catalog(
         [("release", "Prepare a release"), ("review", "审查代码改动")]
     )
     assert view["agent_skills"] == 2

@@ -318,7 +318,7 @@ def test_environment_update_can_reload_runtime_settings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """保存环境配置时按请求就地重载 Settings，并刷新主 Agent profile。"""
+    """保存环境配置时按请求就地重载 Settings（主 Agent 步数随注册表签名生效，不另行同步）。"""
 
     root = tmp_path / "root"
     root.mkdir()
@@ -332,18 +332,13 @@ def test_environment_update_can_reload_runtime_settings(
     events: list[str] = []
 
     monkeypatch.setattr(Settings, "load", staticmethod(lambda: events.append("settings")))
-    monkeypatch.setattr(
-        "app.config.configuration.replace_main_agent_profile",
-        lambda **_: events.append("agent_registry"),
-    )
 
     service.update(
         {"DEFAULT_LANGUAGE": EnvironmentChange("replace", "en")},
         reload_after_write=True,
     )
 
-    # 顺序即语义：必须先刷新 Settings，再把新预算注入主 Agent profile。
-    assert events == ["settings", "agent_registry"]
+    assert events == ["settings"]
     assert 'DEFAULT_LANGUAGE="en"' in env_file.read_text(encoding="utf-8")
 
 

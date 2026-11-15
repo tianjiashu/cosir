@@ -13,13 +13,15 @@ import pytest
 from app.config.configuration import build_agent_registry
 from app.core.agents.agent_profile import AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.agents.define_agents import main_agent
 from app.core.agents.model_settings import ModelSettings
+from app.core.context.prompt_sources.registry import AGENT_PRESET
+from app.core.context.prompt_sources.source import SourceContext
 from app.core.context.system_prompt_builder import SystemPromptBuilder
 from tests.builtin_agent_fixtures import builtin_child_profile
 from tests.model_config_fixtures import model_config_record
+from tests.static_agent_source import registry_with
 
 
 def _code_defined_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list:
@@ -50,12 +52,12 @@ def test_general_child_profile_carries_its_factory_prompt(monkeypatch) -> None:
     # 本用例只验证 Agent 预设层，故注入一个不含 CHILD 的空目录（该层因此不生成）。
     monkeypatch.setattr(
         "app.config.configuration.get_agent_registry",
-        lambda: AgentProfileRegistry(AgentProfileScopeSource()),
+        lambda: registry_with()[0],
     )
     profile = builtin_child_profile("general-assistant")
     prompt = SystemPromptBuilder.build(
         profile, str(Path(__file__).resolve()), profile.allowed_tools
-    )
+    ).text
 
     assert profile.agent_type is AgentProfileType.CHILD
     assert profile.agent_id == "general-assistant"
@@ -126,7 +128,7 @@ def test_main_profile_prompt_is_injected_and_child_catalog_follows_allowed_tools
     profile_without_delegation = replace(profile, allowed_tools=["read_file"])
     prompt_without_tools = SystemPromptBuilder.build(
         profile_without_delegation, workspace_root, profile_without_delegation.allowed_tools
-    )
+    ).text
     assert "<agent_layer>" in prompt_without_tools
     assert "主 Agent 执行协议" in prompt_without_tools
     # 没有委派工具时不投影子 Agent 目录；文件工具的公共声明照常注入。
@@ -134,15 +136,14 @@ def test_main_profile_prompt_is_injected_and_child_catalog_follows_allowed_tools
     assert "read_file to read" in prompt_without_tools
     assert "general-assistant" not in prompt_without_tools
 
-    registry = AgentProfileRegistry(AgentProfileScopeSource())
-    registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, builtin_child_profile("general-assistant"))
+    registry, _ = registry_with([builtin_child_profile("general-assistant")])
     monkeypatch.setattr(
         "app.config.configuration.get_agent_registry",
         lambda: registry,
     )
     prompt_with_delegation = SystemPromptBuilder.build(
         profile, workspace_root, profile.allowed_tools
-    )
+    ).text
 
     assert profile.description is None
     assert not hasattr(profile, "prompt_file_path")
@@ -156,23 +157,23 @@ def test_main_profile_without_configured_prompt_skips_agent_layer() -> None:
     profile = main_agent()
 
     assert profile.system_prompt == ""
-    assert SystemPromptBuilder._build_agent_layer(profile) == ""
+    assert AGENT_PRESET.project(SourceContext.locate("ws", frozenset(), profile)) == {}
 
 
 def test_registry_projects_only_child_profiles() -> None:
     """registry 摘要和 ID 列表只暴露 CHILD，不包含 MAIN。"""
 
-    registry = AgentProfileRegistry(AgentProfileScopeSource())
     generic = builtin_child_profile("general-assistant")
     main_profile = main_agent()
-    registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, generic)
-    registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, main_profile)
+    registry, _ = registry_with([generic, main_profile])
 
     assert registry.child_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == {generic.agent_id}
-    assert generic.agent_id in registry.child_agent_summary(AgentProfileRegistry.SYSTEM_WORKSPACE)
-    assert main_profile.agent_id not in registry.child_agent_summary(
-        AgentProfileRegistry.SYSTEM_WORKSPACE
-    )
+    child_ids = {
+        profile.agent_id
+        for profile in registry.list(AgentProfileRegistry.SYSTEM_WORKSPACE)
+        if profile.agent_type is AgentProfileType.CHILD
+    }
+    assert child_ids == {generic.agent_id}
 
 
 def test_builtin_children_leave_model_route_to_parent_run(

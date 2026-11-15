@@ -28,6 +28,9 @@ from tests.runtime_context_stub import install_runtime_singletons, runtime_stub
 from tests.sdk_fixtures import sdk_completion
 from tests.tool_executor_fakes import emit_running
 
+# prepare_input 用替身上下文：每步的配置对账另有专门测试。
+pytestmark = pytest.mark.usefixtures("skip_configuration_reconcile")
+
 
 def _raw(call_id: str = "call-1", arguments: str = "{}") -> dict:
     return {

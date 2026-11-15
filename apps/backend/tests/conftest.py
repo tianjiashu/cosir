@@ -30,6 +30,7 @@ from app.core.context.context_store import ContextStore
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.tool_registry import ToolRegistry
 from app.service.configuration import extension_scope
+from app.service.configuration.instructions import main_agent_prompt_service
 from app.service.configuration.mcp import machine_state as mcp_machine_state
 from app.service.configuration.skills import skill_root
 from app.service.conversation.session_context_service import (
@@ -147,6 +148,18 @@ def restore_backend_logging_state() -> Iterator[None]:
         _restore(snapshot)
 
 
+@pytest.fixture
+def skip_configuration_reconcile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """prepare_input 节点单测用替身上下文（没有工具名与配置基准）：显式关掉每步的配置对账。
+
+    对账本身由 ``test_configuration_notice.py`` 覆盖；走真实上下文的用例不用它。
+    """
+
+    from app.core.workflow.nodes import prepare_input_node
+
+    monkeypatch.setattr(prepare_input_node, "_reconcile_configuration", lambda: None)
+
+
 @pytest.fixture(autouse=True)
 def reset_runtime_singletons() -> Iterator[None]:
     """复原 ``runtime_stub`` 为节点测试装上的进程级单例补丁，避免泄漏到后续用例。"""
@@ -257,6 +270,11 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         "system_mcp_machine_state_file",
         lambda: system_cosir_root / "config" / "mcp_machine_state.json",
     )
+    # 主 Agent 提示词同理：注册表读系统作用域时现读它（并按签名判断是否重读）。
+    main_prompt = system_cosir_root / "main_agent_system_prompt.md"
+    monkeypatch.setattr(main_agent_prompt_service, "system_cosir_dir", lambda: system_cosir_root)
+    monkeypatch.setattr(main_agent_prompt_service, "system_main_agent_prompt_file", lambda: main_prompt)
+    monkeypatch.setattr(agent_profile_source, "system_main_agent_prompt_file", lambda: main_prompt)
     # 模型配置文件同理：每次现读，且测试会写它。
     monkeypatch.setattr(model_config_service, "system_cosir_dir", lambda: system_cosir_root)
     monkeypatch.setattr(

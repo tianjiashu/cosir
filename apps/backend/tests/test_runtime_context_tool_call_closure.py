@@ -32,7 +32,11 @@ from app.core.context.runtime_message_context_manager import RuntimeMessageConte
 from app.core.context.tool_call_closure import ContextProtocolError
 from app.core.workflow.run_ledger import RunLedger
 from app.models.conversation_input import UserInputPresentation
-from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
+from app.models.message_metadata import (
+    SystemMessageMetadata,
+    ToolMessageMetadata,
+    UserMessageMetadata,
+)
 from app.models.session_context import SessionContextRecord
 from app.service.conversation.session_context_service import (
     SessionContextService,
@@ -176,7 +180,13 @@ def _manager(
     # 假服务按协议实现 append，不继承真实 service 类型。
     manager.context_store = cast(ContextStore, context_store)
     manager.current_run_id = current_run_id
-    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1, turn=1)
+    manager._system_entry = ContextEntry(
+        {"role": "system", "content": "system"},
+        None,
+        -1,
+        metadata=SystemMessageMetadata(prompt_sources={}),
+        turn=1,
+    )
     manager._entries = list(entries)
     manager._message_sequence = next_sequence
     # 与真实 dataclass 字段同形：Run 重置路径会访问流式草稿表。

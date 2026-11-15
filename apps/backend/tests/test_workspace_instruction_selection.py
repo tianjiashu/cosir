@@ -1,8 +1,11 @@
-"""Layer 3 workspace 项目指令层：只择优加载唯一一个指令文件的行为契约。"""
+"""工作区指令来源：只择优加载唯一一个指令文件的行为契约。"""
 
 from pathlib import Path
 
-from app.core.context.system_prompt_builder import SystemPromptBuilder
+from app.core.agents.define_agents import main_agent
+from app.core.context.prompt_sources.registry import WORKSPACE_INSTRUCTIONS
+from app.core.context.prompt_sources.source import SourceContext
+from app.utils.workspace_instruction import find_workspace_instruction_file
 
 # 候选文件名硬编码在被测模块内（不再经 Settings 配置注入），故用例不再传文件名。
 INSTRUCTION_FILE_NAME = "AGENTS.md"
@@ -14,7 +17,13 @@ def _find(root: Path) -> tuple[Path, Path] | None:
 
     扫描深度上限为被测模块内硬编码的固定值（4 层），不接收深度参数。
     """
-    return SystemPromptBuilder._find_instruction_file(root)
+    return find_workspace_instruction_file(root)
+
+
+def _layer(root: Path) -> str:
+    """工作区指令来源渲染出的正文（不含层标签）。"""
+    items = WORKSPACE_INSTRUCTIONS.project(SourceContext.locate(str(root), frozenset(), main_agent()))
+    return WORKSPACE_INSTRUCTIONS.render(items)
 
 
 def test_other_instruction_files_are_not_candidates(tmp_path: Path) -> None:
@@ -68,7 +77,7 @@ def test_no_agents_md_returns_none_even_with_other_instruction_file(tmp_path: Pa
     (out_of_range / INSTRUCTION_FILE_NAME).write_text("OUT-OF-RANGE", encoding="utf-8")
 
     assert _find(tmp_path) is None
-    assert SystemPromptBuilder._build_workspace_layer(str(tmp_path)) == ""
+    assert _layer(tmp_path) == ""
 
 
 def test_ignores_dirs_in_skip_list_and_depth_limit(tmp_path: Path) -> None:
@@ -90,7 +99,7 @@ def test_returns_empty_layer_without_any_candidate(tmp_path: Path) -> None:
     """无命中时定位返回 None，且项目指令层为空字符串。"""
 
     assert _find(tmp_path) is None
-    assert SystemPromptBuilder._build_workspace_layer(str(tmp_path)) == ""
+    assert _layer(tmp_path) == ""
 
 
 def test_workspace_layer_contains_only_selected_file(tmp_path: Path) -> None:
@@ -100,11 +109,21 @@ def test_workspace_layer_contains_only_selected_file(tmp_path: Path) -> None:
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / IGNORED_FILE_NAME).write_text("DEEP-CLAUDE", encoding="utf-8")
 
-    layer = SystemPromptBuilder._build_workspace_layer(str(tmp_path))
+    layer = _layer(tmp_path)
 
-    assert layer.startswith(
-        "<workspace_layer>\n# Loaded AGENTS.md from workspace path: ./AGENTS.md\n"
-    )
-    assert layer.endswith("\n</workspace_layer>")
+    assert layer.startswith("# Loaded AGENTS.md from workspace path: ./AGENTS.md\n")
     assert "ROOT-AGENTS" in layer
     assert "DEEP-CLAUDE" not in layer
+
+
+def test_directory_named_agents_md_is_not_an_instruction(tmp_path: Path) -> None:
+    """名叫 AGENTS.md 的目录不是指令文件：照常往下找，深处的真文件胜出。"""
+
+    (tmp_path / INSTRUCTION_FILE_NAME).mkdir()
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / INSTRUCTION_FILE_NAME).write_text("REAL", encoding="utf-8")
+
+    found = _find(tmp_path)
+
+    assert found is not None
+    assert found[0] == Path("pkg") / INSTRUCTION_FILE_NAME

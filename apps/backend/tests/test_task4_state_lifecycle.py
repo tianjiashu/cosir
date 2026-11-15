@@ -18,7 +18,7 @@ from app.core.workflow.run_ledger import RunLedger
 from app.models import RunStatus
 from app.models.conversation_input import UserInputPresentation
 from app.models.enums.run_status import RunTransition
-from app.models.message_metadata import UserMessageMetadata
+from app.models.message_metadata import SystemMessageMetadata, UserMessageMetadata
 from app.models.run_failure import run_failure_message, run_terminal_error
 from app.models.run_record import RunRecord
 from app.models.session_context import SessionContextRecord
@@ -154,6 +154,7 @@ def test_cold_state_rebuild_ignores_session_system_prompt() -> None:
             session_id=7,
             run_id=None,
             message={"role": "system", "content": "internal system prompt"},
+            metadata=SystemMessageMetadata(prompt_sources={}),
             include_in_context=True,
             sequence=0,
             turn=1,

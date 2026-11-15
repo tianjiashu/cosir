@@ -23,6 +23,9 @@ from app.models.message_metadata import NoticeEntry
 from app.models.session_kind import SessionType
 from tests.runtime_context_stub import runtime_stub
 
+# prepare_input 用替身上下文：每步的配置对账另有专门测试。
+pytestmark = pytest.mark.usefixtures("skip_configuration_reconcile")
+
 
 def _space(mailbox: RunMailbox) -> SimpleNamespace:
     """Run 所属 Session 的运行时空间替身：``for_run`` 只从它取 Session / 工作区 / mailbox。"""

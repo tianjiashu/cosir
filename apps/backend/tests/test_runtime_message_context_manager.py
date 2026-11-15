@@ -12,6 +12,7 @@ from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import (
     BackgroundWork,
     EmptyMessageMetadata,
+    SystemMessageMetadata,
     ToolMessageMetadata,
     UserMessageMetadata,
 )
@@ -86,7 +87,13 @@ def _manager(
     manager.workspace = SimpleNamespace(id=7, root_path="")
     manager.context_store = context_store
     manager.current_run_id = None
-    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1, turn=1)
+    manager._system_entry = ContextEntry(
+        {"role": "system", "content": "system"},
+        None,
+        -1,
+        metadata=SystemMessageMetadata(prompt_sources={}),
+        turn=1,
+    )
     manager._entries = []
     manager._message_sequence = next_sequence
     manager._draft_response = None

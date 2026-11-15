@@ -30,9 +30,6 @@ class _PermanentlyBrokenRegistry:
     def child_agent_ids(self) -> set[str]:
         raise AttributeError("persistent registry bug")
 
-    def child_agent_summary(self) -> str:
-        raise AttributeError("persistent registry bug")
-
 
 @pytest.fixture
 def broken_registry(monkeypatch) -> _PermanentlyBrokenRegistry:

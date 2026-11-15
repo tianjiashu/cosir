@@ -16,6 +16,7 @@ from app.core.workflow.execution_state.react_execution_state import ReactExecuti
 from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
 from app.core.workflow.run_ledger import RunLedger
 from app.models.enums.run_status import RunStatus, RunTransition
+from app.models.message_metadata import SystemMessageMetadata
 from app.models.run_failure import run_failure_message
 from app.service.recover_service import RecoverService
 from tests.model_config_fixtures import model_config_record, model_configs
@@ -63,7 +64,13 @@ def _runtime_manager(context_store: _RecordingContextStore) -> RuntimeMessageCon
     manager._system_entry = None
     manager._entries = []
     manager._message_sequence = 1
-    manager._system_entry = ContextEntry({"role": "system", "content": "system"}, None, -1, turn=1)
+    manager._system_entry = ContextEntry(
+        {"role": "system", "content": "system"},
+        None,
+        -1,
+        metadata=SystemMessageMetadata(prompt_sources={}),
+        turn=1,
+    )
     return manager
 
 

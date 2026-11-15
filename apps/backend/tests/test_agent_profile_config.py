@@ -13,9 +13,11 @@ from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import main_agent
-from app.core.context import system_prompt_builder
+from app.core.context.prompt_sources.registry import AGENT_PRESET
+from app.core.context.prompt_sources.source import SourceContext
 from app.utils.token_estimator import TokenEstimator
 from tests.builtin_agent_fixtures import builtin_child_profile
+from tests.static_agent_source import registry_with
 
 
 def _document(agent_id: str) -> dict:
@@ -53,9 +55,7 @@ def _system_source(monkeypatch: pytest.MonkeyPatch, directory: Path) -> AgentPro
 def _base_registry() -> AgentProfileRegistry:
     """构造包含代码内通用 Agent 和主 Agent 的进程目录。"""
 
-    registry = AgentProfileRegistry(AgentProfileScopeSource())
-    registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, builtin_child_profile("general-assistant"))
-    registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, main_agent())
+    registry, _ = registry_with([builtin_child_profile("general-assistant"), main_agent()])
     return registry
 
 
@@ -90,7 +90,7 @@ def test_system_agent_config_dir_creates_empty_workspace_when_no_packaged_defaul
 
     registry = AgentProfileRegistry(_system_source(monkeypatch, target))
 
-    assert registry.list(AgentProfileRegistry.SYSTEM_WORKSPACE) == []
+    assert registry.list_system_sub_agents() == []
 
 
 def test_configured_prompt_enters_agent_layer_and_truncation_logs_agent_id(
@@ -104,13 +104,16 @@ def test_configured_prompt_enters_agent_layer_and_truncation_logs_agent_id(
     profile = AgentProfile.vaild_agent_profile(tmp_path / "local-reader.json")
     monkeypatch.setattr(Constant.SystemPrompt, "AGENT_PERSONA_MAX_TOKENS", 3)
 
-    layer = system_prompt_builder.SystemPromptBuilder._build_agent_layer(profile)
+    context = SourceContext.locate("ws", frozenset(), profile)
+    body = AGENT_PRESET.render(AGENT_PRESET.project(context))
+    # 每步对账都会再投影一次：原文没变就复用截断结果，不重复告警。
+    AGENT_PRESET.project(context)
 
-    body = layer[len("<agent_layer>\n") : -len("\n</agent_layer>")]
     assert 0 < TokenEstimator.estimate(body) <= 3
     assert body != profile.system_prompt
     assert "agent_system_prompt_truncated" in caplog.text
     assert caplog.records[0].data == {"agent_id": "local-reader"}
+    assert [record.message for record in caplog.records].count("agent_system_prompt_truncated") == 1
 
 
 @pytest.mark.parametrize(
@@ -170,13 +173,13 @@ def test_loader_does_not_check_filename_id_and_keeps_skipping_duplicates(
     """文件名与 agent_id 不一致不是错误；同作用域重复 ID 跳过而不中断整批装载。
 
     文件名一致性属 ``AgentProfileRegistry`` 的已知缺口（见类 docstring）；重复 ID 由
-    ``_decide_registration`` 保留先读到的文件并告警，同样不抛错。
+    注册表保留先读到的文件并告警，同样不抛错。
     """
 
     _write_config(tmp_path, "filename", _document("different-id"))
     mismatched = AgentProfileRegistry(_system_source(monkeypatch, tmp_path))
 
-    assert mismatched.list_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == {"different-id"}
+    assert mismatched.child_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == {"different-id"}
 
     (tmp_path / "filename.json").unlink()
     _write_config(tmp_path, "same-agent")
@@ -184,7 +187,7 @@ def test_loader_does_not_check_filename_id_and_keeps_skipping_duplicates(
     duplicated = AgentProfileRegistry(_system_source(monkeypatch, tmp_path))
 
     # 同作用域重复 ID（``same-agent-copy.json``）被跳过，不进入索引。
-    assert duplicated.list_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == {"same-agent"}
+    assert duplicated.child_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == {"same-agent"}
 
 
 def test_workspace_catalog_isolated_and_rejects_baseline_collision(tmp_path: Path) -> None:
@@ -200,7 +203,7 @@ def test_workspace_catalog_isolated_and_rejects_baseline_collision(tmp_path: Pat
     assert catalog.resolve(workspace.parent / "other", "workspace-reader") is None
 
     # agent_id 与 system 基线冲突：保留先注册的 system profile，workspace 文件被跳过，
-    # 装载不因冲突中断（冲突由 ``_decide_registration`` 裁决，不抛配置异常）。
+    # 装载不因冲突中断（system 生效，不抛配置异常）。
     _write_config(directory, "general-assistant", _document("general-assistant"))
 
     collision = _base_registry()

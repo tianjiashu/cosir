@@ -41,6 +41,9 @@ from app.models.enums.react_route import ReactRoute
 from app.models.message_metadata import ToolMessageMetadata
 from tests.runtime_context_stub import runtime_stub
 
+# prepare_input 用替身上下文：每步的配置对账另有专门测试。
+pytestmark = pytest.mark.usefixtures("skip_configuration_reconcile")
+
 _CALL = {
     "id": "call-hitl",
     "type": "function",

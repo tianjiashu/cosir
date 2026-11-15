@@ -29,6 +29,9 @@ from app.service import depends as service_depends
 from app.utils.datetime_utils import SESSION_TITLE_LIMIT
 from tests.runtime_context_stub import runtime_stub
 
+# prepare_input 用替身上下文：每步的配置对账另有专门测试。
+pytestmark = pytest.mark.usefixtures("skip_configuration_reconcile")
+
 
 def _completion(content: str) -> SimpleNamespace:
     return SimpleNamespace(

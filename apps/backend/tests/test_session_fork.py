@@ -21,6 +21,8 @@ from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.message_metadata import (
     TURN_INPUT_KINDS,
     BackgroundWork,
+    PromptSourceEntry,
+    SystemMessageMetadata,
     ToolMessageMetadata,
     UserMessageMetadata,
 )
@@ -29,6 +31,9 @@ from app.service.session.session_service import SessionService
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.session_runtime.workspace_operation_registry import workspace_operations
 from app.storage.model.session_model import SessionModel
+
+# 分叉前 Agent 已看到的一份工作区规则（系统行上的初始基准）。
+_SEEN = PromptSourceEntry(fingerprint="fp", text="rules")
 
 
 @pytest.fixture
@@ -41,7 +46,11 @@ def fork_store(request, monkeypatch):
     service._session_context_crud = store.contexts
     service._db_factory = store.factory
     store.service = service
-    store.context.create_system_prompt(store.session.id, {"role": "system", "content": "固定系统指令"})
+    store.context.create_system_prompt(
+        store.session.id,
+        {"role": "system", "content": "固定系统指令"},
+        SystemMessageMetadata(prompt_sources={"workspace_instructions": {"AGENTS.md": _SEEN}}),
+    )
 
     def runtime_access_forbidden(*args, **kwargs):
         raise AssertionError("fork must not access runtime spaces")
@@ -420,7 +429,12 @@ def test_agent_on_the_first_turn_forks_to_system_only(fork_store):
     run = append_run(s, "running")
     call(s, run)
     child = agent_fork(s, run)
-    assert [r.message.get("content") for r in s.contexts.get(child.id)] == ["固定系统指令"]
+    rows = s.contexts.get(child.id)
+    assert [r.message.get("content") for r in rows] == ["固定系统指令"]
+    # 分叉继承 Agent 已看到的配置基准：系统行原样复制，指纹随之过来。
+    assert rows[0].metadata == SystemMessageMetadata(
+        prompt_sources={"workspace_instructions": {"AGENTS.md": _SEEN}}
+    )
 
 
 def test_agent_in_a_branch_inherits_the_branch_history(fork_store):

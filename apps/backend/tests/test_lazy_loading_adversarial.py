@@ -1,13 +1,11 @@
-"""作用域懒装载改造的独立缺陷发现型测试（对抗性）。
+"""Agent 注册表按签名重读的独立缺陷发现型测试（对抗性）。
 
 覆盖目标（均以「试图证伪」为出发点，而不只是 happy path）：
 
-1. 并发：多线程首访是否只装载一次；``register`` / ``drop_scope`` / 读交错时是否抛异常或读到
+1. 并发：多线程首访是否只读一次盘；改文件 / ``drop_scope`` / 读交错时是否抛异常或读到
    半装填状态；``drop_scope`` 与正在进行的装载之间的锁序是否会死锁。
-2. 跨作用域同名 ``agent_id``：两种读取顺序下裁决是否一致；``register`` 是否会被 system 目录
-   内容抢先；system 作用域自身的注册会不会被「某个 workspace 的本地同名 Agent」挡掉（跨作用域
-   串扰）。
-3. 删除/重建：``drop_scope`` 幂等性与作用域隔离；不 ``drop_scope`` 时的陈旧语义。
+2. 跨作用域同名 ``agent_id``：两种读取顺序、两边先后改动下，system 是否总是胜出。
+3. 进程外改动：不 ``drop_scope`` 也能看到磁盘上的新增、删除与修复。
 4. 坏配置与布局破坏：单文件坏、路径是文件、符号链接目录、失效符号链接、祖先被占位、
    隐藏文件、非 UTF-8、顶层非对象 —— 是否都能「降级 + 留痕（事件名）」且不抛异常、不阻断后续。
 5. 内置 profile 不被同名用户文件覆盖。
@@ -19,7 +17,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
@@ -36,7 +33,6 @@ from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import main_agent
 from app.service.configuration.agents.configuration import AgentConfiguration
 from app.service.configuration.agents.configuration_service import (
-    AgentConfigurationError,
     AgentConfigurationService,
 )
 from app.utils.scope_config_directory import ScopeDirectoryError, read_scope_json_files
@@ -196,7 +192,7 @@ def test_concurrent_distinct_scopes_isolate_and_load_once_each(tmp_path: Path) -
     def worker(index: int) -> None:
         barrier.wait(timeout=_JOIN_TIMEOUT)
         try:
-            ids = registry.list_agent_ids(workspaces[index])
+            ids = registry.child_agent_ids(workspaces[index])
             seen[index] = set(ids)
         except BaseException as exc:
             errors.append(exc)
@@ -209,10 +205,9 @@ def test_concurrent_distinct_scopes_isolate_and_load_once_each(tmp_path: Path) -
 
 
 def test_reader_writer_drop_interleaving_never_raises(tmp_path: Path) -> None:
-    """[并发/健壮性] register/unregister/list/resolve 与反复 drop_scope 交错不得抛异常。
+    """[并发/健壮性] 改文件、list/resolve 与反复 drop_scope 交错不得抛异常。
 
-    潜在缺陷：``list`` 迭代 ``self._profiles`` 时被并发改写（``RuntimeError: dictionary changed
-    size during iteration``），或读路径遇到半装填作用域。
+    潜在缺陷：读路径遇到半装填作用域，或重读与 drop 交错留下坏状态。
     """
 
     registry = AgentProfileRegistry(AgentProfileScopeSource())
@@ -221,17 +216,13 @@ def test_reader_writer_drop_interleaving_never_raises(tmp_path: Path) -> None:
     scope = AgentProfileRegistry.normalize_workspace(workspace)
     done = threading.Event()
     failures: list[BaseException] = []
-    rounds = 300
+    rounds = 100
 
     def writer(prefix: str) -> None:
         try:
             for index in range(rounds):
-                agent_id = f"{prefix}-{index}"
-                registry.register(scope, _file_profile(agent_id, role="writer"))
-                # 注册与注销之间被并发 drop_scope 清空了作用域：未注册即 KeyError 是契约，
-                # 不是本用例要防的并发异常（迭代中改写、读到半装填作用域）。
-                with contextlib.suppress(KeyError):
-                    registry.unregister(scope, agent_id)
+                path = _write_workspace_agent(workspace, f"{prefix}-{index}")
+                path.unlink()
         except BaseException as exc:
             failures.append(exc)
             done.set()
@@ -261,6 +252,7 @@ def test_reader_writer_drop_interleaving_never_raises(tmp_path: Path) -> None:
     )
 
     assert not failures, f"并发交错出现异常: {failures!r}"
+    assert registry.resolve_local(workspace, "disk-agent") is not None
 
 
 def test_drop_scope_waits_for_inflight_load_without_deadlock(tmp_path: Path) -> None:
@@ -342,61 +334,42 @@ def test_workspace_first_read_still_lets_system_baseline_win(tmp_path: Path) -> 
     assert resolved is not None and resolved.role == "system-reader"
 
 
-def test_register_workspace_profile_colliding_with_system_file_is_rejected(tmp_path: Path) -> None:
-    """[跨作用域/注册] 注册与 system 目录同名的 workspace profile 应被拒绝且先装载 system。
+def test_system_file_added_later_still_wins_over_workspace(tmp_path: Path) -> None:
+    """[跨作用域/先后] workspace 已在用某 id，之后 system 才新增同名文件：下一次读取 system 胜出。
 
-    潜在缺陷：``register`` 未先装载 system 时，workspace 同名 profile 抢先入索引，跨作用域裁决翻转。
+    与重启后的结果一致：冲突按读取时两边当前的内容判定，不看谁先进内存。
     """
 
-    system_directory = tmp_path / _SYSTEM_AGENTS
-    _write_agent(system_directory, "shared", role="system-reader")
     workspace = tmp_path / "workspace"
+    _write_workspace_agent(workspace, "shared", role="workspace-reader")
     registry = AgentProfileRegistry(AgentProfileScopeSource())
+    assert registry.resolve_local(workspace, "shared") is not None
 
-    accepted = registry.register(workspace, _file_profile("shared", role="workspace-reader"))
+    _write_agent(tmp_path / _SYSTEM_AGENTS, "shared", role="system-reader")
 
-    assert accepted is False
     assert registry.resolve_local(workspace, "shared") is None
-    assert registry.resolve_local(AgentProfileRegistry.SYSTEM_WORKSPACE, "shared") is not None
-
-
-def test_register_system_after_workspace_holds_same_id_is_rejected(tmp_path: Path) -> None:
-    """[跨作用域/先注册者优先] workspace 已持有某 id 时，system 作用域的注册被拒绝。
-
-    这是有意的规则（见 ``AgentProfileRegistry`` 类 docstring）：运行期的 system 写入不逐出
-    已在用的 workspace Agent。服务层的可见后果在
-    ``test_system_scope_create_rejected_when_workspace_holds_same_id`` 断言。
-    """
-
-    workspace = tmp_path / "workspace"
-    registry = AgentProfileRegistry(AgentProfileScopeSource())
-    assert registry.register(workspace, _file_profile("local-only", role="workspace-reader")) is True
-
-    accepted = registry.register(
-        AgentProfileRegistry.SYSTEM_WORKSPACE,
-        _file_profile("local-only", role="system-reader"),
-    )
-
-    assert accepted is False
-    assert registry.resolve_local(AgentProfileRegistry.SYSTEM_WORKSPACE, "local-only") is None
-    assert registry.resolve_local(workspace, "local-only") is not None
+    resolved = registry.resolve(workspace, "shared")
+    assert resolved is not None and resolved.role == "system-reader"
 
 
 def test_cross_scope_conflict_logs_skip_event(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """[跨作用域/留痕] 冲突跳过必须写 ``agent_profile_conflict_skipped``，便于复盘。"""
+    """[跨作用域/留痕] 冲突跳过写 ``agent_profile_conflict_skipped`` 便于复盘，且配置不变时只写一次。"""
 
     system_directory = tmp_path / _SYSTEM_AGENTS
     _write_agent(system_directory, "shared", role="system-reader")
     workspace = tmp_path / "workspace"
+    _write_workspace_agent(workspace, "shared", role="workspace-reader")
     registry = AgentProfileRegistry(AgentProfileScopeSource())
 
     with caplog.at_level(logging.WARNING):
-        registry.register(workspace, _file_profile("shared", role="workspace-reader"))
+        for _ in range(3):
+            registry.resolve_local(workspace, "shared")
 
     events = [record.message for record in caplog.records]
-    assert "agent_profile_conflict_skipped" in events
+    # 每步都会读到这里：两边配置没变时只记一次，不刷屏。
+    assert events.count("agent_profile_conflict_skipped") == 1
 
 
 def test_same_id_allowed_in_two_different_workspaces(tmp_path: Path) -> None:
@@ -426,7 +399,7 @@ def test_drop_scope_on_never_loaded_scope_is_idempotent(tmp_path: Path) -> None:
     registry.drop_scope(workspace)
     registry.drop_scope(workspace)
 
-    assert registry.list(workspace) == []
+    assert registry.list_workspace_sub_agents(workspace) == []
 
 
 def test_drop_scope_does_not_touch_other_scopes(tmp_path: Path) -> None:
@@ -444,30 +417,13 @@ def test_drop_scope_does_not_touch_other_scopes(tmp_path: Path) -> None:
     assert registry.resolve(second, "b-agent") is not None
     registry.drop_scope(first)
 
-    assert set(registry.list_agent_ids(first)) == {"sys-agent", "a-agent"}
+    assert set(registry.child_agent_ids(first)) == {"sys-agent", "a-agent"}
     assert registry.resolve(second, "b-agent") is not None
     assert registry.resolve_local(AgentProfileRegistry.SYSTEM_WORKSPACE, "sys-agent") is not None
 
 
-def test_drop_scope_then_reregister_keeps_new_state_after_reload(tmp_path: Path) -> None:
-    """[删除/重建] drop 后重新注册的条目应在后续重新装载时保留（合并不覆盖内存新值）。"""
-
-    workspace = tmp_path / "workspace"
-    _write_workspace_agent(workspace, "disk-agent")
-    registry = AgentProfileRegistry(AgentProfileScopeSource())
-    assert registry.resolve_local(workspace, "disk-agent") is not None
-
-    registry.drop_scope(workspace)
-    registry.register(workspace, _file_profile("memory-only", role="memory"))
-
-    assert registry.resolve_local(workspace, "memory-only") is not None
-    # 触发重新装载：磁盘内容合并进来，内存项不被清掉。
-    assert registry.resolve_local(workspace, "disk-agent") is not None
-    assert registry.resolve_local(workspace, "memory-only") is not None
-
-
-def test_stale_scope_without_drop_ignores_on_disk_changes(tmp_path: Path) -> None:
-    """[删除/陈旧语义] 未 drop 时，进程外的删除/新增不应被感知（文档声明的已知限制）。"""
+def test_on_disk_changes_are_seen_without_drop(tmp_path: Path) -> None:
+    """[进程外改动] 不 drop 也能看到磁盘上的删除与新增：签名变了就重读。"""
 
     workspace = tmp_path / "workspace"
     stale = _write_workspace_agent(workspace, "first")
@@ -477,8 +433,8 @@ def test_stale_scope_without_drop_ignores_on_disk_changes(tmp_path: Path) -> Non
     stale.unlink()
     _write_workspace_agent(workspace, "second")
 
-    assert registry.resolve_local(workspace, "first") is not None
-    assert registry.resolve_local(workspace, "second") is None
+    assert registry.resolve_local(workspace, "first") is None
+    assert registry.resolve_local(workspace, "second") is not None
 
 
 # =========================================================== D. 坏配置与布局破坏
@@ -496,7 +452,7 @@ def test_single_invalid_json_is_skipped_others_load(
     registry = AgentProfileRegistry(AgentProfileScopeSource())
 
     with caplog.at_level(logging.ERROR):
-        ids = registry.list_agent_ids(tmp_path / "workspace")
+        ids = registry.child_agent_ids(tmp_path / "workspace")
 
     assert ids == {"good-agent"}
     assert "agent_profile_config_invalid" in {record.message for record in caplog.records}
@@ -517,7 +473,7 @@ def test_agents_path_is_regular_file_degrades_with_warning(
 
     assert "agent_profile_scope_load_failed" in {record.message for record in caplog.records}
     # 不阻断后续读取：作用域已标记装载，重复读取仍返回空且不抛。
-    assert registry.list(workspace) == []
+    assert registry.list_workspace_sub_agents(workspace) == []
 
 
 def test_agents_directory_is_symlink_degrades_with_warning(
@@ -568,7 +524,7 @@ def test_config_file_symlink_escaping_directory_degrades_with_warning(
     registry = AgentProfileRegistry(AgentProfileScopeSource())
 
     with caplog.at_level(logging.WARNING):
-        ids = registry.list_agent_ids(workspace)
+        ids = registry.child_agent_ids(workspace)
 
     assert ids == set(), "越界符号链接视为布局破坏，整个作用域降级"
     assert "agent_profile_scope_load_failed" in {record.message for record in caplog.records}
@@ -583,7 +539,7 @@ def test_missing_configuration_directory_is_silent_no_config(
     missing = tmp_path / "missing-workspace"
 
     with caplog.at_level(logging.WARNING):
-        assert registry.list(missing) == []
+        assert registry.list_workspace_sub_agents(missing) == []
 
     assert not [
         record for record in caplog.records if record.message == "agent_profile_scope_load_failed"
@@ -646,7 +602,7 @@ def test_hidden_json_files_are_not_loaded(
     with caplog.at_level(logging.WARNING):
         assert registry.resolve(workspace, "hidden-agent") is None
 
-    assert registry.list_agent_ids(workspace) == set()
+    assert registry.child_agent_ids(workspace) == set()
 
 
 def test_directory_entry_with_json_suffix_is_ignored(tmp_path: Path) -> None:
@@ -673,7 +629,7 @@ def test_non_utf8_config_is_skipped_with_error_log(
     registry = AgentProfileRegistry(AgentProfileScopeSource())
 
     with caplog.at_level(logging.ERROR):
-        ids = registry.list_agent_ids(tmp_path / "workspace")
+        ids = registry.child_agent_ids(tmp_path / "workspace")
 
     assert ids == {"good-agent"}
     assert "agent_profile_config_invalid" in {record.message for record in caplog.records}
@@ -696,26 +652,22 @@ def test_top_level_array_config_is_skipped_with_error_log(
     assert "agent_profile_config_invalid" in {record.message for record in caplog.records}
 
 
-def test_broken_scope_marked_loaded_so_fix_requires_drop(
+def test_broken_scope_is_seen_once_fixed(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """[状态副作用] 布局破坏降级后作用域仍标记已装载：修复目录后不 drop 不应被感知。"""
+    """[修复即生效] 布局破坏降级后修好目录：不 drop，下一次读取就看到修复后的配置。"""
 
     workspace = tmp_path / "workspace"
     (workspace / ".cosir").mkdir(parents=True)
     (workspace / ".cosir" / "agents").write_text("", encoding="utf-8")
     registry = AgentProfileRegistry(AgentProfileScopeSource())
 
-    assert registry.list(workspace) == []
+    assert registry.list_workspace_sub_agents(workspace) == []
 
     # 修复布局：把占位文件替换为真实目录并放入合法配置。
     (workspace / ".cosir" / "agents").unlink()
     _write_workspace_agent(workspace, "recovered-agent")
 
-    assert registry.resolve_local(workspace, "recovered-agent") is None, (
-        "文档声明每作用域只读盘一次；修复后需 drop_scope 才能感知"
-    )
-    registry.drop_scope(workspace)
     assert registry.resolve_local(workspace, "recovered-agent") is not None
 
 
@@ -832,39 +784,35 @@ def test_agent_service_system_write_then_list_without_false_duplicate(
     ], "刚写入的配置文件不应在首次读取时被读回并报成重复"
 
 
-def test_system_scope_create_rejected_when_workspace_holds_same_id(
+def test_system_scope_create_shadows_a_workspace_agent_with_the_same_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """[跨作用域/先注册者优先] workspace 本地 Agent 已占用某 id 时，同 id 的 system Agent 创建失败。
+    """[跨作用域/system 优先] workspace 已有某 id 时仍可创建同 id 的 system Agent，之后 system 生效。
 
-    运行期 system 写入不逐出已在用的 workspace Agent（规则见 ``AgentProfileRegistry``）：配置中心
-    抛「Agent 已注册」，workspace 本地 Agent 保持可见，system 作用域不出现该 id。
+    与重启后一致：system 胜出，workspace 那份被遮住（列表与解析里都看不到）。
     """
 
     workspace = tmp_path / "workspace"
     _write_workspace_agent(workspace, "shared")
     registry = AgentProfileRegistry(AgentProfileScopeSource())
-    # 先让某个 workspace 作用域装载，使 workspace 本地 Agent 进入索引。
     assert registry.resolve_local(workspace, "shared") is not None
     monkeypatch.setattr(
         "app.service.configuration.agents.configuration_service.get_agent_registry",
         lambda: registry,
     )
-    service = AgentConfigurationService()
 
-    with pytest.raises(AgentConfigurationError, match="已注册"):
-        service.create(
-            AgentConfiguration(
-                agent_id="shared",
-                role="system-reader",
-                description="System level agent with a workspace-local name collision",
-                system_prompt="Read only the files needed and report evidence.",
-                allowed_tools=["read_file"],
-            )
+    AgentConfigurationService().create(
+        AgentConfiguration(
+            agent_id="shared",
+            role="system-reader",
+            description="System level agent with a workspace-local name collision",
+            system_prompt="Read only the files needed and report evidence.",
+            allowed_tools=["read_file"],
         )
+    )
 
-    assert registry.resolve_local(AgentProfileRegistry.SYSTEM_WORKSPACE, "shared") is None
-    assert registry.resolve_local(workspace, "shared") is not None
+    assert registry.resolve_local(AgentProfileRegistry.SYSTEM_WORKSPACE, "shared") is not None
+    assert registry.resolve_local(workspace, "shared") is None
 
 
 def test_agent_service_create_does_not_log_false_duplicate_after_drop(

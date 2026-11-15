@@ -15,7 +15,10 @@ from app.models.session_context import SessionContextRecord
 @pytest.mark.parametrize(
     ("message", "metadata"),
     [
-        ({"role": "system", "content": "system"}, {}),
+        (
+            {"role": "system", "content": "system"},
+            {"prompt_sources": {"reply_language": {"language": {"fingerprint": "fp", "text": "rules"}}}},
+        ),
         ({"role": "developer", "content": "policy"}, {}),
         ({"role": "user", "content": "internal notice"}, {"kind": "notice"}),
         (
@@ -67,6 +70,8 @@ def test_role_metadata_round_trip_without_polluting_sdk_message(message, metadat
         ("user", {"status": "completed"}),
         ("assistant", {"kind": "user_input", "presentation": {"text": "wrong role"}}),
         ("system", {"usage": {}}),
+        # 系统行必须带来源基准：漏掉就无法判断之后的配置变化。
+        ("system", {}),
         ("user", {"user_input": {"text": "old wrapper"}}),
         ("tool", {"status": "completed", "status_hint": "obsolete"}),
     ],

@@ -16,16 +16,25 @@ import pytest
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.agents.agent_profile_source import AgentProfileScopeSource
 from app.core.agents.define_agents import main_agent
 from app.core.context import system_prompt_builder as spb
+from app.core.context.prompt_sources.source import SourceContext
+from app.core.context.prompt_sources.view import PromptSourceView
 from app.core.tool.schemas.tool_names import TOOL_MCP, TOOL_SKILL
 from app.service.configuration.mcp import configuration as mcp_configuration
 from app.utils.path import system_cosir as paths
+from tests.static_agent_source import registry_with
 
 _DELEGATION_TOOLS = ("read_file", "delegate_task")
 # 该层只把 workspace 当作 Registry 作用域键，故用例用任意稳定的路径字符串。
 _ANY_WORKSPACE = "ws"
+
+
+def _tool_layer(workspace: str, tools) -> str:
+    """按真实投影渲染工具层（与 ``SystemPromptBuilder.build`` 同一条路）。"""
+    names = frozenset(tools)
+    view = PromptSourceView.collect(SourceContext.locate(workspace, names, main_agent()))
+    return spb.SystemPromptBuilder._build_tool_layer(names, view)
 
 
 def _child_profile(
@@ -46,12 +55,9 @@ def _child_profile(
 
 
 def _registry_with(*profiles: AgentProfile) -> AgentProfileRegistry:
-    """把给定 profile 注册进 system 作用域并返回 Registry。"""
+    """system 作用域只有给定 profile 的 Registry。"""
 
-    registry = AgentProfileRegistry(AgentProfileScopeSource())
-    for profile in profiles:
-        registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, profile)
-    return registry
+    return registry_with(profiles)[0]
 
 
 @pytest.fixture
@@ -71,11 +77,11 @@ def test_tool_layer_without_delegation_tool_skips_the_agent_catalog(monkeypatch)
 
     monkeypatch.setattr(configuration, "get_agent_registry", _fail)
 
-    layer = spb.SystemPromptBuilder._build_tool_layer(_ANY_WORKSPACE, ("read_file",))
+    layer = _tool_layer(_ANY_WORKSPACE, ("read_file",))
 
     assert "read_file to read" in layer
     assert "agent_id" not in layer
-    assert spb.SystemPromptBuilder._build_tool_layer(_ANY_WORKSPACE, ()) == ""
+    assert _tool_layer(_ANY_WORKSPACE, ()) == ""
 
 
 def test_tool_layer_projects_child_catalog_without_main_profile(monkeypatch) -> None:
@@ -84,7 +90,7 @@ def test_tool_layer_projects_child_catalog_without_main_profile(monkeypatch) -> 
     registry = _registry_with(_child_profile(), main_agent())
     monkeypatch.setattr(configuration, "get_agent_registry", lambda: registry)
 
-    layer = spb.SystemPromptBuilder._build_tool_layer(_ANY_WORKSPACE, _DELEGATION_TOOLS)
+    layer = _tool_layer(_ANY_WORKSPACE, _DELEGATION_TOOLS)
 
     assert layer.startswith("<tool_layer>\n")
     assert layer.endswith("\n</tool_layer>")
@@ -102,7 +108,7 @@ def test_tool_layer_omits_catalog_without_child_candidates(monkeypatch) -> None:
         lambda: _registry_with(main_agent()),
     )
 
-    layer = spb.SystemPromptBuilder._build_tool_layer(_ANY_WORKSPACE, _DELEGATION_TOOLS)
+    layer = _tool_layer(_ANY_WORKSPACE, _DELEGATION_TOOLS)
 
     assert "read_file to read" in layer
     assert "agent_id" not in layer
@@ -113,12 +119,12 @@ def test_tool_layer_scopes_catalog_to_workspace(monkeypatch, tmp_path: Path) -> 
 
     workspace = tmp_path / "ws-a"
     workspace.mkdir()
-    registry = _registry_with(_child_profile())
-    registry.register(workspace, _child_profile(agent_id="ws-a-agent"))
+    registry, source = registry_with([_child_profile()])
+    source.add(workspace, _child_profile(agent_id="ws-a-agent"))
     monkeypatch.setattr(configuration, "get_agent_registry", lambda: registry)
 
-    scoped = spb.SystemPromptBuilder._build_tool_layer(str(workspace), _DELEGATION_TOOLS)
-    other = spb.SystemPromptBuilder._build_tool_layer(str(tmp_path / "ws-b"), _DELEGATION_TOOLS)
+    scoped = _tool_layer(str(workspace), _DELEGATION_TOOLS)
+    other = _tool_layer(str(tmp_path / "ws-b"), _DELEGATION_TOOLS)
 
     assert "ws-a-agent" in scoped
     assert "ws-a-agent" not in other
@@ -133,7 +139,7 @@ def test_tool_layer_requires_initialized_registry(monkeypatch) -> None:
     monkeypatch.setattr(configuration, "get_agent_registry", _uninitialized)
 
     with pytest.raises(RuntimeError, match="agent registry has not been initialized"):
-        spb.SystemPromptBuilder._build_tool_layer(_ANY_WORKSPACE, _DELEGATION_TOOLS)
+        _tool_layer(_ANY_WORKSPACE, _DELEGATION_TOOLS)
 
 
 def test_tool_layer_injects_catalog_without_budget(monkeypatch) -> None:
@@ -145,7 +151,7 @@ def test_tool_layer_injects_catalog_without_budget(monkeypatch) -> None:
         lambda: _registry_with(_child_profile(description="a" * 20_000)),
     )
 
-    layer = spb.SystemPromptBuilder._build_tool_layer(_ANY_WORKSPACE, _DELEGATION_TOOLS)
+    layer = _tool_layer(_ANY_WORKSPACE, _DELEGATION_TOOLS)
 
     assert layer.startswith("<tool_layer>\n")
     assert layer.endswith("\n</tool_layer>")
@@ -199,7 +205,7 @@ def test_tool_layer_injects_workspace_visible_mcp_and_skill_catalogs(tmp_path) -
         '{"disabled_skills":["disabled"]}', encoding="utf-8"
     )
 
-    layer = spb.SystemPromptBuilder._build_tool_layer(str(workspace), (TOOL_MCP, TOOL_SKILL))
+    layer = _tool_layer(str(workspace), (TOOL_MCP, TOOL_SKILL))
 
     assert '"system-tools"' in layer
     assert '"workspace-tools"' in layer
@@ -229,7 +235,7 @@ def test_build_orders_tool_layer_between_agent_and_global(
     )
 
     main = main_agent(system_prompt="主 Agent 协议")
-    prompt = spb.SystemPromptBuilder.build(main, str(workspace), main.allowed_tools)
+    prompt = spb.SystemPromptBuilder.build(main, str(workspace), main.allowed_tools).text
 
     assert prompt.index("<agent_layer>") < prompt.index("<tool_layer>")
     assert prompt.index("<tool_layer>") < prompt.index("<global_layer>")
@@ -252,7 +258,7 @@ def test_build_omits_agent_catalog_without_delegation_tool(
     child = _child_profile()
     prompt = spb.SystemPromptBuilder.build(
         child, str(redirect_system_cosir.parent), child.allowed_tools
-    )
+    ).text
 
     assert "agent_id:" not in prompt
     assert "read_file to read" in prompt
