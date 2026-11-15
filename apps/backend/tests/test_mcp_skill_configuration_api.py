@@ -16,9 +16,12 @@ from fastapi.testclient import TestClient
 
 from app.api.configuration import extensions
 from app.app import app
-from app.service.configuration import mcp_configuration_service, skill_configuration_service
+from app.service.configuration.mcp import configuration_service as mcp_configuration_service
+from app.service.configuration.skills import configuration_service as skill_configuration_service
 
 _SEARCH_TOOLS = [{"name": "search", "description": "Search", "input_schema": {"type": "object"}}]
+
+
 
 
 def _write_skill(root: Path, name: str, description: str | None = None) -> None:
@@ -33,6 +36,13 @@ def _write_skill(root: Path, name: str, description: str | None = None) -> None:
 @pytest.fixture
 def system_cosir(tmp_path) -> Path:
     return tmp_path / "system-cosir"
+
+
+@pytest.fixture
+def system_cosir_skills(tmp_path) -> Path:
+    """系统级 cosir 专属 Skill 目录：导入落在这里（conftest 随系统 ``.cosir`` 隔离）。"""
+
+    return tmp_path / "system-cosir" / "skills"
 
 
 @pytest.fixture
@@ -255,10 +265,10 @@ def test_workspace_routes_map_unknown_workspace_to_404(client, workspace) -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_skills_can_be_listed_previewed_toggled_imported_and_deleted(
-    client, tmp_path, system_cosir
+def test_skills_can_be_listed_previewed_toggled_and_imported(
+    system_cosir_skills, client, tmp_path, system_cosir
 ) -> None:
-    skills_root = system_cosir / "skills"
+    skills_root = system_cosir_skills
     _write_skill(skills_root, "existing")
 
     assert client.get("/configuration/skills").json() == [
@@ -267,20 +277,28 @@ def test_skills_can_be_listed_previewed_toggled_imported_and_deleted(
             "description": "existing description",
             "enabled": True,
             "scope": "system",
+            "kind": "cosir",
             "overrides": False,
+            "warnings": [],
+            "manual_only": False,
+            "has_scripts": False,
         }
     ]
     assert client.get("/configuration/skills/existing").json()["content"].startswith("# existing")
 
-    response = client.put("/configuration/skills/existing/enabled", json={"enabled": False})
+    response = client.put(
+        "/configuration/skills/enabled", json={"names": ["existing"], "enabled": False}
+    )
     assert response.status_code == 200
-    assert response.json()["enabled"] is False
+    assert response.json() == {}
     disabled_document = client.get("/configuration/skills/existing")
     assert disabled_document.status_code == 200
     assert disabled_document.json()["enabled"] is False
     assert client.get("/configuration/skills/missing").status_code == 404
     assert (
-        client.put("/configuration/skills/missing/enabled", json={"enabled": True}).status_code
+        client.put(
+            "/configuration/skills/enabled", json={"names": ["missing"], "enabled": True}
+        ).status_code
         == 404
     )
 
@@ -298,25 +316,23 @@ def test_skills_can_be_listed_previewed_toggled_imported_and_deleted(
         "description": "imported",
         "enabled": True,
         "scope": "system",
+        "kind": "cosir",
         "overrides": False,
+        "warnings": [],
+        "manual_only": False,
+        "has_scripts": False,
     }
     assert (skills_root / "new-skill" / "references" / "guide.md").read_text() == "Guide"
     assert client.get("/configuration/skills").json()[1]["enabled"] is True
     # 暂存目录不在 skills 目录里，安装后也不残留。
     assert sorted(path.name for path in skills_root.iterdir()) == ["existing", "new-skill"]
 
-    response = client.delete("/configuration/skills/new-skill")
-    assert response.status_code == 200
-    assert response.json() == {"name": "new-skill", "deleted": True}
-    assert not (skills_root / "new-skill").exists()
-    assert [item["enabled"] for item in client.get("/configuration/skills").json()] == [False]
-
 
 def test_workspace_skills_override_system_and_writes_stay_in_scope(
-    client, tmp_path, workspace, system_cosir
+    system_cosir_skills, client, tmp_path, workspace, system_cosir
 ) -> None:
-    _write_skill(system_cosir / "skills", "shared", "system version")
-    _write_skill(system_cosir / "skills", "system-only")
+    _write_skill(system_cosir_skills, "shared", "system version")
+    _write_skill(system_cosir_skills, "system-only")
     source_root = tmp_path / "import-source"
     _write_skill(source_root, "shared", "workspace version")
 
@@ -339,33 +355,25 @@ def test_workspace_skills_override_system_and_writes_stay_in_scope(
 
     # 继承来的系统级 Skill 在工作区里只读。
     inherited_toggle = client.put(
-        "/workspaces/7/configuration/skills/system-only/enabled", json={"enabled": False}
+        "/workspaces/7/configuration/skills/enabled",
+        json={"names": ["system-only"], "enabled": False},
     )
     assert inherited_toggle.status_code == 400
-    assert client.delete("/workspaces/7/configuration/skills/system-only").status_code == 400
-    assert (system_cosir / "skills" / "system-only").is_dir()
 
     toggled = client.put(
-        "/workspaces/7/configuration/skills/shared/enabled", json={"enabled": False}
+        "/workspaces/7/configuration/skills/enabled", json={"names": ["shared"], "enabled": False}
     )
-    assert toggled.json()["enabled"] is False
+    assert toggled.status_code == 200
     assert json.loads(
         (workspace / ".cosir" / "config" / "skills.json").read_text(encoding="utf-8")
-    ) == {"enabled_skills": []}
+    ) == {"disabled_skills": ["shared"]}
     assert not (system_cosir / "config" / "skills.json").exists()
-
-    deleted = client.delete("/workspaces/7/configuration/skills/shared")
-    assert deleted.status_code == 200
-    # 删掉工作区覆盖后，系统级同名 Skill 重新可见。
-    assert client.get("/workspaces/7/configuration/skills/shared").json()["description"] == (
-        "system version"
-    )
 
 
 def test_skill_import_reports_name_conflict_without_replacing_existing_skill(
-    client, tmp_path, system_cosir
+    system_cosir_skills, client, tmp_path, system_cosir
 ) -> None:
-    skills_root = system_cosir / "skills"
+    skills_root = system_cosir_skills
     _write_skill(skills_root, "duplicate")
     source_root = tmp_path / "import-source"
     _write_skill(source_root, "duplicate", "replacement")
@@ -379,7 +387,7 @@ def test_skill_import_reports_name_conflict_without_replacing_existing_skill(
     assert "duplicate description" in (skills_root / "duplicate" / "SKILL.md").read_text()
 
 
-def test_skill_zip_import_copies_archive_contents(client, tmp_path, system_cosir) -> None:
+def test_skill_zip_import_copies_archive_contents(system_cosir_skills, client, tmp_path, system_cosir) -> None:
     archive_path = tmp_path / "new-skill.zip"
     with zipfile.ZipFile(archive_path, "w") as bundle:
         bundle.writestr("new-skill/SKILL.md", b"---\nname: new-skill\ndescription: zipped\n---\n")
@@ -394,7 +402,7 @@ def test_skill_zip_import_copies_archive_contents(client, tmp_path, system_cosir
 
     assert response.status_code == 201
     assert response.json()["description"] == "zipped"
-    assert (system_cosir / "skills" / "new-skill" / "references" / "guide.md").read_text() == (
+    assert (system_cosir_skills / "new-skill" / "references" / "guide.md").read_text() == (
         "Guide"
     )
 
@@ -402,8 +410,14 @@ def test_skill_zip_import_copies_archive_contents(client, tmp_path, system_cosir
 @pytest.mark.parametrize(
     "entries",
     [
-        {"new-skill/SKILL.md": b"---\nname: new-skill\ndescription: zipped\n---\n", "../outside.txt": b"x"},
-        {"new-skill/SKILL.md": b"---\nname: new-skill\ndescription: x\n---", "new-skill/../outside.txt": b"x"},
+        {
+            "new-skill/SKILL.md": b"---\nname: new-skill\ndescription: zipped\n---\n",
+            "../outside.txt": b"x",
+        },
+        {
+            "new-skill/SKILL.md": b"---\nname: new-skill\ndescription: x\n---",
+            "new-skill/../outside.txt": b"x",
+        },
     ],
 )
 def test_skill_zip_import_rejects_archive_path_escape(client, tmp_path, entries) -> None:
@@ -434,11 +448,12 @@ def test_skill_zip_import_reports_invalid_archive(client, tmp_path) -> None:
 
 
 def test_skill_import_rolls_back_when_enabled_configuration_cannot_be_written(
-    client, tmp_path, system_cosir, monkeypatch
+    system_cosir_skills, client, tmp_path, system_cosir, monkeypatch
 ) -> None:
     config_path = system_cosir / "config" / "skills.json"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text('{"enabled_skills": []}', encoding="utf-8")
+    # 停用过同名 Skill：导入要把它从停用名单里移除，于是必须写配置。
+    config_path.write_text('{"disabled_skills": ["new-skill"]}', encoding="utf-8")
 
     def fail_write(self, configuration):
         raise OSError("configuration is not writable")
@@ -454,25 +469,4 @@ def test_skill_import_rolls_back_when_enabled_configuration_cannot_be_written(
     )
 
     assert response.status_code == 500
-    assert not (system_cosir / "skills" / "new-skill").exists()
-
-
-def test_skill_delete_restores_directory_when_enabled_configuration_cannot_be_written(
-    client, system_cosir, monkeypatch
-) -> None:
-    config_path = system_cosir / "config" / "skills.json"
-    config_path.parent.mkdir(parents=True)
-    config_path.write_text('{"enabled_skills": ["existing"]}', encoding="utf-8")
-    _write_skill(system_cosir / "skills", "existing")
-
-    def fail_write(self, configuration):
-        raise OSError("configuration is not writable")
-
-    monkeypatch.setattr(
-        skill_configuration_service.SkillConfigurationService, "_write_configuration", fail_write
-    )
-    response = client.delete("/configuration/skills/existing")
-
-    assert response.status_code == 500
-    assert (system_cosir / "skills" / "existing" / "SKILL.md").is_file()
-    assert '"existing"' in config_path.read_text(encoding="utf-8")
+    assert not (system_cosir_skills / "new-skill").exists()

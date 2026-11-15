@@ -33,9 +33,9 @@ from app.config.configuration import build_agent_registry
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
-from app.core.agents.define_agents import general_child_agent, main_agent
-from app.service.configuration.agent_configuration import AgentConfiguration
-from app.service.configuration.agent_configuration_service import (
+from app.core.agents.define_agents import main_agent
+from app.service.configuration.agents.configuration import AgentConfiguration
+from app.service.configuration.agents.configuration_service import (
     AgentConfigurationError,
     AgentConfigurationService,
 )
@@ -742,14 +742,14 @@ def test_read_scope_json_files_orders_case_insensitively_and_rejects_missing(
 # =========================================================== E. 内置 profile 保护
 
 
-def test_builtin_profiles_survive_same_id_system_files(
+def test_main_agent_survives_same_id_system_file(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """[内置保护] system 目录中的同名文件不得覆盖内置 ``main_agent`` / ``general-assistant``。"""
+    """[内置保护] 同名 ``main_agent.json`` 顶替不了主 Agent；内置子 Agent 以已有文件为准。"""
 
     system_directory = tmp_path / _SYSTEM_AGENTS
     _write_agent(system_directory, "main_agent", role="hijacker")
-    _write_agent(system_directory, "general-assistant", role="hijacker")
+    _write_agent(system_directory, "general-assistant", role="edited")
     registry = build_agent_registry()
 
     with caplog.at_level(logging.WARNING):
@@ -759,8 +759,8 @@ def test_builtin_profiles_survive_same_id_system_files(
     main = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
     general = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "general-assistant")
     assert main is not None and main.agent_type is AgentProfileType.MAIN
-    assert general is not None and general.role == general_child_agent().role
     assert main.role == main_agent().role
+    assert general is not None and general.role == "edited"
     assert "agent_profile_duplicate_skipped" in {record.message for record in caplog.records}
 
 
@@ -775,7 +775,7 @@ def test_agent_service_workspace_write_then_list_matches_loaded_directory(
     workspace = tmp_path / "workspace"
     registry = AgentProfileRegistry(AgentProfileScopeSource())
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.get_agent_registry",
+        "app.service.configuration.agents.configuration_service.get_agent_registry",
         lambda: registry,
     )
     service = AgentConfigurationService(workspace_root=workspace)
@@ -805,7 +805,7 @@ def test_agent_service_system_write_then_list_without_false_duplicate(
 
     registry = AgentProfileRegistry(AgentProfileScopeSource())
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.get_agent_registry",
+        "app.service.configuration.agents.configuration_service.get_agent_registry",
         lambda: registry,
     )
     service = AgentConfigurationService()
@@ -847,7 +847,7 @@ def test_system_scope_create_rejected_when_workspace_holds_same_id(
     # 先让某个 workspace 作用域装载，使 workspace 本地 Agent 进入索引。
     assert registry.resolve_local(workspace, "shared") is not None
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.get_agent_registry",
+        "app.service.configuration.agents.configuration_service.get_agent_registry",
         lambda: registry,
     )
     service = AgentConfigurationService()
@@ -875,7 +875,7 @@ def test_agent_service_create_does_not_log_false_duplicate_after_drop(
     workspace = tmp_path / "workspace"
     registry = AgentProfileRegistry(AgentProfileScopeSource())
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.get_agent_registry",
+        "app.service.configuration.agents.configuration_service.get_agent_registry",
         lambda: registry,
     )
     service = AgentConfigurationService(workspace_root=workspace)

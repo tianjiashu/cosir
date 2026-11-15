@@ -128,7 +128,10 @@ test(`「+」菜单：插入 Skill 与常用提示词，管理打开提示词库
   await page.addInitScript(() => {
     localStorage.setItem("cosir:favorite-prompts", JSON.stringify({ state: { prompts: [{ id: "p1", title: "代码审查", content: "请审查这次改动" }] }, version: 0 }));
   });
-  const skill = (name: string, enabled: boolean) => ({ name, description: `${name} 的说明`, enabled, scope: "system", overrides: false });
+  const skill = (name: string, enabled: boolean) => ({
+    name, description: `${name} 的说明`, enabled, scope: "system", kind: "shared",
+    overrides: false, warnings: [], manual_only: false, has_scripts: false,
+  });
   await page.route(/\/configuration\/skills$/, (route) => route.fulfill({ json: [skill("release-notes", true), skill("disabled-skill", false)] }));
   const { input } = await openComposer(page, { directory: "C:/demo/docs" });
   const addButton = page.getByRole("button", { name: "添加", exact: true });

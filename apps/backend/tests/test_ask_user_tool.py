@@ -12,11 +12,12 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from app.core.agents.define_agents import general_child_agent, main_agent
+from app.core.agents.define_agents import main_agent
 from app.core.tool.handler.ask_user import AskUserTool, build_ask_user_definition
 from app.core.tool.handler.question.ask_user_answers import AskUserAnswers
 from app.core.tool.handler.question.ask_user_args import AskUserArgs
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
+from tests.builtin_agent_fixtures import builtin_child_profile
 
 
 def _option(label: str) -> dict[str, Any]:
@@ -149,7 +150,7 @@ def test_definition_declares_a_turn_scoped_reply_decision() -> None:
 
 def test_only_the_main_agent_is_given_the_tool() -> None:
     assert "ask_user" in main_agent().allowed_tools
-    assert "ask_user" not in general_child_agent().allowed_tools
+    assert "ask_user" not in builtin_child_profile("general-assistant").allowed_tools
 
 
 # ---------------------------------------------------------------------------

@@ -77,7 +77,7 @@ def history(isolated_storage, tmp_path):
     run = RunCrud().create(session.id, status="completed")
     notice_message, notice_metadata = notices_to_context(
         [
-            NoticeBody(content="workspace instructions changed", notice_kind="system_prompt_delta"),
+            NoticeBody(content="workspace instructions changed", notice_kind="fork_handover"),
             NoticeBody(content="continue", notice_kind="model_continuation"),
         ]
     )
@@ -111,7 +111,7 @@ def test_plan_withdraws_the_turn_and_keeps_late_results_of_earlier_calls(history
     # 第一回合调用的结论（序号 8）回答的是第一回合，保留；其余第二回合的行全部移出。
     assert excluded == {4, 5, 6, 7, 9, 10}
     # 合成通知行整体移出：Session 级通知交给调用方重新投递，回合级的续写提示随之丢弃。
-    assert [n.notice_kind for n in plan.redeliver] == ["system_prompt_delta"]
+    assert [n.notice_kind for n in plan.redeliver] == ["fork_handover"]
 
 
 @pytest.fixture
@@ -204,7 +204,7 @@ def test_withdraw_gathers_every_side_effect_of_the_turn(history, side_effects) -
         ("background_result", "call-early"),
         ("notice", "backend_restarted"),
         ("user_input", "排着的"),
-        ("notice", "system_prompt_delta"),
+        ("notice", "fork_handover"),
     ]
     included = SessionContextCrud().get(history.session_id, include_in_context=True)
     assert [r.sequence for r in included] == [1, 2, 3, 8]

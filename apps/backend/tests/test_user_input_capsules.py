@@ -46,8 +46,8 @@ def _prepare(service: UserInputService, text: str):
     return service.prepare(_SESSION_ID, RunCommand(text=text), "test/m1", None, "main_agent")
 
 
-def _write_skill(root: Path, name: str, *, enabled: list[str]) -> None:
-    directory = root / ".cosir" / "skills" / name
+def _write_skill(root: Path, name: str, *, disabled: list[str]) -> None:
+    directory = root / ".agents" / "skills" / name
     directory.mkdir(parents=True)
     (directory / "SKILL.md").write_text(
         f"---\nname: {name}\ndescription: {name}\n---\n\n正文\n", encoding="utf-8"
@@ -55,7 +55,7 @@ def _write_skill(root: Path, name: str, *, enabled: list[str]) -> None:
     config = root / ".cosir" / "config"
     config.mkdir(parents=True, exist_ok=True)
     (config / "skills.json").write_text(
-        '{"enabled_skills": [' + ", ".join(f'"{item}"' for item in enabled) + "]}",
+        '{"disabled_skills": [' + ", ".join(f'"{item}"' for item in disabled) + "]}",
         encoding="utf-8",
     )
 
@@ -208,8 +208,8 @@ def test_ref_capsule_rejects_absolute_and_escaping_paths(
 
 def test_skill_capsule_writes_back_the_skill_file_path(workspace: Path, monkeypatch) -> None:
     workspace.mkdir()
-    _write_skill(workspace, "review", enabled=["review"])
-    expected = (workspace / ".cosir" / "skills" / "review" / "SKILL.md").resolve()
+    _write_skill(workspace, "review", disabled=[])
+    expected = (workspace / ".agents" / "skills" / "review" / "SKILL.md").resolve()
 
     body = _prepare(_service(monkeypatch, workspace), '用 <skill name="review" /> 检查')
 
@@ -222,7 +222,7 @@ def test_unavailable_skill_is_rejected_before_enqueue(
     workspace: Path, monkeypatch, name: str
 ) -> None:
     workspace.mkdir()
-    _write_skill(workspace, "off", enabled=["review"])
+    _write_skill(workspace, "off", disabled=["off"])
 
     with pytest.raises(UserInputRejectedError) as caught:
         _prepare(_service(monkeypatch, workspace), f'用 <skill name="{name}" />')

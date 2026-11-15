@@ -8,16 +8,16 @@ from fastapi.testclient import TestClient
 
 from app.api.schemas.response.EnvironmentResponse import EnvironmentResponse
 from app.app import app
+from app.config.configuration import build_agent_registry
 from app.config.settings import Settings
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.core.agents.agent_profile_source import AgentProfileScopeSource
-from app.core.agents.define_agents import general_child_agent, main_agent
 from app.models.environment.environment_change import EnvironmentChange
-from app.service.configuration.agent_configuration import (
+from app.service.configuration import file_store
+from app.service.configuration.agents.configuration import (
     AgentConfiguration,
     AgentConfigurationEntry,
 )
-from app.service.configuration.agent_configuration_service import (
+from app.service.configuration.agents.configuration_service import (
     AgentConfigurationError,
     AgentConfigurationService,
 )
@@ -25,24 +25,17 @@ from app.service.configuration.environment_configuration_service import (
     EnvironmentConfigurationError,
     EnvironmentConfigurationService,
 )
-from app.service.configuration.file_store import (
-    ConfigurationFileStore,
-    ConfigurationPathError,
-)
-from app.service.configuration.instruction_configuration_service import (
+from app.service.configuration.file_store import ConfigurationPathError
+from app.service.configuration.instructions.global_instruction_service import (
     InstructionConfigurationError,
     InstructionConfigurationService,
 )
-from app.service.configuration.runtime_notices.catalog_change import CatalogChange
 
 
 def _configuration_registry() -> AgentProfileRegistry:
-    """构造包含系统内置 profile 的配置中心测试注册表。"""
+    """按启动装配构造注册表：补齐内置子 Agent 文件（落在用例隔离的系统目录），再注册主 Agent。"""
 
-    registry = AgentProfileRegistry(AgentProfileScopeSource())
-    registry.register_builtin(general_child_agent())
-    registry.register_builtin(main_agent())
-    return registry
+    return build_agent_registry()
 
 
 def _service(
@@ -56,7 +49,7 @@ def _service(
     """
 
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.get_agent_registry",
+        "app.service.configuration.agents.configuration_service.get_agent_registry",
         lambda: registry,
     )
     return AgentConfigurationService()
@@ -84,12 +77,12 @@ def test_configuration_file_store_writes_atomically_and_rejects_escape(tmp_path:
     root.mkdir()
     target = root / "worker.json"
 
-    ConfigurationFileStore.write_text_atomic(target, "one", root=root)
+    file_store.write_text_atomic(target, "one", root=root)
     assert target.read_text(encoding="utf-8") == "one"
-    ConfigurationFileStore.write_text_atomic(target, "two", root=root)
+    file_store.write_text_atomic(target, "two", root=root)
     assert target.read_text(encoding="utf-8") == "two"
     with pytest.raises(ConfigurationPathError):
-        ConfigurationFileStore.assert_safe_child(root, tmp_path / "outside.json")
+        file_store.assert_safe_child(root, tmp_path / "outside.json")
 
 
 def test_agent_configuration_round_trip_preserves_model_override(
@@ -170,117 +163,11 @@ def test_agent_configuration_round_trip_preserves_model_override(
     assert registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "reviewer") is None
 
 
-def test_agent_create_emits_deferred_catalog_change(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """创建子 Agent 后发布目录变更通知。"""
-
-    monkeypatch.setattr(
-        "app.core.agents.agent_profile_source.system_agent_config_dir",
-        lambda: tmp_path / "agents",
-    )
-    registry = _configuration_registry()
-    service = _service(monkeypatch, registry)
-    changes: list[object] = []
-    monkeypatch.setattr(CatalogChange, "broadcast", lambda change: changes.append(change))
-
-    service.create(
-        AgentConfiguration(
-            agent_id="reviewer",
-            role="child",
-            description="审查变更",
-            system_prompt="只审查，不修改文件。",
-            allowed_tools=["read_file"],
-        )
-    )
-
-    assert len(changes) == 1
-    assert (changes[0].catalog, changes[0].action) == ("agents", "added")
-    assert changes[0].entry_id == "reviewer"
-    assert changes[0].current_description == "审查变更"
-
-
-def test_agent_update_notifies_only_when_description_changes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """更新子 Agent 的非描述字段不通知，描述变化才通知。"""
-
-    monkeypatch.setattr(
-        "app.core.agents.agent_profile_source.system_agent_config_dir",
-        lambda: tmp_path / "agents",
-    )
-    registry = _configuration_registry()
-    service = _service(monkeypatch, registry)
-    original = AgentConfiguration(
-        agent_id="reviewer",
-        role="child",
-        description="审查变更",
-        system_prompt="只审查，不修改文件。",
-        allowed_tools=["read_file"],
-    )
-    service.create(original)
-    changes: list[object] = []
-    monkeypatch.setattr(CatalogChange, "broadcast", lambda change: changes.append(change))
-
-    service.update(
-        "reviewer",
-        AgentConfiguration(
-            **{**original.__dict__, "model_settings": {"temperature": 0.2}}
-        ),
-    )
-    assert changes == []
-
-    service.update(
-        "reviewer",
-        AgentConfiguration(
-            **{**original.__dict__, "description": "审查 TypeScript 变更"}
-        ),
-    )
-    assert len(changes) == 1
-    assert changes[0].action == "updated"
-    assert changes[0].previous_description == "审查变更"
-    assert changes[0].current_description == "审查 TypeScript 变更"
-
-
-def test_agent_delete_emits_deferred_catalog_change(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """删除子 Agent 后发布目录变更通知。"""
-
-    monkeypatch.setattr(
-        "app.core.agents.agent_profile_source.system_agent_config_dir",
-        lambda: tmp_path / "agents",
-    )
-    registry = _configuration_registry()
-    service = _service(monkeypatch, registry)
-    document = AgentConfiguration(
-        agent_id="reviewer",
-        role="child",
-        description="审查变更",
-        system_prompt="只审查，不修改文件。",
-        allowed_tools=["read_file"],
-    )
-    service.create(document)
-    changes: list[object] = []
-    monkeypatch.setattr(CatalogChange, "broadcast", lambda change: changes.append(change))
-
-    service.delete("reviewer")
-
-    assert len(changes) == 1
-    assert changes[0].action == "removed"
-    assert changes[0].entry_id == "reviewer"
-    assert changes[0].previous_description == "审查变更"
-    assert changes[0].current_description is None
-
-
 def test_builtin_agent_is_editable_but_not_deletable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """系统内置子 Agent 可写入覆盖配置，但始终不能从注册表卸载。"""
+    """系统内置子 Agent 可以修改（写回它的配置文件），但不能删除。"""
 
     monkeypatch.setattr(
         "app.core.agents.agent_profile_source.system_agent_config_dir",
@@ -553,7 +440,8 @@ def test_agent_configuration_lists_only_registered_profiles(
         encoding="utf-8",
     )
     service = _service(monkeypatch, _configuration_registry())
-    with pytest.raises(AgentConfigurationError):
+    # 内置 id 的文件已由装配生成：新建撞上已存在的文件（接入层映射 409）。
+    with pytest.raises(FileExistsError):
         service.create(
             AgentConfiguration(
                 agent_id="general-assistant",
@@ -564,11 +452,11 @@ def test_agent_configuration_lists_only_registered_profiles(
             )
         )
     listed_ids = {item.configuration.agent_id for item in service.list_entries()}
-    assert listed_ids == {"general-assistant"}
+    # 改坏的文件不进列表，同名 main_agent 文件顶替不了主 Agent，主 Agent 也不在子 Agent 列表里。
+    assert listed_ids == {"general-assistant", "only_read_child_agent"}
     built_in = _entry(service, "general-assistant")
-    # 注册表内置来源决定条目事实；内置 profile 没有配置文件。
     assert built_in.builtin is True
-    assert built_in.path is None
+    assert built_in.path == directory / "general-assistant.json"
 
 
 def test_settings_preserves_file_source_across_repeated_loads(
@@ -618,25 +506,3 @@ def test_environment_configuration_schema_error(
 
 # 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
 pytestmark = pytest.mark.usefixtures("backend_env")
-
-
-def test_global_instruction_update_broadcasts_only_a_real_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """保存全局指令后由服务自己发布增量；正文没变时不广播。"""
-    from app.service.configuration.runtime_notices.system_prompt_delta import (
-        SystemPromptDelta,
-        SystemPromptDeltaSource,
-    )
-
-    broadcast: list[SystemPromptDelta] = []
-    monkeypatch.setattr(SystemPromptDelta, "broadcast", lambda delta: broadcast.append(delta))
-    service = InstructionConfigurationService(path=tmp_path / "root" / "AGENTS.md")
-    monkeypatch.setattr(service, "root", tmp_path / "root")
-
-    service.update("旧规则\n")
-    service.update("新规则\n")
-    service.update("新规则\n")
-
-    assert [delta.source for delta in broadcast] == [SystemPromptDeltaSource.GLOBAL_INSTRUCTIONS] * 2
-    assert "-旧规则" in broadcast[1].diff and "+新规则" in broadcast[1].diff

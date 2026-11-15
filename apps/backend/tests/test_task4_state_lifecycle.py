@@ -14,7 +14,6 @@ from app.assistant_transport.service.conversation_state_service import (
 )
 from app.assistant_transport.stream.session_sse_stream import SessionSseStream
 from app.core.events import RunStatusChangedEvent
-from app.core.workflow import run_ledger as run_ledger_module
 from app.core.workflow.run_ledger import RunLedger
 from app.models import RunStatus
 from app.models.conversation_input import UserInputPresentation

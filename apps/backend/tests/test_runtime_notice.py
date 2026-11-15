@@ -38,7 +38,6 @@ def _space(mailbox: RunMailbox) -> SimpleNamespace:
 def _stub_for_run_deps(monkeypatch, agent) -> None:
     """``for_run`` 只收 Run：Agent 配置与事件回调由它内部解析，这里换成最小替身。"""
     from app.core.agents import agent_runtime_config as agent_module
-    from app.core.workflow.execution_state import runtime_context as runtime_context_module
 
     monkeypatch.setattr(
         agent_module.AgentRuntimeConfig, "for_run", classmethod(lambda _cls, _run: agent)
@@ -347,7 +346,7 @@ def test_tool_availability_notice_rules() -> None:
 def test_mailbox_dedupes_persisted_rows_within_one_execution() -> None:
     """同一外部队列行在一次执行内只收一次（派发方每次按外部队列全量投递）。"""
     mailbox = RunMailbox()
-    persisted = SessionMessage.of(NoticeBody(content="broadcast", notice_kind="system_prompt_delta"), message_id=5)
+    persisted = SessionMessage.of(NoticeBody(content="broadcast", notice_kind="fork_handover"), message_id=5)
 
     mailbox.post(persisted)
     mailbox.post(persisted)
@@ -366,7 +365,7 @@ def test_mailbox_takes_notices_from_both_sources_in_delivery_order() -> None:
     """通知一次取光（外部行与执行内通知都在内），其余消息不动；普通通知不算可唤醒消息。"""
     mailbox = RunMailbox()
     row = SessionMessage.of(
-        NoticeBody(content="catalog changed", notice_kind="catalog_change"), message_id=5
+        NoticeBody(content="catalog changed", notice_kind="fork_handover"), message_id=5
     )
     result = SessionMessage.of(
         BackgroundResultBody(

@@ -8,6 +8,8 @@ describe("skill / mcp query keys", () => {
     for (const workspaceId of [null, 7]) {
       expect(queryKeys.skills(workspaceId).slice(0, 2)).toEqual([...queryKeys.skillsAll]);
       expect(queryKeys.skill(workspaceId, "x").slice(0, 3)).toEqual([...queryKeys.skills(workspaceId)]);
+      // 分组目录与 Skill 列表互相影响：挂在同一作用域前缀下，失效 Skill 时一并重拉。
+      expect(queryKeys.skillCatalog(workspaceId).slice(0, 3)).toEqual([...queryKeys.skills(workspaceId)]);
       expect(queryKeys.mcpServers(workspaceId).slice(0, 2)).toEqual([...queryKeys.mcpServersAll]);
     }
     expect(queryKeys.skills(7)).not.toEqual(queryKeys.skills(null));

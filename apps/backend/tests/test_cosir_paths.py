@@ -14,7 +14,6 @@ from app.utils.path.system_cosir import (
     COSIR_DIR_NAME,
     system_cosir_dir,
     system_skills_config_file,
-    system_skills_dir,
 )
 from app.utils.path.validation import is_within_cosir
 from app.utils.path.workspace_cosir import (
@@ -92,7 +91,6 @@ def test_system_skill_paths_are_nested_under_system_cosir(tmp_path: Path) -> Non
 
     paths.override(DATA_DIR=tmp_path / "sys")
     try:
-        assert system_skills_dir() == system_cosir_dir() / "skills"
         assert system_skills_config_file() == system_cosir_dir() / "config" / "skills.json"
     finally:
         paths.reset()

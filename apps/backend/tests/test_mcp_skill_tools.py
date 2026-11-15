@@ -12,17 +12,17 @@ from starlette.responses import PlainTextResponse
 
 from app.core.tool.schemas import ToolExecutionContext
 from app.service.configuration.extension_scope import ExtensionScope
-from app.service.configuration.mcp_configuration import (
+from app.service.configuration.mcp.configuration import (
+    MCPConfiguration,
     MCPConfigurationError,
     MCPServerConfig,
     ScopedMCPServer,
     available_servers,
-    read_mcp_configuration,
     visible_servers,
 )
-from app.service.configuration.mcp_tested_servers import MCPTestedServers
-from app.service.configuration.skill_catalog import SkillCatalog, SkillLoadError
-from app.service.configuration.skill_configuration import read_skill_configuration
+from app.service.configuration.mcp.tested_servers import MCPTestedServers
+from app.service.configuration.skills.catalog import SkillCatalog, SkillLoadError
+from app.service.configuration.skills.configuration import SkillConfiguration
 from app.tools.mcp.client import _stdio_parameters, call_result_text, list_server_tools
 from app.tools.mcp.connection_pool import MCPConnectionPool
 from app.tools.tool_handler.mcp_tool import MCPTool
@@ -39,9 +39,15 @@ def _write_skill(directory, name: str, description: str, body: str = "说明正�
 
 
 def _system_cosir(tmp_path) -> Path:
-    """conftest 把系统级 Skill / MCP 路径隔离到这里。"""
+    """conftest 把系统级 Skill 启停与 MCP 配置隔离到这里。"""
 
     return tmp_path / "system-cosir"
+
+
+def _system_skills(tmp_path) -> Path:
+    """conftest 把用户主目录隔离到 ``tmp_path / "home"``，系统级 Skill 目录在它下面。"""
+
+    return tmp_path / "home" / ".agents" / "skills"
 
 
 def _workspace(tmp_path, name: str = "workspace") -> Path:
@@ -80,19 +86,21 @@ def test_agent_facing_tool_and_argument_descriptions_are_english():
 
 
 def test_skill_catalog_merges_workspace_over_system(tmp_path):
-    system_root = _system_cosir(tmp_path) / "skills"
+    system_root = _system_skills(tmp_path)
     workspace = _workspace(tmp_path)
     _write_skill(system_root / "example", "example", "系统 Skill", "系统正文")
     _write_skill(system_root / "shared", "shared", "系统版本")
-    _write_skill(workspace / ".cosir" / "skills" / "shared", "shared", "工作区版本", "工作区正文")
-    _write_skill(workspace / ".cosir" / "skills" / "workspace-only", "workspace-only", "工作区 Skill")
-    # 只认 ``.cosir/skills``：其他工具的目录约定不参与。
-    _write_skill(workspace / ".agents" / "skills" / "foreign", "foreign", "外部约定")
+    _write_skill(workspace / ".agents" / "skills" / "shared", "shared", "工作区版本", "工作区正文")
+    _write_skill(workspace / ".agents" / "skills" / "workspace-only", "workspace-only", "工作区 Skill")
+    # 其他产品各自的项目目录不读。
+    _write_skill(workspace / ".claude" / "skills" / "foreign", "foreign", "Claude 目录")
 
     visible = SkillCatalog.visible_from(workspace).list_skills()
     system_only = SkillCatalog.visible_from(None).list_skills()
 
-    assert [(item.name, item.description, item.scope.kind, item.overrides) for item in visible] == [
+    assert [
+        (item.name, item.description, item.scope.kind, item.overrides) for item in visible
+    ] == [
         ("example", "系统 Skill", "system", False),
         ("shared", "工作区版本", "workspace", True),
         ("workspace-only", "工作区 Skill", "workspace", False),
@@ -106,7 +114,7 @@ def test_skill_catalog_merges_workspace_over_system(tmp_path):
 
 def test_skill_document_for_model_names_its_directory_and_resources_load(tmp_path):
     workspace = _workspace(tmp_path)
-    directory = workspace / ".cosir" / "skills" / "example"
+    directory = workspace / ".agents" / "skills" / "example"
     _write_skill(directory, "example", "测试 Skill", "运行 scripts/run.py")
     (directory / "reference.md").write_text("资源正文", encoding="utf-8")
     catalog = SkillCatalog.visible_from(workspace)
@@ -120,7 +128,7 @@ def test_skill_document_for_model_names_its_directory_and_resources_load(tmp_pat
 
 
 def test_skill_catalog_rejects_resource_escape(tmp_path):
-    system_root = _system_cosir(tmp_path) / "skills"
+    system_root = _system_skills(tmp_path)
     _write_skill(system_root / "example", "example", "测试 Skill")
     (system_root / "outside.md").write_text("外部文件", encoding="utf-8")
 
@@ -129,14 +137,13 @@ def test_skill_catalog_rejects_resource_escape(tmp_path):
 
 
 def test_each_scope_enable_list_only_governs_its_own_skills(tmp_path):
-    system_cosir_dir = _system_cosir(tmp_path)
     workspace = _workspace(tmp_path)
-    _write_skill(system_cosir_dir / "skills" / "system-skill", "system-skill", "系统")
-    _write_skill(workspace / ".cosir" / "skills" / "local-skill", "local-skill", "工作区")
+    _write_skill(_system_skills(tmp_path) / "system-skill", "system-skill", "系统")
+    _write_skill(workspace / ".agents" / "skills" / "local-skill", "local-skill", "工作区")
     (workspace / ".cosir" / "config").mkdir(parents=True)
-    # workspace 名单里列出系统级 Skill 也不能启停它；没列出的工作区 Skill 被停用。
+    # workspace 停用名单里列出系统级 Skill 也停不了它，只停得了自己这一层的。
     (workspace / ".cosir" / "config" / "skills.json").write_text(
-        '{"enabled_skills":["system-skill"]}', encoding="utf-8"
+        '{"disabled_skills":["system-skill","local-skill"]}', encoding="utf-8"
     )
 
     visible = {item.name: item.enabled for item in SkillCatalog.visible_from(workspace).list_skills()}
@@ -144,11 +151,11 @@ def test_each_scope_enable_list_only_governs_its_own_skills(tmp_path):
     assert visible == {"local-skill": False, "system-skill": True}
 
 
-def test_missing_skill_configuration_enables_all_installed_skills(tmp_path):
+def test_missing_skill_configuration_enables_everything(tmp_path):
     workspace = _workspace(tmp_path)
 
-    assert read_skill_configuration(ExtensionScope.workspace(workspace)).is_enabled("newly-installed")
-    assert read_skill_configuration(ExtensionScope.system()).is_enabled("newly-installed")
+    for scope in (ExtensionScope.workspace(workspace), ExtensionScope.system()):
+        assert SkillConfiguration.read(scope).skill_enabled("newly-installed")
 
 
 def test_mcp_visible_servers_merge_workspace_over_system(tmp_path):
@@ -277,7 +284,7 @@ def test_mcp_configuration_rejects_duplicate_names(tmp_path):
     )
 
     with pytest.raises(MCPConfigurationError, match="必须唯一"):
-        read_mcp_configuration(ExtensionScope.workspace(workspace))
+        MCPConfiguration.read(ExtensionScope.workspace(workspace))
 
 
 @pytest.mark.parametrize(
@@ -432,14 +439,14 @@ def test_mcp_tool_keeps_same_named_workspace_servers_apart(tmp_path, monkeypatch
 
 
 def test_skill_tool_lists_and_loads_workspace_visible_skills(tmp_path):
-    system_root = _system_cosir(tmp_path) / "skills"
+    system_root = _system_skills(tmp_path)
     workspace = _workspace(tmp_path)
     _write_skill(system_root / "example", "example", "系统 Skill", "按需加载的正文")
     _write_skill(system_root / "disabled", "disabled", "禁用 Skill")
-    _write_skill(workspace / ".cosir" / "skills" / "local", "local", "工作区 Skill", "工作区正文")
+    _write_skill(workspace / ".agents" / "skills" / "local", "local", "工作区 Skill", "工作区正文")
     config_path = _system_cosir(tmp_path) / "config" / "skills.json"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text('{"enabled_skills":["example"]}', encoding="utf-8")
+    config_path.write_text('{"disabled_skills":["disabled"]}', encoding="utf-8")
     tool = SkillTool()
     context = _context(workspace)
 
@@ -455,6 +462,6 @@ def test_skill_tool_lists_and_loads_workspace_visible_skills(tmp_path):
     assert [item["scope"] for item in listing.display_data["skills"]] == ["system", "workspace"]
     assert loaded.status == "success"
     assert loaded.display_data["scope"] == "workspace"
-    assert str((workspace / ".cosir" / "skills" / "local").resolve()) in loaded.content
+    assert str((workspace / ".agents" / "skills" / "local").resolve()) in loaded.content
     assert loaded.content.endswith("工作区正文\n")
     assert disabled.status == "error"

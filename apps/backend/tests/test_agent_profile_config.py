@@ -12,9 +12,10 @@ from app.core.agents.agent_profile import AgentProfile
 from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
-from app.core.agents.define_agents import general_child_agent, main_agent
+from app.core.agents.define_agents import main_agent
 from app.core.context import system_prompt_builder
 from app.utils.token_estimator import TokenEstimator
+from tests.builtin_agent_fixtures import builtin_child_profile
 
 
 def _document(agent_id: str) -> dict:
@@ -53,7 +54,7 @@ def _base_registry() -> AgentProfileRegistry:
     """构造包含代码内通用 Agent 和主 Agent 的进程目录。"""
 
     registry = AgentProfileRegistry(AgentProfileScopeSource())
-    registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, general_child_agent())
+    registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, builtin_child_profile("general-assistant"))
     registry.register(AgentProfileRegistry.SYSTEM_WORKSPACE, main_agent())
     return registry
 
@@ -77,8 +78,8 @@ def test_system_agent_config_dir_creates_empty_workspace_when_no_packaged_defaul
 ) -> None:
     """没有随包分发的默认 JSON 时，系统 Agent 配置目录仍会被创建且装载为空。
 
-    专用 CHILD（code-developer 等）已从内置 defaults 迁出仓库，唯一代码内置 CHILD 由
-    ``define_agents.general_child_agent`` 直接注册；目录存在但无 JSON 不得让装载失败。
+    专用 CHILD（code-developer 等）已从内置 defaults 迁出仓库；内置子 Agent 由启动装配写成这个目录里的
+    配置文件（``builtin_agents.seed_builtin_agent_files``）。目录存在但无 JSON 不得让装载失败。
     """
 
     target = tmp_path / "system-agents"
@@ -205,7 +206,7 @@ def test_workspace_catalog_isolated_and_rejects_baseline_collision(tmp_path: Pat
     collision = _base_registry()
     resolved = collision.resolve(workspace, "general-assistant")
     assert resolved is not None
-    assert resolved.description == general_child_agent().description
+    assert resolved.description == builtin_child_profile("general-assistant").description
     # 同一目录内的非冲突文件仍正常装载。
     assert collision.resolve(workspace, "workspace-reader") is not None
 

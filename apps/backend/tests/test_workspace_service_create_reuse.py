@@ -81,6 +81,16 @@ def test_reuse_returns_same_record(storage, tmp_path) -> None:
     assert _count() == 1
 
 
+def test_create_prepares_cosir_skill_directory_but_not_the_shared_one(storage, tmp_path) -> None:
+    # 目的：专属 Skill 目录随工作区建好，用户知道往哪放；共享 .agents/skills 归其他工具，不往仓库里塞空目录。
+    root = _make_dir(tmp_path, "ws_skills")
+
+    get_workspace_service().create_workspace("skills", str(root))
+
+    assert (root / ".cosir" / "skills").is_dir()
+    assert not (root / ".agents").exists()
+
+
 # ---------------------------------------------------------------------------
 # 2. 新路径新建
 # ---------------------------------------------------------------------------

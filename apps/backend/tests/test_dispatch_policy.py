@@ -49,7 +49,7 @@ def _user(
     return SessionMessage.of(body, delivery=delivery, message_id=message_id)
 
 
-def _notice(message_id: int, kind: NoticeKind = "catalog_change") -> SessionMessage:
+def _notice(message_id: int, kind: NoticeKind = "fork_handover") -> SessionMessage:
     return SessionMessage.of(NoticeBody(content="n", notice_kind=kind), message_id=message_id)
 
 

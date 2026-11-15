@@ -17,7 +17,7 @@ from app.core.agents.agent_profile import AgentProfileType
 from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.define_agents import main_agent
-from app.service.configuration.main_agent_prompt_configuration_service import (
+from app.service.configuration.instructions.main_agent_prompt_service import (
     MainAgentPromptConfigurationError,
     MainAgentPromptConfigurationService,
 )

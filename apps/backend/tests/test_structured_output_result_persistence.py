@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.events import RunResultUpdatedEvent, RunStatusChangedEvent
-from app.core.workflow import run_ledger as ledger_module
 from app.models.enums.run_status import RunTransition
 from app.service.depends import (
     get_run_crud,

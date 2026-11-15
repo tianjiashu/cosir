@@ -12,7 +12,7 @@ const agentDraft = {
 };
 
 const persistAgent: PersistAgent = async (input) => ({
-  ...input, source: "user_file", path: null, editable: true, deletable: true,
+  ...input, source: "user_file", path: null, deletable: true,
   validation_status: "valid", validation_error: null, file_name: null,
 });
 

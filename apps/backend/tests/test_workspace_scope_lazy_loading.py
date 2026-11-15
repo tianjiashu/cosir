@@ -25,8 +25,8 @@ from app.core.agents import agent_profile_source
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.agent_profile_source import AgentProfileScopeSource
-from app.service.configuration.agent_configuration import AgentConfiguration
-from app.service.configuration.agent_configuration_service import AgentConfigurationService
+from app.service.configuration.agents.configuration import AgentConfiguration
+from app.service.configuration.agents.configuration_service import AgentConfigurationService
 
 _JOIN_TIMEOUT = 10.0
 
@@ -95,7 +95,7 @@ def test_configuration_service_lists_disk_agent_on_first_read(
     _write_agent(workspace, "workspace-reader")
     registry = AgentProfileRegistry(AgentProfileScopeSource())
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.get_agent_registry",
+        "app.service.configuration.agents.configuration_service.get_agent_registry",
         lambda: registry,
     )
 
@@ -270,7 +270,7 @@ def test_creating_agent_does_not_report_false_duplicate(
     (workspace / ".cosir" / "agents").mkdir(parents=True)
     registry = AgentProfileRegistry(AgentProfileScopeSource())
     monkeypatch.setattr(
-        "app.service.configuration.agent_configuration_service.get_agent_registry",
+        "app.service.configuration.agents.configuration_service.get_agent_registry",
         lambda: registry,
     )
     service = AgentConfigurationService(workspace_root=workspace)

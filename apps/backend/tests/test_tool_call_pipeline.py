@@ -315,7 +315,7 @@ def test_observe_node_only_settles_and_keeps_batch(monkeypatch, suspend) -> None
 
 
 def _gate_runtime(
-    monkeypatch, *, cancelled=False, result_ids=(), notice_rows=(), local_notices=(), notice_kind="catalog_change"
+    monkeypatch, *, cancelled=False, result_ids=(), notice_rows=(), local_notices=(), notice_kind="fork_handover"
 ):
     """prepare_input 关口用的最小运行时：记录状态迁移，并入消息与通知不落库。
 

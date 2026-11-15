@@ -31,7 +31,6 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
     model_settings: {},
     source: "user_file",
     path: ".cosir/agents/reviewer.json",
-    editable: true,
     deletable: true,
     validation_status: "valid",
     validation_error: null,
@@ -140,7 +139,7 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
 
   await settingsNav.getByRole("link", { name: "全局 AGENTS.md" }).click();
   await expect(page).toHaveURL(/\/settings\/instructions$/);
-  await expect(page.getByText("保存后实时生效，不影响前缀缓存。", { exact: true })).toBeVisible();
+  await expect(page.getByText("保存后对新会话生效。", { exact: true })).toBeVisible();
   // 字节计数已移除，只保留 Token 估算。
   await expect(page.getByText("字节", { exact: true })).toHaveCount(0);
   await expect(page.getByText("估算 Token", { exact: true })).toBeVisible();
@@ -148,7 +147,7 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
 
   await settingsNav.getByRole("link", { name: "主 Agent 提示词" }).click();
   await expect(page.getByRole("button", { name: "保存主 Agent 提示词" })).toBeVisible();
-  await expect(page.getByText("保存后实时生效，不影响前缀缓存。", { exact: true })).toBeVisible();
+  await expect(page.getByText("保存后对新会话生效。", { exact: true })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Markdown 源码编辑器" })).toHaveText("# 主 Agent 协议");
 
   await settingsNav.getByRole("link", { name: "环境变量" }).click();
@@ -174,4 +173,45 @@ test("系统配置中心从 settings 路由打开并支持配置编辑", async (
   await page.getByRole("button", { name: /保存变量/ }).click();
   await expect(page.getByText("环境变量已保存", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "保存变量" })).toBeDisabled();
+});
+
+test("设置页各分类都不横向溢出：吸顶条铺满留白、贴边内容不冒出横向滚动条", async ({ page }) => {
+  // 环境变量页带吸顶的保存条（-mx-2 铺满内容区留白），是最容易撑出横向滚动的一页。
+  await page.route(`${API_ORIGIN}/configuration/environment`, (route) => route.fulfill({
+    json: {
+      groups: [{
+        id: "browser",
+        label: "浏览器",
+        description: "限制内置浏览器同时打开的标签页数量。",
+        fields: [{
+          name: "BROWSER_MAX_TABS",
+          type: "integer",
+          component: "number",
+          label: "全部会话的标签上限",
+          secret: false,
+          default: "20",
+          value: "20",
+          disk_value: null,
+          configured: false,
+          masked: false,
+          source: "default",
+          process_override: false,
+          options: [],
+          placeholder: null,
+          clearable: false,
+        }],
+      }],
+    },
+  }));
+  await page.setViewportSize({ width: 1280, height: 760 });
+
+  for (const tab of ["appearance", "agents", "models", "main-agent", "instructions", "environment", "mcp", "skills"]) {
+    await page.goto(`/settings/${tab}`);
+    await expect(page.getByRole("navigation", { name: "系统配置分类" }).locator('[aria-current="page"]')).toHaveAttribute("href", `/settings/${tab}`);
+    const overflow = await page.locator(".scroll-fade-top").evaluate((fade) => {
+      const scroller = fade.parentElement!;
+      return scroller.scrollWidth - scroller.clientWidth;
+    });
+    expect(overflow, `/settings/${tab} 的内容区横向溢出`).toBe(0);
+  }
 });

@@ -2,7 +2,7 @@
 
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
-from app.core.tool.schemas.tool_names import TOOL_READ_FILE, TOOL_EDIT_FILE
+from app.core.tool.schemas.tool_names import TOOL_EDIT_FILE, TOOL_READ_FILE
 
 
 def test_success_keeps_ui_and_internal_data_separate() -> None:

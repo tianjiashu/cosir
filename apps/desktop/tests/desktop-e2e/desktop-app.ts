@@ -9,6 +9,8 @@ const backendPython = path.join(repositoryRoot, "apps", "backend", process.platf
 
 /**
  * 启动真实宿主。数据根指向临时目录（`CODING_AGENT_DATA_DIR`）：SQLite、日志与运行期文件全部隔离，不碰开发者的真实数据。
+ * 用户主目录也指向它（`HOME` / `USERPROFILE`）：系统级 Skill 目录固定在主目录的 `.agents/skills`、不随数据根走，
+ * 不改主目录的话测试会读写开发者真实的 Skill。
  * 已有后端虚拟环境时直接用它的解释器，省去在全新 uv 缓存里重新同步依赖。
  */
 export async function launchDesktop(): Promise<{ app: ElectronApplication; page: Page; home: string }> {
@@ -18,6 +20,8 @@ export async function launchDesktop(): Promise<{ app: ElectronApplication; page:
     env: {
       ...process.env,
       CODING_AGENT_DATA_DIR: home,
+      HOME: home,
+      USERPROFILE: home,
       ...(fs.existsSync(backendPython) ? { COSIR_BACKEND_PYTHON: backendPython } : {}),
     } as Record<string, string>,
   });

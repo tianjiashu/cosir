@@ -29,7 +29,9 @@ from app.core.agents import agent_profile_source
 from app.core.context.context_store import ContextStore
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.tool_registry import ToolRegistry
-from app.service.configuration import extension_scope, mcp_tested_servers
+from app.service.configuration import extension_scope
+from app.service.configuration.mcp import tested_servers as mcp_tested_servers
+from app.service.configuration.skills import skill_root
 from app.service.conversation.session_context_service import (
     SessionContextService,
 )
@@ -43,6 +45,7 @@ from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.store_engines import init_storage, initialize_app_schema
 from app.tools.tool_registration import build_tool_registry
+from app.utils.path import shared_skills
 from app.utils.path import system_cosir as paths
 from tests.terminal_test_support import terminal_worker_path
 
@@ -222,8 +225,8 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
     副作用:
         改写 Agent 配置来源模块内 ``system_agent_config_dir`` 的引用，以及 Skill / MCP 作用域、
-        测试记录与模型配置服务里的系统级路径函数；不触碰真实的路径模块，也不创建目录。需要验证
-        真实目录推导的用例可再自行覆盖。
+        系统级 Skill 目录所在的用户主目录、测试记录与模型配置服务里的系统级路径函数；不触碰真实的
+        路径模块，也不创建目录。需要验证真实目录推导的用例可再自行覆盖。
     """
 
     system_agents = tmp_path / "system-agents"
@@ -234,7 +237,6 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     # 开发者本机 ``~/.cosir`` 里装的 Skill 与 MCP 服务。用例往 ``tmp_path / "system-cosir"`` 下写即可。
     system_cosir_root = tmp_path / "system-cosir"
     monkeypatch.setattr(extension_scope, "system_cosir_dir", lambda: system_cosir_root)
-    monkeypatch.setattr(extension_scope, "system_skills_dir", lambda: system_cosir_root / "skills")
     monkeypatch.setattr(
         extension_scope,
         "system_skills_config_file",
@@ -245,6 +247,10 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         "system_mcp_servers_file",
         lambda: system_cosir_root / "config" / "mcp_servers.json",
     )
+    # cosir 专属 Skill 目录随系统 ``.cosir`` 隔离到 ``tmp_path / "system-cosir" / "skills"``；共享目录在
+    # 用户主目录的 ``.agents/skills``、不随数据根走，主目录指到 ``tmp_path / "home"``。
+    monkeypatch.setattr(skill_root, "system_cosir_skills_dir", lambda: system_cosir_root / "skills")
+    monkeypatch.setattr(shared_skills, "user_home_dir", lambda: tmp_path / "home")
     monkeypatch.setattr(mcp_tested_servers, "system_cosir_dir", lambda: system_cosir_root)
     monkeypatch.setattr(
         mcp_tested_servers,

@@ -17,7 +17,7 @@ from app.api.schemas.request.AgentConfigurationRequest import AgentConfiguration
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
 from app.core.tool.schemas.tool_definition import ToolDefinition
 from app.core.tool.tool_registry import ToolRegistry
-from app.service.configuration.agent_configuration import (
+from app.service.configuration.agents.configuration import (
     AgentConfiguration,
     AgentConfigurationEntry,
 )

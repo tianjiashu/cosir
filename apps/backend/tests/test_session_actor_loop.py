@@ -145,7 +145,7 @@ def _user(text: str = "hi") -> UserInputBody:
 
 
 def _notice() -> NoticeBody:
-    return NoticeBody(content="config changed", notice_kind="system_prompt_delta")
+    return NoticeBody(content="config changed", notice_kind="fork_handover")
 
 
 def _result() -> BackgroundResultBody:
@@ -579,7 +579,7 @@ async def test_stop_only_touches_materialized_spaces_and_aclose_aborts_all(regis
 
     await registry.aclose()
     assert (first.actor.aborted, second.actor.aborted) == (1, 1)
-    assert registry.existing_spaces() == ()
+    assert (registry.get(1), registry.get(2)) == (None, None)
 
 
 # ── 后台结果与首次驱动提醒 ─────────────────────────────────────────────────

@@ -10,7 +10,7 @@ from PIL import Image
 
 import app.tools.tool_handler.read_image as read_image_module
 from app.config.constant import Constant
-from app.core.agents.define_agents import general_child_agent, main_agent, only_read_child_agent
+from app.core.agents.define_agents import main_agent
 from app.core.tool.schemas import TOOL_READ_IMAGE, ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
@@ -18,6 +18,7 @@ from app.service.attachment.attachment_service import AttachmentService
 from app.service.attachment.image_normalizer import ImageNormalizationError
 from app.tools.tool_handler.read_image import ReadImageTool
 from app.tools.tool_models import ReadImageArgs
+from tests.builtin_agent_fixtures import builtin_child_profile
 
 
 def _png(
@@ -148,5 +149,5 @@ def test_definition_schema_and_agent_exposure() -> None:
     assert not validate_tool_arguments(
         {"paths": []}, definition.parameters_schema, ReadImageArgs
     ).ok
-    for profile in (main_agent(), general_child_agent(), only_read_child_agent()):
+    for profile in (main_agent(), builtin_child_profile("general-assistant"), builtin_child_profile("only_read_child_agent")):
         assert TOOL_READ_IMAGE in profile.allowed_tools

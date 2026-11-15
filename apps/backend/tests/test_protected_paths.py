@@ -1,4 +1,4 @@
-"""受保护路径：文件工具不得读写系统 ``.cosir``（Skill 目录只读放行）。
+"""受保护路径：文件工具不得读写系统 ``.cosir``（cosir 专属 Skill 目录只读放行）。
 
 数据根按 ``system_cosir.override(DATA_DIR=...)`` 指到临时目录，验证规则随路径变量走、不写死。
 """
@@ -24,7 +24,7 @@ MARKER = "sk-protected-marker"
 
 @pytest.fixture
 def home(tmp_path: Path) -> Iterator[Path]:
-    """数据根：``<home>/.cosir`` 放密钥与 Skill，``<home>/proj`` 是工作区。"""
+    """数据根：``<home>/.cosir`` 放密钥与 cosir 专属 Skill，``<home>/proj`` 是工作区。"""
 
     root = tmp_path / "home"
     cosir = root / ".cosir"
@@ -50,13 +50,16 @@ def _ctx(workspace: Path) -> ToolExecutionContext:
     )
 
 
-def test_most_specific_rule_wins(home: Path) -> None:
+def test_cosir_is_protected_and_its_skills_are_read_only(home: Path) -> None:
     protected = ProtectedPaths.current()
+    skill_file = home / ".cosir" / "skills" / "demo" / "SKILL.md"
 
-    assert protected.access(home / ".cosir" / ".env") == "deny"
-    assert protected.access(home / ".cosir" / "skills" / "demo" / "SKILL.md") == "read"
-    assert protected.access(home / "proj" / "notes.txt") is None
-    assert protected.access(home / ".cosir2" / "x") is None
+    assert protected.denies_read(home / ".cosir" / ".env")
+    assert protected.denies_write(home / ".cosir" / ".env")
+    assert not protected.denies_read(skill_file)
+    assert protected.denies_write(skill_file)
+    assert not protected.denies_read(home / "proj" / "notes.txt")
+    assert not protected.denies_write(home / ".cosir2" / "x")
 
 
 def test_read_file_denies_system_env_but_reads_skills(home: Path) -> None:

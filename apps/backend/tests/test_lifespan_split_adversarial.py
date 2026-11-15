@@ -732,7 +732,7 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         "ensure_system_agent_config_dir",
         record("ensure_system_agent_config_dir"),
     )
-    # 注册表只播种代码内置 profile；用户 JSON 由注册表在作用域首次被读取时按需装载，
+    # 注册表构建只注册主 Agent、补齐内置子 Agent 文件；配置文件由注册表在作用域首次被读取时按需装载，
     # 启动编排不再持有任何「装载目录」的调用。
     registry_stub = SimpleNamespace()
 
