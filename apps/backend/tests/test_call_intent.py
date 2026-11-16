@@ -63,10 +63,14 @@ def test_reserved_conflict_and_deep_copy():
         model_parameters_with_intent({"properties": {"intent": {}}})
 
 
-@pytest.mark.parametrize("intent", [None, "", "  ", 5, "x" * 161])
-def test_invalid_intent_never_reaches_handler_or_running(tmp_path, monkeypatch, intent):
-    def handler(**kwargs):
-        pytest.fail("invalid intent reached handler")
+@pytest.mark.parametrize("intent", ["absent", None, "", "  ", 5, "x" * 161])
+def test_missing_or_invalid_intent_still_executes_without_intent(tmp_path, monkeypatch, intent):
+    """intent 只服务展示：缺失或非法不拒绝调用，handler 照常执行，运行上下文里的意图为 None。"""
+    seen = []
+
+    def handler(value, *, execution_context):
+        seen.append((value, execution_context.call_intent))
+        return ToolObservation(tool_name="probe", status="success", content="ok")
 
     registry = ToolRegistry(
         [
@@ -75,14 +79,12 @@ def test_invalid_intent_never_reaches_handler_or_running(tmp_path, monkeypatch, 
             )
         ]
     )
-    events = []
-    monkeypatch.setattr("app.core.tool.execute.tool_executor.emit", events.append)
-    call = ToolCall(
-        tool_name="probe", call_id="c", arguments=json.dumps({"intent": intent, "value": 1})
-    )
+    monkeypatch.setattr("app.core.tool.execute.tool_executor.emit", lambda event: None)
+    arguments = {"value": 1} if intent == "absent" else {"intent": intent, "value": 1}
+    call = ToolCall(tool_name="probe", call_id="c", arguments=json.dumps(arguments))
     result = ToolExecutor(registry).execute(call, context(tmp_path), {"probe"})
-    assert result.status == "error"
-    assert not events
+    assert result.status == "success"
+    assert seen == [(1, None)]
 
 
 def test_handler_only_receives_business_args_context_keeps_original_intent(

@@ -47,8 +47,8 @@ class ToolExecutionContext:
     event_sink: EventSink | None = None
     tool_call_id: str = ""
     user_decision: DecisionBody | None = None
-    # 准入时从原始调用提取；仅供展示，绝不能用作执行/授权依据。
-    call_intent: str = ""
+    # 准入时从原始调用提取，模型漏写时为 None；仅供展示，绝不能用作执行/授权依据。
+    call_intent: str | None = None
     # Session 的可写根事实（``SessionExtra.writable_root``）；消费方读 :attr:`writable_root`。
     writable_subpath: str | None = None
 

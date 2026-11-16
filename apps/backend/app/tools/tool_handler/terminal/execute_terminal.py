@@ -23,6 +23,7 @@ from typing import Literal, cast
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
+from app.core.tool.call_intent import MAX_INTENT_LENGTH
 from app.core.tool.execute.tool_output_budget import fit_head_tail
 from app.core.tool.placeholder_settlement import USER_CANCELLED_HINT
 from app.core.tool.results.tool_cancelled import tool_cancelled
@@ -447,7 +448,7 @@ class ExecuteTerminalTool(HandlerBase):
         detached = None if background else threading.Event()
         registered = command_results.register(
             tool_call_id, session_id=execution_context.session_id, run_id=execution_context.run_id,
-            label=execution_context.call_intent, job=job, detached=detached,
+            label=self._background_label(execution_context.call_intent, command), job=job, detached=detached,
         )
         if registered is None:
             # 拒收（Session 正被收回或后端关闭）：作业已停下，按它的取消结论返回，不留后台占位。
@@ -482,6 +483,17 @@ class ExecuteTerminalTool(HandlerBase):
                 command, cwd, timeout_s, "detached", registered, tool_call_id
             )
         return self._result_observation(conclusion)
+
+    @staticmethod
+    def _background_label(intent: str | None, command: str) -> str:
+        """看板与 ``wait_messages`` 提示的标签：优先模型写的意图，漏写时退回命令首个非空行。
+
+        截到意图的长度上限，免得多行脚本整段进入给模型的等待提示；侧栏另有截断。
+        """
+        if intent is not None:
+            return intent
+        first_line = next((line.strip() for line in command.splitlines() if line.strip()), "")
+        return first_line[:MAX_INTENT_LENGTH]
 
     def _result_observation(self, conclusion: CommandConclusion) -> ToolObservation:
         """前台拿到结论时的观察：观察状态只按结局映射，这是结局到状态的唯一一处。

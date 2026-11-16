@@ -24,7 +24,7 @@ from app.core.tool.validation.arguments import validate_tool_arguments
 class CallArguments:
     """``arguments`` 是按工具参数模型校验并归一后的业务参数；``coercions`` 只供调用方落日志。"""
 
-    intent: str
+    intent: str | None
     arguments: dict[str, Any]
     coercions: tuple[ArgumentCoercion, ...] = ()
 
@@ -37,13 +37,14 @@ def resolve_call_arguments(tool: ToolDefinition, raw: str) -> CallArguments:
     """解码、拆出意图、宽容归一并按工具的参数模型 strict 校验。
 
     异常:
-        CallArgumentsError: JSON 不合法、缺少或写错 ``intent``、业务参数不合工具声明。
+        CallArgumentsError: JSON 不合法、业务参数不合工具声明。缺失或非法的 ``intent`` 不拒绝，
+            结果里为 ``None``（见 ``parse_call_intent``）。
     """
     try:
         intent, arguments = split_call_arguments(decode_tool_arguments(raw))
     except ValueError as exc:
         raise CallArgumentsError(
-            f"Invalid tool arguments. {exc}. Supply intent and correct the arguments before retrying."
+            f"Invalid tool arguments. {exc}. Correct the arguments before retrying."
         ) from exc
     validation = validate_tool_arguments(arguments, tool.parameters_schema, tool.args_model)
     if not validation.ok:

@@ -32,28 +32,25 @@ def model_parameters_with_intent(schema: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def validate_call_intent(value: object) -> str:
-    """只接受非空短字符串；模型输出与持久化展示在各自输入边界复用本契约。"""
+def parse_call_intent(value: object) -> str | None:
+    """非空短字符串收紧空白后返回，缺失或非法为 ``None``；执行与展示共用这一条规则。
+
+    schema 把 intent 声明为必填是对模型的要求，执行边界却不因它拒绝调用：意图只服务展示，执行、
+    授权与日志都不读它，而不强制 strict 的厂商（如 DeepSeek 非 beta 地址）在长参数调用里会漏写它，
+    拒绝只换来模型重新生成整份参数。缺失时展示退回工具动词，后台标签由各自登记方回退。
+    """
     if not isinstance(value, str) or not value.strip() or len(value) > MAX_INTENT_LENGTH:
-        raise ValueError(
-            f"intent must be a nonempty string of at most {MAX_INTENT_LENGTH} characters"
-        )
+        return None
     return value.strip()
 
 
-def split_call_arguments(arguments: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def split_call_arguments(arguments: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
     """执行边界拆出意图；业务校验和 Hook 只接收剩余参数，不修改原始调用。"""
     business = dict(arguments)
-    intent = validate_call_intent(business.pop("intent", None))
-    return intent, business
+    return parse_call_intent(business.pop("intent", None)), business
 
 
 def display_call_arguments(raw: str) -> tuple[str | None, dict[str, Any]]:
     """实时收口和冷重建的同一投影；非法或残缺意图不猜测、不影响诊断参数。"""
     arguments = display_arguments(raw)
-    value = arguments.pop("intent", None)
-    try:
-        intent = validate_call_intent(value)
-    except ValueError:
-        intent = None
-    return intent, arguments
+    return parse_call_intent(arguments.pop("intent", None)), arguments

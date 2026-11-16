@@ -12,6 +12,6 @@ class SessionStatusArgs(BaseModel):
         gt=0,
         description=(
             "A session you started: the child_session_id from delegate_task or the fork_session_id from "
-            "fork_session. REQUIRED."
+            "fork_session."
         ),
     )

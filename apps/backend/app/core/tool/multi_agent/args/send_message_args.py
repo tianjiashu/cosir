@@ -17,6 +17,6 @@ class SendMessageArgs(BaseModel):
         max_length=8000,
         description=(
             "The message text, read literally as everything the recipient knows from you. "
-            "REQUIRED, at most 8000 characters."
+            "At most 8000 characters."
         ),
     )

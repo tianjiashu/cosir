@@ -15,7 +15,7 @@ class ForkSessionArgs(BaseModel):
     title: str = Field(
         description=(
             "Short name of the forked conversation, shown in the sidebar. Name it after its part "
-            f"of the work so the user can tell forks apart. REQUIRED, at most {TITLE_MAX} characters."
+            f"of the work so the user can tell forks apart. At most {TITLE_MAX} characters."
         ),
     )
     message: str = Field(
@@ -24,7 +24,7 @@ class ForkSessionArgs(BaseModel):
             "reply, not the current turn: restate in your own words whatever from this turn it "
             "needs, and point at files by path instead of pasting them. State the goal, "
             "constraints, what to leave to you and what to report back. "
-            f"REQUIRED, at most {MESSAGE_MAX} characters."
+            f"At most {MESSAGE_MAX} characters."
         ),
     )
 

@@ -42,7 +42,7 @@ class ToolGateOutcome:
     tool: ToolDefinition | None = None
     arguments: dict[str, object] = field(default_factory=dict)
     denial: ToolObservation | None = None
-    intent: str = ""
+    intent: str | None = None
 
     @property
     def admitted(self) -> bool:
@@ -155,6 +155,16 @@ class ToolAccessGate:
             resolved = resolve_call_arguments(tool, call.arguments)
         except CallArgumentsError as exc:
             return ToolGateOutcome(denial=tool_error(tool.name, str(exc), tool_call_id=call.call_id))
+
+        if resolved.intent is None:
+            # schema 要求必填但执行不拒绝（见 ``parse_call_intent``）；记下来观察哪些模型、哪些工具会漏写。
+            log.warning(
+                "tool_call_intent_missing",
+                extra={
+                    "msg": "工具调用缺少合法 intent，照常执行，展示退回工具动词",
+                    "data": {"tool": tool.name, "tool_call_id": call.call_id},
+                },
+            )
 
         if resolved.coercions:
             # 输入适配只还原无损形态（如 "30"→30），是模型未按声明类型传值的信号；

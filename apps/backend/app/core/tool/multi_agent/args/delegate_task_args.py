@@ -20,14 +20,14 @@ class DelegateTaskArgs(BaseModel):
     child_agent_id: str = Field(
         description=(
             "The child agent to run the task, from the available child agents listed in your "
-            "instructions: pick the one whose description and allowed_tools fit the task. REQUIRED."
+            "instructions: pick the one whose description and allowed_tools fit the task."
         )
     )
     agent_name: str = Field(
         description=(
             "Short name for this child, shown to the user as its conversation title and on its "
             "status line. Name it after its job (e.g. 'API review') so parallel children can be "
-            f"told apart. REQUIRED, at most {AGENT_NAME_MAX} characters."
+            f"told apart. At most {AGENT_NAME_MAX} characters."
         )
     )
     # 不写「越详细越好」：它与长度上限冲突，还诱导模型把文件内容贴进来；按要素写、文件按路径指。
@@ -37,7 +37,7 @@ class DelegateTaskArgs(BaseModel):
             "about this task. State the goal, what done looks like and what to report back, what "
             "you have already found or ruled out, and the scope. Point it at files and docs by "
             "path instead of pasting their contents. "
-            f"REQUIRED, at most {MESSAGE_MAX} characters."
+            f"At most {MESSAGE_MAX} characters."
         )
     )
 

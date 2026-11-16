@@ -6,7 +6,7 @@
 
 成功观察可不提供展示数据；提供时必须有稳定 kind。错误/取消由工具结果治理收口为短提示；实际已收集的结构化部分结果可保留 kind（终端取消、超时输出），不把部分结果解释为成功。Transport 的 completed 只表示调用完成，pending 可能是后台占位；awaitingUser 与 background 必须读取显式字段。Run 状态不等于工具状态，后台 completed 不等于业务成功。
 
-调用意图由 `ToolDefinition.to_model_tool_definition` 在模型可见 schema 根部统一注入必填 `intent`，不进入业务 Args、Hook 参数、handler kwargs、宿主参数或 MCP 远端参数。执行准入拆出并校验后放入 `ToolExecutionContext.call_intent`；Hook 不得改写该保留字段。终端后台标签消费同一上下文，不再使用工具专有 `description`。
+调用意图由 `ToolDefinition.to_model_tool_definition` 在模型可见 schema 根部统一注入必填 `intent`，不进入业务 Args、Hook 参数、handler kwargs、宿主参数或 MCP 远端参数。执行准入拆出后放入 `ToolExecutionContext.call_intent`：必填是对模型的要求，缺失或非法不拒绝调用（值为 `None`，记 `tool_call_intent_missing` 日志，标题回落到动词），因为它只服务展示，而不强制 strict 的厂商会在长参数调用里漏写；Hook 不得改写该保留字段。终端后台标签消费同一上下文，缺失时回落到命令首个非空行，不再使用工具专有 `description`。
 
 原始 `assistant.tool_calls[].function.arguments.intent` 是唯一持久来源。模型流正常/异常/取消收口都独立发布意图事实，Transport 投影为 `tool part.intent`，不依赖是否准入执行；冷重建使用同一解析规则。不完整 JSON 不猜意图。意图是模型声明的目的，不是进度、执行承诺或授权依据。Session 冻结模型 schema，因此变更后新建 Session 使用新契约，不迁移旧 schema 或保留旧字段兼容分支。
 
