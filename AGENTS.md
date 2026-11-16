@@ -334,7 +334,7 @@ Electron 桌面应用
 安全与权限：功能完善后整体设计，现阶段不做。目标是一套配置化的白名单 + 黑名单 + 越界审批（审批复用 `user_decision`），覆盖下列全部通道；设计稿见 `docs/plan/agent-permission-sandbox-design.md`（前置：`terminal-ownership-redesign.md`）：
 
 - [ ] **终端**：`execute_terminal` 与交互终端的命令直接在本机执行（原 deny-list 已删），可以 `cd` 或用绝对路径影响工作区以外，删除、不可逆 git 操作、下载后执行都不拦截；MCP stdio 服务同属本机进程，也不受限。方案：一份固定策略（工作区内读写），门禁管进程内工具、worker 内 Rust 沙箱管命令（macOS Seatbelt、Linux bubblewrap，Windows 待做、期间每条先审），越界交给智能审查，被拒后由模型用通用提问工具 `ask_user` 向用户征得许可，子 Agent 被拒即被拒；自定义档位待做。
-- [ ] **受保护路径**：文件工具（含浏览器 `upload`）已按 `core/permission/protected_paths.py`（系统 `.cosir` 禁读写、其 `skills/` 只读）拦截；终端与浏览器 `file://` 仍能读出 `.env`，命令沙箱须消费同一份事实；`.agents/skills` 可被文件工具改写，仓库自带的同名 Skill 会覆盖用户的。
+- [ ] **受保护路径**：文件工具（含浏览器 `upload`）已按 `core/permission/protected_paths.py`（系统 `.cosir` 禁读写、其 `skills/` 只读，按文件身份判定、大小写与 firmlink 写法绕不过，规则在 `utils/path/file_identity.py`）拦截，硬链接仍挡不住；终端与浏览器 `file://` 仍能读出 `.env`，命令沙箱须消费同一份事实；`.agents/skills` 可被文件工具改写，仓库自带的同名 Skill 会覆盖用户的。
 - [ ] **浏览器**：现有防线只有快照边界标签、工具描述提醒与模型自主交接（`browser_handoff`）；`browser_evaluate` 可在页面执行任意脚本，`upload` 可把工作区外的本机文件交给网页，打开任意网址即可外传数据；可打开任意本机文件，站点权限（含摄像头、麦克风、录屏）默认授权。用户新开标签时下载目录经渲染进程转交，宿主只校验是绝对路径。所有页面的 Fetch / XHR 响应体都被采进标签日志，交接期间用户登录的接口响应也在其中，Agent 事后可读。
 - [ ] **站点图标**：对话里的公网链接一显示就请求该主机的 `/favicon.ico`（`lib/links/site-icon.ts`），站点能看到本机 IP，模型写出的子域名可夹带数据。
 - [ ] **本机 API**：后端 CORS 放行任意端口的本机来源且 API 无认证（`app/app.py`）；命令能替用户作答；方案是 API 加认证，沙箱不屏蔽端口。
