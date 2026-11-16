@@ -13,7 +13,7 @@ Agent 配置、cosir 专属 Skill、Skill 启停、MCP 配置、文件面板设�
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePath
 
 COSIR_DIR_NAME: str = ".cosir"
 COSIR_ATTACHMENT_DIR_NAME: str = "Attachment"
@@ -30,6 +30,16 @@ COSIR_SKILLS_DIR_NAME: str = "skills"
 COSIR_SKILLS_CONFIG_FILE_NAME: str = "skills.json"
 COSIR_MCP_SERVERS_FILE_NAME: str = "mcp_servers.json"
 COSIR_FILE_BROWSER_SETTINGS_FILE_NAME: str = "file-browser.json"
+
+
+def is_in_workspace_cosir(relative: PurePath) -> bool:
+    """相对工作区根的路径是否落在工作区 ``.cosir`` 保留区里（含它本身）。
+
+    输入是 ``RootDirectory.relative`` 的结果（已解析链接与 ``..``）；按首段 casefold 比较，大小写变体在
+    不区分大小写的卷上就是同一个目录，在区分大小写的卷上多拒一个同名变体也无害。
+    """
+
+    return bool(relative.parts) and relative.parts[0].casefold() == COSIR_DIR_NAME
 
 
 def workspace_cosir_dir(workspace_root: str | Path) -> Path:

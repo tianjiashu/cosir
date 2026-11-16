@@ -7,10 +7,8 @@
 1. ``attachment_service`` 使用 ``_WorkspaceAttachmentDirs`` 冻结 dataclass 与 ``_dirs(workspace_id)``
    （替换旧 ``_directory``）；``workspace_root`` 直接取自 workspace 记录，不再用
    ``directory.parent.parent`` 反推。7 个调用点全部迁移。
-2. ``is_within_cosir`` 新增空白路径短路：``""`` / ``"   "`` / ``Path("")`` 必须返回 ``False``。
 3. ``tool_output_budget._write_artifact`` 统一使用已 resolve 的 ``root`` 构造 PathResolver 与
    ``atomicWrite containment_root``。
-4. ``image_utils.is_trusted_cosir_path`` docstring 补异常段（无行为变更）。
 
 对抗维度：
   A. 附件功能回归：dedup / normalizer / runtime-context 全绿（另由既有文件覆盖）；本文件额外
@@ -18,7 +16,6 @@
   B. 等价性：修复后 ``relative_path`` / ``resolve_for_model`` 基准 == 修复前
      ``directory.parent.parent``（含 workspace 根为符号链接场景）。
   C. artifact 落盘位置、回读原文、符号链接 workspace 根的 containment。
-  D. ``is_within_cosir`` 空白短路 + 正常路径判定不被破坏（复跑上一轮对抗用例）。
   E. 五个文件工具指向 ``.cosir`` 仍全部失败且磁盘不变；只读工具仍可读；终端 cwd 仍豁免。
 """
 
@@ -44,7 +41,6 @@ from app.tools.tool_handler.find_files import FindFilesTool
 from app.tools.tool_handler.read_file import ReadFileTool
 from app.tools.tool_handler.search_content import SearchContentTool
 from app.tools.tool_handler.write_file import WriteFileTool
-from app.utils.path.validation import is_within_cosir
 
 _ASSET = "a" * 64
 
@@ -361,68 +357,6 @@ def test_artifact_not_written_outside_when_cosir_is_outside_symlink(tmp_path: Pa
         assert written.is_relative_to(root.resolve()), f"artifact 越界：{written}"
 
 
-# --- D. is_within_cosir 空白短路 --------------------------------------------------------
-
-
-@pytest.mark.parametrize("blank", ["", "   ", "\t", "\n", Path("")])
-def test_is_within_cosir_blank_path_returns_false(tmp_path: Path, blank: object) -> None:
-    """空白路径（``""`` / 纯空白 / ``Path("")``）必须短路返回 ``False``。
-
-    潜在缺陷类型：``realpath("")`` 可能落到当前工作目录，导致误判为在 ``.cosir`` 内。
-    """
-
-    root = tmp_path / "ws"
-    (root / ".cosir").mkdir(parents=True)
-    assert is_within_cosir(blank, root) is False
-
-
-def test_is_within_cosir_blank_does_not_depend_on_cwd(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """即使进程 cwd 切到 ``.cosir`` 内，空白路径仍必须返回 ``False``（不落 cwd 语义）。"""
-
-    root = tmp_path / "ws"
-    cosir = root / ".cosir"
-    cosir.mkdir(parents=True)
-    monkeypatch.chdir(cosir)
-
-    assert is_within_cosir("", root) is False
-    assert is_within_cosir("   ", root) is False
-
-
-def test_is_within_cosir_normal_paths_unaffected_by_blank_short_circuit(tmp_path: Path) -> None:
-    """空白短路不得影响正常路径判定（复跑上一轮对抗用例）。"""
-
-    root = tmp_path / "ws"
-    (root / ".cosir").mkdir(parents=True)
-    (root / ".cosir2").mkdir(parents=True)
-
-    # 命中
-    assert is_within_cosir(root / ".cosir", root) is True
-    assert is_within_cosir(root / ".cosir" / "x.txt", root) is True
-    assert is_within_cosir(root / "./.cosir" / "x", root) is True
-    assert is_within_cosir(root / ".cosir" / "x" / ".." / "y", root) is True
-    # 不命中
-    assert is_within_cosir(root / ".cosir2" / "x", root) is False
-    assert is_within_cosir(root / "src" / "x.txt", root) is False
-    # workspace_root 无效
-    assert is_within_cosir(root / ".cosir" / "x", None) is False
-    assert is_within_cosir(root / ".cosir" / "x", "") is False
-    assert is_within_cosir(root / ".cosir" / "x", "   ") is False
-
-
-def test_is_trusted_cosir_path_blank_is_false(tmp_path: Path) -> None:
-    """``is_trusted_cosir_path`` 直接暴露空白短路行为（委托 is_within_cosir）。"""
-
-    from app.utils.image_utils import is_trusted_cosir_path
-
-    root = tmp_path / "ws"
-    (root / ".cosir").mkdir(parents=True)
-    assert is_trusted_cosir_path("", str(root)) is False
-    assert is_trusted_cosir_path("   ", str(root)) is False
-    assert is_trusted_cosir_path(str(root / ".cosir" / "a.png"), str(root)) is True
-
-
 # --- E. 端到端：五个文件工具 + 只读工具 + 终端豁免 ---------------------------------------
 
 
@@ -631,7 +565,7 @@ async def test_resolve_content_after_upload(tmp_path: Path) -> None:
     assert content_type == "image/png"
 
 
-# --- I. image_utils 行为回归（is_image_path + is_trusted_cosir_path） -------------------
+# --- I. image_utils 行为回归（is_image_path） -------------------
 
 
 @pytest.mark.parametrize(
@@ -651,13 +585,3 @@ def test_is_image_path_contract(ref: str, expected: bool) -> None:
     from app.utils.image_utils import is_image_path
 
     assert is_image_path(ref) is expected
-
-
-def test_is_trusted_cosir_path_does_not_raise_on_nul(tmp_path: Path) -> None:
-    """含 NUL 的图片路径不得让 ``is_trusted_cosir_path`` 抛出（OSError 归一化）。"""
-
-    from app.utils.image_utils import is_trusted_cosir_path
-
-    root = tmp_path / "ws"
-    (root / ".cosir").mkdir(parents=True)
-    assert is_trusted_cosir_path("\x00bad", str(root)) is False

@@ -60,6 +60,7 @@ from app.tools.tool_models.terminal.execute_terminal_args import (
     ExecuteTerminalShell,
     resolve_execute_terminal_args_model,
 )
+from app.utils.path.file_identity import RootDirectory
 
 # 平台无关的工具描述：只写选用与调用决策需要的执行语义（无状态、无 stdin / 终端、前台占步、
 # 不能长驻）。其余各有唯一出处，不在此复述：平台 shell、命令语法、timeout、workdir 与后台回投在
@@ -631,8 +632,10 @@ class ExecuteTerminalTool(HandlerBase):
         candidate = Path(workdir)
         resolved = (candidate if candidate.is_absolute() else root / candidate).resolve()
         try:
-            resolved.relative_to(root)
-        except ValueError:
+            inside = RootDirectory.at(root).contains(resolved)
+        except OSError as exc:
+            return Path(), f"workspace root is not usable: {exc}"
+        if not inside:
             return Path(), f"workdir escapes workspace root: {workdir}"
         if not resolved.is_dir():
             return Path(), f"workdir not found: {resolved}"

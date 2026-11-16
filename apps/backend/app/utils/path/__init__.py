@@ -27,7 +27,6 @@ from app.utils.path.system_cosir import (
     system_model_config_file,
     system_skills_config_file,
 )
-from app.utils.path.validation import is_within_cosir
 from app.utils.path.workspace_cosir import (
     COSIR_AGENT_CONFIG_DIR_NAME,
     COSIR_ATTACHMENT_DIR_NAME,
@@ -62,7 +61,6 @@ __all__ = [
     "env_file",
     "has_nul",
     "has_parent_segment",
-    "is_within_cosir",
     "override",
     "reset",
     "system_agent_config_dir",

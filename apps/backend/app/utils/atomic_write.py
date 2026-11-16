@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path
 
 from app.config.constant import Constant
+from app.utils.path.file_identity import RootDirectory
 
 
 def atomic_write_text(
@@ -69,7 +70,7 @@ def atomic_write_text(
         content_out = content
 
     directory = target.parent
-    _assert_existing_ancestor_contained(directory, containment_root)
+    _assert_contained(directory, containment_root)
     directory.mkdir(parents=True, exist_ok=True)
     _assert_contained(target, containment_root)
     file_descriptor, temp_path = tempfile.mkstemp(dir=str(directory), prefix=".tmp_write_")
@@ -93,66 +94,23 @@ def atomic_write_text(
 
 
 def _assert_contained(path: Path, containment_root: Path | None) -> None:
-    """在实际写入前重新确认目标仍位于 containment 根内。
+    """确认 ``path``（解析链接与 ``..`` 后）仍在 containment 根内；为 None 时跳过。
 
-    参数:
-        path: 待写入目标。
-        containment_root: 可选 workspace 根；为 None 时跳过校验。
-
-    返回:
-        无。
+    建目录前、写临时文件后、替换前各确认一次，挡住期间被换成指向根外的链接。尚不存在的尾部按最近
+    存在的祖先判定，所以建目录前也能判；判定按文件身份，大小写与 firmlink 写法不影响结论。
 
     异常:
-        OSError: 当前解析结果越出根目录或无法解析时抛出。
-
-    副作用:
-        仅读取路径元数据。
+        OSError(EPERM): 越出根目录、根无法访问或根所在卷不提供文件号。
     """
 
     if containment_root is None:
         return
     try:
-        root = Path(containment_root).resolve(strict=True)
-        resolved = Path(path).resolve(strict=False)
-        resolved.relative_to(root)
-        Path(path).parent.resolve(strict=True).relative_to(root)
-    except (OSError, ValueError) as exc:
+        inside = RootDirectory.at(containment_root).contains(path)
+    except OSError as exc:
         raise OSError(errno.EPERM, f"write path escaped containment root: {path}") from exc
-
-
-def _assert_existing_ancestor_contained(
-    directory: Path,
-    containment_root: Path | None,
-) -> None:
-    """在创建目录前校验最近存在祖先仍位于 containment 根内。
-
-    参数:
-        directory: 即将创建或使用的目标父目录。
-        containment_root: 可选 workspace 根；为 None 时跳过校验。
-
-    返回:
-        无。
-
-    异常:
-        OSError: 最近存在祖先越界、为断链 reparse point 或无法解析时抛出。
-
-    副作用:
-        仅读取路径元数据，不创建目录。
-    """
-
-    if containment_root is None:
-        return
-    candidate = Path(directory)
-    while not os.path.lexists(candidate):
-        parent = candidate.parent
-        if parent == candidate:
-            raise OSError(errno.EPERM, f"no existing ancestor for write path: {directory}")
-        candidate = parent
-    try:
-        root = Path(containment_root).resolve(strict=True)
-        candidate.resolve(strict=True).relative_to(root)
-    except (OSError, ValueError) as exc:
-        raise OSError(errno.EPERM, f"write ancestor escaped containment root: {directory}") from exc
+    if not inside:
+        raise OSError(errno.EPERM, f"write path escaped containment root: {path}")
 
 
 def detect_line_ending(text: str) -> str:

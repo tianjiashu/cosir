@@ -10,13 +10,14 @@ from pathlib import Path
 import pytest
 
 from app.utils.path import system_cosir as paths
+from app.utils.path.file_identity import RootDirectory
 from app.utils.path.system_cosir import (
     COSIR_DIR_NAME,
     system_cosir_dir,
     system_skills_config_file,
 )
-from app.utils.path.validation import is_within_cosir
 from app.utils.path.workspace_cosir import (
+    is_in_workspace_cosir,
     workspace_attachment_dir,
     workspace_attachment_staging_dir,
     workspace_cosir_dir,
@@ -36,33 +37,25 @@ def test_workspace_paths_are_nested_under_cosir(tmp_path: Path) -> None:
     assert workspace_download_dir(root) == root / ".cosir" / "Download"
 
 
-def test_is_within_cosir_matches_reserved_subtree_only(tmp_path: Path) -> None:
+def _reserved(path: Path, root: Path) -> bool:
+    """写入口与可写根共用的保留区规则：先按文件身份求相对工作区的路径，再看首段是不是 ``.cosir``。"""
+    relative = RootDirectory.at(root).relative(path)
+    return relative is not None and is_in_workspace_cosir(relative)
+
+
+def test_reserved_area_matches_subtree_only(tmp_path: Path) -> None:
     """``.cosir`` 本身与其子路径命中；同前缀兄弟目录与普通路径不命中。"""
 
     root = tmp_path / "ws"
-    assert is_within_cosir(root / ".cosir", root) is True
-    assert is_within_cosir(root / ".cosir" / "Attachment" / "a.png", root) is True
-    assert is_within_cosir(root / ".cosir2" / "a.txt", root) is False
-    assert is_within_cosir(root / "src" / "a.txt", root) is False
-    assert is_within_cosir(root / "a.txt", root) is False
+    (root / ".cosir").mkdir(parents=True)
+    assert _reserved(root / ".cosir", root) is True
+    assert _reserved(root / ".cosir" / "Attachment" / "a.png", root) is True
+    assert _reserved(root / ".cosir2" / "a.txt", root) is False
+    assert _reserved(root / "src" / "a.txt", root) is False
+    assert _reserved(root / "a.txt", root) is False
 
 
-def test_is_within_cosir_without_workspace_root_is_false(tmp_path: Path) -> None:
-    """缺少 workspace 根时按「无 workspace」处理，恒返回 ``False``。"""
-
-    assert is_within_cosir(tmp_path / "x.txt", None) is False
-    assert is_within_cosir(tmp_path / "x.txt", "") is False
-
-
-def test_is_within_cosir_treats_blank_path_as_invalid(tmp_path: Path) -> None:
-    """空串/纯空白路径视为无效，不得因 ``realpath("")`` 落到当前目录而误判。"""
-
-    root = tmp_path / "ws"
-    assert is_within_cosir("", root) is False
-    assert is_within_cosir("   ", root) is False
-
-
-def test_is_within_cosir_follows_symlink_into_reserved_area(tmp_path: Path) -> None:
+def test_reserved_area_follows_symlink(tmp_path: Path) -> None:
     """指向 ``.cosir`` 的符号链接必须命中（anti-symlink）。"""
 
     root = tmp_path / "ws"
@@ -73,7 +66,7 @@ def test_is_within_cosir_follows_symlink_into_reserved_area(tmp_path: Path) -> N
         link.symlink_to(cosir / "target.txt")
     except (OSError, NotImplementedError):
         pytest.skip("当前环境不支持创建符号链接")
-    assert is_within_cosir(link, root) is True
+    assert _reserved(link, root) is True
 
 
 def test_system_cosir_dir_combines_data_dir_with_fixed_name(tmp_path: Path) -> None:

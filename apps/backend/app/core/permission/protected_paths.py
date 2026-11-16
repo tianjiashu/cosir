@@ -17,49 +17,64 @@ Skill 目录 ``skills/`` 例外、只读放行：Skill 正文过长时，``skill
 
 from __future__ import annotations
 
-import os
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.utils.path.file_identity import FileIdentity, RootDirectory
 from app.utils.path.system_cosir import system_cosir_dir, system_cosir_skills_dir
-from app.utils.path.validation import is_within
+
+
+def _root_or_none(path: Path) -> RootDirectory | None:
+    """根不存在时没有东西要保护（运行期 cosir 启动即创建系统 ``.cosir``，skills 目录可能还没有）。"""
+
+    try:
+        return RootDirectory.at(path)
+    except FileNotFoundError:
+        return None
 
 
 @dataclass(frozen=True)
 class ProtectedPaths:
-    """某一时刻的受保护根与只读例外（都是真实路径）；按调用现取，判断时不再读路径变量。"""
+    """某一时刻的受保护根与只读例外；按调用现取，判断时不再读路径变量。
 
-    root: Path
-    readable: Path
+    判定按文件身份（``RootDirectory``）而不是字符串：大小写变体（``~/.COSIR``）、firmlink 前缀
+    （``/System/Volumes/Data/...``）、Unicode 规范化不同的写法都指向同一个目录，都要拦住。
+    """
+
+    root: RootDirectory | None
+    readable: RootDirectory | None
 
     @classmethod
     def current(cls) -> ProtectedPaths:
-        """按当前数据根推导；两者都取真实路径，判断时不再逐次解析。"""
-
-        return cls(
-            Path(os.path.realpath(system_cosir_dir())),
-            Path(os.path.realpath(system_cosir_skills_dir())),
-        )
+        return cls(_root_or_none(system_cosir_dir()), _root_or_none(system_cosir_skills_dir()))
 
     def denies_read(self, path: str | Path) -> bool:
         """路径（跟随符号链接后）是否禁读：在受保护子树内，且不在 Skill 只读例外里。"""
 
-        return is_within(path, self.root) and not is_within(path, self.readable)
+        if self.root is None or not self.root.contains(path):
+            return False
+        return self.readable is None or not self.readable.contains(path)
 
     def denies_write(self, path: str | Path) -> bool:
         """路径是否禁写：受保护子树内一律不可写，Skill 目录也不例外。"""
 
-        return is_within(path, self.root)
+        return self.root is not None and self.root.contains(path)
 
     def is_denied_root(self, directory: Path) -> bool:
         """``directory`` 是否正是受保护根，供遍历剪枝。
 
-        遍历从已解析的真实路径出发、不跟随符号链接，子目录路径因此都是真实路径，按字面比较即可，
-        不必每个目录都 ``realpath``。剪掉受保护根后其下的 ``skills/`` 不会被遍历到，要搜 Skill 就以
-        Skill 目录为起点。
+        遍历不跟随链接，对每个子目录都 ``stat`` 太贵：先比目录名（NFC + casefold，大小写与 Unicode 写法
+        不同仍算同名），同名才比身份。Windows 上 ``DirEntry`` 给的文件号恒为 0，所以这里用 ``os.stat``。
+        剪掉受保护根后其下的 ``skills/`` 不会被遍历到，要搜 Skill 就以 Skill 目录为起点。
         """
 
-        return os.path.normcase(str(directory)) == os.path.normcase(str(self.root))
+        if self.root is None or _folded(directory.name) != _folded(self.root.path.name):
+            return False
+        try:
+            return FileIdentity.of(directory) == self.root.identity
+        except OSError:
+            return False
 
     def denial_message(self, path: str, *, write: bool) -> str:
         """面向模型的拒绝说明。"""
@@ -75,3 +90,7 @@ class ProtectedPaths:
             f"API keys and conversation history and cannot be read; only skills under "
             f"{system_cosir_skills_dir()} are readable."
         )
+
+
+def _folded(name: str) -> str:
+    return unicodedata.normalize("NFC", name).casefold()

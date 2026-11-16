@@ -12,10 +12,11 @@ Session 时定、之后不变，所以「在上级之内」只在派生那一刻
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from app.core.permission.protected_paths import ProtectedPaths
-from app.utils.path.validation import is_within, is_within_cosir
+from app.utils.path.file_identity import RootDirectory
+from app.utils.path.workspace_cosir import is_in_workspace_cosir
 
 
 class WritableRootError(ValueError):
@@ -40,20 +41,23 @@ def narrow(workspace_root: str | Path, current: str | None, requested: str) -> s
         WritableRootError: 上述任一条不满足。
     """
 
-    workspace = Path(workspace_root).resolve()
-    ceiling = absolute(workspace, current).resolve()
     candidate = Path(requested)
     try:
-        resolved = (candidate if candidate.is_absolute() else workspace / candidate).resolve()
+        workspace = RootDirectory.at(workspace_root)
+        ceiling = RootDirectory.at(absolute(workspace.path, current))
+        resolved = (candidate if candidate.is_absolute() else workspace.path / candidate).resolve()
     except (OSError, RuntimeError) as exc:
         raise WritableRootError(f"writable_root cannot be resolved: {requested} ({exc})") from exc
-    if not is_within(resolved, ceiling):
+    if not ceiling.contains(resolved):
         raise WritableRootError(
-            f"writable_root must be inside your own writable root {ceiling}: {requested}. "
+            f"writable_root must be inside your own writable root {ceiling.path}: {requested}. "
             "A derived session can only be narrowed, never widened."
         )
     if not resolved.is_dir():
         raise WritableRootError(f"writable_root is not an existing directory: {requested}")
-    if is_within_cosir(resolved, workspace) or ProtectedPaths.current().denies_write(resolved):
+    # 可写根恒在工作区内（上级可写根也是），所以相对工作区的路径必然存在。
+    relative = workspace.relative(resolved)
+    assert relative is not None
+    if is_in_workspace_cosir(relative) or ProtectedPaths.current().denies_write(resolved):
         raise WritableRootError(f"writable_root is inside a protected area: {requested}")
-    return None if resolved == workspace else resolved.relative_to(workspace).as_posix()
+    return None if relative == PurePath(".") else relative.as_posix()

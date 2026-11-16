@@ -135,3 +135,48 @@ def test_rules_follow_data_dir_override(home: Path, tmp_path: Path) -> None:
 
     assert result.status == "success"
     assert ProtectedPaths.current().denies_read(other / ".cosir" / "x")
+
+
+def _case_insensitive(directory: Path) -> bool:
+    return (directory / ".COSIR").exists() == (directory / ".cosir").exists() and (
+        directory / ".COSIR"
+    ).exists()
+
+
+def test_case_variant_cannot_bypass_protection(home: Path) -> None:
+    """``~/.COSIR/.env`` 在不区分大小写的卷上就是 ``~/.cosir/.env``：读、写、搜索都要拦住。
+
+    曾经按字符串比较（``realpath`` 保留输入大小写、POSIX 上 ``normcase`` 不做事），这种写法被放行。
+    """
+
+    if not _case_insensitive(home):
+        pytest.skip("文件系统区分大小写，.COSIR 是另一个目录")
+    variant = home / ".COSIR"
+    ctx = _ctx(home / "proj")
+
+    read = ReadFileTool().execute(path=str(variant / ".env"), execution_context=ctx)
+    write = WriteFileTool().execute(
+        path=str(variant / "config" / "models.json"), content="{}", execution_context=_ctx(home)
+    )
+    search = SearchContentTool().execute(pattern=MARKER, path=str(variant), execution_context=ctx)
+
+    assert read.status == "error" and MARKER not in read.content
+    assert write.status == "error"
+    assert MARKER in (home / ".cosir" / "config" / "models.json").read_text(encoding="utf-8")
+    assert search.status == "error" and MARKER not in search.content
+    assert ProtectedPaths.current().is_denied_root(variant)
+
+
+@pytest.mark.skipif(os.uname().sysname != "Darwin", reason="firmlink 只在 macOS 上存在")
+def test_firmlink_prefix_cannot_bypass_protection(home: Path) -> None:
+    """``/System/Volumes/Data/...`` 与 ``/...`` 是同一个目录（firmlink），身份相同，照样拦住。"""
+
+    firmlinked = Path("/System/Volumes/Data") / str(home.resolve()).lstrip("/")
+    if not firmlinked.exists():
+        pytest.skip("本机没有 Data 卷 firmlink")
+    result = ReadFileTool().execute(
+        path=str(firmlinked / ".cosir" / ".env"), execution_context=_ctx(home / "proj")
+    )
+
+    assert result.status == "error"
+    assert MARKER not in result.content

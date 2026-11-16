@@ -1,17 +1,7 @@
-"""图片路径判定与视觉落盘目录归属（leaf 层纯工具）。
+"""图片路径判定（leaf 层纯工具）：按扩展名判断引用是否为图片，不读取文件、不依赖业务模型。
 
-单一职责：承载"路径是否为图片"与"路径是否落在 workspace 受信 ``.cosir`` 目录内"
-两类**纯路径判断**逻辑，不触碰文件系统读取、不依赖模型能力、不依赖任何业务模型。
-
-为什么放在 utils（leaf）而非 vision_content_blocks：
-- 这两类判断被多处复用：附件类型推断、运行期视觉预筛
-  （``core/workflow/.../vision_content_blocks`` 编排层）、workflow 图片路径过滤。
-  放在编排层会导致其它层跨层引用其私有函数，违反分层依赖。
-- 它们只依赖标准库 ``mimetypes`` 与同属 ``app.utils`` 的 ``constants`` / ``cosir_paths``，
-  无循环依赖风险，符合 leaf 层定位。
-
-不负责：图片真实格式/尺寸/体积校验（属运行期 Pillow 校验，在 vision_content_blocks）、
-图片 base64 编码（同处）、模型视觉能力查询（属 llm_provider 层）。
+被附件类型推断与运行期视觉预筛共用，放在 leaf 层避免编排层互相引用私有函数。不负责真实格式、尺寸与
+体积校验（运行期 Pillow 校验）和 base64 编码。
 """
 
 from __future__ import annotations
@@ -20,7 +10,6 @@ import mimetypes
 from pathlib import Path
 
 from app.utils.constants import IMAGE_EXTENSIONS
-from app.utils.path.validation import is_within_cosir
 
 
 def is_image_path(ref: str) -> bool:
@@ -56,30 +45,3 @@ def is_image_path(ref: str) -> bool:
         return True
     # 回退业务白名单：覆盖标准库未识别、但本项目视觉通道需要强制路由的扩展名。
     return suffix in IMAGE_EXTENSIONS
-
-
-def is_trusted_cosir_path(image_path: str, workspace_root: str | None) -> bool:
-    """判断图片路径是否落在受信的 workspace ``.cosir`` 目录内（抗符号链接/大小写）。
-
-    视觉路径不复用写工具 ``PathResolver`` 的 workspace 边界硬拒；此处单独做受信前缀判断，
-    仅用于决定是否需要按"外部路径"做额外保守校验（两类路径最终都走同样的读/校验逻辑）。
-
-    参数:
-        image_path: 用户图片路径。
-        workspace_root: workspace 根路径（用于推导 ``.cosir`` 目录）；为空/非法时按外部路径处理。
-
-    返回:
-        ``True`` 表示路径落在 ``.cosir`` 受信目录内（含子目录）；否则 ``False``。
-
-    异常:
-        无：底层 :func:`app.utils.path.validation.is_within_cosir` 将 ``OSError`` 归一化为 ``False``。
-
-    副作用:
-        无。
-
-    说明:
-        判定委托 :func:`app.utils.path.validation.is_within_cosir`，使 ``.cosir`` 归属规则保持
-        单一来源，避免本模块与其它调用点各自实现而漂移。
-    """
-
-    return is_within_cosir(image_path, workspace_root)

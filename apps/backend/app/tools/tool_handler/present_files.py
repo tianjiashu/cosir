@@ -20,6 +20,7 @@ from app.core.tool.tool_grouping import TOOL_GROUP_REPLY_PRESENTATION
 from app.tools.display.deliverables_display import build_deliverables_display_data
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models import PresentFilesArgs
+from app.utils.path.file_identity import RootDirectory
 
 
 class PresentFilesTool(HandlerBase):
@@ -50,7 +51,7 @@ class PresentFilesTool(HandlerBase):
         self, files: list[dict[str, Any]], *, execution_context: ToolExecutionContext
     ) -> ToolObservation:
         resolver = PathResolver(execution_context.workspace_root)
-        root = execution_context.workspace_root.resolve()
+        workspace = RootDirectory.at(execution_context.workspace_root)
         presented: dict[str, dict[str, Any]] = {}
         failures: list[str] = []
         for file in files:
@@ -61,13 +62,10 @@ class PresentFilesTool(HandlerBase):
             elif not resolved.is_file():
                 failures.append(f"- {path}: no such file")
             else:
+                relative = workspace.relative(resolved)
                 # 同一文件写两遍只留后一条说明，卡片不出现重复行。
                 presented[str(resolved)] = {
-                    "path": (
-                        resolved.relative_to(root).as_posix()
-                        if resolved.is_relative_to(root)
-                        else str(resolved)
-                    ),
+                    "path": relative.as_posix() if relative is not None else str(resolved),
                     "absolute_path": str(resolved),
                     "caption": (file.get("caption") or "").strip() or None,
                 }

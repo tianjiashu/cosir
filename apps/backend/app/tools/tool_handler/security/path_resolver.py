@@ -25,8 +25,9 @@ from typing import ClassVar
 
 from app.config.logging.logger import log
 from app.core.permission.protected_paths import ProtectedPaths
+from app.utils.path.file_identity import RootDirectory
 from app.utils.path.relative_path import has_nul
-from app.utils.path.validation import is_within, is_within_cosir
+from app.utils.path.workspace_cosir import is_in_workspace_cosir
 
 
 class PathResolver:
@@ -128,26 +129,34 @@ class PathResolver:
         """解析写入目标：相对路径按工作区根解析，目标须在可写根内，并拒绝保留区与受保护路径。
 
         返回 ``(resolved_path, "")`` 或 ``(None, error)``，``error`` 为面向模型的英文短句；不向上抛出。
-        两边都跟随符号链接后再比较，指向边界外的链接因此被拒。
+        包含判定按文件身份（``RootDirectory``）：链接、``..`` 先解析，大小写与 firmlink 写法不影响结论，
+        指向边界外的链接因此被拒。
         """
 
         input_error = self._validate_path(path)
         if input_error:
             return None, input_error
         try:
-            root = self.workspace_root.resolve()
+            workspace = RootDirectory.at(self.workspace_root)
             raw = Path(path)
-            resolved = (raw if raw.is_absolute() else root / raw).resolve()
-            resolved.relative_to(root)
+            resolved = (raw if raw.is_absolute() else workspace.path / raw).resolve()
+            relative = workspace.relative(resolved)
+            writable = (
+                workspace
+                if self.writable_root == self.workspace_root
+                else RootDirectory.at(self.writable_root)
+            )
         except (OSError, RuntimeError, ValueError) as exc:
             return None, f"path escapes project root: {path} ({exc})"
-        if not is_within(resolved, self.writable_root):
+        if relative is None:
+            return None, f"path escapes project root: {path}"
+        if not writable.contains(resolved):
             return None, (
                 f"path is outside this session's writable root {self.writable_root}: {path}. "
                 "This session may only write inside that directory; leave other files alone "
                 "and report what needs to change there"
             )
-        if is_within_cosir(resolved, self.workspace_root):
+        if is_in_workspace_cosir(relative):
             return None, (
                 f"path is inside the reserved '.cosir' metadata area: {path}. That area is "
                 "read-only; write, edit, delete, and move operations must target files "
