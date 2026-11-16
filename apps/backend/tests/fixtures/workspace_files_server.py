@@ -8,6 +8,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 from PIL import Image
+from watchdog.events import FileModifiedEvent
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -66,6 +67,17 @@ async def fixture_lifespan(_app: FastAPI):
         close_service_dependencies()
 
 
+def deliver_change(path: Path) -> None:
+    """替操作系统送一次目录变化事件，走真实的路由与推送链路。
+
+    原生事件的投递时限由操作系统决定、不做保证（macOS 的 fseventsd 满载时会迟到十几秒或丢失），
+    E2E 要验证的是「后端推 changed → 前端刷新 → 界面更新」，不能押在机器负载上。原生登记与路由
+    的正确性由后端 ``test_workspace_files.py`` 的注册、路由测试守住。系统报出的是真实路径，这里同样先解析。
+    """
+    path = path.parent.resolve() / path.name
+    app.state.fixture_watcher.changed(app.state.fixture_workspace_id, FileModifiedEvent(str(path)))
+
+
 @app.post("/__test__/files/update")
 def update_file():
     root = app.state.fixture_root
@@ -73,6 +85,7 @@ def update_file():
     replacement = root / "src" / "new.py"
     replacement.write_text("print('after update')\n", encoding="utf-8")
     replacement.replace(root / "src" / "main.py")
+    deliver_change(root / "src" / "main.py")
     return {"updated": True}
 
 
@@ -80,19 +93,21 @@ def update_file():
 def update_image():
     root = app.state.fixture_root
     Image.new("RGB", (40, 30), "blue").save(root / "media" / "deep" / "photo.png")
+    deliver_change(root / "media" / "deep" / "photo.png")
     return {"updated": True}
 
 
 @app.post("/__test__/files/delete")
 def delete_file():
     (app.state.fixture_root / "src" / "main.py").unlink()
+    deliver_change(app.state.fixture_root / "src" / "main.py")
     return {"deleted": True}
 
 
 @app.get("/__test__/files/watch-status")
 def watch_status():
     watcher = app.state.fixture_watcher
-    return {"subscriptions": len(watcher._subscribers), "watches": len(watcher._watches)}
+    return {"subscriptions": len(watcher._subscribers), "watches": len(watcher._registrations)}
 
 
 @app.post("/__test__/files/link-fixture")

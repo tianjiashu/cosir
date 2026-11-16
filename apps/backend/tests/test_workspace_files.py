@@ -183,20 +183,164 @@ def test_http_contract_and_resource_range(files, workspace_root):
         app.dependency_overrides.clear()
 
 
+class _RecordingObserver:
+    """替身观察器：只记下交给系统的注册，不碰操作系统的事件机制。
+
+    原生事件的投递时限由操作系统决定、不做保证（macOS 的 fseventsd 满载时可迟到十几秒或丢失），
+    测试只验证 cosir 自己的部分：注册了什么、何时释放、事件进来后通知了谁。
+    """
+
+    def __init__(self) -> None:
+        self.handlers: dict[str, object] = {}
+        self.schedules: list[str] = []
+        self.emitters: list[object] = []
+        self.stopped = False
+
+    def start(self) -> None:
+        pass
+
+    def schedule(self, handler, path, recursive=False):
+        assert recursive is True
+        self.handlers[path] = handler
+        self.schedules.append(path)
+        return path
+
+    def unschedule(self, watch) -> None:
+        del self.handlers[watch]
+
+    def stop(self) -> None:
+        self.stopped = True
+
+    def join(self, timeout=None) -> None:
+        pass
+
+
+@pytest.fixture
+def recording_observer(monkeypatch):
+    from app.service.workspace_files import file_watch
+
+    observers: list[_RecordingObserver] = []
+
+    def make() -> _RecordingObserver:
+        observers.append(_RecordingObserver())
+        return observers[-1]
+
+    monkeypatch.setattr(file_watch, "Observer", make)
+    return observers
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 @pytest.mark.asyncio
-async def test_watch_native_update_and_release(files, workspace_root):
-    watcher = WorkspaceFileWatcher()
-    sub = await asyncio.to_thread(watcher.subscribe, 1, [""], asyncio.get_running_loop())
+async def test_watch_registers_each_workspace_once_and_releases_when_idle(
+    files, workspace_root, recording_observer
+):
+    """展开目录不再注册：每个工作区只在根上注册一次递归监听；最后一个订阅离开满空闲期才释放。
+
+    前端展开目录是「先断旧连接、再建新连接」，空闲期内的重连不得触发重新注册（注册会冻住整个后端进程）。
+    """
+    from app.service.workspace_files.file_watch import IDLE_RELEASE_SECONDS
+
+    (workspace_root / "docs").mkdir()
+    (workspace_root / "docs" / "a.md").write_text("a")
+    clock = _Clock()
+    watcher = WorkspaceFileWatcher(clock)
+    loop = asyncio.get_running_loop()
+    root = files.root(1).resolve()
     try:
-        (workspace_root / "new.txt").write_text("new")
-        await asyncio.wait_for(sub.changed.wait(), 5)
-        assert watcher._watches
-        await asyncio.to_thread(watcher.close_workspace, 1)
-        assert sub.closed
-        assert not watcher._watches
-        assert watcher._observer is None
+        first = watcher.subscribe(1, [""], loop)
+        observer = recording_observer[0]
+        assert observer.schedules == [str(root)]
+        assert first.paths == {root, root / ".cosir"}
+        watcher.unsubscribe(first)
+        expanded = watcher.subscribe(1, ["docs/a.md", "missing/b.md"], loop)
+        assert expanded.paths == {root, root / ".cosir", (workspace_root / "docs").resolve()}
+        assert observer.schedules == [str(root)] and expanded.polling is False
+
+        watcher.unsubscribe(expanded)
+        clock.now += IDLE_RELEASE_SECONDS - 1
+        watcher.release_idle()
+        assert observer.handlers and not observer.stopped
+        clock.now += 1
+        watcher.release_idle()
+        assert observer.handlers == {} and observer.stopped and watcher._observer is None
     finally:
-        await asyncio.to_thread(watcher.close)
+        watcher.close()
+
+
+@pytest.mark.asyncio
+async def test_watch_close_workspace_releases_registration_immediately(
+    files, workspace_root, isolated_storage, recording_observer
+):
+    """删除工作区立即释放它的注册（不等空闲期），关闭并通知它的订阅；其他工作区的注册与订阅不受影响。"""
+    other_root = workspace_root.parent / "other"
+    other_root.mkdir()
+    other_id = get_workspace_crud().create("other", str(other_root)).id
+    watcher = WorkspaceFileWatcher()
+    loop = asyncio.get_running_loop()
+    try:
+        first = watcher.subscribe(1, [""], loop)
+        other = watcher.subscribe(other_id, [""], loop)
+        observer = recording_observer[0]
+        assert set(observer.handlers) == {str(files.root(1).resolve()), str(other_root.resolve())}
+
+        watcher.close_workspace(1)
+        await asyncio.wait_for(first.changed.wait(), 1)
+        assert first.closed and not other.closed
+        assert set(observer.handlers) == {str(other_root.resolve())}
+        assert watcher._timers == {} and not observer.stopped
+
+        watcher.close_workspace(other_id)
+        assert observer.handlers == {} and observer.stopped and watcher._observer is None
+    finally:
+        watcher.close()
+
+
+@pytest.mark.asyncio
+async def test_watch_routes_events_to_matching_subscriptions(
+    files, workspace_root, recording_observer
+):
+    """事件按路径找关心它的订阅：所在目录或它本身在过滤集合里才通知；根目录被删时全部通知。"""
+    from watchdog.events import DirDeletedEvent, FileModifiedEvent, FileMovedEvent
+
+    (workspace_root / "docs").mkdir()
+    (workspace_root / "src" / "deep").mkdir(parents=True)
+    watcher = WorkspaceFileWatcher()
+    loop = asyncio.get_running_loop()
+    root = files.root(1).resolve()
+    docs = watcher.subscribe(1, ["docs"], loop)
+    src = watcher.subscribe(1, ["src"], loop)
+    handler = recording_observer[0].handlers[str(root)]
+
+    async def notified(*subs: object) -> None:
+        await asyncio.sleep(0)
+        assert {sub for sub in (docs, src) if sub.changed.is_set()} == set(subs)
+        docs.changed.clear()
+        src.changed.clear()
+
+    try:
+        handler.on_any_event(FileModifiedEvent(str(root / "docs" / "a.md")))
+        await notified(docs)
+        # 递归监听会送来任意深度的变化；没有订阅展开那一层就不推，免得整棵树的变动都触发重读。
+        handler.on_any_event(FileModifiedEvent(str(root / "src" / "deep" / "x.py")))
+        await notified()
+        handler.on_any_event(
+            FileMovedEvent(str(root / "docs" / "a.md"), str(root / "src" / "a.md"))
+        )
+        await notified(docs, src)
+        handler.on_any_event(FileModifiedEvent(str(root / ".cosir" / "browse.json")))
+        await notified(docs, src)
+        handler.on_any_event(DirDeletedEvent(str(root)))
+        await notified(docs, src)
+    finally:
+        watcher.close()
+    assert docs.closed and src.closed
 
 
 def test_opened_handle_rejects_link_swapped_after_resolution(files, workspace_root, monkeypatch):
@@ -342,7 +486,7 @@ async def test_watch_degrades_when_emitter_dies_and_releases(files, monkeypatch)
     watcher = WorkspaceFileWatcher()
     sub = watcher.subscribe(1, [""], asyncio.get_running_loop())
     assert watcher.check_health(sub)
-    watcher.unsubscribe(sub)
+    watcher.close()
     assert observer.stopped
     assert watcher._observer is None
 
