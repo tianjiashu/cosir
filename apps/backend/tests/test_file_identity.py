@@ -7,7 +7,6 @@ from pathlib import Path, PurePath
 
 import pytest
 
-from app.utils.path import file_identity
 from app.utils.path.file_identity import (
     FileIdentity,
     RootDirectory,
@@ -95,13 +94,7 @@ def test_hard_link_shares_identity(tmp_path):
 
 def test_root_on_volume_without_file_ids_is_rejected(tmp_path, monkeypatch):
     """不提供文件号的卷上身份比较会把整卷判为在根内，必须明确拒绝，不退回字符串比较。"""
-    real_stat = os.stat
-
-    class _NoInode:
-        def __init__(self, stat: os.stat_result) -> None:
-            self.st_dev, self.st_ino = stat.st_dev, 0
-
-    monkeypatch.setattr(file_identity.os, "stat", lambda path: _NoInode(real_stat(path)))
+    monkeypatch.setattr(FileIdentity, "of", classmethod(lambda cls, path: cls(1, 0)))
     with pytest.raises(UnsupportedFileSystemError):
         RootDirectory.at(tmp_path)
 

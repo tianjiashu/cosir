@@ -24,6 +24,7 @@ from app.service.attachment.image_normalizer import (
     StoredImage,
     normalize_image,
 )
+from app.utils.path.file_identity import RootDirectory
 from app.utils.path.workspace_cosir import (
     workspace_attachment_dir,
     workspace_attachment_staging_dir,
@@ -162,9 +163,13 @@ class AttachmentService:
 
     @staticmethod
     def _inside(directory: Path, candidate: Path) -> Path:
-        resolved_dir = directory.resolve()
+        """候选路径（解析链接后）须在附件目录内，按文件身份判定；返回解析后的路径。"""
         resolved = candidate.resolve()
-        if resolved != resolved_dir and resolved_dir not in resolved.parents:
+        try:
+            inside = RootDirectory.at(directory).contains(resolved)
+        except OSError:
+            inside = False
+        if not inside:
             raise ImageNormalizationError("ATTACHMENT_NOT_OWNED", "附件不属于当前工作区")
         return resolved
 

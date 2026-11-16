@@ -31,6 +31,7 @@ from app.core.permission.protected_paths import ProtectedPaths
 from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.skills.configuration import SkillConfiguration
 from app.service.configuration.skills.skill_root import SkillRoot
+from app.utils.path.file_identity import RootDirectory
 
 _SKILL_NAME_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 _SKILL_NAME_MAX_CHARS = 64
@@ -310,7 +311,7 @@ def read_skill_file(info: SkillInfo, resource_path: str | None = None) -> str:
         target = (skill_directory / relative_path).resolve(strict=True)
     except FileNotFoundError:
         raise SkillLoadError("Skill 目录内没有这个文件") from None
-    if not target.is_relative_to(skill_directory) or not target.is_file():
+    if not RootDirectory.at(skill_directory).contains(target) or not target.is_file():
         raise SkillLoadError("Skill 资源必须是 Skill 目录内的文件")
     return _read_skill_text(target)
 

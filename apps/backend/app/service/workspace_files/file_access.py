@@ -8,38 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
 
-
-def opened_path(descriptor: int) -> Path:
-    """从操作系统查询已打开对象的位置，不再沿用户提供的软链接重新寻址。"""
-    if sys.platform == "win32":
-        import ctypes
-        import msvcrt
-        from ctypes import wintypes
-
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        get_path = kernel.GetFinalPathNameByHandleW
-        get_path.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
-        get_path.restype = wintypes.DWORD
-        handle = msvcrt.get_osfhandle(descriptor)
-        length = get_path(handle, None, 0, 0)
-        if not length:
-            raise ctypes.WinError(ctypes.get_last_error())
-        buffer = ctypes.create_unicode_buffer(length + 1)
-        if not get_path(handle, buffer, len(buffer), 0):
-            raise ctypes.WinError(ctypes.get_last_error())
-        value = buffer.value
-        if value.startswith("\\\\?\\UNC\\"):
-            value = "\\\\" + value[8:]
-        elif value.startswith("\\\\?\\"):
-            value = value[4:]
-        return Path(value)
-    elif sys.platform == "darwin":
-        import fcntl
-
-        # Darwin F_GETPATH 返回该句柄的绝对路径，内核要求 MAXPATHLEN 缓冲区。
-        return Path(os.fsdecode(fcntl.fcntl(descriptor, 50, bytes(1024)).split(b"\0", 1)[0]))
-    else:
-        return Path(os.readlink(f"/proc/self/fd/{descriptor}"))
+from app.utils.path.file_identity import RootDirectory, canonical_path_of
 
 
 @contextmanager
@@ -53,7 +22,7 @@ def regular_file(path: Path, root: Path) -> Iterator[BinaryIO]:
     with os.fdopen(descriptor, "rb") as source:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise ValueError("只能预览普通文件")
-        if not opened_path(descriptor).is_relative_to(root):
+        if not RootDirectory.at(root).contains(canonical_path_of(descriptor)):
             raise PermissionError("链接目标位于工作区之外")
         yield source
 
@@ -93,8 +62,8 @@ def directory_entries(path: Path, root: Path) -> Iterator[Iterator[os.DirEntry[s
     else:
         descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NONBLOCK)
     try:
-        actual = opened_path(descriptor)
-        if not actual.is_relative_to(root):
+        actual = canonical_path_of(descriptor)
+        if not RootDirectory.at(root).contains(actual):
             raise PermissionError("链接目标位于工作区之外")
         with os.scandir(str(actual) if os.name == "nt" else descriptor) as scan:
             yield scan

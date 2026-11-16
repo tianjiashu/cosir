@@ -8,6 +8,7 @@ from app.service.workspace_files.file_models import FileEntry
 from app.tools.tool_handler.security.windows_reparse_point import (
     is_windows_directory_reparse_point,
 )
+from app.utils.path.file_identity import RootDirectory
 from app.utils.path.relative_path import has_nul, has_parent_segment
 
 
@@ -23,18 +24,21 @@ def resolve_path(root: Path, relative: str) -> Path:
         raise ValueError("路径必须使用工作区相对路径")
     target = root / relative
     resolved = target.resolve(strict=True)
-    if not resolved.is_relative_to(root):
+    if not RootDirectory.at(root).contains(resolved):
         raise PermissionError("链接目标位于工作区之外")
     return target
 
 
 def entry_for(root: Path, path: Path, ancestors: set[Path]) -> FileEntry:
-    """条目自身不可读仍保留名称；链接到祖先时阻止继续展开。"""
+    """条目自身不可读仍保留名称；链接到祖先时阻止继续展开。
+
+    只有链接条目要判范围：普通子项就在已校验过的目录里，逐个 ``stat`` 祖先没有必要。
+    """
     relative = path.relative_to(root).as_posix()
     linked = path.is_symlink() or is_windows_directory_reparse_point(path)
     try:
         resolved = path.resolve(strict=True)
-        if not resolved.is_relative_to(root):
+        if linked and not RootDirectory.at(root).contains(resolved):
             return FileEntry(relative, path.name, "unavailable", linked, "链接目标位于工作区之外")
         if path.is_dir():
             if resolved in ancestors:

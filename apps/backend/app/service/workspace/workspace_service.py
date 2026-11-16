@@ -24,6 +24,12 @@ from app.service.configuration.mcp.machine_state import MCPMachineState
 from app.session_runtime.workspace_operation_registry import workspace_operations
 from app.storage.store_engines import main_db_factory
 from app.storage.write_transaction import begin_immediate
+from app.utils.path.file_identity import (
+    FileIdentity,
+    RootDirectory,
+    UnsupportedFileSystemError,
+    canonical_path,
+)
 from app.utils.path.workspace_cosir import (
     workspace_agent_config_dir,
     workspace_attachment_dir,
@@ -66,7 +72,8 @@ class WorkspaceService:
             已持久化的 ``WorkspaceRecord``。路径已存在时返回既有记录；否则返回新建记录。
 
         异常:
-            ValueError: 当 ``root_path`` 去除首尾空白后为空、非绝对路径、不存在或非目录时抛出。
+            ValueError: 当 ``root_path`` 去除首尾空白后为空、非绝对路径、不存在、非目录，
+                或所在磁盘不提供文件号（无法可靠判定哪些文件在工作区内）时抛出。
                 注意 ``name`` 为空白不会抛错，新建分支会回退为根目录名。
 
         副作用:
@@ -103,8 +110,7 @@ class WorkspaceService:
     def _find_by_path(self, normalized_path: str) -> WorkspaceRecord | None:
         """在已注册工作区中按规范化路径查找等价记录。
 
-        等价判定使用操作系统感知的 ``_same_path``（resolve + casefold），以兼容 Windows /
-        macOS 默认大小写不敏感文件系统；不直接用 SQL 等值比较，避免漏判不同大小写拼写。
+        等价判定见 ``_same_path``：按目录身份比较，大小写、firmlink 写法不同的同一目录判为同一个。
 
         参数:
             normalized_path: 经 ``_normalize_root_path`` 得到的绝对规范化路径。
@@ -184,21 +190,33 @@ class WorkspaceService:
 
     @staticmethod
     def _normalize_root_path(root_path: str) -> str:
-        """校验并规范化工作区根目录。"""
+        """校验工作区根目录并返回系统报出的规范路径（磁盘上的大小写，链接与 firmlink 已解开）。
+
+        存规范路径而不是保留输入写法的 ``resolve()``：文件面板按句柄取真实路径做范围校验，登记写法与磁盘
+        不一致时曾让每个文件都 403。添加时就用 ``RootDirectory.at`` 把关：磁盘不提供文件号就拒绝添加，
+        让用户在开始干活前换个位置，而不是之后在读写时才失败。
+        """
         candidate = Path(root_path.strip()).expanduser()
         if not candidate.is_absolute():
             raise ValueError("workspace root_path must be an absolute path")
         if not candidate.exists() or not candidate.is_dir():
             raise ValueError("workspace root_path must be an existing directory")
-        return str(candidate.resolve())
+        try:
+            RootDirectory.at(candidate)
+        except UnsupportedFileSystemError as exc:
+            raise ValueError(
+                "这个磁盘不提供可靠的文件识别，cosir 无法判断哪些文件在工作区内；请把项目放到本机磁盘"
+            ) from exc
+        return str(canonical_path(candidate))
 
     @staticmethod
     def _same_path(left: str, right: str) -> bool:
-        """按当前操作系统规则比较两个规范化目录路径。"""
-        return (
-            Path(left).resolve().as_posix().casefold()
-            == Path(right).resolve().as_posix().casefold()
-        )
+        """两个工作区根是否同一个目录：按目录身份比较（大小写敏感的卷上同名不同大小写的两个目录不会被
+        误合并）；已登记的目录不在了就退回规范路径字面相等。"""
+        try:
+            return FileIdentity.of(left) == FileIdentity.of(right)
+        except OSError:
+            return left == right
 
     def list_workspaces(self) -> list[WorkspaceRecord]:
         """列出全部工作区。

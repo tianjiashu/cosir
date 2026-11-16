@@ -128,6 +128,33 @@ def test_case_insensitive_reuse(storage, tmp_path) -> None:
     assert _count() == 1
 
 
+def test_registration_stores_disk_spelling(storage, tmp_path) -> None:
+    """以大小写变体登记，存下的是磁盘上的写法（规范路径）。
+
+    曾经存保留输入写法的 ``resolve()``，文件面板按句柄取真实路径比对，于是每个文件都 403。
+    """
+    service = get_workspace_service()
+    _make_dir(tmp_path, "Project")
+    if not (tmp_path / "project").exists():
+        pytest.skip("filesystem is case-sensitive")
+
+    record = service.create_workspace("p", str(tmp_path / "PROJECT"))
+
+    assert Path(record.root_path).name == "Project"
+
+
+def test_disk_without_file_identities_is_rejected(storage, tmp_path, monkeypatch) -> None:
+    """磁盘不提供文件号时添加即拒绝，原因写给用户看，不留到之后读写时才失败。"""
+    from app.utils.path.file_identity import FileIdentity
+
+    project = _make_dir(tmp_path, "project")
+    monkeypatch.setattr(FileIdentity, "of", classmethod(lambda cls, path: cls(1, 0)))
+
+    with pytest.raises(ValueError, match="本机磁盘"):
+        get_workspace_service().create_workspace("p", str(project))
+    assert _count() == 0
+
+
 # ---------------------------------------------------------------------------
 # 4. 新建分支创建 .cosir
 # ---------------------------------------------------------------------------

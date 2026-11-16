@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.utils.path.file_identity import RootDirectory
+
 
 class ScopeDirectoryError(ValueError):
     """作用域配置目录布局不合法或不可读。
@@ -77,13 +79,13 @@ def read_scope_json_files(directory: str | Path) -> list[Path]:
     try:
         if not root.is_dir():
             raise ScopeDirectoryError(f"配置路径不是目录: {root}")
-        resolved_root = root.resolve(strict=True)
+        root_directory = RootDirectory.at(root)
         files: list[Path] = []
         for path in sorted(root.glob("*.json"), key=lambda item: item.name.casefold()):
             if path.name.startswith("."):
                 continue
             resolved_path = path.resolve(strict=True)
-            if not resolved_path.is_relative_to(resolved_root):
+            if not root_directory.contains(resolved_path):
                 raise ScopeDirectoryError(f"配置文件符号链接越出配置目录: {path}")
             if resolved_path.is_file():
                 files.append(path)

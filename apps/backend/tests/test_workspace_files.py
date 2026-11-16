@@ -33,6 +33,25 @@ def files(workspace_root, isolated_storage):
     service.close()
 
 
+def test_workspace_registered_with_case_variant_stays_readable(workspace_root, isolated_storage):
+    """工作区记录的写法与磁盘不一致（大小写变体）时，文件面板照常读写：范围校验按文件身份，不比字符串。
+
+    曾经按句柄取到磁盘写法、再与登记写法做字符串比较，每个文件都 403。
+    """
+    (workspace_root / "docs").mkdir()
+    (workspace_root / "docs" / "a.md").write_text("a")
+    variant = workspace_root.parent / workspace_root.name.upper()
+    if not variant.exists():
+        pytest.skip("filesystem is case-sensitive")
+    get_workspace_crud().create("project", str(variant))
+    service = get_workspace_files_service()
+    try:
+        assert service.info(1, "docs/a.md").size == 1
+        assert [entry.name for entry in service.directory(1, "docs", None, 10).entries] == ["a.md"]
+    finally:
+        service.close()
+
+
 def test_directory_pagination_sort_and_version(files, workspace_root):
     (workspace_root / "folder").mkdir()
     for name in ["file10.py", "file2.py", ".env", "file1.py"]:
