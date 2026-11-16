@@ -59,7 +59,7 @@
 
 snapshot 的 Task 级 `fork` 提供来源提示与初始配置，不伪装成消息、不占分页位置、不进入模型。继承消息只有现有 `runId:null`，不新增消息级 history 协议。继承与本地消息共用 `Turn`、`projectTurn`、`CallRow`、`CALL_VIEWS`、折叠状态与虚拟估高；由 `runId:null` 推导的展示入参只在工具能力边界禁止活订阅和执行操作。删除独立的 `InheritedTurn` 和 `HISTORY_VIEWS`。文件链接、图片、截图、diff、终端输出阅读及错误提示沿用同一展示契约；配置提案不推断来源草稿是否保存。继承上下文保留单条用量，不计算已丢失 Run 边界的缓存率差分。
 
-真实桌面用例位于 `apps/desktop/tests/desktop-e2e/desktop-smoke.spec.ts` 的 `fork context`。启动隔离 Electron、真实 FastAPI、SQLite、actor、工具和 OpenAI SDK；仅模型返回由 localhost 测试服务控制。捕获实际模型请求验证边界，再点击真实分叉按钮验证展示、重启、删源后继续对话及初始配置。详情见 [fork-context-acceptance.md](fork-context-acceptance.md)。
+真实桌面用例位于 `apps/desktop/tests/desktop-e2e/desktop-smoke.spec.ts` 的 `fork context`。启动隔离 Electron、真实 FastAPI、SQLite、actor、工具和 OpenAI SDK；仅模型返回由 localhost 测试服务控制。捕获实际模型请求验证边界，再点击真实分叉按钮验证展示、重启、删源后继续对话及初始配置。
 
 本方案不新增数据库表或 context 字段，但五种类型与实体化 extra 改变了持久化值及 JSON 契约。按绿地约定，不兼容旧 Task 类型、旧分叉元数据及旧 fork 请求；旧运行数据需要另行处理，不能把“表结构未变”理解为数据兼容。验收使用隔离数据，不清理用户现有数据库。
 

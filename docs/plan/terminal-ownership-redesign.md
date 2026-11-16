@@ -1,14 +1,14 @@
 # 终端归属改造：Agent 执行，人在人的终端
 
-> 实施顺序（11-10 定）：一期只收窄 Agent 对交互终端的能力（保留 list / read，write 只填入，不含「请你执行」），实施方案见 [`terminal-agent-read-prefill-plan.md`](terminal-agent-read-prefill-plan.md)（已实施）；二期把运行中的后台命令并入 `terminal_list` / `terminal_read` 统一读取、新增 `terminal_stop`，实施方案见 [`terminal-unified-read-plan.md`](terminal-unified-read-plan.md)；「请你执行」与沙箱在其后另议。
-> 状态：2026-11-10 设计稿，未实施。修订经过：
+> 实施顺序（11-10 定）：一期只收窄 Agent 对交互终端的能力（保留 list / read，write 只填入，不含「请你执行」）；二期把运行中的后台命令并入 `terminal_list` / `terminal_read` 统一读取、新增 `terminal_stop`。两期都已实施，当前能力以 AGENTS.md 与代码为准；「请你执行」与沙箱在其后另议。
+> 状态：2026-11-10 设计稿，一期与二期已实施。修订经过：
 > - 11-09 初稿：「请人执行」用卡片 + 运行按钮。
 > - 11-10 上午：改为「填入提示符 + 等待交还」。
 > - 11-10 下午：按场景拆开——Agent 请你执行用回复里的命令块，你请 Agent 帮忙用 `terminal_write` 填入；两者都不阻塞，终端交接整体删除。
 >
 > 任务类型：功能改造（删除 Agent 常驻 shell 与终端交接、收窄 `terminal_write`、补齐后台命令）。
 > 后续：[`agent-permission-sandbox-design.md`](agent-permission-sandbox-design.md) 的命令沙箱（P2）以本改造为前提。
-> 取代：[`terminal-process-unification-design.md`](terminal-process-unification-design.md) §3「两个工具的边界」、[`terminal-gap-assessment.md`](terminal-gap-assessment.md) 中依赖 Agent 执行输入的人机仲裁（§3 T7、§7.4 A）。进程层（worker 两种模式、进程归属与清理）不变。
+> 取代：早前终端进程统一方案中「两个工具的边界」，以及终端能力差距评估里依赖 Agent 执行输入的人机仲裁（T7 与 P2 界面第一阶段 A）。进程层（worker 两种模式、进程归属与清理）不变。
 
 ## 1. 为什么改
 
@@ -48,7 +48,7 @@
 ### 3.1 执行：`execute_terminal`
 
 - 语义不变：一次性命令、无 stdin、无 TTY，可前台等待或后台运行。调用之间不保留状态；需要串起来就写进同一段脚本，`workdir` 指定目录。
-- **补齐运行中读取与停止**（原 gap 稿 T3，方案沿用 [`terminal-gap-assessment.md`](terminal-gap-assessment.md) §7.2 方案 A）：
+- **补齐运行中读取与停止**（原终端能力差距评估 T3，方案沿用其 §7.2 方案 A）：
   - 命令运行时由 `CommandService` 按 Task + `tool_call_id` 持有。现在它没有可寻址的持有者，输出只在 `_OutputCollector._chunks` 里（`apps/backend/app/tools/tool_handler/terminal/output_collector.py:85-115`）。
   - 新增两个工具：读运行中的输出（按行号续读、可等待匹配或退出，上限 30 秒）和停止命令。
     - 停止复用用户取消入口 `background_registry.request_user_cancel`（`assistant_transport/service/transport_assistant_service.py:192-205`）。
