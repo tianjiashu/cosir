@@ -12,7 +12,6 @@ export const queryKeys = {
   fileDirectory: (id: number, path: string, revision: string) => ["cosir", "files", id, "directory", path, revision] as const,
   fileInfo: (id: number, path: string) => ["cosir", "files", id, "info", path] as const,
   fileText: (id: number, path: string, version: string, encoding: string, offset: number, tail: boolean, before?: number) => ["cosir", "files", id, "text", path, version, encoding, offset, tail, before] as const,
-  fileResource: (id: number, path: string, version: string) => ["cosir", "files", id, "resource", path, version] as const,
   agents: (workspaceId: number | null) => ["cosir", "agents", workspaceId ?? "system"] as const,
   instruction: (kind: "global" | "main-agent-prompt" | "workspace", workspaceId?: number) =>
     ["cosir", "instruction", kind, workspaceId ?? null] as const,

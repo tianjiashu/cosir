@@ -11,6 +11,7 @@ from charset_normalizer import from_bytes
 
 from app.service.workspace_files.file_access import regular_file
 from app.service.workspace_files.file_models import FileConflictError, FileInfo, TextPage
+from app.service.workspace_files.image_preview import image_size
 
 TEXT_CHUNK_BYTES = 512 * 1024
 FULL_TEXT_BYTES = 2 * 1024 * 1024
@@ -60,6 +61,27 @@ def inspect_file(root: Path, path: Path) -> FileInfo:
     with regular_file(path, root) as source:
         stat = os.fstat(source.fileno())
         sample = source.read(65536)
+        kind, mime, encoding = _classify(path, sample)
+        size = image_size(source) if kind == "image" else None
+    return FileInfo(
+        path.relative_to(root).as_posix(),
+        path.name,
+        str(root),
+        stat.st_size,
+        stat.st_mtime_ns,
+        version_of(stat),
+        kind,
+        mime,
+        encoding,
+        size[0] if size else None,
+        size[1] if size else None,
+    )
+
+
+def _classify(
+    path: Path, sample: bytes
+) -> tuple[Literal["text", "markdown", "image", "svg", "pdf", "binary"], str, str | None]:
+    """按文件头与后缀判定类型；全仓只此一处判定，预览器都按它的结果分发。"""
     mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     encoding = encoding_of(sample)
     kind: Literal["text", "markdown", "image", "svg", "pdf", "binary"] = (
@@ -85,17 +107,7 @@ def inspect_file(root: Path, path: Path) -> FileInfo:
         kind, mime = "svg", "image/svg+xml"
     elif path.suffix.lower() in {".md", ".markdown", ".mdown"} and encoding:
         kind = "markdown"
-    return FileInfo(
-        path.relative_to(root).as_posix(),
-        path.name,
-        str(root),
-        stat.st_size,
-        stat.st_mtime_ns,
-        version_of(stat),
-        kind,
-        mime,
-        encoding,
-    )
+    return kind, mime, encoding
 
 
 def read_text(

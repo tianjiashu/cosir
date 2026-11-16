@@ -25,6 +25,9 @@ export type FileInfo = {
   kind: "text" | "markdown" | "image" | "svg" | "pdf" | "binary";
   mime: string;
   encoding: string | null;
+  /** 位图的原图尺寸（后端只读文件头）；非位图为 null，位图读不出（过大、损坏）也为 null。 */
+  width: number | null;
+  height: number | null;
 };
 export type TextPage = {
   text: string;

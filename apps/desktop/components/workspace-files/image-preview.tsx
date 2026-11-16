@@ -1,14 +1,20 @@
 import { useState, type ReactNode } from "react";
 import { ZoomInIcon, ZoomOutIcon } from "lucide-react";
 import type { FileInfo } from "@/lib/api/workspace-files";
-import { useImageResource } from "@/lib/workspace-files/resources";
+import { useFileResourceSrc, useImageLoadFailure } from "@/lib/workspace-files/resources";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { AddToChatButton } from "./add-to-chat-button";
 import { ReadingToolbar, type ReadingNavigation } from "./reading-toolbar";
 
-/** 位图与 SVG 的渲染视图：缩放控件放进共用工具栏，尺寸与缩略说明放进「更多」。 */
+/**
+ * 位图与 SVG 的渲染视图：缩放控件放进共用工具栏，尺寸与缩略说明放进「更多」。
+ *
+ * 资源接口对大图返回缩小图，所以「尺寸」与「100%」都按文件信息里的原图宽高（位图）算，不按 `<img>` 拿到的
+ * 画面；SVG 没有原图宽高，退回画面尺寸。位图宽高为空表示后端读不出（像素超出安全上限、文件头损坏），直接
+ * 显示无法预览，不去请求资源。
+ */
 export function ImagePreview({
   workspaceId,
   info,
@@ -20,10 +26,13 @@ export function ImagePreview({
   navigation: ReadingNavigation;
   view?: ReactNode;
 }) {
-  const resource = useImageResource(workspaceId, info.path, info.version);
+  const src = useFileResourceSrc(workspaceId, info.path, info.version);
+  const failure = useImageLoadFailure(workspaceId, info.path, info.version);
   const [zoom, setZoom] = useState<number | null>(null);
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  const [error, setError] = useState(false);
+  const [natural, setNatural] = useState({ width: 0, height: 0 });
+  const unreadable = info.kind === "image" && info.width === null;
+  const size = info.width !== null && info.height !== null ? { width: info.width, height: info.height } : natural;
+  const reduced = info.width !== null && natural.width > 0 && natural.width < info.width;
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ReadingToolbar navigation={navigation} info={info} view={view}
@@ -45,19 +54,19 @@ export function ImagePreview({
         </>}
         options={<p className="text-xs text-muted-foreground">
           {size.width > 0 ? `${size.width} × ${size.height}` : "尺寸读取中"}
-          {resource.thumbnail && " · 大图缩略预览"}
+          {reduced && " · 大图缩略预览"}
         </p>}
       />
       <div className="flex min-h-0 flex-1 overflow-auto p-4">
-        {resource.error || error ? (
-          <ErrorState className="m-auto" message={resource.error ?? "此图片无法解码"} />
-        ) : resource.url ? (
+        {unreadable || failure.failed ? (
+          <ErrorState className="m-auto" message="无法预览这张图片" />
+        ) : src ? (
           <img
-            src={resource.url}
+            src={src}
             alt={info.name}
-            onError={() => setError(true)}
+            onError={() => void failure.onError()}
             onLoad={(event) =>
-              setSize({
+              setNatural({
                 width: event.currentTarget.naturalWidth,
                 height: event.currentTarget.naturalHeight,
               })

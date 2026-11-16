@@ -15,6 +15,8 @@ class FileInfoResponse(BaseModel):
     kind: str
     mime: str
     encoding: str | None
+    width: int | None
+    height: int | None
 
     @classmethod
     def from_domain(cls, info: FileInfo) -> "FileInfoResponse":
@@ -28,4 +30,6 @@ class FileInfoResponse(BaseModel):
             kind=info.kind,
             mime=info.mime,
             encoding=info.encoding,
+            width=info.width,
+            height=info.height,
         )

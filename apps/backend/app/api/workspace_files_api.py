@@ -152,11 +152,12 @@ async def text(
 
 @app.get("/workspaces/{workspace_id}/files/resource", response_model=None)
 async def resource(
-    workspace_id: int, request: Request, files: Files, path: str, version: str | None = None
+    workspace_id: int, request: Request, files: Files, path: str, version: str
 ) -> Response:
+    """资源地址按版本寻址（版本必填），响应可长期缓存；版本过期返回 409，前端重读信息后换地址。"""
     metadata = await run_read(request, lambda: files.info(workspace_id, path))
     with file_errors():
-        if version and metadata.version != version:
+        if metadata.version != version:
             raise FileConflictError("文件已变化，请重新加载")
         if metadata.kind not in {"image", "svg", "pdf"}:
             raise ValueError("此文件使用文本或元信息预览")

@@ -16,6 +16,7 @@
     "lint": "eslint",
     "test:unit": "vitest run tests/unit",
     "test:e2e": "playwright test",
+    "test:e2e:visual": "playwright test -c playwright.visual.config.ts",
     "test:e2e:desktop": "npm run build && playwright test -c playwright.desktop.config.ts",
     "knip": "knip"
   },

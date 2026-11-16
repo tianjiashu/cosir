@@ -1,70 +1,16 @@
 import { readState, seedState } from "./transport-fixtures";
-import { spawn, type ChildProcess } from "node:child_process";
-import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { installFakeDesktopHost } from "./fake-desktop-host";
-import { API_ORIGIN, REAL_BACKEND_ORIGIN as REAL_BACKEND, REAL_BACKEND_PORT } from "./e2e-env";
+import { API_ORIGIN, REAL_BACKEND_ORIGIN as REAL_BACKEND } from "./e2e-env";
+import { WorkspaceFilesBackend } from "./workspace-files-backend";
 
-let server: ChildProcess;
-// 真实后端夹具的工作区 id 由 SQLite 自增分配，与前端内存测试服务的
-// 固定 workspace id 无关；beforeAll 从夹具 health 读取，文件请求改写时统一映射。
-let realWorkspaceId: number;
+const backend = new WorkspaceFilesBackend();
 
-/** 把前端发往内存测试服务的文件接口改写到真实后端夹具，并映射工作区 id。 */
-async function routeFilesToRealBackend(page: import("@playwright/test").Page) {
-  await page.route(/\/workspaces\/\d+\/files\//, (route) =>
-    route.continue({
-      url: route
-        .request()
-        .url()
-        .replace(
-          new RegExp(`^${API_ORIGIN}/workspaces/\\d+/`),
-          `${REAL_BACKEND}/workspaces/${realWorkspaceId}/`,
-        ),
-    }),
-  );
-}
 test.beforeAll(async ({ request }) => {
-  const backend = path.resolve(process.cwd(), "../backend");
-  const python = path.join(
-    backend,
-    process.platform === "win32"
-      ? ".venv/Scripts/python.exe"
-      : ".venv/bin/python",
-  );
-  server = spawn(
-    python,
-    [path.join(backend, "tests/fixtures/workspace_files_server.py"), String(REAL_BACKEND_PORT)],
-    { cwd: backend, stdio: "pipe" },
-  );
-  let output = "";
-  server.stderr?.on("data", (chunk) => {
-    output += String(chunk);
-  });
-  await expect
-    .poll(
-      async () => {
-        if (server.exitCode !== null) throw new Error(output);
-        try {
-          const response = await request.get(
-            `${REAL_BACKEND}/__test__/files/health`,
-          );
-          if (!response.ok()) return false;
-          realWorkspaceId = (await response.json()).workspace_id;
-          return true;
-        } catch {
-          return false;
-        }
-      },
-      { timeout: 20_000 },
-    )
-    .toBe(true);
+  await backend.start(request);
 });
 test.afterAll(async () => {
-  if (server && server.exitCode === null) {
-    server.kill("SIGTERM");
-    await new Promise<void>((resolve) => server.once("exit", () => resolve()));
-  }
+  await backend.stop();
 });
 
 test("真实后端：内部链接、原子替换实时更新、搜索和退出", async ({
@@ -72,7 +18,7 @@ test("真实后端：内部链接、原子替换实时更新、搜索和退出",
   request,
 }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await routeFilesToRealBackend(page);
+  await backend.route(page);
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
@@ -117,7 +63,7 @@ test("真实后端：Markdown 相对图片更新、大文件从末尾反向阅�
   request,
 }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await routeFilesToRealBackend(page);
+  await backend.route(page);
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
@@ -164,6 +110,25 @@ test("真实后端：Markdown 相对图片更新、大文件从末尾反向阅�
     .toBe(0);
 });
 
+test("真实后端：大图显示原图尺寸并标出缩小预览，资源按版本长期缓存", async ({ page, request }) => {
+  await request.post(`${API_ORIGIN}/__test__/reset`);
+  await backend.route(page);
+  const resource = page.waitForResponse((response) => response.url().includes("/files/resource") && response.url().includes("huge.png"));
+  await page.goto("/");
+  await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
+  await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
+  await page.getByRole("button", { name: "浏览工作区文件" }).click();
+  const surface = page.getByTestId("workspace-files-surface");
+  await surface.getByRole("button", { name: "展开目录 media", exact: true }).click();
+  await surface.getByRole("treeitem", { name: "huge.png", exact: true }).click();
+  const image = surface.getByRole("img", { name: "huge.png", exact: true });
+  // 资源接口把 4100 边长的图缩到 4096 再给；面板仍按文件信息里的原图尺寸显示。
+  await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(4096);
+  expect((await resource).headers()["cache-control"]).toBe("private, max-age=31536000, immutable");
+  await surface.getByRole("button", { name: "更多阅读选项" }).click();
+  await expect(page.getByText("4100 × 4100 · 大图缩略预览", { exact: true })).toBeVisible();
+});
+
 async function referenceWorkspace(
   page: import("@playwright/test").Page,
   theme?: string,
@@ -172,7 +137,7 @@ async function referenceWorkspace(
     localStorage.clear();
     if (theme) localStorage.setItem("cosir:theme", JSON.stringify({ state: { preference: theme }, version: 0 }));
   }, theme);
-  await routeFilesToRealBackend(page);
+  await backend.route(page);
   await page.goto("/");
   // 行内「+」只在悬停时出现，先悬停工作区行。
   await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
@@ -443,7 +408,7 @@ for (const theme of ["light", "dark"]) {
     request,
   }, testInfo) => {
     await request.post(`${API_ORIGIN}/__test__/reset`);
-    const visibilityUrl = `${REAL_BACKEND}/workspaces/${realWorkspaceId}/files/visibility`;
+    const visibilityUrl = `${REAL_BACKEND}/workspaces/${backend.workspaceId}/files/visibility`;
     await request.patch(visibilityUrl, {
       data: {
         paths: ["src", "alias", "README.md", "src/main.py"],
@@ -534,7 +499,7 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
   request,
 }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  const api = `${REAL_BACKEND}/workspaces/${realWorkspaceId}/files/visibility`;
+  const api = `${REAL_BACKEND}/workspaces/${backend.workspaceId}/files/visibility`;
   const surface = await referenceWorkspace(page);
   const src = surface.getByText("src", { exact: true });
   await src.click();
@@ -639,7 +604,7 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
 test("真实后端：文件地址与文件名查找分离，候选定位和字面路径", async ({ page, request }, testInfo) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
   await request.post(`${REAL_BACKEND}/__test__/files/link-fixture`);
-  await routeFilesToRealBackend(page);
+  await backend.route(page);
   await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
   const state = await readState(request, 42);
   state.messages[1].parts = [{ type: "text", status: "completed", text:

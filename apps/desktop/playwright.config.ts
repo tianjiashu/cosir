@@ -6,6 +6,8 @@ const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  // 视觉回归另有配置（playwright.visual.config.ts），日常运行不比对截图。
+  testIgnore: "**/*.visual.spec.ts",
   outputDir: OUTPUT_DIR,
   // The local test service is intentionally one process with in-memory state.
   // Keep all browser tests in one worker so fixed test fixtures cannot race

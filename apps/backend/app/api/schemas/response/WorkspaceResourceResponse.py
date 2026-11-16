@@ -33,8 +33,10 @@ class WorkspaceResourceResponse(Response):
             stat = await anyio.to_thread.run_sync(os.fstat, source.fileno())
             if version_of(stat) != self.info.version:
                 raise HTTPException(409, "文件已变化，请重新加载")
+            # 地址带版本（资源接口要求必填），同一版本即同一内容：可长期缓存，滚动回来或重开不再下载。
+            # 错误响应（409、404 等）由 HTTPException 另行生成，不带这组头。
             headers = {
-                "Cache-Control": "no-store",
+                "Cache-Control": "private, max-age=31536000, immutable",
                 "X-Content-Type-Options": "nosniff",
                 "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
                 "Accept-Ranges": "bytes",
@@ -44,7 +46,6 @@ class WorkspaceResourceResponse(Response):
                 with file_errors():
                     thumbnail = await anyio.to_thread.run_sync(image_preview, source)
                 if thumbnail is not None:
-                    headers["X-Cosir-Image-Preview"] = "thumbnail"
                     await Response(thumbnail, media_type="image/png", headers=headers)(
                         scope, receive, send
                     )

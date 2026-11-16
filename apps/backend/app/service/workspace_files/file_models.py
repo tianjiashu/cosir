@@ -37,6 +37,10 @@ class FileInfo:
     kind: Literal["text", "markdown", "image", "svg", "pdf", "binary"]
     mime: str
     encoding: str | None
+    # 位图的原图尺寸（只读文件头）；资源接口可能返回缩小图，面板据此显示真实尺寸、判断是否缩小。
+    # 非位图为 None；位图读不出（像素超出 Pillow 安全上限、文件头损坏）同样为 None，前端据此直接判为无法预览。
+    width: int | None
+    height: int | None
 
 
 @dataclass(frozen=True)

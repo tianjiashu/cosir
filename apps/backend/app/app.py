@@ -46,7 +46,6 @@ app.add_middleware(
         "Content-Range",
         "Content-Length",
         "ETag",
-        "X-Cosir-Image-Preview",
     ],
 )
 

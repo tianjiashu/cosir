@@ -12,7 +12,7 @@ if (!Number.isInteger(slot) || slot < 0) throw new Error(`COSIR_E2E_SLOT 必须�
 export const E2E_SLOT = slot;
 export const WEB_PORT = 4173 + slot;
 export const API_PORT = 8000 + slot;
-/** `workspace-files-integration.spec.ts` 拉起的真实后端夹具。 */
+/** 文件面板用例共用的真实后端夹具（`workspace-files-backend.ts` 拉起，集成用例与视觉回归都用）。 */
 export const REAL_BACKEND_PORT = 8766 + slot;
 
 export const WEB_ORIGIN = `http://127.0.0.1:${WEB_PORT}`;

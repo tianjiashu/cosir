@@ -36,6 +36,11 @@ async def fixture_lifespan(_app: FastAPI):
         (root / "README.md").write_text(
             "# Local image\n\n![asset](media/deep/photo.png)", encoding="utf-8"
         )
+        # 视觉回归与图片资源用例：一张在、一张不在的 Markdown 图片；一张超过缩小阈值的大图（原图尺寸与缩小图不同）。
+        (root / "media" / "gallery.md").write_text(
+            "# Gallery\n\n![photo](deep/photo.png)\n\n![gone](deep/gone.png)\n", encoding="utf-8"
+        )
+        Image.new("RGB", (4100, 4100), "teal").save(root / "media" / "huge.png")
         (root / "large.txt").write_text("中文😀 line\n" * 350000, encoding="utf-8")
         # 隔离 storage 到临时目录，避免触碰生产数据库；watcher 与 api 共享同一 service 单例。
         storage_dir = Path(tempfile.mkdtemp(prefix="cosir-files-e2e-storage-"))

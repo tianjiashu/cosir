@@ -167,13 +167,16 @@ def test_http_contract_and_resource_range(files, workspace_root):
         )
         response = client.get(
             "/workspaces/1/files/resource",
-            params={"path": "test.pdf"},
+            params={"path": "test.pdf", "version": files.info(1, "test.pdf").version},
             headers={"Range": "bytes=0-7"},
         )
         assert response.status_code == 206
         assert response.content == b"%PDF-1.7"
+        data_version = files.info(1, "data.txt").version
         assert (
-            client.get("/workspaces/1/files/resource", params={"path": "data.txt"}).status_code
+            client.get(
+                "/workspaces/1/files/resource", params={"path": "data.txt", "version": data_version}
+            ).status_code
             == 400
         )
     finally:
@@ -231,33 +234,35 @@ def test_resource_range_images_and_changed_version(files, workspace_root, monkey
     try:
         client = TestClient(app)
         url = "/workspaces/1/files/resource"
+        pdf_params = {"path": "test.pdf", "version": files.info(1, "test.pdf").version}
+        picture_params = {"path": "picture.png", "version": files.info(1, "picture.png").version}
+        # 地址按版本寻址：不带版本是调用写错（422），不是读最新。
+        assert client.get(url, params={"path": "test.pdf"}).status_code == 422
         for value, expected in [("bytes=-5", pdf[-5:]), ("bytes=5-", pdf[5:])]:
-            response = client.get(url, params={"path": "test.pdf"}, headers={"Range": value})
+            response = client.get(url, params=pdf_params, headers={"Range": value})
             assert response.status_code == 206
             assert response.content == expected
         assert (
-            client.get(
-                url, params={"path": "test.pdf"}, headers={"Range": "bytes=1000-"}
-            ).status_code
-            == 416
+            client.get(url, params=pdf_params, headers={"Range": "bytes=1000-"}).status_code == 416
         )
         assert (
             client.get(
-                url,
-                params={"path": "test.pdf"},
-                headers={"Range": "bytes=0-2", "If-Range": '"old"'},
+                url, params=pdf_params, headers={"Range": "bytes=0-2", "If-Range": '"old"'}
             ).content
             == pdf
         )
-        image = client.get(url, params={"path": "picture.png"})
+        image = client.get(url, params=picture_params)
         assert image.content == (workspace_root / "picture.png").read_bytes()
+        assert image.headers["Cache-Control"] == "private, max-age=31536000, immutable"
         monkeypatch.setattr(image_preview, "THUMBNAIL_PIXELS", 1)
-        image = client.get(url, params={"path": "picture.png"})
-        assert image.headers["X-Cosir-Image-Preview"] == "thumbnail"
+        image = client.get(url, params=picture_params)
+        assert "X-Cosir-Image-Preview" not in image.headers
+        assert image.headers["Cache-Control"] == "private, max-age=31536000, immutable"
         assert image.content.startswith(b"\x89PNG")
-        version = files.info(1, "test.pdf").version
         (workspace_root / "test.pdf").write_bytes(pdf + b"changed")
-        assert client.get(url, params={"path": "test.pdf", "version": version}).status_code == 409
+        stale = client.get(url, params=pdf_params)
+        assert stale.status_code == 409
+        assert "immutable" not in stale.headers.get("Cache-Control", "")
     finally:
         app.dependency_overrides.clear()
 
@@ -401,3 +406,22 @@ def test_completed_directory_index_survives_request_cancellation(files, workspac
     result = files.directory(1, "", page.next_cursor, 290)
     assert len(result.entries) == 290
     assert result.entries[-1].name == "item299.txt"
+
+
+def test_image_info_reports_original_size_or_none(files, workspace_root, monkeypatch):
+    """位图的原图尺寸只读文件头；读不出（像素超出安全上限、文件头损坏）时宽高为空，信息接口照常成功。"""
+    from PIL import Image
+
+    Image.new("RGB", (20, 10), "red").save(workspace_root / "picture.png")
+    (workspace_root / "broken.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"not a real png")
+    (workspace_root / "data.txt").write_text("text")
+    picture = files.info(1, "picture.png")
+    assert (picture.kind, picture.width, picture.height) == ("image", 20, 10)
+    broken = files.info(1, "broken.png")
+    assert (broken.kind, broken.width, broken.height) == ("image", None, None)
+    text = files.info(1, "data.txt")
+    assert (text.width, text.height) == (None, None)
+    # 超过两倍上限时 Pillow 在 open 就抛 DecompressionBombError：调低上限模拟，不真造一张巨图。
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 50)
+    bomb = files.info(1, "picture.png")
+    assert (bomb.kind, bomb.width, bomb.height) == ("image", None, None)
