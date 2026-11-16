@@ -102,7 +102,7 @@
 | S2-30 | 图片方块：位图 `src` 是带版本与 `edge`（方块边长两倍）的资源地址，灯箱用原图、方块用 `previewSrc`；SVG 方块与灯箱都用原始地址，无 `edge`、无 `previewSrc`；`onerror` 先失效一次文件信息，仍失败显示二进制空态；不传 `previewSrc` 的现有调用方行为不变 | VT | `tests/unit/image-lightbox.test.tsx`（新）、`image-read-view.test.ts`（保持） | §4.3 | 预览 |
 | S2-31 | 监听登记表：按工作区分开引用计数，登记与释放成对；虚拟列表卸载卡片不改变会话级集合（集合取自 snapshot `deliverables`，不触发重连）；目录条目登记自身；工作区外不登记 | VT | `tests/unit/file-watch-store.test.ts`（新） | §4.8 | |
 | S2-32 | 监听连接：`AppLayout` 为每个有登记的工作区各挂一个订阅（保活的会话页与面板属于不同工作区时两个）；面板关闭后会话登记的目录仍在监听；某工作区登记清零即关闭其订阅 | VT | `tests/unit/use-file-watch.test.tsx`（新；`useFileWatch` 现无单测） | §4.8 | |
-| S2-33 | 前置：`test_workspace_files.py::test_watch_native_update_and_release` 修好后连续 20 次通过，才开始监听提升 | PY | `test_workspace_files.py:184` | §4.8 前置 | |
+| S2-33 | 监听的注册与路由（已完成，2026-11-16）：每个工作区只在解析后的根上注册一次递归监听，展开目录不再注册；最后一个订阅离开满 60 秒才释放，删除工作区立即释放且不影响其他工作区；事件按路径通知关心所在目录的订阅，`.cosir` 变化与根目录删除通知全部订阅。不断言原生投递时限 | PY | `test_workspace_files.py` 的 `test_watch_registers_each_workspace_once_and_releases_when_idle`、`test_watch_close_workspace_releases_registration_immediately`、`test_watch_routes_events_to_matching_subscriptions` | §4.8 | |
 | S2-34 | E2E 点卡片：工作区 Markdown 进文件面板；目录在文件树展开并选中；本机网址调宿主 `browser.open`（假宿主记录）；公网网址出确认框；工作区外文件调 `files.reveal`（绝对路径） | PW | `tests/e2e/reply-presentation.spec.ts`（改） | §4.3 | |
 | S2-35 | E2E 面板关着时文件被删：监听流（`page.route` 推 `changed`）使卡片变「已不存在」，没有打开面板 | PW | 同上 | §4.8 | |
 | S2-36 | 浏览器开发模式（不装宿主）：没有次按钮；工作区外条目不可点、悬停仍有提示条 | PW | 同上 | §4.3、§11.2 | |
@@ -205,7 +205,7 @@
 | R12 | 工具改名 `present_files` → `present_deliverables`（阶段二） | `tool_names.py:39,74`、`tool_models/__init__.py:17,49`、`tool_registration.py:29,68`、`schemas/__init__`、`define_agents`、`tool-catalog.ts:150`、`system_prompt_builder.py:517`、契约文档 `:56,82`、`test_session_tool_scope.py:25`、AGENTS kind 清单 | 只给侧栏会话；静默；`offer_next_step` 不受影响 | `test_tool_registry_display_guard.py`（目录覆盖、契约表全工具）、`test_session_tool_scope.py`、`test_reply_presentation_tools.py`、`tool-catalog.test.ts` | S2-16；交付检查（非测试）：`git grep present_files` 只剩文档历史 |
 | R13 | 工具结果 metadata 的逐字段重建点（阶段二） | `runtime_message_context_manager.py:441-446`（显式构造，`delivery` 不写就丢）、`service/conversation/session_context_service.py:110`（`model_copy` 自动保留）、`core/tool/placeholder_settlement.py:85-93`、`tool_call_event_projection.py:140-147`、`core/tool/execute/tool_terminal_projection.py:190`、`node_helper/tool_observation_projection.py:55,109,145,157` | `display_data`、`background` 的现有合并语义不变 | `test_background_task_projection.py`、`test_final_reply_projection.py` | 每个重建点各一条：`delivery` 在该路径上是保留还是清除，与 §4.1 一致（方案把「去掉重复拷贝」列为刻意不做，所以每处都要测） |
 | R14 | 回合布局、估高、产物区（阶段二） | `turn-layout.ts:14,128,160`、`artifact-zone.tsx:38`、`message-height-estimate.ts:111-114,158`、`turn.tsx` | 改动卡聚合与位置；独立产物；等用户决定期间不显示；渲染错误被 `RenderIsolationBoundary` 隔离 | `turn-layout.test.ts:100-134`、`message-height.test.ts`、`render-isolation.test.tsx`、PW `turn-render-isolation.spec.ts` | S2-22 至 S2-24；`STANDALONE_ARTIFACT_KINDS` 不再含 `deliverables`（`display_data` 为空，布局按 part 字段） |
-| R15 | 文件监听提升（阶段二） | `workspace-files-surface.tsx:89-94`、`markdown-preview.tsx:25`、`resource-watch.tsx`（删除）、后端 `file_watch.py` | 原子替换实时更新与「文件已更新」；Markdown 相对图片更新；断线指数退避；端口换代取消旧连接；聚焦刷新；超过 128 个目录转轮询；无交付物且面板收起时订阅数为 0 | PW-R `workspace-files-integration.spec.ts:70`（原子替换）、`:115`（图片更新、监听释放，`:152-163` 仍成立）；PY `test_workspace_files.py:184`（先修，S2-33） | S2-31、S2-32、S2-38 |
+| R15 | 文件监听提升（阶段二） | `workspace-files-surface.tsx:89-94`、`markdown-preview.tsx:25`、`resource-watch.tsx`（删除）、后端 `file_watch.py` | 原子替换实时更新与「文件已更新」；Markdown 相对图片更新；断线指数退避；端口换代取消旧连接；聚焦刷新；超过 128 个目录转轮询；无交付物且面板收起时订阅数为 0 | PW-R `workspace-files-integration.spec.ts:70`（原子替换）、`:115`（图片更新、监听释放，`:152-163` 仍成立）；PY 布线与路由测试（S2-33）；E2E 夹具写完文件后送合成事件，不等系统投递 | S2-31、S2-32、S2-38 |
 | R16 | 图片地址与缓存（阶段二） | `image-preview.tsx:23,48,52`、`markdown-preview.tsx:29`、`resources.ts:16-58`（删除 `useImageResource`）、`query-keys.ts:15`（删除 `fileResource`）、`WorkspaceResourceResponse.py:36-50`、灯箱的全部调用方（读图、浏览器截图、用户消息图片） | 版本变化 409；PDF Range 与 `pdfResource` 不变；尺寸显示；灯箱翻页与失败占位 | PY `test_http_contract_and_resource_range`、`test_resource_range_images_and_changed_version`；PW `workspace-files.spec.ts:185`、PW-R `integration.spec.ts:115`（`naturalWidth` 20 → 40）、`message-images.spec.ts`、`fullscreen.spec.ts:59`；VT `image-read-view.test.ts` | S2-17 至 S2-19、S2-30；尺寸改读 `FileInfo` 后「大图缩略预览」由宽高比较得出；**有意改变**：图片解码失败从 `ErrorState` 改为二进制空态 |
 | R17 | `FileInfo.kind` 六 → 十类（阶段三） | `file_content.py:65-99`、资源白名单 `workspace_files_api.py:128`、前端 `lib/api/workspace-files.ts`、`file-preview.tsx:62-90`、文件图标与链接图标 | 原六类逐个不变；`.md` 仍是 markdown；非音视频的 `mime` 不变 | `test_workspace_files.py`（判定表无系统覆盖） | S3-01 先锁基线；**有意改变**：二进制空态改版、PDF 失败改为降级，PR 说明列为行为变化 |
 | R18 | snapshot 新增顶层字段（阶段二） | 后端 `conversation_state_snapshot.py`、`conversation_state_service.py:151,250,423`；前端 `contract.ts`、`snapshot-validation.ts`、`transport-frame-store.ts`；G4 的 13 个夹具 | 其余顶层字段刷新时机与帧内容不变；读取不重建只裁窗口 | `test_background_task_projection.py`、`test_state_snapshot_write_side_validation.py`、`test_snapshot_window.py`、`test_snapshot_http_contract.py`、`snapshot-validation.test.ts` | S2-39 至 S2-46 |
@@ -300,6 +300,9 @@
 | W15 | win32 | 二进制空态与胶囊菜单 | 无快速查看，「用系统应用打开」为主按钮 | WIN-A（PW 假宿主 win32 即 S4-12）+ WIN-M（真宿主） | §4.4 |
 | W16 | 终端输出里的 `C:\` 路径、对话里的 Windows 绝对路径链接 | 点链接 | 与交付物同一套打开规则（AGENTS「终端交互」中的 `C:\` 路径链接项） | WIN-M | §4.3 |
 | W17 | Windows 上的会话（工作区在非系统盘） | 跑 `execute_terminal` 带大小写不同的 `workdir`、写入大小写不同的绝对路径 | 在根内的都接受 | WIN-A | §4.7 |
+| W18 | 工作区注册存在（面板开着，或关掉后 60 秒内） | 在资源管理器里重命名、再删除工作区根目录 | 监听线程退出，订阅经 `check_health` 转轮询，面板显示工作区已不存在；再在空闲满 60 秒后重命名上级目录，不被拒 | WIN-M | §9 后清单第 7、10 项 |
+| W19 | 系统开着最后访问时间更新（`fsutil behavior query disablelastaccess` 为 0 或 2） | 打开文件面板静置 1 分钟，观察 `files/watch` 推送的 `changed` 与 `files/info` 请求次数 | 静置时没有持续的 `changed`；出现循环则在事件处理里忽略纯访问时间变化 | WIN-M | §9 后清单第 11 项 |
+| W20 | 未开开发者模式的普通账号 | 跑 `workspace-files-integration.spec.ts` | 夹具能启动；建软链接失败时整组被跳过并说明原因，而不是全部报错 | WIN-A | §9 后清单第 12 项 |
 
 ---
 
@@ -365,6 +368,6 @@
 | 新功能测试（阶段一 21、二 46、三 22、四 13、五 5） | 107 |
 | 回归链路（阶段一 11、其余 11） | 22 |
 | 视觉基线条目（深浅合计约 40 张；阶段二 10、三 8、四 8、五 3） | 29 |
-| Windows 用例（含 W0 前置） | 18，其中可自动化（含部分）10 |
+| Windows 用例（含 W0 前置） | 21，其中可自动化（含部分）11 |
 | macOS 人工 | 9 |
 | 已定案对照 | 23 |
