@@ -83,33 +83,34 @@ After presenting, do not restate the contents in your reply. Give the key takeaw
 
 ### 4.1 交付记录：交付时观察，现状现读
 
-**记录是持久化事实，不是展示数据。** 交付记录挂在工具结果行的强类型 metadata 上：`ToolMessageMetadata.delivery`，值对象与 `BackgroundWork` 并列放在 `models/message_metadata.py`，随 fork、撤回、删除自动跟随。这个工具的 `display_data` 为空，不存两份。展示数据按契约只给前端（`tool_observation.py:37`），而侧栏清单与以后的读取凭据都是后端要读的事实，所以不能放在那里；`artifact_data` 不落库，也不行。
+**记录是持久化事实，不是展示数据。** 交付记录挂在工具结果行的强类型 metadata 上：`ToolMessageMetadata.deliverables`（`tuple[Deliverable, ...] | None`），值对象与 `BackgroundWork` 并列放在 `models/message_metadata.py`，随 fork、撤回、删除自动跟随。这个工具的 `display_data` 为空，不存两份。展示数据按契约只给前端（`tool_observation.py:37`），而侧栏清单与以后的读取凭据都是后端要读的事实，所以不能放在那里；`artifact_data` 不落库，也不行。名字用 `deliverables` 而不是 `delivery`：后者在仓里已经指消息的投递时机（`SessionMessage.delivery`），同一个词不指两个概念。
 
 ```text
-Delivery {items: [
-  {type: "file",      key, workspace_path | null, absolute_path, caption, kind, size, system_preview},
-  {type: "directory", key, workspace_path | null, absolute_path, caption},
-  {type: "url",       key, url, caption, media: "audio" | "video" | null},
-]}
+Deliverable（按 type 判别）
+  {type: "file",      workspace_path | null, absolute_path, caption, kind, size}
+  {type: "directory", workspace_path | null, absolute_path, caption}
+  {type: "url",       url, caption}
 ```
 
 | 字段 | 来源与用途 |
 |---|---|
-| `key` | 「同一指向」的唯一判等值，规则只在工具里：文件与目录取规范路径（§4.7 的 `canonical_path`），网址按一个手写的规范化子集（协议与主机小写、去掉 80 / 443 默认端口、空路径补 `/`、去掉片段；不做 IDNA 与百分号编码规范化，标准库没有现成实现，不为此加依赖），所以 `http://localhost:5173` 与 `http://localhost:5173/` 是同一指向。硬链接的不同名字会得到不同的 `key`，出两张卡，接受。工具内去重、回合内合并、侧栏清单三处只比较它 |
-| `workspace_path` | 在工作区内时是相对 POSIX 路径，否则为空。前端据它区分内外，不自己解析盘符或反斜杠 |
-| `kind`、`system_preview`、`size` | 交付那一刻由 `inspect_file` 观察得出。类型判定仍只在 `inspect_file` 一处，只是结果被记下来，用于排版。工作区外的文件以**解析后**真实路径所在的目录为根调用（交付的是指向别处的链接时，取输入路径的父目录会被句柄校验判为越界），不依赖推迟的 §4.9 |
-| `media` | 网址后缀查后端的音视频后缀表（§4.2），前端不另存一张表 |
+| `absolute_path` | 文件与目录的规范路径（§4.7 的 `canonical_path`），也是判等用的值：不另存 `key`，值对象上的 `key` 属性对文件与目录返回它，对网址返回规范化后的地址（手写子集：协议与主机小写、去掉 80 / 443 默认端口、空路径补 `/`、去掉片段；不做 IDNA 与百分号编码规范化，不为此加依赖）。规范化规则挂在值对象上，工具内去重、回合内合并、侧栏清单都只比较 `key`。硬链接的不同名字得到不同的 `key`，出两张卡，接受 |
+| `workspace_path` | 在工作区内时是相对 POSIX 路径（`RootDirectory.relative`），否则为空。前端据它区分内外，不自己解析盘符或反斜杠 |
+| `kind`、`size` | 交付那一刻由 `inspect_file` 观察得出。类型判定仍只在 `inspect_file` 一处，结果被记下来用于排版；类型词表 `FileKind` 定义在 `models` 层，`FileInfo` 与 `Deliverable` 共用。调用时路径要与根同一写法：工作区内传 `工作区根 / 相对路径`，工作区外以解析后的真实路径所在目录为根（交付的是指向别处的链接时，取输入路径的父目录会被句柄校验判为越界）。目录不经 `inspect_file`：按 `resolve_read_scope` 校验、确认是目录、取规范路径 |
+| `system_preview`、`media` | 阶段二不放。它们的来源是阶段三的后缀表，消费方在阶段三、四；到时给记录加字段，旧行取默认值（绿地项目接受） |
 
-**流向**：工具 → `ToolObservation.delivery` → 终态事件 → `settle_observations` 写进 metadata → `project_tool_result` 投影为工具 part 上的 `deliverables` 字段（实时与冷重建同源）→ snapshot 顶层清单（§4.6）。与 `background` 有一处必须相反：事件不带记录时要清掉 part 上的记录，不是保留。驱动失败时补写的 `cancelled` 不带记录，冷重建时那一行也没有，卡片随之消失，模型没看到的结果用户也不该看到。
+交付时某一项观察失败（无权访问、磁盘不提供文件号、硬链接被报出越界的名字等）只把这一项列进给模型的失败名单，不让整个调用失败；全部失败时的短提示用中性说法，不再是「文件不存在」。
+
+**流向**：工具 → `ToolObservation.deliverables` → 终态事件 → `settle_observations` 写进 metadata（`RuntimeMessageContextManager.update_tool_result_metadata` 等几处逐字段构造 metadata 的地方都要带上它）→ `project_tool_result` 投影为工具 part 上的 `deliverables` 字段（实时与冷重建同源）→ snapshot 顶层清单（§4.6）。part 上用单独的 wire 形状（驼峰：`workspacePath`、`absolutePath`），不把 metadata 原样下发。和 `background` 一样「有才写」：快照增量只有设置与追加文本，没有删除，做不到「事件不带记录时清掉」。驱动失败时补写的 `cancelled` 会被已完成状态的守卫丢弃，实时快照仍显示卡片，冷重建时才消失；这是所有工具共有的「实时终态早于结果行落库」不一致（`display_data` 也一样），记入刻意不做。
 
 **什么冻结，什么现读**：
 
-| 事实 | 工作区内的条目 | 工作区外的条目 |
-|---|---|---|
-| 排版类别（方块、胶囊、音频） | 由记录的 `kind`、`system_preview` 推出 | 同左 |
-| 大小、是否存在、图片版本 | 现读，走文件面板现有的 `fileInfoQueryOptions`，与面板共用缓存和监听（§4.8） | 显示交付时的大小；被删后，点「在文件夹中显示」时才提示已不存在 |
+| 事实 | 工作区内的文件 | 工作区内的目录 | 工作区外的条目 |
+|---|---|---|---|
+| 排版类别（方块、胶囊） | 由记录的 `kind` 与「是否在工作区内」推出 | 胶囊 | 胶囊（阶段二没有工作区外的图源） |
+| 大小、是否存在、图片版本 | 现读，走文件面板现有的 `fileInfoQueryOptions`，与面板共用缓存和监听（§4.8） | 不探测，大小一格写「文件夹」，点击时由打开链路确认 | 显示交付时的大小；被删后点击时才提示 |
 
-**为什么本轮不按记录寻址读取**：卡片要读的工作区内信息，现有 `/files/info` 已经能读，而且它不依赖工具结果行是否已落库。按记录寻址的接口只对工作区外的文件有意义，那是推迟的阶段（§4.9）。这样「终态事件早于结果落库」的时间窗口（`tool_batch_runner.py:201` 先发事件、observe 节点后写行）本轮不存在，也不需要新的 service、错误码与重试。
+**为什么本轮不按记录寻址读取**：卡片要读的工作区内信息，现有 `/files/info` 已经能读，而且它不依赖工具结果行是否已落库。按记录寻址的接口只对工作区外的文件有意义，那是推迟的阶段（§4.9）。这样「终态事件早于结果落库」的时间窗口本轮不影响任何读取，也不需要新的 service、错误码与重试。
 
 ### 4.2 文件类型
 
@@ -143,10 +144,10 @@ Delivery {items: [
 ### 4.3 卡片
 
 - **结构**：一个回合里的全部交付物调用合成一张聚合卡，写法照抄改动卡（`turn-layout.ts` 的 `changes`），放在本回合第一次交付调用的位置，按 `key` 只留最后一次。产物区直接吃卡片数据，不再逐调用回查 part。
-- **排版类别**由一个纯函数从 `kind`、`system_preview` 与「宿主能否给缩略图」推出（新文件 `lib/assistant/turn/deliverable-layout.ts`），回合布局与估高共用，不需要先读文件信息。估高按「方块行数 + 胶囊行数 + 音频条数」算，胶囊每行按对话内容列最大宽度下的 3 枚估；估高没有宽度入参，窄窗口下的误差由虚拟列表的实测高度修正，不追求精确。胶囊里大小那一格定宽，网址胶囊的主机名截断到同一宽度，「12 KB」变成「已不存在」时胶囊宽度不变。
-- **胶囊**有一个主操作（点名称区）和一个次操作，两者是并列的两个按钮，不嵌套（§11.1）。次操作是一个小菜单：在文件夹中显示；阶段四起加快速查看（macOS）、用系统应用打开。
-- **主操作的去处**：工作区内的文件进文件面板，网页文件与本机地址进内置浏览器，工作区内的目录在文件树里展开，公网地址确认后交系统浏览器，全部经现有的 `use-open-link`。工作区外的文件与目录，主操作是「在文件夹中显示」。工作区内的目录若被浏览可见性隐藏（文件树里没有它），主操作同样退回「在文件夹中显示」。浏览器开发模式没有宿主，工作区外的条目不可点、只有悬停提示，开发期接受。音视频永远不交给内置浏览器（浏览器会把播不了的格式转成下载）：文件按 `kind`，网址按记录里的 `media`，确认后交系统浏览器。
-- **图片方块**用 `<img>` 直接加载带版本号的资源地址，加 `edge` 参数要缩小图（边长为方块的两倍）。带版本号且校验通过的响应改为长期缓存（`immutable`，附件已是这样，`attachments_api.py:72`），滚出视口再回来不重新下载。GIF 与动态 WebP 在字节预算内返回原文件，保住动画。灯箱契约加一个可选的 `previewSrc`：方块用小图，灯箱用原图；现有调用方（读图、浏览器截图、用户消息图片）不用改。`useImageResource` 的 blob 方案与没人用的 `queryKeys.fileResource` 删除，面板图片与 Markdown 本地图片改走同一条地址路径。**已先行完成**（2026-11-16）：资源接口的 `version` 改为必填，所有资源响应都按版本长期缓存；`edge` 与 `previewSrc` 只有交付物用，仍在阶段二。`<img>` 带不了 `X-Trace-Id`，与附件相同，也读不到错误响应体：错误语义由文件信息查询承担，`onerror` 时先失效一次该文件的信息（处理版本过期），仍失败就显示二进制空态。SVG 不经 Pillow：方块与灯箱都用原始地址，不带 `edge`，也不设 `previewSrc`。
+- **排版类别**由一个纯函数推出（新文件 `lib/assistant/turn/deliverable-layout.ts`，同时负责聚合、按 `key` 去重、分组与行数计算），回合布局与估高共用，不需要先读文件信息。输入只有当前阶段真有事实来源的：阶段二是 `kind` 与「是否在工作区内」（工作区内的 `image` / `svg` 排成方块，其余胶囊）；阶段三加音频，阶段四加 `system_preview` 与宿主能否给缩略图，各自到时加，不预留。聚合卡放在本回合第一次**带记录**的调用的位置；同一 `key` 只留最后一次，留在最后出现的位置；去重后再按方块、胶囊分组。估高按「方块行数 + 胶囊行数」算，方块每行数量用自己的常量（对话内容列宽下约 5 枚），胶囊每行按对话内容列最大宽度下的 3 枚估；估高没有宽度入参，窄窗口下的误差由虚拟列表的实测高度修正，不追求精确。胶囊里大小那一格定宽，网址胶囊的主机名截断到同一宽度，「12 KB」变成「已不存在」时胶囊宽度不变。
+- **胶囊**有一个主操作（点名称区）和一个次操作，两者是并列的两个按钮，不嵌套（§11.1）。阶段二次操作只有「在文件夹中显示」，是一个图标按钮，阶段四加了快速查看与系统应用打开后才换成菜单；工作区外的条目主操作已经是它，不再显示次按钮。次按钮叠在定宽的大小一格上，悬停与否胶囊宽度不变。
+- **主操作的去处**：工作区内的文件进文件面板，网页文件与本机地址进内置浏览器，工作区内的目录在文件树里展开，公网地址确认后交系统浏览器，全部经现有的 `use-open-link`，链接解析加一个从记录结构直接得出目标的入口（规则仍只在 `resolve-link.ts`）。工作区外的 `.html` 照现有链接规则进内置浏览器，其余工作区外的文件与目录主操作是「在文件夹中显示」。目录被浏览可见性隐藏时，由打开器在点击时判断并提示（对话里的目录链接同样受益），卡片不预先读可见性。浏览器开发模式没有宿主，工作区外的条目不可点、只有悬停提示，开发期接受。音视频不交给内置浏览器（浏览器会把播不了的格式转成下载）：文件按 `kind`（阶段三有音视频类型后），网址按记录里的 `media`（阶段三），打开器给网页目标加媒体标记、在一处跳过内置浏览器。
+- **图片方块**用 `<img>` 直接加载带版本号的资源地址，加 `edge` 参数要缩小图：语义是「铺满 240×192 的框」，缩放倍数 = max(240 / 宽, 192 / 高)，上限为 1（方块是裁切铺满、保留顶部，按长边缩会让长截图铺进方块时被放大发糊）。带版本号且校验通过的响应改为长期缓存（`immutable`，附件已是这样，`attachments_api.py:72`），滚出视口再回来不重新下载。GIF 与动态 WebP 在字节预算内返回原文件，保住动画。图片组的条目（`StripImage`）加一个可选的 `previewSrc`：方块用小图，灯箱仍用 `src` 原图；`ImageTile` 与 `StripImage` 加可选的 `onError`，让 `useImageLoadFailure` 接得进来；现有调用方（读图、浏览器截图、用户消息图片）不用改。工作区内的图片被删或无法访问时方块保持方块，只换图标并加提示，不退回胶囊（高度不变）。`useImageResource` 的 blob 方案与没人用的 `queryKeys.fileResource` 删除，面板图片与 Markdown 本地图片改走同一条地址路径。**已先行完成**（2026-11-16）：资源接口的 `version` 改为必填，所有资源响应都按版本长期缓存；`edge` 与 `previewSrc` 只有交付物用，仍在阶段二。`<img>` 带不了 `X-Trace-Id`，与附件相同，也读不到错误响应体：错误语义由文件信息查询承担，`onerror` 时先失效一次该文件的信息（处理版本过期），仍失败就显示二进制空态。SVG 不经 Pillow：方块与灯箱都用原始地址，不带 `edge`，也不设 `previewSrc`。
 - **系统缩略图**：PDF、Office、视频用宿主 `files.thumbnail`（阶段四）。系统对不认识的格式不报错，而是返回通用白纸图标，所以只对 `system_preview` 为真的文件请求；其余用彩色文件图标。首次约 1 秒、之后 60–320 毫秒，先显示图标、到了再换。浏览器开发模式与 Linux 没有缩略图，一律是图标，排版类别随之退回胶囊。
 - 音频在卡片内出播放器，`preload="none"`，历史里的音频不会每条都发请求。
 - 异常表现见 §11.2。
@@ -184,10 +185,10 @@ snapshot 顶层新增 `deliverables`：工作副本里全部工具 part 上 `del
 
 | 问题 | 规则 |
 |---|---|
-| 何时重算 | 整份重建时（撤回走这里），以及 `apply_planned` 处理的事件指向一个交付物 part 时。不能照抄看板的「事件带后台记录才重算」，否则失败补写清掉记录时清单不更新 |
-| 继承的消息 | 计入。手动 fork 展示继承的历史与卡片，清单一致；Agent fork 的继承行不进 Transport，自然不在 |
+| 何时重算 | 整份重建时（撤回走这里），以及 `apply_planned` 处理的事件带交付记录时（与看板「事件带后台记录才重算」同一写法，记录「有才写」） |
+| 继承的消息 | 计入（与看板跳过继承相反，docstring 写明）。手动 fork 展示继承的历史与卡片，清单一致；Agent fork 的继承行不进 Transport，自然不在 |
 | 同一指向 | 按 `key`，只留最后一次，新的在前 |
-| 条目形状 | `{key, tool_call_id, index, turn, item}` |
+| 条目形状 | `{key, toolCallId, index, turn, item}`（驼峰，与相邻的 `background_tasks` 一致） |
 
 侧栏注册一张「产出」卡片（`aside-card-registry.tsx`），条目与回复下方共用同一个条目组件（侧栏变体只显示角标与名称）。有过交付物才出现。侧栏**不探测文件是否存在**：清单常驻、条目会积累几十个，逐条探测就是几十个并发请求；点击时由现有的打开链路确认，不存在就提示（`use-open-workspace-path.ts:76`）。新增卡片 id 会让用户已存的侧栏顺序与折叠重置，store 的设计本来就是「不迁移」，绿地规则下接受。
 
@@ -226,11 +227,11 @@ snapshot 顶层新增 `deliverables`：工作副本里全部工具 part 上 `del
 
 **现状**：文件监听只由文件面板挂载（`workspace-files-surface.tsx:90`），面板只在打开时渲染。面板关着时，对话里的卡片收不到任何「文件变了」的信号。
 
-**改造**：监听提升为工作区级，在 `AppLayout` 挂一次（复用现有的 `useFileWatch` 与聚焦刷新），新增 `lib/workspace-files/file-watch-store.ts` 按工作区记录登记的目录与引用计数。文件面板登记已展开的目录、标签所在目录与 Markdown 引用的图片；会话页登记本会话工作区内交付物的父目录（目录条目登记自身），集合取自 snapshot 顶层 `deliverables`（§4.6），所以清单投影与监听同在阶段二。store 按工作区分开记，`AppLayout` 为每个至少有一项登记的工作区各挂一个订阅（保活的会话页与当前文件面板可能属于不同工作区）；某个工作区的登记清零就关掉它的订阅。登记的是会话级集合，不是每张卡片各自登记：虚拟列表滚出即卸载，按卡片登记会让集合抖动、反复重连并整体失效全部文件查询。卡片的文件信息查询落在 `queryKeys.files(workspaceId)` 前缀下，监听的整体失效自然覆盖它。
+**改造**：监听提升为工作区级，在 `AppLayout` 挂一次（复用现有的 `useFileWatch` 与聚焦刷新），新增 `lib/workspace-files/file-watch-store.ts` 按工作区记录登记的目录与引用计数。文件面板登记已展开的目录、标签所在目录与 Markdown 引用的图片；每个挂着的会话订阅界面（主对话与工作台里的子 Agent 只读线程，它们都渲染产物区）登记本会话工作区内交付物的路径（后端订阅时对文件自动取父目录、对目录取自身，前端不必自己算），集合取自 snapshot 顶层 `deliverables`（§4.6），所以清单投影与监听同在阶段二。store 按工作区分开记，`AppLayout` 为每个至少有一项登记的工作区各挂一个订阅（工作台里的子 Agent 可能属于别的工作区；按工作区分开记本身也便宜）；某个工作区的登记清零就关掉它的订阅。登记的是会话级集合，不是每张卡片各自登记：虚拟列表滚出即卸载，按卡片登记会让集合抖动、反复重连并整体失效全部文件查询。卡片的文件信息查询落在 `queryKeys.files(workspaceId)` 前缀下，监听的整体失效自然覆盖它。
 
 `resource-watch.tsx` 整个删除，面板不再拥有监听，只声明要看哪些目录。工作区外的条目不监听（§4.1）。
 
-**运行时成本**：订阅存在期间，每次重连的 `ready` 与每 15 秒的对账（轮询模式每 2 秒）都会整体失效该工作区的文件查询，react-query 只重拉已挂载的查询，所以是可见卡片与面板各一次本机 `files/info`，接受。订阅只在有登记时存在：会话没有工作区内交付物、面板也关着时没有订阅，现有 E2E「收起面板后订阅数为 0」在这种情况下仍成立，有交付物的情况另写用例。
+**运行时成本**：订阅的目录集合一变就重连（面板每展开一个目录都会），重连收到 `ready` 会整体失效该工作区的文件查询，合并后范围包括全部卡片的文件信息。订阅存在期间，每次重连的 `ready` 与每 15 秒的对账（轮询模式每 2 秒）都会整体失效该工作区的文件查询，react-query 只重拉已挂载的查询，所以是可见卡片与面板各一次本机 `files/info`，接受。订阅只在有登记时存在：会话没有工作区内交付物、面板也关着时没有订阅，现有 E2E「收起面板后订阅数为 0」在这种情况下仍成立，有交付物的情况另写用例。
 
 **原生事件是尽力而为**（2026-11-16 查清）：原生监听用例与两条集成 E2E 的不稳定，根因是本机 fseventsd 满载（CPU 持续 100% 以上），纯 watchdog 脚本也复现，事件迟到十几秒或丢失；cosir 的登记、路由与推送链路没有缺陷。操作系统不保证投递时限，产品由 15 秒对账与聚焦刷新兜底；测试因此不再断言投递时限：后端改为注册与路由两个确定性测试，E2E 夹具写完文件后经监听器送合成事件。阶段二接入交付物卡片后，按实际体验再评估 15 秒是否够用。
 
@@ -273,7 +274,9 @@ snapshot 顶层新增 `deliverables`：工作副本里全部工具 part 上 `del
 | 阶段 | 内容 | 验证 | 删除 |
 |---|---|---|---|
 | 一 | 路径身份（§4.7）：新模块与全部调用点迁移，修受保护路径绕过 | 身份与包含判定单测（大小写、firmlink、NFD、写新文件、链接逃逸、`..` 逃逸、硬链接、根 `st_ino` 为 0）；工作区以不同大小写登记后文件面板可读；现有路径与受保护路径测试改写后全绿 | `validation.py`、`is_trusted_cosir_path`、各处字符串比较与重复规范化 |
-| 二 | 交付记录与卡片（§4.1、§4.3）：工具改名与 `delivery`；契约文档、提示词、工具目录同步，加提示词工具名守卫；回合聚合卡、排版类别、估高；snapshot 顶层 `deliverables`（§4.6，监听的登记集合取自它）；监听提升（§4.8，先修不稳定的原生监听用例）；`edge`、`previewSrc`（图片地址缓存与 `FileInfo` 图片尺寸已先行完成） | 工具、透传、清除语义测试；清单投影纯函数测试（去重、继承、撤回、失败清除、重算时机）；前端单测；E2E 点卡片进面板、浏览器、文件树（测试服务没有文件接口，用 `page.route`）；一次改完全部内联 snapshot 的测试夹具 | `display/deliverables_display.py`、旧卡片与读取函数、`resource-watch.tsx`、`useImageResource`、`fileResource` 键、`X-Cosir-Image-Preview` |
+| 二a | 交付记录与胶囊卡：工具改名与 `deliverables` 记录、各跳透传、part 字段；契约文档、提示词（工具名改用常量拼接）、工具目录同步；回合聚合卡、排版函数、估高、胶囊组件与打开器入口；大小先显示交付时的值 | 工具（文件、目录、网址、工作区外、观察失败、部分失败）、透传与实时冷重建一致；前端排版与聚合单测；E2E 点胶囊进面板、浏览器、文件树 | `display/deliverables_display.py`、`present_files` 工具与参数、旧卡片与 `readDeliverables`、产物区与估高里按 `display_data.kind` 的交付物分支 |
+| 二b | 图片方块：资源接口 `edge`（铺满框）、`previewSrc`、`ImageTile` 与 `StripImage` 的 `onError`、方块的失败状态 | `edge` 算法与缓存头；方块加载、版本过期重读、失败占位；视觉基线 | 无 |
+| 二c | 现读与监听：snapshot 顶层 `deliverables` 与全部内联夹具；监听提升为工作区级 store，面板与会话订阅界面各自登记；工作区内文件的大小、已不存在、无法访问现读；打开器的隐藏目录提示 | 清单投影（去重、继承、撤回、重算时机）与实时冷重建一致；store 单测；E2E 有交付物时订阅存在、离开会话订阅归零、合成事件后卡片刷新 | `resource-watch.tsx`、面板里自持的 `useFileWatch` |
 | 三 | 类型与预览（§4.2、§4.5、§4.10）：后缀表、`system_preview`、TIFF、表格、媒体、降级；`.ipynb` 按 JSON 高亮 | `inspect_file` 类型测试；E2E 表格排序筛选、音频播放（wav、ogg、webm） | 无 |
 | 四 | 宿主三个方法；系统缩略图接进卡片；胶囊菜单与二进制空态的出口 | 宿主入参校验单测；E2E 用假宿主断言调用（假宿主平台改为按用例传参，默认仍是 linux）；macOS 人工实测缩略图与快速查看 | 无 |
 | 五 | 侧栏「产出」卡 | E2E 侧栏卡 | 无 |
@@ -285,7 +288,7 @@ snapshot 顶层新增 `deliverables`：工作副本里全部工具 part 上 `del
 | 阶段 | 增 | 减 | 主要文件 |
 |---|---|---|---|
 | 一 | 约 +215（模块 +95，测试 +120） | 约 −355（应用 −155，测试 −200） | 新增 `utils/path/file_identity.py`；删除 `utils/path/validation.py` |
-| 二 | 约 +920（后端 +255，前端 +245，夹具 +40，测试 +380） | 约 −215 | 新增 `lib/assistant/turn/deliverable-layout.ts`、`lib/workspace-files/file-watch-store.ts`、`assistant_transport/state/conversation_state_deliverable.py`、`reply-presentation/deliverable-item.tsx`；改名 `present_files.py` → `present_deliverables.py`；删除 `display/deliverables_display.py`、`resource-watch.tsx` |
+| 二 | 约 +1520（后端 +300，前端 +550，夹具 +40，测试 +630） | 约 −360 | 新增 `models/file_kind.py`、`lib/assistant/turn/deliverable-layout.ts`、`lib/workspace-files/file-watch-store.ts`、`assistant_transport/state/conversation_state_deliverable.py`、`reply-presentation/deliverable-capsule.tsx`；改名 `present_files.py` → `present_deliverables.py`；删除 `display/deliverables_display.py`、`resource-watch.tsx`。执行计划与验收见 `stage-2-plan.md` |
 | 三 | 约 +500（后端 +50，前端 +300，测试 +150） | 约 −10 | 新增 `workspace-files/table-preview.tsx`、`media-preview.tsx` |
 | 四 | 约 +160 | 约 −10 | 宿主 `ipc.ts`、`host-contract.ts`、preload、`lib/desktop-host`、`fake-desktop-host.ts` |
 | 五 | 约 +150（侧栏卡 +110，测试 +40） | 0 | 新增 `conversation-aside/deliverables-aside-card.tsx` |
@@ -532,4 +535,6 @@ cosir 另加：提示上方一张系统缩略图；认得的格式多出「快�
 
 撤回第一轮的两项：侧栏偏好「保留旧顺序」（store 的设计就是不迁移）；「阶段一的按记录寻址信息接口」（工作区内不需要，工作区外推迟）。
 
-**第三轮**：重写后的测试计划查出 23 个问题（`test-plan.md` §6），逐条并入正文。阻塞测试的两条：包含判定必须先解析路径再比身份（Q1，第二轮合成方案时漏写了这一步）；工作区外的文件以所在目录为根做类型观察（Q2）。其余：403 改用中性的「无法访问」；侧栏不划线；snapshot 清单提前到阶段二（监听的登记集合取自它）；监听按工作区分订阅、无登记即关闭、先修不稳定的监听用例；位图失败统一进空态；音视频的 MIME 取自后缀表；Windows 规范路径用 `realpath(strict=True)`；迁移清单补「不改」的三处与理由；§4.9 的记录比对改为规范路径或文件身份任一相等；网址判等用 WHATWG 规范化。
+**第三轮**：重写后的测试计划查出 23 个问题（`test-plan.md` §6），逐条并入正文。阻塞测试的两条：包含判定必须先解析路径再比身份（Q1，第二轮合成方案时漏写了这一步）；工作区外的文件以所在目录为根做类型观察（Q2）。其余：403 改用中性的「无法访问」；侧栏不划线；snapshot 清单提前到阶段二（监听的登记集合取自它）；监听按工作区分订阅、无登记即关闭、先修不稳定的监听用例；位图失败统一进空态；音视频的 MIME 取自后缀表；Windows 规范路径用 `realpath(strict=True)`；迁移清单补「不改」的三处与理由；§4.9 的记录比对改为规范路径或文件身份任一相等；网址判等用一个手写的规范化子集（见 §4.1，标准库没有 WHATWG 实现，不加依赖）。
+
+**第四轮**（2026-11-16，阶段二开工前核对）：两个方向重新核对阶段二在当前代码上的落地，修正并入正文：记录改名 `deliverables`（`delivery` 已指消息投递时机）；去掉「事件不带记录时清掉」（快照增量没有删除，补写的取消也收不到），改为「有才写」；`system_preview`、`media` 移出阶段二；不另存 `key`，由值对象从规范路径或规范化网址计算；目录不经 `inspect_file`、不现读；工作区外的图片排成胶囊；`edge` 改为铺满框；次按钮阶段二只是图标按钮；工作区外的 `.html` 沿用现有规则进内置浏览器；隐藏目录在打开器里判断；监听登记方包括工作台的子 Agent 线程；snapshot 条目用驼峰；阶段二拆为二a、二b、二c；账本按核对结果上调。
