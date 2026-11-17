@@ -175,7 +175,7 @@ class ToolOutputBudget:
 
         返回:
             未超限时返回原对象；超限时返回「头 + 截断标记 + 尾」的新对象，正文长度不超过
-            ``max_chars``，并在 ``artifact_data`` 中带截断标记与 artifact 路径。
+            ``max_chars``；完整原文的落盘路径只写在截断标记里，模型凭它取回全文。
 
         异常:
             无。artifact 写入失败仅记日志并退化为纯截断。
@@ -197,18 +197,8 @@ class ToolOutputBudget:
 
         # 超限：先把完整原文落盘，再把模型可见正文截断为「头 + 标记 + 尾」。
         artifact_path = self._write_artifact(normalized_observation, execution_context)
-        artifact_data = dict(normalized_observation.artifact_data or {})
-        artifact_data.update(
-            {
-                "output_truncated": True,
-                "original_chars": len(content),
-                "artifact_path": artifact_path,
-            }
-        )
         return replace(
-            normalized_observation,
-            content=self._truncate_content(content, artifact_path),
-            artifact_data=artifact_data,
+            normalized_observation, content=self._truncate_content(content, artifact_path)
         )
 
     def _truncate_content(self, content: str, artifact_path: str) -> str:

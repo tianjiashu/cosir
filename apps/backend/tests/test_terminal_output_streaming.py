@@ -39,7 +39,7 @@ from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 from app.models.conversation_input import UserInputPresentation
-from app.models.message_metadata import BackgroundWork
+from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
 from app.models.session_extra import SessionExtra
 from app.tools.display.terminal_display import build_terminal_display_data
 from app.tools.terminal_runtime.command.command_output import CommandOutput
@@ -48,6 +48,7 @@ from app.tools.tool_handler.terminal import execute_terminal as execute_terminal
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal.live_output_channel import LiveOutputChannel
 from tests.runtime_context_stub import runtime_stub
+from tests.tool_output_support import truncated_artifact_path
 from tests.transport_fixtures import consumed
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
@@ -241,8 +242,7 @@ def test_terminal_output_budget_preserves_raw_content_and_artifact(
     result = ToolOutputBudget(max_chars=200).apply(observation, context)
 
     assert "token=visible-secret" in (result.content or "")
-    assert result.artifact_data is not None
-    artifact_path = result.artifact_data["artifact_path"]
+    artifact_path = truncated_artifact_path(result.content)
     assert isinstance(artifact_path, str) and artifact_path
     # artifact 落盘位置必须统一在 workspace 的 `.cosir/tool-artifacts` 下。
     assert artifact_path.startswith(".cosir/tool-artifacts/")
@@ -442,7 +442,7 @@ def test_runtime_update_appends_terminal_output_and_rejects_stale_sequences() ->
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            status="running",
+            result=ToolMessageMetadata(status="running"),
         )
     )
 
@@ -482,7 +482,12 @@ def test_runtime_update_trims_terminal_output_window(monkeypatch: pytest.MonkeyP
         )
     )
     projector.process(
-        ToolCallStatusChangedEvent(session_id=7, run_id=9, tool_call_id="call-1", status="running")
+        ToolCallStatusChangedEvent(
+            session_id=7,
+            run_id=9,
+            tool_call_id="call-1",
+            result=ToolMessageMetadata(status="running"),
+        )
     )
 
     projector.process(_terminal_started_update())
@@ -514,7 +519,12 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
         )
     )
     projector.process(
-        ToolCallStatusChangedEvent(session_id=7, run_id=9, tool_call_id="call-1", status="running")
+        ToolCallStatusChangedEvent(
+            session_id=7,
+            run_id=9,
+            tool_call_id="call-1",
+            result=ToolMessageMetadata(status="running"),
+        )
     )
     projector.process(_terminal_started_update())
     projector.process(_terminal_output_update(0, "before "))
@@ -524,14 +534,12 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            status="pending",
-            background=BackgroundWork(
-                run_id=1,
-                kind="terminal_command",
-                label="make",
-                started_at=_RUN_CREATED_AT.isoformat(),
-            ),
-            display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"},
+            result=ToolMessageMetadata(status="pending", background=BackgroundWork(
+                    run_id=1,
+                    kind="terminal_command",
+                    label="make",
+                    started_at=_RUN_CREATED_AT.isoformat(),
+                ), display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"}),
         )
     )
     projector.process(
@@ -553,15 +561,14 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            status="completed",
-            display_data={
-                "kind": "terminal-result",
-                "command": "make",
-                "workdir": "/w",
-                "output": "before after",
-                "end": "exited",
-                "exit_code": 0,
-            },
+            result=ToolMessageMetadata(status="completed", display_data={
+                    "kind": "terminal-result",
+                    "command": "make",
+                    "workdir": "/w",
+                    "output": "before after",
+                    "end": "exited",
+                    "exit_code": 0,
+                }),
         )
     )
     projector.process(_terminal_output_update(2, " late"))
@@ -622,7 +629,7 @@ def test_final_terminal_status_uses_authoritative_output_including_unstreamed_ta
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            status="running",
+            result=ToolMessageMetadata(status="running"),
         )
     )
 
@@ -635,12 +642,11 @@ def test_final_terminal_status_uses_authoritative_output_including_unstreamed_ta
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            status="completed",
-            display_data={
-                "kind": "terminal-result",
-                "output": streamed_output + "final unstreamed tail",
-                "exit_code": 0,
-            },
+            result=ToolMessageMetadata(status="completed", display_data={
+                    "kind": "terminal-result",
+                    "output": streamed_output + "final unstreamed tail",
+                    "exit_code": 0,
+                }),
         )
     )
 
@@ -699,7 +705,7 @@ def _streamed_terminal_projector() -> (
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            status="running",
+            result=ToolMessageMetadata(status="running"),
         )
     )
     projector.process(_terminal_started_update())
@@ -839,8 +845,8 @@ def _running_terminal_projector() -> tuple[ConversationStateSnapshot, Conversati
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            status="running",
             occurred_at=datetime(2026, 1, 1, 0, 0, 2, tzinfo=UTC),
+            result=ToolMessageMetadata(status="running"),
         )
     )
     return state, projector
@@ -910,8 +916,8 @@ def test_duplicate_running_event_keeps_the_original_start_time() -> None:
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            status="running",
             occurred_at=datetime(2026, 1, 1, 0, 5, 0, tzinfo=UTC),
+            result=ToolMessageMetadata(status="running"),
         )
     )
 
@@ -928,13 +934,12 @@ def test_leaving_running_clears_the_start_time() -> None:
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            status="completed",
-            display_data={
-                "kind": "terminal-result",
-                "command": "make",
-                "workdir": "/w",
-                "output": "",
-            },
+            result=ToolMessageMetadata(status="completed", display_data={
+                    "kind": "terminal-result",
+                    "command": "make",
+                    "workdir": "/w",
+                    "output": "",
+                }),
         )
     )
 

@@ -7,9 +7,38 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
+from pydantic import Field
+
+from app.models.deliverable import Deliverable
 from app.models.message_metadata import BackgroundWork
+
+
+@dataclass(frozen=True)
+class AwaitDecision:
+    """HITL 等待占位：等用户决定，Agent 挂起。"""
+
+    kind: Literal["decision"] = "decision"
+
+
+@dataclass(frozen=True)
+class RunInBackground:
+    """后台占位：工作继续，结论稍后回投；Agent 不挂起。"""
+
+    work: BackgroundWork
+    kind: Literal["background"] = "background"
+
+
+@dataclass(frozen=True)
+class AwaitMessages:
+    """``wait_messages``：调用已完成，Agent 挂起等消息。"""
+
+    kind: Literal["messages"] = "messages"
+
+
+# ``kind`` 是判别键：批次随执行状态落库（``ToolBatch``），读回时据它还原成哪一种。
+Waiting = Annotated[AwaitDecision | RunInBackground | AwaitMessages, Field(discriminator="kind")]
 
 
 @dataclass(frozen=False)
@@ -32,12 +61,11 @@ class ToolObservation:
       错误事实与处理建议、取消说明）都在 ``content`` 一个文本通道里，由构造工厂在源头
       组织成最终文本；workflow 不再从多个诊断字段拼装模型消息。
 
-    content、display_data 与 artifact_data 的区别（易混，单独说明）:
-        - ``content`` 是模型唯一直接消费的英文文本通道。
+    content 与 display_data 的区别（易混，单独说明）:
+        - ``content`` 是模型唯一直接消费的英文文本通道；超出预算时截断，完整原文落盘的路径写在截断
+          标记里（``ToolOutputBudget``）。
         - ``display_data`` 是只给前端渲染消费的结构化字典，不进入模型，也不应被后端
           持久化逻辑当作事实源。
-        - ``artifact_data`` 是工具执行产出的内部产物数据（如终端输出超限后落盘的路径），
-          不进入 Transport，也不到模型。
 
     字段:
         tool_name: 触发本次观察的工具名称（与 :class:`ToolDefinition.name` 对应）。
@@ -47,18 +75,21 @@ class ToolObservation:
             失败与取消时为构造工厂组织好的说明文本。
         tool_call_id: 对应的模型工具调用 id（透传自 :class:`ToolCall`），缺失时为空。
         display_data: 面向客户端的结构化机读字典，仅供前端渲染。
-        suspend: 请求 Agent 挂起等消息：本批观察写入后由 prepare_input 迁移 Run 为
-            ``suspended``、不再请求模型，由可唤醒消息继续同一个 Run（取消优先；已有外部可唤醒
-            消息时直接继续）。它是工作流控制流事实，不进模型上下文、不随 ``display_data`` 下发。
-        artifact_data: 工具执行产出的内部产物数据；不进入事件、快照或模型上下文。
-        awaiting_decision: 本观察是 HITL 工具的等待占位（见 :func:`tool_awaiting_decision`）：模型
-            协议上它就是这次调用的最终结果，用户决定后的执行结果另行追加为消息、不覆盖它；投影为
-            非终态 ``pending``，执行完成后只更新展示状态。
-        background: 非 ``None`` 即本观察是后台占位（结论稍后以 ``background_result`` 回投，
-            见 ``tools/tool_handler/terminal/command_results``）。与 HITL 占位一样投影为 ``pending``，
-            结论并入或撤销时只更新占位行的展示状态；原样持久化为占位行 metadata 的 ``background``，
-            卡片据此显示「后台执行中」，
-            看板据此列出这项工作。开始时间由 ``CommandResultRegistry.register`` 登记时确定。
+        waiting: 这次调用之后还要等什么，``None`` 即普通结果。三种情形互斥，用一个判别联合表达，
+            「等决定」同时又是后台占位这类组合在类型上写不出来：
+
+            - :class:`AwaitDecision`：HITL 工具的等待占位（见 :func:`tool_awaiting_decision`）。模型协议上
+              它就是这次调用的最终结果，用户决定后的执行结果另行追加为消息、不覆盖它；投影为非终态
+              ``pending``，执行完成后只更新展示状态。Agent 挂起。
+            - :class:`RunInBackground`：后台占位，结论稍后以 ``background_result`` 回投（见
+              ``tools/tool_handler/terminal/command_results``）。同样投影为 ``pending``，工作记录原样
+              持久化为占位行 metadata 的 ``background``，卡片与看板据此显示；开始时间由
+              ``CommandResultRegistry.register`` 登记时确定。Agent 不挂起：后台工作属于 Session。
+            - :class:`AwaitMessages`：``wait_messages`` 要 Agent 挂起等消息，调用本身已经完成。
+
+            挂起是工作流控制流事实（:attr:`suspend`）：本批观察写入后由 prepare_input 迁移 Run 为
+            ``suspended``、不再请求模型，由可唤醒消息继续同一个 Run；不进模型上下文、不随
+            ``display_data`` 下发。
         images: 工具产出给模型看的图片（工作区附件的相对路径，见
             ``AttachmentService.save_image``）。
             tool 消息只能是文本，图片由 observe 节点在整批 tool 消息之后以一条 ``tool_image`` user
@@ -70,8 +101,20 @@ class ToolObservation:
     content: str | None = None
     tool_call_id: str = ""
     display_data: dict[str, Any] | None = field(default_factory=dict)
-    suspend: bool = False
-    artifact_data: dict[str, Any] | None = field(default_factory=dict)
-    awaiting_decision: bool = False
-    background: BackgroundWork | None = None
+    waiting: Waiting | None = None
     images: tuple[str, ...] = ()
+    # 交付记录（只有 ``present_deliverables``）：原样持久化为结果行 metadata 的 ``deliverables``。
+    deliverables: tuple[Deliverable, ...] | None = None
+
+    @property
+    def suspend(self) -> bool:
+        """调用结束后 Agent 应挂起等消息：等用户决定或显式等消息；后台占位不挂起。"""
+        return isinstance(self.waiting, AwaitDecision | AwaitMessages)
+
+    @property
+    def awaiting_decision(self) -> bool:
+        return isinstance(self.waiting, AwaitDecision)
+
+    @property
+    def background(self) -> BackgroundWork | None:
+        return self.waiting.work if isinstance(self.waiting, RunInBackground) else None

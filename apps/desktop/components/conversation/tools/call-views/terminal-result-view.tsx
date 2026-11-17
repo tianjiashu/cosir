@@ -21,6 +21,7 @@ import { readText as text } from "../display-data-readers";
 import { useCallRanAWhile } from "../call-elapsed";
 import { ForegroundWaitAction } from "../foreground-wait-action";
 import { ToolStopButton, useStopRequest } from "../tool-stop-button";
+import { baseName } from "@/lib/files/file-name";
 
 /** 输出按原样保留：纯空白也是输出，不走 `readText`。 */
 function rawOutput(data: Record<string, unknown>): string {
@@ -124,7 +125,7 @@ function TerminalResultBody({ data, context }: { data: Record<string, unknown>; 
   const live = commandLive(context);
   const links = useOpenLink("tool", sessionId);
   const directoryTarget = workdir ? resolvePathText(`${workdir}/`, { workspaceRoot: links.workspaceRoot }) : null;
-  const directoryName = workdir?.replace(/[\\/]+$/, "").split(/[\\/]/).at(-1) || workdir;
+  const directoryName = workdir && baseName(workdir);
   // 在工作区根目录跑命令是常态，只有换了目录才值得说。
   const showWorkdir = workdir !== undefined && workdir.replace(/[\\/]+$/, "") !== links.workspaceRoot?.replace(/[\\/]+$/, "");
   const { tail, readText } = useParsedOutput(output);

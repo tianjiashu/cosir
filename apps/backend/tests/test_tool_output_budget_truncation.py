@@ -20,6 +20,7 @@ import pytest
 
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget, fit_head_tail
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
+from tests.tool_output_support import truncated_artifact_path
 
 
 def _ctx(root: Path) -> ToolExecutionContext:
@@ -52,7 +53,6 @@ def test_content_exactly_at_budget_is_unchanged() -> None:
     result = budget.apply(obs, None)
 
     assert result is obs
-    assert result.artifact_data == {}
 
 
 def test_none_content_is_normalized_to_empty_string() -> None:
@@ -95,15 +95,15 @@ def test_marker_reports_omitted_volume_and_artifact_path(tmp_path: Path) -> None
 
     result = budget.apply(_obs(content), _ctx(root))
 
-    artifact_path = (result.artifact_data or {}).get("artifact_path")
+    artifact_path = truncated_artifact_path(result.content)
     assert isinstance(artifact_path, str) and artifact_path.startswith(".cosir/tool-artifacts/")
     assert result.content is not None
     assert f"full output: {artifact_path}" in result.content
     assert f"of {len(content)} characters" in result.content
     # 标记闭合符仍在，说明标记没有被 max_chars 切掉尾部（旧实现会切掉路径）。
     assert "] ..." in result.content
-    assert (result.artifact_data or {}).get("output_truncated") is True
-    assert (result.artifact_data or {}).get("original_chars") == len(content)
+    assert "[output truncated:" in (result.content or "")
+    assert f"of {len(content)} characters" in (result.content or "")
     # 落盘内容仍是完整原文。
     assert (root / artifact_path).read_text(encoding="utf-8") == content
 
@@ -118,7 +118,7 @@ def test_marker_is_never_sliced_when_budget_fits(tmp_path: Path) -> None:
     for max_chars in (300, 1000, 3000):
         result = ToolOutputBudget(max_chars=max_chars).apply(_obs(content), _ctx(root))
 
-        artifact_path = (result.artifact_data or {}).get("artifact_path")
+        artifact_path = truncated_artifact_path(result.content)
         assert isinstance(artifact_path, str) and artifact_path
         assert result.content is not None
         assert result.content.count("[output truncated") == 1
@@ -171,9 +171,9 @@ def test_tiny_budget_still_writes_full_artifact(tmp_path: Path) -> None:
 
     assert result.content is not None
     assert len(result.content) <= 5
-    artifact_path = (result.artifact_data or {}).get("artifact_path")
-    assert isinstance(artifact_path, str) and artifact_path
-    assert (root / artifact_path).read_text(encoding="utf-8") == content
+    # 标记本身放不进 5 个字符，路径随之看不到；全文仍然落盘。
+    written = list((root / ".cosir" / "tool-artifacts").iterdir())
+    assert [path.read_text(encoding="utf-8") for path in written] == [content]
 
 
 

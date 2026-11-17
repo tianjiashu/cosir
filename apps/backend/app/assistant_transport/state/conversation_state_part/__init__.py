@@ -13,6 +13,7 @@ from .conversation_state_image_part import ConversationStateImagePart
 from .conversation_state_text_part import ConversationStateTextPart, TextPartStatus
 from .conversation_state_tool_call_part import (
     ConversationBackgroundWork,
+    ConversationDeliverable,
     ConversationStateToolCallPart,
     ToolCallStatus,
 )
@@ -26,6 +27,7 @@ ConversationStatePart = (
 
 __all__ = [
     "ConversationBackgroundWork",
+    "ConversationDeliverable",
     "ConversationStateAgentMessagePart",
     "ConversationStateImagePart",
     "ConversationStateMessageSource",

@@ -1,5 +1,6 @@
 import { requestJson } from "@/lib/http/client";
 import type { TraceId } from "@/lib/logging/trace-id";
+import { fileExtension } from "@/lib/files/file-name";
 
 export type UploadedAttachment = {
   id: string;
@@ -31,14 +32,14 @@ function isSupportedImageContentType(contentType: string): boolean {
 export function isUnsupportedImageFile(file: Pick<File, "name" | "type">): boolean {
   const normalizedType = file.type.toLowerCase();
   if (normalizedType.startsWith("image/")) return !isSupportedImageContentType(normalizedType);
-  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  const extension = fileExtension(file.name)?.toLowerCase() ?? "";
   return UNSUPPORTED_IMAGE_EXTENSIONS.has(extension);
 }
 
 /** 判断文件是否可以作为视觉图片上传，MIME 优先，扩展名只作本地选择补充。 */
 export function isSupportedImageFile(file: Pick<File, "name" | "type">): boolean {
   if (isSupportedImageContentType(file.type)) return true;
-  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  const extension = fileExtension(file.name)?.toLowerCase() ?? "";
   return SUPPORTED_IMAGE_EXTENSIONS.has(extension) && !file.type;
 }
 

@@ -1,9 +1,12 @@
 """文件浏览契约：磁盘事实、分页、链接、分段编码、取消和监听生命周期。"""
 
 import asyncio
+import io
 import os
 import threading
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -50,6 +53,16 @@ def test_workspace_registered_with_case_variant_stays_readable(workspace_root, i
         assert [entry.name for entry in service.directory(1, "docs", None, 10).entries] == ["a.md"]
     finally:
         service.close()
+
+
+def test_link_cycle_written_in_another_case_is_caught_at_once(files, workspace_root):
+    """回归：链接环曾按解析后的路径字符串比较；macOS 上指向祖先的链接换个大小写写法，就多展开一层才被拦住。"""
+    (workspace_root / "docs").mkdir()
+    if not (workspace_root / "DOCS").exists():
+        pytest.skip("filesystem is case-sensitive")
+    (workspace_root / "docs" / "loop").symlink_to(workspace_root / "DOCS")
+    entries = {entry.name: entry for entry in files.directory(1, "docs", None, 10).entries}
+    assert (entries["loop"].kind, entries["loop"].hint) == ("unavailable", "目录链接形成循环")
 
 
 def test_directory_pagination_sort_and_version(files, workspace_root):
@@ -212,8 +225,14 @@ class _RecordingObserver:
     def __init__(self) -> None:
         self.handlers: dict[str, object] = {}
         self.schedules: list[str] = []
-        self.emitters: list[object] = []
         self.stopped = False
+        # 已退出的监听线程（按注册路径）：模拟根目录被删后 emitter 停止。
+        self.dead: set[str] = set()
+
+    @property
+    def emitters(self) -> list[SimpleNamespace]:
+        """每个注册一条监听线程（与 watchdog 一样以 ``watch`` 对应注册）。"""
+        return [SimpleNamespace(watch=watch, is_alive=lambda w=watch: w not in self.dead) for watch in self.handlers]
 
     def start(self) -> None:
         pass
@@ -280,7 +299,7 @@ async def test_watch_registers_each_workspace_once_and_releases_when_idle(
         watcher.unsubscribe(first)
         expanded = watcher.subscribe(1, ["docs/a.md", "missing/b.md"], loop)
         assert expanded.paths == {root, root / ".cosir", (workspace_root / "docs").resolve()}
-        assert observer.schedules == [str(root)] and expanded.polling is False
+        assert observer.schedules == [str(root)] and watcher.polling(expanded) is False
 
         watcher.unsubscribe(expanded)
         clock.now += IDLE_RELEASE_SECONDS - 1
@@ -477,18 +496,22 @@ async def test_watch_degrades_when_emitter_dies_and_releases(files, monkeypatch)
     from app.service.workspace_files import file_watch
 
     class DeadEmitter:
+        def __init__(self, watch):
+            self.watch = watch
+
         def is_alive(self):
             return False
 
     class FailedObserver:
         def __init__(self):
-            self.emitters = [DeadEmitter()]
+            self.emitters = []
             self.stopped = False
 
         def start(self):
             pass
 
         def schedule(self, handler, path, recursive):
+            self.emitters.append(DeadEmitter(path))
             return path
 
         def unschedule(self, path):
@@ -504,10 +527,33 @@ async def test_watch_degrades_when_emitter_dies_and_releases(files, monkeypatch)
     monkeypatch.setattr(file_watch, "Observer", lambda: observer)
     watcher = WorkspaceFileWatcher()
     sub = watcher.subscribe(1, [""], asyncio.get_running_loop())
-    assert watcher.check_health(sub)
+    assert watcher.polling(sub)
     watcher.close()
     assert observer.stopped
     assert watcher._observer is None
+
+
+@pytest.mark.asyncio
+async def test_a_dead_watch_only_degrades_its_own_workspace(
+    files, workspace_root, isolated_storage, recording_observer
+):
+    """回归：一个工作区的监听线程退出（根目录被删时 FSEvents 实测如此），曾把所有工作区的订阅都判成轮询、且永不恢复。"""
+    other_root = workspace_root.parent / "other"
+    other_root.mkdir()
+    other_id = get_workspace_crud().create("other", str(other_root)).id
+    watcher = WorkspaceFileWatcher()
+    loop = asyncio.get_running_loop()
+    try:
+        healthy = watcher.subscribe(1, [""], loop)
+        broken = watcher.subscribe(other_id, [""], loop)
+        assert not watcher.polling(healthy) and not watcher.polling(broken)
+        recording_observer[0].dead.add(str(other_root.resolve()))
+        assert watcher.polling(broken)
+        assert not watcher.polling(healthy)
+        # 新来的订阅读的是同一个现场事实：坏掉的工作区一开始就是轮询。
+        assert watcher.polling(watcher.subscribe(other_id, [""], loop))
+    finally:
+        watcher.close()
 
 
 @pytest.mark.parametrize("encoding", ["utf-8", "utf-16-le", "utf-16-be", "gb18030"])
@@ -588,3 +634,207 @@ def test_image_info_reports_original_size_or_none(files, workspace_root, monkeyp
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 50)
     bomb = files.info(1, "picture.png")
     assert (bomb.kind, bomb.width, bomb.height) == ("image", None, None)
+
+
+def test_tiff_is_served_as_png_and_media_with_its_table_type(files, workspace_root):
+    """TIFF 内核显示不了，资源接口整张转成 PNG（16 位按取值范围拉伸，不截断发白）；音视频按后缀表给 Content-Type，
+    带分段读取，播放器拖动进度靠它。"""
+    from PIL import Image
+
+    scan = Image.new("I;16", (8, 4))
+    scan.putpixel((0, 0), 1008)
+    scan.save(workspace_root / "scan.tif")
+    wav = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 40
+    (workspace_root / "tone.wav").write_bytes(wav)
+    app.dependency_overrides[get_workspace_files_service] = lambda: files
+    try:
+        client = TestClient(app)
+        url = "/workspaces/1/files/resource"
+        info = files.info(1, "scan.tif")
+        assert (info.kind, info.mime, info.width, info.height) == ("image", "image/tiff", 8, 4)
+        image = client.get(url, params={"path": "scan.tif", "version": info.version})
+        assert image.headers["content-type"] == "image/png"
+        with Image.open(io.BytesIO(image.content)) as png:
+            assert png.mode == "L"
+            assert png.getextrema() == (0, 255)
+
+        audio = files.info(1, "tone.wav")
+        assert (audio.kind, audio.mime) == ("audio", "audio/wav")
+        params = {"path": "tone.wav", "version": audio.version}
+        whole = client.get(url, params=params)
+        assert whole.headers["content-type"] == "audio/wav"
+        assert whole.headers["x-content-type-options"] == "nosniff"
+        part = client.get(url, params=params, headers={"Range": "bytes=0-3"})
+        assert (part.status_code, part.content) == (206, b"RIFF")
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_broken_tiff_is_an_unviewable_image_not_a_server_error(files, workspace_root):
+    """像素数据坏了的 TIFF：信息照常返回、宽高为空；资源请求得到明确的读取错误而不是 500。"""
+    (workspace_root / "broken.tif").write_bytes(b"II*\x00" + b"\xff" * 64)
+    app.dependency_overrides[get_workspace_files_service] = lambda: files
+    try:
+        client = TestClient(app)
+        info = files.info(1, "broken.tif")
+        assert (info.kind, info.width) == ("image", None)
+        response = client.get(
+            "/workspaces/1/files/resource", params={"path": "broken.tif", "version": info.version}
+        )
+        # 与「图片内容无法识别」同一映射；前端在请求资源前就按宽高为空判为无法预览。
+        assert response.status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_deliverable_previews_cover_the_tile_and_fit_the_card(files, workspace_root):
+    """交付物缩略图只有两种：方块铺满 240×192（长图按短边缩，铺进方块不发糊），大图卡装进 720×480；
+    小图不放大、原样返回；动图原样返回保住动画；未知取值与非位图是调用写错。"""
+    from PIL import Image
+
+    Image.new("RGB", (1000, 4000), "red").save(workspace_root / "long.png")
+    Image.new("RGB", (4000, 1000), "blue").save(workspace_root / "wide.png")
+    Image.new("RGB", (200, 150), "green").save(workspace_root / "small.png")
+    frames = [Image.new("RGB", (800, 800), color) for color in ("red", "blue")]
+    frames[0].save(workspace_root / "anim.gif", save_all=True, append_images=frames[1:])
+    (workspace_root / "doc.pdf").write_bytes(b"%PDF-1.7\n" + b"x" * 10)
+    app.dependency_overrides[get_workspace_files_service] = lambda: files
+    try:
+        client = TestClient(app)
+        url = "/workspaces/1/files/resource"
+
+        def fetch(path: str, preview: str):
+            params = {"path": path, "version": files.info(1, path).version, "preview": preview}
+            return client.get(url, params=params)
+
+        def size(response) -> tuple[int, int]:
+            with Image.open(io.BytesIO(response.content)) as image:
+                return image.size
+
+        tile = fetch("long.png", "tile")
+        assert size(tile) == (240, 960)
+        assert tile.headers["Cache-Control"] == "private, max-age=31536000, immutable"
+        assert size(fetch("wide.png", "tile")) == (768, 192)
+        assert size(fetch("wide.png", "card")) == (720, 180)
+        assert size(fetch("long.png", "card")) == (120, 480)
+        for preview in ("tile", "card"):
+            assert (
+                fetch("small.png", preview).content == (workspace_root / "small.png").read_bytes()
+            )
+            assert fetch("anim.gif", preview).content == (workspace_root / "anim.gif").read_bytes()
+        assert fetch("small.png", "huge").status_code == 422
+        assert fetch("doc.pdf", "tile").status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_previews_keep_exif_orientation(files, workspace_root):
+    """竖拍照片（EXIF 方向 6）缩略后仍是竖的：先按方向算目标尺寸再降采样解码。"""
+    from PIL import Image
+
+    photo = Image.new("RGB", (1600, 800), "orange")
+    exif = photo.getexif()
+    exif[0x0112] = 6
+    photo.save(workspace_root / "portrait.jpg", exif=exif)
+    app.dependency_overrides[get_workspace_files_service] = lambda: files
+    try:
+        client = TestClient(app)
+        params = {
+            "path": "portrait.jpg",
+            "version": files.info(1, "portrait.jpg").version,
+            "preview": "card",
+        }
+        response = client.get("/workspaces/1/files/resource", params=params)
+        with Image.open(io.BytesIO(response.content)) as image:
+            assert image.size == (240, 480)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _dispatch_while_holding_watcher_lock(watcher, workspace_id, path, action):
+    """在持 ``watcher._lock`` 的线程里，等 watchdog 分发线程（真实观察器、持它自己的锁）进入 ``changed`` 后再做
+    ``action``——生产里注册、撤销、停止都是在持锁时调观察器方法。返回该线程是否在时限内完成。"""
+    from watchdog.events import FileModifiedEvent
+
+    entered = threading.Event()
+    original = watcher.changed
+
+    def changed(workspace, event):
+        entered.set()
+        original(workspace, event)
+
+    watcher.changed = changed
+    done = threading.Event()
+
+    def holder():
+        with watcher._lock:
+            watch = watcher._registrations[workspace_id].watch
+            # 合成事件经观察器自己的事件队列走真实的分发线程，不依赖 FSEvents 的投递时延。
+            watcher._observer.event_queue.put((FileModifiedEvent(str(path)), watch))
+            assert entered.wait(5)
+            time.sleep(0.1)
+            action()
+        done.set()
+
+    threading.Thread(target=holder, daemon=True).start()
+    return done.wait(5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["register", "release"])
+async def test_watch_callback_never_waits_for_the_watcher_lock(
+    files, workspace_root, tmp_path, action
+):
+    """回归：分发线程持观察器锁调回调，我们持 watcher._lock 调 schedule / unschedule / stop。回调若拿锁，两个
+    线程互等、永久卡死（曾在自然时序下 15 次循环内复现）。"""
+    other = tmp_path / "other"
+    other.mkdir()
+    get_workspace_crud().create("other", str(other))
+    watcher = WorkspaceFileWatcher()
+    loop = asyncio.get_running_loop()
+    assert not watcher.polling(watcher.subscribe(1, [], loop))
+
+    def run() -> None:
+        if action == "register":
+            watcher.subscribe(2, [], loop)  # 第二个工作区首次订阅 → schedule
+        else:
+            watcher._release(1)  # 撤销最后一个注册 → unschedule + stop
+
+    finished = await asyncio.to_thread(
+        _dispatch_while_holding_watcher_lock, watcher, 1, workspace_root / "a.txt", run
+    )
+    # 卡死时锁永远不会放开，收尾的 close() 也会跟着卡住：只有完成了才收尾，失败时让测试立即报告。
+    assert finished, "持 watcher._lock 的线程与 watchdog 分发线程互等"
+    watcher.close()
+
+
+@pytest.mark.asyncio
+async def test_idle_release_does_not_drop_a_subscription_that_arrives_meanwhile(
+    files, recording_observer
+):
+    """回归：空闲释放选出工作区后若先放锁再撤销，这期间到来的订阅会随旧注册一起被撤掉、静默失去原生监听。"""
+    from app.service.workspace_files.file_watch import IDLE_RELEASE_SECONDS
+
+    clock = _Clock()
+    watcher = WorkspaceFileWatcher(clock)
+    loop = asyncio.get_running_loop()
+    watcher.unsubscribe(watcher.subscribe(1, [], loop))
+    clock.now += IDLE_RELEASE_SECONDS
+    arrived: list = []
+    subscriber = threading.Thread(target=lambda: arrived.append(watcher.subscribe(1, [], loop)))
+    original = watcher._release
+
+    def release(workspace_id):
+        # 撤销前让另一个线程来订阅，给它充足的时间。
+        subscriber.start()
+        subscriber.join(0.3)
+        original(workspace_id)
+
+    watcher._release = release
+    await asyncio.to_thread(watcher.release_idle)
+    watcher._release = original
+    await asyncio.to_thread(subscriber.join, 5)
+    assert len(arrived) == 1
+    assert not watcher.polling(arrived[0])
+    assert 1 in watcher._registrations, "新订阅到来后工作区的原生监听被撤掉了"
+    watcher.close()

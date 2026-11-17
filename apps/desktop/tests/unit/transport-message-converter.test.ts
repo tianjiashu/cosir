@@ -204,25 +204,20 @@ describe("assistant transport converter", () => {
     const pending = toToolCallPart(tool("pending"));
     const running = toToolCallPart(tool("running"));
     const completed = toToolCallPart(tool("completed", { display_data: { kind: "terminal-result" } }));
-    const failed = toToolCallPart(tool("failed", { error: "权限不足", display_data: { status_hint: "权限不足" }, errorCode: "DENIED" }));
+    const failed = toToolCallPart(tool("failed", { error: "权限不足", display_data: { status_hint: "权限不足" } }));
     // 重启收尾的失败只带后端写入的 part.error，没有 status_hint，前端不得改写。
     const settled = toToolCallPart(tool("failed", { error: "执行异常" }));
     const cancelled = toToolCallPart(tool("cancelled"));
-    const delegation = toToolCallPart(tool("running", {
-      toolName: "delegate_task",
-      child_session_id: 22,
-    }));
 
     expect(pending).toMatchObject({ type: "tool-call", argsText: '{"command":"npm test"}', artifact: {presentation: "activity",  backendStatus: "pending" } });
     expect(running).toMatchObject({ artifact: {presentation: "activity",  backendStatus: "running" } });
     expect(completed).toMatchObject({ isError: false, artifact: {presentation: "activity",  backendStatus: "completed", display_data: { kind: "terminal-result" } } });
-    expect(failed).toMatchObject({ isError: true, artifact: {presentation: "activity",  backendStatus: "failed", errorCode: "DENIED" } });
+    expect(failed).toMatchObject({ isError: true, artifact: {presentation: "activity",  backendStatus: "failed", error: "权限不足" } });
     expect(failed).toMatchObject({ artifact: { error: "权限不足" } });
     expect(settled).toMatchObject({ artifact: { error: "执行异常" } });
     expect(failed).toMatchObject({ result: { kind: "tool-terminal", status: "failed" } });
     expect(cancelled).toMatchObject({ isError: false, artifact: {presentation: "activity",  backendStatus: "cancelled", error: "已取消" } });
     expect(cancelled).toMatchObject({ result: { kind: "tool-terminal", status: "cancelled" } });
-    expect(delegation).toMatchObject({ artifact: { childSessionId: 22 } });
   });
 
   // 目的：等待用户与展示数据原样进 artifact，调用行只读这里；参数留在 assistant-ui 的 args 上，标题由前端目录算。

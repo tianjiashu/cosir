@@ -47,6 +47,7 @@ from app.core.tool.execute.tool_terminal_projection import (
     terminal_status,
 )
 from app.core.tool.schemas import (
+    AwaitMessages,
     ToolCall,
     ToolDefinition,
     ToolExecutionContext,
@@ -56,6 +57,7 @@ from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
+from app.models.message_metadata import ToolMessageMetadata
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.tool_handler.read_file import ReadFileTool
 from tests.runtime_context_stub import runtime_stub
@@ -225,10 +227,10 @@ def test_terminal_event_payload_matches_contract() -> None:
         "call-x",
     )
     assert event.status == "failed"
-    assert event.error == "读取失败"
-    assert event.display_data == {"status_hint": "读取失败", "extra": 1}
+    assert event.result.error == "读取失败"
+    assert event.result.display_data == {"status_hint": "读取失败", "extra": 1}
     # 深拷贝隔离：事件不得与 observation 共享同一 dict 对象。
-    assert event.display_data is not observation.display_data
+    assert event.result.display_data is not observation.display_data
 
 
 def test_terminal_event_display_data_is_deep_copied() -> None:
@@ -243,7 +245,7 @@ def test_terminal_event_display_data_is_deep_copied() -> None:
         tool_call_id="call-1",
     )
 
-    event.display_data["nested"]["k"].append(999)
+    event.result.display_data["nested"]["k"].append(999)
     assert source["nested"]["k"] == [1, 2], "终态事件与源 display_data 共享了嵌套结构"
 
 
@@ -265,8 +267,8 @@ def test_terminal_event_success_and_cancelled(
     )
 
     assert event.status == expected_status
-    assert event.error == expected_error
-    assert event.display_data == {"kind": "read-file-meta"}
+    assert event.result.error == expected_error
+    assert event.result.display_data == {"kind": "read-file-meta"}
 
 
 def test_terminal_event_keeps_status_when_display_data_is_not_a_mapping(
@@ -290,9 +292,9 @@ def test_terminal_event_keeps_status_when_display_data_is_not_a_mapping(
         event = terminal_event(observation, session_id=1, run_id=2, step_id="s", tool_call_id="call-1")
 
     assert event.status == "failed"
-    assert event.display_data is None, "不可用展示数据必须跳过展示字段更新，而非伪造载荷"
+    assert event.result.display_data is None, "不可用展示数据必须跳过展示字段更新，而非伪造载荷"
     # error 短提示仍按无效 display_data 走失败兜底。
-    assert event.error == "执行失败"
+    assert event.result.error == "执行失败"
     dropped = _dropped_records(caplog)
     assert len(dropped) == 1
     assert dropped[0].data["display_data_type"] == "list"
@@ -321,7 +323,7 @@ def test_terminal_event_keeps_status_when_deepcopy_fails(
         event = terminal_event(observation, session_id=1, run_id=2, step_id="s", tool_call_id="call-1")
 
     assert event.status == "failed"
-    assert event.display_data is None
+    assert event.result.display_data is None
     assert _dropped_records(caplog), "深拷贝失败未留痕"
 
 
@@ -381,7 +383,7 @@ def _seed_run(owner: _MemorySnapshotOwner, session_id: int, run_id: int, call_id
             session_id=session_id,
             run_id=run_id,
             tool_call_id=call_id,
-            status="running",
+            result=ToolMessageMetadata(status="running"),
         )
     )
 
@@ -407,8 +409,7 @@ def test_double_projection_cancel_then_settle_is_stable() -> None:
             session_id=1,
             run_id=9,
             tool_call_id="call-1",
-            status="cancelled",
-            error="已取消",
+            result=ToolMessageMetadata(status="cancelled", error="已取消"),
         )
     )
     first = copy.deepcopy(_part(owner, 9, "call-1"))
@@ -417,15 +418,13 @@ def test_double_projection_cancel_then_settle_is_stable() -> None:
             session_id=1,
             run_id=9,
             tool_call_id="call-1",
-            status="cancelled",
-            error="已取消",
+            result=ToolMessageMetadata(status="cancelled", error="已取消"),
         )
     )
     second = copy.deepcopy(_part(owner, 9, "call-1"))
 
     assert first["status"] == second["status"] == "cancelled"
     assert first["error"] == second["error"] == "已取消"
-    assert first["isError"] == second["isError"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -514,9 +513,9 @@ def test_success_emits_running_then_completed(
     running, terminal = recorder.events
     # running 展示准入后的最终参数（含 schema 默认值）。
     assert (running.session_id, running.run_id, running.step_id) == (1, 2, "step-1")
-    assert terminal.error is None
+    assert terminal.result.error is None
     assert terminal.step_id == "step-1"
-    assert isinstance(terminal.display_data, dict) and terminal.display_data, "成功终态丢了展示数据"
+    assert isinstance(terminal.result.display_data, dict) and terminal.result.display_data, "成功终态丢了展示数据"
 
 
 def test_running_is_emitted_only_after_admission(
@@ -576,7 +575,7 @@ def test_unknown_tool_emits_failed_without_running(
     assert observation.status == "error"
     assert recorder.statuses("call-unknown") == ["failed"]
     # 未知工具无工具名映射 → 执行失败。
-    assert recorder.events[0].error == "执行失败"
+    assert recorder.events[0].result.error == "执行失败"
 
 
 def test_profile_denied_tool_emits_failed_without_running(
@@ -602,7 +601,7 @@ def test_profile_denied_tool_emits_failed_without_running(
 
     assert observation.status == "error"
     assert recorder.statuses("call-denied") == ["failed"]
-    assert recorder.events[0].error == "读取失败"
+    assert recorder.events[0].result.error == "读取失败"
 
 
 def test_invalid_arguments_emit_failed_without_running(
@@ -726,7 +725,7 @@ def test_malformed_display_data_still_emits_failed_terminal(
 
     assert observation.status == "error"
     assert recorder.statuses("call-bad-display") == ["running", "failed"]
-    assert recorder.events[-1].display_data is None
+    assert recorder.events[-1].result.display_data is None
 
 
 def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
@@ -811,7 +810,7 @@ def test_executor_exception_becomes_error_observation_and_failed_terminal(
     assert recorder.statuses("call-boom") == ["failed"]
     event = recorder.events[0]
     assert event.tool_call_id == "call-boom"
-    assert event.error == "读取失败"
+    assert event.result.error == "读取失败"
     assert "tool_call_internal_error" in {r.message for r in caplog.records}
 
 
@@ -897,7 +896,7 @@ def _suspending_probe_handler(
         content="preview",
         tool_call_id=execution_context.tool_call_id,
         display_data={"kind": "probe"},
-        suspend=True,
+        waiting=AwaitMessages(),
     )
 
 
@@ -941,7 +940,7 @@ def test_projection_happens_in_parent_for_process_isolated_tool(
     # 恰发出一次 running 与一次与该观察同值的终态。
     assert recorder.statuses("call-proc") == ["running", terminal_status(observation.status)]
     if observation.status == "success":
-        assert recorder.events[-1].display_data == {"kind": "probe"}
+        assert recorder.events[-1].result.display_data == {"kind": "probe"}
         # handler 在独立子进程中运行（PID 与父进程不同）。
         assert f"pid={os.getpid()}" not in (observation.content or "")
         assert "probe body pid=" in (observation.content or "")
@@ -997,7 +996,10 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            session_id=1, run_id=9, tool_call_id="call-t", status="running"
+            session_id=1,
+            run_id=9,
+            tool_call_id="call-t",
+            result=ToolMessageMetadata(status="running"),
         )
     )
     projector.process(
@@ -1039,13 +1041,12 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
             session_id=1,
             run_id=9,
             tool_call_id="call-t",
-            status="completed",
-            display_data={
-                "kind": "terminal-result",
-                "output": "authoritative final output",
-                "truncated": False,
-                "exit_code": 0,
-            },
+            result=ToolMessageMetadata(status="completed", display_data={
+                    "kind": "terminal-result",
+                    "output": "authoritative final output",
+                    "truncated": False,
+                    "exit_code": 0,
+                }),
         )
     )
 
@@ -1176,7 +1177,6 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
                     "toolName": "read_file",
                     "status": "running",
                     "error": None,
-                    "isError": False,
                 }
             ],
             "turn": 5, "inherited": False,

@@ -15,6 +15,13 @@ export type DirectoryPage = {
   hidden_count: number;
   next_cursor: string | null;
 };
+/**
+ * 文件类型词表：与后端 `models/file_kind.py` 一一对应（判定只在后端 `file_classification`），文件面板与
+ * 交付记录共用；快照校验也从这里取，前端只此一份。
+ */
+export const FILE_KINDS = ["text", "markdown", "table", "mermaid", "image", "svg", "pdf", "audio", "video", "binary"] as const;
+export type FileKind = (typeof FILE_KINDS)[number];
+
 export type FileInfo = {
   path: string;
   name: string;
@@ -22,13 +29,23 @@ export type FileInfo = {
   size: number;
   modified_ns: number;
   version: string;
-  kind: "text" | "markdown" | "image" | "svg" | "pdf" | "binary";
+  kind: FileKind;
   mime: string;
   encoding: string | null;
   /** 位图的原图尺寸（后端只读文件头）；非位图为 null，位图读不出（过大、损坏）也为 null。 */
   width: number | null;
   height: number | null;
+  /** 操作系统能否出缩略图、快速查看（后端按最终类型与后缀表判定）；只对它为真的文件向宿主要缩略图。 */
+  system_preview: boolean;
 };
+
+/**
+ * 位图读不出：后端只读文件头取宽高，像素超限或文件损坏时宽高为空（`image_size`）。文件面板、Markdown 内嵌图与交付物
+ * 方块都在请求资源前据此判定「无法预览」，不发一个注定失败的资源请求；规则只在这里。
+ */
+export function isUnreadableImage(info: Pick<FileInfo, "kind" | "width">): boolean {
+  return info.kind === "image" && info.width === null;
+}
 export type TextPage = {
   text: string;
   offset: number;

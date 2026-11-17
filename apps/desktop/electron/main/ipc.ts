@@ -1,6 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
-import { BrowserWindow, dialog, ipcMain, nativeTheme, shell, type IpcMainInvokeEvent } from "electron";
+import { BrowserWindow, dialog, ipcMain, nativeTheme, type IpcMainInvokeEvent } from "electron";
 
 import type { BackendSupervisor } from "./backend/supervisor";
 import type { BrowserHost } from "./browser/browser-host";
@@ -8,6 +7,7 @@ import { tabContextOf } from "./browser/params";
 import { pageUrl } from "./browser/page-url";
 import { BROWSER_USER_WORDING, type BrowserErrorCode } from "./browser/errors";
 import { appendJsonLine, logDesktopEvent } from "./desktop-log";
+import { openExternally, parseExistingPath, parseThumbnailEdge, quickLook, revealFile, thumbnail } from "./files/file-actions";
 import { HostMethodError } from "./host-link/method-registry";
 import { HostUserError } from "./host-user-error";
 import { appLogDir } from "./paths";
@@ -65,14 +65,10 @@ export function registerHostIpc(supervisor: BackendSupervisor, browser: BrowserH
     parseDialogAnswer(answer),
   ));
   handle(HOST_CHANNEL.browserRevealDownload, (_event, downloadId) => browser.revealDownload(parseDownloadId(downloadId)));
-  handle(HOST_CHANNEL.filesReveal, (_event, absolutePath) => shell.showItemInFolder(parseRevealPath(absolutePath)));
-}
-
-/** 只显示、不打开：要求是存在的绝对路径（`showItemInFolder` 对不存在的路径什么也不做，用户会以为没反应）。 */
-function parseRevealPath(value: unknown): string {
-  if (typeof value !== "string" || value.length > 4096 || !path.isAbsolute(value)) throw new HostUserError("文件路径不合法");
-  if (!fs.existsSync(value)) throw new HostUserError("文件已不存在");
-  return value;
+  handle(HOST_CHANNEL.filesReveal, (_event, absolutePath) => revealFile(parseExistingPath(absolutePath)));
+  handle(HOST_CHANNEL.filesOpenExternally, (_event, absolutePath) => openExternally(parseExistingPath(absolutePath)));
+  handle(HOST_CHANNEL.filesQuickLook, (_event, absolutePath) => quickLook(parseExistingPath(absolutePath)));
+  handle(HOST_CHANNEL.filesThumbnail, (_event, absolutePath, edge) => thumbnail(parseExistingPath(absolutePath), parseThumbnailEdge(edge)));
 }
 
 /** 地址栏输入：与 Agent 打开同一条规则（`pageUrl`），被拒的浏览器错误码由 `failureMessage` 换成用户说法。 */

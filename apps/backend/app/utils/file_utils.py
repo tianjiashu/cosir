@@ -2,10 +2,6 @@
 
 单一职责：提供不依赖项目类型/模型的纯文件读写工具与文件相关常量。
 不负责：路径解析、权限判定、业务逻辑。
-
-模块级常量（如 ``IMAGE_EXTENSIONS``）属于跨层共享的公共契约事实，放在
-leaf 层可被 ``api`` / ``core`` / ``service`` 任意层无循环依赖地引用，避免
-在 ``run_ledger`` 与 ``vision_content_blocks`` 之间重复定义同一份扩展名集合。
 """
 
 from pathlib import Path

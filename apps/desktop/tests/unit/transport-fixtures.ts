@@ -1,6 +1,7 @@
 import { ToolCallIndex } from "@/lib/assistant/tools/tool-call-index";
 import type {
   TerminalSessionEntry,
+  TransportDeliverable,
   TransportActivity,
   TransportMessage,
   TransportMessagePart,
@@ -18,7 +19,7 @@ const EMPTY_LAUNCH: TransportRunLaunch = { modelConfigId: null, reasoningEffort:
 
 /** 单测共用的 Session 视角 snapshot 构造器：只填契约必填字段，调用方覆盖需要的部分。 */
 export function transportState(overrides: Partial<TransportState> = {}): TransportState {
-  return { title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [], ...overrides };
+  return { title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [], deliverables: [], ...overrides };
 }
 
 function textPart(text: string): TransportMessagePart {
@@ -118,4 +119,16 @@ export function indexedState(state: TransportState) {
   const index = new ToolCallIndex();
   index.replace(state.messages);
   return { ...state, toolCalls: index.snapshot };
+}
+
+/** 交付记录（wire 形状）：`key` 默认取绝对路径或网址，与后端的判等值同一来源。 */
+export function deliveredFile(workspacePath: string | null, overrides: Partial<Extract<TransportDeliverable, { type: "file" }>> = {}): TransportDeliverable {
+  const absolutePath = overrides.absolutePath ?? `/w/${workspacePath ?? "outside"}`;
+  return { type: "file", key: absolutePath, caption: null, workspacePath, absolutePath, kind: "text", size: 2048, width: null, height: null, ...overrides };
+}
+export function deliveredDirectory(workspacePath: string | null, absolutePath = `/w/${workspacePath}`): TransportDeliverable {
+  return { type: "directory", key: absolutePath, caption: null, workspacePath, absolutePath };
+}
+export function deliveredUrl(url: string, key = url): TransportDeliverable {
+  return { type: "url", key, caption: null, url };
 }

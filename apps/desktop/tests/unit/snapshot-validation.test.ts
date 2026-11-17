@@ -168,11 +168,13 @@ describe("Transport snapshot validation", () => {
     expect(() => parseTransportState(snapshot)).toThrow("messages[0].parts[0].status");
   });
 
-  it("accepts a positive child Run locator and rejects invalid locators", () => {
-    const part = {presentation: "standalone",  type: "tool-call", awaitingUser: false, toolCallId: "delegate-1", toolName: "delegate_task", status: "running", args: {}, child_session_id: 501 };
+  // 目的：子会话 id 只有展示数据一份；潜在缺陷：part 顶层再带一份，两处兜底读、各说各话。
+  it("子会话 id 只在展示数据里，part 顶层带它会被拒收", () => {
+    const part = {presentation: "standalone",  type: "tool-call", awaitingUser: false, toolCallId: "fork-1", toolName: "fork_session", status: "completed", args: {}, display_data: { kind: "fork-session-result", title: "前端", child_session_id: 501 } };
     const snapshot = withToolPart(part);
     expect(parseTransportState(snapshot)).toBe(snapshot);
-    expect(() => parseTransportState(withToolPart({ ...part, child_session_id: 0 }))).toThrow("child_session_id");
+    expect(() => parseTransportState(withToolPart({ ...part, display_data: { ...part.display_data, child_session_id: 0 } }))).toThrow("child_session_id");
+    expect(() => parseTransportState(withToolPart({ ...part, child_session_id: 501 }))).toThrow("已知字段");
   });
 
   it("接受后端 execute_terminal 流式输出的去重序号 terminal_output_seq", () => {
@@ -180,6 +182,22 @@ describe("Transport snapshot validation", () => {
     const snapshot = withToolPart(part);
     expect(parseTransportState(snapshot)).toBe(snapshot);
     expect(() => parseTransportState(withToolPart({ ...part, terminal_output_seq: -1 }))).toThrow("terminal_output_seq");
+  });
+
+  // 目的：交付记录是卡片的唯一来源，漂移的形状要在入口被拦下；潜在缺陷：多余或错类型字段一路传到胶囊里才崩。
+  it("工具 part 的 deliverables 逐项按类型校验字段", () => {
+    const part = { presentation: "quiet", type: "tool-call", awaitingUser: false, toolCallId: "p1", toolName: "present_deliverables", status: "completed", args: {} };
+    const file = { type: "file", key: "/w/a.md", caption: "说明", workspacePath: "a.md", absolutePath: "/w/a.md", kind: "markdown", size: 12, width: null, height: null };
+    const directory = { type: "directory", key: "/w/dist", caption: null, workspacePath: null, absolutePath: "/w/dist" };
+    const url = { type: "url", key: "http://localhost:5173/", caption: null, url: "http://localhost:5173" };
+    const ok = withToolPart({ ...part, deliverables: [file, directory, url] });
+    expect(parseTransportState(ok)).toBe(ok);
+    expect(() => parseTransportState(withToolPart({ ...part, deliverables: [{ ...file, extra: 1 }] }))).toThrow("deliverables[0]");
+    expect(() => parseTransportState(withToolPart({ ...part, deliverables: [{ ...file, kind: "spreadsheet" }] }))).toThrow("deliverables[0]");
+    expect(() => parseTransportState(withToolPart({ ...part, deliverables: [{ ...url, size: 1 }] }))).toThrow("deliverables[0]");
+    expect(() => parseTransportState(withToolPart({ ...part, deliverables: [{ ...file, width: 0, height: 10 }] }))).toThrow("deliverables[0].width");
+    expect(() => parseTransportState(withToolPart({ ...part, deliverables: [without(directory, "workspacePath")] }))).toThrow("deliverables[0]");
+    expect(() => parseTransportState(withToolPart({ ...part, deliverables: {} }))).toThrow("deliverables");
   });
 
   it("accepts the minimal child session display contract", () => {

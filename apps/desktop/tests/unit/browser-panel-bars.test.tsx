@@ -42,11 +42,11 @@ describe("DownloadBar", () => {
     const progressing = renderToStaticMarkup(
       <DownloadBar host={host} downloads={[download("a", { state: "progressing", receivedBytes: 512 * 1024, totalBytes: 2 * 1024 * 1024 })]} />,
     );
-    expect(progressing).toContain("512.0 KB / 2.0 MB · 25%");
+    expect(progressing).toContain("512 KB / 2 MB · 25%");
     expect(progressing).not.toContain("在文件夹中显示");
 
     const unknownTotal = renderToStaticMarkup(<DownloadBar host={host} downloads={[download("a", { state: "progressing", receivedBytes: 2048, totalBytes: 0 })]} />);
-    expect(unknownTotal).toContain("2.0 KB");
+    expect(unknownTotal).toContain("2 KB");
     expect(unknownTotal).not.toContain("%");
 
     expect(renderToStaticMarkup(<DownloadBar host={host} downloads={[download("a")]} />)).toContain("在文件夹中显示 a.zip");

@@ -1,5 +1,6 @@
 """Playwright 的真实文件服务夹具：所有文件都放系统临时目录，不接生产数据库。"""
 
+import os
 import sys
 import tempfile
 from contextlib import asynccontextmanager
@@ -131,9 +132,51 @@ def link_fixture():
     return {"ready": True}
 
 
+@app.post("/__test__/files/preview-fixture")
+def preview_fixture():
+    """按需在 previews/ 下放各类预览样本（表格、Mermaid、音视频、TIFF、几种损坏文件与看不了的文件）。
+
+    不放进启动时的工作区：已有用例与视觉基线截到目录树，多一个目录就要重录。音视频样本是仓库里的几 KB 文件
+    （无头 Chromium 的 MediaRecorder 录制；Ogg 封装它录不出来，所以没有 .ogg 样本），WAV 由标准库现写。
+    """
+    import shutil
+    import struct
+    import wave
+
+    root = app.state.fixture_root / "previews"
+    root.mkdir(exist_ok=True)
+    rows = ["城市,人口,备注", '杭州,"12,200,000","多\n行备注"', "上海,24870000,", "成都,21190000,西南"]
+    rows += [f"城市{index},{index * 1000},样本" for index in range(1, 301)]
+    (root / "cities.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    (root / "flow.mmd").write_text("graph TD\n  Start-->Done\n", encoding="utf-8")
+    (root / "broken.mmd").write_text("graph TD\n  A-->>>\n", encoding="utf-8")
+    with wave.open(str(root / "tone.wav"), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(8000)
+        audio.writeframes(b"".join(struct.pack("<h", (i % 40 - 20) * 800) for i in range(8000)))
+    media = Path(__file__).resolve().parent / "media"
+    shutil.copy(media / "tone.webm", root / "tone.webm")
+    shutil.copy(media / "clip.webm", root / "clip.webm")
+    (root / "fake.mp4").write_bytes(b"not a video at all" * 64)
+    scan = Image.new("I;16", (64, 32))
+    for x in range(64):
+        for y in range(32):
+            scan.putpixel((x, y), x * 900)
+    scan.save(root / "scan.tif")
+    (root / "broken.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+    (root / "broken.pdf").write_bytes(b"%PDF-1.7\n" + b"garbage " * 64)
+    (root / "notebook.ipynb").write_text('{\n "cells": [],\n "nbformat": 4\n}\n', encoding="utf-8")
+    # 内容不是文本：docx 后缀在系统可预览表里，zip 不在；两者都落到「看不了的文件」，说法与出口不同。
+    (root / "report.docx").write_bytes(b"PK\x03\x04" + b"\x00" * 64)
+    (root / "archive.zip").write_bytes(b"PK\x03\x04" + b"\x00" * 64)
+    return {"ready": True}
+
+
 @app.get("/__test__/files/health")
 def health():
-    return {"status": "ready", "workspace_id": app.state.fixture_workspace_id}
+    # pid 让拉起方确认回应的是自己刚起的进程：端口被遗留的夹具占着时，新进程绑不上端口，旧进程却照样回应。
+    return {"status": "ready", "workspace_id": app.state.fixture_workspace_id, "pid": os.getpid()}
 
 
 app.router.lifespan_context = fixture_lifespan

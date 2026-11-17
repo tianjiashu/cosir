@@ -1,0 +1,25 @@
+{
+  "_说明": "交付网址的样本表：后端 DeliveredUrl 的判定须与它一致（test_reply_presentation_tools.py），前端须能用 new URL 解析每个 accepted 样本（deliverable-urls.test.ts）。改规则时两边一起改这里。",
+  "accepted": [
+    "http://localhost:5173",
+    "https://example.com/a b",
+    "https://中文.com/x",
+    "http://[::1]:8080/",
+    "https://Example.COM:443/docs#intro",
+    "http://192.168.1.5:3000/a?b=c"
+  ],
+  "rejected": [
+    "https://exa mple.com/x",
+    "https://exa<mple.com",
+    "https://exa%20mple.com",
+    "https://exa|mple.com",
+    "http://[::1",
+    "http://a:99999",
+    "http://a:abc",
+    "http://localhost:$PORT",
+    "https://",
+    "https://user:token@example.com/",
+    "ftp://example.com/x",
+    "mailto:someone@example.com"
+  ]
+}

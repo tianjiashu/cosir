@@ -22,7 +22,7 @@ from app.core.tool.schemas.tool_names import (
     TOOL_FORK_SESSION,
     TOOL_MCP,
     TOOL_OFFER_NEXT_STEP,
-    TOOL_PRESENT_FILES,
+    TOOL_PRESENT_DELIVERABLES,
     TOOL_PROPOSE_AGENT_CONFIGURATION,
     TOOL_READ_FILE,
     TOOL_READ_IMAGE,
@@ -40,7 +40,13 @@ from app.core.tool.schemas.tool_names import (
     TOOL_WRITE_FILE,
     ToolName,
 )
-from app.core.tool.schemas.tool_observation import ToolObservation
+from app.core.tool.schemas.tool_observation import (
+    AwaitDecision,
+    AwaitMessages,
+    RunInBackground,
+    ToolObservation,
+    Waiting,
+)
 
 __all__ = [
     "ALL_TOOL_NAMES",
@@ -61,7 +67,7 @@ __all__ = [
     "TOOL_FORK_SESSION",
     "TOOL_MCP",
     "TOOL_OFFER_NEXT_STEP",
-    "TOOL_PRESENT_FILES",
+    "TOOL_PRESENT_DELIVERABLES",
     "TOOL_PROPOSE_AGENT_CONFIGURATION",
     "TOOL_READ_FILE",
     "TOOL_READ_IMAGE",
@@ -77,9 +83,13 @@ __all__ = [
     "TOOL_WEB_FETCH",
     "TOOL_WEB_SEARCH",
     "TOOL_WRITE_FILE",
+    "AwaitDecision",
+    "AwaitMessages",
+    "RunInBackground",
     "ToolCall",
     "ToolDefinition",
     "ToolExecutionContext",
     "ToolName",
     "ToolObservation",
+    "Waiting",
 ]

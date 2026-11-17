@@ -31,6 +31,7 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_EXECUTE_TERMINAL,
+    RunInBackground,
     ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
@@ -578,7 +579,7 @@ class ExecuteTerminalTool(HandlerBase):
             f"({'no timeout' if timeout_s is None else f'timeout {timeout_s:g}s'}); keep working",
             "detached": "the user moved this command to the background; keep working",
         }[reason]
-        observation = tool_success(
+        return tool_success(
             tool_name=self.name,
             content=(
                 f"{situation}. terminal_id: {terminal_id}. Read its output with terminal_read "
@@ -587,9 +588,8 @@ class ExecuteTerminalTool(HandlerBase):
                 "to pause for it)."
             ),
             display_data=build_terminal_started_display_data(command=command, workdir=cwd),
+            waiting=RunInBackground(work),
         )
-        observation.background = work
-        return observation
 
     def to_definition(self) -> ToolDefinition:
         """把工具实例转换成当前注册系统使用的 ``ToolDefinition``。

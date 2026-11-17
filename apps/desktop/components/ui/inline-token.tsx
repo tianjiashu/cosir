@@ -1,5 +1,6 @@
 import { useId, type ReactNode } from "react";
 import { XIcon } from "lucide-react";
+import { MiddleTruncate } from "@/components/ui/middle-truncate";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 type InlineTokenProps = {
@@ -19,15 +20,13 @@ export function InlineToken({
   tone = "neutral", open, remove,
 }: InlineTokenProps) {
   const descriptionId = useId();
-  const extensionAt = preserveExtension ? name.lastIndexOf(".") : -1;
-  const hasExtension = extensionAt > 0 && extensionAt < name.length - 1;
   const label = (
     <>
       <span className="cosir-inline-token-icon" aria-hidden="true">{icon}</span>
-      <span className="cosir-inline-token-name">
-        <span className="cosir-inline-token-stem">{hasExtension ? name.slice(0, extensionAt) : name}</span>
-        {hasExtension && <span className="cosir-inline-token-extension">{name.slice(extensionAt)}</span>}
-      </span>
+      {/* 文件名与交付物胶囊同一条截断规则（`MiddleTruncate`）；目录没有扩展名可保，整段从末尾截断。 */}
+      {preserveExtension
+        ? <MiddleTruncate text={name} className="cosir-inline-token-name" />
+        : <span className="cosir-inline-token-name"><span className="truncate">{name}</span></span>}
       {detail && <span className="cosir-inline-token-detail">{detail}</span>}
     </>
   );

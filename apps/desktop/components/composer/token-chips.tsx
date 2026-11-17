@@ -1,6 +1,7 @@
 import { PuzzleIcon } from "lucide-react";
 
-import { basename, isDirectoryPath } from "@/lib/assistant/capsules";
+import { isDirectoryPath } from "@/lib/assistant/capsules";
+import { baseName } from "@/lib/files/file-name";
 import { InlineToken } from "@/components/ui/inline-token";
 import { WorkspaceFileIcon } from "@/components/workspace-files/file-icon";
 
@@ -33,7 +34,7 @@ export function FileChip({ path, remove, disabled = false }: {
   disabled?: boolean;
 }) {
   const directory = isDirectoryPath(path);
-  const name = `${basename(path)}${directory ? "/" : ""}`;
+  const name = `${baseName(path)}${directory ? "/" : ""}`;
   return (
     <InlineToken
       icon={<WorkspaceFileIcon name={name} folder={directory} />}

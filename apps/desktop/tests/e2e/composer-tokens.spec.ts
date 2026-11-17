@@ -73,7 +73,8 @@ for (const theme of ["light", "dark"]) {
       expect(metrics.tokens.every(token => token.height === 24 && token.fits)).toBe(true);
       expect(metrics.tokens.every(token => token.labelHeight <= 22)).toBe(true);
       expect(metrics.overflow).toBe(false);
-      await expect(input.locator(".cosir-inline-token-extension")).toHaveText([".md", ".tsx"]);
+      // 截断后结尾与扩展名仍可见（与交付物胶囊同一条规则，见 `MiddleTruncate`）。
+      await expect(input.locator('[data-slot="middle-truncate"] > span:last-child')).toHaveText(["tion.md", "tion.tsx"]);
       await expect(input.locator(".cosir-inline-token-detail")).toHaveText(" · L12–28");
       expect(await historyStyle()).toEqual(before);
       // 历史引用与输入框共用同一胶囊外观。

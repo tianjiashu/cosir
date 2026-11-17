@@ -10,7 +10,7 @@ from pydantic import Field
 
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.models.message_metadata import BackgroundWork
+from app.models.message_metadata import ToolMessageMetadata
 
 
 class ToolCallCreatedEvent(WorkflowEventEnvelope):
@@ -55,15 +55,17 @@ class ToolCallStatusChangedEvent(WorkflowEventEnvelope):
 
     时序：``running`` 只在调用通过准入、即将交给 handler 时发出；终态由两处发出——**执行即投影**
     （``run_tool_batch`` 在每个调用结束时发出，早于 ``ToolMessage`` 落 canonical context）与
-    **结算兜底**（``settle_observations``，在写 ``ToolMessage`` 之后）。取消不得早于执行层的强杀与输出排空：执行层在检出取消的瞬间只产出
-    观察与日志，不发状态事件（见 ``tool_terminal_projection`` 的时序说明）。两处对同一调用
+    **结算兜底**（``settle_observations``，在写 ``ToolMessage`` 之后）。取消不得早于执行层的强杀与
+    输出排空：执行层在检出取消的瞬间只产出观察与日志，不发状态事件（见 ``tool_terminal_projection`` 的时序说明）。两处对同一调用
     产生相同终态，由消费方按自迁移幂等吸收。
 
     Attributes:
         tool_call_id: 目标工具调用标识。
-        status: 迁移后的状态。
-        error: 面向展示的短错误提示；仅失败时非空，不能承载完整诊断。
-        display_data: 面向 UI 的结构化展示结果；不进入模型上下文。
+        result: 这次迁移后的结果行事实，与持久化的 metadata 同一个形状（``ToolMessageMetadata``）：
+            状态、短错误提示、展示数据、后台记录与交付记录作为一个整体传递，事件、落库与快照投影之间
+            不再逐个抄字段。只迁移状态的事件（开始执行、修补中断）只带 ``status``。投影按
+            「有才写」吸收：展示数据之外，后台记录与交付记录为空时 part 上已有的保留（见
+            ``project_tool_result``）。
 
     异常:
         pydantic.ValidationError: 标识为空、``status`` 取值非法，或出现未声明字段时抛出。
@@ -71,8 +73,8 @@ class ToolCallStatusChangedEvent(WorkflowEventEnvelope):
 
     type: Literal["tool_call_status_changed"] = "tool_call_status_changed"
     tool_call_id: str = Field(min_length=1)
-    status: ToolCallEventStatus
-    error: str | None = None
-    display_data: dict[str, object] | None = None
-    # 后台工作记录：占位写入与结算（并入、撤销、重启中断）时带上最新值；``None`` 时 part 上已有的保留。
-    background: BackgroundWork | None = None
+    result: ToolMessageMetadata
+
+    @property
+    def status(self) -> ToolCallEventStatus:
+        return self.result.status

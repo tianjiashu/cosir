@@ -291,7 +291,6 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
                         "toolName": "hitl_tool",
                         "status": "running",
                         "args": {},
-                        "isError": False,
                     }
                 ],
             }
@@ -301,7 +300,12 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
     base = ("messages", 0, "parts", 0)
     for status in ("pending", "completed"):
         mutations = plan_tool_call_status_changed(
-            ToolCallStatusChangedEvent(session_id=1, run_id=2, tool_call_id="c1", status=status),
+            ToolCallStatusChangedEvent(
+                session_id=1,
+                run_id=2,
+                tool_call_id="c1",
+                result=ToolMessageMetadata(status=status),
+            ),
             state,
         )
         assert {m.path: m.value for m in mutations}[(*base, "status")] == status
@@ -442,7 +446,7 @@ async def test_reply_decision_settles_the_placeholder_with_the_answer(
     [db] = context.update_sessions
     assert db is not None
     [event] = emitted
-    assert (event.status, event.display_data) == ("completed", metadata.display_data)
+    assert (event.status, event.result.display_data) == ("completed", metadata.display_data)
 
 
 @pytest.mark.usefixtures("isolated_storage")

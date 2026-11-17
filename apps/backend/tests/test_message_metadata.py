@@ -8,7 +8,7 @@ from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
 )
 from app.core.events import ToolCallStatusChangedEvent
-from app.models.message_metadata import ToolMessageMetadata, parse_message_metadata
+from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, parse_message_metadata
 from app.models.session_context import SessionContextRecord
 
 
@@ -166,9 +166,7 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
         session_id=1,
         run_id=1,
         tool_call_id="call-1",
-        status=metadata.status,
-        error=metadata.error,
-        display_data=metadata.display_data,
+        result=ToolMessageMetadata(status=metadata.status, error=metadata.error, display_data=metadata.display_data),
     )
     for mutation in plan_event(event, state, {}):
         initial[mutation.path[-1]] = mutation.value
@@ -197,11 +195,25 @@ def test_final_tool_metadata_uses_authoritative_terminal_output():
         session_id=1,
         run_id=1,
         tool_call_id="call-1",
-        status="completed",
-        display_data={"kind": "terminal-result", "output": "truncated"},
+        result=ToolMessageMetadata(status="completed", display_data={"kind": "terminal-result", "output": "truncated"}),
     )
     for mutation in plan_event(event, state, {}):
         part[mutation.path[-1]] = mutation.value
     assert part["status"] == "completed"
     assert part["display_data"]["output"] == "truncated"
-    assert event.display_data["output"] == "truncated"
+    assert event.result.display_data["output"] == "truncated"
+
+
+# 目的：结果行的更新规则全仓只此一处；潜在缺陷：只知道新状态的更新方（结算、作废）把卡片的展示数据与
+# 后台记录一并清掉，或者沿用了旧的状态与错误。
+def test_merged_onto_takes_new_status_and_keeps_previous_payload() -> None:
+    work = BackgroundWork(run_id=1, kind="terminal_command", label="build", started_at="t0")
+    previous = ToolMessageMetadata(
+        status="pending", error=None, display_data={"kind": "terminal-result"}, background=work
+    )
+
+    merged = ToolMessageMetadata(status="cancelled", error="已取消").merged_onto(previous)
+
+    assert merged == ToolMessageMetadata(
+        status="cancelled", error="已取消", display_data={"kind": "terminal-result"}, background=work
+    )

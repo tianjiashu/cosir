@@ -1,6 +1,7 @@
 import { currentActivity, type ActivityFeedback } from "./current-activity";
 import type { BackgroundTaskEntry } from "../contract";
 import { readFileChanges, type FileChange } from "../tools/file-changes";
+import { collectDeliverables, type DeliverablesCard } from "./deliverable-layout";
 import type { TransportActivity, TransportAgentMessagePart, TransportMessagePart, TransportOutcome, TransportTextPart, TransportToolCallPart } from "../contract";
 import { toolHeading, toolVerb } from "../tools/tool-catalog";
 import { toolResultSignal } from "../tools/tool-result-signals";
@@ -11,7 +12,7 @@ export function turnPhaseOf(activity: TransportActivity | null): TurnPhase {
   return activity?.status === "running" ? "running" : activity?.status === "suspended" ? "suspended" : "settled";
 }
 export const CHANGES_KIND = "file-changes";
-export const STANDALONE_ARTIFACT_KINDS = ["agent-configuration-draft", "deliverables"] as const;
+export const STANDALONE_ARTIFACT_KINDS = ["agent-configuration-draft"] as const;
 export const NEXT_STEP_KIND = "next-step";
 export type StandaloneArtifactKind = (typeof STANDALONE_ARTIFACT_KINDS)[number];
 /**
@@ -37,7 +38,7 @@ export type FileOperation = { toolCallId: string; change: FileChange };
 export type ChangedFile = { path: string; operations: FileOperation[] };
 export type ChangesCard = { kind: "changes"; files: ChangedFile[]; totals: { files: number; calls: number }; callIndexes: number[] };
 export type StandaloneArtifactCard = { kind: StandaloneArtifactKind; index: number; part: TransportToolCallPart };
-export type ArtifactCard = ChangesCard | StandaloneArtifactCard;
+export type ArtifactCard = ChangesCard | StandaloneArtifactCard | DeliverablesCard;
 export type AnswerItem = { index: number; part: TransportTextPart };
 export type TurnLayout = {
   /** 直接引用 canonical parts，供下一版复用未变区间；不反向还原 AUI content。 */
@@ -99,8 +100,8 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
   const hasFinalReply = outcome?.status === "completed" && parts.some((part) => part.type === "text" && part.finalReply && part.text.trim());
   const blocks: TurnBlock[] = [], items: ProcessItem[] = [], calls: CallItem[] = [];
   const answer: AnswerItem[] = [], artifacts: ArtifactCard[] = [];
-  const changes: CallItem[] = [];
-  const previousArtifacts = new Map(previous?.artifacts.flatMap(card => card.kind === "changes" ? [] : [[card.index, card] as const]));
+  const changes: CallItem[] = [], deliverableCalls: CallItem[] = [];
+  const previousArtifacts = new Map(previous?.artifacts.flatMap(card => card.kind === "changes" || card.kind === "deliverables" ? [] : [[card.index, card] as const]));
   let group: ActivityGroup | null = null;
   let nextStep: TurnLayout["nextStep"] = null;
   for (const [index, part] of parts.entries()) {
@@ -124,6 +125,7 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
       if (!group) { group = { kind: "activity", key: `interval:${index}`, index, calls: [], summary: summarizeCalls([]) }; blocks.push(group); }
       const item: CallItem = { kind: "call", index, part };
       if (visibleCall(part)) { group.calls.push(item); items.push(item); calls.push(item); }
+      if (part.deliverables?.length) deliverableCalls.push(item);
       const kind = part.display_data?.kind;
       if (kind === CHANGES_KIND) changes.push(item);
       else if (kind === NEXT_STEP_KIND) nextStep = previous?.nextStep?.part === part ? previous.nextStep : { index, part };
@@ -157,11 +159,16 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
       blocks[i] = old;
     } else block.summary = summarizeCalls(block.calls);
   }
+  // 交付物卡放在本回合第一次带记录的调用的位置（其余单卡按调用下标有序，插到第一个下标更大的卡之前）。
+  if (deliverableCalls.length) {
+    const old = previous?.artifacts.find(card => card.kind === "deliverables");
+    const card = old?.kind === "deliverables" && sameCalls(old.callIndexes, deliverableCalls, previous) ? old : collectDeliverables(deliverableCalls)!;
+    const at = artifacts.findIndex(other => other.kind !== "changes" && other.index > card.index);
+    artifacts.splice(at === -1 ? artifacts.length : at, 0, card);
+  }
   if (changes.length) {
     const old = previous?.artifacts.find(card => card.kind === "changes");
-    const unchanged = old?.kind === "changes" && old.callIndexes.length === changes.length
-      && changes.every((call, i) => old.callIndexes[i] === call.index && previous?.parts[call.index] === call.part);
-    artifacts.unshift(unchanged ? old : aggregateChanges(changes));
+    artifacts.unshift(old?.kind === "changes" && sameCalls(old.callIndexes, changes, previous) ? old : aggregateChanges(changes));
   }
   // Any tool (including a hidden wait) ends the first-output introduction. A later silent model
   // request is not observable here, so it must not be inferred from the absence of visible cards.
@@ -181,6 +188,11 @@ export function visibleTurnBlock(block: TurnBlock, open: boolean, currentKey?: s
   if (block.kind === "agent") return open;
   if (block.kind === "standalone") return open || block.part.awaitingUser;
   return block.key === currentKey || block.calls.length > 0 && open;
+}
+
+/** 聚合卡（改动、交付物）能否复用上一版：参与的调用槽位与 canonical part 身份都没变。 */
+function sameCalls(oldIndexes: readonly number[], calls: readonly CallItem[], previous?: TurnLayout | null): boolean {
+  return oldIndexes.length === calls.length && calls.every((call, i) => oldIndexes[i] === call.index && previous?.parts[call.index] === call.part);
 }
 
 /** Index operation history by path; neither status ranking nor summed diffs describe the final filesystem. */

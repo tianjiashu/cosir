@@ -4,7 +4,7 @@ import { aggregateChanges, describeCallProblems, projectTurn, visibleTurnBlock, 
 
 /** 第一个工具组的摘要：失败、取消与按动词计数只在组上汇总。 */
 const firstGroupSummary = (layout: TurnLayout) => (layout.blocks.find((block) => block.kind === "activity") as ActivityGroup).summary;
-import { agentMessagePart, outcome, toolCallPart } from "./transport-fixtures";
+import { agentMessagePart, deliveredFile, outcome, toolCallPart } from "./transport-fixtures";
 const text = (value: string, finalReply = false): TransportMessagePart => ({ type: "text", text: value, finalReply });
 const call = (id: string, overrides: Partial<TransportToolCallPart> = {}) => toolCallPart(id, "read_file", { status: "completed", ...overrides });
 
@@ -124,7 +124,8 @@ it("reuses unchanged tool groups and file aggregation across prose versions, but
 });
 
 describe("回复呈现工具", () => {
-  const files = call("files", { toolName: "present_files", presentation: "quiet", display_data: { kind: "deliverables", files: [{ path: "a.md", absolute_path: "/w/a.md", caption: null }] } });
+  const present = (id: string, paths: string[]) => call(id, { toolName: "present_deliverables", presentation: "quiet", deliverables: paths.map((path) => deliveredFile(path)) });
+  const files = present("files", ["a.md"]);
   const offer = (id: string, ask: string, overrides: Partial<TransportToolCallPart> = {}) =>
     call(id, { toolName: "offer_next_step", presentation: "quiet", display_data: { kind: "next-step", ask, replies: ["好"] }, ...overrides });
 
@@ -134,6 +135,21 @@ describe("回复呈现工具", () => {
     expect(layout.artifacts.map((item) => item.kind)).toEqual(["deliverables"]);
     expect(layout.nextStep?.part.toolCallId).toBe("o1");
     expect(layout.process.items).toHaveLength(0);
+  });
+
+  // 目的：交付物组排在它所在的位置、改动卡仍在最前；潜在缺陷：两次交付出现两张卡，或流式追加正文时卡片重建导致胶囊重挂载。
+  it("一个回合的多次交付合成一张卡，放在第一次交付的位置，正文流式追加时保持同一引用", () => {
+    const draft = call("draft", { toolName: "propose_agent_configuration", presentation: "quiet", display_data: { kind: "agent-configuration-draft" } });
+    const change = call("w", { display_data: { kind: "file-changes", changes: [{ path: "a.md", status: "added" }] } });
+    const parts = [change, present("p1", ["a.md"]), draft, present("p2", ["b.md", "a.md"]), text("a")];
+    const first = projectTurn(parts, "running");
+    expect(first.artifacts.map((item) => item.kind)).toEqual(["changes", "deliverables", "agent-configuration-draft"]);
+    const card = first.artifacts[1];
+    expect(card.kind === "deliverables" && card.items.map((item) => item.deliverable.key)).toEqual(["/w/b.md", "/w/a.md"]);
+    const streamed = projectTurn([...parts.slice(0, -1), text("ab")], "running", null, first);
+    expect(streamed.artifacts[1]).toBe(card);
+    const more = projectTurn([...parts.slice(0, -1), present("p3", ["c.md"])], "running", null, streamed);
+    expect(more.artifacts[1]).not.toBe(card);
   });
 
   it("同一回合多次建议只认最后一次，失败的调用没有展示数据、不算", () => {

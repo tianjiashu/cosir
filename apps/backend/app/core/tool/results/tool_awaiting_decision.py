@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from app.core.tool.results.tool_success import tool_success
-from app.core.tool.schemas import ToolObservation
+from app.core.tool.schemas import AwaitDecision, ToolObservation
 
 _AWAITING_DECISION_CONTENT = (
     "This tool call is awaiting the user's decision. Do not call it again or assume the outcome. "
@@ -25,12 +25,10 @@ def tool_awaiting_decision(
     调用；用户决定后的执行结果作为新消息追加，不覆盖它，历史前缀因此不变。所有 HITL 工具共用
     这段文案。
     """
-    observation = tool_success(
+    return tool_success(
         tool_name,
         _AWAITING_DECISION_CONTENT,
         tool_call_id=tool_call_id,
         display_data=display_data,
-        suspend=True,
+        waiting=AwaitDecision(),
     )
-    observation.awaiting_decision = True
-    return observation

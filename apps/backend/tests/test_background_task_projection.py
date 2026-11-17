@@ -173,8 +173,7 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
             session_id=session.id,
             run_id=run.id,
             tool_call_id="call-bg",
-            status="pending",
-            background=work,
+            result=ToolMessageMetadata(status="pending", background=work),
         )
     )
     hot = service.get_state(session.id)["background_tasks"]
@@ -197,6 +196,64 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
     assert hot[0]["status"] == "cancelled" and hot[0]["endedAt"] is not None
     service.republish_from_canonical(session.id)
     assert hot == service.get_state(session.id)["background_tasks"]
+
+
+# 目的：看板由工具 part 派生，任何工具状态事件之后都要重算；潜在缺陷：只在事件带后台记录时才重算，
+# 修补中断这类只带状态的事件让看板停在「收尾中」，直到下次整份重建。
+def test_status_event_without_background_still_updates_the_board(tmp_path, isolated_storage):
+    workspace = depends.get_workspace_crud().create("ws", str(tmp_path))
+    session = depends.get_session_crud().create(workspace.id, "session")
+    run = depends.get_run_crud().create(session.id, "running")
+    crud = depends.get_session_context_crud()
+    crud.create(
+        SessionContextRecord(
+            session_id=session.id,
+            run_id=run.id,
+            sequence=1,
+            include_in_context=True,
+            message={
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call-bg",
+                        "type": "function",
+                        "function": {"name": "execute_terminal", "arguments": "{}"},
+                    }
+                ],
+            },
+            turn=1,
+        )
+    )
+    work = command_results.register(
+        "call-bg", session_id=session.id, run_id=run.id, label="build", job=FakeCommandJob()
+    )
+    crud.create(
+        SessionContextRecord(
+            session_id=session.id,
+            run_id=run.id,
+            sequence=2,
+            include_in_context=True,
+            message={"role": "tool", "tool_call_id": "call-bg", "content": "placeholder"},
+            metadata=ToolMessageMetadata(status="pending", background=work),
+            turn=1,
+        )
+    )
+    service = ConversationStateService()
+    assert service.get_state(session.id)["background_tasks"][0]["status"] == "running"
+    command_results.withdraw_calls(session.id, ["call-bg"])
+    service.refresh_background_results(session.id)
+    assert service.get_state(session.id)["background_tasks"][0]["status"] == "settling"
+
+    service.apply_planned(
+        ToolCallStatusChangedEvent(
+            session_id=session.id,
+            run_id=run.id,
+            tool_call_id="call-bg",
+            result=ToolMessageMetadata(status="cancelled"),
+        )
+    )
+
+    assert service.get_state(session.id)["background_tasks"][0]["status"] == "cancelled"
 
 
 def test_withdrawn_rounds_are_not_listed(tmp_path, isolated_storage):

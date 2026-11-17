@@ -46,10 +46,13 @@ export default function PdfPreview({
   workspaceId,
   info,
   navigation,
+  onUnviewable,
 }: {
   workspaceId: number;
   info: FileInfo;
   navigation: ReadingNavigation;
+  /** 内容不是有效 PDF 时上报；读取失败（网络、版本过期）仍在这里显示可重试的错误。 */
+  onUnviewable: (reason: string) => void;
 }) {
   const backend = useBackendRuntime();
   const container = useRef<HTMLDivElement>(null);
@@ -152,7 +155,9 @@ export default function PdfPreview({
         setPages(document.numPages);
       })
       .catch((cause) => {
-        if (!disposed) setError(userErrorMessage(cause, "PDF 无法读取"));
+        if (disposed) return;
+        if (cause instanceof pdfjs.InvalidPDFException) onUnviewable("PDF 内容已损坏，无法显示");
+        else setError(userErrorMessage(cause, "PDF 无法读取"));
       });
     const resize = new ResizeObserver(() => {
       if (viewer.pagesCount) viewer.currentScaleValue = "page-width";
@@ -168,7 +173,7 @@ export default function PdfPreview({
       viewerRef.current = null;
       busRef.current = null;
     };
-  }, [workspaceId, info.path, info.version, backend]);
+  }, [workspaceId, info.path, info.version, backend, onUnviewable]);
   // 换了词是一次新查找（type ""），同一个词是「再找一处」（type "again"）。
   const find = (query: string, direction: FindDirection) => {
     const again = query === lastQuery.current;

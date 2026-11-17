@@ -41,6 +41,7 @@ from app.tools.tool_handler.find_files import FindFilesTool
 from app.tools.tool_handler.read_file import ReadFileTool
 from app.tools.tool_handler.search_content import SearchContentTool
 from app.tools.tool_handler.write_file import WriteFileTool
+from tests.tool_output_support import truncated_artifact_path
 
 _ASSET = "a" * 64
 
@@ -174,6 +175,27 @@ def test_relative_path_rejects_path_outside_attachment_dir(tmp_path: Path) -> No
     assert error.value.code == "ATTACHMENT_NOT_OWNED"
 
 
+def test_unreadable_attachment_root_is_storage_unavailable_not_ownership(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """附件目录取不到文件身份时是「存储不可用」，不是「附件不属于当前工作区」。
+
+    潜在缺陷类型：曾在每次判定时现取根目录身份，再把任何系统错误都吞成 NOT_OWNED，掩盖真实原因。
+    """
+
+    from app.service.attachment import attachment_service as module
+
+    def unavailable(_path: object) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    service = _service(tmp_path)
+    monkeypatch.setattr(module.RootDirectory, "at", staticmethod(unavailable))
+    with pytest.raises(ImageNormalizationError) as error:
+        service.relative_path(7, tmp_path / ".cosir" / "Attachment" / "a.png")
+
+    assert error.value.code == "ATTACHMENT_STORAGE_UNAVAILABLE"
+
+
 def test_resolve_for_model_rejects_path_outside_attachment(tmp_path: Path) -> None:
     """``resolve_for_model`` 对 workspace 内但非 ``.cosir/Attachment`` 的引用必须拒绝。
 
@@ -301,13 +323,13 @@ def test_artifact_still_lands_under_cosir_and_reads_back(tmp_path: Path) -> None
 
     root = tmp_path / "ws"
     root.mkdir()
-    budget = ToolOutputBudget(max_chars=10)
+    budget = ToolOutputBudget(max_chars=300)
     content = "abcdefghij" * 100
     obs = ToolObservation(tool_name="t", status="success", content=content)
 
     result = budget.apply(obs, _ctx(root))
 
-    artifact_path = (result.artifact_data or {}).get("artifact_path")
+    artifact_path = truncated_artifact_path(result.content)
     assert isinstance(artifact_path, str) and artifact_path
     assert artifact_path.startswith(".cosir/tool-artifacts/")
     on_disk = root / artifact_path
@@ -325,12 +347,12 @@ def test_artifact_containment_when_root_is_symlink(tmp_path: Path) -> None:
     link_root = tmp_path / "link_ws"
     link_root.symlink_to(real_root, target_is_directory=True)
 
-    budget = ToolOutputBudget(max_chars=5)
+    budget = ToolOutputBudget(max_chars=300)
     content = "y" * 500
     obs = ToolObservation(tool_name="t", status="success", content=content)
     result = budget.apply(obs, _ctx(link_root))
 
-    artifact_path = (result.artifact_data or {}).get("artifact_path")
+    artifact_path = truncated_artifact_path(result.content)
     assert isinstance(artifact_path, str) and artifact_path.startswith(".cosir/tool-artifacts/")
     written = real_root / Path(artifact_path)
     assert written.is_file()
@@ -348,10 +370,10 @@ def test_artifact_not_written_outside_when_cosir_is_outside_symlink(tmp_path: Pa
     outside.mkdir()
     (root / ".cosir").symlink_to(outside, target_is_directory=True)
 
-    budget = ToolOutputBudget(max_chars=5)
+    budget = ToolOutputBudget(max_chars=300)
     obs = ToolObservation(tool_name="t", status="success", content="z" * 500)
     result = budget.apply(obs, _ctx(root))
-    artifact_path = (result.artifact_data or {}).get("artifact_path")
+    artifact_path = truncated_artifact_path(result.content)
     if artifact_path:
         written = (root / artifact_path).resolve()
         assert written.is_relative_to(root.resolve()), f"artifact 越界：{written}"
@@ -467,10 +489,10 @@ def test_artifact_path_text_matches_os_separator_handling(tmp_path: Path) -> Non
 
     root = tmp_path / "ws"
     root.mkdir()
-    budget = ToolOutputBudget(max_chars=5)
+    budget = ToolOutputBudget(max_chars=300)
     obs = ToolObservation(tool_name="t", status="success", content="x" * 500)
     result = budget.apply(obs, _ctx(root))
-    artifact_path = (result.artifact_data or {}).get("artifact_path")
+    artifact_path = truncated_artifact_path(result.content)
     assert "\\" not in str(artifact_path)
     assert (root / artifact_path).is_file()
 
@@ -563,25 +585,3 @@ async def test_resolve_content_after_upload(tmp_path: Path) -> None:
     assert path.parent == (tmp_path / ".cosir" / "Attachment").resolve()
     assert path.read_bytes() == data
     assert content_type == "image/png"
-
-
-# --- I. image_utils 行为回归（is_image_path） -------------------
-
-
-@pytest.mark.parametrize(
-    ("ref", "expected"),
-    [
-        ("a.png", True),
-        ("a.jpg", True),
-        ("a.bmp", True),
-        ("a.txt", False),
-        ("", False),
-        ("noext", False),
-    ],
-)
-def test_is_image_path_contract(ref: str, expected: bool) -> None:
-    """``is_image_path`` 扩展名判定契约（回归：image_utils 改动未破坏该函数）。"""
-
-    from app.utils.image_utils import is_image_path
-
-    assert is_image_path(ref) is expected

@@ -3,6 +3,7 @@ import type { ComponentType } from "react";
 import { CONVERSATION_ASIDE_CARD_IDS, type AsideCardId } from "@/lib/conversation-aside/conversation-aside-store";
 
 import { BackgroundTasksActions, BackgroundTasksBody, BackgroundTasksSummary, useBackgroundTasksHasContent } from "./background-tasks-card";
+import { DeliverablesBody, DeliverablesSummary, useDeliverablesHasContent } from "./deliverables-card";
 
 type AsideCardDefinition = {
   title: string;
@@ -21,6 +22,7 @@ type AsideCardDefinition = {
  */
 export const CONVERSATION_ASIDE_CARDS: Record<AsideCardId, AsideCardDefinition> = {
   "background-tasks": { title: "后台任务", useHasContent: useBackgroundTasksHasContent, Summary: BackgroundTasksSummary, Actions: BackgroundTasksActions, Body: BackgroundTasksBody },
+  deliverables: { title: "产出", useHasContent: useDeliverablesHasContent, Summary: DeliverablesSummary, Body: DeliverablesBody },
 };
 
 /**

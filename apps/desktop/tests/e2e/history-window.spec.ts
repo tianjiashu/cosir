@@ -14,7 +14,7 @@ const PAIRS = 160;
 const OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 };
 const LAUNCH = { modelConfigId: null, reasoningEffort: null };
 
-type SeedState = Omit<TransportState, "messageOffset" | "terminal_sessions" | "background_tasks" | "foreground_waits" | "handoffs">;
+type SeedState = Omit<TransportState, "messageOffset" | "terminal_sessions" | "background_tasks" | "foreground_waits" | "handoffs" | "deliverables">;
 
 function longConversation(pairs = PAIRS): SeedState {
   const messages: TransportState["messages"] = [];

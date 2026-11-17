@@ -12,7 +12,7 @@ from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_state_snapshot import _validate_part
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.placeholder_settlement import INTERRUPTED_HINT, cancel_placeholders
-from app.core.tool.schemas import ToolObservation
+from app.core.tool.schemas import RunInBackground, ToolObservation
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.session_message import BackgroundResultBody
 from app.core.workflow.node_helper import tool_observation_projection as projection_module
@@ -90,9 +90,9 @@ def test_settlement_filters_by_call(stored) -> None:
 
 
 def test_terminal_event_keeps_background_placeholders_pending() -> None:
-    observation = ToolObservation(tool_name="terminal_write", status="success", background=_WORK)
+    observation = ToolObservation(tool_name="terminal_write", status="success", waiting=RunInBackground(_WORK))
     event = terminal_event(observation, session_id=1, run_id=2, step_id="s", tool_call_id="c")
-    assert (event.status, event.background) == ("pending", _WORK)
+    assert (event.status, event.result.background) == ("pending", _WORK)
 
 
 
@@ -117,7 +117,7 @@ def test_observe_persists_background_placeholder_as_pending(monkeypatch) -> None
                 tool_name="execute_terminal",
                 status="success",
                 tool_call_id="call-bg",
-                background=_WORK,
+                waiting=RunInBackground(_WORK),
             )
         ],
 
@@ -128,7 +128,7 @@ def test_observe_persists_background_placeholder_as_pending(monkeypatch) -> None
     [metadata] = written
     assert (metadata.status, metadata.background) == ("pending", _WORK)
     [event] = emitted
-    assert (event.status, event.background) == ("pending", _WORK)
+    assert (event.status, event.result.background) == ("pending", _WORK)
 
 
 def test_background_placeholder_projects_a_valid_part_field() -> None:
@@ -183,8 +183,8 @@ def test_consumed_result_completes_the_placeholder(monkeypatch) -> None:
     assert (update.status, update.display_data) == ("completed", card)
     assert update.background == _FINISHED_WORK
     assert not emitted
-    assert (event.tool_call_id, event.status, event.display_data) == ("call-bg", "completed", card)
-    assert event.background == _FINISHED_WORK
+    assert (event.tool_call_id, event.status, event.result.display_data) == ("call-bg", "completed", card)
+    assert event.result.background == _FINISHED_WORK
 
 
 @pytest.mark.parametrize(

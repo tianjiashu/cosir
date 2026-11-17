@@ -3,6 +3,7 @@ import { useState } from "react";
 import { AssistantRuntimeErrorBoundary } from "@/components/conversation-runtime/runtime/assistant-runtime-error-boundary";
 import { AssistantRuntimeSession } from "@/components/conversation-runtime/runtime/assistant-runtime-session";
 import type { AssistantRuntimeProps } from "@/components/conversation-runtime/runtime/runtime-types";
+import { useSessionDeliverableWatch } from "@/components/conversation/tools/reply-presentation/use-session-deliverable-watch";
 
 export type { AssistantRuntimeProps } from "@/components/conversation-runtime/runtime/runtime-types";
 
@@ -14,6 +15,8 @@ export type { AssistantRuntimeProps } from "@/components/conversation-runtime/ru
  */
 export function AssistantRuntime(props: AssistantRuntimeProps) {
   const [sessionKey, setSessionKey] = useState(0);
+  // 登记在错误边界之外：渲染崩溃重挂会话时监听不断。
+  useSessionDeliverableWatch(props.store);
   const retry = () => {
     setSessionKey((key) => key + 1);
     props.connection.resync();

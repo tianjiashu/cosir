@@ -26,7 +26,7 @@ from app.tools.tool_handler.browser import build_browser_definitions
 from app.tools.tool_handler.edit_file import build_edit_file_definition
 from app.tools.tool_handler.find_files import build_find_files_definition
 from app.tools.tool_handler.mcp_tool import build_mcp_definition
-from app.tools.tool_handler.present_files import build_present_files_definition
+from app.tools.tool_handler.present_deliverables import build_present_deliverables_definition
 from app.tools.tool_handler.read_file import build_read_file_definition
 from app.tools.tool_handler.read_image import ReadImageTool
 from app.tools.tool_handler.search_content import build_search_content_definition
@@ -65,7 +65,7 @@ def build_tool_registry() -> ToolRegistry:
     registry.register(build_wait_messages_definition())
     registry.register(build_propose_agent_configuration_definition())
     registry.register(build_ask_user_definition())
-    registry.register(build_present_files_definition())
+    registry.register(build_present_deliverables_definition())
     registry.register(build_offer_next_step_definition())
     registry.register(build_mcp_definition())
     registry.register(build_skill_definition())

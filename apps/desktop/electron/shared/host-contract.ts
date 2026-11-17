@@ -27,6 +27,9 @@ export const HOST_CHANNEL = {
   browserAnswerDialog: "cosir:browser.answer-dialog",
   browserRevealDownload: "cosir:browser.reveal-download",
   filesReveal: "cosir:files.reveal",
+  filesOpenExternally: "cosir:files.open-externally",
+  filesQuickLook: "cosir:files.quick-look",
+  filesThumbnail: "cosir:files.thumbnail",
 } as const;
 
 /**
@@ -219,5 +222,11 @@ export type CosirHost = {
      * 存在的绝对路径，不读内容、不打开文件。文件已不在时抛出给用户看的错误。
      */
     reveal(absolutePath: string): Promise<void>;
+    /** 交给系统按默认应用打开（不限制后缀，见 AGENTS 待办「安全与权限」）；系统打不开时抛出给用户看的错误。 */
+    openExternally(absolutePath: string): Promise<void>;
+    /** 系统的快速查看窗口；只有 macOS 有，其他平台抛错（界面不显示这一项，见 `lib/desktop-host/file-exits`）。 */
+    quickLook(absolutePath: string): Promise<void>;
+    /** 系统缩略图（macOS、Windows），返回 PNG 的 data URL；`edge` 是最长边像素。只对系统可预览的文件调用。 */
+    thumbnail(absolutePath: string, edge: number): Promise<string>;
   };
 };

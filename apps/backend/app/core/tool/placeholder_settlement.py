@@ -52,7 +52,7 @@ def cancel_placeholders(
     settled = service_depends.get_session_context_service().settle_placeholders(
         session_id, ids, status, hint, exclude=exclude, displays=displays
     )
-    publish_settled(settled, status, hint)
+    publish_settled(settled)
     if settled:
         log.info(
             "background_placeholders_settled",
@@ -64,9 +64,7 @@ def cancel_placeholders(
     return frozenset(record.session_id for record in settled)
 
 
-def publish_settled(
-    settled: Iterable[SessionContextRecord], status: ToolCallEventStatus, hint: str | None
-) -> None:
+def publish_settled(settled: Iterable[SessionContextRecord]) -> None:
     """把 Run 之外结算的占位投影到已物化的 snapshot；未物化的下次重建自会读到（见模块说明）。
 
     本模块的 ``cancel_placeholders`` 与等用户回应的决定的作废（``decision_expiry``）共用。
@@ -79,17 +77,14 @@ def publish_settled(
         space = session_runtime_spaces.get(record.session_id)
         if space is None or not space.has_snapshot():
             continue
-        metadata = cast(ToolMessageMetadata, record.metadata)
         try:
             sink(
                 ToolCallStatusChangedEvent(
                     session_id=record.session_id,
                     run_id=record.run_id,
                     tool_call_id=tool_call_id,
-                    status=status,
-                    error=hint,
-                    display_data=metadata.display_data,
-                    background=metadata.background,
+                    # 结算后的行已带新状态与提示（见 ``settle_placeholders``），按写入的事实投影。
+                    result=cast(ToolMessageMetadata, record.metadata),
                 )
             )
         except (KeyError, ValueError):

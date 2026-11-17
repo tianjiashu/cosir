@@ -153,9 +153,7 @@ def expire_decisions(*, step_id: str, keep: frozenset[str] = frozenset()) -> lis
                 run_id=rc.run.id,
                 step_id=step_id,
                 tool_call_id=call_id,
-                status=metadata.status,
-                error=metadata.error,
-                display_data=metadata.display_data,
+                result=metadata,
             )
         )
     log.info(
@@ -190,7 +188,7 @@ def expire_decisions_after_run(session_id: int, hint: str) -> list[str]:
     if not expiring:
         return []
     settled = context.expire_awaiting_decisions(session_id, expiring, hint)
-    publish_settled(settled, "cancelled", hint)
+    publish_settled(settled)
     expired = [str(record.message.get("tool_call_id")) for record in settled]
     log.info(
         "decisions_expired_after_run",

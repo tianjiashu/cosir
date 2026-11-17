@@ -2,13 +2,14 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { Streamdown } from "streamdown";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { confirm, openUserTab } = vi.hoisted(() => ({
+const { confirm, openUserTab, reveal } = vi.hoisted(() => ({
   confirm: vi.fn<() => Promise<boolean>>(),
   openUserTab: vi.fn<() => Promise<string>>(),
+  reveal: vi.fn<() => Promise<void>>(),
 }));
 vi.mock("@/lib/confirm/confirm-store", () => ({ requestConfirmation: confirm }));
 vi.mock("@/lib/browser/open-tab", () => ({ openUserTab }));
-vi.mock("@/lib/desktop-host", () => ({ desktopHost: {} }));
+vi.mock("@/lib/desktop-host", () => ({ desktopHost: { files: { reveal } } }));
 vi.mock("@/lib/logging/frontend-log", () => ({ frontendLog: vi.fn() }));
 // 打开文件前会先读文件信息确认存在：src/a.ts 存在，其余路径按后端的 FILE_NOT_FOUND 返回。
 const getFileInfo = vi.hoisted(() => vi.fn());
@@ -29,6 +30,7 @@ import { useFilesStore } from "@/lib/workspace-files/workspace-files-store";
 import { HttpError } from "@/lib/http/http-error";
 import { createQueryClient } from "@/lib/query/query-client";
 import { QueryClientProvider } from "@tanstack/react-query";
+import { deliveredDirectory, deliveredFile, deliveredUrl } from "./transport-fixtures";
 
 function inWorkspace(node: React.ReactNode) {
   return (
@@ -123,6 +125,35 @@ describe("useOpenLink", () => {
     const opener = captureOpener(null);
     expect(opener.resolve("out/report.html")).toEqual({ kind: "workspace", path: "out/report.html", directory: false });
     expect(opener.resolve("/Users/x/a.html")).toBeNull();
+  });
+
+  // 目的：交付记录直接给出去向，不经字符串解析；潜在缺陷：工作区外的普通文件点了没反应，或目录被当成文件去读。
+  it("交付记录的去向：工作区内进面板与文件树，网页文件进内置浏览器，工作区外其余条目在文件夹中显示", async () => {
+    openUserTab.mockResolvedValue("tab-1");
+    reveal.mockResolvedValue(undefined);
+    const opener = captureOpener(3);
+    expect(opener.resolveDeliverable(deliveredFile("src/a.ts", { absolutePath: "/repo/src/a.ts" }))).toEqual({ kind: "workspace", path: "src/a.ts", directory: false });
+    expect(opener.resolveDeliverable(deliveredDirectory("dist", "/repo/dist"))).toEqual({ kind: "workspace", path: "dist", directory: true });
+    expect(opener.resolveDeliverable(deliveredDirectory(".", "/repo"))).toEqual({ kind: "workspace", path: "", directory: true });
+    opener.open(opener.resolveDeliverable(deliveredFile("out/r.html", { absolutePath: "/repo/out/r.html" }))!);
+    await vi.waitFor(() => expect(openUserTab).toHaveBeenCalledWith(3, "file:///repo/out/r.html"));
+    opener.open(opener.resolveDeliverable(deliveredFile(null, { absolutePath: "/Users/x/a.html" }))!);
+    await vi.waitFor(() => expect(openUserTab).toHaveBeenCalledWith(3, "file:///Users/x/a.html"));
+    const outside = opener.resolveDeliverable(deliveredFile(null, { absolutePath: "/Users/x/a.csv" }))!;
+    expect(outside).toEqual({ kind: "reveal", path: "/Users/x/a.csv" });
+    expect(opener.describe(outside)).toBe("在文件夹中显示 /Users/x/a.csv");
+    opener.open(outside);
+    await vi.waitFor(() => expect(reveal).toHaveBeenCalledWith("/Users/x/a.csv"));
+    confirm.mockResolvedValueOnce(true);
+    opener.open(opener.resolveDeliverable(deliveredUrl("https://example.com/r"))!);
+    await vi.waitFor(() => expect(windowOpen).toHaveBeenCalledWith("https://example.com/r", "_blank", "noopener,noreferrer"));
+    expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("没有所属 Session 时工作区内网页文件退回文件面板，工作区外的不可打开", () => {
+    const opener = captureOpener(null);
+    expect(opener.resolveDeliverable(deliveredFile("out/r.html", { absolutePath: "/repo/out/r.html" }))).toEqual({ kind: "workspace", path: "out/r.html", directory: false });
+    expect(opener.resolveDeliverable(deliveredFile(null, { absolutePath: "/Users/x/a.html" }))).toBeNull();
   });
 
   it("confirms external links before opening them", async () => {

@@ -34,6 +34,7 @@ from app.core.tool.schemas import ToolObservation
 from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
 from app.models.conversation_input import UserInputPresentation
 from app.models.enums.run_status import RunStatus
+from app.models.message_metadata import ToolMessageMetadata
 from tests.transport_fixtures import consumed, queue_user_input
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
@@ -170,15 +171,14 @@ def test_delegation_status_event_projects_display_data_to_target_tool(
         session_id=1,
         run_id=1,
         tool_call_id="delegate-1",
-        status="completed",
-        display_data={
-            "kind": "delegation-result",
-            "child_agent_id": "delegate_reviewer",
-            "child_session_id": 22,
-            "title": "审查前端",
-            "role": "Reviewer",
-            "status": "running",
-        },
+        result=ToolMessageMetadata(status="completed", display_data={
+                "kind": "delegation-result",
+                "child_agent_id": "delegate_reviewer",
+                "child_session_id": 22,
+                "title": "审查前端",
+                "role": "Reviewer",
+                "status": "running",
+            }),
     )
 
     change = event_projector.process(event)
@@ -369,7 +369,7 @@ def test_tool_part_is_created_after_run_resume(
             session_id=1,
             run_id=1,
             tool_call_id="call-9",
-            status="running",
+            result=ToolMessageMetadata(status="running"),
         )
     )
 
@@ -393,7 +393,7 @@ def test_tool_status_change_without_part_is_skipped(
                 session_id=1,
                 run_id=1,
                 tool_call_id="missing-call",
-                status="running",
+                result=ToolMessageMetadata(status="running"),
             )
         )
 
@@ -642,7 +642,10 @@ def test_idempotent_tool_events_reapply_without_changing_snapshot(
         event_projector,
         snapshots,
         lambda: ToolCallStatusChangedEvent(
-            session_id=1, run_id=1, tool_call_id="t1", status="running"
+            session_id=1,
+            run_id=1,
+            tool_call_id="t1",
+            result=ToolMessageMetadata(status="running"),
         ),
     )
     # 终态由实时与结算两条路径各投一次（同经 ``terminal_event`` 构造），重放必须不改快照。
@@ -861,7 +864,10 @@ def test_run_and_tool_status_events_publish_the_session_status(
     )
     event_projector.process(
         ToolCallStatusChangedEvent(
-            session_id=1, run_id=1, tool_call_id="call-hitl", status="pending"
+            session_id=1,
+            run_id=1,
+            tool_call_id="call-hitl",
+            result=ToolMessageMetadata(status="pending"),
         )
     )
     event_projector.process(

@@ -1,3 +1,5 @@
+import { baseName } from "@/lib/files/file-name";
+
 /**
  * 输入框胶囊的文本语法（唯一事实源，前后端各有一份实现，用 `contract/capsule-grammar-cases.json` 对齐）。
  *
@@ -114,7 +116,7 @@ export function serializeCapsule(capsule: Capsule): string {
 
 /** 展示/标题用的纯文本：去掉标签，保留可读名称（不修改正文、不用于落库）。 */
 export function capsulePlainText(capsule: Capsule): string {
-  if (capsule.kind === "file") return basename(capsule.path);
+  if (capsule.kind === "file") return baseName(capsule.path);
   if (capsule.kind === "ref") {
     const locator =
       capsule.lines !== undefined ? `:${capsule.lines}` : capsule.page !== undefined ? ` (p.${capsule.page})` : "";
@@ -128,8 +130,3 @@ export function isDirectoryPath(path: string): boolean {
   return path === "" || /[\\/]$/.test(path);
 }
 
-/** 路径的最后一段；兼容 Windows 反斜杠与目录尾斜杠。 */
-export function basename(path: string): string {
-  const trimmed = path.replace(/[\\/]+$/, "");
-  return trimmed.split(/[\\/]/).at(-1) || trimmed || path;
-}

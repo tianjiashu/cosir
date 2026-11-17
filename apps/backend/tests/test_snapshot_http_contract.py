@@ -37,6 +37,7 @@ def test_nested_tool_parts_serialize_through_actual_routes(presentation):
                     "toolName": "write_file",
                     "presentation": presentation,
                     "status": "failed",
+                    "awaitingUser": False,
                     "error": "本轮禁用",
                 }
             ],

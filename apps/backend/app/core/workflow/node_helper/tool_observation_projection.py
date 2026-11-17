@@ -12,7 +12,7 @@ from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.execute.tool_terminal_projection import (
     terminal_event,
 )
-from app.core.tool.schemas import ToolObservation
+from app.core.tool.schemas import AwaitDecision, ToolObservation
 from app.core.workflow.decision_expiry import (
     ends_on_user_input,
     expire_decisions,
@@ -47,13 +47,7 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
         )
         status = event.status
         canonical_write = _message_context().add_message(
-            to_tool_model_message(observation),
-            metadata=ToolMessageMetadata(
-                status=status,
-                display_data=event.display_data,
-                error=event.error,
-                background=observation.background,
-            ),
+            to_tool_model_message(observation), metadata=event.result
         )
         log.info(
             "tool_observation_persisted",
@@ -85,7 +79,9 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
     runtime = _runtime_context()
     context = _message_context()
     [executed] = batch.observations
-    observation = dataclasses.replace(executed, awaiting_decision=False)
+    # 重放的执行结果不再是等待占位；批准后启动的后台作业（``RunInBackground``）保留。
+    waiting = None if isinstance(executed.waiting, AwaitDecision) else executed.waiting
+    observation = dataclasses.replace(executed, waiting=waiting)
     call_id = observation.tool_call_id
     message, metadata = ToolResultBody(
         tool_call_id=call_id,
@@ -102,14 +98,7 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
     )
     with main_db_factory().begin() as db:
         context.add_message(message, metadata=metadata, project_to_transport=False, db=db)
-        written = context.update_tool_result_metadata(
-            call_id,
-            ToolMessageMetadata(
-                status=event.status, display_data=event.display_data, error=event.error,
-                background=observation.background,
-            ),
-            db=db,
-        )
+        written = context.update_tool_result_metadata(call_id, event.result, db=db)
     log.info(
         "tool_decision_result_persisted",
         extra={
@@ -122,9 +111,7 @@ def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
         },
     )
     # 卡片按实际写入的 metadata 渲染：结果没带展示数据时沿用了占位的。
-    emit(
-        event.model_copy(update={"display_data": written.display_data})
-    )
+    emit(event.model_copy(update={"result": written}))
 
 
 def settle_background_placeholder(
@@ -151,10 +138,7 @@ def settle_background_placeholder(
         run_id=runtime.run.id,
         step_id=step_id,
         tool_call_id=tool_call_id,
-        status=written.status,
-        error=written.error,
-        display_data=written.display_data,
-        background=written.background,
+        result=written,
     )
 
 

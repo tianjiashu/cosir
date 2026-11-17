@@ -20,7 +20,6 @@ from app.core.events import (
     ToolCallStatusChangedEvent,
 )
 from app.core.tool.presentation import ToolPresentation
-from app.models.message_metadata import ToolMessageMetadata
 from app.utils.datetime_utils import to_text
 
 # 已终态的 part 只接受自迁移，以及「占位被真实结果覆盖」的 ``cancelled -> completed/failed``：
@@ -59,7 +58,6 @@ def plan_tool_call_created(
         "error": None,
         # 刚创建的 ``pending`` 是「准备执行」不是「等你操作」；后者由结果投影按占位行判定。
         "awaitingUser": False,
-        "isError": False,
         # 运行起点只在 running 期间有值，见 ``plan_tool_call_status_changed``。
         "startedAt": None,
     }
@@ -138,14 +136,7 @@ def plan_tool_call_status_changed(
             },
         )
         return []
-    fields = project_tool_result(
-        ToolMessageMetadata(
-            status=event.status,
-            error=event.error,
-            display_data=event.display_data,
-            background=event.background,
-        )
-    )
+    fields = project_tool_result(event.result)
     display = fields["display_data"]
     current_display = part.get("display_data")
     if isinstance(current_display, dict) and current_display.get("kind") == "terminal-result":

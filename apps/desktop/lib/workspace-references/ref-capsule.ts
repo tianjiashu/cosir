@@ -1,5 +1,6 @@
-import { basename, isDirectoryPath, type RefCapsule } from "@/lib/assistant/capsules";
+import { isDirectoryPath, type RefCapsule } from "@/lib/assistant/capsules";
 import type { LineRange } from "@/lib/links/resolve-link";
+import { baseName } from "@/lib/files/file-name";
 
 /**
  * 工作区引用胶囊（`<ref path="src/a.py" lines="12-14" />` / `page="3"`）的构造与读取。
@@ -48,9 +49,9 @@ export function refLineRange(capsule: RefCapsule): LineRange | null {
 export function refName(capsule: RefCapsule): string {
   if (refIsDirectory(capsule)) {
     const trimmed = capsule.path.replace(/\/+$/, "");
-    return trimmed ? `${basename(trimmed)}/` : "工作区";
+    return trimmed ? `${baseName(trimmed)}/` : "工作区";
   }
-  return basename(capsule.path);
+  return baseName(capsule.path);
 }
 
 /** 胶囊上显示的定位说明（` · L12–14` / ` · p.3`）。 */

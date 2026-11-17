@@ -5,11 +5,23 @@ import { Compartment, EditorState, EditorSelection } from "@codemirror/state";
 import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { frontendLog } from "@/lib/logging/frontend-log";
+
+/**
+ * language-data 认不出、但内容其实是已知语言的后缀：Jupyter 笔记本就是 JSON。只做别名，不格式化——笔记本保存时
+ * 本来就带缩进，格式化会让行号与引用、全文查找的位置对不上。
+ */
+const LANGUAGE_ALIASES: Record<string, string> = { ipynb: "JSON" };
+
+function languageFor(name: string): LanguageDescription | null {
+  const alias = LANGUAGE_ALIASES[fileExtension(name)?.toLowerCase() ?? ""];
+  return alias ? (LanguageDescription.matchLanguageName(languages, alias, false) ?? null) : LanguageDescription.matchFilename(languages, name);
+}
 import {
   editorTheme,
   useEditorSyntaxTheme,
 } from "@/components/code-editor/code-editor-theme";
 import type { LineRange } from "@/lib/links/resolve-link";
+import { fileExtension } from "@/lib/files/file-name";
 import type { FindDirection, FindResult } from "@/lib/find/next-match";
 import { findHighlights, findInEditor } from "./editor-find";
 
@@ -150,7 +162,7 @@ export function ReadonlyTextViewer({
     instance.scrollDOM.scrollTop = latest.current.scrollTop;
     // 超长单行仅关闭语法解析，保留阅读与查找，避免解析器占满主线程。
     if (highlight) {
-      const description = LanguageDescription.matchFilename(languages, name);
+      const description = languageFor(name);
       void description
         ?.load()
         .then((extension) => {

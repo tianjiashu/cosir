@@ -6,7 +6,7 @@ import { preferenceStorage } from "@/lib/storage/preference-storage";
 import { callKey, useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
 
 /** 会话侧栏的卡片 id；新增卡片时在这里登记，并在卡片注册表（`components/conversation-aside/aside-card-registry.tsx`）补齐实现。 */
-export const CONVERSATION_ASIDE_CARD_IDS = ["background-tasks"] as const;
+export const CONVERSATION_ASIDE_CARD_IDS = ["background-tasks", "deliverables"] as const;
 export type AsideCardId = (typeof CONVERSATION_ASIDE_CARD_IDS)[number];
 
 type ConversationAsidePreferences = {

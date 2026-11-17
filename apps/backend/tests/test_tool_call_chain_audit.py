@@ -307,7 +307,6 @@ def test_t4_cold_rebuild_unfinished_call_stays_cancelled(
 
     assert len(parts) == 2
     assert parts["hidden-1"]["status"] == "cancelled"
-    assert "isError" not in parts["hidden-1"], f"part 键={sorted(parts['hidden-1'])}"
     assert "error" not in parts["hidden-1"]
 
 
@@ -437,11 +436,10 @@ def test_t4_build_run_error_contract(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_t4_delegation_display_data_backfills_child_locators(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """T4-h：委派结果的展示数据回填 child_session_id / agent_role（子 Agent 按 Session 寻址，无 run_id）。
+    """T4-h：委派结果的展示数据回填 child_session_id（子 Agent 按 Session 寻址，无 run_id）。
 
-    实际观测：``display_data.kind == "delegation-result"`` 时，part 上出现 ``child_session_id``；
-    ``display_data`` 使用持久化 role，并把 role 写回 ``display_data["role"]`` 与
-    ``part["agent_role"]``。
+    实际观测：子会话 id 只在 ``display_data["child_session_id"]``，不再提升到 part 顶层；
+    ``display_data`` 使用持久化 role，写在 ``display_data["role"]``。
     是否符合预期：符合（旧委派记录的 role 回填既定行为）。
     """
 
@@ -484,6 +482,6 @@ def test_t4_delegation_display_data_backfills_child_locators(
 
     part = pair_tool_parts(rows, {})["delegate-1"]
 
-    assert part["child_session_id"] == 22
-    assert part["agent_role"] == "workspace-reviewer"
+    assert part["display_data"]["child_session_id"] == 22
+    assert "child_session_id" not in part
     assert part["display_data"]["role"] == "workspace-reviewer"

@@ -134,7 +134,6 @@ def _tool_summary() -> dict[str, Any]:
         "reason": "",
         "retryable": False,
         "display_data": {"kind": "read-file-meta", "path": "a.py"},
-        "artifact_data": {"before": "secret"},
     }
 
 

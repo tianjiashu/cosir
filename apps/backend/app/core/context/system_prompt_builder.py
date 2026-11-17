@@ -52,6 +52,8 @@ from app.core.tool.schemas.tool_names import (
     TOOL_BROWSER_TABS,
     TOOL_EXECUTE_TERMINAL,
     TOOL_FIND_FILES,
+    TOOL_OFFER_NEXT_STEP,
+    TOOL_PRESENT_DELIVERABLES,
     TOOL_READ_FILE,
     TOOL_READ_IMAGE,
     TOOL_SEARCH_CONTENT,
@@ -216,9 +218,9 @@ class SystemPromptBuilder:
 
     # --- Layer T: 工具层（公共声明 + 能力目录，均按可用工具裁剪） ---
     _FILE_TOOL_ROLES = (
-        (TOOL_READ_FILE, "read_file to read"),
-        (TOOL_SEARCH_CONTENT, "search_content to search"),
-        (TOOL_FIND_FILES, "find_files to find files or see what a directory contains"),
+        (TOOL_READ_FILE, f"{TOOL_READ_FILE} to read"),
+        (TOOL_SEARCH_CONTENT, f"{TOOL_SEARCH_CONTENT} to search"),
+        (TOOL_FIND_FILES, f"{TOOL_FIND_FILES} to find files or see what a directory contains"),
     )
     _READ_ONLY_TOOLS = frozenset(
         {
@@ -280,19 +282,19 @@ class SystemPromptBuilder:
             sentence = f"- Use dedicated tools for files: {', '.join(file_roles)}."
             if TOOL_EXECUTE_TERMINAL in tools:
                 sentence += (
-                    " Use execute_terminal for builds, tests, git and running programs, not for "
+                    f" Use {TOOL_EXECUTE_TERMINAL} for builds, tests, git and running programs, not for "
                     "cat/sed/head/grep/rg/find/ls."
                 )
             lines.append(sentence)
         # 用户输入里的胶囊怎么读（语法在消息协议里，用法按工具裁剪在这里）。
         if TOOL_READ_FILE in tools:
             lines.append(
-                "- Read `<file>` and `<ref>` capsules from the user with read_file (PDFs through a "
+                f"- Read `<file>` and `<ref>` capsules from the user with {TOOL_READ_FILE} (PDFs through a "
                 "Skill or script)."
             )
         if TOOL_SKILL in tools:
             lines.append(
-                "- For a `<skill>` capsule, read its `path` or call skill(action='load') before "
+                f"- For a `<skill>` capsule, read its `path` or call {TOOL_SKILL}(action='load') before "
                 "following it."
             )
         if tools & SystemPromptBuilder._READ_ONLY_TOOLS:
@@ -362,9 +364,10 @@ class SystemPromptBuilder:
                     "any failure you did not resolve."
                 ),
                 (
-                    "- If you have `present_files` and produced a file the user should open, "
-                    "present it. If you have `offer_next_step` and your work leaves the user one "
-                    "decision, offer it before your closing message."
+                    f"- If you have `{TOOL_PRESENT_DELIVERABLES}` and produced something the user should "
+                    "open (a file, a directory, a page you are serving), present it. If you have "
+                    f"`{TOOL_OFFER_NEXT_STEP}` and your work leaves the user one decision, offer it "
+                    "before your closing message."
                 ),
                 "</work_layer>",
             ]

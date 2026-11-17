@@ -1,4 +1,6 @@
 import { isLocalNetworkHost } from "@/electron/shared/local-network-host";
+import type { TransportDeliverable } from "@/lib/assistant/contract";
+import { fileExtension } from "@/lib/files/file-name";
 
 /** 行范围，1 起算、闭区间。 */
 export type LineRange = { start: number; end: number };
@@ -24,7 +26,10 @@ type PageLink = { kind: "page"; url: string; path: string; workspace: WorkspaceL
 /** 同一篇 Markdown 里的位置（脚注引用与返回、标题锚点）；`id` 是已解码的目标元素 id。 */
 export type AnchorLink = { kind: "anchor"; id: string };
 
-export type LinkTarget = WorkspaceLink | WebLink | PageLink | AnchorLink | FilenameSearch;
+/** 在系统文件管理器里显示的本机对象（`path` 为绝对路径）：只由交付记录得出，用于工作区外没有界面可打开的条目。 */
+export type RevealLink = { kind: "reveal"; path: string };
+
+export type LinkTarget = WorkspaceLink | WebLink | PageLink | AnchorLink | FilenameSearch | RevealLink;
 
 /**
  * 解析基准。`workspaceRoot` 为 null 时（配置页等没有工作区的界面）只认网页链接；`documentDir` 只在
@@ -75,6 +80,23 @@ export function resolveLink(href: string, base: LinkBase): LinkTarget | null {
   return absolute ? { kind: "page", url: fileUrl(absolute), path: absolute, workspace } : null;
 }
 
+/**
+ * 交付记录的打开目标：记录是工具观察过的事实（规范路径、是否在工作区内），所以不经字符串解析，直接按字段得出。
+ * 与 `resolveLink` 同一套去向：工作区内文件进文件面板（`.html` 进内置浏览器）、目录在文件树里展开、网址按网页规则；
+ * 工作区外的 `.html` 进内置浏览器，其余工作区外条目只能「在文件夹中显示」。没有工作区的界面不认工作区路径。
+ */
+export function resolveDeliverable(deliverable: TransportDeliverable, base: LinkBase): LinkTarget | null {
+  if (deliverable.type === "url") return webLink(deliverable.url);
+  const { absolutePath } = deliverable;
+  const isPage = deliverable.type === "file" && PAGE_FILE.test(absolutePath);
+  if (deliverable.workspacePath !== null && base.workspaceRoot !== null) {
+    const path = deliverable.workspacePath === "." ? "" : deliverable.workspacePath;
+    const workspace: WorkspaceLink = { kind: "workspace", path, directory: deliverable.type === "directory" };
+    return isPage ? { kind: "page", url: fileUrl(absolutePath), path: absolutePath, workspace } : workspace;
+  }
+  return isPage ? { kind: "page", url: fileUrl(absolutePath), path: absolutePath, workspace: null } : { kind: "reveal", path: absolutePath };
+}
+
 /** 本机绝对路径 → file 地址；`pathname` 赋值负责百分号编码（空格、中文、`#`、`?`），Windows 盘符补前导 `/`。 */
 function fileUrl(absolute: string): string {
   const url = new URL("file:///");
@@ -114,7 +136,7 @@ export function inlineCodeLink(text: string, base: LinkBase): WorkspaceLink | Fi
   const candidate = text.trim().replace(/:\d+(?::\d+)?$/, "");
   if (!candidate || candidate.includes("://") || !/^[\p{L}\p{N}_.@~%#\-/\\:]+$/u.test(candidate)) return null;
   const name = candidate.split(/[/\\]/).at(-1) ?? "";
-  const extension = /^[^.].*\.([A-Za-z0-9]{1,10})$/.exec(name)?.[1]?.toLowerCase();
+  const extension = fileExtension(name)?.toLowerCase();
   if (!extension || (name === candidate && !BARE_FILE_EXTENSIONS.has(extension))) return null;
   const target = resolvePathText(text, base);
   if (!target) return null;

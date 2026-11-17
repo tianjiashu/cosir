@@ -11,7 +11,8 @@ import copy
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from app.core.tool.schemas import ToolObservation
+from app.core.tool.schemas import ToolObservation, Waiting
+from app.models.deliverable import Deliverable
 
 
 def tool_success(
@@ -19,9 +20,9 @@ def tool_success(
     content: str | None,
     tool_call_id: str = "",
     display_data: Mapping[str, Any] | None = None,
-    suspend: bool = False,
-    artifact_data: Mapping[str, Any] | None = None,
+    waiting: Waiting | None = None,
     images: Sequence[str] = (),
+    deliverables: Sequence[Deliverable] | None = None,
 ) -> ToolObservation:
     """构造成功的工具观察结果（纯工厂函数）。
 
@@ -29,11 +30,12 @@ def tool_success(
         tool_name: 触发本次成功的工具名称（与 :class:`ToolDefinition.name` 对应）。
         content: 面向模型的最小成功正文。只有模型继续工作所需的工具结果或额外
             警告才应返回；如果仅需表达成功可传 ``None``，由 workflow 生成 success。
-            不要回显已经存在于工具调用参数或 UI/artifact 数据中的内容。
+            不要回显已经存在于工具调用参数或展示数据中的内容。
         tool_call_id: 关联本次成功的模型工具调用 id；缺省为空字符串。
         display_data: 仅供客户端展示消费的结构化数据；会写入
             ``ToolObservation.display_data``，不会回传给模型。
-        suspend: 调用结束后 Agent 应挂起等待消息（见 ``ToolObservation.suspend``）。
+        waiting: 调用之后还要等什么（等决定、后台、等消息），见 ``ToolObservation.waiting``。
+        deliverables: 交付记录（只有 ``present_deliverables``），持久化为结果行 metadata。
         images: 给模型看的图片（``AttachmentService.save_image`` 返回的相对路径）；工具定义须声明
             ``returns_images``，模型不支持图片时准入门禁会先拒绝。
 
@@ -63,9 +65,9 @@ def tool_success(
         status="success",
         content=content,
         tool_call_id=tool_call_id,
-        suspend=suspend,
+        waiting=waiting,
         images=tuple(images),
+        deliverables=tuple(deliverables) if deliverables is not None else None,
     )
     observation.display_data = copy.deepcopy(dict(display_data or {}))
-    observation.artifact_data = copy.deepcopy(dict(artifact_data or {}))
     return observation

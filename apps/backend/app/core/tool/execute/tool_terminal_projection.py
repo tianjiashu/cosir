@@ -29,6 +29,8 @@ from typing import Literal
 from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.schemas import ToolObservation
+from app.models.enums.tool_call_status import ToolCallEventStatus
+from app.models.message_metadata import ToolMessageMetadata
 
 ToolTerminalStatus = Literal["completed", "failed", "cancelled"]
 
@@ -169,7 +171,7 @@ def terminal_event(
 
     # HITL 等待占位与后台结果的后台占位都不是终态：用户决定后执行完成、或后台结论并入 / 撤销时，
     # 才把展示状态推到终态。
-    status = (
+    status: ToolCallEventStatus = (
         "pending"
         if observation.awaiting_decision or observation.background
         else terminal_status(observation.status)
@@ -179,15 +181,18 @@ def terminal_event(
         run_id=run_id,
         step_id=step_id,
         tool_call_id=tool_call_id,
-        status=status,
-        error=terminal_error_hint(status, observation.display_data),
-        display_data=normalize_display_data(
-            observation.display_data,
-            session_id=session_id,
-            run_id=run_id,
-            tool_call_id=tool_call_id,
+        result=ToolMessageMetadata(
+            status=status,
+            error=terminal_error_hint(status, observation.display_data),
+            display_data=normalize_display_data(
+                observation.display_data,
+                session_id=session_id,
+                run_id=run_id,
+                tool_call_id=tool_call_id,
+            ),
+            background=observation.background,
+            deliverables=observation.deliverables,
         ),
-        background=observation.background,
     )
 
 

@@ -170,7 +170,6 @@ function toolLifecycleParts(turn, status, toolStatus) {
             matches: [{ path: "lifecycle.test.ts", line: 1, content: "lifecycle", is_match: true }],
           }
         : null,
-      isError: false,
     },
     { type: "text", text: status === "completed" ? "工具完成" : "", status: status === "running" ? "running" : "completed" },
   ];
@@ -215,7 +214,6 @@ function toolTraceState() {
       status: "completed",
       error: null,
       display_data: null,
-      isError: false,
     },
     {presentation: "activity",
       type: "tool-call", awaitingUser: false,
@@ -225,7 +223,6 @@ function toolTraceState() {
       status: "completed",
       error: null,
       display_data: null,
-      isError: false,
     },
     { type: "text", text: "检查完成", status: "completed", finalReply: true },
   ]);
@@ -240,7 +237,7 @@ function alternatingSequenceState(phase) {
   // 图标、动词与标题由前端工具目录按工具名 + 参数算出，夹具只给真实形状的参数。
   const call = (toolCallId, toolName, args, status, extra = {}) => ({presentation: ["delegate_task", "fork_session", "browser_handoff", "ask_user"].includes(toolName) ? "standalone" : toolName === "wait_messages" ? "quiet" : "activity",
     type: "tool-call", awaitingUser: false, toolCallId, toolName, args, status, error: null,
-    display_data: null, isError: false, ...extra,
+    display_data: null, ...extra,
   });
   const parts = [
     { type: "text", text: "先找调度循环在哪里。", status: "completed" },
@@ -252,7 +249,7 @@ function alternatingSequenceState(phase) {
     }),
     { type: "text", text: "tick 是写死的常量，配置模块已有校验工具，可以直接加字段。", status: "completed" },
     call("alt-typecheck", "execute_terminal", { command: "bun run typecheck" }, "failed", {
-      intent: "运行类型检查", error: "命令执行失败", isError: true, display_data: { status_hint: "命令执行失败" },
+      intent: "运行类型检查", error: "命令执行失败", display_data: { status_hint: "命令执行失败" },
     }),
     call("alt-patch", "apply_patch", { patch: "diff --git a/src/config.ts b/src/config.ts\n" }, "completed", {
       display_data: {
@@ -310,7 +307,6 @@ function webSearchState() {
         query: "assistant-ui",
         results: [{ title: "Assistant UI 官方文档", url: "https://assistant-ui.com/docs" }],
       },
-      isError: false,
     },
     { type: "text", text: "搜索完成", status: "completed" },
   ]);
@@ -343,9 +339,6 @@ function delegationState() {
       args: { child_agent_id: "delegate_reviewer", agent_name: "审查代码", message: "请审查当前改动" },
       status: "completed",
       display_data: { kind: "delegation-result", title: "审查代码", role: "Reviewer", child_session_id: 501 },
-      child_session_id: 501,
-      agent_role: "Reviewer",
-      isError: false,
     },
     {presentation: "standalone",
       type: "tool-call", awaitingUser: false,
@@ -354,9 +347,6 @@ function delegationState() {
       args: { child_agent_id: "delegate_tester", agent_name: "检查测试", message: "请检查相关测试" },
       status: "completed",
       display_data: { kind: "delegation-result", title: "检查测试", role: "Tester", child_session_id: 502 },
-      child_session_id: 502,
-      agent_role: "Tester",
-      isError: false,
     },
     { type: "text", text: "子 Agent 已开始工作。", status: "completed" },
   ]);
@@ -394,9 +384,21 @@ function turnStart(messages, start) {
   return start;
 }
 
+/** 会话交付清单：与后端 `project_session_deliverables` 同一规则（按 key 去重、留最后一次、最近在前，继承的也算）。 */
+function sessionDeliverables(messages) {
+  const latest = new Map();
+  for (const message of messages)
+    for (const part of message.parts)
+      for (const item of part.type === "tool-call" ? part.deliverables ?? [] : []) {
+        latest.delete(item.key);
+        latest.set(item.key, item);
+      }
+  return [...latest.values()].reverse();
+}
+
 /**
- * wire 上的 Session state：模拟后端把进程内终端会话与后台工作看板投影进 snapshot 顶层，并像后端一样
- * 只带最近一段消息（`messageOffset` 为前面没带的条数）。这里保存的始终是完整历史。
+ * wire 上的 Session state：模拟后端把进程内终端会话、后台工作看板与会话交付清单投影进 snapshot 顶层，并像后端
+ * 一样只带最近一段消息（`messageOffset` 为前面没带的条数）。这里保存的始终是完整历史，交付清单按完整历史算。
  */
 function wireState(sessionId, state = states.get(sessionId)) {
   const start = turnStart(state.messages, state.messages.length - HISTORY_WINDOW_MESSAGES);
@@ -408,6 +410,7 @@ function wireState(sessionId, state = states.get(sessionId)) {
     background_tasks: backgroundTasks.get(sessionId) ?? [],
     foreground_waits: (foregroundWaits.get(sessionId) ?? []).map((entry) => entry.toolCallId),
     handoffs: [],
+    deliverables: sessionDeliverables(state.messages),
   };
 }
 

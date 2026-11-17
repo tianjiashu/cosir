@@ -8,6 +8,10 @@ watchfiles 实测都如此），注册期间整个进程冻住；系统文件事
 变为根目录一个。根目录被改名或删除时递归监听直接报出根目录删除并停止，因此不再单独监听根的父目录。
 
 原生事件只是尽力而为：系统不保证投递时限（fseventsd 满载时可迟到十几秒或丢失），由 watch 端点的周期对账兜底。
+
+锁序：watchdog 的分发线程持观察器自己的锁调用 handler，而我们持 ``self._lock`` 调 ``schedule`` / ``unschedule`` /
+``stop``（都要观察器锁）。所以事件回调 ``changed`` 不拿 ``self._lock``：订阅集合写时复制（增删时在锁内换一个新的
+不可变集合），回调只读当前引用。回调一旦拿锁，两个线程按相反顺序等两把锁就会永久卡死（实测可复现）。
 """
 
 import asyncio
@@ -38,7 +42,6 @@ class FileSubscription:
     loop: asyncio.AbstractEventLoop
     changed: asyncio.Event
     paths: set[Path] = field(default_factory=set)
-    polling: bool = False
     closed: bool = False
 
     def wants(self, path: Path) -> bool:
@@ -51,10 +54,12 @@ class FileSubscription:
 
 @dataclass(eq=False)
 class _Registration:
-    """一个工作区在观察器上的递归监听；``idle_since`` 为最后一个订阅离开的时刻，有订阅时为 None。"""
+    """一个工作区在观察器上的递归监听；``idle_since`` 为最后一个订阅离开的时刻，有订阅时为 None。
+    ``degraded`` 只用于「监听线程已退出」的告警只记一次，是否轮询由 ``polling`` 现场推导。"""
 
     watch: ObservedWatch
     idle_since: float | None = None
+    degraded: bool = False
 
 
 class _Handler(FileSystemEventHandler):
@@ -75,7 +80,8 @@ class WorkspaceFileWatcher:
         self._lock = threading.RLock()
         self._observer: BaseObserver | None = None
         self._registrations: dict[int, _Registration] = {}
-        self._subscribers: set[FileSubscription] = set()
+        # 写时复制：只在 self._lock 内整体替换，事件回调不加锁直接读（见模块说明的锁序）。
+        self._subscribers: frozenset[FileSubscription] = frozenset()
         self._timers: dict[int, threading.Timer] = {}
 
     def subscribe(
@@ -93,17 +99,18 @@ class WorkspaceFileWatcher:
                 continue
         sub = FileSubscription(workspace_id, root, loop, asyncio.Event(), targets)
         with self._lock:
-            self._subscribers.add(sub)
+            self._subscribers = self._subscribers | {sub}
             registration = self._registrations.get(workspace_id)
             if registration is None:
-                sub.polling = not self._register(workspace_id, root)
+                self._register(workspace_id, root)
             else:
                 registration.idle_since = None
                 self._cancel_timer(workspace_id)
         return sub
 
-    def _register(self, workspace_id: int, root: Path) -> bool:
-        """在持锁状态下注册递归监听；失败时订阅转轮询，由周期对账兜底。注册耗时记进日志，用来观察进程冻结。"""
+    def _register(self, workspace_id: int, root: Path) -> None:
+        """在持锁状态下注册递归监听；失败时不登记，这个工作区的订阅即为轮询（``polling``），由周期对账兜底，
+        下一个新订阅会再试一次。注册耗时记进日志，用来观察进程冻结。"""
         started = time.monotonic()
         try:
             if self._observer is None:
@@ -118,7 +125,7 @@ class WorkspaceFileWatcher:
                     "data": {"workspace_id": workspace_id, "error": str(exc)},
                 },
             )
-            return False
+            return
         self._registrations[workspace_id] = _Registration(watch)
         log.info(
             "workspace_watch_registered",
@@ -130,39 +137,46 @@ class WorkspaceFileWatcher:
                 },
             },
         )
-        return True
 
     def changed(self, workspace_id: int, event: FileSystemEvent) -> None:
-        """原生事件入口：按事件路径（及移动的目标路径）找出关心它的订阅。根目录被删时根恒在订阅里，全部通知。"""
+        """原生事件入口（watchdog 分发线程，持观察器锁调用）：按事件路径（及移动的目标路径）找出关心它的订阅。
+        根目录被删时根恒在订阅里，全部通知。不拿 ``self._lock``，见模块说明的锁序。"""
         paths = [Path(os.fsdecode(event.src_path))]
         if event.dest_path:
             paths.append(Path(os.fsdecode(event.dest_path)))
-        with self._lock:
-            for sub in self._subscribers:
-                if sub.workspace_id == workspace_id and any(sub.wants(path) for path in paths):
-                    sub.notify()
+        for sub in self._subscribers:
+            if sub.workspace_id == workspace_id and any(sub.wants(path) for path in paths):
+                sub.notify()
 
-    def check_health(self, sub: FileSubscription) -> bool:
-        """原生 emitter 可在线程内启动失败或因根目录变化停止；周期检查将其显式转为轮询状态。"""
+    def polling(self, sub: FileSubscription) -> bool:
+        """订阅所在工作区是否只能靠周期对账：没有注册（注册失败），或它自己那条监听线程已退出（根目录被删或改名）。
+
+        只看这个工作区自己的注册：观察器为每个注册各起一条 emitter 线程，别的工作区停了与它无关。结论现场推导、
+        不存在订阅上——同一事实存两份时，注册失败、线程退出、释放后重新注册三条路径都要记得同步。
+        """
         with self._lock:
-            if self._observer and any(
-                not emitter.is_alive() for emitter in self._observer.emitters
-            ):
-                if not sub.polling:
-                    log.warning(
-                        "workspace_watch_degraded",
-                        extra={
-                            "msg": "原生监听线程已退出，改用周期校验",
-                            "data": {"workspace_id": sub.workspace_id},
-                        },
-                    )
-                sub.polling = True
-            return sub.polling
+            registration = self._registrations.get(sub.workspace_id)
+            if registration is None or self._observer is None:
+                return True
+            alive = any(
+                emitter.watch == registration.watch and emitter.is_alive()
+                for emitter in self._observer.emitters
+            )
+            if not alive and not registration.degraded:
+                registration.degraded = True
+                log.warning(
+                    "workspace_watch_degraded",
+                    extra={
+                        "msg": "原生监听线程已退出，改用周期校验",
+                        "data": {"workspace_id": sub.workspace_id},
+                    },
+                )
+            return not alive
 
     def unsubscribe(self, sub: FileSubscription) -> None:
         with self._lock:
             sub.closed = True
-            self._subscribers.discard(sub)
+            self._subscribers = self._subscribers - {sub}
             registration = self._registrations.get(sub.workspace_id)
             if registration is None or self._has_subscribers(sub.workspace_id):
                 return
@@ -176,6 +190,7 @@ class WorkspaceFileWatcher:
     def release_idle(self) -> None:
         """释放空闲满 ``IDLE_RELEASE_SECONDS`` 的工作区注册；空闲计时器到期时调用，测试可注入时钟后直接调用。"""
         now = self._clock()
+        # 选出与撤销在同一次持锁内完成：放锁再撤销的话，这期间到来的新订阅会被一并撤掉、静默失去原生监听。
         with self._lock:
             idle = [
                 workspace_id
@@ -183,22 +198,18 @@ class WorkspaceFileWatcher:
                 if registration.idle_since is not None
                 and now - registration.idle_since >= IDLE_RELEASE_SECONDS
             ]
-        for workspace_id in idle:
-            self._release(workspace_id)
+            for workspace_id in idle:
+                self._release(workspace_id)
 
     def close_workspace(self, workspace_id: int) -> None:
-        with self._lock:
-            subscribers = [s for s in self._subscribers if s.workspace_id == workspace_id]
-        for sub in subscribers:
+        for sub in [s for s in self._subscribers if s.workspace_id == workspace_id]:
             self.unsubscribe(sub)
             sub.notify()
         self._release(workspace_id)
         self.files.invalidate(workspace_id)
 
     def close(self) -> None:
-        with self._lock:
-            subscribers = list(self._subscribers)
-        for sub in subscribers:
+        for sub in self._subscribers:
             self.unsubscribe(sub)
             sub.notify()
         with self._lock:
@@ -207,7 +218,10 @@ class WorkspaceFileWatcher:
             self._release(workspace_id)
 
     def _release(self, workspace_id: int) -> None:
-        """撤销该工作区的注册；没有注册了就停掉观察器（join 在锁外，避免与事件线程互等）。"""
+        """撤销该工作区的注册；没有注册了就停掉观察器并等它退出（最多 5 秒）。
+
+        ``release_idle`` 在持锁时调用它；分发线程的回调不拿 ``self._lock``，在锁内等观察器退出也不会互等。
+        """
         observer = None
         with self._lock:
             self._cancel_timer(workspace_id)

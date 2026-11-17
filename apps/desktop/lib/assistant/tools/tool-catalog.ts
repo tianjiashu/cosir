@@ -147,7 +147,7 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   session_status: { verb: "读取会话状态", icon: "info", target: sessionRef },
   wait_messages: { verb: "等待结果", icon: "clock" },
   ask_user: { verb: "向你提问", icon: "circle-help", target: questionHeaders },
-  present_files: { verb: "呈现文件", icon: "file-text", target: (args) => withMore(Array.isArray(args.files) ? args.files.map((file) => (file as { path?: unknown } | null)?.path) : undefined) },
+  present_deliverables: { verb: "交付成果", icon: "file-text", target: (args) => withMore(Array.isArray(args.items) ? args.items.map((item) => (item as { target?: unknown } | null)?.target) : undefined) },
   offer_next_step: { verb: "建议下一步", icon: "circle-help", target: (args) => str(args.ask) },
   propose_agent_configuration: { verb: "生成子 Agent 配置草稿", icon: "bot", target: (args) => str(args.agent_id) },
 };

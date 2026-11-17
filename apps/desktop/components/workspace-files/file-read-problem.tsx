@@ -5,6 +5,7 @@ import { EmptyState, ErrorState } from "@/components/ui/state-panel";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { fileReadProblem } from "@/lib/workspace-files/read-problem";
 import { useFilesStore } from "@/lib/workspace-files/workspace-files-store";
+import { baseName } from "@/lib/files/file-name";
 
 /**
  * 阅读器读不到文件时的统一展示（分类规则见 `lib/workspace-files/read-problem.ts`）。
@@ -25,7 +26,7 @@ export function FileReadProblem({ workspaceId, path, error, onRetry }: {
         description="工作区目录已被删除或移动，文件面板里的内容都无法读取。" />
     );
   if (problem === "missing-file") {
-    const name = path.split("/").at(-1)!;
+    const name = baseName(path);
     const { searchFilename, close } = useFilesStore.getState();
     return (
       <EmptyState

@@ -16,7 +16,7 @@
 - ``to_definition() -> ToolDefinition``: 返回可注册到 ``ToolRegistry`` 的工具定义。
 
 后端不承载任何渲染职责：handler 只产出模型继续工作所需的 ``content``，以及客户端
-展示所需的 ``display_data`` 和必要的内部 ``artifact_data``。成功结果应保持最小；错误
+展示所需的 ``display_data``。成功结果应保持最小；错误
 经 ``tool_error`` 构造，调用点直接写好模型可见的 ``content``（错误事实 + 下一步建议）。
 """
 

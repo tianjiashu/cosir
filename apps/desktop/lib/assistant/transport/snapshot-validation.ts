@@ -1,5 +1,6 @@
 import { IMAGE_LOCATOR } from "@/lib/assistant/attachments/attachment-locator";
 import type { TransportHistoryPage, TransportState } from "@/lib/assistant/contract";
+import { FILE_KINDS } from "@/lib/api/workspace-files";
 
 export class TransportSnapshotValidationError extends Error {
   constructor(path: string, expectation: string) {
@@ -188,7 +189,7 @@ function validatePart(value: unknown, path: string): void {
     return;
   }
   if (type !== "tool-call") throw new TransportSnapshotValidationError(`${path}.type`, "已知消息 part 类型");
-  const allowed = ["type", "toolCallId", "toolName", "presentation", "status", "args", "intent", "error", "errorCode", "awaitingUser", "display_data", "background", "isError", "child_session_id", "agent_role", "startedAt", "terminal_output_seq"];
+  const allowed = ["type", "toolCallId", "toolName", "presentation", "status", "args", "intent", "error", "awaitingUser", "display_data", "background", "deliverables", "startedAt", "terminal_output_seq"];
   if (Object.keys(part).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
   requireString(part.toolCallId, `${path}.toolCallId`);
   requireString(part.toolName, `${path}.toolName`);
@@ -200,14 +201,11 @@ function validatePart(value: unknown, path: string): void {
   }
   if (hasOwn(part, "args") && part.args !== null && !isRecord(part.args)) throw new TransportSnapshotValidationError(`${path}.args`, "对象或 null");
   if (hasOwn(part, "error") && part.error !== null && typeof part.error !== "string") throw new TransportSnapshotValidationError(`${path}.error`, "字符串或 null");
-  if (hasOwn(part, "errorCode") && part.errorCode !== null && part.errorCode !== undefined && typeof part.errorCode !== "string") throw new TransportSnapshotValidationError(`${path}.errorCode`, "字符串或 null");
   // 后端每次显式写：缺省会让「排队待执行」与「等你操作」再次混在 pending 里。
   if (typeof part.awaitingUser !== "boolean") throw new TransportSnapshotValidationError(`${path}.awaitingUser`, "布尔值");
   if (hasOwn(part, "display_data")) validateDisplayData(part.display_data, `${path}.display_data`);
-  if (hasOwn(part, "isError") && part.isError !== null && typeof part.isError !== "boolean") throw new TransportSnapshotValidationError(`${path}.isError`, "布尔值或 null");
-  if (hasOwn(part, "child_session_id") && (!Number.isInteger(part.child_session_id) || (part.child_session_id as number) < 1)) throw new TransportSnapshotValidationError(`${path}.child_session_id`, "正整数");
   if (hasOwn(part, "background")) validateBackgroundWork(part.background, `${path}.background`);
-  if (hasOwn(part, "agent_role") && (typeof part.agent_role !== "string" || !part.agent_role.trim())) throw new TransportSnapshotValidationError(`${path}.agent_role`, "非空字符串");
+  if (hasOwn(part, "deliverables")) validateDeliverables(part.deliverables, `${path}.deliverables`);
   if (hasOwn(part, "startedAt") && part.startedAt !== null && (typeof part.startedAt !== "string" || !part.startedAt)) throw new TransportSnapshotValidationError(`${path}.startedAt`, "非空字符串或 null");
   if (hasOwn(part, "terminal_output_seq") && (!Number.isInteger(part.terminal_output_seq) || (part.terminal_output_seq as number) < 0)) throw new TransportSnapshotValidationError(`${path}.terminal_output_seq`, "非负整数");
 }
@@ -282,6 +280,38 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
 
 const BACKGROUND_TASK_KINDS = ["terminal_command"] as const;
 const BACKGROUND_TASK_STATUSES = ["running", "settling", "completed", "cancelled"] as const;
+
+const DELIVERABLE_FIELDS: Record<string, string[]> = {
+  file: ["type", "key", "caption", "workspacePath", "absolutePath", "kind", "size", "width", "height"],
+  directory: ["type", "key", "caption", "workspacePath", "absolutePath"],
+  url: ["type", "key", "caption", "url"],
+};
+
+/** 交付记录按 `type` 精确校验：字段集合随类型而定（后端 `conversation_state_deliverable.py` 同一份契约）。 */
+function validateDeliverables(value: unknown, path: string): void {
+  if (!Array.isArray(value)) throw new TransportSnapshotValidationError(path, "数组");
+  value.forEach((raw, index) => {
+    const at = `${path}[${index}]`;
+    const item = requireRecord(raw, at);
+    const fields = typeof item.type === "string" ? DELIVERABLE_FIELDS[item.type] : undefined;
+    if (!fields) throw new TransportSnapshotValidationError(`${at}.type`, "file、directory 或 url");
+    requireExactKeys(item, fields, at);
+    requireString(item.key, `${at}.key`);
+    if (item.caption !== null) requireString(item.caption, `${at}.caption`);
+    if (item.type === "url") {
+      requireString(item.url, `${at}.url`);
+      return;
+    }
+    if (item.workspacePath !== null) requireString(item.workspacePath, `${at}.workspacePath`);
+    requireString(item.absolutePath, `${at}.absolutePath`);
+    if (item.type === "file") {
+      if (!(FILE_KINDS as readonly string[]).includes(item.kind as string)) throw new TransportSnapshotValidationError(`${at}.kind`, "已知文件类型");
+      if (!Number.isInteger(item.size) || (item.size as number) < 0) throw new TransportSnapshotValidationError(`${at}.size`, "非负整数");
+      for (const field of ["width", "height"] as const)
+        if (item[field] !== null && (!Number.isInteger(item[field]) || (item[field] as number) < 1)) throw new TransportSnapshotValidationError(`${at}.${field}`, "正整数或 null");
+    }
+  });
+}
 
 function validateBackgroundWork(value: unknown, path: string): void {
   const work = requireRecord(value, path);
@@ -376,7 +406,7 @@ export function validateTransportUpdate(previous: TransportState, next: Transpor
 
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["title", "messages", "messageOffset", "activity", "terminal_sessions", "background_tasks", "foreground_waits", "handoffs", ...(state.fork === undefined ? [] : ["fork"]), ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  requireExactKeys(state, ["title", "messages", "messageOffset", "activity", "terminal_sessions", "background_tasks", "foreground_waits", "handoffs", "deliverables", ...(state.fork === undefined ? [] : ["fork"]), ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
   // 允许为空：未开始的会话还没有标题，首条用户输入并入时才命名。
   if (typeof state.title !== "string") throw new TransportSnapshotValidationError("title", "字符串");
   if (state.fork !== undefined) {
@@ -406,6 +436,9 @@ export function parseTransportState(value: unknown): TransportState {
   if (!Array.isArray(state.background_tasks)) throw new TransportSnapshotValidationError("background_tasks", "数组");
   const backgroundTaskIds = new Set<string>();
   state.background_tasks.forEach((entry, index) => validateBackgroundTask(entry, `background_tasks[${index}]`, backgroundTaskIds));
+  validateDeliverables(state.deliverables, "deliverables");
+  const deliverableKeys = new Set((state.deliverables as { key: string }[]).map((item) => item.key));
+  if (deliverableKeys.size !== (state.deliverables as unknown[]).length) throw new TransportSnapshotValidationError("deliverables", "key 不重复");
   if (!Array.isArray(state.foreground_waits)) throw new TransportSnapshotValidationError("foreground_waits", "数组");
   const foregroundIds = new Set<string>();
   state.foreground_waits.forEach((value, index) => {

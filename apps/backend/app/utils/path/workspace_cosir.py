@@ -4,8 +4,8 @@
 Agent 配置、cosir 专属 Skill、Skill 启停、MCP 配置、文件面板设置等）的路径；共享 Skill 目录见
 ``shared_skills``。只做路径运算，**不创建目录、不读写文件、不依赖业务模型**。
 
-为什么集中：``.cosir`` 基名与子目录规则此前在 ``workspace_service``、``attachment_service``、
-``image_utils`` 三处各自拼接，口径容易漂移；本模块是唯一允许拼接 ``.cosir`` 基名的位置。
+为什么集中：``.cosir`` 基名与子目录规则此前在 ``workspace_service``、``attachment_service`` 等
+多个模块各自拼接，口径容易漂移；本模块是唯一允许拼接 ``.cosir`` 基名的位置。
 
 不负责：目录创建（见 ``WorkspaceService``）、附件与工具产物 artifact 的实际读写、系统级
 路径落点（见 ``app.utils.path.system_cosir``）。

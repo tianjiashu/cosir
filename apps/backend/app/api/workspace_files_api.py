@@ -29,6 +29,7 @@ from app.service.workspace_files import (
     WorkspaceFilesService,
     WorkspaceFileWatcher,
 )
+from app.service.workspace_files.image_preview import ImagePreview
 
 Files = Annotated[WorkspaceFilesService, Depends(get_workspace_files_service)]
 Watcher = Annotated[WorkspaceFileWatcher, Depends(get_workspace_file_watcher)]
@@ -152,20 +153,30 @@ async def text(
 
 @app.get("/workspaces/{workspace_id}/files/resource", response_model=None)
 async def resource(
-    workspace_id: int, request: Request, files: Files, path: str, version: str
+    workspace_id: int,
+    request: Request,
+    files: Files,
+    path: str,
+    version: str,
+    preview: ImagePreview | None = None,
 ) -> Response:
-    """资源地址按版本寻址（版本必填），响应可长期缓存；版本过期返回 409，前端重读信息后换地址。"""
+    """资源地址按版本寻址（版本必填），响应可长期缓存；版本过期返回 409，前端重读信息后换地址。
+
+    ``preview`` 只用于位图（交付物的方块与大图卡），取值是固定的两种，缓存变体有界；对其他类型带它是调用写错，400。
+    """
     metadata = await run_read(request, lambda: files.info(workspace_id, path))
     with file_errors():
         if metadata.version != version:
             raise FileConflictError("文件已变化，请重新加载")
-        if metadata.kind not in {"image", "svg", "pdf"}:
+        if metadata.kind not in {"image", "svg", "pdf", "audio", "video"}:
             raise ValueError("此文件使用文本或元信息预览")
+        if preview is not None and metadata.kind != "image":
+            raise ValueError("缩略图只用于位图")
         resolved = await asyncio.to_thread(files.path, workspace_id, path)
     if metadata.kind == "svg" and metadata.size > 8 * 1024 * 1024:
         raise HTTPException(413, "SVG 超出图片解析预算，请切换源码分段阅读")
     root = await run_read(request, lambda: files.root(workspace_id))
-    return WorkspaceResourceResponse(root, resolved, metadata)
+    return WorkspaceResourceResponse(root, resolved, metadata, preview)
 
 
 def line(value: object) -> bytes:
@@ -210,7 +221,7 @@ async def watch(
 
     async def stream() -> AsyncIterator[bytes]:
         try:
-            yield line({"type": "ready", "polling": subscription.polling})
+            yield line({"type": "ready", "polling": watcher.polling(subscription)})
             last_reconcile = time.monotonic()
             while not subscription.closed:
                 try:
@@ -220,7 +231,7 @@ async def watch(
                     yield line({"type": "changed"})
                 except TimeoutError:
                     # 周期失效也覆盖原生监听丢事件、目录删除重建、休眠恢复。
-                    polling = await asyncio.to_thread(watcher.check_health, subscription)
+                    polling = await asyncio.to_thread(watcher.polling, subscription)
                     reconcile = polling or time.monotonic() - last_reconcile >= 15
                     if reconcile:
                         last_reconcile = time.monotonic()

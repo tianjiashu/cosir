@@ -1,15 +1,14 @@
 """有界文件探测与分段文本读取；读取版本变化向上报告，不拼接不同版本。"""
 
 import codecs
-import mimetypes
 import os
 import threading
 from pathlib import Path
-from typing import Literal
 
 from charset_normalizer import from_bytes
 
 from app.service.workspace_files.file_access import regular_file
+from app.service.workspace_files.file_classification import classify, system_preview
 from app.service.workspace_files.file_models import FileConflictError, FileInfo, TextPage
 from app.service.workspace_files.image_preview import image_size
 
@@ -61,7 +60,8 @@ def inspect_file(root: Path, path: Path) -> FileInfo:
     with regular_file(path, root) as source:
         stat = os.fstat(source.fileno())
         sample = source.read(65536)
-        kind, mime, encoding = _classify(path, sample)
+        encoding = encoding_of(sample)
+        kind, mime = classify(path, sample, encoding)
         size = image_size(source) if kind == "image" else None
     return FileInfo(
         path.relative_to(root).as_posix(),
@@ -75,39 +75,8 @@ def inspect_file(root: Path, path: Path) -> FileInfo:
         encoding,
         size[0] if size else None,
         size[1] if size else None,
+        system_preview(path, kind),
     )
-
-
-def _classify(
-    path: Path, sample: bytes
-) -> tuple[Literal["text", "markdown", "image", "svg", "pdf", "binary"], str, str | None]:
-    """按文件头与后缀判定类型；全仓只此一处判定，预览器都按它的结果分发。"""
-    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    encoding = encoding_of(sample)
-    kind: Literal["text", "markdown", "image", "svg", "pdf", "binary"] = (
-        "text" if encoding else "binary"
-    )
-    if sample.startswith(b"%PDF-"):
-        kind, mime = "pdf", "application/pdf"
-    elif sample.startswith(b"\x89PNG\r\n"):
-        kind, mime = "image", "image/png"
-    elif sample.startswith(b"\xff\xd8\xff"):
-        kind, mime = "image", "image/jpeg"
-    elif sample.startswith((b"GIF87a", b"GIF89a")):
-        kind, mime = "image", "image/gif"
-    elif sample.startswith(b"BM"):
-        kind, mime = "image", "image/bmp"
-    elif sample[:4] == b"RIFF" and sample[8:12] == b"WEBP":
-        kind, mime = "image", "image/webp"
-    elif sample[4:12] in {b"ftypavif", b"ftypavis"}:
-        kind, mime = "image", "image/avif"
-    elif sample.startswith(b"\x00\x00\x01\x00"):
-        kind, mime = "image", "image/x-icon"
-    elif path.suffix.lower() == ".svg" and encoding:
-        kind, mime = "svg", "image/svg+xml"
-    elif path.suffix.lower() in {".md", ".markdown", ".mdown"} and encoding:
-        kind = "markdown"
-    return kind, mime, encoding
 
 
 def read_text(

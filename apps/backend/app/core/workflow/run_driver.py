@@ -27,6 +27,7 @@ from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.workflow_run_failure import WorkflowRunFailure
 from app.models import RunRecord
 from app.models.enums.run_status import RunTransition
+from app.models.message_metadata import ToolMessageMetadata
 from app.models.run_failure import run_failure_message
 from app.service.depends import (
     get_run_ledger,
@@ -150,7 +151,7 @@ class RunDriver:
                     session_id=run.session_id,
                     run_id=run.id,
                     tool_call_id=tool_call_id,
-                    status="cancelled",
+                    result=ToolMessageMetadata(status="cancelled"),
                 )
             )
         cancel_placeholders(run.session_id, context.claimed_decisions(run.session_id), INTERRUPTED_HINT)

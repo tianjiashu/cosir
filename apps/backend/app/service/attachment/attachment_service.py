@@ -101,10 +101,12 @@ class SavedImage:
 
 @dataclass(frozen=True, slots=True)
 class _WorkspaceAttachmentDirs:
-    """一个 workspace 的根目录与附件落盘目录（仅本模块内部使用）。"""
+    """一个 workspace 的根目录与附件落盘目录（仅本模块内部使用）。``attachment_root`` 是附件目录的身份根，
+    在 ``_dirs`` 校验目录时取一次，之后的包含判定都用它。"""
 
     workspace_root: Path
     attachment_dir: Path
+    attachment_root: RootDirectory
 
 
 class AttachmentService:
@@ -149,10 +151,18 @@ class AttachmentService:
         _assert_real_directory(cosir, create=True)
         _assert_real_directory(directory, create=True)
         _assert_real_directory(staging, create=True)
+        try:
+            attachment_root = RootDirectory.at(directory)
+        except OSError as exc:
+            # 目录刚校验过存在：这里失败只可能是取不到文件身份（无权限、卷不提供文件号、刚被删）。
+            raise ImageNormalizationError(
+                "ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用"
+            ) from exc
 
         return _WorkspaceAttachmentDirs(
             workspace_root=Path(workspace.root_path).resolve(),
             attachment_dir=directory,
+            attachment_root=attachment_root,
         )
 
     @staticmethod
@@ -162,19 +172,17 @@ class AttachmentService:
         return asset_id
 
     @staticmethod
-    def _inside(directory: Path, candidate: Path) -> Path:
-        """候选路径（解析链接后）须在附件目录内，按文件身份判定；返回解析后的路径。"""
+    def _inside(root: RootDirectory, candidate: Path) -> Path:
+        """候选路径（解析链接后）须在附件目录内，按文件身份判定；返回解析后的路径。
+        ``contains`` 逐层跳过 ``stat`` 失败的层，不抛系统错误：判为不在时就是真的不在附件目录里。"""
         resolved = candidate.resolve()
-        try:
-            inside = RootDirectory.at(directory).contains(resolved)
-        except OSError:
-            inside = False
-        if not inside:
+        if not root.contains(resolved):
             raise ImageNormalizationError("ATTACHMENT_NOT_OWNED", "附件不属于当前工作区")
         return resolved
 
-    def _files(self, directory: Path, asset_id: str) -> list[Path]:
+    def _files(self, dirs: _WorkspaceAttachmentDirs, asset_id: str) -> list[Path]:
         self._safe_asset_id(asset_id)
+        directory = dirs.attachment_dir
         candidates = [
             *directory.glob(f".uploading/{asset_id}.*"),
             *directory.glob(f"{asset_id}.*"),
@@ -186,7 +194,7 @@ class AttachmentService:
                     "ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用"
                 )
             if path.is_file() and _asset_id_from_name(path.name) == asset_id:
-                files.append(self._inside(directory, path))
+                files.append(self._inside(dirs.attachment_root, path))
         return files
 
     async def upload(self, workspace_id: int, file: UploadFile) -> AttachmentDescriptor:
@@ -339,7 +347,7 @@ class AttachmentService:
                 os.link(normalized.path, target)
         finally:
             normalized_tmp.unlink(missing_ok=True)
-        files = self._files(directory, asset_id)
+        files = self._files(workspace_dirs, asset_id)
         if not files or target not in files:
             raise ImageNormalizationError("ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用")
         descriptor = AttachmentDescriptor(
@@ -378,13 +386,9 @@ class AttachmentService:
         """解析一个已发布的 workspace 图片，不触发 Pillow 解析或格式转换。"""
 
         safe_asset_id = self._safe_asset_id(asset_id)
-        directory = self._dirs(workspace_id).attachment_dir
+        dirs = self._dirs(workspace_id)
         path = next(
-            (
-                item
-                for item in self._files(directory, safe_asset_id)
-                if ".uploading" not in item.parts
-            ),
+            (item for item in self._files(dirs, safe_asset_id) if ".uploading" not in item.parts),
             None,
         )
         if path is None:
@@ -427,7 +431,7 @@ class AttachmentService:
         dirs = self._dirs(workspace_id)
         directory = dirs.attachment_dir
         try:
-            candidate = self._inside(directory, dirs.workspace_root / image_path)
+            candidate = self._inside(dirs.attachment_root, dirs.workspace_root / image_path)
         except ImageNormalizationError:
             raise
         except (OSError, RuntimeError, ValueError) as exc:
@@ -443,7 +447,7 @@ class AttachmentService:
         """将已完成安全检查的附件路径转换为稳定的 workspace 相对路径。"""
 
         dirs = self._dirs(workspace_id)
-        checked = self._inside(dirs.attachment_dir, path)
+        checked = self._inside(dirs.attachment_root, path)
         return checked.relative_to(dirs.workspace_root).as_posix()
 
 

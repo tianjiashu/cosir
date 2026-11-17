@@ -1,6 +1,5 @@
 export {
   CAPSULE_TAG_PATTERN,
-  basename,
   capsuleFromTag,
   capsulePlainText,
   escapeAttribute,

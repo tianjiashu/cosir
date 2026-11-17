@@ -10,6 +10,7 @@ from __future__ import annotations
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.schemas import ToolCall, ToolExecutionContext
+from app.models.message_metadata import ToolMessageMetadata
 
 
 def emit_running(call: ToolCall, execution_context: ToolExecutionContext) -> None:
@@ -21,7 +22,6 @@ def emit_running(call: ToolCall, execution_context: ToolExecutionContext) -> Non
             run_id=execution_context.run_id,
             step_id=execution_context.step_id,
             tool_call_id=execution_context.tool_call_id,
-            status="running",
-            # 真实执行器发的是准入后的参数；替身不过门禁，按合法 JSON 直接解码。
+            result=ToolMessageMetadata(status="running"),
         )
     )

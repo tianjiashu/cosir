@@ -27,7 +27,7 @@
   新契约：
     - ToolMessageMetadata.deliverables / ToolObservation.deliverables / ToolCallStatusChangedEvent.deliverables；
     - 工具 part 新字段 deliverables（驼峰 wire 形状）；snapshot 顶层 deliverables；
-    - 资源接口 edge 参数（铺满 240×192）；StripImage.previewSrc、ImageTile / StripImage.onError；
+    - 资源接口 preview 参数（tile：铺满 240×192；card：装进 720×480，单张大图卡用）；StripImage.previewSrc、ImageTile / StripImage.onError；
     - 工具名 present_deliverables，参数 items[].target / caption。
 
 【链路复用】
@@ -39,7 +39,7 @@
     - 夹具的 deliver_change（合成事件）；视觉回归设施与 WorkspaceFilesBackend。
   改造后复用：
     - useFileWatch 从面板自持改为由 AppLayout 按工作区挂载，面板与会话只登记路径；对面板用户行为不变。
-    - image_preview 增加「铺满框」缩放；不带 edge 的请求行为不变。
+    - image_preview 增加两种缩放；不带 preview 的请求行为不变。
 
 【问题清单】
   - 实时终态早于结果行落库：驱动失败补写的取消被已完成守卫丢弃，实时快照仍显示卡片、冷重建才消失。
@@ -66,7 +66,7 @@
           提示词常量（+5）；前端契约与校验（+30）、deliverable-layout（+90）、聚合卡与胶囊组件（+200）、
           打开器入口（+30）、估高（+15）。约 +640。测试约 +350，夹具约 +15。
   二b：
-    新增：image_preview 铺满框（+25）、资源接口 edge（+10）；StripImage / ImageTile 的 previewSrc 与 onError（+20）；
+    新增：image_preview 两种缩放（+30）、资源接口 preview（+10）；单张大图卡（+30）；StripImage / ImageTile 的 previewSrc 与 onError（+20）；
           方块与失败状态（+60）。约 +115。测试约 +80。
   二c：
     精简：resource-watch.tsx（−36）；面板自持的 useFileWatch 拼装（约 −10）。约 −46。
@@ -82,7 +82,7 @@
     - 新增 assistant_transport/state/conversation_state_deliverable.py：照 conversation_state_background_task.py。
     - 新增 lib/assistant/turn/deliverable-layout.ts：聚合、去重、排版、行数，回合布局与估高共用。
     - 新增 components/conversation/tools/reply-presentation/deliverable-capsule.tsx、deliverable-tile-row.tsx，
-      重写 deliverables-card.tsx 为聚合卡；新增 components/ui/middle-truncate.tsx（仓里没有中间截断组件）。
+      重写 deliverables-card.tsx 为聚合卡；新增 components/ui/middle-truncate.tsx，行内胶囊（InlineToken）原有的扩展名拆分并入它，全仓一条截断规则。
     - 新增 lib/workspace-files/file-watch-store.ts；删除 lib/workspace-files/resource-watch.tsx。
   同步：契约文档（工具表与 kind 表）、AGENTS（kind 清单、snapshot 顶层字段、文件监听）、测试计划对应编号。
 
@@ -119,7 +119,8 @@
 
 | 编号 | 验证什么 | 层级与文件 |
 |---|---|---|
-| B1 | `edge` 铺满框：1000×4000 的长图缩到宽 240（铺满）、300×200 不放大、GIF 与动态 WebP 在预算内原样返回；带 `edge` 的响应同样长期缓存 | PY `test_workspace_files.py` |
+| B1 | `preview=tile` 铺满框：1000×4000 的长图缩到宽 240（铺满）、300×200 不放大；`preview=card` 装进框：4000×1000 缩到宽 720、500×300 不放大；GIF 与动态 WebP 在预算内原样返回；两种响应都长期缓存；未知取值 422 | PY `test_workspace_files.py` |
+| B5 | 单张大图卡：本回合只有一个方块时出大图卡（最宽 360、最高 240，按原图比例），同组胶囊排在下面；两个以上方块仍是方块行；宽高读不出时退回方块；估高按大图卡高度 | VT `deliverable-layout.test.ts`、`message-height.test.ts`；PW 集成 |
 | B2 | `previewSrc`：方块用小图、灯箱用原图；不传时三处现有调用方行为不变 | VT `image-strip` 相关单测、`image-read-view.test.ts` |
 | B3 | 失败：`onError` 触发重读文件信息，版本变了换新地址；版本没变显示失败图标，方块尺寸不变 | VT + PW 集成（夹具 `image-update`） |
 | B4 | 宽高为空的图不请求资源，直接显示无法预览的方块 | PW 集成（夹具加一张损坏 PNG） |
@@ -128,13 +129,11 @@
 
 | 编号 | 验证什么 | 层级与文件 |
 |---|---|---|
-| C1 | 清单投影：按 `key` 留最后一次、新的在前；继承行计入；撤回后消失；事件带记录时重算；历史窗口只带最近一段时清单仍含窗口外条目 | PY 新 `test_deliverable_projection.py`、`test_snapshot_window.py` |
-| C2 | 顶层字段写入侧校验、HTTP 契约、前端严格校验 | PY `test_state_snapshot_write_side_validation.py`、`test_snapshot_http_contract.py`；VT `snapshot-validation.test.ts` |
-| C3 | 夹具一次改完：后端 7 处整 dict 断言，前端 9 个内联 snapshot 的 spec、两份 `transport-fixtures.ts`、`test-server.mjs`、`history-window.spec.ts` 的键列表 | PY / PW 全量 |
+| C1–C3 | snapshot 顶层清单的投影、校验与夹具：随阶段五（侧栏「产出」卡，它唯一的使用方）一起完成（`test_session_deliverables.py`、`test_live_cold_parity.py`）。监听登记改从已加载的消息算出（`workspaceDeliverablePaths`），流式增量时键不变（`session-deliverable-watch.test.ts`） | 阶段五 |
 | C4 | store：按工作区引用计数；登记清零即关闭订阅；面板与会话登记同一工作区时合并成一条连接 | VT 新 `file-watch-store.test.ts` |
-| C5 | E2E 集成：有工作区内交付物时订阅存在（面板关着也在）；离开会话订阅归零；合成事件后卡片大小更新；文件删除后胶囊变「已不存在」 | PW `workspace-files-integration.spec.ts` |
+| C5 | E2E 集成：有工作区内交付物时订阅存在（面板关着也在）；离开会话订阅归零；合成事件后卡片大小更新；文件删除后胶囊变「已不存在」 | PW `workspace-files-deliverables.spec.ts`（独立夹具工作区） |
 | C6 | 现读状态：403 →「无法访问」（read-problem 新类别）、500 →「—」、工作区不存在 →「—」；目录大小一格恒为「文件夹」 | VT + PW（`page.route` 伪造） |
-| C7 | 打开器隐藏目录：被浏览可见性隐藏的目录点击后提示并给「在文件夹中显示」；对话里的目录链接同样 | VT `open-link.test.tsx` |
+| C7 | 打开器隐藏目录：对话里所有目录链接都有同样的问题、与交付物无关，单独处理 | 不在二c |
 | C8 | 非集成 E2E 补桩：快照里有工作区内交付物的用例都用共用的 `page.route` 桩应答 `/files/info` 与 `/files/watch`，不出现无限重连告警 | PW 共用 helper（`tests/e2e/workspace-files-stubs.ts`） |
 | C9 | 现有用例「收起面板后订阅数为 0」不变 | PW 集成 |
 
@@ -160,6 +159,7 @@
 | V6 | 无宿主的开发模式：没有次按钮 | 二a |
 | V7 | 窄列宽（约 640px）换行 | 二a |
 | V8 | 图片方块：已加载、SVG、加载中占位（路由延迟）、加载失败图标 | 二b |
+| V11 | 单张大图卡：横图、竖长图（受最高 240 限制）、与胶囊同组 | 二b |
 | V9 | 方块与胶囊同组：方块一行在上、胶囊在下 | 二b |
 | V10 | 现读状态：已不存在、无法访问、「—」 | 二c |
 

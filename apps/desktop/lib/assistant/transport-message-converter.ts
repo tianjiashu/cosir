@@ -179,9 +179,6 @@ function convertToolCallPart(part: TransportToolCallPart): ThreadMessage["conten
     error: backendStatus === "cancelled"
       ? part.error || "已取消"
       : backendStatus === "failed" ? part.error || "执行失败" : null,
-    errorCode: part.errorCode ?? null,
-    childSessionId: part.child_session_id,
-    agent_role: part.agent_role,
     background: part.background !== undefined,
     startedAt: part.startedAt ?? undefined,
   };
@@ -221,7 +218,7 @@ function convertToolCallPart(part: TransportToolCallPart): ThreadMessage["conten
 
   return {
     ...base,
-    ...(backendStatus === "completed" ? { isError: part.isError ?? false } : {}),
+    ...(backendStatus === "completed" ? { isError: false } : {}),
   };
 }
 

@@ -50,6 +50,7 @@ from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_c
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import tool_batch_runner
 from app.models.conversation_input import UserInputPresentation
+from app.models.message_metadata import ToolMessageMetadata
 from app.models.session_extra import SessionExtra
 from tests.runtime_context_stub import runtime_stub
 from tests.transport_fixtures import consumed
@@ -279,7 +280,7 @@ def _seed_running_execute_terminal(projector: ConversationEventProjector, call_i
             session_id=_SESSION_ID,
             run_id=_RUN_ID,
             tool_call_id=call_id,
-            status="running",
+            result=ToolMessageMetadata(status="running"),
         )
     )
 
@@ -360,8 +361,8 @@ def test_real_cancel_projection_keeps_streamed_output(
 
     # 取消事件本身不带成功态展示；保留输出是投影侧的职责。
     assert event.status == "cancelled"
-    assert event.error == "已取消"
-    assert event.display_data == {}
+    assert event.result.error == "已取消"
+    assert event.result.display_data == {}
 
     part = owner.state["messages"][1]["parts"][0]
     assert part["status"] == "cancelled"

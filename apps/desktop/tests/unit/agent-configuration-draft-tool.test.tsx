@@ -23,7 +23,6 @@ describe("AgentConfigurationDraftTool", () => {
               system_prompt: "请完成后端排查。",
             },
             error: null,
-            errorCode: null,
           }}
           sessionId={3}
           toolCallId="tool-call-1"

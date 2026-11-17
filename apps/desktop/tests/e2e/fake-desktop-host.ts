@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import type { BrowserState } from "@/electron/shared/host-contract";
+import type { BrowserState, HostPlatform } from "@/electron/shared/host-contract";
 import { API_ORIGIN } from "./e2e-env";
 
 /** 测试宿主记下的内置浏览器调用：方法名与参数，按调用顺序。 */
@@ -14,12 +14,15 @@ export type FakeBrowserCall = { method: string; args: unknown[] };
  *
  * 内置浏览器只是一份静态状态（`browser.state`，缺省为空）：不开真实网页，作答、定位下载、在文件夹中显示等调用只记进
  * `fakeBrowserCalls`（`browser.failAnswer` 时作答失败），状态不随调用变化；真实标签行为由桌面 E2E 覆盖。
+ *
+ * `platform` 缺省是 linux（没有快速查看、没有缩略图）；按平台分支的界面用 darwin / win32 测。文件出口（显示、打开、
+ * 快速查看、缩略图）同样只记调用；`thumbnail` 给出时缩略图返回它（data URL），否则按「系统没给出」失败。
  */
 export async function installFakeDesktopHost(
   page: Page,
-  options: { directory?: string | null; browser?: { state?: BrowserState; failAnswer?: boolean } } = {},
+  options: { directory?: string | null; browser?: { state?: BrowserState; failAnswer?: boolean }; platform?: HostPlatform; thumbnail?: string } = {},
 ) {
-  await page.addInitScript(({ directory, backendBaseUrl, browserState, failAnswer }) => {
+  await page.addInitScript(({ directory, backendBaseUrl, browserState, failAnswer, platform, thumbnail }) => {
     // 选择框的 <input> 不一定挂在文档上，所以在读取 files 时记录，而不是监听 change 冒泡。
     const pickedFiles = new WeakSet<File>();
     const filesDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "files")!;
@@ -31,19 +34,28 @@ export async function installFakeDesktopHost(
         return files;
       },
     });
-    const snapshot = { generation: 1, status: { state: "ready" }, backendBaseUrl };
+    let snapshot = { generation: 1, status: { state: "ready" }, backendBaseUrl };
+    const backendListeners = new Set<(next: typeof snapshot) => void>();
     const browserCalls: { method: string; args: unknown[] }[] = [];
     const record = (method: string, args: unknown[]) => {
       browserCalls.push({ method, args });
     };
     Object.assign(window, {
       fakeBrowserCalls: browserCalls,
+      // 模拟后端重启：宿主推送新一代快照、地址换新（真实宿主每次重启都重新分配端口）。
+      fakeBackendRestart: (baseUrl: string) => {
+        snapshot = { ...snapshot, generation: snapshot.generation + 1, backendBaseUrl: baseUrl };
+        for (const listener of backendListeners) listener(snapshot);
+      },
       cosirHost: {
-        platform: "linux",
+        platform,
         backend: {
           snapshot: async () => snapshot,
           restart: async () => snapshot,
-          onChange: () => () => undefined,
+          onChange: (listener: (next: typeof snapshot) => void) => {
+            backendListeners.add(listener);
+            return () => backendListeners.delete(listener);
+          },
         },
         log: { write: async () => undefined },
         dialog: { openDirectory: async () => directory },
@@ -51,14 +63,22 @@ export async function installFakeDesktopHost(
         files: {
           pathOf: (file: File) => (pickedFiles.has(file) ? `/tmp/${file.name}` : ""),
           reveal: async (...args: unknown[]) => record("files.reveal", args),
+          openExternally: async (...args: unknown[]) => record("files.openExternally", args),
+          quickLook: async (...args: unknown[]) => record("files.quickLook", args),
+          thumbnail: async (...args: unknown[]) => {
+            record("files.thumbnail", args);
+            if (!thumbnail) throw new Error("系统没有给出这个文件的缩略图");
+            return thumbnail;
+          },
         },
         browser: {
           state: async () => browserState,
           onStateChanged: () => () => undefined,
-          open: async () => { throw new Error("测试宿主不提供内置浏览器"); },
+          // 只记下请求、不模拟标签：用例据此断言「要在内置浏览器打开什么」（地址随 navigate 给出）。
+          open: async (...args: unknown[]) => { record("browser.open", args); return "fake-tab"; },
           place: async () => undefined,
           freeze: async () => "",
-          navigate: async () => undefined,
+          navigate: async (...args: unknown[]) => record("browser.navigate", args),
           close: async () => undefined,
           answerDialog: async (...args: unknown[]) => {
             record("answerDialog", args);
@@ -73,6 +93,8 @@ export async function installFakeDesktopHost(
     backendBaseUrl: API_ORIGIN,
     browserState: options.browser?.state ?? { tabs: [], downloads: [] },
     failAnswer: options.browser?.failAnswer ?? false,
+    platform: options.platform ?? "linux",
+    thumbnail: options.thumbnail ?? null,
   });
 }
 

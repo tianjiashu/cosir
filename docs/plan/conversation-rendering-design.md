@@ -378,7 +378,7 @@ class ToolDisplayHints:
 - **显示密度设置**：等真实反馈。
 - **块级虚拟化**：长回合内部不虚拟化；回合结束后已收起，运行中有活跃尾部上界，暂不需要。
 - **多目标读取 / ripgrep 后端 / 放宽 strict（A8）/ 剥离历史推理（A9）/ 目录深度参数**：都影响 Agent 行为与成本，各自需要单独评估。
-- **part 与展示数据的其余重复**（`isError` 与 `status`、`team_run_id` 两处等）与实时 / 冷重建参数口径差异：不影响本次渲染，单独清理。
+- **part 与展示数据的其余重复**（`isError` 与 `status`、`team_run_id` 两处等）与实时 / 冷重建参数口径差异：不影响本次渲染，单独清理。（2026-11-17 已清理：`isError`、`agent_role` 与 part 顶层 `child_session_id` 删除，子会话 id 只在展示数据里。）
 - **assistant-ui 对工具状态的推导与 converter 的结果哨兵**：本次渲染不再读它，但适配层仍在；是否进一步弱化对 assistant-ui part 模型的依赖，单独评估。
 
 ## 11. 待确认

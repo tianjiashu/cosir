@@ -1,3 +1,4 @@
+import { CAPSULE_HEIGHT, deliverableRows, type DeliverablesCard } from "./deliverable-layout";
 import type { TransportOutcome, TransportToolCallPart } from "../contract";
 import { resolveDisclosure, processKey, activityKey, agentKey, userMessageKey } from "./disclosure-store";
 import { USER_MESSAGE_CLAMP_HEIGHT, USER_MESSAGE_TOGGLE_HEIGHT } from "./user-message-clamp";
@@ -108,11 +109,19 @@ const AWAITING_CARD = 96;
 const CHANGES_CARD_CHROME = 40;
 const CHANGES_FILE_ROW = 28;
 const STANDALONE_ARTIFACT_CARD = 120;
-const DELIVERABLES_CARD_CHROME = 8;
-const DELIVERABLE_ROW = 44;
-function deliverableCount(part: { display_data?: Record<string, unknown> | null }): number {
-  const files = part.display_data?.files;
-  return Array.isArray(files) ? files.length : 0;
+// 产物区内卡片之间是 `gap-2`（artifact-zone），整个产物区与其余块之间才是 ZONE_GAP。
+const ARTIFACT_GAP = 8;
+// 胶囊行间 `gap-2`。
+const CAPSULE_ROW_GAP = 8;
+function deliverablesHeight(card: DeliverablesCard): number {
+  const { tileRows, cardHeight, capsuleRows } = deliverableRows(card);
+  const sections = [
+    cardHeight,
+    tileRows * IMAGE_TILE_SIZE.regular.height + Math.max(0, tileRows - 1) * IMAGE_TILE_GAP,
+    capsuleRows * CAPSULE_HEIGHT + Math.max(0, capsuleRows - 1) * CAPSULE_ROW_GAP,
+  ].filter((height) => height > 0);
+  // 方块区与胶囊区之间是 gap-2（deliverables-card）。
+  return sections.reduce((sum, height) => sum + height, 0) + Math.max(0, sections.length - 1) * CAPSULE_ROW_GAP;
 }
 
 /** 等你操作的调用就地画成卡片：提问卡片随当前那一题的选项数变化，其余等待卡是固定的一两行。 */
@@ -153,10 +162,11 @@ function assistantHeight(message: ThreadMessage, sessionId?: number): number {
       blocks.push(PROCESS_HEADER + (groupOpen ? block.calls.length : 0) * PROCESS_ITEM);
     }
   }
-  for (const card of layout.artifacts) {
-    blocks.push(card.kind === "changes" ? CHANGES_CARD_CHROME + card.files.length * CHANGES_FILE_ROW
-      : card.kind === "deliverables" ? DELIVERABLES_CARD_CHROME + deliverableCount(card.part) * DELIVERABLE_ROW
+  if (layout.artifacts.length) {
+    const cards = layout.artifacts.map((card) => card.kind === "changes" ? CHANGES_CARD_CHROME + card.files.length * CHANGES_FILE_ROW
+      : card.kind === "deliverables" ? deliverablesHeight(card)
         : STANDALONE_ARTIFACT_CARD);
+    blocks.push(cards.reduce((sum, height) => sum + height, 0) + (cards.length - 1) * ARTIFACT_GAP);
   }
   if (layout.intro) return ROW_GAP + blocks.reduce((sum, block) => sum + block, 0) + Math.max(0, blocks.length - 1) * ZONE_GAP;
   return ROW_GAP + ASSISTANT_CHROME + blocks.reduce((sum, block) => sum + block + ZONE_GAP, 0);

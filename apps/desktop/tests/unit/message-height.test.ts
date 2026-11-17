@@ -1,4 +1,4 @@
-import { outcome, assistantMessage, toolCallPart, activity } from "./transport-fixtures";
+import { outcome, assistantMessage, toolCallPart, activity, deliveredFile } from "./transport-fixtures";
 import { useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
 import type { ThreadMessage } from "@assistant-ui/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -118,6 +118,29 @@ describe("estimateMessageHeight", () => {
     expect(estimateMessageHeight(waiting)).toBeGreaterThan(estimateMessageHeight(settled) + 60);
     const changes = (paths: string[]) => assistant(call("w", "completed", { display_data: { kind: "file-changes", changes: paths.map((path) => ({ path, status: "modified" })) } }));
     expect(estimateMessageHeight(changes(["a", "b", "c"])) - estimateMessageHeight(changes(["a"]))).toBe(56);
+  });
+
+  // 目的：交付物按胶囊行估高，产物区内卡片间距按实际的 8 计；潜在缺陷：一枚胶囊按旧的整行列表估高，滚动时跳动。
+  it("交付物按胶囊行估高，同一行再多几枚不变高，与改动卡同处产物区时只加卡片间距", () => {
+    const present = (count: number) => call("p", "completed", { toolName: "present_deliverables", presentation: "quiet", deliverables: Array.from({ length: count }, (_, i) => deliveredFile(`f${i}.md`)) });
+    const base = estimateMessageHeight(assistant(text("完")));
+    expect(estimateMessageHeight(assistant(text("完"), present(1))) - base).toBe(36 + 16);
+    expect(estimateMessageHeight(assistant(text("完"), present(3)))).toBe(estimateMessageHeight(assistant(text("完"), present(1))));
+    expect(estimateMessageHeight(assistant(text("完"), present(4))) - estimateMessageHeight(assistant(text("完"), present(3)))).toBe(44);
+    const change = call("w", "completed", { display_data: { kind: "file-changes", changes: [{ path: "a", status: "added" }] } });
+    expect(estimateMessageHeight(assistant(text("完"), change, present(1))) - estimateMessageHeight(assistant(text("完"), change))).toBe(36 + 8);
+  });
+
+  // 潜在缺陷：图片方块与单张大图卡按胶囊高度估，滚动时跳动。
+  it("图片方块按方块行估高，单张大图卡按记录里的宽高估，方块区与胶囊区之间加间距", () => {
+    const present = (...deliverables: ReturnType<typeof deliveredFile>[]) => call("p", "completed", { toolName: "present_deliverables", presentation: "quiet", deliverables });
+    const images = (count: number, extra: ReturnType<typeof deliveredFile>[] = []) => present(...Array.from({ length: count }, (_, i) => deliveredFile(`i${i}.png`, { kind: "image", width: 800, height: 400 })), ...extra);
+    const base = estimateMessageHeight(assistant(text("完")));
+    expect(estimateMessageHeight(assistant(text("完"), images(1))) - base).toBe(180 + 16);
+    // 单张 SVG 没有宽高，渲染是方块，估高也按方块。
+    expect(estimateMessageHeight(assistant(text("完"), present(deliveredFile("a.svg", { kind: "svg" })))) - base).toBe(96 + 16);
+    expect(estimateMessageHeight(assistant(text("完"), images(2))) - base).toBe(96 + 16);
+    expect(estimateMessageHeight(assistant(text("完"), images(2, [deliveredFile("a.md")]))) - base).toBe(96 + 8 + 36 + 16);
   });
 
   it("long Agent input starts compact and only grows on explicit disclosure", () => {

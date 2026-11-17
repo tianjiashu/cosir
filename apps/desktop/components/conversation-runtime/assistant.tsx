@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 
+import { useDeliverablesStore } from "@/lib/deliverables/deliverables-store";
 import { AssistantRuntime } from "@/components/conversation-runtime/assistant-runtime";
 import { ThreadSkeleton } from "@/components/conversation-runtime/thread-skeleton";
 import { TransportStatus } from "@/components/conversation-runtime/transport-status";
@@ -59,6 +60,7 @@ export const Assistant = ({
       useTerminalWorkbenchStore.getState().syncSessions(sessionId, state.terminal_sessions);
       useBackgroundTasksStore.getState().sync(sessionId, { ...state, toolCalls });
       useHandoffStore.getState().sync(sessionId, state.handoffs);
+      useDeliverablesStore.getState().sync(sessionId, state.deliverables);
     },
   });
 

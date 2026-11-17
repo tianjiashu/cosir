@@ -500,14 +500,7 @@ class RuntimeMessageContextManager:
         if entry is None:
             raise KeyError(tool_call_id)
         if isinstance(entry.metadata, ToolMessageMetadata):
-            previous = entry.metadata
-            # 显式构造而不用 ``model_copy(update=...)``：后者不校验键名，拼错的键会被静默丢弃。
-            metadata = ToolMessageMetadata(
-                status=metadata.status,
-                error=metadata.error,
-                display_data=metadata.display_data or previous.display_data,
-                background=metadata.background or previous.background,
-            )
+            metadata = metadata.merged_onto(entry.metadata)
         self.context_store.replace_message(
             SessionContextRecord(
                 session_id=self.current_session_id,

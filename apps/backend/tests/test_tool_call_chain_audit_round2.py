@@ -147,7 +147,10 @@ def _seed_tool_part(tool_call_id: str = "call-1") -> tuple[ConversationStateSnap
     )
     projector.process(
         ToolCallStatusChangedEvent(
-            session_id=_SESSION_ID, run_id=_RUN_ID, tool_call_id=tool_call_id, status="running"
+            session_id=_SESSION_ID,
+            run_id=_RUN_ID,
+            tool_call_id=tool_call_id,
+            result=ToolMessageMetadata(status="running"),
         )
     )
     projector.process(
@@ -213,8 +216,10 @@ def test_p2_terminal_result_prefers_final_output() -> None:
             session_id=_SESSION_ID,
             run_id=_RUN_ID,
             tool_call_id="call-1",
-            status="completed",
-            display_data={"kind": "terminal-result", "output": "", "exit_code": 0},
+            result=ToolMessageMetadata(
+                status="completed",
+                display_data={"kind": "terminal-result", "output": "", "exit_code": 0},
+            ),
         )
     )
 
@@ -235,8 +240,7 @@ def test_p2_empty_display_data_keeps_streamed_terminal_output() -> None:
             session_id=_SESSION_ID,
             run_id=_RUN_ID,
             tool_call_id="call-1",
-            status="cancelled",
-            display_data={},
+            result=ToolMessageMetadata(status="cancelled", display_data={}),
         )
     )
 
@@ -255,8 +259,10 @@ def test_p2_explicit_kind_display_replaces_streamed_terminal_output() -> None:
             session_id=_SESSION_ID,
             run_id=_RUN_ID,
             tool_call_id="call-1",
-            status="failed",
-            display_data={"kind": "terminal-session", "status_hint": "执行失败"},
+            result=ToolMessageMetadata(
+                status="failed",
+                display_data={"kind": "terminal-session", "status_hint": "执行失败"},
+            ),
         )
     )
 

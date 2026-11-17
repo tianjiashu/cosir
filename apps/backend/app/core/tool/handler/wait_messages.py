@@ -20,6 +20,7 @@ from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_WAIT_MESSAGES,
+    AwaitMessages,
     ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
@@ -66,7 +67,7 @@ class WaitMessagesTool(HandlerBase):
         return tool_success(
             tool_name=self.name,
             content=f"Paused until a result arrives. Still running: {', '.join(pending)}.",
-            suspend=True,
+            waiting=AwaitMessages(),
         )
 
 

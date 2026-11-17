@@ -7,7 +7,7 @@ import pytest
 
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.tool.execute import tool_executor as tool_executor_module
-from app.core.tool.schemas import ToolCall, ToolObservation
+from app.core.tool.schemas import AwaitMessages, ToolCall, ToolObservation
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.tool_batch import ToolBatch
@@ -270,7 +270,7 @@ def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
         return [
             ToolObservation(tool_name="read_file", status="success", tool_call_id="call-1"),
             ToolObservation(
-                tool_name="read_file", status="success", tool_call_id="call-2", suspend=True
+                tool_name="read_file", status="success", tool_call_id="call-2", waiting=AwaitMessages()
             ),
         ]
 
@@ -292,7 +292,8 @@ def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
 
 def _observation(call_id: str = "call-1", *, suspend: bool = False) -> ToolObservation:
     return ToolObservation(
-        tool_name="review", status="success", tool_call_id=call_id, suspend=suspend
+        tool_name="review", status="success", tool_call_id=call_id,
+        waiting=AwaitMessages() if suspend else None,
     )
 
 
@@ -473,19 +474,6 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
     asyncio.run(tools_node._tools_node(_state(batch)))
 
     assert [call.arguments for call in called] == ['{"path":']
-
-
-def test_internal_artifact_does_not_enter_tool_batch_snapshot() -> None:
-    observation = ToolObservation(
-        tool_name="read_file",
-        status="success",
-        tool_call_id="call-1",
-        artifact_data={"secret": "internal"},
-    )
-    stripped = tools_node._without_artifact(observation)
-
-    assert stripped.artifact_data is None
-    assert "internal" not in ToolBatch(observations=[stripped]).model_dump_json()
 
 
 def test_observation_persists_all_results_before_events(monkeypatch) -> None:

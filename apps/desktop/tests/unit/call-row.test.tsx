@@ -36,7 +36,6 @@ function artifact(overrides: Partial<ToolArtifact> = {}): ToolArtifact {
     background: false,
     display_data: null,
     error: null,
-    errorCode: null,
     ...overrides,
   };
 }
@@ -193,7 +192,7 @@ describe("CallRow kind 视图", () => {
         toolCallId="call-fork"
         toolName="fork_session"
         args={{ title: "前端部分", message: "只做前端" }}
-        artifact={artifact({ childSessionId: 41, display_data: { kind: "fork-session-result", title: "前端部分", child_session_id: 41 }, ...overrides })}
+        artifact={artifact({ display_data: { kind: "fork-session-result", title: "前端部分", child_session_id: 41 }, ...overrides })}
         {...props}
       />
     </MemoryRouter>,
@@ -202,7 +201,6 @@ describe("CallRow kind 视图", () => {
   it.each(["running", "completed", null])("子会话 %s 时委派行不说状态，且不读展示数据", (status) => {
     sessionStatuses.set(501, status);
     const html = render({
-      childSessionId: 501,
       display_data: { kind: "delegation-result", title: "审查代码", child_session_id: 501, status: "completed" },
     });
     expect(html).not.toContain("运行中");
@@ -211,14 +209,14 @@ describe("CallRow kind 视图", () => {
 
   it.each([["failed", "运行失败"], ["cancelled", "已停止"], ["suspended", "等待结果"]])("子会话 %s 时委派行报异常", (status, label) => {
     sessionStatuses.set(501, status);
-    const html = render({ childSessionId: 501, display_data: { kind: "delegation-result", title: "审查代码", child_session_id: 501 } });
+    const html = render({ display_data: { kind: "delegation-result", title: "审查代码", child_session_id: 501 } });
     expect(html).toContain(label);
   });
 
   it("子会话有事等你操作时，不论它的 Run 怎样，调用行都写明等你操作", () => {
     sessionStatuses.set(501, "completed");
     awaitingCalls.set(501, 1);
-    const html = render({ childSessionId: 501, display_data: { kind: "delegation-result", title: "审查代码", child_session_id: 501 } });
+    const html = render({ display_data: { kind: "delegation-result", title: "审查代码", child_session_id: 501 } });
     expect(html).toContain("等你操作");
     expect(html).not.toContain("已完成");
   });

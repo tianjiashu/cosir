@@ -29,6 +29,9 @@
   --font-heading: var(--app-font-sans);
   /* 对话栏（消息流、输入框、新会话空态）的唯一宽度：各处共用，发出首条消息时输入框不跳宽。 */
   --container-conversation: 48rem;
+  /* 交付物胶囊的类型角标（大写后缀），只此一处用 */
+  --text-3xs: 0.59375rem;
+  --text-3xs--line-height: 1;
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
   /* 回合里过程区的字号（设计 §5.9：调用行、区头 13px）：介于 xs 与 sm 之间，正文仍用 sm。 */
@@ -420,13 +423,6 @@ body > :not(#root) > * {
     white-space: nowrap;
   }
 
-  .cosir-inline-token-stem {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .cosir-inline-token-extension,
   .cosir-inline-token-detail {
     flex-shrink: 0;
     max-width: 7em;

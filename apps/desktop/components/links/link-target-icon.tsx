@@ -32,7 +32,7 @@ const IMAGE_FILE = /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|tiff?|webp)$/i;
  * 对象，不显示图标。
  */
 export function LinkTargetIcon({ target, className }: { target: LinkTarget; className?: string }) {
-  if (target.kind === "anchor" || target.kind === "filename-search") return null;
+  if (target.kind === "anchor" || target.kind === "filename-search" || target.kind === "reveal") return null;
   return (
     <span className={cn(ICON_CLASS, className)} aria-hidden="true">
       {target.kind === "web"

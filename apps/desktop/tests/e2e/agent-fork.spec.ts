@@ -19,14 +19,14 @@ const parentState: TransportState = {
       outcome: { status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 },
       parts: [{presentation: "standalone",
         type: "tool-call", awaitingUser: false, toolCallId: "call-fork", toolName: "fork_session", status: "completed",
-        args: { title: "前端部分", message: "只做前端" }, child_session_id: 41,
+        args: { title: "前端部分", message: "只做前端" },
         display_data: { kind: "fork-session-result", title: "前端部分", child_session_id: 41 },
       }],
     },
   ],
   messageOffset: 0,
   activity: {modelActivity: null, turn: 1, resumable: false, status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
-  terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
+  terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [], deliverables: [],
 };
 
 test.beforeEach(async ({ request }) => {
@@ -83,7 +83,7 @@ test("手动分叉的历史可读、截图可查看，但不操作来源会话",
       { ...parentState.messages[1], inherited: true,
         outcome: null,
         parts: [
-          { type: "tool-call", presentation: "standalone", toolCallId: "history-8:child", toolName: "fork_session", status: "pending", awaitingUser: false, child_session_id: 991, args: {}, display_data: { kind: "fork-session-result", title: "来源子会话", child_session_id: 991 } },
+          { type: "tool-call", presentation: "standalone", toolCallId: "history-8:child", toolName: "fork_session", status: "pending", awaitingUser: false, args: {}, display_data: { kind: "fork-session-result", title: "来源子会话", child_session_id: 991 } },
           { type: "tool-call", presentation: "activity", toolCallId: "history-8:browser", toolName: "browser_screenshot", status: "completed", awaitingUser: false, intent: "查看已保存网页", args: {}, display_data: { kind: "browser-page", tab_id: "gone", url: "https://example.com", title: "历史页面", screenshot: assetId } },
         ] },
     ],

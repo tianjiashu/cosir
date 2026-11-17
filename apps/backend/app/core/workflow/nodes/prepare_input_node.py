@@ -171,8 +171,7 @@ async def _route_decision(decision: SessionMessage, step_id: str) -> ToolBatch |
                 run_id=rc.run.id,
                 step_id=step_id,
                 tool_call_id=body.tool_call_id,
-                status="running",
-                display_data=claimed.display_data,
+                result=claimed,
             )
         )
     call = _message_context().find_tool_call(body.tool_call_id)
@@ -336,8 +335,7 @@ def _settle_answered(
         run_id=rc.run.id,
         step_id=step_id,
         tool_call_id=body.tool_call_id,
-        status=written.status,
-        display_data=written.display_data,
+        result=written,
     )
 
 

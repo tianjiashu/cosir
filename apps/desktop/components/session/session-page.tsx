@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { useDeliverablesStore } from "@/lib/deliverables/deliverables-store";
 import { Assistant } from "@/components/conversation-runtime/assistant";
 import { getSession, type WorkspaceSession } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
@@ -109,6 +110,7 @@ export function SessionPage({
   useEffect(() => () => {
     useTerminalWorkbenchStore.getState().syncSessions(sessionId, null);
     useBackgroundTasksStore.getState().sync(sessionId, null);
+    useDeliverablesStore.getState().sync(sessionId, null);
     useHandoffStore.getState().sync(sessionId, null);
   }, [sessionId]);
 

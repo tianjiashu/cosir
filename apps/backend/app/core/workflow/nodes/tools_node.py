@@ -6,17 +6,12 @@ import dataclasses
 from typing import Any
 
 from app.config.logging.logger import log
-from app.core.tool.schemas import ToolCall, ToolObservation
+from app.core.tool.schemas import ToolCall
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.message_queue.session_message import DecisionBody
 from app.core.workflow.node_helper.common import _runtime_context
 from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 from app.models.enums.react_route import ReactRoute
-
-
-def _without_artifact(observation: ToolObservation) -> ToolObservation:
-    """剥掉内部产物：批次随执行状态落库，``artifact_data`` 不进入 Run。"""
-    return dataclasses.replace(observation, artifact_data=None)
 
 
 async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
@@ -50,19 +45,18 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
     # running 与终态由 run_tool_batch 按调用投影：只有真正开始运行的调用才显示为运行中。
     # 用户批准后的 HITL 执行带着决定，交给 handler 区分「登记待决」与「按决定执行」。
     decision = DecisionBody.model_validate(batch.decision) if batch.decision else None
-    observations = await run_tool_batch(rc, tool_calls, step_id,  decision)
-    settled = [_without_artifact(observation) for observation in observations]
+    observations = await run_tool_batch(rc, tool_calls, step_id, decision)
     log.info(
         "tools_node_completed",
         extra={
             "msg": f"工具批次处理完成，step_id={step_id}",
             "data": {
                 "step_id": step_id,
-                "observations": [dataclasses.asdict(observation) for observation in settled],
+                "observations": [dataclasses.asdict(observation) for observation in observations],
             },
         },
     )
     return {
-        "batch": batch.model_copy(update={"observations": settled}),
+        "batch": batch.model_copy(update={"observations": observations}),
         "next_node": ReactRoute.OBSERVE,
     }

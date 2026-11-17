@@ -19,6 +19,10 @@ type ImageTileProps = {
   onRemove?: () => void;
   /** 请求放大预览；灯箱由图片组（`useImageGallery`）持有，不传时不可点。 */
   onOpen?: () => void;
+  /** 图片加载失败时通知调用方（如重读文件信息换新地址）；方块自己照常显示破图标。 */
+  onError?: () => void;
+  /** 图已经不在了（文件被删、无法访问）：中性图标、不可点，说明放在 `title`。不用上传失败的红色样式。 */
+  unavailable?: boolean;
 };
 
 /**
@@ -28,7 +32,7 @@ type ImageTileProps = {
  * 信息的是开头。完整的图在灯箱里看（长图按宽度铺满、可滚动）。只负责呈现、加载与失败占位，以及转发
  * 打开 / 移除意图；地址从哪来、何时上传由调用方负责。尺寸只有两档，见 `IMAGE_TILE_SIZE`。
  */
-function ImageTileImpl({ src, alt, size = "regular", title, state = "ready", errorMessage, onRemove, onOpen }: ImageTileProps) {
+function ImageTileImpl({ src, alt, size = "regular", title, state = "ready", errorMessage, onRemove, onOpen, onError, unavailable = false }: ImageTileProps) {
   const { width, height } = IMAGE_TILE_SIZE[size];
   const statusLabel = state === "uploading" ? "，上传中" : state === "error" ? "，上传失败" : "";
   const tile = (
@@ -36,23 +40,26 @@ function ImageTileImpl({ src, alt, size = "regular", title, state = "ready", err
       data-slot="image-tile"
       data-size={size}
       data-state={state}
+      data-unavailable={unavailable || undefined}
       style={{ width, height }}
       className={cn(
         "bg-muted/40 border-border/70 relative max-w-full shrink-0 overflow-hidden rounded-lg border animate-in fade-in-0 zoom-in-95 duration-200 motion-reduce:animate-none",
         state === "error" && "border-destructive/60",
       )}
     >
-      {src && onOpen ? (
+      {unavailable ? (
+        <ImageOffIcon className="text-muted-foreground absolute inset-0 m-auto size-6" aria-label={`${alt}，${title ?? "不可用"}`} />
+      ) : src && onOpen ? (
         <button
           type="button"
           aria-label={`预览图片 ${alt}${statusLabel}`}
           onClick={onOpen}
           className="focus-visible:ring-ring absolute inset-0 cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-inset"
         >
-          <TilePicture src={src} alt={alt} />
+          <TilePicture src={src} alt={alt} onError={onError} />
         </button>
       ) : src ? (
-        <TilePicture src={src} alt={alt} />
+        <TilePicture src={src} alt={alt} onError={onError} />
       ) : (
         <ImageIcon className="text-muted-foreground absolute inset-0 m-auto size-6" aria-label={`${alt}${statusLabel}`} />
       )}
@@ -84,22 +91,28 @@ function ImageTileImpl({ src, alt, size = "regular", title, state = "ready", err
 
 export const ImageTile = memo(ImageTileImpl);
 
-/** 加载中显示占位，失败显示破图标；按 src 记状态，地址变了重新加载。 */
-function TilePicture({ src, alt }: { src: string; alt: string }) {
-  const [loaded, setLoaded] = useState<string | null>(null);
+/**
+ * 首次加载显示占位，失败显示破图标（按 src 记）。换地址时不回到占位：浏览器在新图解码好之前继续显示旧画面，
+ * 文件更新或后端换端口时方块不闪。
+ */
+function TilePicture({ src, alt, onError }: { src: string; alt: string; onError?: () => void }) {
+  const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   if (failed === src) return <ImageOffIcon className="text-muted-foreground absolute inset-0 m-auto size-6" aria-label={`${alt}，无法显示`} />;
   return (
     <>
-      {loaded !== src && <ImageIcon className="text-muted-foreground absolute inset-0 m-auto size-6 animate-pulse" aria-hidden="true" />}
+      {!loaded && <ImageIcon className="text-muted-foreground absolute inset-0 m-auto size-6 animate-pulse" aria-hidden="true" />}
       <img
         src={src}
         alt={alt}
         loading="lazy"
         decoding="async"
-        className={cn("block size-full object-cover object-top", loaded !== src && "invisible")}
-        onLoad={() => setLoaded(src)}
-        onError={() => setFailed(src)}
+        className={cn("block size-full object-cover object-top", !loaded && "invisible")}
+        onLoad={() => setLoaded(true)}
+        onError={() => {
+          setFailed(src);
+          onError?.();
+        }}
       />
     </>
   );

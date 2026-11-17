@@ -15,6 +15,7 @@ import { panelTabClass } from "@/components/ui/panel-tokens";
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
 import { fileInfoQueryOptions } from "@/lib/query/query-options";
 import { fileReadProblem } from "@/lib/workspace-files/read-problem";
+import { baseName } from "@/lib/files/file-name";
 
 /**
  * 标签的文件名与读取状态：只观察阅读器已产生的元数据查询，不为非活动标签发起额外读取。文件不存在时名字划线
@@ -145,7 +146,7 @@ export function FileTabBar({
                     onClick={() => useFilesStore.getState().beginNavigation()}
                     onDoubleClick={() => open(workspaceId, tab.path, true)}
                   />} >
-                    <WorkspaceFileIcon name={tab.path.split("/").at(-1)!} />
+                    <WorkspaceFileIcon name={baseName(tab.path)} />
                     <FileTabName workspaceId={workspaceId} path={tab.path} label={fileTabLabel(tab.path, paths)} pinned={tab.pinned} />
                   </TooltipTrigger>
                   <TooltipContent side="bottom">{tab.path}{!tab.pinned && " · 临时预览，打开其他文件会替换；双击或右键固定"}</TooltipContent>

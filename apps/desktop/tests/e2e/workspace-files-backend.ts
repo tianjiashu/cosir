@@ -10,7 +10,12 @@ import { API_ORIGIN, REAL_BACKEND_ORIGIN, REAL_BACKEND_PORT } from "./e2e-env";
  *
  * 工作区 id 由夹具的 SQLite 自增分配，与内存测试服务的固定 id 无关，`start` 从夹具 health 读出，
  * `route` 改写请求时据它映射。`<img>` 等资源请求同样经 `page.route`，所以直连资源地址也会被改写。
+ *
+ * 就绪只认自己拉起的进程（health 回的 pid 与子进程一致）：端口被遗留的夹具占着时，旧进程照样回应 health，而它的
+ * 文件早被上一轮改过，用例会拿到「更新后」的状态、失败得莫名其妙。这里直接报错并给出占用者的 pid。
  */
+class PortTakenError extends Error {}
+
 export class WorkspaceFilesBackend {
   private server: ChildProcess | undefined;
   private id: number | undefined;
@@ -39,9 +44,13 @@ export class WorkspaceFilesBackend {
           try {
             const response = await request.get(`${REAL_BACKEND_ORIGIN}/__test__/files/health`);
             if (!response.ok()) return false;
-            this.id = (await response.json()).workspace_id;
+            const health = (await response.json()) as { workspace_id: number; pid: number };
+            if (health.pid !== server.pid)
+              throw new PortTakenError(`端口 ${REAL_BACKEND_PORT} 被另一个夹具进程（pid ${health.pid}）占着，请先结束它`);
+            this.id = health.workspace_id;
             return true;
-          } catch {
+          } catch (error) {
+            if (error instanceof PortTakenError) throw error;
             return false;
           }
         },

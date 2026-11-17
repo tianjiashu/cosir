@@ -29,7 +29,12 @@ from app.service.workspace_files.file_models import (
 )
 from app.service.workspace_files.search_paging import file_search_pages, text_search_pages
 from app.service.workspace_files.text_search import search_text
-from app.service.workspace_files.workspace_paths import ancestor_paths, entry_for, resolve_path
+from app.service.workspace_files.workspace_paths import (
+    ancestor_identities,
+    entry_for,
+    resolve_path,
+)
+from app.utils.path.file_identity import FileIdentity
 
 
 @dataclass
@@ -123,7 +128,7 @@ class WorkspaceFilesService:
                 raise ValueError("目录游标无效")
         else:
             start = time.monotonic()
-            ancestors = ancestor_paths(root, path)
+            ancestors = ancestor_identities(root, path)
 
             hidden_count = 0
 
@@ -227,7 +232,7 @@ class WorkspaceFilesService:
         """按展示路径遍历并流式返回；每条祖先链独立检测链接环，取消不等整树结束。"""
         root = self.root(workspace_id)
         visibility = BrowserVisibilityStore(root).read()
-        stack = [(root, {root})]
+        stack = [(root, {FileIdentity.of(root)})]
         batch: list[FileEntry] = []
         skipped = 0
         skipped_reasons: dict[str, int] = {}
@@ -247,7 +252,7 @@ class WorkspaceFilesService:
                             continue
                         entry = entry_for(root, path, ancestors)
                         if entry.kind == "directory":
-                            stack.append((path, ancestors | {path.resolve(strict=True)}))
+                            stack.append((path, ancestors | {FileIdentity.of(path)}))
                         elif entry.kind == "unavailable":
                             skipped += 1
                             reason = entry.hint or "条目不可读取"

@@ -23,24 +23,16 @@ function ChangesArtifact({ card, sessionId }: { card: Extract<ArtifactCard, { ki
   return <ChangesCard card={card} sessionId={sessionId} messageId={messageId} />;
 }
 
-/**
- * 配置草稿卡与交付物卡：各自读自己那次调用的 artifact；等用户决定期间不显示。
- */
+/** 配置草稿卡：读自己那次调用的 artifact；等用户决定期间不显示。 */
 function StandaloneArtifact({ card, sessionId, interactive, sessionCancelling, inherited }: { inherited?: boolean; card: StandaloneArtifactCard; sessionId: number; interactive: boolean; sessionCancelling: boolean }) {
   const part = useAuiState((state) => state.message.parts[card.index]);
   if (part?.type !== "tool-call") return null;
   const artifact = readToolArtifact(part.artifact);
   if (artifact.awaitingUser) return null;
-  const props = { inherited, sessionId, toolCallId: card.part.toolCallId, artifact, interactive, sessionCancelling };
-  switch (card.kind) {
-    case "agent-configuration-draft":
-      return <AgentConfigurationDraftTool {...props} />;
-    case "deliverables":
-      return <DeliverablesCard {...props} />;
-  }
+  return <AgentConfigurationDraftTool inherited={inherited} sessionId={sessionId} toolCallId={card.part.toolCallId} artifact={artifact} interactive={interactive} sessionCancelling={sessionCancelling} />;
 }
 
-/** 产物区：本轮改动（聚合）排在前，其余卡片按调用顺序；每张卡各自隔离渲染错误。 */
+/** 产物区：本轮改动（聚合）排在前，其余卡片按调用顺序（交付物组在第一次交付的位置）；每张卡各自隔离渲染错误。 */
 export const ArtifactZone = memo(function ArtifactZone({ inherited, sessionId, artifacts, interactive, sessionCancelling }: ArtifactZoneProps) {
   if (artifacts.length === 0) return null;
   return (
@@ -54,6 +46,16 @@ export const ArtifactZone = memo(function ArtifactZone({ inherited, sessionId, a
           fallback={({ onRetry }) => <RenderErrorCard scope="part" label="文件操作记录" onRetry={onRetry} />}
         >
           <ChangesArtifact card={card} sessionId={sessionId} />
+        </RenderIsolationBoundary>
+      ) : card.kind === "deliverables" ? (
+        <RenderIsolationBoundary
+          key="deliverables"
+          scope="part"
+          resetKey={`deliverables:${card.callIndexes.join(",")}`}
+          metadata={{ renderer: "deliverables-card", partIndices: card.callIndexes }}
+          fallback={({ onRetry }) => <RenderErrorCard scope="part" label="交付物" onRetry={onRetry} />}
+        >
+          <DeliverablesCard card={card} sessionId={sessionId} />
         </RenderIsolationBoundary>
       ) : (
         <RenderIsolationBoundary

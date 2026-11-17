@@ -9,6 +9,7 @@ import type { LineRange } from "@/lib/links/resolve-link";
 import { toWorkspacePath } from "@/lib/links/resolve-link";
 import { parentsOf, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
 import { useReferenceBridge } from "./reference-bridge";
+import { baseName } from "@/lib/files/file-name";
 
 export type OpenFileOptions = {
   /** 打开后选中并居中的行范围。 */
@@ -82,7 +83,7 @@ export function useOpenWorkspacePath(): WorkspacePathOpener | null {
                 action: {
                   label: "查找同名文件",
                   onClick: () => {
-                    const name = path.split("/").at(-1)!;
+                    const name = baseName(path);
                     if (isCurrentWorkspace(workspaceId)) searchFilename(name, options.lines);
                     else notify.info(`已离开原工作区，没有查找 ${name}`);
                   },

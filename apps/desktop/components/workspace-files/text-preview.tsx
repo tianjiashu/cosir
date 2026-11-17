@@ -6,17 +6,12 @@ import type { RefCapsule } from "@/lib/assistant/capsules";
 import { AddToChatButton } from "./add-to-chat-button";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  getText,
-  type FileInfo,
-} from "@/lib/api/workspace-files";
-import { queryKeys } from "@/lib/query/query-keys";
+import type { FileInfo } from "@/lib/api/workspace-files";
 import { workspaceFiles, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
-import { HttpError } from "@/lib/http/http-error";
+import { useTextPage } from "@/lib/workspace-files/use-text-page";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
-import { NativeSelect } from "@/components/ui/native-select";
+import { EncodingSelect } from "./encoding-select";
 import { SearchIcon } from "lucide-react";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { ReadingToolbar, type ReadingNavigation } from "./reading-toolbar";
@@ -25,11 +20,13 @@ import { OutlineButton, revealSourceLine } from "@/components/markdown/outline-b
 import type { TextViewerHandle } from "@/components/text-viewer/readonly-text-viewer";
 import { CodePreview } from "./code-preview";
 import { MarkdownPreview } from "./markdown-preview";
+import { mermaidDocument } from "@/lib/workspace-files/mermaid-document";
 
 /**
- * 文本类文件的阅读器：分段读取、全文件查找、编码与换行，源码用只读编辑器显示，Markdown 的渲染视图
- * （`rendered`）用同一份文本渲染。看渲染还是源码由 `FilePreview` 决定并传入，这里只在需要行的场合
- * （点击查找结果）把偏好切回源码。
+ * 文本类文件的阅读器：分段读取（`useTextPage`）、全文件查找、编码与换行，源码用只读编辑器显示。渲染视图（`rendered`）
+ * 用同一份文本按类型得出：Markdown 与 Mermaid（包成一个 mermaid 代码块）交给 Markdown 渲染；表格的渲染视图是
+ * `TableReader`，不在这里。看渲染还是源码由 `FilePreview` 决定并传入，这里只在点击别的分段的查找结果时把偏好切回源码。
+ * 只有 Markdown 有大纲。
  */
 export function TextPreview({
   workspaceId,
@@ -45,17 +42,7 @@ export function TextPreview({
   view?: ReactNode;
 }) {
   const [selection, setSelection] = useState<RefCapsule | null>(null);
-  const position = useFilesStore(
-    (s) => workspaceFiles(s.byWorkspace, workspaceId).positions[info.path],
-  );
-  const setPosition = useFilesStore((s) => s.position);
-  const queryClient = useQueryClient();
-  const offset = position?.offset ?? 0;
-  const encoding = position?.encoding ?? info.encoding ?? "utf-8";
-  const tail = position?.tail ?? false;
-  const before = position?.before;
-  const setTail = (value: boolean) =>
-    setPosition(workspaceId, info.path, { tail: value, before: undefined });
+  const { page, position, offset, encoding, tail, before, go, setEncoding, setPosition } = useTextPage(workspaceId, info);
   const preference = useFilesStore(
     (s) => workspaceFiles(s.byWorkspace, workspaceId).preferences[info.path],
   );
@@ -64,51 +51,9 @@ export function TextPreview({
   const searchTrigger = useRef<HTMLButtonElement>(null);
   const editor = useRef<TextViewerHandle>(null);
   const markdownHost = useRef<HTMLDivElement>(null);
-  const previousVersion = useRef(info.version);
-  useEffect(() => {
-    if (previousVersion.current !== info.version) {
-      setPosition(workspaceId, info.path, {
-        offset: 0,
-        tail: false,
-        before: undefined,
-      });
-      previousVersion.current = info.version;
-    }
-  }, [info.version, info.path, workspaceId, offset, setPosition]);
-  const page = useQuery({
-    queryKey: queryKeys.fileText(
-      workspaceId,
-      info.path,
-      info.version,
-      encoding,
-      offset,
-      tail,
-      before,
-    ),
-    queryFn: ({ signal }) =>
-      getText(
-        workspaceId,
-        info.path,
-        offset,
-        encoding,
-        info.version,
-        tail,
-        before,
-        signal,
-      ),
-    gcTime: 30_000,
-  });
   useEffect(() => {
     setSelection(null);
   }, [info.version, encoding, offset, tail, before]);
-  useEffect(() => {
-    if (page.error instanceof HttpError && page.error.status === 409) {
-      setPosition(workspaceId, info.path, { offset: 0 });
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.fileInfo(workspaceId, info.path),
-      });
-    }
-  }, [page.error, workspaceId, info.path, queryClient, setPosition]);
   // 带行号打开（`ReadingPosition.reveal`）：整份加载的文件在源码里选中并居中；分段读取的大文件没有
   // 行号到字节偏移的换算，只停在开头并说明。切到源码视图由 `FilePreview` 负责。
   const reveal = position?.reveal;
@@ -117,7 +62,7 @@ export function TextPreview({
   useEffect(() => {
     if (reveal && page.data && !wholeFile) {
       setRevealSkipped(true);
-      setPosition(workspaceId, info.path, { reveal: undefined });
+      setPosition({ reveal: undefined });
     }
   }, [reveal, page.data, wholeFile, workspaceId, info.path, setPosition]);
   const find = useTextFind({
@@ -136,14 +81,6 @@ export function TextPreview({
       go(next);
     },
   });
-  const go = (next: number) => {
-    setPosition(workspaceId, info.path, {
-      offset: next,
-      before: undefined,
-      tail: false,
-      scrollTop: 0,
-    });
-  };
   const source = page.data && (
     <CodePreview
       ref={editor}
@@ -165,28 +102,29 @@ export function TextPreview({
       }}
       wrap={wrap}
       reveal={wholeFile ? reveal : undefined}
-      onRevealed={() => setPosition(workspaceId, info.path, { reveal: undefined })}
+      onRevealed={() => setPosition({ reveal: undefined })}
       scrollTop={position?.scrollTop ?? 0}
       onScroll={(scrollTop) =>
-        setPosition(workspaceId, info.path, { scrollTop })
+        setPosition({ scrollTop })
       }
     />
   );
   const markdown = page.data && (
     <MarkdownPreview
       hostRef={markdownHost}
-      text={page.data.text}
+      text={info.kind === "mermaid" ? mermaidDocument(page.data.text) : page.data.text}
       onSelectSelection={(value: DomTextSelection | null) => {
         // 渲染视图按块级 data-source-line 求源码行范围；求不出时退化为整文件指针。
         const host = markdownHost.current;
-        const lines = value && host ? sourceLinesOfRange(value.range, host) : null;
+        // Mermaid 的渲染结果是一张图，没有与源码行对应的块：引用整个文件。
+        const lines = value && host && info.kind === "markdown" ? sourceLinesOfRange(value.range, host) : null;
         setSelection(value ? workspaceFileRef(info.path, lines ?? undefined) : null);
       }}
       workspaceId={workspaceId}
       path={info.path}
       scrollTop={position?.previewScrollTop ?? 0}
       onScroll={(previewScrollTop) =>
-        setPosition(workspaceId, info.path, { previewScrollTop })
+        setPosition({ previewScrollTop })
       }
     />
   );
@@ -224,37 +162,7 @@ export function TextPreview({
           />
         </>}
         options={<>
-          <NativeSelect
-            aria-label="文本编码"
-            size="sm"
-            wrapperClassName="w-32"
-            value={encoding}
-            onChange={(event) => {
-              setTail(false);
-              setPosition(workspaceId, info.path, {
-                encoding: event.target.value,
-                offset: 0,
-              });
-            }}
-          >
-            {[
-              ...new Set([
-                encoding,
-                "utf-8",
-                "utf-8-sig",
-                "utf-16-le",
-                "utf-16-be",
-                "utf-32-le",
-                "utf-32-be",
-                "gb18030",
-                "big5",
-                "shift_jis",
-                "cp1252",
-              ]),
-            ].map((value) => (
-              <option key={value}>{value}</option>
-            ))}
-          </NativeSelect>
+          <EncodingSelect value={encoding} onChange={setEncoding} />
           {!rendered && (
             <Button
               size="sm"
@@ -310,7 +218,7 @@ export function TextPreview({
             variant="ghost"
             disabled={!page.data?.offset}
             onClick={() =>
-              setPosition(workspaceId, info.path, {
+              setPosition({
                 before: page.data!.offset,
                 tail: false,
                 scrollTop: 0,
@@ -327,7 +235,7 @@ export function TextPreview({
           >
             下一段
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => setTail(true)}>
+          <Button size="sm" variant="ghost" onClick={() => setPosition({ tail: true, before: undefined })}>
             末尾
           </Button>
         </div>

@@ -107,3 +107,57 @@ def test_validation_covers_only_what_a_change_touched() -> None:
     state["title"] = None
     with pytest.raises(ValueError):  # 独立的顶层字段只校验它自己
         validate_mutated(state, [ConversationStateMutation("set", ("title",), None)])
+
+
+def test_tool_part_deliverables_are_validated_by_type() -> None:
+    """工具 part 上的交付记录按 ``type`` 精确校验：字段集合随类型而定，坏条目让这次变更失败。"""
+    state = _history(2)
+    state["messages"][1]["parts"].append(
+        cast(
+            Any,
+            {
+                "type": "tool-call",
+                "toolCallId": "c1",
+                "toolName": "present_deliverables",
+                "presentation": "quiet",
+                "status": "completed",
+                "awaitingUser": False,
+            },
+        )
+    )
+    path = ("messages", 1, "parts", 1, "deliverables")
+    good = [
+        {
+            "type": "file",
+            "key": "/ws/a.md",
+            "caption": None,
+            "workspacePath": "a.md",
+            "absolutePath": "/ws/a.md",
+            "kind": "markdown",
+            "size": 3,
+            "width": None,
+            "height": None,
+        },
+        {
+            "type": "directory",
+            "key": "/ws/d",
+            "caption": "构建产物",
+            "workspacePath": "d",
+            "absolutePath": "/ws/d",
+        },
+        {"type": "url", "key": "http://h/", "caption": None, "url": "http://h"},
+    ]
+    state["messages"][1]["parts"][1]["deliverables"] = good
+    validate_mutated(state, [ConversationStateMutation("set", path, good)])
+
+    for bad in (
+        [{**good[0], "kind": "spreadsheet"}],
+        [{**good[1], "kind": "markdown"}],
+        [{"type": "url", "key": "http://h/", "caption": None}],
+        [{**good[0], "size": -1}],
+        [{**good[0], "width": 0}],
+        [{k: v for k, v in good[0].items() if k != "height"}],
+    ):
+        state["messages"][1]["parts"][1]["deliverables"] = bad
+        with pytest.raises(ValueError):
+            validate_mutated(state, [ConversationStateMutation("set", path, bad)])

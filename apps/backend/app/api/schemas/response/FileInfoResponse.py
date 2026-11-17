@@ -17,6 +17,7 @@ class FileInfoResponse(BaseModel):
     encoding: str | None
     width: int | None
     height: int | None
+    system_preview: bool
 
     @classmethod
     def from_domain(cls, info: FileInfo) -> "FileInfoResponse":
@@ -32,4 +33,5 @@ class FileInfoResponse(BaseModel):
             encoding=info.encoding,
             width=info.width,
             height=info.height,
+            system_preview=info.system_preview,
         )

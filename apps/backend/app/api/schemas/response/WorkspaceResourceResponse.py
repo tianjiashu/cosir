@@ -13,15 +13,17 @@ from starlette.types import Receive, Scope, Send
 from app.service.workspace_files.file_access import regular_file
 from app.service.workspace_files.file_content import version_of
 from app.service.workspace_files.file_models import FileInfo
-from app.service.workspace_files.image_preview import image_preview
+from app.service.workspace_files.image_preview import ImagePreview, image_preview
 
 
 class WorkspaceResourceResponse(Response):
     """同一响应读同一个句柄；仅支持单段 Range，多段按 HTTP 语义退回完整响应。"""
 
-    def __init__(self, root: Path, path: Path, info: FileInfo) -> None:
+    def __init__(
+        self, root: Path, path: Path, info: FileInfo, preview: ImagePreview | None = None
+    ) -> None:
         super().__init__()
-        self.root, self.path, self.info = root, path, info
+        self.root, self.path, self.info, self.preview = root, path, info, preview
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         from app.api.workspace_files_api import file_errors
@@ -44,7 +46,7 @@ class WorkspaceResourceResponse(Response):
             }
             if self.info.kind == "image":
                 with file_errors():
-                    thumbnail = await anyio.to_thread.run_sync(image_preview, source)
+                    thumbnail = await anyio.to_thread.run_sync(image_preview, source, self.preview)
                 if thumbnail is not None:
                     await Response(thumbnail, media_type="image/png", headers=headers)(
                         scope, receive, send

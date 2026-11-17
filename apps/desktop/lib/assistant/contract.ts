@@ -10,6 +10,8 @@
  * 本文件为纯类型契约，不依赖 React，归位于 `lib/assistant/`，便于无 React 依赖的模块复用。
  */
 
+import type { FileInfo } from "@/lib/api/workspace-files";
+
 /** 后端工具生命周期五态；非法输入由 Transport 边界拒绝。 */
 export type TransportToolStatus =
   | "pending"
@@ -66,8 +68,6 @@ export type TransportToolCallPart = {
   error?: string | null;
   /** 后端工具调用生命周期状态，已由传输入口校验。 */
   status: TransportToolStatus;
-  /** 后端在失败时提供的稳定错误标识（可选）。 */
-  errorCode?: string;
   /**
    * 是否在等用户决定（HITL 审批、交接）。后端在投影工具结果时一处计算（占位行 `pending` 且不是后台
    * 占位）、每次显式写；前端据此把调用提进「等待用户」区，不从 `status === "pending"` 推断——
@@ -82,12 +82,11 @@ export type TransportToolCallPart = {
    * 卡片状态仍看 `status`。
    */
   background?: TransportBackgroundWork;
-  /** 后端显式标记的错误结果。 */
-  isError?: boolean | null;
-  /** 委派 / 子 Agent 调用指向的子 Session；委派行据此读会话状态推送、点击打开子会话，不渲染为文本。 */
-  child_session_id?: number;
-  /** Current AgentProfile.role resolved by the backend. */
-  agent_role?: string;
+  /**
+   * 交付记录（只有 `present_deliverables`）：投影自结果行 metadata，交付那一刻的观察。回合聚合卡读它，
+   * 去重只比较后端算好的 `key`。工作区内文件的现状（大小、是否还在）由卡片现读，不从这里取。
+   */
+  deliverables?: TransportDeliverable[];
   /** 进入 running 的时刻（ISO 8601，取自后端状态事件），其余时候为 null；调用行据此本地计时运行时长。 */
   startedAt?: string | null;
   /** execute_terminal 流式输出的去重序号，后端投影内部使用；前端只接受、不消费。 */
@@ -278,6 +277,12 @@ export type TerminalSessionEntry = {
   createdAt: string;
 };
 
+/** 交付记录的一项（后端 `Deliverable` 的 wire 形状）。 */
+export type TransportDeliverable =
+  | { type: "file"; key: string; caption: string | null; workspacePath: string | null; absolutePath: string; kind: FileInfo["kind"]; size: number; width: number | null; height: number | null }
+  | { type: "directory"; key: string; caption: string | null; workspacePath: string | null; absolutePath: string }
+  | { type: "url"; key: string; caption: string | null; url: string };
+
 /** 工具 part 上的后台工作记录（后端 `BackgroundWork`）。 */
 export type TransportBackgroundWork = {
   kind: "terminal_command";
@@ -348,4 +353,6 @@ export type TransportState = {
   foreground_waits: string[];
   /** 进行中的交接（必填，可为空数组）；面板的交接提示与自动弹出读它。 */
   handoffs: HandoffEntry[];
+  /** 会话交付清单（必填，可为空数组）：后端从完整历史投影，按 key 去重、最近在前；侧栏「产出」卡读它。 */
+  deliverables: TransportDeliverable[];
 };

@@ -85,10 +85,6 @@ function ChildStopAction({ childSessionId, title, context }: { childSessionId: n
   );
 }
 
-function childSessionIdOf(context: CallViewContext, fromDisplay: number | undefined): number | undefined {
-  return context.artifact.childSessionId ?? fromDisplay;
-}
-
 /** 行上的可写范围：只在子会话被收窄时出现。 */
 function writableRootMeta(writableRoot: string | undefined): string | undefined {
   return writableRoot === undefined ? undefined : `可写 ${writableRoot}`;
@@ -107,8 +103,8 @@ export const delegationView: CallView = (data, context) => {
   return {
     meta: writableRootMeta(display.writableRoot),
     detail: typeof context.args.message === "string" ? { render: () => <DetailSurface className="text-muted-foreground whitespace-pre-wrap break-words">{context.args.message as string}</DetailSurface> } : undefined,
-    status: context.inherited ? null : <ChildSessionProblem childSessionId={childSessionIdOf(context, display.childSessionId)} />,
-    actions: context.inherited ? null : <DelegationActions childSessionId={childSessionIdOf(context, display.childSessionId)} title={rowTitle(context, display.title)} context={context} />,
+    status: context.inherited ? null : <ChildSessionProblem childSessionId={display.childSessionId} />,
+    actions: context.inherited ? null : <DelegationActions childSessionId={display.childSessionId} title={rowTitle(context, display.title)} context={context} />,
   };
 };
 
@@ -157,7 +153,7 @@ export const agentSessionResultView: CallView = (data, context) => {
 export const forkSessionView: CallView = (data, context) => {
   const display = readForkDisplay(data);
   if (!display) return null;
-  const childSessionId = childSessionIdOf(context, display.childSessionId)!;
+  const { childSessionId } = display;
   return {
     meta: writableRootMeta(display.writableRoot),
     detail: typeof context.args.message === "string" ? { render: () => <DetailSurface className="text-muted-foreground whitespace-pre-wrap break-words">{context.args.message as string}</DetailSurface> } : undefined,

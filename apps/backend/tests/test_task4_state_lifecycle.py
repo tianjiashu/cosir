@@ -364,6 +364,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             "background_tasks": [],
             "foreground_waits": [],
             "handoffs": [],
+            "deliverables": [],
             "queued_messages": [],
         }
     )

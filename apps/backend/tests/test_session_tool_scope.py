@@ -22,7 +22,7 @@ _USER_SURFACE_ONLY = {
     "browser_handoff",
     "propose_agent_configuration",
     "ask_user",
-    "present_files",
+    "present_deliverables",
     "offer_next_step",
 }
 

@@ -40,6 +40,7 @@ from app.core.workflow.cancel.run_cancellation_registry import cancellation_regi
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper import tool_batch_runner
+from app.models.message_metadata import ToolMessageMetadata
 from app.models.session_extra import SessionExtra
 from tests.runtime_context_stub import runtime_stub
 
@@ -505,7 +506,6 @@ def _running_tool_state(tool_call_id: str = "call-9") -> dict[str, Any]:
                         "toolName": "execute_terminal",
                         "status": "running",
                         "args": {},
-                        "isError": False,
                     }
                 ],
             }
@@ -524,7 +524,7 @@ def _running_tool_state(tool_call_id: str = "call-9") -> dict[str, Any]:
 
 
 def test_cancelled_event_mutates_running_part_to_cancelled() -> None:
-    """取消终态事件把 ``running`` part 迁移为 ``cancelled``：状态、提示与 ``isError`` 口径固定。
+    """取消终态事件把 ``running`` part 迁移为 ``cancelled``：状态与提示口径固定。
 
     谁在什么时机发出这条事件由执行出口决定（见上面的时序用例），本节只锁定事件本身的 snapshot
     投影口径，避免口径随取消链路改动而漂移。
@@ -534,8 +534,7 @@ def test_cancelled_event_mutates_running_part_to_cancelled() -> None:
         session_id=11,
         run_id=_RUN_A,
         tool_call_id="call-1",
-        status="cancelled",
-        error="已取消",
+        result=ToolMessageMetadata(status="cancelled", error="已取消"),
     )
 
     mutations = {
@@ -546,7 +545,6 @@ def test_cancelled_event_mutates_running_part_to_cancelled() -> None:
 
     assert mutations[(*base, "status")] == "cancelled"
     assert mutations[(*base, "error")] == "已取消"
-    assert mutations[(*base, "isError")] is False
 
 
 def test_cancelled_observation_plan_tolerates_missing_tool_part() -> None:
@@ -556,8 +554,7 @@ def test_cancelled_observation_plan_tolerates_missing_tool_part() -> None:
         session_id=11,
         run_id=_RUN_A,
         tool_call_id="call-absent",
-        status="cancelled",
-        error="已取消",
+        result=ToolMessageMetadata(status="cancelled", error="已取消"),
     )
 
     assert list(plan_event(event, {"messages": [], "activity": None}, {})) == []
@@ -585,8 +582,7 @@ def test_placeholder_overwrite_transition_cancelled_to_completed_is_applied() ->
         session_id=11,
         run_id=_RUN_A,
         tool_call_id="call-1",
-        status="completed",
-        display_data={"kind": "read-file-meta", "path": "a.py"},
+        result=ToolMessageMetadata(status="completed", display_data={"kind": "read-file-meta", "path": "a.py"}),
     )
 
     mutations = {
@@ -596,7 +592,6 @@ def test_placeholder_overwrite_transition_cancelled_to_completed_is_applied() ->
     base = ("messages", 0, "parts", 0)
 
     assert mutations[(*base, "status")] == "completed"
-    assert mutations[(*base, "isError")] is False
     assert mutations[(*base, "display_data")] == {"kind": "read-file-meta", "path": "a.py"}
 
 
@@ -607,8 +602,7 @@ def test_late_event_cannot_revive_a_completed_part_and_is_logged(caplog: Any) ->
         session_id=11,
         run_id=_RUN_A,
         tool_call_id="call-1",
-        status="failed",
-        error="迟到失败",
+        result=ToolMessageMetadata(status="failed", error="迟到失败"),
     )
 
     with caplog.at_level("WARNING"):

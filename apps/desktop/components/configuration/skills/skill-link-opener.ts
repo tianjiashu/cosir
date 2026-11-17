@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { useWebOnlyLinkOpener, type LinkOpener } from "@/components/links/use-open-link";
 import type { SkillDetail } from "@/lib/api/extensions";
 import { inlineCodeLink, resolveLink, type LinkTarget } from "@/lib/links/resolve-link";
+import { baseName } from "@/lib/files/file-name";
 
 /**
  * Skill 详情页的打开方式：Skill 说明里的相对路径指向它自己的配套文件（`scripts/`、`references/`），
@@ -20,7 +21,7 @@ export function useSkillLinkOpener(skill: SkillDetail, openFile: (path: string) 
     const inSkill = (target: LinkTarget | null): LinkTarget | null => {
       if (target?.kind === "workspace") return !target.directory && readable.includes(target.path) ? target : null;
       if (target?.kind === "filename-search") {
-        const matches = readable.filter((path) => path.split("/").at(-1) === target.query);
+        const matches = readable.filter((path) => baseName(path) === target.query);
         return matches.length === 1 ? { kind: "workspace", path: matches[0], directory: false } : null;
       }
       return target?.kind === "page" ? null : target;
@@ -29,6 +30,7 @@ export function useSkillLinkOpener(skill: SkillDetail, openFile: (path: string) 
       workspaceRoot: skill.directory,
       resolve: (href, documentDir) => inSkill(resolveLink(href, { ...base, documentDir })),
       resolveCode: (text, documentDir) => inSkill(inlineCodeLink(text, { ...base, documentDir })),
+      resolveDeliverable: web.resolveDeliverable,
       describe: (target) => (target.kind === "workspace" ? `打开 ${target.path}` : web.describe(target)),
       open: (target, origin) => {
         if (target.kind === "workspace") openFile(target.path);

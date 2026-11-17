@@ -20,6 +20,10 @@ from app.assistant_transport.state.conversation_state_background_task import (
     validate_background_work,
     validate_foreground_waits,
 )
+from app.assistant_transport.state.conversation_state_deliverable import (
+    validate_deliverables,
+    validate_session_deliverables,
+)
 from app.assistant_transport.state.conversation_state_handoff import (
     ConversationHandoff,
     validate_handoffs,
@@ -32,6 +36,7 @@ from app.assistant_transport.state.conversation_state_message import (
 )
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_part import (
+    ConversationDeliverable,
     ConversationStateAgentMessagePart,
     ConversationStateImagePart,
     ConversationStateMessageSource,
@@ -100,6 +105,8 @@ class ConversationStateSnapshot(TypedDict):
     ``foreground_waits``（可转到后台的前台等待）是进程内事实，
     二者见 ``refresh_background_results``。
     ``handoffs``（进行中的交接）也是进程内事实，见 ``refresh_handoffs``。
+    ``deliverables`` 是会话交付清单（侧栏「产出」卡），由工作副本的工具 part 派生，见
+    ``project_session_deliverables``。
 
     ``messageOffset`` 是 ``messages`` 之前还有多少条消息没带上；
     后端工作副本始终是完整历史（恒为 0），
@@ -117,6 +124,7 @@ class ConversationStateSnapshot(TypedDict):
     background_tasks: list[ConversationBackgroundTask]
     foreground_waits: list[str]
     handoffs: list[ConversationHandoff]
+    deliverables: list[ConversationDeliverable]
 
 
 def empty_snapshot(title: str = "新会话") -> ConversationStateSnapshot:
@@ -131,6 +139,7 @@ def empty_snapshot(title: str = "新会话") -> ConversationStateSnapshot:
         background_tasks=[],
         foreground_waits=[],
         handoffs=[],
+        deliverables=[],
         queued_messages=[],
     )
 
@@ -154,6 +163,7 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
     validate_background_tasks(snapshot["background_tasks"])
     validate_foreground_waits(snapshot["foreground_waits"])
     validate_handoffs(snapshot["handoffs"])
+    validate_session_deliverables(snapshot["deliverables"])
 
 
 def validate_mutated(
@@ -377,6 +387,7 @@ def _validate_tool_call_part(part: object) -> None:
     require_str(tool_part["toolCallId"], "snapshot tool toolCallId")
     require_str(tool_part["toolName"], "snapshot tool toolName")
     require_one_of(tool_part["status"], _TOOL_STATUSES, "snapshot tool status")
+    require_bool(tool_part["awaitingUser"], "snapshot tool awaitingUser")
     # 其余字段都是 NotRequired：只有出现时才校验。
     if "error" in tool_part:
         require_str(tool_part["error"], "snapshot tool error", nullable=True)
@@ -386,22 +397,16 @@ def _validate_tool_call_part(part: object) -> None:
         require_mapping(tool_part["args"], "snapshot tool args", nullable=True)
     if "display_data" in tool_part:
         require_mapping(tool_part["display_data"], "snapshot tool display_data", nullable=True)
-    if "isError" in tool_part:
-        require_bool(tool_part["isError"], "snapshot tool isError")
-    if "awaitingUser" in tool_part:
-        require_bool(tool_part["awaitingUser"], "snapshot tool awaitingUser")
-    if "child_session_id" in tool_part:
-        require_int(tool_part["child_session_id"], "snapshot tool child_session_id", minimum=1)
-    if "agent_role" in tool_part:
-        require_non_empty_str(tool_part["agent_role"], "snapshot tool agent_role")
-    if "startedAt" in tool_part:
-        require_str(tool_part["startedAt"], "snapshot tool startedAt", nullable=True)
+    if "startedAt" in tool_part and tool_part["startedAt"] is not None:
+        require_non_empty_str(tool_part["startedAt"], "snapshot tool startedAt")
     if "terminal_output_seq" in tool_part:
         require_int(
             tool_part["terminal_output_seq"], "snapshot tool terminal_output_seq", minimum=0
         )
     if "background" in tool_part:
         validate_background_work(tool_part["background"])
+    if "deliverables" in tool_part:
+        validate_deliverables(tool_part["deliverables"])
 
 
 # 与消息无关、可单独校验的顶层字段（见 :func:`validate_mutated`）。
@@ -412,4 +417,5 @@ _INDEPENDENT_FIELD_VALIDATORS: dict[str, Callable[[object], None]] = {
     "background_tasks": validate_background_tasks,
     "foreground_waits": validate_foreground_waits,
     "handoffs": validate_handoffs,
+    "deliverables": validate_session_deliverables,
 }

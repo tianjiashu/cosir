@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
+import { FILE_EXITS } from "@/lib/desktop-host/file-exits";
 import { MoreHorizontalIcon } from "lucide-react";
 import { copyText } from "@/lib/clipboard";
 import { workspacePathText } from "@/lib/workspace-files/workspace-files-store";
@@ -60,6 +61,15 @@ export function ReadingToolbar({ navigation, info, view, actions, options }: {
           <PopoverContent align="end">
             <PopoverTitle>阅读选项</PopoverTitle>
             {options}
+            {/* 任何文件都能交给系统：想用 Excel 打开一个 CSV，不必先去访达里找。 */}
+            {FILE_EXITS.length > 0 && (
+              <div className="flex flex-col items-stretch border-t pt-2">
+                {FILE_EXITS.map((exit) => (
+                  <Button key={exit.id} size="sm" variant="ghost" className="justify-start"
+                    onClick={() => exit.run(workspacePathText(navigation.rootPath, navigation.path, true))}>{exit.label}</Button>
+                ))}
+              </div>
+            )}
             <div className="border-t pt-2 text-xs text-muted-foreground">
               <p>文件信息 · {info.size.toLocaleString()} 字节</p>
               <p>{new Date(info.modified_ns / 1_000_000).toLocaleString()}</p>

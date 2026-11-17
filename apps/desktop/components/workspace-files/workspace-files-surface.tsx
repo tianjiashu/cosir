@@ -24,11 +24,7 @@ import {
   parentsOf,
   useFilesStore,
 } from "@/lib/workspace-files/workspace-files-store";
-import {
-  ResourceWatchContext,
-  useResourceWatchTargets,
-} from "@/lib/workspace-files/resource-watch";
-import { useFileWatch } from "@/lib/workspace-files/use-file-watch";
+import { useWatchedPaths } from "@/lib/workspace-files/file-watch-store";
 import { queryKeys } from "@/lib/query/query-keys";
 import { FileTree } from "./file-tree";
 import { FileSearch } from "./file-search";
@@ -86,10 +82,8 @@ export function WorkspaceFilesSurface({
     ? files.treeVisible
     : files.browsing || !files.active;
   const readingVisible = wide || !treeVisible;
-  const resources = useResourceWatchTargets();
-  useFileWatch(workspaceId, [
+  useWatchedPaths(workspaceId, [
     ...files.expanded,
-    ...resources.paths,
     ...files.tabs.map((tab) => parentPath(tab.path)),
   ]);
   const revealPath = () => {
@@ -123,7 +117,6 @@ export function WorkspaceFilesSurface({
     else if (wasReading) filenameSearch.current?.focus();
   }, [wide, readingVisible]);
   return (
-    <ResourceWatchContext.Provider value={resources.register}>
       <FileReadingTabs workspaceId={workspaceId} ref={root}>
         <DockFrame
           label="文件"
@@ -285,6 +278,5 @@ export function WorkspaceFilesSurface({
           </div>
         </DockFrame>
       </FileReadingTabs>
-    </ResourceWatchContext.Provider>
   );
 }

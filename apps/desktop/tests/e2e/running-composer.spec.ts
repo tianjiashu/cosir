@@ -32,7 +32,7 @@ function activeState(queued: TransportState["queued_messages"] = []): TransportS
       contextWindowTotal: null, launch: RUN_LAUNCH, startedAt: "2026-10-27T00:00:00.000Z",
     },
     queued_messages: queued,
-    terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [], deliverables: [],
   };
 }
 

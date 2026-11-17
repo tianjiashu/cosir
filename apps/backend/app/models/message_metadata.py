@@ -6,6 +6,7 @@ from openai.types import CompletionUsage
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.conversation_input import MessageSource, UserInputPresentation
+from app.models.deliverable import Deliverable
 from app.models.enums.tool_call_status import ToolCallEventStatus
 
 
@@ -159,11 +160,29 @@ class ToolMessageMetadata(BaseModel):
     # 后台结果的后台占位（见 ``ToolObservation.background``）：存在即后台占位，卡片状态与看板条目
     # 的持久化事实源。
     background: BackgroundWork | None = None
+    # 交付记录（见 ``app.models.deliverable``）：只有 ``present_deliverables`` 的结果行有；卡片与产出清单的
+    # 持久化事实源。与 ``background`` 一样「有才写」：投影不会因为某次事件没带它而清掉 part 上已有的。
+    deliverables: tuple[Deliverable, ...] | None = None
 
     @property
     def awaiting_decision(self) -> bool:
         """决定入口与展示投影共用的等待条件。"""
         return self.status == "pending" and self.background is None
+
+    def merged_onto(self, previous: "ToolMessageMetadata") -> "ToolMessageMetadata":
+        """结果行 metadata 的更新规则，全仓只此一处：状态与错误取新值，展示数据、后台记录与交付记录
+        「有才写」——新值为空时沿用旧值。
+
+        更新方（决定重放、后台结论并入、Run 外的占位结算）常常只知道新的状态，不知道也不该覆盖卡片的
+        展示数据与后台记录；所以空值表示「不变」，而不是「清空」。目前没有需要清空这三项的场景。
+        """
+        return ToolMessageMetadata(
+            status=self.status,
+            error=self.error,
+            display_data=self.display_data or previous.display_data,
+            background=self.background or previous.background,
+            deliverables=self.deliverables or previous.deliverables,
+        )
 
 
 MessageMetadata = (

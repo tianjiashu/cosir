@@ -57,4 +57,3 @@ def test_rebuild_pairs_disabled_tool_closure_with_metadata(
     parts = pair_tool_parts(rows, {})
 
     assert parts["disabled-1"]["status"] == "cancelled"
-    assert parts["disabled-1"]["isError"] is False

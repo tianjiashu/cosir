@@ -9,6 +9,7 @@ from openai.types.chat import (
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.models.conversation_input import UserInputPresentation
+from app.models.deliverable import DeliveredUrl
 from app.models.message_metadata import (
     BackgroundWork,
     EmptyMessageMetadata,
@@ -144,6 +145,25 @@ def test_background_completion_updates_work_and_preserves_existing_card():
     assert written.background == ended and written.display_data == card
     assert store.appended[0][2].metadata.background == ended
     assert manager.tool_result_metadata("c").background == ended
+
+
+def test_merging_tool_result_metadata_keeps_the_deliverables_record():
+    """逐字段构造 metadata 的合并处必须带上交付记录：后来的更新没带它时保留已有的，带了就用新的。"""
+    store = _ContextStore(max_sequence=2)
+    manager = _manager(store)
+    record = (DeliveredUrl(url="http://localhost:5173", caption=None),)
+    manager._entries = [
+        ContextEntry(
+            {"role": "tool", "tool_call_id": "c", "content": "presented"},
+            2,
+            2,
+            metadata=ToolMessageMetadata(status="completed", deliverables=record),
+            turn=1,
+        )
+    ]
+    written = manager.update_tool_result_metadata("c", ToolMessageMetadata(status="completed"))
+    assert written.deliverables == record
+    assert store.appended[0][2].metadata.deliverables == record
 
 
 def test_runtime_message_context_manager_owns_next_sequence_after_run_restart() -> None:

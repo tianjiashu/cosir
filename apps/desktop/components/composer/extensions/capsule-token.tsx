@@ -1,7 +1,6 @@
 import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import {
-  basename,
   parseCapsules,
   serializeCapsule,
   type Capsule,
@@ -11,6 +10,7 @@ import { ReferenceChip } from "@/components/workspace-references/reference-chip"
 import { useComposerEditorView } from "@/components/composer/composer-editor-context";
 
 import { removeComposerToken } from "./remove-composer-token";
+import { baseName } from "@/lib/files/file-name";
 
 /**
  * 输入框里的胶囊是单一原子节点，attrs 直接存 `Capsule`：文件、工作区引用、Skill 共用一套解析、
@@ -33,7 +33,7 @@ function CapsuleTokenView({ node, editor, getPos }: NodeViewProps) {
       {capsule.kind === "file" ? (
         <FileChip
           path={capsule.path}
-          remove={{ label: `移除附件 ${basename(capsule.path)}`, onClick: remove }}
+          remove={{ label: `移除附件 ${baseName(capsule.path)}`, onClick: remove }}
           disabled={context.disabled}
         />
       ) : capsule.kind === "skill" ? (

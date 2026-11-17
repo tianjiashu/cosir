@@ -108,18 +108,14 @@ class SessionContextService:
             if (record.session_id, tool_call_id) in exclude:
                 continue
             previous = cast(ToolMessageMetadata, record.metadata)
-            metadata = previous.model_copy(
-                update={
-                    "status": status,
-                    "error": error,
-                    "display_data": (
-                        (displays or {}).get(str(tool_call_id)) or previous.display_data
-                    ),
-                    "background": previous.background.model_copy(update={"ended_at": ended_at})
-                    if previous.background is not None
-                    else None,
-                }
-            )
+            metadata = ToolMessageMetadata(
+                status=status,
+                error=error,
+                display_data=(displays or {}).get(str(tool_call_id)),
+                background=previous.background.model_copy(update={"ended_at": ended_at})
+                if previous.background is not None
+                else None,
+            ).merged_onto(previous)
             updated = dataclasses.replace(record, metadata=metadata)
             self._crud.replace_message(record.session_id, record.sequence, updated)
             settled.append(updated)
@@ -143,8 +139,8 @@ class SessionContextService:
                 or not record.awaits_user
             ):
                 continue
-            metadata = cast(ToolMessageMetadata, record.metadata).model_copy(
-                update={"status": "cancelled", "error": error}
+            metadata = ToolMessageMetadata(status="cancelled", error=error).merged_onto(
+                cast(ToolMessageMetadata, record.metadata)
             )
             updated = dataclasses.replace(record, metadata=metadata)
             self._crud.replace_message(record.session_id, record.sequence, updated)

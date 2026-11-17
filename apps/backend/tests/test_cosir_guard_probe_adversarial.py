@@ -40,6 +40,7 @@ from app.utils.path import system_cosir as paths
 from app.utils.path.file_identity import RootDirectory
 from app.utils.path.system_cosir import COSIR_DIR_NAME, system_cosir_dir
 from app.utils.path.workspace_cosir import is_in_workspace_cosir
+from tests.tool_output_support import truncated_artifact_path
 
 
 def _ctx(root: Path) -> ToolExecutionContext:
@@ -466,11 +467,11 @@ def test_artifact_written_under_cosir_tool_artifacts(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     root.mkdir()
-    budget = ToolOutputBudget(max_chars=10)
+    budget = ToolOutputBudget(max_chars=300)
     content = "abcdefghij" * 100
     obs = ToolObservation(tool_name="t", status="success", content=content)
     result = budget.apply(obs, _ctx(root))
-    artifact_path = (result.artifact_data or {}).get("artifact_path")
+    artifact_path = truncated_artifact_path(result.content)
     assert isinstance(artifact_path, str) and artifact_path
     assert artifact_path.startswith(".cosir/tool-artifacts/")
     assert not Path(artifact_path).is_absolute()
@@ -484,10 +485,10 @@ def test_artifact_returns_posix_relative_path(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     root.mkdir()
-    budget = ToolOutputBudget(max_chars=5)
+    budget = ToolOutputBudget(max_chars=300)
     obs = ToolObservation(tool_name="t", status="success", content="x" * 500)
     result = budget.apply(obs, _ctx(root))
-    artifact_path = (result.artifact_data or {}).get("artifact_path")
+    artifact_path = truncated_artifact_path(result.content)
     assert "\\" not in str(artifact_path)
 
 
@@ -496,7 +497,7 @@ def test_artifact_not_written_to_coding_agent(tmp_path: Path) -> None:
 
     root = tmp_path / "ws"
     root.mkdir()
-    budget = ToolOutputBudget(max_chars=5)
+    budget = ToolOutputBudget(max_chars=300)
     obs = ToolObservation(tool_name="t", status="success", content="x" * 500)
     budget.apply(obs, _ctx(root))
     assert not (root / ".coding-agent").exists()
@@ -508,11 +509,11 @@ def test_artifact_when_cosir_is_a_file_degrades(tmp_path: Path) -> None:
     root = tmp_path / "ws"
     root.mkdir()
     (root / ".cosir").write_text("i am a file", encoding="utf-8")
-    budget = ToolOutputBudget(max_chars=5)
+    budget = ToolOutputBudget(max_chars=300)
     obs = ToolObservation(tool_name="t", status="success", content="x" * 500)
     result = budget.apply(obs, _ctx(root))
-    # 不抛异常即可；artifact 因路径不可用而应为空。
-    assert (result.artifact_data or {}).get("artifact_path", "") == ""
+    # 不抛异常即可；路径不可用时截断标记写明全文不可取回。
+    assert "full output unavailable" in (result.content or "")
 
 
 # --- H. 系统级 `.cosir` --------------------------------------------------------
@@ -667,10 +668,10 @@ def test_artifact_when_root_does_not_exist_degrades(tmp_path: Path) -> None:
     """workspace_root 指向不存在的目录时，artifact 落盘必须降级（不抛异常）。"""
 
     missing = tmp_path / "does-not-exist"
-    budget = ToolOutputBudget(max_chars=5)
+    budget = ToolOutputBudget(max_chars=300)
     obs = ToolObservation(tool_name="t", status="success", content="x" * 500)
     result = budget.apply(obs, _ctx(missing))  # 不得抛异常
-    assert (result.artifact_data or {}).get("output_truncated") is True
+    assert "full output unavailable" in (result.content or "")
 
 
 def test_resolve_read_scope_returns_error_on_resolve_failure(
@@ -809,11 +810,11 @@ def test_artifact_containment_when_root_is_symlink(tmp_path: Path) -> None:
     real_root.mkdir()
     link_root = tmp_path / "link_ws"
     link_root.symlink_to(real_root, target_is_directory=True)
-    budget = ToolOutputBudget(max_chars=5)
+    budget = ToolOutputBudget(max_chars=300)
     content = "y" * 500
     obs = ToolObservation(tool_name="t", status="success", content=content)
     result = budget.apply(obs, _ctx(link_root))
-    artifact_path = (result.artifact_data or {}).get("artifact_path")
+    artifact_path = truncated_artifact_path(result.content)
     if artifact_path:
         assert artifact_path.startswith(".cosir/tool-artifacts/")
         assert (real_root / ".cosir" / "tool-artifacts" / Path(artifact_path).name).is_file()
@@ -864,10 +865,10 @@ def test_budget_write_artifact_when_cosir_is_symlink_to_outside(tmp_path: Path) 
     outside = tmp_path / "outside"
     outside.mkdir()
     (root / ".cosir").symlink_to(outside, target_is_directory=True)
-    budget = ToolOutputBudget(max_chars=5)
+    budget = ToolOutputBudget(max_chars=300)
     obs = ToolObservation(tool_name="t", status="success", content="z" * 500)
     result = budget.apply(obs, _ctx(root))
-    artifact_path = (result.artifact_data or {}).get("artifact_path")
+    artifact_path = truncated_artifact_path(result.content)
     # 若返回了 artifact 路径，绝不能落在 workspace 之外的真实目录。
     if artifact_path:
         written = (root / artifact_path).resolve()

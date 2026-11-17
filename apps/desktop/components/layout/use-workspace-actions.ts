@@ -1,4 +1,5 @@
 import { forgetSessionComposerDrafts } from "@/lib/assistant/composer/composer-drafts";
+import { useDeliverablesStore } from "@/lib/deliverables/deliverables-store";
 import { forgetCommands } from "@/lib/assistant/command-request-store";
 import { useDisclosureStore } from "@/lib/assistant/turn/disclosure-store";
 import { useFilesStore } from "@/lib/workspace-files/workspace-files-store";
@@ -21,6 +22,7 @@ import { useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks
 import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { useWorkbenchStore } from "@/lib/workbench/workbench-store";
+import { baseName } from "@/lib/files/file-name";
 
 export type DeleteTarget =
   | { kind: "workspace"; id: number; label: string; sessionCount: number }
@@ -60,7 +62,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedSessionId:
       if (!desktopHost) throw new UserFacingError("只能在桌面应用中添加工作区");
       const picked = await desktopHost.dialog.openDirectory({ title: "选择工作区文件夹" });
       if (picked === null) return false;
-      const name = picked.split(/[\\/]/).filter(Boolean).at(-1) ?? "新工作区";
+      const name = baseName(picked);
       const workspace = await createWorkspace({ name, root_path: picked });
       selectWorkspace(workspace.workspace_id);
       if (location.pathname !== "/") navigate("/");
@@ -173,6 +175,7 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedSessionId:
     useTerminalWorkbenchStore.getState().forget(deletedSessionIds);
     useWorkbenchStore.getState().forgetSessions(deletedSessionIds);
     useBackgroundTasksStore.getState().forget(deletedSessionIds);
+    useDeliverablesStore.getState().forget(deletedSessionIds);
     useHandoffStore.getState().forget(deletedSessionIds);
     forgetMessageHeights(deletedSessionIds);
     forgetCommands(deletedSessionIds);

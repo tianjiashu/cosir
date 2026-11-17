@@ -11,6 +11,7 @@ import {
 import { queryKeys } from "@/lib/query/query-keys";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
+import { baseName } from "@/lib/files/file-name";
 
 /** 查询缓存只承载后端配置；版本变化使目录分页和搜索重新读取，阅读标签不参与。 */
 export function useBrowserVisibility(workspaceId: number, enabled = true) {
@@ -47,7 +48,7 @@ export function useChangeBrowserVisibility(workspaceId: number) {
       if (result.changed_paths.length) {
         notify.success(
           ignored
-            ? `已忽略 ${paths.length === 1 ? paths[0].split("/").at(-1) : `${result.changed_paths.length} 项`}`
+            ? `已忽略 ${paths.length === 1 ? baseName(paths[0]) : `${result.changed_paths.length} 项`}`
             : "已恢复显示",
           {
             description: ignored ? "仅影响文件浏览器和界面搜索" : undefined,

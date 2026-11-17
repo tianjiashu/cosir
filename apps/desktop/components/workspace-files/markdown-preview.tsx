@@ -3,13 +3,14 @@ import { useMemo, useLayoutEffect, type ComponentProps, type RefObject } from "r
 import { useDomSelection } from "@/hooks/use-dom-selection";
 import type { DomTextSelection } from "@/lib/workspace-files/dom-selection-locator";
 import { useQuery } from "@tanstack/react-query";
-import { useResourceWatch } from "@/lib/workspace-files/resource-watch";
+import { useWatchedPaths } from "@/lib/workspace-files/file-watch-store";
 import type { ExtraProps } from "streamdown";
 import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
 import { useOpenLink } from "@/components/links/use-open-link";
 import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { parentPath } from "@/lib/workspace-files/workspace-files-store";
-import { useFileResourceSrc, useImageLoadFailure } from "@/lib/workspace-files/resources";
+import { useFileResourceSrc, useResourceLoadFailure } from "@/lib/workspace-files/resources";
+import { isUnreadableImage } from "@/lib/api/workspace-files";
 import { fileInfoQueryOptions } from "@/lib/query/query-options";
 import { fileReadProblem } from "@/lib/workspace-files/read-problem";
 
@@ -22,12 +23,12 @@ function LocalImage({
   path: string;
   alt?: string;
 }) {
-  useResourceWatch(path);
+  useWatchedPaths(id, [path]);
   const metadata = useQuery({
     ...fileInfoQueryOptions(id, path),
   });
   const src = useFileResourceSrc(id, path, metadata.data?.version);
-  const failure = useImageLoadFailure(id, path, metadata.data?.version);
+  const failure = useResourceLoadFailure(id, path, src);
   if (metadata.error)
     // 文档引用的图片不在是常见的文档过期，不是故障：灰字说明即可，文件恢复时随文件监听自动出现。
     return fileReadProblem(metadata.error) === "missing-file" ? (
@@ -37,7 +38,7 @@ function LocalImage({
         {userErrorMessage(metadata.error, "图片读取失败")}
       </span>
     );
-  if (failure.failed || (metadata.data?.kind === "image" && metadata.data.width === null))
+  if (failure.failed || (metadata.data !== undefined && isUnreadableImage(metadata.data)))
     return <span role="alert">无法预览这张图片：{path}</span>;
   return src ? (
     <img src={src} alt={alt ?? ""} className="max-w-full" onError={() => void failure.onError()} />

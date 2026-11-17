@@ -73,6 +73,47 @@ _SCENARIOS = {
 }
 
 
+async def test_a_deliverable_card_is_the_same_live_and_after_rebuild(backend_env, tmp_path, monkeypatch):
+    """交付记录经观察 → 事件 → 结算 → part 投影，实时与冷重建得到同一张卡。"""
+    (tmp_path / "a.txt").write_text("x")
+    present = {"intent": "交付", "items": [{"target": "a.txt", "caption": "结果"}]}
+    steps = [
+        ([{"tool_calls": [tool_call("c1", "present_deliverables", present)]}], "tool_calls"),
+        ([{"content": "完成"}], "stop"),
+    ]
+    env = LiveColdEnv(tmp_path, monkeypatch, steps)
+    try:
+        env.send()
+        await env.parked()
+        env.assert_parity()
+        [part] = tool_parts(env.live())
+        assert part["status"] == "completed"
+        assert [item["workspacePath"] for item in part["deliverables"]] == ["a.txt"]
+    finally:
+        await env.close()
+
+
+async def test_session_deliverables_list_is_the_same_live_and_after_rebuild(backend_env, tmp_path, monkeypatch):
+    """顶层交付清单随带记录的事件重算：同一文件再交付一次只留一条、排到最前，实时与冷重建一致。"""
+    for name in ("a.txt", "b.txt"):
+        (tmp_path / name).write_text(name)
+    first = {"intent": "交付", "items": [{"target": "a.txt"}]}
+    second = {"intent": "交付", "items": [{"target": "b.txt"}, {"target": "a.txt"}]}
+    steps = [
+        ([{"tool_calls": [tool_call("c1", "present_deliverables", first)]}], "tool_calls"),
+        ([{"tool_calls": [tool_call("c2", "present_deliverables", second)]}], "tool_calls"),
+        ([{"content": "完成"}], "stop"),
+    ]
+    env = LiveColdEnv(tmp_path, monkeypatch, steps)
+    try:
+        env.send()
+        await env.parked()
+        env.assert_parity()
+        assert [item["workspacePath"] for item in env.live()["deliverables"]] == ["a.txt", "b.txt"]
+    finally:
+        await env.close()
+
+
 @pytest.mark.parametrize("name", list(_SCENARIOS))
 async def test_run_outcomes_agree(backend_env, tmp_path, monkeypatch, name):
     steps, banned = _SCENARIOS[name]

@@ -43,7 +43,7 @@ describe("browser-page display", () => {
 
   it("routes browser tools by display kind, falling back on bad payloads", () => {
     const artifact = (display_data: Record<string, unknown>): ToolArtifact => ({presentation: "activity",
-      backendStatus: "completed", awaitingUser: false, background: false, display_data, error: null, errorCode: null,
+      backendStatus: "completed", awaitingUser: false, background: false, display_data, error: null,
     });
     expect(resolveCallView({ artifact: artifact(PAGE) } as CallViewContext)).toMatchObject({ meta: expect.anything() });
     expect(resolveCallView({ artifact: artifact({ ...PAGE, handoff_reason: "sign in" }) } as CallViewContext)).toMatchObject({ meta: expect.anything() });

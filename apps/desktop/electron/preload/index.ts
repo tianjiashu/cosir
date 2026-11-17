@@ -58,6 +58,9 @@ const host: CosirHost = {
   files: {
     pathOf: (file) => webUtils.getPathForFile(file),
     reveal: (absolutePath) => call(HOST_CHANNEL.filesReveal, absolutePath),
+    openExternally: (absolutePath) => call(HOST_CHANNEL.filesOpenExternally, absolutePath),
+    quickLook: (absolutePath) => call(HOST_CHANNEL.filesQuickLook, absolutePath),
+    thumbnail: (absolutePath, edge) => call(HOST_CHANNEL.filesThumbnail, absolutePath, edge),
   },
 };
 

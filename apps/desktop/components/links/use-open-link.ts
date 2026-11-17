@@ -4,7 +4,9 @@ import { useOpenWorkspacePath } from "@/components/workspace-references/use-open
 import { openUserTab } from "@/lib/browser/open-tab";
 import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { desktopHost } from "@/lib/desktop-host";
-import { inlineCodeLink, resolveLink, type LinkTarget } from "@/lib/links/resolve-link";
+import { FILE_EXITS } from "@/lib/desktop-host/file-exits";
+import type { TransportDeliverable } from "@/lib/assistant/contract";
+import { inlineCodeLink, resolveDeliverable, resolveLink, type LinkTarget } from "@/lib/links/resolve-link";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 
@@ -24,6 +26,8 @@ export const LinkSessionContext = createContext<number | null>(null);
 export type LinkOpener = {
   /** 按当前工作区（与文件面板一致）解析；`documentDir` 只在工作区文档里给出。 */
   resolve: (href: string, documentDir?: string) => LinkTarget | null;
+  /** 交付记录的打开目标（见 `resolveDeliverable`）；当前界面打不开时返回 null。 */
+  resolveDeliverable: (deliverable: TransportDeliverable) => LinkTarget | null;
   /** 行内代码里的文件路径能否打开、打开什么；不认路径的打开方式返回 null。 */
   resolveCode: (text: string, documentDir?: string) => LinkTarget | null;
   /** 悬停提示：点了会在哪里打开。 */
@@ -39,6 +43,7 @@ export type LinkOpener = {
  *
  * - 页内锚点 → 在链接所在的那篇 Markdown 里滚动到目标（脚注来回跳转）。
  * - 工作区路径 → 文件面板（带行号时选中并居中）；目录在文件树里展开。
+ * - 「在文件夹中显示」（只来自交付记录）→ 宿主的系统文件管理器；浏览器开发模式没有宿主，解析时就不可点。
  * - 本机与局域网地址、本机网页文件，且有所属 Session、运行在桌面宿主里 → 该 Session 的内置浏览器（Agent 也看得到，
  *   便于一起验证）。打不开内置浏览器时本机网页文件退回文件面板（工作区外的在 `resolve` 里就不可点）。
  * - 其余网页与邮件地址 → 先确认，再经 `window.open` 交给宿主用系统浏览器打开（宿主另有协议白名单）；
@@ -68,12 +73,14 @@ export function useOpenLink(source: LinkSource, sessionId?: number | null): Link
       window.open(url, "_blank", "noopener,noreferrer");
       return "system";
     };
+    // 打不开内置浏览器时本机网页退回文件面板（工作区外的没有退路）；没有宿主时「在文件夹中显示」不可用。
+    const reachable = (target: LinkTarget | null): LinkTarget | null =>
+      target?.kind === "page" && browserSession === null ? target.workspace
+        : target?.kind === "reveal" && !desktopHost ? null : target;
     return {
       workspaceRoot,
-      resolve: (href, documentDir) => {
-        const target = resolveLink(href, { workspaceRoot, documentDir });
-        return target?.kind === "page" && browserSession === null ? target.workspace : target;
-      },
+      resolve: (href, documentDir) => reachable(resolveLink(href, { workspaceRoot, documentDir })),
+      resolveDeliverable: (deliverable) => reachable(resolveDeliverable(deliverable, { workspaceRoot })),
       resolveCode: (text, documentDir) => inlineCodeLink(text, { workspaceRoot, documentDir }),
       describe: describeLinkTarget,
       open: (target, origin) => {
@@ -101,6 +108,12 @@ export function useOpenLink(source: LinkSource, sessionId?: number | null): Link
           );
           return;
         }
+        if (target.kind === "reveal") {
+          // 与胶囊菜单、文件面板空态同一个出口（失败提示与日志在那里）；`resolve` 已保证有宿主。
+          FILE_EXITS.find((exit) => exit.id === "reveal")!.run(target.path);
+          log(target);
+          return;
+        }
         if (target.kind === "page") {
           // `resolve` 已把打不开内置浏览器时的本机网页换成文件面板退路，到这里一定有 browserSession。
           openUserTab(browserSession!, target.url).then(
@@ -123,6 +136,7 @@ function describeLinkTarget(target: LinkTarget): string | undefined {
   if (target.kind === "filename-search") return `查找文件 ${target.query}`;
   if (target.kind === "page") return `在内置浏览器打开 ${target.path}`;
   if (target.kind === "web") return target.url;
+  if (target.kind === "reveal") return `在文件夹中显示 ${target.path}`;
   return undefined;
 }
 
@@ -136,6 +150,7 @@ export function useWebOnlyLinkOpener(source: LinkSource): LinkOpener {
     ...opener,
     workspaceRoot: null,
     resolve: (href) => resolveLink(href, { workspaceRoot: null }),
+    resolveDeliverable: (deliverable) => (deliverable.type === "url" ? opener.resolveDeliverable(deliverable) : null),
     resolveCode: () => null,
   }), [opener]);
 }

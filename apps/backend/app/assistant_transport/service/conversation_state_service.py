@@ -7,7 +7,7 @@ import copy
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from threading import RLock
-from typing import cast
+from typing import Literal, cast
 
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.projection.snapshot_rebuild import rebuild_snapshot
@@ -16,6 +16,9 @@ from app.assistant_transport.projection.user_input_projection import build_prese
 from app.assistant_transport.state.conversation_state_background_task import (
     ConversationBackgroundTask,
     project_background_tasks,
+)
+from app.assistant_transport.state.conversation_state_deliverable import (
+    project_session_deliverables,
 )
 from app.assistant_transport.state.conversation_state_handoff import (
     ConversationHandoff,
@@ -245,14 +248,18 @@ class ConversationStateService:
             mutations = list(plan_event(event, state, presentation_catalog(get_tool_registry())))
             for mutation in mutations:
                 mutation.apply_to(state)
-            # 看板由工具 part 派生：只有带后台记录的事件会改变它（占位写入、并入、撤销、重启中断），
-            # token 帧等其余事件不重算。
-            if isinstance(event, ToolCallStatusChangedEvent) and event.background is not None:
-                background = self._background_tasks(session_id, state)
-                if background != state["background_tasks"]:
-                    mutation = ConversationStateMutation("set", ("background_tasks",), background)
-                    mutation.apply_to(state)
-                    mutations.append(mutation)
+            # 看板与交付清单由工具 part 派生：每个工具状态事件之后都重算并比较，不看事件带了什么——
+            # 漏带后台记录的状态事件也能让看板收敛。工具状态事件频率低，token 帧等其余事件不重算。
+            if isinstance(event, ToolCallStatusChangedEvent):
+                derived: tuple[tuple[Literal["background_tasks", "deliverables"], object], ...] = (
+                    ("background_tasks", self._background_tasks(session_id, state)),
+                    ("deliverables", project_session_deliverables(state["messages"])),
+                )
+                for field, value in derived:
+                    if value != state[field]:
+                        mutation = ConversationStateMutation("set", (field,), value)
+                        mutation.apply_to(state)
+                        mutations.append(mutation)
             self._validate_or_discard(space, state, mutations)
             change = TransportFrame(session_id=session_id, kind="mutation", mutations=tuple(mutations))
             if mutations:
@@ -423,6 +430,7 @@ class ConversationStateService:
             state["background_tasks"] = self._background_tasks(session_id, state)
             state["foreground_waits"] = command_results.foreground_calls(session_id)
             state["handoffs"] = self._handoffs(session_id)
+            state["deliverables"] = project_session_deliverables(state["messages"])
         except Exception as exc:
             log.exception(
                 "state_rebuild_failed",

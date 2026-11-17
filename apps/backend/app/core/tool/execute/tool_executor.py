@@ -29,6 +29,7 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.node_helper import emit
+from app.models.message_metadata import ToolMessageMetadata
 
 
 class ToolExecutor:
@@ -93,7 +94,7 @@ class ToolExecutor:
                     run_id=execution_context.run_id,
                     step_id=execution_context.step_id,
                     tool_call_id=execution_context.tool_call_id,
-                    status="running",
+                    result=ToolMessageMetadata(status="running"),
                 )
             )
         observation = self._runner.execute(tool, gate_outcome.arguments, execution_context)

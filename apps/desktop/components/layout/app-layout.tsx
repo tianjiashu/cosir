@@ -1,5 +1,6 @@
 import { ReferenceBridgeProvider, ReferenceTargetScope } from "@/components/workspace-references/reference-bridge";
 
+import { WorkspaceFileWatches } from "@/components/workspace-files/workspace-file-watches";
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Outlet,
@@ -277,6 +278,7 @@ export function AppLayout() {
       {/* 根是下沉的窗口底色，侧栏直接铺在上面；主区与停靠卡片在 bg-background 上，二者靠明度差分隔，不画线。 */}
       <div className="bg-canvas relative flex h-dvh min-h-0 overflow-hidden">
         <BackendStatusBanner />
+        <WorkspaceFileWatches />
         {/* 收起时宽度过渡到 0 而不是卸载：有收起动画，侧栏滚动位置与展开状态也保留；inert 让它不可聚焦。 */}
         {!narrow && (
           <aside

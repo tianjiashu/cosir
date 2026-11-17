@@ -6,7 +6,11 @@ from typing import NotRequired, TypedDict
 from app.assistant_transport.state.conversation_state_background_task import (
     project_background_work,
 )
-from app.assistant_transport.state.conversation_state_part import ConversationBackgroundWork
+from app.assistant_transport.state.conversation_state_deliverable import project_deliverables
+from app.assistant_transport.state.conversation_state_part import (
+    ConversationBackgroundWork,
+    ConversationDeliverable,
+)
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.message_metadata import ToolMessageMetadata
 
@@ -14,12 +18,10 @@ from app.models.message_metadata import ToolMessageMetadata
 class ToolResultFields(TypedDict):
     status: ToolCallEventStatus
     error: str | None
-    isError: bool
     awaitingUser: bool
     display_data: dict[str, object] | None
     background: NotRequired[ConversationBackgroundWork]
-    child_session_id: NotRequired[int]
-    agent_role: NotRequired[str]
+    deliverables: NotRequired[list[ConversationDeliverable]]
 
 
 def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
@@ -33,23 +35,12 @@ def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
     fields = ToolResultFields(
         status=metadata.status,
         error=metadata.error if metadata.status in {"failed", "cancelled"} else None,
-        isError=metadata.status == "failed",
         awaitingUser=metadata.awaiting_decision,
         display_data=deepcopy(metadata.display_data),
     )
     # 只在有记录时写入：不带记录的事件不能把 part 上已有的记录清掉。
     if metadata.background is not None:
         fields["background"] = project_background_work(metadata.background)
-    display = metadata.display_data
-    if display is not None and display.get("kind") in {"delegation-result", "fork-session-result"}:
-        child_session_id = display.get("child_session_id")
-        role = display.get("role")
-        if (
-            isinstance(child_session_id, int)
-            and not isinstance(child_session_id, bool)
-            and child_session_id > 0
-        ):
-            fields["child_session_id"] = child_session_id
-        if isinstance(role, str) and role.strip():
-            fields["agent_role"] = role
+    if metadata.deliverables is not None:
+        fields["deliverables"] = project_deliverables(metadata.deliverables)
     return fields

@@ -152,7 +152,7 @@ class ModelStreamStateMachine:
                     run_id=self._run_id,
                     step_id=self._step_id,
                     tool_call_id=call_id,
-                    status="cancelled",
+                    result=ToolMessageMetadata(status="cancelled"),
                 )
             )
             context.add_message(
