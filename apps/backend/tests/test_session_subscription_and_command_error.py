@@ -199,10 +199,9 @@ async def test_one_connection_survives_run_completion_new_run_cancel_and_suspend
     await _settle()
     assert not collector.task.done()
 
+    # Run 以 running 建出（RunInitialized 整体写入 activity），紧随的 RUNNING 事件是空操作，发布出口不推帧。
     assert _statuses(collector.frames[1:]) == [
-        "running",
         "completed",
-        "running",
         "suspended",
         "running",
         "cancelled",

@@ -6,11 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-import app.service.user_input.user_input_service as user_input_module
-from app.core.user_input.capsules import FileCapsule, serialize_capsule
+import app.assistant_transport.service.user_input_service as user_input_module
+from app.assistant_transport.service.user_input_service import UserInputService
+from app.core.capsules.capsule_grammar import FileCapsule, serialize_capsule
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.run_command import RunCommand
-from app.service.user_input.user_input_service import UserInputService
 from tests.model_config_fixtures import model_config_record, model_configs
 
 _SESSION_ID = 7

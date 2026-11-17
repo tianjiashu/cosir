@@ -7,7 +7,7 @@
 import re
 from pathlib import Path
 
-from app.service.workspace_files.image_preview import _PREVIEW_BOXES
+from app.service.workspace_files.content.image_preview import _PREVIEW_BOXES
 
 _DESKTOP = Path("../desktop/lib")
 

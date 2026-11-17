@@ -313,3 +313,76 @@ def test_cold_rebuild_is_not_resumable_once_the_last_turn_is_withdrawn(
     assert resumable() is True
     depends.get_turn_withdrawal_service().withdraw(history.session_id, 12)
     assert resumable() is False
+
+
+def test_plan_withdraws_the_interrupted_draft_with_its_turn() -> None:
+    """流式中途停止后撤回：被打断的草稿从不进上下文却照常显示，必须随回合一起移出，否则撤回后用户的话
+    没了、半截回复还挂在线程里，之后的分叉还会把它复制过去。"""
+    from app.models.session_context import SessionContextRecord, run_last_turn_withdrawn
+
+    def row(row_id: int, turn: int, message: dict, *, include: bool, metadata=None) -> SessionContextRecord:
+        return SessionContextRecord(
+            session_id=1, run_id=7, message=message, include_in_context=include,
+            sequence=row_id, turn=turn, metadata=metadata or {}, id=row_id,
+        )
+
+    rows = [
+        row(1, 1, {"role": "user", "content": "写一篇长文"}, include=True, metadata=_user("写一篇长文")),
+        row(2, 1, {"role": "assistant", "content": "## 半截"}, include=False),
+    ]
+
+    plan = WithdrawalPlan.plan_withdrawal(rows, from_turn=1)
+
+    assert plan.excluded_row_ids == frozenset({1, 2})
+    after = [replace(r, include_in_context=False, project_to_transport=False) for r in rows]
+    assert run_last_turn_withdrawn(after)
+
+
+def test_notices_about_withdrawn_calls_are_dropped_not_redelivered(history, side_effects) -> None:
+    """原地结算的占位，结局只在一条带所指调用的通知里：调用被撤回，通知随之作废（队列里删除，合成行里的
+    不再重新投递）；关于更早调用的通知照常保留。"""
+    queue = depends.get_session_message_queue()
+    for call_id in ("call-decide", "call-early"):
+        queue.put(
+            history.session_id,
+            SessionMessage.of(
+                NoticeBody(
+                    content=f"Your question (tool_call_id={call_id}) was not answered",
+                    notice_kind="decision_expired",
+                    tool_call_ids=[call_id],
+                )
+            ),
+        )
+
+    depends.get_turn_withdrawal_service().withdraw(history.session_id, 12)
+
+    expired = [
+        message.body.tool_call_ids
+        for message in queue.pending_nowait(history.session_id)
+        if isinstance(message.body, NoticeBody) and message.body.notice_kind == "decision_expired"
+    ]
+    assert expired == [["call-early"]]
+
+
+def test_plan_does_not_redeliver_session_notices_about_withdrawn_calls() -> None:
+    from app.models.message_metadata import NoticeEntry
+    from app.models.session_context import SessionContextRecord
+
+    notice = UserMessageMetadata(
+        kind="notice",
+        notices=[
+            NoticeEntry(notice_kind="decision_expired", content="late", tool_call_ids=["call-late"]),
+            NoticeEntry(notice_kind="decision_expired", content="early", tool_call_ids=["call-early"]),
+            NoticeEntry(notice_kind="backend_restarted", content="restarted"),
+        ],
+    )
+    rows = [
+        SessionContextRecord(session_id=1, run_id=7, message=_call("call-early"), include_in_context=True, sequence=1, turn=1, id=1),
+        SessionContextRecord(session_id=1, run_id=7, message={"role": "user", "content": "second"}, include_in_context=True, sequence=2, turn=2, metadata=_user("second"), id=2),
+        SessionContextRecord(session_id=1, run_id=7, message=_call("call-late"), include_in_context=True, sequence=3, turn=2, id=3),
+        SessionContextRecord(session_id=1, run_id=7, message={"role": "user", "content": "notice"}, include_in_context=True, sequence=4, turn=2, metadata=notice, id=4),
+    ]
+
+    plan = WithdrawalPlan.plan_withdrawal(rows, from_turn=2)
+
+    assert [n.content for n in plan.redeliver] == ["early", "restarted"]

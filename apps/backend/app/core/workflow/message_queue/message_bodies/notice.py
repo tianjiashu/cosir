@@ -36,6 +36,11 @@ NoticeLevel = Literal["session", "run", "turn"]
 # - turn：上一个回合怎样结束（用户已停止）或本次驱动内的提示（续写）。驱动开始时推导或驱动内投递，
 #   不入队。
 # run 与 turn 级都从持久化事实与上下文现推，撤回后自然重新推导，所以撤回只需重新投递 session 级。
+#
+# 送达占位结局的通知必须带所指调用（``tool_call_ids``）：提问作废、重启中断把占位原地改成「已取消 /
+# 已中断」、正文不动，结局只在这条通知里；派生 Session 被停止说的是派生它的那次调用。占位的结局总是
+# 一条按调用寻址的消息（后台结论、决定同理），分叉与撤回都按调用归属处理它——不带所指调用，分支会
+# 继承「等待中」的占位而收不到结局，撤回会留下指向已撤回调用的通知。
 NOTICE_LEVELS: dict[NoticeKind, NoticeLevel] = {
     "fork_handover": "session",
     "backend_restarted": "session",
@@ -92,6 +97,8 @@ class NoticeBody(EnqueuedMessageBody):
     content: str
     notice_kind: NoticeKind
     metadata: dict[str, str | None] = Field(default_factory=dict)
+    # 这条通知给哪些调用送达了结局（见本模块开头的说明）；与具体调用无关的通知为空。
+    tool_call_ids: list[str] = Field(default_factory=list)
     # 只有工具准入通知带：告知时禁用的工具名（排序），是下一次推导的比对基准（随行落库）。
     banned_tools: list[str] | None = None
     # 只有未了结事项通知带：告知时的清单（排序），同样是下一次推导的比对基准。
@@ -101,6 +108,9 @@ class NoticeBody(EnqueuedMessageBody):
 
     def wake_scope(self) -> WakeScope:
         return NOTICE_WAKE_SCOPES[self.notice_kind]
+
+    def answered_calls(self) -> frozenset[str]:
+        return frozenset(self.tool_call_ids)
 
     def render(self) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
         return notices_to_context([self])
@@ -127,6 +137,7 @@ def notices_to_context(
                 NoticeEntry(
                     notice_kind=item.notice_kind,
                     content=item.content,
+                    tool_call_ids=item.tool_call_ids,
                     banned_tools=item.banned_tools,
                     open_items=item.open_items,
                     prompt_sources=item.prompt_sources,

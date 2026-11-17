@@ -159,7 +159,9 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
     )
     initial = pair_tool_parts([call], {})["call-1"]
     initial["status"] = "running"
-    initial["display_data"] = {"kind": "read-file-meta", "path": "old.txt"}
+    # 结果带展示数据时取代旧值；不带时表示「不变」（``merged_onto``），旧值只可能来自已有结果行
+    # （HITL / 后台占位），冷重建也会读到它，所以这里只在结果带展示数据时预置旧值。
+    initial["display_data"] = {"kind": "read-file-meta", "path": "old.txt"} if metadata.display_data else None
     initial["error"] = "old error"
     state = _running_state(initial)
     event = ToolCallStatusChangedEvent(

@@ -104,15 +104,12 @@ def test_fork_keeps_the_parents_identity_and_completes_once_assigned(env, tmp_pa
     assert prepared["source"].session_id == 7
     assert (prepared["agent_id"], prepared["model_config_id"]) == ("main_agent", "test/m3")
     assert prepared["reasoning_effort"] == "high"
-    # 交接通知排在任务说明之前：写清身份与会话归属，模型读到会话时已经知道自己是谁。
-    [(handover_session, handover), assignment] = env.enqueued
-    assert assignment == (41, "agent-message")
-    assert handover_session == 41 and handover.body.notice_kind == "fork_handover"
-    assert "session 41" in handover.body.content and "session 7" in handover.body.content
+    # 工具只投递任务说明；交接通知由分叉层随分支在同一事务里写入（见 ``test_session_fork``）。
+    assert env.enqueued == [(41, "agent-message")]
 
 
 def test_fork_narrows_or_inherits_the_writable_root(env, tmp_path) -> None:
-    """可写根只能收窄：给出时按来源校验后交给分叉，不给即继承；分叉沿用来源的系统提示词，范围写在交接通知里。"""
+    """可写根只能收窄：给出时按来源校验后交给分叉，不给即继承（范围写进交接通知归分叉层，见 ``test_session_fork``）。"""
     (tmp_path / "pkg" / "web").mkdir(parents=True)
     (tmp_path / "docs").mkdir()
     env.parent_root = "pkg"
@@ -126,12 +123,10 @@ def test_fork_narrows_or_inherits_the_writable_root(env, tmp_path) -> None:
     narrowed = fork("pkg/web")
     assert env.forked[-1]["narrowed_root"] == "pkg/web"
     assert narrowed.display_data["writable_root"] == "pkg/web"
-    assert "Your writable root is pkg/web" in env.enqueued[-2][1].body.content
 
     inherited = fork(None)
     assert env.forked[-1]["narrowed_root"] is None
     assert inherited.display_data["writable_root"] == "pkg"
-    assert "Your writable root is pkg " in env.enqueued[-2][1].body.content
 
     widened = fork("docs")
     assert widened.status == "error" and "only be narrowed" in (widened.content or "")

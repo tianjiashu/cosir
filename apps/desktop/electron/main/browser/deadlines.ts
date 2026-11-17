@@ -4,7 +4,7 @@ import { browserError } from "./errors";
 
 /**
  * 浏览器方法的总时限：宿主保证每次调用在这之内答复（超时也是一种答复，码为 `DEADLINE_EXCEEDED`）。时限的唯一来源是
- * `contract/method-deadlines.json`（秒）；后端的等待时限 = 它 + 链路余量，镜像在后端 `host_request.py`，由
+ * `contract/method-deadlines.json`（秒）；后端的等待时限 = 它 + 链路余量，镜像在后端 `tools/browser_runtime/deadlines.py`，由
  * `test_browser_contract_guard.py` 核对。这样后端不必再按宿主内部各步的超时去推算「最坏要多久」——那份推算
  * 随宿主实现变化而漂移，漂到比宿主实际耗时短时，后端先超时、撤销调用，模型拿不到做到了哪一步。
  *

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
 from threading import RLock
-from typing import Literal, cast
+from typing import cast
 
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.projection.snapshot_rebuild import rebuild_snapshot
@@ -177,11 +177,10 @@ class ConversationStateService:
             if space is None or not space.has_snapshot():
                 return
             state = space.get_working_snapshot(lambda: self._materialize(session_id))
-            snapshot = cast(dict[str, object], state)
             mutations = tuple(
-                ConversationStateMutation("set", (key,), value)
+                mutation
                 for key, produce in producers.items()
-                if (value := produce(state)) != snapshot[key]
+                if (mutation := ConversationStateMutation("set", (key,), produce(state))).changes(state)
             )
             if not mutations:
                 return
@@ -245,21 +244,25 @@ class ConversationStateService:
         with self._lock:
             space = session_runtime_spaces.get_or_create(session_id)
             state = space.get_working_snapshot(lambda: self._materialize(session_id))
-            mutations = list(plan_event(event, state, presentation_catalog(get_tool_registry())))
-            for mutation in mutations:
-                mutation.apply_to(state)
-            # 看板与交付清单由工具 part 派生：每个工具状态事件之后都重算并比较，不看事件带了什么——
-            # 漏带后台记录的状态事件也能让看板收敛。工具状态事件频率低，token 帧等其余事件不重算。
-            if isinstance(event, ToolCallStatusChangedEvent):
-                derived: tuple[tuple[Literal["background_tasks", "deliverables"], object], ...] = (
-                    ("background_tasks", self._background_tasks(session_id, state)),
-                    ("deliverables", project_session_deliverables(state["messages"])),
-                )
-                for field, value in derived:
-                    if value != state[field]:
-                        mutation = ConversationStateMutation("set", (field,), value)
+            mutations: list[ConversationStateMutation] = []
+
+            def apply(planned: Iterable[ConversationStateMutation]) -> None:
+                # 逐条按应用前的状态判定：同一计划里前一条可能改变后一条的目标。空操作不应用、不发布。
+                for mutation in planned:
+                    if mutation.changes(state):
                         mutation.apply_to(state)
                         mutations.append(mutation)
+
+            apply(plan_event(event, state, presentation_catalog(get_tool_registry())))
+            # 看板与交付清单由工具 part 派生：每个工具状态事件之后都重算，不看事件带了什么——
+            # 漏带后台记录的状态事件也能让看板收敛。工具状态事件频率低，token 帧等其余事件不重算。
+            if isinstance(event, ToolCallStatusChangedEvent):
+                background = self._background_tasks(session_id, state)
+                deliverables = project_session_deliverables(state["messages"])
+                apply((
+                    ConversationStateMutation("set", ("background_tasks",), background),
+                    ConversationStateMutation("set", ("deliverables",), deliverables),
+                ))
             self._validate_or_discard(space, state, mutations)
             change = TransportFrame(session_id=session_id, kind="mutation", mutations=tuple(mutations))
             if mutations:

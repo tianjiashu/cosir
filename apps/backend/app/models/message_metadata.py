@@ -71,6 +71,8 @@ class NoticeEntry(BaseModel):
     model_config = ConfigDict(extra="forbid")
     notice_kind: str
     content: str
+    # 这条通知给哪些调用送达了结局（见 ``NoticeBody.tool_call_ids``）：分叉与撤回据此按调用归属处理它。
+    tool_call_ids: list[str] = Field(default_factory=list)
     banned_tools: list[str] | None = None
     open_items: list[str] | None = None
     # 配置变化通知的基准：告知后 Agent 看到的全部配置指纹（见 ``SystemMessageMetadata``）。
@@ -100,6 +102,18 @@ class UserMessageMetadata(BaseModel):
     source: MessageSource | None = None
     tool_call_id: str | None = None
     notices: list[NoticeEntry] = Field(default_factory=list)
+
+    @property
+    def answered_calls(self) -> frozenset[str]:
+        """这一行给哪些调用送达了结局：调用结果类消息的 ``tool_call_id``，合成通知行里各通知的所指调用。
+
+        与队列里的 ``EnqueuedMessageBody.answered_calls`` 同一口径：分叉判断「结局在不在复制范围内」、
+        撤回判断「回答的是不是被撤回的调用」都只认它。
+        """
+        calls = {call for notice in self.notices for call in notice.tool_call_ids}
+        if self.tool_call_id is not None:
+            calls.add(self.tool_call_id)
+        return frozenset(calls)
 
     @model_validator(mode="after")
     def _presentation_only_for_turn_inputs(self) -> "UserMessageMetadata":

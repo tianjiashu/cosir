@@ -38,6 +38,9 @@ class BackgroundResultBody(EnqueuedMessageBody):
     tool_result: str
     # 单项取消的回执为 False：只对活动 Run 起作用，Session 空闲时不凭它开新 Run（见 ``wake_scope``）。
     starts_run: bool = True
+
+    def answered_calls(self) -> frozenset[str]:
+        return frozenset({self.tool_call_id})
     placeholder_status: Literal["completed", "cancelled"] = "completed"
     placeholder_error: str | None = None
     placeholder_display_data: dict[str, object] | None = None

@@ -69,7 +69,7 @@ def test_only_pending_background_rows_are_settled(stored) -> None:
         stored.session_id, None, INTERRUPTED_HINT
     )
 
-    assert settled_sessions == frozenset({stored.session_id})
+    assert settled_sessions == {stored.session_id: frozenset({"call-bg"})}
     settled = _metadata(stored, "call-bg")
     assert (settled.status, settled.error) == ("cancelled", "已中断")
     assert settled.background.started_at == _WORK.started_at
@@ -79,13 +79,13 @@ def test_only_pending_background_rows_are_settled(stored) -> None:
     assert _metadata(stored, "call-done").status == "completed"
     assert _metadata(stored, "call-done").background == _FINISHED_WORK
     # 迟到的再次结算幂等。
-    assert cancel_placeholders(stored.session_id, None, None) == frozenset()
+    assert cancel_placeholders(stored.session_id, None, None) == {}
 
 
 def test_settlement_filters_by_call(stored) -> None:
     other = cancel_placeholders(stored.session_id, ["call-other"], None)
     empty = cancel_placeholders(stored.session_id, [], None)
-    assert other == empty == frozenset()
+    assert other == empty == {}
     assert _metadata(stored, "call-bg").status == "pending"
 
 
@@ -249,9 +249,9 @@ def test_restart_interrupts_hitl_calls_whose_decision_was_executing(stored) -> N
     run_id = stored.crud.get(stored.session_id)[0].run_id
     stored.crud.create(_tool_row(stored.session_id, run_id, 4, "call-claimed", status="running"))
 
-    assert RecoverService().interrupt_placeholders([stored.session_id]) == frozenset(
-        {stored.session_id}
-    )
+    assert RecoverService().interrupt_placeholders([stored.session_id]) == {
+        stored.session_id: frozenset({"call-bg", "call-claimed"})
+    }
 
     claimed = _metadata(stored, "call-claimed")
     assert (claimed.status, claimed.error) == ("cancelled", "已中断")

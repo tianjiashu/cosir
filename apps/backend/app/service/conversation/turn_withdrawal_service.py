@@ -4,11 +4,12 @@
 撤回不通知模型。回合的范围按行上的回合号（``turn``）算，副产物按调用归属（``tool_call_id``）找：
 
 - 保留：更早发起的调用在这一回合才并入的结果（它们回答的是之前的调用）；
-- 重新投递：这一回合途中并入的 Session 级通知（排队投递、只投一次，见 ``NoticeKind``）；推导出的
-  回合级与 Run 级通知不入队，撤回后由下一次驱动重新推导；
+- 重新投递：这一回合途中并入的 Session 级通知（排队投递、只投一次，见 ``NoticeKind``），只关于被撤回
+  调用的除外；推导出的回合级与 Run 级通知不入队，撤回后由下一次驱动重新推导；
 - 撤销：这一回合发起、仍在进行的后台作业与交接；这一回合派生的 Session（委派、Agent fork，按
   ``SessionExtra.deriving_call_id`` 找）以 ``parent`` 原因收回；
-- 删除：队列里属于这些调用的结论与决定，以及这一回合派生的 Session 已经交来、还没并入的汇报；
+- 删除：队列里只给这些调用送达结局的消息（结论、决定、作废与重启通知，见 ``answered_calls``），以及
+  这一回合派生的 Session 已经交来、还没并入的汇报；
 - 不处理：已经发生的外部事实——文件改动、终端会话、浏览器标签、派生 Session 已经做完的事、已发出的
   消息（见 AGENTS.md 待办）。
 
@@ -26,8 +27,6 @@ from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, NoticeKind
 from app.core.workflow.message_queue.session_message import (
     AgentMessageBody,
-    BackgroundResultBody,
-    DecisionBody,
     SessionMessage,
 )
 from app.models.errors.session_command_errors import SessionCommandConflictError
@@ -93,6 +92,7 @@ class TurnWithdrawalService:
                         NoticeBody(
                             content=notice.content,
                             notice_kind=cast(NoticeKind, notice.notice_kind),
+                            tool_call_ids=notice.tool_call_ids,
                         )
                     ),
                     db=db,
@@ -152,7 +152,8 @@ class TurnWithdrawalService:
             return False
         return body.source.session_id in session_ids
 
-    def _answers_withdrawn_call(self, message: SessionMessage, calls: frozenset[str]) -> bool:
-        """队列里回答被撤回调用的行：这些调用的结论与决定。队列里的通知都是 Session 级，照常保留。"""
-        body = message.body
-        return isinstance(body, BackgroundResultBody | DecisionBody) and body.tool_call_id in calls
+    @staticmethod
+    def _answers_withdrawn_call(message: SessionMessage, calls: frozenset[str]) -> bool:
+        """队列里只给被撤回调用送达结局的行；与调用无关的（多数通知）、还涉及别的调用的照常保留。"""
+        answered = message.body.answered_calls()
+        return bool(answered) and answered <= calls

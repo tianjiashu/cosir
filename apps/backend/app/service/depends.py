@@ -36,8 +36,8 @@ if TYPE_CHECKING:
     from app.service.model_config.model_discovery_service import ModelDiscoveryService
     from app.service.recover_service import RecoverService
     from app.service.session.session_service import SessionService
-    from app.service.session_feed.session_feed import SessionFeed
-    from app.service.user_input.user_input_service import UserInputService
+    from app.service.session.session_feed import SessionFeed
+    from app.assistant_transport.service.user_input_service import UserInputService
     from app.service.workspace.workspace_service import WorkspaceService
     from app.service.workspace_files.file_watch import WorkspaceFileWatcher
     from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
@@ -260,7 +260,7 @@ def get_workspace_files_service() -> WorkspaceFilesService:
 @_process_singleton
 def get_session_feed() -> SessionFeed:
     """进程级 Session 推送（状态与目录失效）；状态与 Run 开始经 projector 发布，目录写入方提交后发布。"""
-    from app.service.session_feed.session_feed import SessionFeed
+    from app.service.session.session_feed import SessionFeed
 
     return SessionFeed()
 
@@ -377,7 +377,7 @@ def get_session_message_queue() -> SessionMessageQueue:
 def get_user_input_service() -> UserInputService:
     """返回进程级用户输入解析服务单例（无进程内状态）。"""
 
-    from app.service.user_input.user_input_service import UserInputService
+    from app.assistant_transport.service.user_input_service import UserInputService
 
     return UserInputService()
 

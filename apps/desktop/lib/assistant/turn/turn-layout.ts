@@ -1,4 +1,4 @@
-import { currentActivity, type ActivityFeedback } from "./current-activity";
+import { executingInForeground, segmentActivity, unownedActivity, type ActivityFeedback } from "./current-activity";
 import type { BackgroundTaskEntry } from "../contract";
 import { readFileChanges, type FileChange } from "../tools/file-changes";
 import { collectDeliverables, type DeliverablesCard } from "./deliverable-layout";
@@ -7,6 +7,7 @@ import { toolHeading, toolVerb } from "../tools/tool-catalog";
 import { toolResultSignal } from "../tools/tool-result-signals";
 
 export type TurnPhase = "running" | "suspended" | "settled";
+const NO_ARTIFACTS: ArtifactCard[] = [];
 /** Only the current canonical reply receives activity; runtime placeholders do not own a Run. */
 export function turnPhaseOf(activity: TransportActivity | null): TurnPhase {
   return activity?.status === "running" ? "running" : activity?.status === "suspended" ? "suspended" : "settled";
@@ -21,12 +22,20 @@ export type StandaloneArtifactKind = (typeof STANDALONE_ARTIFACT_KINDS)[number];
  * 不构成过程。
  */
 export type NarrationItem = { kind: "narration"; index: number; part: TransportTextPart; inProcess: boolean };
-export type StandaloneItem = { kind: "standalone"; index: number; part: TransportToolCallPart };
+/** `live`：独立工具正由前台执行，它那一行自己说状态（活动段因此不说），运行中收起过程也常显。 */
+export type StandaloneItem = { kind: "standalone"; index: number; part: TransportToolCallPart; live: boolean };
 export type CallItem = { kind: "call"; index: number; part: TransportToolCallPart };
 export type AgentItem = { kind: "agent"; index: number; part: TransportAgentMessagePart };
 export type ProcessItem = NarrationItem | CallItem | StandaloneItem | AgentItem;
 export type VerbCount = { label: string; count: number };
-export type ActivityGroup = { kind: "activity"; key: string; index: number; calls: CallItem[]; summary: CallSummary };
+/**
+ * 活动段：两次中断（旁白、独立工具、Agent 来信）之间的思考与工具调用，用户眼里的「一段工作」，只占一行。
+ * `live` 是这段此刻在做什么（执行中的调用，或回合最后一段上的思考、等待）：运行时这一行说它并连续计时
+ * （起点见 `segment-clock`），段结束原地换回 `summary` 汇总；还没有调用的段（`calls` 为空）只在运行时存在，
+ * 出现旁白即被替换。`key` 取上一次中断之后的位置，所以从思考进入第一次调用、中间夹着空白正文或静默调用，
+ * 都是同一段、同一个计时。运行中的段在收起过程时也常显。
+ */
+export type ActivityGroup = { kind: "activity"; key: string; index: number; calls: CallItem[]; summary: CallSummary; live: ActivityFeedback | null };
 export type TurnBlock = NarrationItem | StandaloneItem | AgentItem | ActivityGroup;
 /** 工具组摘要：按动词计数与失败、取消数。只在组上有，回合过程不另做汇总。 */
 export type CallSummary = {
@@ -44,12 +53,15 @@ export type TurnLayout = {
   /** 直接引用 canonical parts，供下一版复用未变区间；不反向还原 AUI content。 */
   parts: readonly TransportMessagePart[];
   phase: TurnPhase;
-  current: { groupKey: string; feedback: ActivityFeedback } | null;
   /** Compact introduction before prose/tools. Derived presentation only, not a model execution phase. */
   intro: "waiting" | null;
   blocks: TurnBlock[];
   /** 过程里的全部条目（标题据此判断能否展开）。 */
   process: { items: ProcessItem[] };
+  /**
+   * 产出卡是这一回合的报告，只在落定后出现，与过程默认收起同一刻：运行中出现会被之后的过程一路
+   * 往下推，挂起时出现又会在唤醒时消失。运行中每次操作的那一行就是反馈。
+   */
   artifacts: ArtifactCard[];
   /**
    * 这一回合最后一次成功的 `offer_next_step`（同一回合多次调用只认最后一次）。这里只说「有这个建议」；
@@ -80,6 +92,16 @@ export function describeCallProblems(summary: CallSummary): string | null {
   ].filter(Boolean).join(" · ") || null;
 }
 
+/**
+ * 工具组头的计数文案。按首次出现排列、只取最早的三类：运行中次数一直在涨，按次数排会让已显示的类别
+ * 来回换位；文案因此只往后追加（新类别并入「等 N 类」），不会改动已显示的部分。三类上限让组头保持一行
+ * （估高按一行算）。
+ */
+export function describeVerbCounts(summary: CallSummary): string {
+  const shown = summary.verbCounts.slice(0, 3).map(({ label, count }) => `${label} ${count} 次`).join(" · ");
+  return shown + (summary.verbCounts.length > 3 ? ` 等 ${summary.verbCounts.length} 类` : "");
+}
+
 /** Summaries count calls, not files/steps. Control calls can expose errors without pretending to be work. */
 export function summarizeCalls(calls: readonly CallItem[]): CallSummary {
   const verbs = new Map<string, number>();
@@ -98,16 +120,20 @@ export function summarizeCalls(calls: readonly CallItem[]): CallSummary {
  */
 export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnPhase, outcome?: TransportOutcome | null, previous?: TurnLayout | null, activity: TransportActivity | null = null, background: readonly BackgroundTaskEntry[] = []): TurnLayout {
   const hasFinalReply = outcome?.status === "completed" && parts.some((part) => part.type === "text" && part.finalReply && part.text.trim());
-  const blocks: TurnBlock[] = [], items: ProcessItem[] = [], calls: CallItem[] = [];
+  const blocks: TurnBlock[] = [], items: ProcessItem[] = [];
   const answer: AnswerItem[] = [], artifacts: ArtifactCard[] = [];
   const changes: CallItem[] = [], deliverableCalls: CallItem[] = [];
   const previousArtifacts = new Map(previous?.artifacts.flatMap(card => card.kind === "changes" || card.kind === "deliverables" ? [] : [[card.index, card] as const]));
   let group: ActivityGroup | null = null;
+  // 当前活动段从哪里开始：上一次中断之后的位置，段的身份取它（见 `ActivityGroup`）。
+  let segmentStart = 0;
   let nextStep: TurnLayout["nextStep"] = null;
   for (const [index, part] of parts.entries()) {
     if (part.type === "text") {
-      group = null;
+      // 纯空白正文不显示，也不切断前后的活动段（模型常在调用前吐一个换行）。
       if (!part.text.trim()) continue;
+      group = null;
+      segmentStart = index + 1;
       const item: NarrationItem = { kind: "narration", index, part, inProcess: Boolean(outcome) && !part.finalReply };
       blocks.push(item);
       if (!hasFinalReply || part.finalReply) answer.push({ index, part });
@@ -115,16 +141,15 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
     } else if (part.type === "tool-call") {
       if (part.presentation === "standalone") {
         group = null;
-        const item: StandaloneItem = { kind: "standalone", index, part };
+        segmentStart = index + 1;
+        const item: StandaloneItem = { kind: "standalone", index, part, live: false };
         blocks.push(item);
         items.push(item);
-        calls.push({ kind: "call", index, part });
         continue;
       }
-      // Hidden controls still establish the interval identity, so a later error cannot rename this group.
-      if (!group) { group = { kind: "activity", key: `interval:${index}`, index, calls: [], summary: summarizeCalls([]) }; blocks.push(group); }
+      if (!group) { group = { kind: "activity", key: `interval:${segmentStart}`, index, calls: [], summary: summarizeCalls([]), live: null }; blocks.push(group); }
       const item: CallItem = { kind: "call", index, part };
-      if (visibleCall(part)) { group.calls.push(item); items.push(item); calls.push(item); }
+      if (visibleCall(part)) { group.calls.push(item); items.push(item); }
       if (part.deliverables?.length) deliverableCalls.push(item);
       const kind = part.display_data?.kind;
       if (kind === CHANGES_KIND) changes.push(item);
@@ -135,6 +160,7 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
       }
     } else {
       group = null;
+      segmentStart = index + 1;
       if (part.type === "agent-message") {
         const item: AgentItem = { kind: "agent", index, part };
         blocks.push(item);
@@ -143,19 +169,32 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
       }
     }
   }
-  const feedback = currentActivity(activity, calls.map(call => call.part), background);
-  if (feedback && !group) {
-    group = { kind: "activity", key: `interval:${parts.length}`, index: parts.length, calls: [], summary: summarizeCalls([]) };
-    blocks.push(group);
+  // 只有当前回复在运行或挂起时才有「正在做」：继承或历史里未结束的调用不是。
+  const board = new Set(background.map(entry => entry.toolCallId));
+  const active = phase !== "settled";
+  // 独立工具在执行、或有等你操作的卡片时，它们自己那一行说状态，活动段不再说无归属的状态。
+  const owned = blocks.some(block => block.kind === "standalone" && (block.part.awaitingUser || active && executingInForeground(block.part, board)));
+  // 正文真的在流：末尾是一段输出中的非空正文（不看块，块尾的旁白可能是上一步说完的）。
+  const tail = parts.at(-1);
+  const proseStreaming = tail?.type === "text" && tail.status === "running" && tail.text.trim() !== "";
+  const unowned = active && !owned ? unownedActivity(activity, background, proseStreaming) : null;
+  // 无归属的状态只归最后一段；回合末尾不是活动段时（刚说完旁白、独立工具刚结束）补一个还没有调用的段承载它。
+  if (unowned && blocks.at(-1)?.kind !== "activity") {
+    blocks.push({ kind: "activity", key: `interval:${segmentStart}`, index: parts.length, calls: [], summary: summarizeCalls([]), live: null });
   }
-  const current = feedback && group ? { groupKey: group.key, feedback } : null;
-  // 只比较 canonical part 身份与槽位；正文追加不重建工具组、摘要或文件聚合。
+  const last = blocks.at(-1);
+  // 只比较 canonical part 身份、槽位与段状态；正文追加不重建活动段、摘要或文件聚合。
   const previousGroups = new Map(previous?.blocks.filter(block => block.kind === "activity").map(block => [block.key, block]));
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i];
+    if (block.kind === "standalone") {
+      block.live = active && executingInForeground(block.part, board);
+      continue;
+    }
     if (block.kind !== "activity") continue;
+    block.live = active ? segmentActivity(block.calls.map(call => call.part), board, block === last ? unowned : null) : null;
     const old = previousGroups.get(block.key);
-    if (old && old.index === block.index && old.calls.length === block.calls.length && old.calls.every((call, j) => call.index === block.calls[j].index && call.part === block.calls[j].part)) {
+    if (old && old.index === block.index && sameLive(old.live, block.live) && old.calls.length === block.calls.length && old.calls.every((call, j) => call.index === block.calls[j].index && call.part === block.calls[j].part)) {
       blocks[i] = old;
     } else block.summary = summarizeCalls(block.calls);
   }
@@ -174,20 +213,27 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
   // request is not observable here, so it must not be inferred from the absence of visible cards.
   const intro = phase === "running" && !outcome && parts.every((part) => part.type === "text" && !part.text.trim())
     ? "waiting" : null;
-  return { parts, phase, current, intro, blocks, process: { items }, artifacts: previous?.artifacts.length === artifacts.length && artifacts.every((card, i) => card === previous.artifacts[i]) ? previous.artifacts : artifacts, nextStep, answer, hasFinalReply,
+  const reported = phase !== "settled" ? NO_ARTIFACTS
+    : previous?.artifacts.length === artifacts.length && artifacts.every((card, i) => card === previous.artifacts[i]) ? previous.artifacts : artifacts;
+  return { parts, phase, intro, blocks, process: { items }, artifacts: reported, nextStep, answer, hasFinalReply,
     defaultProcessOpen: !hasFinalReply };
 }
 
 /**
- * 渲染和虚拟估高共用：等你操作的调用常显，其余过程遵循用户开合。需要用户决定的工具一律是独立工具
- * （后端 `test_tool_registry_display_guard.py` 守着），所以只有独立块要看 `awaitingUser`——收在工具组里
- * 的调用会被折叠的组藏住，不能承载等待。
+ * 渲染和虚拟估高共用：正在做的事常显（运行中的活动段与独立工具、等你操作的调用），其余过程遵循用户开合——
+ * 运行中收起过程不能把唯一说「在做什么」的那一行也藏起来。需要用户决定的工具一律是独立工具（后端
+ * `test_tool_registry_display_guard.py` 守着），所以只有独立块要看 `awaitingUser`——收在工具组里的调用会被
+ * 折叠的组藏住，不能承载等待。
  */
-export function visibleTurnBlock(block: TurnBlock, open: boolean, currentKey?: string): boolean {
+export function visibleTurnBlock(block: TurnBlock, open: boolean): boolean {
   if (block.kind === "narration") return open || !block.inProcess;
   if (block.kind === "agent") return open;
-  if (block.kind === "standalone") return open || block.part.awaitingUser;
-  return block.key === currentKey || block.calls.length > 0 && open;
+  if (block.kind === "standalone") return open || block.live || block.part.awaitingUser;
+  return block.live !== null || block.calls.length > 0 && open;
+}
+
+function sameLive(left: ActivityFeedback | null, right: ActivityFeedback | null): boolean {
+  return left === right || (left !== null && right !== null && left.label === right.label && left.animated === right.animated);
 }
 
 /** 聚合卡（改动、交付物）能否复用上一版：参与的调用槽位与 canonical part 身份都没变。 */

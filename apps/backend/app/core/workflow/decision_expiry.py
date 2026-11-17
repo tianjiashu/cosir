@@ -120,6 +120,7 @@ def expired_notice(tool_call_id: str, cause: ExpiryCause) -> NoticeBody:
             f"{_EXPIRY_REASONS[cause]}"
         ),
         notice_kind="decision_expired",
+        tool_call_ids=[tool_call_id],
     )
 
 

@@ -1,7 +1,8 @@
-"""工具调用宿主方法的唯一入口，以及链路层错误到工具观察的转换。
+"""后端调用宿主方法的唯一入口，以及链路层错误到工具观察的转换。
 
-工具只在工作线程里经 :func:`call_host` 调用宿主：投递、等待、取消与时限都在这里收口，工具只处理
-结果与它自己能力的错误码。
+调用方只在工作线程里经 :func:`call_host` 调用宿主：投递、等待、取消与时限都在这里收口，调用方只处理
+结果与它自己能力的错误码。工具带执行上下文调用（调用被撤销即取消）；工具之外的调用方（如浏览器标签
+对账）不带，只受时限约束。
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ def call_host(
     execution_context: ToolExecutionContext | None,
     timeout_seconds: float,
 ) -> Any:
-    """调用宿主方法并返回其结果；只能在工具线程调用。
+    """调用宿主方法并返回其结果；只能在工作线程调用（会阻塞等应答）。
 
     超时与取消也以 :class:`HostCallError`（``TIMEOUT`` / ``CANCELLED``）上浮，工具只需一个
     ``except`` 分支：自己能力的错误码自己解释，其余交给 :func:`host_error_observation`。

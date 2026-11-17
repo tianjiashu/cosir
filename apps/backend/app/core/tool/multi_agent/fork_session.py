@@ -5,8 +5,8 @@
 投递任务说明、Run 落定时由编排向本 Session 汇报（``derived_report``），父 Agent 用 ``wait_messages``
 等汇报。用户在分叉里直接对话开出的 Run 不汇报。
 
-继承的历史是第一人称的，分叉自己分不清哪些事归它：曾把来源没做完的请求接过去，并自认是父会话。
-所以任务说明前先投一条交接通知，写清身份与会话归属；通知不进请求前缀，不影响缓存。
+任务说明前的交接通知（身份、会话归属、可写根）是分叉自己的事实，由分叉层随分支在同一事务里写入
+（``ForkSource.identity_notice``），这里只投递任务说明。
 
 分叉是侧栏会话（``session_type="agent_fork"``，来源记在 ``extra.fork``），不挂在
 所有权子树上：删除父对话时按用户 fork 的规则改挂，而不是一起删掉。父 Session 被上游收回时，分叉按
@@ -33,27 +33,11 @@ from app.core.tool.schemas import (
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
-from app.core.workflow.message_queue.session_message import NoticeBody, RunLaunch, SessionMessage
+from app.core.workflow.message_queue.session_message import RunLaunch
 from app.models.conversation_input import MessageSource
 from app.models.errors.session_fork_errors import SessionForkConflictError
 from app.service.depends import get_run_ledger, get_session_service
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
-
-_HANDOVER_NOTICE = (
-    "You are session {fork_id}, a fork of session {source_id}. The conversation above was copied from "
-    "that session as background: requests in it belong to that session, even where they read as your "
-    "own work, so do not pick them up. Your only job is the assignment in the next message. Each "
-    "time you finish working on it, your final reply is reported to session {source_id} "
-    "automatically, so do not send it with send_message. If the user later talks to you here, "
-    "follow the user; what you do for the user is not reported."
-)
-# 分叉沿用来源的系统提示词（接缓存），可写根只能在这里告知；来源自己也收窄过时以这一条为准。
-_WRITABLE_ROOT_NOTICE = (
-    " Your writable root is {writable_root} (relative to the workspace root): file-writing tools "
-    "are refused outside it and commands start there by default. This replaces any writable "
-    "area stated earlier. Do not change files outside it by other means; report what needs to "
-    "change there instead."
-)
 
 
 class ForkSessionTool(HandlerBase):
@@ -110,7 +94,7 @@ class ForkSessionTool(HandlerBase):
         execution_context: ToolExecutionContext,
         writable_root: str | None = None,
     ) -> ToolObservation:
-        """复制当前会话、投递交接通知与任务说明，返回已启动的观察。
+        """复制当前会话（交接通知随分支写入）、投递任务说明，返回已启动的观察。
 
         失败路径都收口为工具错误观察：源 Session 正被删除等结构性操作占用时提示重试或自己做；
         其余异常记录 ``fork_session_exception`` 后返回通用错误，不向上抛。
@@ -146,14 +130,8 @@ class ForkSessionTool(HandlerBase):
                 model_config_id=launch.model_config_id,
                 reasoning_effort=launch.reasoning_effort,
             )
-            # 通知先入队：不唤醒、不开 Run，随任务说明开出的第一个 Run 写在它前面。
-            handover = _HANDOVER_NOTICE.format(fork_id=fork.id, source_id=parent_session.id)
+            # 交接通知已随分支写入队列（优先级在前），任务说明开出的第一个 Run 先读到身份再读到任务。
             fork_root = fork.extra.writable_root
-            if fork_root is not None:
-                handover += _WRITABLE_ROOT_NOTICE.format(writable_root=fork_root)
-            session_runtime_spaces.enqueue(
-                fork.id, SessionMessage.of(NoticeBody(content=handover, notice_kind="fork_handover"))
-            )
             session_runtime_spaces.enqueue(fork.id, assignment)
             return tool_success(
                 tool_name=self.name,

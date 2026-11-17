@@ -1,6 +1,6 @@
 """后端重启恢复用例：重启后的收敛与收尾只在这里按序编排，lifespan 只调用一次入口。"""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from app.config.logging.logger import log
 from app.core.context.tool_call_closure import ContextProtocolError
@@ -66,14 +66,18 @@ class RecoverService:
         recovered_session_ids = {run.session_id for run in recovered_runs}
         # 被收敛的 Run 不经 actor 的落定点：它们留下的、等用户回应的决定（提问）在这里作废，模型从下面
         # 的重启通知得知。挂起的 Run 不在其列，它的提问照常等回答。
+        # 每个受影响的 Session 被重启结束了哪些调用：原地作废的提问与推到「已中断」的占位，结局都只在
+        # 重启通知里，通知因此带上它们（见 ``NoticeBody.tool_call_ids``）；只是 Run 被收敛、没有调用被
+        # 结束的 Session 与派生方，通知不指向任何调用。
+        interrupted: dict[int, set[str]] = {
+            session_id: set() for session_id in recovered_session_ids | self._derivers_of(recovered_session_ids)
+        }
         for session_id in sorted(recovered_session_ids):
-            expire_decisions_after_run(session_id, INTERRUPTED_HINT)
-        interrupted_session_ids = (
-            recovered_session_ids
-            | self._derivers_of(recovered_session_ids)
-            | self.interrupt_placeholders(dispatch_session_ids)
-        )
-        self.notify_interrupted(interrupted_session_ids)
+            interrupted[session_id].update(expire_decisions_after_run(session_id, INTERRUPTED_HINT))
+        for session_id, calls in self.interrupt_placeholders(dispatch_session_ids).items():
+            interrupted.setdefault(session_id, set()).update(calls)
+        interrupted_session_ids = set(interrupted)
+        self.notify_interrupted(interrupted)
         log.info(
             "backend_restart_recovered",
             extra={
@@ -105,8 +109,8 @@ class RecoverService:
             derivers.add(deriver_id)
         return derivers
 
-    def interrupt_placeholders(self, session_ids: Iterable[int]) -> frozenset[int]:
-        """把重启前还在等结果的占位推到「已中断」，返回受影响的 Session。
+    def interrupt_placeholders(self, session_ids: Iterable[int]) -> dict[int, frozenset[str]]:
+        """把重启前还在等结果的占位推到「已中断」，返回按 Session 分组的被中断调用。
 
         ``session_ids`` 是启动时的候选 Session（已覆盖全部队列有消息的 Session），用来核对「结论已在队列里」
         的调用：那些占位不在这里改，由那条结论结算，否则卡片先显示已中断、结论又无处落。后台占位
@@ -123,19 +127,23 @@ class RecoverService:
         )
         return cancel_placeholders(None, None, INTERRUPTED_HINT, exclude=queued)
 
-    def notify_interrupted(self, session_ids: Iterable[int]) -> None:
-        """给被中断的 Session 各投一条重启通知，等它们下次驱动时并入。
+    def notify_interrupted(self, interrupted: Mapping[int, Iterable[str]]) -> None:
+        """给被中断的 Session 各投一条重启通知（带上它结束的调用），等它们下次驱动时并入。
 
         直接写外部队列而不经 ``session_runtime_spaces.enqueue``：通知不开新 Run，不为它给空闲 Session
         物化 space、拉起常驻 actor；当前 Run 挂起的 Session 已在第 2 步拉起 actor，入队即被它读到并唤醒。
         """
 
         queue = service_depends.get_session_message_queue()
-        for session_id in sorted(set(session_ids)):
+        for session_id in sorted(interrupted):
             queue.put(
                 session_id,
                 SessionMessage.of(
-                    NoticeBody(content=INTERRUPTED_NOTICE, notice_kind="backend_restarted")
+                    NoticeBody(
+                        content=INTERRUPTED_NOTICE,
+                        notice_kind="backend_restarted",
+                        tool_call_ids=sorted(interrupted[session_id]),
+                    )
                 ),
             )
 

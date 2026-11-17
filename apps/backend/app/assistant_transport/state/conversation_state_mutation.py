@@ -16,6 +16,23 @@ class ConversationStateMutation:
     path: SnapshotPath
     value: object
 
+    def changes(self, state: Any) -> bool:
+        """应用到 ``state`` 是否会改变它：等值 ``set``（含同一终态的重复投递）与空串追加都不改变。
+
+        发布出口据此丢弃空操作，「重复投递由消费方幂等吸收」因此在出口一处兑现：前端不会因为等值
+        变更换掉 part 对象、白算依赖身份复用的布局，各 planner 也不必各自比较新旧值。
+        """
+
+        if self.kind == "append-text":
+            return self.value != ""
+        parent: Any = state
+        for key in self.path[:-1]:
+            parent = parent[key]
+        key = self.path[-1]
+        if isinstance(parent, list):
+            return not (isinstance(key, int) and key < len(parent) and parent[key] == self.value)
+        return key not in parent or parent[key] != self.value
+
     def apply_to(self, state: Any) -> None:
         """把变更应用到 ``state``（快照工作副本，原地修改）。
 

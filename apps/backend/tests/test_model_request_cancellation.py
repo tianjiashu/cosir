@@ -433,3 +433,36 @@ async def test_model_timeout_keeps_persisted_snapshot_excluded_from_context(monk
             driver.cancel()
             await asyncio.gather(driver, return_exceptions=True)
         await model.close()
+
+
+@pytest.mark.asyncio
+async def test_model_phase_clears_only_after_the_step_settles_the_run(monkeypatch):
+    """阶段跟模型步而不是跟流：流结束后提交响应、落定 Run 都还在这一步里，清除排在落定之后。
+
+    否则快照会出现「运行中、模型空闲、没有工具」的中间帧，前端在最终正文下闪一下「正在思考」。
+    """
+    body = BlockingBody(first_chunk=True, boundary="complete")
+    model = sdk_model(body)
+    bound = bind_node(monkeypatch, model)
+    order: list[str] = []
+    transition = bound.runtime.run_state.transition
+
+    def record_transition(run_id, kind, **kwargs):
+        order.append(f"transition:{kind.name}")
+        return transition(run_id, kind, **kwargs)
+
+    bound.runtime.run_state.transition = record_transition
+    monkeypatch.setattr(
+        streaming_module,
+        "emit",
+        lambda event: order.append(f"phase:{event.phase}") if event.type == "model_activity" else None,
+    )
+    driver = asyncio.create_task(model_node._model_node(bound.state))
+    try:
+        await asyncio.wait_for(body.reading.wait(), 1)
+        body.resume_read.set()
+        result = await asyncio.wait_for(driver, 1)
+        assert result["next_node"] == ReactRoute.END
+        assert order[-2:] == ["transition:COMPLETE", "phase:None"]
+    finally:
+        await model.close()

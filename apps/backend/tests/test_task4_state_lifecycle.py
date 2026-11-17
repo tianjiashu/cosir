@@ -536,3 +536,47 @@ async def test_running_snapshot_is_kept_until_the_run_stops_unwatched() -> None:
         )
     )
     assert not space.has_snapshot()
+
+
+def test_publish_drops_noop_mutations_so_duplicate_terminal_events_send_nothing() -> None:
+    """终态刻意投递两次：第二次在发布出口按空操作丢弃，前端收不到等值变更、不会换掉 part 对象。"""
+    from app.core.events import ToolCallCreatedEvent
+    from app.core.tool.execute.tool_terminal_projection import terminal_event
+    from app.core.tool.schemas import ToolObservation
+
+    sources = _RunSources("running")
+    service = _make_state_service(sources, sources, sources)
+    service.apply_planned(
+        ToolCallCreatedEvent(session_id=7, run_id=2, turn=1, tool_call_id="t1", tool_name="read_file")
+    )
+
+    def finished() -> object:
+        return terminal_event(
+            ToolObservation(tool_name="read_file", status="success", content="ok",
+                            display_data={"kind": "read-file-meta", "path": "a.txt"}),
+            session_id=7, run_id=2, step_id="step-1", tool_call_id="t1",
+        )
+
+    assert service.apply_planned(finished()).mutations
+    assert service.apply_planned(finished()).mutations == ()
+
+
+def test_result_without_display_data_keeps_the_placeholder_preview() -> None:
+    """与持久化侧 ``merged_onto`` 同一规则：决定重放的结果不带展示数据时卡片保留占位预览，不闪成空。"""
+    from app.core.events import ToolCallCreatedEvent, ToolCallStatusChangedEvent
+    from app.models.message_metadata import ToolMessageMetadata
+
+    sources = _RunSources("running")
+    service = _make_state_service(sources, sources, sources)
+    service.apply_planned(
+        ToolCallCreatedEvent(session_id=7, run_id=2, turn=1, tool_call_id="t1", tool_name="read_file")
+    )
+    preview = {"kind": "read-file-meta", "path": "a.txt"}
+
+    def status(result: ToolMessageMetadata) -> None:
+        service.apply_planned(ToolCallStatusChangedEvent(session_id=7, run_id=2, tool_call_id="t1", result=result))
+
+    status(ToolMessageMetadata(status="running", display_data=preview))
+    status(ToolMessageMetadata(status="completed"))
+    [part] = service.get_state(7)["messages"][-1]["parts"]
+    assert (part["status"], part["display_data"]) == ("completed", preview)

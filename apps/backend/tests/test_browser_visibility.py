@@ -49,7 +49,7 @@ def test_exact_subtree_filter_and_preview_survive(files, tmp_path, monkeypatch):
     assert files.directory(1, "src/a", None, 10).entries == []
     assert files.info(1, "src/a/test.py").kind == "text"
     assert files.text(1, "src/a/test.py", 0, "utf-8", None, False).text == "needle"
-    from app.service.workspace_files import workspace_files_service as module
+    from app.service.workspace_files.search import name_search as module
 
     scan = module.directory_entries
 

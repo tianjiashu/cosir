@@ -69,6 +69,19 @@ describe("跨界面的请求生命周期", () => {
     expect(commandPending(current()?.session)).toBe(false);
   });
 
+  // 目的：回合按对话订阅渲染；潜在缺陷：应用级状态流先到，提前清掉「停止中」，回合还在 running，旧文案被顶回来。
+  it("被对话订阅观察的 Session 只认订阅：状态流的终态与断开都不碰它的停止", () => {
+    reconcileCommands(1, activity(7, "running"));
+    const stop = beginCommand(1, "session")!;
+    finishCommand(1, "session", stop, "accepted");
+    reconcileSessionStatuses({ 1: { executionStatus: "cancelled", awaitingUserCalls: 0 } });
+    expect(current()?.session?.phase).toBe("syncing");
+    markSessionRequestsUnsynced();
+    expect(current()?.session?.error).toBeNull();
+    reconcileCommands(1, activity(7, "cancelled"));
+    expect(current()?.session).toBeUndefined();
+  });
+
   it("HTTP 完成时用已观察到的事实收尾，不再等下一帧", () => {
     reconcileCommands(1, activity(7, "completed"));
     const request = beginCommand(1, "session")!;

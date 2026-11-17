@@ -199,7 +199,7 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   await expect(changes.locator(".aui-diff-view")).toBeVisible();
 });
 
-test("交替序列：运行中过程区展开、区头显示当前动作，命令输出跟随主题展开", async ({ page, request }) => {
+test("交替序列：运行中过程区展开、活动段显示当前动作，改动卡等落定才出现", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/seed-alternating`, { data: { phase: "running" } });
   await page.setViewportSize(SHOT_VIEWPORT);
   await page.goto("/sessions/42");
@@ -221,7 +221,8 @@ test("交替序列：运行中过程区展开、区头显示当前动作，命�
   await expect(copyCommand).toHaveCSS("opacity", "1");
   await expect(running.getByRole("button", { name: "复制输出" })).toHaveCSS("opacity", "1");
   await page.mouse.move(0, 0);
-  await expect(assistant.locator('[data-slot="changes-card"]')).toContainText("涉及 2 个路径");
+  // 改动卡是回合的报告，运行中不出现；每次写入的那一行就是反馈。
+  await expect(assistant.locator('[data-slot="changes-card"]')).toHaveCount(0);
   await assistant.screenshot({ path: `${SHOTS}/impl-running.png`, animations: "disabled" });
 });
 

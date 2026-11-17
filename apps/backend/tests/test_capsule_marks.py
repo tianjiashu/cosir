@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.user_input.capsules import (
+from app.core.capsules.capsule_grammar import (
     Capsule,
     CapsuleSegment,
     FileCapsule,

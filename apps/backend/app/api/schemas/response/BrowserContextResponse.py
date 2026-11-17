@@ -6,7 +6,7 @@
 
 from pydantic import BaseModel
 
-from app.service.browser.tab_context import BrowserTabContext
+from app.tools.browser_runtime.tab_context import BrowserTabContext
 
 
 class BrowserTabLimitsResponse(BaseModel):

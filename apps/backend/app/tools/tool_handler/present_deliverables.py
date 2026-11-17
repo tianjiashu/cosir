@@ -22,7 +22,7 @@ from app.core.tool.schemas import (
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_REPLY_PRESENTATION
 from app.models.deliverable import Deliverable, DeliveredDirectory, DeliveredFile, DeliveredUrl
-from app.service.workspace_files.file_content import inspect_file
+from app.service.workspace_files.content.file_content import inspect_file
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models import PresentDeliverablesArgs
 from app.utils.path.file_identity import RootDirectory, canonical_path

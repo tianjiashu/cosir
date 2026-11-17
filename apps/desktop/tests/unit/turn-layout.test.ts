@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TransportMessagePart, TransportToolCallPart } from "@/lib/assistant/contract";
-import { aggregateChanges, describeCallProblems, projectTurn, visibleTurnBlock, type ActivityGroup, type TurnLayout } from "@/lib/assistant/turn/turn-layout";
+import { aggregateChanges, describeCallProblems, describeVerbCounts, projectTurn, visibleTurnBlock, type ActivityGroup, type TurnLayout } from "@/lib/assistant/turn/turn-layout";
 
 /** 第一个工具组的摘要：失败、取消与按动词计数只在组上汇总。 */
 const firstGroupSummary = (layout: TurnLayout) => (layout.blocks.find((block) => block.kind === "activity") as ActivityGroup).summary;
@@ -75,6 +75,27 @@ describe("stable conversation projection", () => {
     expect(layout.blocks.map((item) => item.kind)).toEqual(["activity", "narration", "standalone", "activity"]);
     expect(layout.blocks[2]).toMatchObject({ index: 2, part: pending });
   });
+  // 目的：模型常在调用前吐一个换行；潜在缺陷：不可见的空白正文把连续调用切成两个工具组，计数与当前活动跟着跳。
+  it("whitespace-only prose neither renders nor splits a tool interval", () => {
+    const layout = projectTurn([call("a"), text("\n"), call("b")], "running");
+    expect(layout.blocks.map((item) => item.kind)).toEqual(["activity"]);
+    expect((layout.blocks[0] as ActivityGroup).calls.map((item) => item.index)).toEqual([0, 2]);
+  });
+  // 目的：组头文案运行中只往后追加；潜在缺陷：按次数排序时后出现的类别次数反超，已显示的类别来回换位。
+  it("group heading lists verbs by first appearance and only appends while counts grow", () => {
+    const write = (id: string) => call(id, { toolName: "write_file" });
+    const edit = (id: string) => call(id, { toolName: "edit_file" });
+    const run = (id: string) => call(id, { toolName: "execute_terminal" });
+    const heading = (parts: TransportMessagePart[]) => describeVerbCounts(firstGroupSummary(projectTurn(parts, "running")));
+    const early = heading([write("w"), edit("e"), run("r1")]);
+    const later = heading([write("w"), edit("e"), run("r1"), run("r2")]);
+    expect(later.split(" · ").map((item) => item.split(" ")[0])).toEqual(early.split(" · ").map((item) => item.split(" ")[0]));
+    expect(later.endsWith("2 次")).toBe(true);
+    // 超过三类：只列最早出现的三类，其余并入「等 N 类」，已显示部分不变。
+    const more = heading([write("w"), edit("e"), run("r1"), run("r2"), call("x"), call("y")]);
+    expect(more.startsWith(later)).toBe(true);
+    expect(more.endsWith(" 等 4 类")).toBe(true);
+  });
   it("completed result warnings are counted per call, not per failed item", () => {
     const layout = projectTurn([
       call("terminal", { display_data: { kind: "terminal-result", exit_code: 1 } }),
@@ -142,13 +163,15 @@ describe("回复呈现工具", () => {
     const draft = call("draft", { toolName: "propose_agent_configuration", presentation: "quiet", display_data: { kind: "agent-configuration-draft" } });
     const change = call("w", { display_data: { kind: "file-changes", changes: [{ path: "a.md", status: "added" }] } });
     const parts = [change, present("p1", ["a.md"]), draft, present("p2", ["b.md", "a.md"]), text("a")];
-    const first = projectTurn(parts, "running");
+    // 产出卡是回合的报告：运行中不出现（否则被之后的过程一路往下推），落定后才出现。
+    expect(projectTurn(parts, "running").artifacts).toEqual([]);
+    const first = projectTurn(parts, "settled", outcome("completed"));
     expect(first.artifacts.map((item) => item.kind)).toEqual(["changes", "deliverables", "agent-configuration-draft"]);
     const card = first.artifacts[1];
     expect(card.kind === "deliverables" && card.items.map((item) => item.deliverable.key)).toEqual(["/w/b.md", "/w/a.md"]);
-    const streamed = projectTurn([...parts.slice(0, -1), text("ab")], "running", null, first);
+    const streamed = projectTurn([...parts.slice(0, -1), text("ab")], "settled", outcome("completed"), first);
     expect(streamed.artifacts[1]).toBe(card);
-    const more = projectTurn([...parts.slice(0, -1), present("p3", ["c.md"])], "running", null, streamed);
+    const more = projectTurn([...parts.slice(0, -1), present("p3", ["c.md"])], "settled", outcome("completed"), streamed);
     expect(more.artifacts[1]).not.toBe(card);
   });
 

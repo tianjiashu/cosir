@@ -19,8 +19,5 @@ def plan_model_activity(
     value: ModelActivity | None = (
         None if event.phase is None else {"stepId": event.step_id, "phase": event.phase}
     )
-    return (
-        []
-        if value == current
-        else [ConversationStateMutation("set", ("activity", "modelActivity"), value)]
-    )
+    # 同一阶段的重复事件由发布出口按空操作丢弃，这里不再各自比较新旧值。
+    return [ConversationStateMutation("set", ("activity", "modelActivity"), value)]

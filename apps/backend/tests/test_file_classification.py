@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from app.service.workspace_files.file_classification import (
+from app.service.workspace_files.content.file_classification import (
     BINARY_MIME,
     TEXT_MIME,
     classify,

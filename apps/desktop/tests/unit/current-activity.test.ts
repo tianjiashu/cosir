@@ -1,49 +1,112 @@
 import { describe, it, expect } from "vitest";
-import { currentActivity } from "@/lib/assistant/turn/current-activity";
+import { segmentActivity, unownedActivity } from "@/lib/assistant/turn/current-activity";
 import { projectCallStatus } from "@/lib/assistant/tools/call-status";
-import { projectTurn } from "@/lib/assistant/turn/turn-layout";
+import { segmentStartedAt } from "@/lib/assistant/turn/segment-clock";
+import { projectTurn, visibleTurnBlock, type ActivityGroup, type TurnLayout } from "@/lib/assistant/turn/turn-layout";
+import type { TransportMessagePart } from "@/lib/assistant/contract";
 import { activity, toolCallPart } from "./transport-fixtures";
 
 const job = { toolCallId: "bg", kind: "terminal_command" as const, label: "检查导出", status: "running" as const, startedAt: "2026-01-01", endedAt: null };
-describe("current activity facts", () => {
-  it("shows model phases without an assistant, and combines parallel background work", () => {
+const none = new Set<string>();
+const segments = (layout: TurnLayout) => layout.blocks.filter((block): block is ActivityGroup => block.kind === "activity");
+const text = (value: string): TransportMessagePart => ({ type: "text", text: value });
+/** 正在流出的正文（后端在首个增量到达时建 part，状态为 running）。 */
+const streaming = (value: string): TransportMessagePart => ({ type: "text", text: value, status: "running" });
+
+describe("unowned activity", () => {
+  it("names model phases and waits, with background work as a suffix only while running", () => {
     const model = activity(1, "running", { modelActivity: { stepId: "s", phase: "reasoning" } });
-    expect(currentActivity(model)).toEqual({ label: "正在思考", animated: true });
-    expect(currentActivity(model, [], [job])?.label).toBe("正在思考 · 后台 1 项");
-    for (const phase of ["waiting", "tool_call"] as const) expect(currentActivity(activity(1, "running", { modelActivity: { stepId: "s", phase } }))?.label).toBe("正在思考");
-    expect(currentActivity(activity(1, "running", { modelActivity: { stepId: "s", phase: "responding" } }))).toBeNull();
-    expect(currentActivity(activity(1, "cancelled"))).toBeNull();
+    expect(unownedActivity(model)).toEqual({ label: "思考中", animated: true });
+    expect(unownedActivity(model, [job])?.label).toBe("思考中 · 后台 1 项");
+    expect(unownedActivity(activity(1, "running", { modelActivity: { stepId: "s", phase: "tool_call" } }))?.label).toBe("正在准备工具");
+    expect(unownedActivity(activity(1, "running", { modelActivity: { stepId: "s", phase: "responding" } }))).toBeNull();
+    // 步与步之间也是思考，不另起「正在处理」。
+    expect(unownedActivity(activity(1, "running"))?.label).toBe("思考中");
+    expect(unownedActivity(activity(1, "cancelled"))).toBeNull();
+    expect(unownedActivity(activity(1, "suspended"))).toEqual({ label: "等待继续", animated: false });
+    expect(unownedActivity(activity(1, "suspended"), [job])).toEqual({ label: "后台执行：检查导出", animated: false });
+    expect(unownedActivity(activity(1, "suspended"), [{ ...job, status: "settling" }])).toEqual({ label: "等待并入后台结果：检查导出", animated: false });
   });
-  it("uses original call intent with stable parallel count and explicit user waits", () => {
-    expect(currentActivity(activity(1, "running"), [toolCallPart("early", "read_file", { args: undefined, status: "pending" })])?.label).toBe("读取文件");
+});
+
+describe("segment activity", () => {
+  const thinking = { label: "思考中", animated: true };
+  it("an executing call takes precedence; otherwise the segment says the unowned state", () => {
     const call = toolCallPart("read", "read_file", { intent: "检查登录配置", status: "running" });
-    expect(currentActivity(activity(1, "running"), [call, { ...call, toolCallId: "other" }])?.label).toBe("检查登录配置 · 另 1 项");
-    // 在等用户决定：那次调用就地画着卡片，回合不再另说一句「等待你的操作」。
-    expect(currentActivity(activity(1, "suspended"), [{ ...call, status: "pending", awaitingUser: true }])).toBeNull();
-    expect(currentActivity(activity(1, "suspended"))).toEqual({ label: "等待继续", animated: false });
-    expect(currentActivity(activity(1, "suspended"), [], [{ ...job, status: "settling" }])).toEqual({ label: "等待并入后台结果：检查导出", animated: false });
+    expect(segmentActivity([call, { ...call, toolCallId: "other" }], none, thinking)?.label).toBe("检查登录配置 · 另 1 项");
+    // 先串行后并行：排在前面的 pending 不是正在执行的那个。
+    const queued = toolCallPart("first", "read_file", { intent: "读取说明", status: "pending" });
+    expect(segmentActivity([queued, { ...call, intent: "修改配置" }], none, null)?.label).toBe("修改配置 · 另 1 项");
+    expect(segmentActivity([{ ...call, status: "completed" }], none, thinking)).toBe(thinking);
+    expect(segmentActivity([{ ...call, status: "completed" }], none, null)).toBeNull();
   });
-  it("distinguishes pending queue, background execution, settling, waits and terminal states", () => {
+  it("leaves background and awaiting calls to their own surfaces", () => {
+    const detaching = toolCallPart("bg", "execute_terminal", { intent: "检查导出", status: "running" });
+    // 转后台的那一瞬：看板已有条目，part 上的 background 还没写入，不能算作前台。
+    expect(segmentActivity([detaching], new Set(["bg"]), null)).toBeNull();
+    expect(segmentActivity([{ ...detaching, status: "pending", awaitingUser: true }], none, null)).toBeNull();
+  });
+});
+
+describe("one segment, one row, one clock", () => {
+  const model = activity(1, "running", { modelActivity: { stepId: "s", phase: "reasoning" } });
+  const idle = { ...model, modelActivity: null };
+  const responding = { ...model, modelActivity: { stepId: "s", phase: "responding" as const } };
+  const call = toolCallPart("read", "read_file", { intent: "检查配置", status: "running" });
+
+  it("thinking, preparing, executing and thinking again are one segment with one identity", () => {
+    const start = projectTurn([text("先看看。")], "running", null, null, model);
+    const [thinking] = segments(start);
+    expect(thinking).toMatchObject({ key: "interval:1", calls: [], live: { label: "思考中" } });
+    // 模型吐一个换行、再开始调用：仍是同一段。
+    const executing = projectTurn([text("先看看。"), text("\n"), call], "running", null, start, idle);
+    expect(segments(executing).map(s => [s.key, s.live?.label])).toEqual([["interval:1", "检查配置"]]);
+    const again = projectTurn([text("先看看。"), text("\n"), { ...call, status: "completed" }], "running", null, executing, model);
+    expect(segments(again).map(s => [s.key, s.live?.label])).toEqual([["interval:1", "思考中"]]);
+    // 新旁白：这段结束换回汇总，没有运行中的段（旁白本身就是反馈）。
+    const prose = projectTurn([...again.parts, streaming("找到了。")], "running", null, again, responding);
+    expect(segments(prose).map(s => [s.key, s.live])).toEqual([["interval:1", null]]);
+  });
+
+  it("a thinking-only segment is replaced by the prose that follows", () => {
+    const thinking = projectTurn([text("先想想。")], "running", null, null, model);
+    expect(segments(thinking)).toHaveLength(1);
+    const prose = projectTurn([text("先想想。"), streaming("想好了。")], "running", null, thinking, responding);
+    expect(segments(prose)).toEqual([]);
+    // 模型已进入输出阶段、首段正文还在路上：这一段继续说思考，不先消失。
+    expect(segments(projectTurn([text("先想想。")], "running", null, thinking, responding)).map(s => s.live?.label)).toEqual(["思考中"]);
+  });
+
+  it("a running standalone tool and a call awaiting the user speak for themselves", () => {
+    const delegate = toolCallPart("d", "delegate_task", { status: "running", presentation: "standalone" });
+    expect(segments(projectTurn([delegate], "running", null, null, idle))).toEqual([]);
+    const asking = toolCallPart("q", "ask_user", { status: "pending", awaitingUser: true, presentation: "standalone" });
+    expect(segments(projectTurn([asking], "suspended", null, null, activity(1, "suspended")))).toEqual([]);
+    // 独立工具结束后又在思考：在它之后另起一段。
+    expect(segments(projectTurn([{ ...delegate, status: "completed" }], "running", null, null, model)).map(s => s.key)).toEqual(["interval:1"]);
+  });
+
+  it("collapsing the process while running keeps what is being done visible; settled turns are quiet", () => {
+    const layout = projectTurn([call, toolCallPart("d", "delegate_task", { status: "running", presentation: "standalone" })], "running", null, null, idle);
+    expect(layout.blocks.map(block => visibleTurnBlock(block, false))).toEqual([true, true]);
+    // 历史或继承里未结束的调用不是「正在做」。
+    expect(segments(projectTurn([call], "settled"))[0].live).toBeNull();
+  });
+
+  it("the segment clock keeps its start and moves it only earlier", () => {
+    const first = segmentStartedAt(9, "m", "interval:0", undefined);
+    expect(segmentStartedAt(9, "m", "interval:0", undefined)).toBe(first);
+    const earlier = new Date(Date.parse(first) - 60_000).toISOString();
+    expect(segmentStartedAt(9, "m", "interval:0", earlier)).toBe(earlier);
+    // 调用结束、后端清掉 startedAt 之后不往回跳。
+    expect(segmentStartedAt(9, "m", "interval:0", undefined)).toBe(earlier);
+  });
+
+  it("distinguishes pending queue, background execution, settling, waits and terminal states on call rows", () => {
     expect(projectCallStatus("pending").label).toBe("准备执行");
     expect(projectCallStatus("pending", false, true).label).toBe("后台运行中");
     expect(projectCallStatus("pending", false, true, "settling")).toEqual({ label: "后台结果收尾中", animated: false });
     expect(projectCallStatus("pending", true, true).animated).toBe(false);
     for (const status of ["failed", "cancelled", "completed"] as const) expect(projectCallStatus(status, false, true).animated).toBe(false);
-  });
-  it("keeps one stable interval from thinking through tool execution and seals history at new prose", () => {
-    const model = activity(1, "running", { modelActivity: { stepId: "s", phase: "reasoning" } });
-    const initial = projectTurn([], "running", null, null, model);
-    const call = toolCallPart("read", "read_file", { intent: "检查配置", status: "running" });
-    const executing = projectTurn([call], "running", null, initial, { ...model, modelActivity: null });
-    expect(executing.current?.groupKey).toBe(initial.current?.groupKey);
-    expect(executing.current?.feedback.label).toBe("检查配置");
-    const thinking = projectTurn([{ ...call, status: "completed" }], "running", null, executing, model);
-    expect(thinking.current?.groupKey).toBe(executing.current?.groupKey);
-    const writing = projectTurn([...thinking.parts, { type: "text", text: "发现原因" }], "running", null, thinking, model);
-    expect(writing.current?.groupKey).not.toBe(thinking.current?.groupKey);
-    expect(writing.blocks[0]).toBe(thinking.blocks[0]);
-    const streamed = projectTurn([writing.parts[0], { type: "text", text: "发现原因，继续" }], "running", null, writing, model);
-    expect(streamed.blocks[0]).toBe(writing.blocks[0]);
-    expect(streamed.current?.groupKey).toBe(writing.current?.groupKey);
   });
 });

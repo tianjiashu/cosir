@@ -121,8 +121,8 @@ def test_time_threshold_flushes_below_char_threshold() -> None:
     assert harness.closed_parts == []
 
 
-def test_channel_switch_flushes_and_closes_before_new_channel() -> None:
-    """切通道时先发出旧通道缓冲并收口旧 part，之后才累积新通道。"""
+def test_reasoning_flushes_without_closing_text() -> None:
+    """推理打断正文只刷出缓冲、不收口：同一响应的正文与冷重建一样是一段，finish 时才收口。"""
 
     harness = _Harness(min_chars=1_000, max_interval=1_000.0)
 
@@ -131,17 +131,15 @@ def test_channel_switch_flushes_and_closes_before_new_channel() -> None:
         source_sequence=1, turn=1, text=None, reasoning=True, tool_delta=False, tool_calls=[]
     )
 
-    assert harness.event_kinds() == ["delta:text", "closed:text"]
+    assert harness.event_kinds() == ["delta:text"]
     assert harness.transcript("text") == "hi"
     assert harness.transcript("reasoning") == ""
 
+    harness.machine.text(" there", source_sequence=1)
     harness.machine.finish()
 
-    assert harness.event_kinds() == [
-        "delta:text",
-        "closed:text",
-    ]
-    assert harness.transcript("reasoning") == ""
+    assert harness.event_kinds() == ["delta:text", "delta:text", "closed:text"]
+    assert harness.transcript("text") == "hi there"
 
 
 def test_tool_call_flushes_pending_before_closing() -> None:
@@ -348,13 +346,17 @@ def test_phases_follow_delta_not_accumulated_calls(monkeypatch):
     assert harness.closed_parts == []
     machine.finish()
     machine.finish()
+    # 流收口不清除阶段：模型步还要提交响应，阶段由 exit 在这一步退出时清除。
     assert [e.phase for e in harness.events if isinstance(e, ModelActivityEvent)] == [
         "waiting",
         "reasoning",
         "tool_call",
         "responding",
-        None,
     ]
+    machine.exit()
+    machine.exit()
+    assert [e.phase for e in harness.events if isinstance(e, ModelActivityEvent)][-1] is None
+    assert sum(isinstance(e, ModelActivityEvent) and e.phase is None for e in harness.events) == 1
     assert harness.transcript("text") == "答案继续"
     assert harness.closed_parts == ["text"]
     assert sum(isinstance(e, ToolCallCreatedEvent) for e in harness.events) == 1
@@ -367,6 +369,7 @@ def test_mixed_chunk_retains_text_and_only_signals_reasoning():
         source_sequence=1, turn=1, text="正文", reasoning=True, tool_delta=True, tool_calls=[]
     )
     harness.machine.finish()
+    harness.machine.exit()
     assert [e.phase for e in harness.events if isinstance(e, ModelActivityEvent)] == [
         "waiting",
         "tool_call",
@@ -376,8 +379,10 @@ def test_mixed_chunk_retains_text_and_only_signals_reasoning():
     assert {e.part for e in harness.deltas} == {"text"}
 
 
-def test_wait_without_output_is_cleared_on_finish():
+def test_wait_without_output_is_cleared_on_step_exit():
     harness = _Harness()
     harness.machine.start()
     harness.machine.finish()
+    assert [e.phase for e in harness.events] == ["waiting"]
+    harness.machine.exit()
     assert [e.phase for e in harness.events] == ["waiting", None]

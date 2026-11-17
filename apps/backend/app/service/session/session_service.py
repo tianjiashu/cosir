@@ -15,6 +15,7 @@ from sqlalchemy.orm.session import Session as DbSession
 
 from app.config.logging.logger import log
 from app.core.workflow.message_queue.message_bodies import ADVANCING_KINDS
+from app.core.workflow.message_queue.session_message import SessionMessage
 from app.models import RunRecord, SessionRecord
 from app.models.enums.run_status import ACTIVE_RUN_STATUSES
 from app.models.errors.deletion_errors import DeletionBusyError
@@ -296,12 +297,18 @@ class SessionService:
             ):
                 source = self._session.ensure_session(db, source_session_id)
                 _require_forkable(source)
+                queue = service_depends.get_session_message_queue()
                 fork_source = ForkSource(
                     session=source,
                     rows=self._session_context_crud.get(
                         source_session_id, include_in_context=False, db=db
                     ),
                     runs=self._turn.list_by_session_in_db(db, source.id),
+                    answered_in_queue=frozenset(
+                        call
+                        for message in queue.pending_nowait(source.id)
+                        for call in message.body.answered_calls()
+                    ),
                 )
                 fork_cut = cut(fork_source)
                 target = self._session.create(
@@ -324,6 +331,11 @@ class SessionService:
                     derivation_depth=depth,
                 )
                 count = fork_source.copy_before(fork_cut, target, self._session_context_crud, db)
+                identity = fork_source.identity_notice(fork_cut, target)
+                if identity is not None:
+                    # 身份声明与分支同一事务写入；通知不推进 Session，随分支第一次驱动并入（Agent
+                    # 分叉的任务说明随后入队时拉起 actor）。
+                    queue.put(target.id, SessionMessage.of(identity), db=db)
         except TimeoutError as exc:
             raise SessionForkConflictError(
                 "WORKSPACE_BUSY", "workspace has an active structural operation"
@@ -582,15 +594,13 @@ class SessionService:
         workspace 闸门。
         """
         from app.core.tool.handoff.handoff_registry import handoff_registry
+        from app.tools.browser_runtime.tab_reclaim import drop_sessions as drop_browser_sessions
         from app.tools.tool_handler.file_observations import file_observations
         from app.tools.tool_handler.terminal.command_results import command_results
 
         service_depends.get_terminal_session_service().delete_session_terminals(session_ids)
-        # 浏览器标签页归宿主所有：发后即忘的通知；宿主断线重连期间或后端崩溃时会丢，由链路连上时的
-        # 对账补回收（``service/browser/tab_reclaim``）。
-        service_depends.get_host_link().notify(
-            "browser.dropSessions", {"session_ids": sorted(session_ids)}
-        )
+        # 浏览器标签页归宿主所有：发后即忘，丢了由链路连上时的对账补回收。
+        drop_browser_sessions(session_ids)
         for session_id in session_ids:
             command_results.drop_session(session_id)
             handoff_registry.drop_session(session_id)

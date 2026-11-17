@@ -38,21 +38,28 @@ export function useCommandRequest(sessionId: number, target: CommandTarget): Com
 export function commandPending(request: CommandRequest | undefined): boolean {
   return !!request && request.error === null;
 }
+/**
+ * 应用级状态流的对账：只结算没有对话订阅在观察的 Session（如委派行里停止的子会话）。被观察的
+ * Session 只认对话订阅——回合按它渲染，两条连接各自到达，状态流先到时提前清掉「停止中」，回合
+ * 还停在 running，旧的当前活动会被顶回来一下。
+ */
 export function reconcileSessionStatuses(sessions: Readonly<Record<number, SessionStatus>>): void {
   for (const [id, { executionStatus }] of Object.entries(sessions)) {
+    if (observed.has(Number(id))) continue;
     if (executionStatus !== null && !["running", "suspended"].includes(executionStatus)) settleCommand(Number(id), "session");
   }
 }
 /**
- * 状态流或对话订阅断开时可能错过「停下、又开出新运行」的边界，不再声称正在停止：转为待确认、可重试。
- * 不传 `sessionId` 时作用于全部 Session（应用级状态流断开）。
+ * 订阅断开时可能错过「停下、又开出新运行」的边界，不再声称正在停止：转为待确认、可重试。
+ * 传 `sessionId` 是这个 Session 的对话订阅断开；不传是应用级状态流断开，只作用于它负责结算的、
+ * 没有对话订阅在观察的 Session（与 {@link reconcileSessionStatuses} 同一归属）。
  */
 export function markSessionRequestsUnsynced(sessionId?: number): void {
   useCommandRequests.setState(state => {
     const sessions = { ...state.sessions };
     let changed = false;
     for (const [id, bucket] of Object.entries(sessions)) {
-      if (sessionId !== undefined && Number(id) !== sessionId) continue;
+      if (sessionId === undefined ? observed.has(Number(id)) : Number(id) !== sessionId) continue;
       if (!bucket.session || bucket.session.error) continue;
       sessions[Number(id)] = {
         ...bucket,

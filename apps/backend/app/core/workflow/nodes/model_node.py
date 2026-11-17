@@ -80,167 +80,171 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     # SDK 快照负责聚合；context 只保存请求正文副本和独立响应元数据。
     aggregated_message: ParsedChatCompletionSnapshot | None = None
 
-    # 两层边界：内层是流的生命周期（取消在流收口内落定，正文与意图在任何出口都先 finish）；
-    # 外层是「响应提交前」——调用只在流里预览过、还没随响应进上下文，RunDriver 的失败收尾看不到，
-    # 这段内的任何失败都由这里写成事实。提交之后的失败由 RunDriver 按上下文补结果。
+    # 模型阶段跟这一步的生命周期：所有出口（落定、交给 tools、续写、取消、失败）都在最外层清除。
     try:
+        # 两层边界：内层是流的生命周期（取消在流收口内落定，正文与意图在任何出口都先 finish）；
+        # 外层是「响应提交前」——调用只在流里预览过、还没随响应进上下文，RunDriver 的失败收尾看不到，
+        # 这段内的任何失败都由这里写成事实。提交之后的失败由 RunDriver 按上下文补结果。
         try:
-            # 加载上下文期间到达的取消：不开模型请求，走下方同一个取消落定分支。
-            if rc.is_cancelled():
-                raise RunStopped()
-            parts.start()
-            async with aclosing(model.stream(messages)) as chunks:
-                async for event in chunks:
-                    if rc.is_cancelled():
-                        raise RunStopped()
-                    aggregated_message = event.snapshot
-                    response = _message_context().save_model_response(
-                        aggregated_message,
-                        include_in_context=False,
-                        registered_tool_names=registered_tool_names,
-                    )
-
-                    delta = event.chunk.choices[0].delta if event.chunk.choices else None
-                    reasoning = (
-                        (delta.model_extra or {}).get(rc.thinking_channel)
-                        if delta is not None and rc.thinking_channel
-                        else None
-                    )
-                    # 工具预览使用完整快照里的调用身份；参数只在流结束后解析一次。
-                    raw_tool_calls: list[ParsedFunctionToolCall] = (
-                        aggregated_message.choices[0].message.tool_calls or []
-                    )
-                    parts.receive(
-                        source_sequence=response.sequence,
-                        turn=response.turn,
-                        text=delta.content if delta else None,
-                        reasoning=bool(reasoning),
-                        tool_delta=bool(delta and delta.tool_calls),
-                        tool_calls=raw_tool_calls,
-                    )
-                # 最后一帧之后仍可能收到取消信号，进入完成判定前再检查一次。
+            try:
+                # 加载上下文期间到达的取消：不开模型请求，走下方同一个取消落定分支。
                 if rc.is_cancelled():
                     raise RunStopped()
-            if aggregated_message is None:
-                raise RuntimeError("模型流没有产出响应")
-            # 最终快照是调用身份的权威集合：在 finish 收口前补记最后一帧才完整的身份。只在流正常
-            # 结束时做；取消路径已由 parts.cancel() 收敛，失败路径没有可信快照。
-            parts.tool_call(aggregated_message.choices[0].message.tool_calls or [])
-        except RunStopped:
+                parts.start()
+                async with aclosing(model.stream(messages)) as chunks:
+                    async for event in chunks:
+                        if rc.is_cancelled():
+                            raise RunStopped()
+                        aggregated_message = event.snapshot
+                        response = _message_context().save_model_response(
+                            aggregated_message,
+                            include_in_context=False,
+                            registered_tool_names=registered_tool_names,
+                        )
+
+                        delta = event.chunk.choices[0].delta if event.chunk.choices else None
+                        reasoning = (
+                            (delta.model_extra or {}).get(rc.thinking_channel)
+                            if delta is not None and rc.thinking_channel
+                            else None
+                        )
+                        # 工具预览使用完整快照里的调用身份；参数只在流结束后解析一次。
+                        raw_tool_calls: list[ParsedFunctionToolCall] = (
+                            aggregated_message.choices[0].message.tool_calls or []
+                        )
+                        parts.receive(
+                            source_sequence=response.sequence,
+                            turn=response.turn,
+                            text=delta.content if delta else None,
+                            reasoning=bool(reasoning),
+                            tool_delta=bool(delta and delta.tool_calls),
+                            tool_calls=raw_tool_calls,
+                        )
+                    # 最后一帧之后仍可能收到取消信号，进入完成判定前再检查一次。
+                    if rc.is_cancelled():
+                        raise RunStopped()
+                if aggregated_message is None:
+                    raise RuntimeError("模型流没有产出响应")
+                # 最终快照是调用身份的权威集合：在 finish 收口前补记最后一帧才完整的身份。只在流正常
+                # 结束时做；取消路径已由 parts.cancel() 收敛，失败路径没有可信快照。
+                parts.tool_call(aggregated_message.choices[0].message.tool_calls or [])
+            except RunStopped:
+                log.info(
+                    "model_node_cancelled_usage_summary",
+                    extra={
+                        "msg": "模型调用已关闭，保存中断输出并收口工具预览",
+                        "data": {
+                            "session_id": session_id,
+                            "run_id": run_id,
+                            "step_id": step_id,
+                            "usage": rc.usage_stats.to_dict(),
+                        },
+                    },
+                )
+                # 取消时工具 part 的收敛由状态机按「本请求已投影的调用」完成，不再查询生命周期记录。
+                parts.cancel()
+                service_depends.get_run_ledger().transition(
+                    run_id,
+                    RunTransition.CANCEL,
+                    end_reason=rc.cancel_end_reason(),
+                    usage_stats=rc.usage_stats,
+                )
+                raise
+            finally:
+                parts.finish()
+            choice = aggregated_message.choices[0]
+            # SDK 快照的静态类型只列完整原因，流被截断时运行时仍可能为 None。
+            finish_reason = cast(str | None, choice.finish_reason)
+            ai_message: ChatCompletionAssistantMessageParam = assistant_message(
+                choice.message, registered_tool_names
+            )
+            calls = [
+                cast(ChatCompletionMessageFunctionToolCallParam, call)
+                for call in ai_message.get("tool_calls") or []
+            ]
+
+            if not calls and finish_reason is None:
+                parts.cancel()
+                _message_context().abandon_model_response()
+                rc.mailbox.notify(
+                    NoticeBody(
+                        content="Please continue the unfinished task.",
+                        notice_kind="model_continuation",
+                    )
+                )
+                return route_state(step_count, ReactRoute.PREPARE_INPUT)
+
+            usage = usage_from_response(aggregated_message.usage)
+            rc.usage_stats.add_usage_metadata(usage)
             log.info(
-                "model_node_cancelled_usage_summary",
+                "model_node_completed",
                 extra={
-                    "msg": "模型调用已关闭，保存中断输出并收口工具预览",
+                    "msg": f"模型产出完成，step_id={step_id}",
                     "data": {
-                        "session_id": session_id,
-                        "run_id": run_id,
                         "step_id": step_id,
-                        "usage": rc.usage_stats.to_dict(),
+                        "output_text_length": len(content_to_text(ai_message.get("content"))),
+                        "finish_reason": finish_reason,
                     },
                 },
             )
-            # 取消时工具 part 的收敛由状态机按「本请求已投影的调用」完成，不再查询生命周期记录。
-            parts.cancel()
-            service_depends.get_run_ledger().transition(
-                run_id,
-                RunTransition.CANCEL,
-                end_reason=rc.cancel_end_reason(),
-                usage_stats=rc.usage_stats,
+
+            response = _message_context().save_model_response(
+                aggregated_message,
+                include_in_context=True,
+                registered_tool_names=registered_tool_names,
             )
+        except RunStopped:
             raise
-        finally:
-            parts.finish()
-        choice = aggregated_message.choices[0]
-        # SDK 快照的静态类型只列完整原因，流被截断时运行时仍可能为 None。
-        finish_reason = cast(str | None, choice.finish_reason)
-        ai_message: ChatCompletionAssistantMessageParam = assistant_message(
-            choice.message, registered_tool_names
-        )
-        calls = [
-            cast(ChatCompletionMessageFunctionToolCallParam, call)
-            for call in ai_message.get("tool_calls") or []
-        ]
-
-        if not calls and finish_reason is None:
+        except Exception:
             parts.cancel()
-            _message_context().abandon_model_response()
-            rc.mailbox.notify(
-                NoticeBody(
-                    content="Please continue the unfinished task.",
-                    notice_kind="model_continuation",
-                )
-            )
-            return route_state(step_count, ReactRoute.PREPARE_INPUT)
+            raise
 
-        usage = usage_from_response(aggregated_message.usage)
-        rc.usage_stats.add_usage_metadata(usage)
+        if calls:
+            # 有任意有效工具调用都进 tools 节点；参数是否合法由执行边界决定，失败由 observe 结算；
+            # 工具结果是否回流 model 也由 observe 决定。
+            batch.calls = calls
+            return {**route_state(step_count, ReactRoute.TOOLS), "batch": batch}
+
+        # 无工具调用且 finish_reason 非 None：正文可以为空；结构化处理作为已完成 Run 的支线。
+        #
+        # 「这次响应是最终回复」只能在这里、整段流收完之后判定，没法在正文出来之前知道。实测
+        # （2026-11-14，deepseek-flash 与 deepseek-v4-pro 各 12 次流式请求，纯文字 / 给了工具但只答文字 /
+        # 只调工具 / 先说话再调工具四种情形）分块顺序无一例外是：
+        #
+        #     空的首块（只声明角色）→ 推理 → 正文 → 工具调用 → 结束信号
+        #
+        # finish_reason 每次都只出现一次、在最后一块，那一块不带正文或工具增量（与用量同块）。「先说话再
+        # 调工具」时正文块排在工具调用块前面，所以看到正文时无从知道后面是结束还是工具调用。只测了
+        # DeepSeek；这是 OpenAI 流式协议的通行顺序，其他兼容厂商未实测。
+        #
+        # 由此定下的取舍：模型的最终正文拦不住——它已经流给用户了。所以 Run 带着未答的提问完成时
+        # （提问挂着时被后台结果唤醒、模型说完话就结束），不为「回到挂起」另做一套判定：正文照常显示，
+        # 提问的去留由落定点按结局决定（见 ``SessionActor._expire_decisions``）。
+        final_answer = content_to_text(ai_message.get("content"))
+        structured = rc.agent.structured_output is not None
         log.info(
-            "model_node_completed",
+            "model_node_final_response",
             extra={
-                "msg": f"模型产出完成，step_id={step_id}",
+                "msg": f"模型给出最终回复，即将落库，step_id={step_id}",
                 "data": {
                     "step_id": step_id,
-                    "output_text_length": len(content_to_text(ai_message.get("content"))),
+                    "output_text_length": len(final_answer),
                     "finish_reason": finish_reason,
+                    "structured_output_pending": structured,
                 },
             },
         )
-
-        response = _message_context().save_model_response(
-            aggregated_message,
-            include_in_context=True,
-            registered_tool_names=registered_tool_names,
+        completed = service_depends.get_run_ledger().transition(
+            run_id,
+            RunTransition.COMPLETE,
+            usage_stats=rc.usage_stats,
+            final_output=final_answer,
+            response_sequence=response.sequence,
+            end_reason=finish_reason,
         )
-    except RunStopped:
-        raise
-    except Exception:
-        parts.cancel()
-        raise
-
-    if calls:
-        # 有任意有效工具调用都进 tools 节点；参数是否合法由执行边界决定，失败由 observe 结算；
-        # 工具结果是否回流 model 也由 observe 决定。
-        batch.calls = calls
-        return {**route_state(step_count, ReactRoute.TOOLS), "batch": batch}
-
-    # 无工具调用且 finish_reason 非 None：正文可以为空；结构化处理作为已完成 Run 的支线。
-    #
-    # 「这次响应是最终回复」只能在这里、整段流收完之后判定，没法在正文出来之前知道。实测
-    # （2026-11-14，deepseek-flash 与 deepseek-v4-pro 各 12 次流式请求，纯文字 / 给了工具但只答文字 /
-    # 只调工具 / 先说话再调工具四种情形）分块顺序无一例外是：
-    #
-    #     空的首块（只声明角色）→ 推理 → 正文 → 工具调用 → 结束信号
-    #
-    # finish_reason 每次都只出现一次、在最后一块，那一块不带正文或工具增量（与用量同块）。「先说话再
-    # 调工具」时正文块排在工具调用块前面，所以看到正文时无从知道后面是结束还是工具调用。只测了
-    # DeepSeek；这是 OpenAI 流式协议的通行顺序，其他兼容厂商未实测。
-    #
-    # 由此定下的取舍：模型的最终正文拦不住——它已经流给用户了。所以 Run 带着未答的提问完成时
-    # （提问挂着时被后台结果唤醒、模型说完话就结束），不为「回到挂起」另做一套判定：正文照常显示，
-    # 提问的去留由落定点按结局决定（见 ``SessionActor._expire_decisions``）。
-    final_answer = content_to_text(ai_message.get("content"))
-    structured = rc.agent.structured_output is not None
-    log.info(
-        "model_node_final_response",
-        extra={
-            "msg": f"模型给出最终回复，即将落库，step_id={step_id}",
-            "data": {
-                "step_id": step_id,
-                "output_text_length": len(final_answer),
-                "finish_reason": finish_reason,
-                "structured_output_pending": structured,
-            },
-        },
-    )
-    completed = service_depends.get_run_ledger().transition(
-        run_id,
-        RunTransition.COMPLETE,
-        usage_stats=rc.usage_stats,
-        final_output=final_answer,
-        response_sequence=response.sequence,
-        end_reason=finish_reason,
-    )
-    return route_state(
-        step_count,
-        ReactRoute.STRUCTURED_OUTPUT if structured and completed else ReactRoute.END,
-    )
+        return route_state(
+            step_count,
+            ReactRoute.STRUCTURED_OUTPUT if structured and completed else ReactRoute.END,
+        )
+    finally:
+        parts.exit()

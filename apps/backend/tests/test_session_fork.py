@@ -760,3 +760,141 @@ def test_interrupted_output_survives_hidden_fork_and_manual_refork(fork_store):
     manual = fork(s, anchor)
     assert "PARTIAL_OUTPUT" in str(snapshot(s, manual)["messages"])
     assert "PARTIAL_OUTPUT" not in str([r.message for r in s.contexts.get(manual.id)])
+
+
+def _expired_question(s, run, call_id="ask"):
+    """提问被停止后原地作废：占位推到「已取消」、正文仍是「等待决定」，结局只在那条作废通知里。"""
+    call(s, run, call_id)
+    append(
+        s,
+        run,
+        {"role": "tool", "tool_call_id": call_id, "content": "This tool call is awaiting the user's decision."},
+        metadata=ToolMessageMetadata(status="cancelled", error="未作答"),
+    )
+
+
+def _expired_notice(call_id="ask"):
+    from app.core.workflow.message_queue.message_bodies.notice import NoticeBody
+
+    return NoticeBody(
+        content=f"Your question (tool_call_id={call_id}) was not answered",
+        notice_kind="decision_expired",
+        tool_call_ids=[call_id],
+    )
+
+
+def test_question_expired_in_place_with_its_notice_still_queued_is_not_inherited(fork_store):
+    """实测复现：ask_user 等回答时用户停止 → 分叉最后一条回复。作废通知还在来源队列里没并入，分支收不到；
+    原样继承的话分支模型读到「等待决定」，会说「我在等你回答」，而卡片已是已取消、用户没法回答。"""
+    from app.core.workflow.message_queue.session_message import SessionMessage
+    from app.service import depends
+
+    s = fork_store
+    run = append_run(s, "cancelled")
+    _expired_question(s, run)
+    depends.get_session_message_queue().put(s.session.id, SessionMessage.of(_expired_notice()))
+
+    child = fork(s, run.input_id)
+
+    body = str([r.message for r in s.contexts.get(child.id)])
+    assert "awaiting the user's decision" not in body and "not inherited" in body
+
+
+def test_question_expired_in_place_with_its_notice_after_the_cut_is_not_inherited(fork_store):
+    from app.models.message_metadata import NoticeEntry
+
+    s = fork_store
+    run = append_run(s, "cancelled")
+    _expired_question(s, run)
+    later = s.runs.create(s.session.id, status="completed")
+    notice = _expired_notice()
+    append(
+        s,
+        later,
+        {"role": "user", "content": f"<system_notice>{notice.content}</system_notice>"},
+        metadata=UserMessageMetadata(
+            kind="notice",
+            notices=[NoticeEntry(notice_kind=notice.notice_kind, content=notice.content, tool_call_ids=["ask"])],
+        ),
+        project=False,
+    )
+    input_message(s, later, "next")
+
+    child = fork(s, run.input_id)
+
+    body = str([r.message for r in s.contexts.get(child.id)])
+    assert "awaiting the user's decision" not in body and "not inherited" in body
+
+
+def test_manual_fork_of_an_agent_fork_restates_identity(fork_store):
+    """交接通知说的是来源自己的身份与汇报关系（「你是 B，结果汇报给 A」），手动分叉复制到它时，分支要补
+    一条身份通知；没有复制到交接通知的手动分叉不补。"""
+    from app.models.message_metadata import NoticeEntry
+    from app.service import depends
+
+    s = fork_store
+    run = append_run(s, "running")
+    call(s, run)
+    child = agent_fork(s, run)
+    s.session = child
+    local = s.runs.create(child.id, status="completed")
+    append(
+        s,
+        local,
+        {"role": "user", "content": "<system_notice>You are session B</system_notice>"},
+        metadata=UserMessageMetadata(
+            kind="notice",
+            notices=[NoticeEntry(notice_kind="fork_handover", content="You are session B")],
+        ),
+        project=False,
+    )
+    assignment = input_message(s, local, "child assignment", "agent_message")
+    append(s, local, {"role": "assistant", "content": "child reply"})
+
+    manual = fork(s, assignment)
+
+    [message] = depends.get_session_message_queue().pending_nowait(manual.id)
+    assert message.body.notice_kind == "fork_handover"
+    assert f"You are session {manual.id}" in message.body.content
+    s.session = manual
+    plain = s.runs.create(manual.id, status="completed")
+    again = input_message(s, plain, "plain")
+    append(s, plain, {"role": "assistant", "content": "plain reply"})
+    # 分支自己的历史里同样有那条交接通知（继承来的），再手动分叉照样补；只有压根没复制到时才不补。
+    assert depends.get_session_message_queue().pending_nowait(fork(s, again).id)
+
+
+def test_plain_manual_fork_gets_no_identity_notice(fork_store):
+    from app.service import depends
+
+    s = fork_store
+    run = append_run(s, "completed")
+
+    child = fork(s, run.input_id)
+
+    assert depends.get_session_message_queue().pending_nowait(child.id) == []
+
+
+def test_agent_fork_is_written_with_its_handover_in_the_same_transaction(fork_store):
+    """Agent 分叉的身份声明归分叉层：分支一建好，队列里就有交接通知（身份、汇报对象），排在任务说明之前；
+    收窄了可写根时附上范围。与分支同一事务写入，不会留下不知道自己是谁的分支。"""
+    from app.service import depends
+
+    s = fork_store
+    run = append_run(s, "running")
+    call(s, run)
+
+    child = agent_fork(s, run)
+
+    [message] = depends.get_session_message_queue().pending_nowait(child.id)
+    assert message.body.notice_kind == "fork_handover"
+    assert f"You are session {child.id}, a fork of session {s.session.id}" in message.body.content
+    assert "writable root" not in message.body.content
+
+    call(s, run, "fork-narrowed")
+    narrowed = s.service.fork_for_agent(
+        s.session.id, run_id=run.id, tool_call_id="fork-narrowed", title="Narrow",
+        derivation_depth=1, narrowed_root="pkg/web",
+    )
+    [message] = depends.get_session_message_queue().pending_nowait(narrowed.id)
+    assert "Your writable root is pkg/web" in message.body.content

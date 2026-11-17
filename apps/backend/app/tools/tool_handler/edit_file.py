@@ -22,7 +22,7 @@ from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_FILE_EDIT
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.display.file_change_display import build_file_change_display_data
-from app.tools.guard.syntax_check import check_source_syntax, format_syntax_reason
+from app.tools.tool_handler.file_edit.syntax_check import check_source_syntax, format_syntax_reason
 from app.tools.tool_handler.file_edit.line_numbered import looks_like_line_numbered
 from app.tools.tool_handler.file_edit.patch_diff import FileDiffResult
 from app.tools.tool_handler.file_edit.text_match import TextMatchError, replace_exact

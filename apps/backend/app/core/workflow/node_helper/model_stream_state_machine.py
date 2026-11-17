@@ -28,7 +28,7 @@ from app.models.message_metadata import ToolMessageMetadata
 
 
 class ModelStreamStateMachine:
-    """每个模型请求一个实例；记录阶段和已发出身份，finish 在所有退出路径执行。"""
+    """每个模型请求一个实例；记录阶段和已发出身份，finish 在流的所有出口、exit 在模型步的所有出口执行。"""
 
     def __init__(self, session_id: int, run_id: int, step_id: str) -> None:
         self._emit = emit
@@ -65,8 +65,10 @@ class ModelStreamStateMachine:
     ) -> None:
         """消费当前分片的通道信号及累计调用身份，推理只接受存在性、不接受原文。
 
-        同一帧多通道时工具优先、其次推理、最后正文。先写完本帧正文，再因推理/工具通道收口；
-        旧累计身份既不切阶段也不反复收口正文。尚未完整的身份等 SDK 后续快照补全。
+        同一帧多通道时工具优先、其次推理、最后正文。先写完本帧正文；推理只刷出缓冲、不收口——
+        canonical 记录里同一响应的正文是一段，推理不构成正文边界，收口会让实时快照比冷重建多出一段
+        正文；工具通道才收口，因为其后是调用 part。旧累计身份既不切阶段也不反复收口正文。尚未完整的
+        身份等 SDK 后续快照补全。
         """
         self._turn = turn
         if tool_delta:
@@ -77,8 +79,10 @@ class ModelStreamStateMachine:
             self._publish_phase("responding")
         if text:
             self.text(text, source_sequence=source_sequence)
-        if reasoning or tool_delta:
+        if tool_delta:
             self._close()
+        elif reasoning:
+            self._flush_pending()
         self.tool_call(tool_calls)
 
     def text(self, delta: str, *, source_sequence: int) -> None:
@@ -124,18 +128,24 @@ class ModelStreamStateMachine:
             )
 
     def finish(self) -> None:
-        """无论正常、异常还是取消都收口正文并清除阶段；重复调用不发事件。"""
-        try:
-            self._close()
-            arguments, self._arguments = self._arguments, {}
-            for call_id, raw in arguments.items():
-                intent, args = display_call_arguments(raw)
-                self._emit(ToolCallIntentEvent(
-                    session_id=self._session_id, run_id=self._run_id, step_id=self._step_id,
-                    tool_call_id=call_id, intent=intent, args=args,
-                ))
-        finally:
-            self._publish_phase(None)
+        """流的任何出口都收口正文并补发调用意图；重复调用不发事件。不清除模型阶段，见 :meth:`exit`。"""
+        self._close()
+        arguments, self._arguments = self._arguments, {}
+        for call_id, raw in arguments.items():
+            intent, args = display_call_arguments(raw)
+            self._emit(ToolCallIntentEvent(
+                session_id=self._session_id, run_id=self._run_id, step_id=self._step_id,
+                tool_call_id=call_id, intent=intent, args=args,
+            ))
+
+    def exit(self) -> None:
+        """模型步退出时清除阶段；由 model 节点在这一步的所有出口调用，重复调用不发事件。
+
+        阶段跟模型步而不是跟流：流结束后这一步还要提交响应、落定 Run 或交给 tools，期间清掉阶段会让
+        快照呈现「运行中、模型空闲、没有工具」的中间态，前端只能把它说成「正在思考」。落定时 Run 状态
+        投影已在同一批变更里清空阶段，这里的清除因此是空操作；交给 tools 时空档只剩准入。
+        """
+        self._publish_phase(None)
 
     def cancel(self) -> None:
         """收敛本请求尚未执行的调用，落占位供冷重建；不可在正常完成路径调用。

@@ -29,9 +29,9 @@ from openai.types.shared_params import ResponseFormatJSONObject
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
+from app.core.capsules import capsule_grammar
 from app.core.events import SessionTitleUpdatedEvent
 from app.core.llm_provider.openai_model import usage_from_response
-from app.core.user_input import capsules
 from app.core.workflow.node_helper.common import emit
 from app.models.session_kind import USER_FACING_SESSION_TYPES
 from app.service import depends as service_depends
@@ -55,7 +55,7 @@ def name_untitled(rc: RuntimeContext, text: str) -> None:
     """
     if rc.session.title:
         return
-    title = preview(capsules.plain_text(text), limit=SESSION_TITLE_LIMIT) or "新会话"
+    title = preview(capsule_grammar.plain_text(text), limit=SESSION_TITLE_LIMIT) or "新会话"
     if not service_depends.get_session_service().fill_empty_title(rc.session.id, title):
         return
     # 同步缓存的记录：随后启动的支线把它当作「当前标题」交给模型。
@@ -194,11 +194,11 @@ def _plain_text_messages(
             continue
         content = message["content"]
         if isinstance(content, str):
-            text_content: str | list[ChatCompletionContentPartParam] = capsules.plain_text(content)
+            text_content: str | list[ChatCompletionContentPartParam] = capsule_grammar.plain_text(content)
         else:
             text_content = [
                 ChatCompletionContentPartTextParam(
-                    type="text", text=capsules.plain_text(part["text"])
+                    type="text", text=capsule_grammar.plain_text(part["text"])
                 )
                 if part["type"] == "text"
                 else part

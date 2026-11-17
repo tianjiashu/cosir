@@ -41,7 +41,8 @@ test("wait does not render a card; suspended has a neutral heading and errors st
   await seedState(request, 42, state([text("等待结果回来。"), wait], "suspended"));
   await page.goto("/sessions/42");
   await expect(page.locator('[data-slot="current-activity"]')).toContainText("等待继续");
-  await expect(page.locator('[data-slot="activity-group"]')).toHaveCount(0);
+  // 隐藏的等待调用不构成可展开的工具记录：等待状态由这一段的那一行说，没有展开按钮。
+  await expect(page.locator('[data-slot="activity-head"]')).toHaveCount(0);
   await expect(page.locator('[data-tool-call-id="wait"]')).toHaveCount(0);
   await seedState(request, 42, state([text("等待结果回来。"), { ...wait, status: "failed", error: "没有可等待的会话" }], "suspended"));
   await expect(page.locator('[data-slot="activity-head"]')).toContainText("1 个失败");

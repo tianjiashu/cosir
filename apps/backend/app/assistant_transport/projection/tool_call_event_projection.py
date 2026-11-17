@@ -139,19 +139,20 @@ def plan_tool_call_status_changed(
     fields = project_tool_result(event.result)
     display = fields["display_data"]
     current_display = part.get("display_data")
-    if isinstance(current_display, dict) and current_display.get("kind") == "terminal-result":
+    if not display:
+        # 与持久化侧 ``ToolMessageMetadata.merged_onto`` 同一规则：结果没带展示数据表示「不变」。
+        # 否则决定重放这类「执行结果不带展示数据」的调用，会在实时终态时清掉占位的预览、结算后又被
+        # 持久化的合并结果写回，卡片闪一下。
+        fields["display_data"] = copy.deepcopy(current_display)
+    elif isinstance(current_display, dict) and current_display.get("kind") == "terminal-result":
         # 运行中的 terminal-result 只来自实时通道（启动时就建立，见 ``LiveOutputChannel.start``）。
         # 最终 ExecutionResult 的展示数据是权威值；实时通道可能尚未送达尾部。
         # 只有缺少结构化终态（例如执行器异常、没有输出就被取消）时才保留已经收到的命令与预览。
-        if (
-            display is not None
-            and display.get("kind") == "terminal-result"
-            and "output" not in display
-        ):
+        if display.get("kind") == "terminal-result" and "output" not in display:
             if "output" in current_display:
                 display["output"] = current_display["output"]
-        elif display is None or "kind" not in display:
-            fields["display_data"] = {**copy.deepcopy(current_display), **(display or {})}
+        elif "kind" not in display:
+            fields["display_data"] = {**copy.deepcopy(current_display), **display}
     mutations = [
         ConversationStateMutation("set", (*base, key), value) for key, value in fields.items()
     ]

@@ -191,7 +191,7 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
     )
     assert cancel_placeholders(
         session.id, ["call-bg"], "cancelled"
-    ) == frozenset({session.id})
+    ) == {session.id: frozenset({"call-bg"})}
     hot = service.get_state(session.id)["background_tasks"]
     assert hot[0]["status"] == "cancelled" and hot[0]["endedAt"] is not None
     service.republish_from_canonical(session.id)

@@ -20,10 +20,10 @@ from typing import Any
 
 import pytest
 
+from app.tools.browser_runtime.deadlines import HOST_DEADLINES
 from app.tools.display.browser_display import build_browser_page_display_data
 from app.tools.host.errors import CANCELLED, INVALID_PARAMS, UNAVAILABLE, HostCallError
 from app.tools.tool_handler.browser.errors import BROWSER_ERRORS, browser_error_observation
-from app.tools.tool_handler.browser.host_request import HOST_DEADLINES
 from app.tools.tool_handler.browser.rendering import (
     act_observation,
     act_summary,

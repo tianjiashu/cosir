@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from app.tools.guard.syntax_check import SyntaxDiagnostic
+from app.tools.tool_handler.file_edit.syntax_check import SyntaxDiagnostic
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 
 

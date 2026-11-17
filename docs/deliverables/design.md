@@ -123,7 +123,7 @@ Deliverable（按 type 判别）
 | `audio` | 后缀在音频表里（不看能否解码：字符集探测偶尔把二进制「解码」成功，播不了由降级兜底） | 播放器 |
 | `video` | 后缀在视频表里；`.webm` 分不出音视频，按视频播，没有画面时换成音频版式 | 播放器 |
 
-归类不用 `mimetypes`：它读本机的类型表，同一个后缀在不同机器上结果不同（实测 `.ts` 被判成 `video/mp2t`、`.mmd` 被判成卡拉 OK 格式）。判定与后缀表在 `service/workspace_files/file_classification.py`，是全仓唯一事实源，顺序是「魔数 → 后缀表 → 能否解码」；`mimetypes` 与依赖它的 `utils/image_utils.py`（已无调用方）一并删除。表中没有的文件，`mime` 只取确定值（文本 `text/plain`、其余 `application/octet-stream`），二进制空态改写「XLSX 文件」这类后缀写法：
+归类不用 `mimetypes`：它读本机的类型表，同一个后缀在不同机器上结果不同（实测 `.ts` 被判成 `video/mp2t`、`.mmd` 被判成卡拉 OK 格式）。判定与后缀表在 `service/workspace_files/content/file_classification.py`，是全仓唯一事实源，顺序是「魔数 → 后缀表 → 能否解码」；`mimetypes` 与依赖它的 `utils/image_utils.py`（已无调用方）一并删除。表中没有的文件，`mime` 只取确定值（文本 `text/plain`、其余 `application/octet-stream`），二进制空态改写「XLSX 文件」这类后缀写法：
 
 | 表 | 后缀 |
 |---|---|
@@ -292,7 +292,7 @@ snapshot 顶层新增 `deliverables`：工作副本里全部工具 part 上 `del
 |---|---|---|---|
 | 一 | 约 +215（模块 +95，测试 +120） | 约 −355（应用 −155，测试 −200） | 新增 `utils/path/file_identity.py`；删除 `utils/path/validation.py` |
 | 二 | 约 +1520（后端 +300，前端 +550，夹具 +40，测试 +630） | 约 −360 | 新增 `models/file_kind.py`、`lib/assistant/turn/deliverable-layout.ts`、`lib/workspace-files/file-watch-store.ts`、`assistant_transport/state/conversation_state_deliverable.py`、`reply-presentation/deliverable-capsule.tsx`；改名 `present_files.py` → `present_deliverables.py`；删除 `display/deliverables_display.py`、`resource-watch.tsx`。执行计划与验收见 `stage-2-plan.md` |
-| 三 | 实际应用约 +660（判定模块 +93、表格 +241、媒体 +75、空态 +46），依赖 `papaparse` | 实际约 −185（含 `mimetypes` 死代码） | 新增 `service/workspace_files/file_classification.py`、`workspace-files/table-preview.tsx`、`media-preview.tsx`、`binary-preview.tsx`、`lib/workspace-files/table-parse.ts`；删除 `utils/image_utils.py`、`utils/constants.py` |
+| 三 | 实际应用约 +660（判定模块 +93、表格 +241、媒体 +75、空态 +46），依赖 `papaparse` | 实际约 −185（含 `mimetypes` 死代码） | 新增 `service/workspace_files/content/file_classification.py`、`workspace-files/table-preview.tsx`、`media-preview.tsx`、`binary-preview.tsx`、`lib/workspace-files/table-parse.ts`；删除 `utils/image_utils.py`、`utils/constants.py` |
 | 四a | 应用约 +290（宿主 +65、后端 +15、前端 +135） | 约 −26 | 新增 `electron/main/files/file-actions.ts`、`lib/desktop-host/file-exits.ts`、`lib/workspace-files/use-system-thumbnail.ts` |
 | 五 | 应用约 +190 | 约 −20 | 新增 `conversation-aside/deliverables-card.tsx`、`lib/deliverables/deliverables-store.ts`、`reply-presentation/deliverable-label.tsx` |
 | **合计** | **约 +1945** | **约 −590** | **净约 +1355**；推迟的 §4.9 约 +350 |

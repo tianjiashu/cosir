@@ -19,12 +19,13 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_BROWSER
+from app.tools.browser_runtime.browser_call import call_browser
+from app.tools.browser_runtime.deadlines import tool_timeout
 from app.tools.display.browser_display import (
     build_browser_page_display_data,
 )
 from app.tools.host.errors import HostCallError
 from app.tools.tool_handler.browser.errors import BROWSER_ERRORS, browser_error_observation
-from app.tools.tool_handler.browser.host_request import call_browser, tool_timeout
 from app.tools.tool_handler.browser.rendering import page_observation
 from app.tools.tool_models import BrowserHandoffArgs, BrowserSnapshotArgs, BrowserTabsArgs
 
@@ -75,7 +76,9 @@ class BrowserHandoffTool(HandlerBase):
             return browser_error_observation(self.name, error)
         if page is None:
             advice, hint = BROWSER_ERRORS["TAB_NOT_FOUND"]
-            missing = f"tab {tab} is not one of this session's tabs" if tab else "this session has no tab"
+            missing = (
+                f"tab {tab} is not one of this session's tabs" if tab else "this session has no tab"
+            )
             return tool_error(self.name, f"{missing}. {advice}", status_hint=hint)
         if page["operation"] is not None:
             code = "OPERATION_UNKNOWN" if page["operation"] == "unknown" else "TAB_BUSY"

@@ -12,6 +12,7 @@ from app.api.workspaces_api import list_workspace_sessions
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
 from app.models.session_context import SessionContextRecord
 from app.models.session_extra import SessionExtra
+from app.models.session_status import SessionStatus
 from app.service.session.session_service import SessionService
 from app.storage.crud.run_crud import RunCrud
 from app.storage.crud.session_context_crud import SessionContextCrud
@@ -19,7 +20,6 @@ from app.storage.crud.session_crud import SessionCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.model.session_context_model import SessionContextModel
-from app.storage.queries.session_status_queries import SessionStatus, SessionStatusQueries
 from app.storage.store_engines import initialize_app_schema
 from tests.session_extra_fixtures import fork_extra
 
@@ -40,7 +40,7 @@ def store(tmp_path):
     service._session = sessions
     yield SimpleNamespace(
         sessions=sessions, runs=runs, contexts=contexts, workspace=workspace,
-        statuses=SessionStatusQueries(factory), service=service, factory=factory,
+        service=service, factory=factory,
     )
     engine.dispose()
 
@@ -51,24 +51,24 @@ def test_status_follows_the_current_pointer_not_the_latest_run(store, status):
     current = store.runs.create(session.id, status=status)
     store.runs.create(session.id, status="completed")
     store.sessions.set_current_run_id(session.id, current.id)
-    assert store.statuses.status(session.id) == SessionStatus(status, 0)
-    assert store.statuses.list_statuses() == {session.id: SessionStatus(status, 0)}
+    assert store.sessions.get_status(session.id) == SessionStatus(status, 0)
+    assert store.sessions.list_statuses() == {session.id: SessionStatus(status, 0)}
 
 
 def test_no_run_and_missing_session(store):
     session = store.sessions.create(store.workspace.id, "未运行")
-    assert store.statuses.status(session.id) == SessionStatus(None, 0)
+    assert store.sessions.get_status(session.id) == SessionStatus(None, 0)
     with pytest.raises(KeyError):
-        store.statuses.status(session.id + 100)
+        store.sessions.get_status(session.id + 100)
 
 
 def test_status_is_read_fresh(store):
     session = store.sessions.create(store.workspace.id, "恢复")
     run = store.runs.create(session.id, status="cancelled")
     store.sessions.set_current_run_id(session.id, run.id)
-    assert store.statuses.status(session.id).execution_status == "cancelled"
+    assert store.sessions.get_status(session.id).execution_status == "cancelled"
     store.runs.update_status_if_in(run.id, "running", ("cancelled",))
-    assert store.statuses.status(session.id).execution_status == "running"
+    assert store.sessions.get_status(session.id).execution_status == "running"
 
 
 def _tool_row(session_id, sequence, metadata, *, run_id, include=True):
@@ -105,14 +105,14 @@ def test_awaiting_user_counts_only_local_hitl_placeholders_still_in_context(stor
         store.contexts.create(row)
 
     assert [row.awaits_user for row in rows] == [True, True, False, False, False, False, False]
-    assert store.statuses.status(session.id) == SessionStatus("completed", 2)
-    assert store.statuses.list_statuses() == {session.id: SessionStatus("completed", 2)}
+    assert store.sessions.get_status(session.id) == SessionStatus("completed", 2)
+    assert store.sessions.list_statuses() == {session.id: SessionStatus("completed", 2)}
 
 
 def test_awaiting_user_queries_use_the_partial_index(store):
     """整表对账每 15 秒一次、每次工具状态迁移按 Session 读一次：两条计数都必须走只收录 pending 行的
     部分索引，不扫整张 context 表，也不扫这个 Session 的全部行。"""
-    queries = SessionStatusQueries._AWAITING, SessionStatusQueries._AWAITING.where(
+    queries = SessionCrud._AWAITING_COUNTS, SessionCrud._AWAITING_COUNTS.where(
         SessionContextModel.session_id == 1
     )
     with store.factory() as db:

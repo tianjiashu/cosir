@@ -34,20 +34,21 @@ def cancel_placeholders(
     *,
     exclude: frozenset[tuple[int, str]] = frozenset(),
     displays: dict[str, dict[str, object] | None] | None = None,
-) -> frozenset[int]:
+) -> dict[int, frozenset[str]]:
     """把还在等结果的占位（``pending`` 的后台占位、``running`` 的 HITL 占位）结束为
-    ``cancelled``，返回**被改写的占位所属的 Session**。``hint`` 只说明被谁结束（停止 / 取消 / 重启）。
+    ``cancelled``，返回**被改写的占位按 Session 分组的调用 id**。``hint`` 只说明被谁结束（停止 / 取消 / 重启）。
 
     ``session_id`` 为 ``None`` 时跨全部 Session（重启）；``tool_call_ids`` 为 ``None`` 时不按调用过滤；
     ``exclude`` 里的调用不动（结论已在队列里，占位归那条结论结算）。
     ``displays`` 按调用 ID 提供执行器最终部分结果，只写回原占位 metadata，不投递消息。
-    返回 Session 集合而不是行数：重启收尾据此给这些 Session 投重启通知，行数对调用方没有用。
+    重启收尾据此给这些 Session 投重启通知，并让通知带上它结束的调用（原地结算的占位，结局只在那条通知里，
+    见 ``NoticeBody.tool_call_ids``）。
     同步写库，调用方放在工作线程。
     """
 
     ids = None if tool_call_ids is None else frozenset(tool_call_ids)
     if ids is not None and not ids:
-        return frozenset()
+        return {}
     status: ToolCallEventStatus = "cancelled"
     settled = service_depends.get_session_context_service().settle_placeholders(
         session_id, ids, status, hint, exclude=exclude, displays=displays
@@ -61,7 +62,10 @@ def cancel_placeholders(
                 "data": {"session_id": session_id, "status": status, "count": len(settled)},
             },
         )
-    return frozenset(record.session_id for record in settled)
+    grouped: dict[int, set[str]] = {}
+    for record in settled:
+        grouped.setdefault(record.session_id, set()).add(str(record.message.get("tool_call_id")))
+    return {session_id: frozenset(calls) for session_id, calls in grouped.items()}
 
 
 def publish_settled(settled: Iterable[SessionContextRecord]) -> None:

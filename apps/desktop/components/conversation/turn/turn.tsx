@@ -10,12 +10,12 @@ import type { TransportActivity, TransportOutcome } from "@/lib/assistant/contra
 import { STOPPING_FEEDBACK } from "@/lib/assistant/turn/current-activity";
 import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
 import { AgentMessageRow } from "@/components/conversation/thread/agent-message";
-import { visibleTurnBlock, type TurnLayout, type CallItem } from "@/lib/assistant/turn/turn-layout";
+import { visibleTurnBlock, type ActivityGroup, type TurnLayout, type CallItem } from "@/lib/assistant/turn/turn-layout";
 import { ArtifactZone } from "./artifact-zone";
 import { TEXT_PART_COMPONENTS } from "./markdown-part";
 import { processKey, useDisclosure } from "@/lib/assistant/turn/disclosure-store";
 import { ProcessBlock } from "./process-block";
-import { ActivityStatus } from "./thinking-label";
+import { ActivityStatus, CURRENT_ACTIVITY_SLOT } from "./thinking-label";
 import { TurnError } from "./turn-error";
 import { TurnFooter } from "./turn-footer";
 import { LiveTurnHeading } from "./turn-heading";
@@ -89,6 +89,9 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
   });
   const lockScroll = useScrollLock(root, 0);
   const stopped = outcome?.status === "cancelled" || outcome?.status === "failed";
+  // 停止是界面暂态，布局层拿不到：有运行中的活动段就让它说「正在停止…」，没有（正在输出旁白）才单独出一行。
+  const stopping = cancelling && phase !== "settled";
+  const stoppingSegment = stopping ? layout.blocks.find((block): block is ActivityGroup => block.kind === "activity" && block.live !== null)?.key : undefined;
   // 下一步建议只在「会话最后一条回复、Run 正常完成」时有效：用户发了任何消息、或又有新回复，它就过期。
   const isLast = useAuiState((state) => state.message.isLast);
   const nextStep = useMemo(
@@ -102,7 +105,7 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
       <LiveTurnHeading layout={layout} outcome={outcome} startedAt={activity?.startedAt}
         open={processOpen} onToggle={() => { lockScroll(); setProcessOpen(!processOpen); }} />
       {layout.blocks.map((block) => {
-        const hidden = !visibleTurnBlock(block, processOpen, layout.current?.groupKey);
+        const hidden = !visibleTurnBlock(block, processOpen);
         return <div key={block.kind === "activity" ? `activity:${block.key}` : `part:${block.index}`}
           hidden={hidden}
           data-slot={block.kind === "narration" ? "prose-part" : "process-part"} data-part-index={block.index} className="min-w-0">
@@ -110,11 +113,10 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
             <MessagePrimitive.PartByIndex index={block.index} components={TEXT_PART_COMPONENTS} />
           </div> : block.kind === "agent" ? <AgentMessageRow id={block.part.id} text={block.part.text} source={block.part.source} sessionId={sessionId} />
             : block.kind === "standalone" ? <CallRowByIndex index={block.index} sessionId={sessionId} interactive={interactive} sessionCancelling={cancelling} visible={!hidden} inherited={inherited} />
-            : <ProcessBlock sessionId={sessionId} messageId={messageId} group={block} feedback={layout.current?.groupKey === block.key ? (cancelling ? STOPPING_FEEDBACK : layout.current.feedback) : undefined} visible={!hidden} renderCall={renderCall} />}
+            : <ProcessBlock sessionId={sessionId} messageId={messageId} group={block} feedback={block.key === stoppingSegment ? STOPPING_FEEDBACK : undefined} visible={!hidden} renderCall={renderCall} />}
         </div>;
       })}
-      {/* 输出正文时没有活动槽位，停止反馈不能跟着消失。 */}
-      {cancelling && phase === "running" && !layout.current && <ActivityStatus feedback={STOPPING_FEEDBACK} className="block text-2sm" />}
+      {stopping && stoppingSegment === undefined && <div className={CURRENT_ACTIVITY_SLOT}><ActivityStatus feedback={STOPPING_FEEDBACK} /></div>}
       {stopped && <p data-slot="partial-reply" className="text-muted-foreground text-2sm">{answerText.trim() ? "回复可能尚未完成。" : "尚未生成回复。"}</p>}
       <ArtifactZone inherited={inherited} sessionId={sessionId} artifacts={layout.artifacts} interactive={interactive} sessionCancelling={cancelling} />
       {nextStep && <NextStepCard offer={nextStep} sessionId={sessionId} />}

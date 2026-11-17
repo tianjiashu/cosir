@@ -20,16 +20,16 @@ test("model status survives tools without exposing reasoning or a disclosure", a
   await expect(page.locator('[data-slot="current-activity"]')).toHaveText("等待继续");
   await seedState(request, 42, state("waiting"));
   const status = page.locator('[data-slot="current-activity"]');
-  await expect(status).toHaveText("正在思考");
+  await expect(status).toHaveText("思考中");
   await seedState(request, 42, state("reasoning"));
-  await expect(status).toHaveText("正在思考");
+  await expect(status).toHaveText("思考中");
   await page.screenshot({ path: `${OUTPUT_DIR}/model-thinking.png` });
   await expect(status.getByRole("button")).toHaveCount(0);
   const parts = [toolCallPart("read", "read_file", { status: "completed" })];
   await seedState(request, 42, state("waiting", parts));
-  await expect(status).toHaveText("正在思考");
+  await expect(status).toHaveText("思考中");
   await seedState(request, 42, state("reasoning", parts));
-  await expect(status).toHaveText("正在思考");
+  await expect(status).toHaveText("思考中");
   await expect(page.locator('[data-slot="reasoning-body"]')).toHaveCount(0);
   await seedState(request, 42, transportState({ activity: activity(1, "cancelled"), messages: [assistantMessage("a", 1, parts, outcome("cancelled"))] }));
   await expect(status).toHaveCount(0);
@@ -41,7 +41,7 @@ test("status exists without an assistant message", async ({ page, request }) => 
   await page.goto("/sessions/42");
   await expect(page.locator('[data-slot="current-activity"]')).toHaveText("等待继续");
   await seedState(request, 42, { ...state("reasoning"), messages: [] });
-  await expect(page.locator('[data-slot="current-activity"]')).toHaveText("正在思考");
+  await expect(page.locator('[data-slot="current-activity"]')).toHaveText("思考中");
 });
 
 
@@ -61,7 +61,7 @@ test("dark quiet waiting and reduced motion preserve status without a tool card"
   await expect(page.locator('[data-tool-call-id="wait"]')).toHaveCount(0);
   await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { sessionId: 42, entries: [] } });
   await seedState(request, 42, state("reasoning"));
-  await expect(status).toHaveText("正在思考");
-  expect(await status.locator("span").evaluate(el => getComputedStyle(el).animationName)).toBe("none");
+  await expect(status).toHaveText("思考中");
+  expect(await status.locator('[data-slot="activity-dots"] > span').first().evaluate(el => getComputedStyle(el).animationName)).toBe("none");
   await page.screenshot({ path: `${OUTPUT_DIR}/model-thinking-dark.png` });
 });

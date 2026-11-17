@@ -62,7 +62,8 @@ def report_settled(run: RunRecord) -> None:
         _deliver(
             deriver_id,
             _stopped_notice(
-                f"session {session.id} ({session.title}), which you derived,", "this run"
+                f"session {session.id} ({session.title}), which you derived,", "this run",
+                deriving_call_id=session.extra.deriving_call_id,
             ),
             data={"session_id": session.id, "run_id": run.id},
         )
@@ -91,12 +92,18 @@ def report_deleted(active_derived: Iterable[SessionRecord], deleted: Collection[
             continue
         _deliver(
             deriver_id,
-            _stopped_notice(f"session {session.id} ({session.title}), which you derived,", "it", verb="deleted"),
+            _stopped_notice(
+                f"session {session.id} ({session.title}), which you derived,", "it", verb="deleted",
+                deriving_call_id=session.extra.deriving_call_id,
+            ),
             data={"session_id": session.id},
         )
 
 
-def _stopped_notice(subject: str, unreported: str, *, verb: str = "stopped") -> SessionMessage:
+def _stopped_notice(
+    subject: str, unreported: str, *, verb: str = "stopped", deriving_call_id: str | None
+) -> SessionMessage:
+    """派生 Session 被用户停止或删除的通知；所指调用是派生它的那次调用：撤回那一回合时通知随之作废。"""
     content = (
         f"The user {verb} {subject} before it finished. It will not report {unreported}; "
         "do not restart that work unless the user asks."
@@ -105,6 +112,7 @@ def _stopped_notice(subject: str, unreported: str, *, verb: str = "stopped") -> 
         NoticeBody(
             content=content,
             notice_kind="derived_session_stopped",
+            tool_call_ids=[] if deriving_call_id is None else [deriving_call_id],
         )
     )
 

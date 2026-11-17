@@ -111,7 +111,7 @@ function FileChangeSection({ change, single }: { change: FileChange; single: boo
 
 /**
  * `file-changes`（`write_file` / `edit_file` / `apply_patch`）：元信息是 `+a −b`
- * 或文件数，展开体逐文件给 diff。回合结束后同一批改动还会按文件聚合进「本轮改动」卡，这里是过程视角。
+ * 或文件数，展开体逐文件给 diff。回合落定后同一批改动还会按文件聚合进产出区的改动卡，这里是过程视角。
  */
 export const fileChangesView: CallView = (data) => {
   const changes = readFileChanges(data.changes);

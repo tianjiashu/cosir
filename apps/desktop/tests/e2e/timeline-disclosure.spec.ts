@@ -68,21 +68,23 @@ for (const [status, reason] of [["completed", "stop"], ["completed", "length"], 
   await expect(page.locator('[data-thinking-active="true"]')).toHaveCount(0);
 });
 
-test("A5/A10 running shimmer survives hidden process, is static for reduced motion and suspended", async ({ page, request }) => {
+test("A5/A10 running activity survives hidden process, is static for reduced motion and suspended", async ({ page, request }) => {
   const running = toolCallPart("read", "read_file", { status: "running" });
   await seedState(request, 42, state([running]));
   await page.goto("/sessions/42");
-  await expect(page.locator('[data-slot="current-activity"] [data-thinking-active="true"]')).toBeVisible();
-  await expect(page.locator('[data-slot="turn"] .animate-spin')).toHaveCount(0);
-  await page.locator('[data-slot="process-head"]').click();
   const feedback = page.locator('[data-slot="current-activity"]');
+  const dots = feedback.locator('[data-slot="activity-dots"]');
+  await expect(dots).toHaveAttribute("data-active", "true");
+  await expect(page.locator('[data-slot="turn"] .animate-spin')).toHaveCount(0);
+  // 运行中收起过程：正在工作的那一段仍然可见。
+  await page.locator('[data-slot="process-head"]').click();
   await expect(feedback).toContainText("读取文件");
   await page.emulateMedia({ reducedMotion: "reduce" });
-  expect(await feedback.locator('span').evaluate(el => getComputedStyle(el).animationName)).toBe("none");
+  expect(await dots.locator("span").first().evaluate(el => getComputedStyle(el).animationName)).toBe("none");
   const suspended = state([call("read")]); suspended.activity!.status = "suspended";
   await seedState(request, 42, suspended);
   await expect(feedback).toContainText("等待继续");
-  await expect(feedback.locator('[data-thinking-active="true"]')).toHaveCount(0);
+  await expect(dots).toHaveAttribute("data-active", "false");
 });
 
 test("A10 automatic folding hands focus from the hidden process to its heading", async ({ page, request }) => {

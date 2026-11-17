@@ -8,7 +8,7 @@
 - **结算投影（权威）**：``settle_observations`` 写入 ``tool 消息`` 后再发一次，并用同一个事件的
   字段写 metadata。未经执行器的观察（被拦截的批次、被驳回的调用）只有这一次。
 
-消费方按自迁移幂等吸收第二次（含已实时流出终端输出的 part），见对应重放用例。
+第二次在 Transport 发布出口按空操作丢弃（``ConversationStateMutation.changes``），不会以等值变更再推给前端。
 
 **终态不得早于进程收尾**：process 工具的取消在检出瞬间只产出观察与日志；``ToolHandlerRunner``
 在强杀与输出排空全部收尾后才返回，终态因此只在那之后发出，前端看到的 ``cancelled`` 表达的是

@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session as DbSession
 from app.core.context.context_entry import ContextEntry
 from app.core.context.context_store import ContextStore
 from app.core.context.tool_call_closure import plan_tool_call_closures
+from app.core.workflow.message_queue.message_bodies.notice import NoticeBody
 from app.models.enums.run_status import ACTIVE_RUN_STATUSES
 from app.models.errors.session_fork_errors import SessionForkConflictError
 from app.models.message_metadata import TURN_INPUT_KINDS, ToolMessageMetadata, UserMessageMetadata
@@ -36,6 +37,30 @@ _NOT_INHERITED_CONTENT = (
     "The result of this tool call was not inherited in this branch. No tool output is available."
 )
 _NOT_INHERITED_HINT = "此分叉未继承调用结果"
+# 分支的身份声明（``ForkSource.identity_notice``）。Agent 分叉的交接通知：继承的历史是第一人称的，分叉自己
+# 分不清哪些事归它——曾把来源没做完的请求接过去，并自认是父会话；所以任务说明前先写清身份与会话归属。
+_AGENT_FORK_HANDOVER = (
+    "You are session {fork_id}, a fork of session {source_id}. The conversation above was copied from "
+    "that session as background: requests in it belong to that session, even where they read as your "
+    "own work, so do not pick them up. Your only job is the assignment in the next message. Each "
+    "time you finish working on it, your final reply is reported to session {source_id} "
+    "automatically, so do not send it with send_message. If the user later talks to you here, "
+    "follow the user; what you do for the user is not reported."
+)
+# 分叉沿用来源的系统提示词（接缓存），可写根只能在交接通知里告知；来源自己也收窄过时以这一条为准。
+_WRITABLE_ROOT = (
+    " Your writable root is {writable_root} (relative to the workspace root): file-writing tools "
+    "are refused outside it and commands start there by default. This replaces any writable "
+    "area stated earlier. Do not change files outside it by other means; report what needs to "
+    "change there instead."
+)
+# 手动分叉复制到了一条交接通知（「你是会话 B，结果汇报给 A」）时补的更正：交接通知说的是来源自己的身份与
+# 汇报关系，换了 Session 就不成立，而上下文只追加、不改写历史行。
+_MANUAL_FORK_IDENTITY = (
+    "You are session {target_id}, a copy the user made of session {source_id}. An earlier notice "
+    "above names a different session as you and says your replies are reported to another session; "
+    "that no longer applies. You work for the user here, and nothing you do is reported automatically."
+)
 
 
 @dataclass(frozen=True)
@@ -51,11 +76,14 @@ class ForkSource:
     """一个来源 Session 在分叉写事务里读到的全部行与 Run；切点、初始配置与复制都按它算。
 
     ``rows`` 是全部 context 行（含不进上下文、不投影的）：切点与复制都要看到撤回移出与隐藏的行。
+    ``answered_in_queue`` 是来源外部队列里还没并入的消息送达了结局的调用（``answered_calls``）：结局
+    还在队列里的调用同样不在复制范围内。
     """
 
     session: SessionRecord
     rows: list[SessionContextRecord]
     runs: list[RunRecord]
+    answered_in_queue: frozenset[str] = frozenset()
 
     def cut_after_turn(self, turn: int) -> ForkCut:
         """手动分叉：切在所选回复这一回合的结尾，配置取这一回合所在的 Run。
@@ -207,17 +235,18 @@ class ForkSource:
         return SessionForkLaunch.from_run(next(r for r in self.runs if r.id == run_id))
 
     def _unresolved_calls(self, before_sequence: int) -> frozenset[str]:
-        """占位在切点前、结论不在切点前的调用。
+        """占位在切点前、结局不在复制范围内的调用。
 
-        占位正文只是「已提交」「等待决定」：还在等的占位没有结论，已结算的占位结论写在后面的结果消息
-        里（占位只更新展示状态）。这两种原样继承，分支里的卡片永远转圈，模型也以为工作还在进行。
+        占位正文只是「已提交」「等待决定」：还在等的占位没有结局，已结算的占位结局是一条按调用寻址的
+        消息（后台结论、决定，以及原地结算时的作废 / 重启通知，见 ``NoticeBody.tool_call_ids``）。结局
+        在切点之后的行里、或还在来源队列里没并入，分支都收不到；原样继承的话，分支里的卡片永远转圈，
+        模型也以为工作还在进行（原地结算的占位卡片已是「已取消」，模型却仍读到「等待决定」）。
         """
-        answered_later = {
-            r.metadata.tool_call_id
+        answered_outside = set(self.answered_in_queue) | {
+            call
             for r in self.rows
-            if r.sequence >= before_sequence
-            and isinstance(r.metadata, UserMessageMetadata)
-            and r.metadata.tool_call_id is not None
+            if r.sequence >= before_sequence and isinstance(r.metadata, UserMessageMetadata)
+            for call in r.metadata.answered_calls
         }
         waiting = {
             r.message["tool_call_id"]
@@ -227,7 +256,35 @@ class ForkSource:
             and isinstance(r.metadata, ToolMessageMetadata)
             and r.metadata.status in {"pending", "running"}
         }
-        return frozenset(answered_later | waiting)
+        return frozenset(answered_outside | waiting)
+
+    def identity_notice(self, cut: ForkCut, target: SessionRecord) -> NoticeBody | None:
+        """分支的身份声明，由调用方在建分支的同一写事务里入队；没有要声明的为 ``None``。
+
+        「分支是谁、和来源什么关系」是分叉自己的事实（会话类型、派生调用、可写根都在建分支时定下），所以
+        声明归这里，不归发起分叉的工具；与分支同一事务写入，分支存在就一定带着它，不会留下不知道自己是谁的
+        分支。Agent 分叉：交接通知（目标收窄了可写根时附上范围）；手动分叉：复制到了交接通知才补一条更正，
+        否则继承来的对话本来就是用户的，不必声明。
+        """
+        if target.session_type == SessionType.AGENT_FORK:
+            content = _AGENT_FORK_HANDOVER.format(fork_id=target.id, source_id=self.session.id)
+            if target.extra.writable_root is not None:
+                content += _WRITABLE_ROOT.format(writable_root=target.extra.writable_root)
+            return NoticeBody(content=content, notice_kind="fork_handover")
+        if target.session_type != SessionType.USER_FORK:
+            return None
+        copied_handover = any(
+            notice.notice_kind == "fork_handover"
+            for r in self.rows
+            if r.retained and r.sequence < cut.before_sequence and isinstance(r.metadata, UserMessageMetadata)
+            for notice in r.metadata.notices
+        )
+        if not copied_handover:
+            return None
+        return NoticeBody(
+            content=_MANUAL_FORK_IDENTITY.format(target_id=target.id, source_id=self.session.id),
+            notice_kind="fork_handover",
+        )
 
 
 def _visible_in_manual_fork(row: SessionContextRecord) -> bool:

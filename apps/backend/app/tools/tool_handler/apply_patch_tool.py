@@ -20,7 +20,7 @@ from app.core.workflow.cancel.run_cancellation_registry import cancellation_regi
 from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
-from app.tools.guard.syntax_check import SyntaxDiagnostic, check_source_syntax
+from app.tools.tool_handler.file_edit.syntax_check import SyntaxDiagnostic, check_source_syntax
 from app.tools.tool_handler.file_edit.patch_apply import (
     PatchApplyError,
     apply_all_with_diff,

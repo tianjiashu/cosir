@@ -1,9 +1,8 @@
-"""``sessions`` 表的纯 CRUD 数据访问层。
-
-单一职责：只提供 ``sessions`` 单表的增删改查与 model↔record 转换。
+"""以 ``sessions`` 为主体的 CRUD 数据访问层。
 
 职责边界：
-- 负责：session 单表读写、``SessionModel``↔``SessionRecord`` 转换。
+- 负责：session 单表读写、``SessionModel``↔``SessionRecord`` 转换，以及按 Session 关联读取的事实
+  （当前 Run 的状态、「等你操作」的调用数，见 ``get_status``）。
 - 不负责：跨表级联（如删除 session 时清理 turn / run / trace，由 ``service/session/`` 编排）、
   业务规则校验、事务跨多表编排。
 
@@ -13,22 +12,36 @@
 
 from typing import Any, cast
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session as DbSession
 
 from app.models import SessionRecord
 from app.models.session_extra import SessionExtra, SessionFork
 from app.models.session_kind import FORK_SESSION_TYPES, USER_FACING_SESSION_TYPES, SessionType
+from app.models.session_status import SessionStatus
+from app.storage.crud.session_context_crud import SessionContextCrud
+from app.storage.model.run_model import RunModel
+from app.storage.model.session_context_model import SessionContextModel
 from app.storage.model.session_model import SessionModel
 from app.storage.store_engines import main_db_factory
 from app.utils.datetime_utils import to_text, utc_now
 
 
 class SessionCrud:
-    """``sessions`` 表的纯 CRUD。
+    """``sessions`` 表的 CRUD。
 
-    仅负责单表读写，不承担跨表编排与业务规则；所有方法通过共享的主库 db 工厂访问数据库。
+    不承担跨表编排与业务规则；所有方法通过共享的主库 db 工厂访问数据库。
     """
+
+    _CURRENT_RUN_STATUS = select(SessionModel.id, RunModel.status).outerjoin(
+        RunModel, SessionModel.current_run_id == RunModel.id
+    )
+    # 部分索引只收录 pending 行：整表对账只读当下在等的那几行。
+    _AWAITING_COUNTS = (
+        select(SessionContextModel.session_id, func.count())
+        .where(SessionContextCrud.awaiting_user())
+        .group_by(SessionContextModel.session_id)
+    )
 
     def __init__(self) -> None:
         """绑定主库共享 db 工厂。
@@ -307,6 +320,33 @@ class SessionCrud:
             raise KeyError(session_id)
         return SessionRecord.from_model(row)
 
+    def get_status(self, session_id: int) -> SessionStatus:
+        """单个 Session 的状态；两项在同一个读事务里读，避免指针、状态与等待数来自不同读取时刻。
+
+        异常:
+            KeyError: Session 不存在。
+        """
+        with self._db_factory() as db:
+            row = db.execute(
+                self._CURRENT_RUN_STATUS.where(SessionModel.id == session_id)
+            ).one_or_none()
+            if row is None:
+                raise KeyError(session_id)
+            awaiting = db.execute(
+                self._AWAITING_COUNTS.where(SessionContextModel.session_id == session_id)
+            ).one_or_none()
+        return SessionStatus(row.status, awaiting[1] if awaiting else 0)
+
+    def list_statuses(self) -> dict[int, SessionStatus]:
+        """全部 Session（含委派子会话）的状态，供状态推送的整表帧与周期对账；同一个读事务。"""
+        with self._db_factory() as db:
+            executions = db.execute(self._CURRENT_RUN_STATUS).tuples().all()
+            awaiting = dict(db.execute(self._AWAITING_COUNTS).tuples().all())
+        return {
+            session_id: SessionStatus(status, awaiting.get(session_id, 0))
+            for session_id, status in executions
+        }
+
     def set_current_run_id(
             self,
             session_id: int,
@@ -422,8 +462,6 @@ class SessionCrud:
             self, status: str, db: DbSession | None = None
     ) -> list[int]:
         """返回当前 Run 处于 ``status`` 的 session id；启动时找出挂起中、需要 actor 等唤醒的 Session。"""
-        from app.storage.model.run_model import RunModel
-
         stmt = (
             select(SessionModel.id)
             .join(RunModel, RunModel.id == SessionModel.current_run_id)

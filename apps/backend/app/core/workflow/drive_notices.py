@@ -28,6 +28,9 @@ _OPEN_ITEMS_PREFIX = (
     "Open items notice: the following are still open. None of them needs action from you right "
     "now; handle what just arrived and do not lose track of them."
 )
+_OPEN_ITEMS_CLEARED = (
+    "Open items notice: none of the items listed earlier are open anymore; do not wait for them."
+)
 _USER_STOPPED = (
     "The user stopped your previous turn before it finished. Background work you started keeps "
     "running and its results will still arrive."
@@ -95,7 +98,9 @@ def _open_items(rc: RuntimeContext, context: RuntimeMessageContextManager) -> No
     只有标签可比：同名的再来一次不会重新提醒，可接受。
 
     基准与准入通知同一做法：上下文里最近一条本类通知出自本 Run 且清单相同就不说；出自更早的 Run
-    或清单变了就说，防止模型在长对话里遗忘。清单为空时不说——每件事了结时各有自己的消息。
+    或清单变了就说，防止模型在长对话里遗忘。清单变空时说一次、之后不再说：多数事项了结时各有自己的
+    消息，但分叉复制来的历史里列着的事项在分支里根本不存在、永远等不到那条消息，不撤回旧清单，模型
+    会一直以为它们还开着。
     """
     session_id = rc.session.id
     effects = incoming_decision_effects(rc.mailbox.ordered())
@@ -111,9 +116,11 @@ def _open_items(rc: RuntimeContext, context: RuntimeMessageContextManager) -> No
         + [f"command:{label}" for label in commands]
         + [f"session:{title}" for title in derived]
     )
-    if not items:
-        return None
     latest = context.latest_notice("open_items")
+    if not items:
+        if latest is None or not latest[1].open_items:
+            return None
+        return NoticeBody(content=_OPEN_ITEMS_CLEARED, notice_kind="open_items", open_items=[])
     if latest is not None and latest[0] == rc.run.id and latest[1].open_items == items:
         return None
     lines = [_OPEN_ITEMS_PREFIX]

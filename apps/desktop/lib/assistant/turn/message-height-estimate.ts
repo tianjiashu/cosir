@@ -145,7 +145,7 @@ function assistantHeight(message: ThreadMessage, sessionId?: number): number {
   const blocks: number[] = [];
   if (hasHeading) blocks.push(TURN_HEADING_HEIGHT);
   for (const block of layout.blocks) {
-    if (!visibleTurnBlock(block, open, layout.current?.groupKey)) continue;
+    if (!visibleTurnBlock(block, open)) continue;
     if (block.kind === "narration") {
       let height = proseHeights.get(block.index);
       if (height === undefined) {
@@ -157,7 +157,7 @@ function assistantHeight(message: ThreadMessage, sessionId?: number): number {
       blocks.push(agentRowHeight(block.part.id, block.part.text, sessionId));
     } else if (block.kind === "standalone") {
       blocks.push(block.part.awaitingUser ? awaitingHeight(block.part, sessionId) : PROCESS_ITEM);
-    } else if (block.calls.length || block.key === layout.current?.groupKey) {
+    } else {
       const groupOpen = sessionId !== undefined && resolveDisclosure(sessionId, activityKey(message.id, block.key), false);
       blocks.push(PROCESS_HEADER + (groupOpen ? block.calls.length : 0) * PROCESS_ITEM);
     }

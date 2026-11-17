@@ -10,21 +10,8 @@ import pytest
 
 from app.api.session_feed_api import session_feed_stream
 from app.models.session_kind import SessionType
-from app.service.session_feed.session_feed import CatalogChange, SessionFeed
-from app.storage.queries.session_status_queries import SessionStatus
-
-
-class _Reads:
-    def __init__(self, statuses: dict[int, SessionStatus]) -> None:
-        self.statuses = statuses
-        self.reads = 0
-
-    def status(self, session_id: int) -> SessionStatus:
-        self.reads += 1
-        return self.statuses[session_id]
-
-    def list_statuses(self) -> dict[int, SessionStatus]:
-        return dict(self.statuses)
+from app.models.session_status import SessionStatus
+from app.service.session.session_feed import CatalogChange, SessionFeed
 
 
 class _Session:
@@ -34,41 +21,50 @@ class _Session:
 
 
 class _Sessions:
-    def __init__(self, sessions: dict[int, _Session]) -> None:
+    """``SessionCrud`` 的替身：状态读取与记录读取分开计数。"""
+
+    def __init__(self, statuses: dict[int, SessionStatus], sessions: dict[int, _Session]) -> None:
+        self.statuses = statuses
         self.sessions = sessions
-        self.reads = 0
+        self.status_reads = 0
+        self.record_reads = 0
+
+    def get_status(self, session_id: int) -> SessionStatus:
+        self.status_reads += 1
+        return self.statuses[session_id]
+
+    def list_statuses(self) -> dict[int, SessionStatus]:
+        return dict(self.statuses)
 
     def get(self, session_id: int) -> _Session:
-        self.reads += 1
+        self.record_reads += 1
         return self.sessions[session_id]
 
 
 def _feed(
     statuses: dict[int, SessionStatus], sessions: dict[int, _Session] | None = None
-) -> tuple[SessionFeed, _Reads, _Sessions]:
+) -> tuple[SessionFeed, _Sessions]:
     feed = SessionFeed()
-    reads = _Reads(statuses)
-    session_reads = _Sessions(sessions or {})
-    feed._session_reads = reads  # type: ignore[assignment]
-    feed._session_crud = session_reads  # type: ignore[assignment]
-    return feed, reads, session_reads
+    crud = _Sessions(statuses, sessions or {})
+    feed._session_crud = crud  # type: ignore[assignment]
+    return feed, crud
 
 
 def test_publish_without_subscribers_does_not_read() -> None:
-    feed, reads, sessions = _feed({1: SessionStatus("running", 0)}, {1: _Session(7, SessionType.USER)})
+    feed, sessions = _feed({1: SessionStatus("running", 0)}, {1: _Session(7, SessionType.USER)})
     feed.publish_status(1)
     feed.publish_session_catalog(1)
-    assert reads.reads == 0
-    assert sessions.reads == 0
+    assert sessions.status_reads == 0
+    assert sessions.record_reads == 0
 
 
 @pytest.mark.asyncio
 async def test_subscribers_get_the_latest_status_per_session() -> None:
-    feed, reads, _ = _feed({1: SessionStatus("running", 0), 2: SessionStatus(None, 0)})
+    feed, sessions = _feed({1: SessionStatus("running", 0), 2: SessionStatus(None, 0)})
     subscription = feed.subscribe(asyncio.get_running_loop())
 
     feed.publish_status(1)
-    reads.statuses[1] = SessionStatus("completed", 1)
+    sessions.statuses[1] = SessionStatus("completed", 1)
     feed.publish_status(1)
     feed.publish_status(2)
     feed.publish_status(99)  # 已删除的 Session 不发
@@ -88,7 +84,7 @@ async def test_subscribers_get_the_latest_status_per_session() -> None:
 
 @pytest.mark.asyncio
 async def test_catalog_changes_only_cover_sidebar_sessions_and_merge_per_workspace() -> None:
-    feed, _, _ = _feed(
+    feed, _ = _feed(
         {},
         {
             1: _Session(7, SessionType.USER),
@@ -118,7 +114,7 @@ async def test_catalog_changes_only_cover_sidebar_sessions_and_merge_per_workspa
 
 @pytest.mark.asyncio
 async def test_stream_starts_with_the_full_table_then_sends_changes() -> None:
-    feed, reads, _ = _feed({1: SessionStatus("running", 0), 2: SessionStatus("completed", 1)})
+    feed, sessions = _feed({1: SessionStatus("running", 0), 2: SessionStatus("completed", 1)})
     response = await session_feed_stream(feed)
     body = response.body_iterator
 
@@ -131,7 +127,7 @@ async def test_stream_starts_with_the_full_table_then_sends_changes() -> None:
         },
     }
 
-    reads.statuses[1] = SessionStatus("suspended", 1)
+    sessions.statuses[1] = SessionStatus("suspended", 1)
     feed.publish_status(1)
     second = json.loads(await anext(body))
     assert second == {

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from app.service.workspace_files.file_content import inspect_file
+from app.service.workspace_files.content.file_content import inspect_file
 
 
 def _bmp(width: int, height: int) -> bytes:

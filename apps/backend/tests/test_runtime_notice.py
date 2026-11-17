@@ -442,3 +442,15 @@ async def test_prepare_input_writes_notices_from_both_sources_as_one_message() -
     assert "already acked" not in content
     assert written["db"] is not None
     assert rc.mailbox.isEmpty()
+
+
+def test_open_items_say_once_when_the_list_clears(monkeypatch, open_sources) -> None:
+    """上次告知的清单非空、这次什么都没了：说一次「都不再开着」，之后清单持续为空不再说。
+
+    分叉复制来的历史里列着的事项在分支里根本不存在，永远等不到各自了结的那条消息；不撤回旧清单，
+    模型会一直以为它们还开着。
+    """
+    [notice] = _open(monkeypatch, _context(_told(6, "decision:call-ask")))
+    assert notice.open_items == []
+    assert "none of the items listed earlier are open anymore" in notice.content
+    assert _open(monkeypatch, _context(_told(7))) == []

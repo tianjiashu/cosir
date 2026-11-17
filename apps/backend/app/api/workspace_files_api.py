@@ -29,7 +29,7 @@ from app.service.workspace_files import (
     WorkspaceFilesService,
     WorkspaceFileWatcher,
 )
-from app.service.workspace_files.image_preview import ImagePreview
+from app.service.workspace_files.content.image_preview import ImagePreview
 
 Files = Annotated[WorkspaceFilesService, Depends(get_workspace_files_service)]
 Watcher = Annotated[WorkspaceFileWatcher, Depends(get_workspace_file_watcher)]

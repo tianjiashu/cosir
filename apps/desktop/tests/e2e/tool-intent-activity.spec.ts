@@ -18,7 +18,7 @@ for (const colorScheme of ["light", "dark"] as const) test(`I6–I9 ${colorSchem
   const initial = model([], "reasoning"); initial.messages.pop();
   await seed(request, initial); await page.goto("/sessions/42");
   const feedback = page.locator('[data-slot="current-activity"]');
-  await expect(feedback).toHaveCount(1); await expect(feedback).toHaveText("正在思考");
+  await expect(feedback).toHaveCount(1); await expect(feedback).toHaveText("思考中");
   const prose = { type: "text" as const, text: "先检查文件配置。" };
   await seed(request, model([prose], "reasoning"));
   await expect(feedback).toHaveCount(1);
@@ -26,13 +26,15 @@ for (const colorScheme of ["light", "dark"] as const) test(`I6–I9 ${colorSchem
   await text.evaluate(el => Object.assign(window, { intentProse: el }));
   const call = toolCallPart("read", "read_file", { status: "running", intent: "核对身份验证配置", args: { path: "config.ts" } });
   await seed(request, model([prose, call]));
+  // 思考与执行是同一段工作：同一行说当前状态，只有这一处。
   await expect(feedback).toHaveText(call.intent!);
+  await expect(feedback).toHaveCount(1);
   await expect(page.locator('[data-tool-call-id="read"]')).toHaveCount(0);
   const head = page.locator('[data-slot="activity-head"]');
   await head.click();
   await expect(page.locator('[data-tool-call-id="read"]')).toBeVisible();
   await seed(request, model([prose, { ...call, status: "completed" }], "reasoning"));
-  await expect(feedback).toHaveText("正在思考");
+  await expect(feedback).toHaveText("思考中");
   await expect(head).toHaveAttribute("aria-expanded", "true");
   await head.click();
   await expect(page.locator('[data-tool-call-id="read"]')).toBeHidden();
@@ -45,11 +47,11 @@ for (const colorScheme of ["light", "dark"] as const) test(`I6–I9 ${colorSchem
   await seed(request, model([prose, { ...call, status: "completed" }, more, long]));
   await page.setViewportSize({ width: 760, height: 720 });
   await expect(feedback).toHaveText(long.intent!);
-  expect(await feedback.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
-  const footer = page.locator('[data-slot="turn"] [data-slot="current-activity"]');
-  expect(await footer.evaluate(el => el.closest('[data-slot="turn"]') !== null)).toBe(true);
+  // 段这一行内省略，不撑出窄栏。
+  expect(await feedback.evaluate(el => { const row = el.closest('[data-slot="activity-head"]')!; return row.scrollWidth <= row.clientWidth + 1; })).toBe(true);
+  expect(await feedback.locator('[data-slot="current-activity-label"]').evaluate(el => getComputedStyle(el).textOverflow)).toBe("ellipsis");
   await page.emulateMedia({ reducedMotion: "reduce" });
-  expect(await feedback.locator('[data-thinking-active]').evaluate(el => getComputedStyle(el).animationName)).toBe("none");
+  expect(await feedback.locator('[data-slot="activity-dots"] > span').first().evaluate(el => getComputedStyle(el).animationName)).toBe("none");
   await page.screenshot({ path: test.info().outputPath(`intent-${colorScheme}-narrow.png`), animations: "disabled" });
 });
 

@@ -14,7 +14,7 @@ from collections import Counter
 from pathlib import Path
 
 from app.config.logging.logger import log
-from app.core.user_input.capsules import (
+from app.core.capsules.capsule_grammar import (
     Capsule,
     CapsuleSegment,
     CapsuleSegmentLike,

@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.orm import sessionmaker
 
-import app.service.user_input.user_input_service as user_input_module
+import app.assistant_transport.service.user_input_service as user_input_module
 from app.core.context.context_store import ContextStore
 from app.core.events import RunStatusChangedEvent
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
@@ -29,7 +29,7 @@ from app.service.conversation.session_context_service import (
     SessionContextService,
 )
 from app.service.recover_service import RecoverService
-from app.service.user_input.user_input_service import UserInputService
+from app.assistant_transport.service.user_input_service import UserInputService
 from app.storage.crud.run_crud import RunCrud
 from app.storage.crud.session_context_crud import SessionContextCrud
 from app.storage.crud.session_crud import SessionCrud

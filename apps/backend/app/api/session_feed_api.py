@@ -2,7 +2,7 @@
 
 一条连接覆盖全部 Session 与工作区：侧栏同时显示多个工作区，按工作区分开会让连接数随之增长（本机
 HTTP/1.1 每个主机只有 6 条连接）。每个 Session 的状态值是 ``{executionStatus, awaitingUserCalls}``
-（执行状态与等你操作的调用数，见 ``SessionStatusQueries``）。帧：
+（执行状态与等你操作的调用数，见 ``app.models.session_status``）。帧：
 
 - ``full``：状态整表 ``{session_id: 值}``，连接建立时与每隔 ``_RECONCILE_SECONDS`` 各发一次，
   覆盖订阅与整表读取交错或投递失败漏掉的变化；
@@ -26,7 +26,7 @@ from fastapi.responses import StreamingResponse
 
 from app.app import app
 from app.service.depends import get_session_feed
-from app.service.session_feed.session_feed import CatalogChange, SessionFeed, SessionStatuses
+from app.service.session.session_feed import CatalogChange, SessionFeed, SessionStatuses
 
 _HEARTBEAT_SECONDS = 2.0
 _RECONCILE_SECONDS = 15.0

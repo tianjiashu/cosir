@@ -1,6 +1,6 @@
 """Session 推送的进程内通道：侧栏、命令面板、页头与工作台标签共用一条连接，送两类事实。
 
-- **状态**：Session 状态是两项正交的事实（见 ``SessionStatusQueries``）：执行状态的事实源是
+- **状态**：Session 状态是两项正交的事实（见 ``app.models.session_status``）：执行状态的事实源是
   ``RunModel.status``（经 Session 当前 Run 指针读取），等你操作的事实源是 HITL 等待占位行。
   在 Run 开始、状态变化或工具调用状态迁移时现读并转发。
 - **目录失效**：侧栏目录（工作区列表、各工作区的侧栏 Session）的写入方在提交后通知「这块目录变了」，
@@ -21,9 +21,8 @@ from threading import Lock
 
 from app.config.logging.logger import log
 from app.models.session_kind import USER_FACING_SESSION_TYPES, SessionType
+from app.models.session_status import SessionStatus
 from app.storage.crud.session_crud import SessionCrud
-from app.storage.queries.session_status_queries import SessionStatus, SessionStatusQueries
-from app.storage.store_engines import main_db_factory
 
 SessionStatuses = dict[int, SessionStatus]
 
@@ -87,14 +86,7 @@ class SessionFeed:
     def __init__(self) -> None:
         self._lock = Lock()
         self._subscriptions: set[SessionFeedSubscription] = set()
-        self._session_reads: SessionStatusQueries | None = None
         self._session_crud: SessionCrud | None = None
-
-    @property
-    def _reads(self) -> SessionStatusQueries:
-        if self._session_reads is None:
-            self._session_reads = SessionStatusQueries(main_db_factory())
-        return self._session_reads
 
     @property
     def _sessions(self) -> SessionCrud:
@@ -114,7 +106,7 @@ class SessionFeed:
 
     def statuses(self) -> SessionStatuses:
         """当前全部 Session 的状态（整表帧与周期对账）。"""
-        return self._reads.list_statuses()
+        return self._sessions.list_statuses()
 
     def publish_status(self, session_id: int) -> None:
         """Session 状态可能变化后调用（Run 开始或迁移、工具调用状态迁移、撤回回合）：现读该 Session 的
@@ -126,7 +118,7 @@ class SessionFeed:
         if not subscriptions:
             return
         try:
-            status = self._reads.status(session_id)
+            status = self._sessions.get_status(session_id)
         except KeyError:
             return
         self._deliver(subscriptions, lambda subscription: subscription.offer_statuses({session_id: status}))

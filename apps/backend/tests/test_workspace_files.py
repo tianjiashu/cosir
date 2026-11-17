@@ -13,11 +13,15 @@ from fastapi.testclient import TestClient
 
 from app.app import app
 from app.service.depends import get_workspace_crud, get_workspace_files_service
-from app.service.workspace_files.directory_index import DirectoryIndex
-from app.service.workspace_files.file_content import FULL_TEXT_BYTES, TEXT_CHUNK_BYTES, read_text
+from app.service.workspace_files.content.file_content import (
+    FULL_TEXT_BYTES,
+    TEXT_CHUNK_BYTES,
+    read_text,
+)
+from app.service.workspace_files.directory.directory_index import DirectoryIndex
 from app.service.workspace_files.file_models import FileConflictError, FileEntry
 from app.service.workspace_files.file_watch import WorkspaceFileWatcher
-from app.service.workspace_files.text_search import search_text
+from app.service.workspace_files.search.text_search import search_text
 
 
 @pytest.fixture
@@ -162,7 +166,7 @@ def test_search_cancelled_and_hidden_files(files, workspace_root):
 
 
 def test_spilled_directory_index_is_sorted_and_cleaned(monkeypatch):
-    monkeypatch.setattr("app.service.workspace_files.directory_index.MEMORY_ENTRIES", 10)
+    monkeypatch.setattr("app.service.workspace_files.directory.directory_index.MEMORY_ENTRIES", 10)
     index = DirectoryIndex(FileEntry(str(i), f"file{i}.py", "file") for i in range(300, -1, -1))
     assert index.total == 301
     assert [e.name for e in index.page(9, 3)] == ["file9.py", "file10.py", "file11.py"]
@@ -382,7 +386,7 @@ async def test_watch_routes_events_to_matching_subscriptions(
 
 
 def test_opened_handle_rejects_link_swapped_after_resolution(files, workspace_root, monkeypatch):
-    from app.service.workspace_files import file_access
+    from app.service.workspace_files.content import file_handle
 
     (workspace_root / "inside.txt").write_text("inside")
     outside = workspace_root.parent / f"{workspace_root.name}-outside.txt"
@@ -396,7 +400,7 @@ def test_opened_handle_rejects_link_swapped_after_resolution(files, workspace_ro
         link.symlink_to(outside)
         return original_open(path, flags)
 
-    monkeypatch.setattr(file_access.os, "open", swap_then_open)
+    monkeypatch.setattr(file_handle.os, "open", swap_then_open)
     try:
         with pytest.raises(PermissionError):
             files.info(1, "alias.txt")
@@ -407,7 +411,7 @@ def test_opened_handle_rejects_link_swapped_after_resolution(files, workspace_ro
 def test_resource_range_images_and_changed_version(files, workspace_root, monkeypatch):
     from PIL import Image
 
-    from app.service.workspace_files import image_preview
+    from app.service.workspace_files.content import image_preview
 
     pdf = b"%PDF-1.7\n" + b"a" * 100
     (workspace_root / "test.pdf").write_bytes(pdf)
@@ -450,7 +454,10 @@ def test_resource_range_images_and_changed_version(files, workspace_root, monkey
 
 
 def test_search_pages_visit_every_result_with_bounded_windows(files, workspace_root):
-    from app.service.workspace_files.search_paging import file_search_pages, text_search_pages
+    from app.service.workspace_files.search.search_paging import (
+        file_search_pages,
+        text_search_pages,
+    )
 
     for number in range(105):
         (workspace_root / f"file{number}.txt").touch()
@@ -577,7 +584,7 @@ def test_backward_read_from_eof_preserves_all_text(files, workspace_root, encodi
     os.name == "nt", reason="os.open 竞态注入仅对应 POSIX 目录 fd；Windows 用原生目录句柄"
 )
 def test_directory_handle_rejects_swapped_link(files, workspace_root, monkeypatch):
-    from app.service.workspace_files import file_access
+    from app.service.workspace_files.directory import directory_entries as entries_module
 
     target = workspace_root / "inside"
     target.mkdir()
@@ -591,7 +598,7 @@ def test_directory_handle_rejects_swapped_link(files, workspace_root, monkeypatc
             link.symlink_to(workspace_root.parent, target_is_directory=True)
         return original_open(path, flags)
 
-    monkeypatch.setattr(file_access.os, "open", swap_then_open)
+    monkeypatch.setattr(entries_module.os, "open", swap_then_open)
     with pytest.raises(PermissionError):
         files.directory(1, "alias", None, 100)
 
@@ -602,11 +609,11 @@ def test_directory_cancel_releases_scan(files, workspace_root):
     stopped.set()
     with pytest.raises(InterruptedError):
         files.directory(1, "", None, 100, stopped)
-    assert not files._snapshots
+    assert len(files._snapshots) == 0
 
 
 def test_completed_directory_index_survives_request_cancellation(files, workspace_root, monkeypatch):
-    monkeypatch.setattr("app.service.workspace_files.directory_index.MEMORY_ENTRIES", 10)
+    monkeypatch.setattr("app.service.workspace_files.directory.directory_index.MEMORY_ENTRIES", 10)
     for number in range(300):
         (workspace_root / f"item{number}.txt").touch()
     request_cancelled = threading.Event()

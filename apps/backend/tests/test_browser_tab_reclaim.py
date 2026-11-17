@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from app.service import depends as service_depends
-from app.service.browser.tab_reclaim import reclaim_orphan_tabs
+from app.tools.browser_runtime.tab_reclaim import reclaim_orphan_tabs
 from app.tools.host.errors import UNAVAILABLE, HostCallError
 
 
@@ -63,7 +63,9 @@ def test_drops_sessions_the_host_still_holds_but_the_store_no_longer_has(
     assert link.notifications == [("browser.dropSessions", {"session_ids": [2, 5]})]
 
 
-def test_sends_nothing_when_every_held_session_still_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sends_nothing_when_every_held_session_still_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     link, _ = _install(monkeypatch, {"session_ids": [3]}, existing={3})
 
     asyncio.run(reclaim_orphan_tabs())

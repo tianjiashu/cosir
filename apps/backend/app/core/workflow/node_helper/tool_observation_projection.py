@@ -32,8 +32,8 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
     """按观察顺序写 canonical tool 消息并投影终态；所有调用结果都保留，不以呈现方式过滤事实。
 
     这里的终态是持久化之后的权威终态。每个调用（含执行链内部异常收口的观察）已在 ``run_tool_batch``
-    里发过一次实时终态，两次都经 :func:`terminal_event` 由同一份观察构造，值必然相同，消费方按自
-    迁移幂等吸收。tool 消息的 metadata 也取自同一个事件，持久化事实与实时投影因此同源。
+    里发过一次实时终态，两次都经 :func:`terminal_event` 由同一份观察构造，值必然相同，第二次在
+    Transport 发布出口按空操作丢弃。tool 消息的 metadata 也取自同一个事件，持久化事实与实时投影因此同源。
     """
     runtime = _runtime_context()
     for observation in batch.observations:

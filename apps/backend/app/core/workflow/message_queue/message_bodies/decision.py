@@ -43,6 +43,9 @@ class DecisionBody(EnqueuedMessageBody):
     data: dict[str, object] | None = None
     reply: str | None = None
 
+    def answered_calls(self) -> frozenset[str]:
+        return frozenset({self.tool_call_id})
+
     def render(self) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
         if self.reply is not None:
             inner = escape_tag(self.reply, self.TAG)

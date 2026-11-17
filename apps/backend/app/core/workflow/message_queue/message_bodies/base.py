@@ -49,6 +49,14 @@ class EnqueuedMessageBody(BaseModel, ABC):
         """这一条的唤醒范围：类型声明的 ``WAKE``，按内容区分的类型覆盖。"""
         return type(self).WAKE
 
+    def answered_calls(self) -> frozenset[str]:
+        """这一条给哪些调用送达了结局（占位的结局总是一条按调用寻址的消息）；与调用无关的为空。
+
+        分叉（结局不在复制范围内的调用按未继承结算）与撤回（删掉只回答被撤回调用的队列行）只认它，
+        不按消息种类各写一遍：新增一种送达结局的消息，覆盖这一个方法即可。
+        """
+        return frozenset()
+
     @abstractmethod
     def render(self) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
         """变成一条带标签的 user 消息；读法由 ``PROMPT_GUIDE`` 声明，不写进正文。"""
