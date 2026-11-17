@@ -7,8 +7,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import TypedDict
 
-from app.service.workspace_files.file_access import regular_file
-from app.service.workspace_files.file_content import read_text
+from app.service.workspace_files.content.file_content import read_text
+from app.service.workspace_files.content.file_handle import regular_file
 
 
 class TextMatch(TypedDict):

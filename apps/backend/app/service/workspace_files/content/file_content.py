@@ -7,10 +7,10 @@ from pathlib import Path
 
 from charset_normalizer import from_bytes
 
-from app.service.workspace_files.file_access import regular_file
-from app.service.workspace_files.file_classification import classify, system_preview
+from app.service.workspace_files.content.file_classification import classify, system_preview
+from app.service.workspace_files.content.file_handle import regular_file
+from app.service.workspace_files.content.image_preview import image_size
 from app.service.workspace_files.file_models import FileConflictError, FileInfo, TextPage
-from app.service.workspace_files.image_preview import image_size
 
 TEXT_CHUNK_BYTES = 512 * 1024
 FULL_TEXT_BYTES = 2 * 1024 * 1024

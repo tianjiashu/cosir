@@ -7,7 +7,7 @@ from typing import BinaryIO, Literal, cast
 
 from PIL import Image, ImageCms, ImageOps, UnidentifiedImageError
 
-from app.service.workspace_files.file_classification import BROWSER_IMAGE_FORMATS
+from app.service.workspace_files.content.file_classification import BROWSER_IMAGE_FORMATS
 
 MAX_IMAGE_PIXELS = 80_000_000
 THUMBNAIL_PIXELS = 16_000_000

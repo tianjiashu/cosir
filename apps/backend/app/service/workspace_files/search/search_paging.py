@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from dataclasses import asdict
 
 from app.service.workspace_files.file_models import SearchBatch
-from app.service.workspace_files.text_search import TextMatch, TextSearchBatch
+from app.service.workspace_files.search.text_search import TextMatch, TextSearchBatch
 
 
 def file_search_pages(

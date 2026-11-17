@@ -8,8 +8,8 @@ from collections.abc import Iterable
 from dataclasses import asdict
 from pathlib import Path
 
+from app.service.workspace_files.directory.directory_entries import natural_key
 from app.service.workspace_files.file_models import FileEntry
-from app.service.workspace_files.workspace_paths import natural_key
 
 MEMORY_ENTRIES = 10_000
 
