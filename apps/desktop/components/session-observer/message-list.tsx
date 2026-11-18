@@ -20,10 +20,11 @@ import {
   formatTime,
   INITIAL_FILTERS,
   kindLabel,
-  MESSAGE_KINDS,
+  MESSAGE_ROLES,
   messagePreview,
   messageTitle,
   messageTools,
+  toolOptions,
   toolStatus,
   type MessageFilters,
 } from "./message-model";
@@ -50,12 +51,13 @@ export function MessageList({
   const host = useRef<HTMLDivElement>(null);
   const changes = useMemo(() => cacheChanges(messages), [messages]);
   const nodes = useMemo(() => runNodes(runs), [runs]);
+  const toolChoices = useMemo(() => toolOptions(messages), [messages]);
   // 节点解释的是时间上的先后：只在列表按时间顺序完整展示时插入；按更新时间排序、搜索或筛选出的
   // 子集里，行之间已不相邻，插进去会误读。
   const { filters } = nav;
   const timelineOrdered =
     nav.reveal ||
-    (filters.sort !== "updated_at" && !filters.search.trim() && filters.kind === "all" && filters.inclusion === "all");
+    (filters.sort !== "updated_at" && !filters.search.trim() && filters.role === "all" && filters.tool === "all" && filters.inclusion === "all");
   const items = useMemo<TimelineItem[]>(
     () =>
       timelineOrdered
@@ -68,7 +70,7 @@ export function MessageList({
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => host.current,
-    estimateSize: (index) => (items[index].type === "node" ? 36 : 104),
+    estimateSize: (index) => (items[index].type === "node" ? 36 : 60),
     overscan: 6,
     getItemKey: (index) => {
       const item = items[index];
@@ -94,15 +96,31 @@ export function MessageList({
     (row) => row.sequence === nav.selected?.sequence,
   );
   const selectedItemIndex = indexOf(nav.selected?.sequence);
+  const canLocate = !nav.reveal && nav.rows.length < messages.length && nav.selected !== null;
+  // 按单个回合查看时每行回合号都一样，只在跨回合的范围里标出来（系统提示词行不算回合）。
+  const mixedTurns = useMemo(
+    () => new Set(messages.filter((m) => m.sequence > 0).map((m) => m.turn)).size > 1,
+    [messages],
+  );
   return (
     <section
       className="flex h-full min-h-0 flex-col"
       aria-label="会话消息列表"
     >
-      <div className="shrink-0 space-y-3 border-b px-4 py-3">
-        <div className="flex items-center justify-between gap-2">
+      <div className="shrink-0 space-y-2.5 border-b px-4 py-3">
+        <div className="flex h-7 items-center gap-2">
           <h2 className="text-sm font-semibold">消息序列</h2>
-          <span className="text-xs tabular-nums text-muted-foreground">
+          {canLocate && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="ml-auto text-xs"
+              onClick={() => nav.locate(nav.selected!.sequence)}
+            >
+              在全部记录中定位
+            </Button>
+          )}
+          <span className={`text-xs tabular-nums text-muted-foreground ${canLocate ? "" : "ml-auto"}`}>
             {nav.rows.length} / {messages.length} 条
           </span>
         </div>
@@ -133,23 +151,42 @@ export function MessageList({
                 }
               />
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
               <NativeSelect
                 size="sm"
                 wrapperClassName="w-auto"
-                aria-label="按种类筛选"
-                value={nav.filters.kind}
+                aria-label="按角色筛选"
+                value={nav.filters.role}
                 onChange={(event) =>
-                  nav.updateFilters({ kind: event.target.value })
+                  nav.updateFilters({ role: event.target.value })
                 }
               >
-                <option value="all">全部种类</option>
-                {MESSAGE_KINDS.map(([kind, label]) => (
-                  <option key={kind} value={kind}>
-                    {label}
+                <option value="all">全部角色</option>
+                {MESSAGE_ROLES.map((role) => (
+                  <option key={role} value={role}>
+                    {role}
                   </option>
                 ))}
               </NativeSelect>
+              {toolChoices.length > 0 && (
+                <NativeSelect
+                  size="sm"
+                  wrapperClassName="w-auto min-w-24 max-w-48 flex-1"
+                  className={nav.filters.tool === "all" ? undefined : "border-primary text-primary"}
+                  aria-label="按工具筛选"
+                  value={nav.filters.tool}
+                  onChange={(event) =>
+                    nav.updateFilters({ tool: event.target.value })
+                  }
+                >
+                  <option value="all">全部工具</option>
+                  {toolChoices.map(({ name, calls }) => (
+                    <option key={name} value={name}>
+                      {name}（{calls} 次）
+                    </option>
+                  ))}
+                </NativeSelect>
+              )}
               <NativeSelect
                 size="sm"
                 wrapperClassName="w-auto"
@@ -166,9 +203,12 @@ export function MessageList({
                 <option value="included">进了上下文</option>
                 <option value="excluded">没进上下文</option>
               </NativeSelect>
+              {/* 排序是低频操作，与筛选分开靠右，依据和方向并成一组。 */}
+              <div className="ml-auto flex items-center">
               <NativeSelect
                 size="sm"
                 wrapperClassName="w-auto"
+                className="border-transparent shadow-none hover:border-input"
                 aria-label="排序依据"
                 value={nav.filters.sort}
                 onChange={(event) =>
@@ -177,9 +217,9 @@ export function MessageList({
                   })
                 }
               >
-                <option value="sequence">按序号</option>
-                <option value="created_at">按创建时间</option>
-                <option value="updated_at">按更新时间</option>
+                <option value="sequence">序号</option>
+                <option value="created_at">创建时间</option>
+                <option value="updated_at">更新时间</option>
               </NativeSelect>
               <Button
                 variant="ghost"
@@ -191,18 +231,7 @@ export function MessageList({
               >
                 {nav.filters.ascending ? <ArrowUpIcon /> : <ArrowDownIcon />}
               </Button>
-              {!nav.reveal &&
-                nav.rows.length < messages.length &&
-                nav.selected && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="ml-auto text-xs"
-                    onClick={() => nav.locate(nav.selected!.sequence)}
-                  >
-                    在全部记录中定位
-                  </Button>
-                )}
+              </div>
             </div>
           </>
         )}
@@ -306,6 +335,9 @@ export function MessageList({
             const change = changes.get(message.sequence);
             const context = contextState(message);
             const tools = messageTools(message);
+            const failed = message.role === "tool" && message.status === "failed";
+            const timeField = nav.filters.sort === "updated_at" ? "updated_at" : "created_at";
+            // 行上只标例外：正常完成、进了上下文、在对话里显示是常态，不占位置；详情里仍有全部字段。
             return (
               <div
                 key={message.sequence}
@@ -316,7 +348,7 @@ export function MessageList({
                 aria-selected={active}
                 aria-label={`#${message.sequence} ${messageTitle(message)}`}
                 data-testid={`observer-row-${message.sequence}`}
-                className={`absolute left-0 top-0 w-full cursor-pointer border-b border-l px-4 py-3 ${active ? "border-l-primary bg-accent" : "border-l-transparent hover:bg-muted/50"}`}
+                className={`absolute left-0 top-0 w-full cursor-pointer border-b border-l-[3px] px-4 py-2 ${active ? "border-l-primary bg-accent" : `${failed ? "border-l-destructive" : "border-l-transparent"} hover:bg-muted/50`}`}
                 style={{ transform: `translateY(${row.start}px)` }}
                 onClick={() => {
                   nav.select(message.sequence);
@@ -324,91 +356,56 @@ export function MessageList({
                   host.current?.focus({ preventScroll: true });
                 }}
               >
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <span className="font-mono text-muted-foreground">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="shrink-0 font-mono text-muted-foreground">
                     #{message.sequence}
                   </span>
-                  <span className="font-semibold">{kindLabel(message)}</span>
+                  <span className="shrink-0 font-semibold">{kindLabel(message)}</span>
                   {tools.length > 0 && (
                     <span className="min-w-0 truncate font-mono text-muted-foreground">
                       {tools.join("、")}
                     </span>
                   )}
-                  {message.role === "tool" && (
+                  {message.role === "tool" && message.status !== "completed" && (
                     <Badge
                       shape="tag"
                       size="sm"
-                      tone={
-                        message.status === "failed"
-                          ? "destructive"
-                          : message.status === "cancelled"
-                            ? "warning"
-                            : "neutral"
-                      }
+                      className="shrink-0"
+                      tone={failed ? "destructive" : message.status === "cancelled" ? "warning" : "neutral"}
                     >
                       {toolStatus(message.status)}
                     </Badge>
                   )}
-                  <span className="ml-auto flex flex-wrap justify-end gap-1">
-                    {!message.project_to_transport && !message.withdrawn && (
-                      <Badge shape="tag" size="sm" variant="outline" tone="neutral">
-                        对话中不显示
-                      </Badge>
-                    )}
-                    <Badge
-                      shape="tag"
-                      size="sm"
-                      variant="outline"
-                      tone={context.included ? "neutral" : "warning"}
-                    >
+                  {!context.included && (
+                    <Badge shape="tag" size="sm" variant="outline" tone="warning" className="shrink-0">
                       {context.label}
                     </Badge>
+                  )}
+                  {!message.project_to_transport && !message.withdrawn && (
+                    <Badge shape="tag" size="sm" variant="outline" tone="neutral" className="shrink-0">
+                      对话中不显示
+                    </Badge>
+                  )}
+                  <span className="ml-auto flex shrink-0 gap-2 tabular-nums text-muted-foreground">
+                    {cache && (
+                      <span title="相较同一上下文范围内上一条可计算记录；变化不代表故障">
+                        缓存 {cache.rate}%
+                        {change !== undefined && change !== 0
+                          ? ` ${change > 0 ? "↑" : "↓"}${Math.abs(change)}`
+                          : ""}
+                      </span>
+                    )}
+                    {message.inherited && <span>继承</span>}
+                    {mixedTurns && message.sequence > 0 && <span>回合 {message.turn}</span>}
+                    <time dateTime={message[timeField]} title={formatTime(message[timeField], true)}>
+                      {timeField === "updated_at" ? "更新 " : ""}
+                      {formatTime(message[timeField])}
+                    </time>
                   </span>
                 </div>
-                <p className="mt-1.5 line-clamp-2 break-words text-sm leading-5">
+                <p className="mt-1 truncate text-sm leading-5">
                   {messagePreview(message)}
                 </p>
-                <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs tabular-nums text-muted-foreground">
-                  <time
-                    dateTime={
-                      message[
-                        nav.filters.sort === "updated_at"
-                          ? "updated_at"
-                          : "created_at"
-                      ]
-                    }
-                    title={formatTime(
-                      message[
-                        nav.filters.sort === "updated_at"
-                          ? "updated_at"
-                          : "created_at"
-                      ],
-                      true,
-                    )}
-                  >
-                    {nav.filters.sort === "updated_at" ? "更新" : "创建"}{" "}
-                    {formatTime(
-                      message[
-                        nav.filters.sort === "updated_at"
-                          ? "updated_at"
-                          : "created_at"
-                      ],
-                    )}
-                  </time>
-                  <span>
-                    {message.sequence === 0
-                      ? "会话系统提示词"
-                      : `${message.inherited ? "继承 · " : ""}回合 ${message.turn}`}
-                  </span>
-                  {cache && (
-                    <span title="相较同一上下文范围内上一条可计算记录；变化不代表故障">
-                      缓存 {cache.rate}%
-                      {change !== undefined && change !== 0
-                        ? ` · ${change > 0 ? "+" : ""}${change} 个百分点`
-                        : ""}
-                    </span>
-                  )}
-                </div>
               </div>
             );
           })}

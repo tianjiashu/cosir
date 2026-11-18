@@ -2,15 +2,18 @@ import type { ObservedMessage } from "@/lib/api/session-observation";
 
 export type MessageFilters = {
   search: string;
-  /** `messageKind` 的取值，或 "all"。 */
-  kind: string;
+  /** 消息角色（`MESSAGE_ROLES`），或 "all"。 */
+  role: string;
+  /** 工具名（`toolOptions` 给出的），或 "all"；按 `messageTools` 判断一行涉及哪些工具。 */
+  tool: string;
   inclusion: "all" | "included" | "excluded";
   sort: "sequence" | "created_at" | "updated_at";
   ascending: boolean;
 };
 export const INITIAL_FILTERS: MessageFilters = {
   search: "",
-  kind: "all",
+  role: "all",
+  tool: "all",
   inclusion: "all",
   sort: "sequence",
   ascending: true,
@@ -25,11 +28,14 @@ export function parseId(value: string | null): number | undefined {
     : undefined;
 }
 
+/** 筛选按模型请求里的角色分；user 行的细分来源只在行标题上标注，不作筛选项。 */
+export const MESSAGE_ROLES = ["system", "user", "assistant", "tool"] as const;
+
 /**
- * 一行「是什么」：进模型时用户输入、系统通知、Agent 消息都是 user 角色，只按角色分不清来源，
- * 所以 user 行按后端记下的种类分，其余角色各是一种。没有种类的 user 行退回角色。
+ * 行标题里的「是什么」：进模型时用户输入、系统通知、Agent 消息都是 user 角色，只按角色分不清来源，
+ * 所以 user 行按后端记下的种类标注，其余角色各是一种。没有种类的 user 行退回角色。
  */
-export const MESSAGE_KINDS: ReadonlyArray<readonly [string, string]> = [
+const KIND_LABELS = new Map<string, string>([
   ["system", "系统提示词"],
   ["user_input", "用户输入"],
   ["agent_message", "Agent 消息"],
@@ -40,21 +46,37 @@ export const MESSAGE_KINDS: ReadonlyArray<readonly [string, string]> = [
   ["tool_result", "决定后的结果"],
   ["background_result", "后台结论"],
   ["tool_image", "工具图片"],
-];
-const KIND_LABELS = new Map(MESSAGE_KINDS);
-
-export function messageKind(message: ObservedMessage): string {
-  return message.role === "user" ? (message.kind ?? "user") : message.role;
-}
+]);
 
 export function kindLabel(message: ObservedMessage): string {
-  const kind = messageKind(message);
+  const kind = message.role === "user" ? (message.kind ?? "user") : message.role;
   return KIND_LABELS.get(kind) ?? kind;
 }
 
 /** 这一行涉及的工具：工具结果与回答调用的行是那次调用的工具，模型回复是它发起的调用。 */
 export function messageTools(message: ObservedMessage): string[] {
   return message.tool_name ? [message.tool_name] : toolNames(message);
+}
+
+/**
+ * 工具筛选的选项：当前范围里出现过的工具与调用次数，次数多的在前。
+ *
+ * 按不同的调用 id 计数而不是按行：一次调用有发起行、结果行，还可能有在后来回合才并入的决定或图片；
+ * 按回合查看时发起行可能不在范围内，只剩回答它的行，所以从两边收集调用 id 再去重。
+ */
+export function toolOptions(messages: ObservedMessage[]): Array<{ name: string; calls: number }> {
+  const calls = new Map<string, Set<string>>();
+  const add = (name: string, id: string) => {
+    calls.set(name, (calls.get(name) ?? new Set()).add(id));
+  };
+  for (const message of messages) {
+    for (const call of message.tool_calls ?? [])
+      if (typeof call.name === "string" && typeof call.id === "string") add(call.name, call.id);
+    if (message.tool_name && message.tool_call_id) add(message.tool_name, message.tool_call_id);
+  }
+  return [...calls]
+    .map(([name, ids]) => ({ name, calls: ids.size }))
+    .sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name));
 }
 
 /** 行标题：种类加涉及的工具，列表行、无障碍名称与详情标题共用。 */
@@ -146,7 +168,8 @@ export function filterMessages(
   return index
     .filter(
       ({ message, searchText }) =>
-        (filters.kind === "all" || messageKind(message) === filters.kind) &&
+        (filters.role === "all" || message.role === filters.role) &&
+        (filters.tool === "all" || messageTools(message).includes(filters.tool)) &&
         (filters.inclusion === "all" ||
           message.include_in_context === (filters.inclusion === "included")) &&
         (!search || searchText.includes(search)),

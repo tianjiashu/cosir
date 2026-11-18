@@ -156,7 +156,7 @@ test("筛选、调用关联与范围内定位", async ({ page }) => {
   });
   await expect(nodes.last()).toContainText("运行完成· 运行了 1 分 0 秒· stop· 整个运行 1,250 tokens");
   await expect(page.getByRole("option", { name: "#101 用户输入", exact: true })).toHaveCount(0);
-  await page.getByLabel("按种类筛选").selectOption("assistant");
+  await page.getByLabel("按角色筛选").selectOption("assistant");
   // 筛选出的子集里行不再相邻，不插节点。
   await expect(nodes).toHaveCount(0);
   await page.getByLabel("搜索已加载消息").fill("read_file");
@@ -170,7 +170,7 @@ test("筛选、调用关联与范围内定位", async ({ page }) => {
   await expect(detail(page).getByRole("heading")).toContainText("#3");
   await page.getByRole("button", { name: "返回筛选结果", exact: true }).click();
   await expect(page.getByLabel("搜索已加载消息")).toHaveValue("read_file");
-  await expect(page.getByLabel("按种类筛选")).toHaveValue("assistant");
+  await expect(page.getByLabel("按角色筛选")).toHaveValue("assistant");
   await expect(detail(page).getByRole("heading")).toContainText("#2");
   await page.getByLabel("搜索已加载消息").fill("");
   await page.getByLabel("按纳入范围筛选").selectOption("excluded");
@@ -178,9 +178,28 @@ test("筛选、调用关联与范围内定位", async ({ page }) => {
     page.getByRole("option", { name: "#4 模型回复", exact: true }),
   ).toBeVisible();
   await expect(page.getByTestId("observer-row-4")).toContainText("没进上下文 · 未采纳");
+  // 行上只标例外：正常完成、进了上下文的工具结果不带这两个标签。
+  await page.getByLabel("按纳入范围筛选").selectOption("all");
+  await page.getByLabel("按角色筛选").selectOption("tool");
+  await expect(page.getByTestId("observer-row-3")).toBeVisible();
+  await expect(page.getByTestId("observer-row-3")).not.toContainText("进了上下文");
+  await expect(page.getByTestId("observer-row-3")).not.toContainText("已完成");
+  await page.getByLabel("按角色筛选").selectOption("assistant");
+  await page.getByLabel("按纳入范围筛选").selectOption("excluded");
+  await page.getByRole("option", { name: "#4 模型回复", exact: true }).click();
   await page.getByRole("button", { name: "在全部记录中定位", exact: true }).click();
   await expect(detail(page).getByRole("heading")).toContainText("#4");
   await expect(page.getByRole("button", { name: "返回筛选结果" })).toBeVisible();
+  // 按工具筛选：发起行与结果行都留下，角色叠加后只剩结果。
+  await page.getByRole("button", { name: "返回筛选结果", exact: true }).click();
+  await page.getByLabel("按纳入范围筛选").selectOption("all");
+  await page.getByLabel("按角色筛选").selectOption("all");
+  await page.getByLabel("按工具筛选").selectOption("read_file");
+  await expect(page.getByRole("option", { name: "#2 模型回复 · read_file", exact: true })).toBeVisible();
+  await expect(page.getByRole("option", { name: "#3 工具结果 · read_file", exact: true })).toBeVisible();
+  await page.getByLabel("按角色筛选").selectOption("tool");
+  await expect(page.getByRole("option", { name: "#2 模型回复 · read_file", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("option", { name: "#3 工具结果 · read_file", exact: true })).toBeVisible();
 });
 test("刷新保留列表与正文位置，失败保留旧结果，新范围不混入旧结果", async ({
   page,

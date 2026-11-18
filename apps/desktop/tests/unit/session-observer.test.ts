@@ -10,6 +10,7 @@ import {
   messageTitle,
   parseId,
   relatedMessages,
+  toolOptions,
 } from "../../components/session-observer/message-model";
 import {
   mergeTimeline,
@@ -54,7 +55,7 @@ const run = (statuses: Array<[number, string, string?]>, patch: Partial<Observed
   ...patch,
 });
 describe("会话观测读取投影", () => {
-  it("user 行按来源种类标注和筛选，工具行带工具名", () => {
+  it("user 行按来源种类标注、按角色筛选，工具行带工具名", () => {
     const rows = [
       row(1, { role: "user", kind: "user_input" }),
       row(2, { role: "user", kind: "notice" }),
@@ -69,8 +70,28 @@ describe("会话观测读取投影", () => {
       "模型回复 · ask_user",
       "user",
     ]);
-    expect(filterMessages(indexMessages(rows), { ...INITIAL_FILTERS, kind: "notice" }).map(item => item.sequence)).toEqual([2]);
+    expect(filterMessages(indexMessages(rows), { ...INITIAL_FILTERS, role: "user" }).map(item => item.sequence)).toEqual([1, 2, 5]);
     expect(filterMessages(indexMessages(rows), { ...INITIAL_FILTERS, search: "ask_user" }).map(item => item.sequence)).toEqual([3, 4]);
+  });
+  it("按工具筛选留下发起、结果与回答调用的行，选项按调用次数计", () => {
+    const rows = [
+      row(1, { tool_calls: [{ id: "c1", name: "read_file" }, { id: "c2", name: "ask_user" }] }),
+      row(2, { role: "tool", tool_call_id: "c1", tool_name: "read_file" }),
+      row(3, { role: "tool", tool_call_id: "c2", tool_name: "ask_user" }),
+      row(4, { tool_calls: [{ id: "c3", name: "read_file" }] }),
+      row(5, { role: "tool", tool_call_id: "c3", tool_name: "read_file" }),
+      // 按回合查看时发起行不在范围内，只剩后来并入的决定。
+      row(6, { role: "user", kind: "decision", tool_call_id: "c9", tool_name: "ask_user", turn: 2 }),
+      row(7, { role: "user", kind: "notice" }),
+    ];
+    expect(toolOptions(rows)).toEqual([
+      { name: "ask_user", calls: 2 },
+      { name: "read_file", calls: 2 },
+    ]);
+    expect(filterMessages(indexMessages(rows), { ...INITIAL_FILTERS, tool: "ask_user" }).map(item => item.sequence)).toEqual([1, 3, 6]);
+    expect(
+      filterMessages(indexMessages(rows), { ...INITIAL_FILTERS, tool: "read_file", role: "tool" }).map(item => item.sequence),
+    ).toEqual([2, 5]);
   });
   it("没进上下文的行给出原因，摘要去掉来源标签", () => {
     expect(contextState(row(1))).toEqual({ included: true, label: "进了上下文" });
@@ -134,7 +155,7 @@ describe("会话观测读取投影", () => {
     expect(relatedMessages(notice, all)).toEqual([call, placeholder, decision]);
     expect(relatedMessages(other, all)).toEqual([]);
   });
-  it("搜索联合种类与纳入筛选，相同时间按序号稳定排序", () => {
+  it("搜索联合角色与纳入筛选，相同时间按序号稳定排序", () => {
     const rows = [
       row(3, { role: "user", kind: "user_input", content: "needle" }),
       row(2, { role: "user", kind: "user_input", include_in_context: false, content: "needle" }),
@@ -143,7 +164,7 @@ describe("会话观测读取投影", () => {
     expect(
       filterMessages(indexMessages(rows), {
         ...INITIAL_FILTERS,
-        kind: "user_input",
+        role: "user",
         search: "NEEDLE",
         inclusion: "included",
         sort: "updated_at",

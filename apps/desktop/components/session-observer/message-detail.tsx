@@ -101,8 +101,10 @@ export function MessageDetail({
           <h2 className="text-sm font-semibold">
             <span className="mr-2 font-mono">#{message.sequence}</span>
             {messageTitle(message)}
+            <span className="ml-2 font-mono text-xs font-normal text-muted-foreground">{message.role}</span>
           </h2>
         </div>
+        {/* 元信息只放标题说不清的：角色跟在标题后，常态（正常完成、在对话里显示）不单列。 */}
         <dl className="grid grid-cols-[auto_minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 break-all text-xs">
           <dt className="text-muted-foreground">回合</dt>
           <dd>
@@ -110,12 +112,14 @@ export function MessageDetail({
               ? "会话系统提示词"
               : `${message.inherited ? "继承 · " : ""}回合 ${message.turn}`}
           </dd>
-          <dt className="text-muted-foreground">模型角色</dt>
-          <dd className="font-mono">{message.role}</dd>
           <dt className="text-muted-foreground">模型上下文</dt>
           <dd>{contextState(message).label}</dd>
-          <dt className="text-muted-foreground">对话界面</dt>
-          <dd>{message.project_to_transport ? "显示" : "不显示"}</dd>
+          {!message.project_to_transport && (
+            <>
+              <dt className="text-muted-foreground">对话界面</dt>
+              <dd>不显示</dd>
+            </>
+          )}
           <dt className="text-muted-foreground">创建时间</dt>
           <dd>{formatTime(message.created_at, true)}</dd>
           <dt className="text-muted-foreground">更新时间</dt>
@@ -126,10 +130,12 @@ export function MessageDetail({
               <dd className="font-mono">{message.tool_call_id}</dd>
             </>
           )}
-          {message.role === "tool" && (
+          {message.role === "tool" && message.status !== "completed" && (
             <>
               <dt className="text-muted-foreground">工具状态</dt>
-              <dd>{toolStatus(message.status)}</dd>
+              <dd className={message.status === "failed" ? "text-destructive" : undefined}>
+                {toolStatus(message.status)}
+              </dd>
             </>
           )}
         </dl>
