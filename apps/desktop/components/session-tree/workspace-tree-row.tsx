@@ -50,7 +50,7 @@ export function WorkspaceTreeRow({ node, innerRef, attrs, children }: RowRendere
   return (
     <Tooltip>
       <TooltipTrigger render={row} />
-      <TooltipContent side="right" align="start" sideOffset={8} className="flex-col items-start gap-1 break-all">
+      <TooltipContent side="right" align="start" sideOffset={8} className="flex-col items-start gap-1">
         <RowHoverCard item={item} />
       </TooltipContent>
     </Tooltip>

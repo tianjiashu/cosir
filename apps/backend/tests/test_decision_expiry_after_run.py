@@ -19,13 +19,9 @@ from app.service.conversation import tool_decision_service
 
 @pytest.fixture
 def asked(tmp_path: Path, isolated_storage, monkeypatch: pytest.MonkeyPatch):
-    """一个 Session 里两次等用户决定的调用：提问（等用户回应）与交接（一直等到用户决定）。"""
-    lifetimes = {"ask_tool": "until_user_input", "handoff_tool": "until_decided"}
-    registry = SimpleNamespace(
-        get_tool_definition=lambda name: SimpleNamespace(
-            decision_lifetime=lifetimes[name], decision_model=None
-        )
-    )
+    """一个 Session 里两个等待占位：提问（等用户回应），与已不在注册表里的工具残留的占位（旧会话）。"""
+    definitions = {"ask_tool": SimpleNamespace(user_decision=True, decision_model=None)}
+    registry = SimpleNamespace(get_tool_definition=definitions.get)
     monkeypatch.setattr(decision_expiry, "get_tool_registry", lambda: registry)
     monkeypatch.setattr(tool_decision_service, "get_tool_registry", lambda: registry)
     workspace = depends.get_workspace_crud().create("ws", str(tmp_path))
@@ -34,7 +30,7 @@ def asked(tmp_path: Path, isolated_storage, monkeypatch: pytest.MonkeyPatch):
     crud = depends.get_session_context_crud()
     calls = [
         {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
-        for call_id, name in (("call-ask", "ask_tool"), ("call-hand", "handoff_tool"))
+        for call_id, name in (("call-ask", "ask_tool"), ("call-gone", "gone_tool"))
     ]
     crud.create(
         SessionContextRecord(
@@ -64,13 +60,13 @@ def _placeholder(session_id: int, call_id: str) -> ToolMessageMetadata:
 
 
 def test_only_turn_scoped_decisions_expire_when_the_run_settles(asked: int) -> None:
-    """提问随 Run 落定作废；交接要等到交还，不动。只改卡片状态，展示数据保留。"""
+    """提问随 Run 落定作废；已不在注册表里的工具残留的占位不动。只改卡片状态，展示数据保留。"""
     assert expire_decisions_after_run(asked, "已停止") == ["call-ask"]
 
     question = _placeholder(asked, "call-ask")
     assert (question.status, question.error) == ("cancelled", "已停止")
     assert question.display_data == {"kind": "probe"}
-    assert _placeholder(asked, "call-hand").status == "pending"
+    assert _placeholder(asked, "call-gone").status == "pending"
     # 已结算的不再动：重复调用幂等。
     assert expire_decisions_after_run(asked, "未作答") == []
     assert _placeholder(asked, "call-ask").error == "已停止"
@@ -84,4 +80,4 @@ def test_expired_question_can_no_longer_be_answered(asked: int) -> None:
         tool_decision_service.ToolDecisionService().submit(asked, "call-ask", "approve")
 
     assert rejected.value.code == "DECISION_NOT_AWAITED"
-    assert depends.get_session_context_service().awaiting_decision_calls(asked).keys() == {"call-hand"}
+    assert depends.get_session_context_service().awaiting_decision_calls(asked).keys() == {"call-gone"}

@@ -12,10 +12,12 @@
  * 没有目标、标题回落到动词。调用标题优先使用统一 `intent`，它不参与状态或结果判断。
  */
 
-/** 调用行标题：意图 + 目标，如 `读取文件` + `src/a.ts`；调用标题优先展示模型写的 `intent`，命令原文归展开体。 */
+/** 调用行标题：意图 + 目标，如 `读取文件` + `src/a.ts`；调用标题优先展示模型写的 `intent`，没写意图的命令在目标里露首行、全文归展开体。 */
 export type ToolHeading = {
   title: string;
   target: string | null;
+  /** 目标是一个工作区路径：调用行按路径显示（省略中间目录、保住文件名）。 */
+  targetIsPath: boolean;
 };
 
 type ToolArgs = Record<string, unknown>;
@@ -25,10 +27,15 @@ type ToolCatalogEntry = {
   verb: string;
   /** lucide 图标名，取值见 `tool-icons.tsx`。 */
   icon: string;
-  /** 目标（路径、模式、会话、子 Agent……）；没有目标或参数还没到时为 null。 */
+  /** 目标：用户认得的实体（路径、命令首行、子 Agent 名……），不写 id；没有目标或参数还没到时为 null。 */
   target?: (args: ToolArgs) => string | null;
-  /** 意图尚未到达时的实体名称回退（子 Agent 名等）；否则回落到动词。 */
-  title?: (args: ToolArgs) => string | null;
+  /** 目标就是 `args.path`（单个工作区路径）。 */
+  pathTarget?: true;
+  /**
+   * 没写意图时补上的目标：标题退回动词后一串行会长得一样（十条都叫「执行命令」），用它区分是哪一次；
+   * 写了意图时不显示，原文归展开体，不在行与卡片里各出现一次。
+   */
+  targetWithoutIntent?: (args: ToolArgs) => string | null;
 };
 
 function str(value: unknown): string | null {
@@ -117,14 +124,14 @@ function browserActTarget(args: ToolArgs): string | null {
 }
 
 export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
-  read_file: { verb: "读取文件", icon: "eye", target: path },
+  read_file: { verb: "读取文件", icon: "eye", target: path, pathTarget: true },
   search_content: { verb: "搜索内容", icon: "search", target: (args) => joined('"', str(args.pattern), '" in ', str(args.path)) },
   find_files: { verb: "查找文件", icon: "search", target: (args) => joined(str(args.pattern), " in ", str(args.path)) },
   read_image: { verb: "查看图片", icon: "eye", target: (args) => withMore(args.paths) },
-  write_file: { verb: "写入文件", icon: "git-compare", target: path },
-  edit_file: { verb: "编辑文件", icon: "git-compare", target: path },
+  write_file: { verb: "写入文件", icon: "git-compare", target: path, pathTarget: true },
+  edit_file: { verb: "编辑文件", icon: "git-compare", target: path, pathTarget: true },
   apply_patch: { verb: "应用补丁", icon: "git-compare", target: patchTargets },
-  execute_terminal: { verb: "执行命令", icon: "terminal" },
+  execute_terminal: { verb: "执行命令", icon: "terminal", targetWithoutIntent: (args) => clipped(firstLine(args.command), 60) },
   terminal_list: { verb: "列出终端", icon: "terminal" },
   terminal_read: { verb: "读取终端", icon: "terminal", target: terminalId },
   terminal_write: { verb: "填入终端", icon: "terminal", target: terminalInput },
@@ -136,13 +143,12 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   browser_tabs: { verb: "管理标签页", icon: "globe", target: (args) => (str(args.tab) ? joined(str(args.action), " ", str(args.tab)) : str(args.action)) },
   browser_logs: { verb: "读取网页日志", icon: "globe", target: (args) => str(args.kind) },
   browser_evaluate: { verb: "执行网页脚本", icon: "globe", target: (args) => clipped(firstLine(args.expression), 60) },
-  browser_handoff: { verb: "交给你操作网页", icon: "globe", target: (args) => str(args.reason) },
   web_search: { verb: "网页搜索", icon: "globe", target: (args) => str(args.query) },
   web_fetch: { verb: "抓取网页", icon: "globe", target: (args) => withMore(args.urls) },
   mcp: { verb: "调用 MCP", icon: "network", target: mcpTarget },
   skill: { verb: "加载 Skill", icon: "puzzle", target: skillTarget },
-  delegate_task: { verb: "委派任务", icon: "users", title: (args) => str(args.agent_name), target: (args) => str(args.child_agent_id) },
-  fork_session: { verb: "分叉会话", icon: "git-fork", title: (args) => str(args.title) },
+  delegate_task: { verb: "委派任务", icon: "users", target: (args) => str(args.agent_name) ?? str(args.child_agent_id) },
+  fork_session: { verb: "分叉会话", icon: "git-fork", target: (args) => str(args.title) },
   send_message: { verb: "发送消息", icon: "send", target: sessionRef },
   session_status: { verb: "读取会话状态", icon: "info", target: sessionRef },
   wait_messages: { verb: "等待结果", icon: "clock" },
@@ -165,9 +171,10 @@ export function toolIconName(toolName: string): string | undefined {
 export function toolHeading(toolName: string, args: ToolArgs | null | undefined, intent?: string | null): ToolHeading {
   const entry = TOOL_CATALOG[toolName];
   const parameters = args ?? {};
-  if (entry === undefined) return { title: intent ?? toolName, target: null };
+  if (entry === undefined) return { title: intent ?? toolName, target: null, targetIsPath: false };
   return {
-    title: intent ?? entry.title?.(parameters) ?? entry.verb,
-    target: entry.target?.(parameters) ?? null,
+    title: intent ?? entry.verb,
+    target: entry.target?.(parameters) ?? (intent ? null : entry.targetWithoutIntent?.(parameters)) ?? null,
+    targetIsPath: entry.pathTarget === true,
   };
 }

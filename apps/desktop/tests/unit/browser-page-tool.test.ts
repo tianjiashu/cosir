@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { readBrowserPageDisplay } from "@/components/conversation/tools/browser-page-display";
+import { readBrowserPageDisplay } from "@/lib/assistant/tools/browser-page-display";
 import { resolveCallView } from "@/components/conversation/tools/call-view-registry";
 import { browserPageView } from "@/components/conversation/tools/call-views/browser-page-view";
 import type { CallViewContext } from "@/components/conversation/tools/call-view";
@@ -10,12 +10,9 @@ const PAGE = { kind: "browser-page", tab_id: "t2", url: "https://example.com/", 
 const SHA = "a".repeat(64);
 
 describe("browser-page display", () => {
-  it("reads page, screenshot and handoff fields", () => {
+  it("reads page and screenshot fields", () => {
     expect(readBrowserPageDisplay(PAGE)).toEqual({ tabId: "t2", url: "https://example.com/", title: "Example" });
-    expect(readBrowserPageDisplay({ ...PAGE, screenshot: SHA, handoff_reason: "sign in" })).toMatchObject({
-      screenshot: SHA,
-      handoffReason: "sign in",
-    });
+    expect(readBrowserPageDisplay({ ...PAGE, screenshot: SHA })).toMatchObject({ screenshot: SHA });
   });
 
   // 目的：截图地址只来自合法的附件 id；潜在缺陷：展示数据里的任意字符串被拼进图片地址。
@@ -46,7 +43,6 @@ describe("browser-page display", () => {
       backendStatus: "completed", awaitingUser: false, background: false, display_data, error: null,
     });
     expect(resolveCallView({ artifact: artifact(PAGE) } as CallViewContext)).toMatchObject({ meta: expect.anything() });
-    expect(resolveCallView({ artifact: artifact({ ...PAGE, handoff_reason: "sign in" }) } as CallViewContext)).toMatchObject({ meta: expect.anything() });
     expect(resolveCallView({ artifact: artifact({ kind: "browser-page" }) } as CallViewContext)).toBeNull();
   });
 });

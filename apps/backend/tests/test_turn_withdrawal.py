@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.context.context_store import ContextStore
-from app.core.tool.handoff.handoff_registry import HandoffLease, handoff_registry
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, notices_to_context
 from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
 from app.core.workflow.message_queue.session_message import (
@@ -126,15 +125,6 @@ def side_effects(history):
             label="t",
             job=FakeCommandJob(lambda call_id=call_id: revoked.append(call_id)),
         )
-    handoff_registry.begin(
-        HandoffLease(
-            tool_call_id="call-late",
-            session_id=history.session_id,
-            tool_name="browser_handoff",
-            resource_id="tab",
-            reason="sign in",
-        )
-    )
     queue = depends.get_session_message_queue()
 
     def result(call_id: str) -> SessionMessage:
@@ -149,7 +139,7 @@ def side_effects(history):
     queue.put(
         history.session_id,
         SessionMessage.of(
-            DecisionBody(tool_call_id="call-decide", tool_name="browser_handoff", decision="approve")
+            DecisionBody(tool_call_id="call-decide", tool_name="ask_user", decision="approve")
         ),
     )
     queue.put(
@@ -159,7 +149,6 @@ def side_effects(history):
     queued_input = queue.put(history.session_id, _input("排着的"))
     yield SimpleNamespace(revoked=revoked, queued_input=queued_input)
     command_results.withdraw_calls(history.session_id, ["call-early"])
-    handoff_registry.drop_session(history.session_id)
 
 
 def _input(text: str) -> SessionMessage:
@@ -197,7 +186,6 @@ def test_withdraw_gathers_every_side_effect_of_the_turn(history, side_effects) -
         )
         is False
     )
-    assert handoff_registry.leases(history.session_id) == []
     # 队列：这一回合调用的结论与决定被删；更早调用的结论、排队的通知与输入保留；移出的 Session 级
     # 通知重新投递。撤回不入队新消息、不开新 Run。
     assert _queued(history.session_id) == [

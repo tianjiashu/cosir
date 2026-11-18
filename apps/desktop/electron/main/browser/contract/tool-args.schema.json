@@ -1047,7 +1047,7 @@
           }
         ],
         "default": null,
-        "description": "Capture only this element (with a small margin; small ones are enlarged), e.g. an icon, a button or a captcha. Null for the viewport, the whole page or a region.",
+        "description": "Capture only this element (with a small margin; small ones are enlarged), e.g. an icon, an image, a button or a captcha. Null for the viewport, the whole page or a region.",
         "title": "Ref"
       },
       "region": {
@@ -1060,7 +1060,7 @@
           }
         ],
         "default": null,
-        "description": "Capture only this part of the viewport, e.g. a chart drawn on a canvas or part of a table that has no ref; take its coordinates from a viewport screenshot. It must lie inside the viewport (scroll first); small regions are enlarged. Null otherwise."
+        "description": "Capture only this part of the viewport, e.g. a chart drawn on a canvas or part of a large table; take its coordinates from a viewport screenshot. It must lie inside the viewport (scroll first); small regions are enlarged. Null otherwise."
       },
       "tab": {
         "anyOf": [
@@ -1104,6 +1104,16 @@
         "description": "Only lines containing this text (ignoring case), with the containers around them, e.g. a button label or a product name. Null for no filter.",
         "title": "Find"
       },
+      "format": {
+        "default": "outline",
+        "description": "outline for the page structure with refs to act on; text to read the page's content (articles, docs, search results) as plain text with headings and list items, at a fraction of the size but without refs or link urls.",
+        "enum": [
+          "outline",
+          "text"
+        ],
+        "title": "Format",
+        "type": "string"
+      },
       "from_line": {
         "anyOf": [
           {
@@ -1145,6 +1155,7 @@
     },
     "required": [
       "find",
+      "format",
       "from_line",
       "scope",
       "tab"

@@ -158,7 +158,6 @@ async def test_attach_without_run_pushes_full_frame_and_stays_open() -> None:
         "terminal_sessions": [],
         "background_tasks": [],
         "foreground_waits": [],
-        "handoffs": [],
         "deliverables": [],
         "queued_messages": [],
     }
@@ -308,7 +307,6 @@ async def test_attach_envelopes_encode_session_view_frames_without_run_fields() 
         "terminal_sessions": [],
         "background_tasks": [],
         "foreground_waits": [],
-        "handoffs": [],
         "deliverables": [],
         "queued_messages": [],
     }

@@ -66,7 +66,7 @@ export function DeliverableCapsule({ deliverable, links }: { deliverable: Transp
         <TooltipContent side="bottom" className="max-w-96">
           <span className="flex flex-col gap-0.5 text-left">
             {deliverable.caption && <span>{deliverable.caption}</span>}
-            <span className={cn("break-all", deliverable.caption && "opacity-70")}>{path}</span>
+            <span className={cn(deliverable.caption && "opacity-70")}>{path}</span>
           </span>
         </TooltipContent>
       </Tooltip>

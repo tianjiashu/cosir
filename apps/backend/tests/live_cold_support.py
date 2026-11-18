@@ -20,7 +20,6 @@ from sqlalchemy import update
 from app.config.configuration import get_tool_registry
 from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_schemas
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
-from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolDefinition
 from app.core.tool.schemas.tool_execution_context import ToolExecutionContext
 from app.core.workflow import workflow
@@ -89,15 +88,7 @@ class _NoArgs(BaseModel):
 
 
 def _hitl(*, execution_context: ToolExecutionContext) -> Any:
-    if execution_context.user_decision is None:
-        return tool_awaiting_decision(
-            "probe_hitl", execution_context.tool_call_id, {"kind": "probe"}
-        )
-    return tool_success(
-        "probe_hitl",
-        f"decided {execution_context.user_decision.decision}",
-        tool_call_id=execution_context.tool_call_id,
-    )
+    return tool_awaiting_decision("probe_hitl", execution_context.tool_call_id, {"kind": "probe"})
 
 
 def _install_probe_tools(session: SessionRecord) -> None:
@@ -111,7 +102,7 @@ def _install_probe_tools(session: SessionRecord) -> None:
                 description="probe",
                 handler=_hitl,
                 args_model=_NoArgs,
-                user_decision="execute",
+                user_decision=True,
             )
         )
     definition = registry.get_tool_definition("probe_hitl")

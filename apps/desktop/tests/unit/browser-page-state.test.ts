@@ -5,7 +5,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { DownloadItem, IpcMainEvent } from "electron";
 
-vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
+vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn(), appendHostLogLine: vi.fn() }));
 import { BrowserDownloads } from "@/electron/main/browser/downloads";
 import { PageDialogs } from "@/electron/main/browser/page-dialogs";
 import { waitForLoad } from "@/electron/main/browser/page-loading";
@@ -43,6 +43,14 @@ describe("PageDialogs", () => {
     expect(dialogs.open(extra, { type: "confirm", message: "b", defaultText: "" })).toEqual({ refused: "busy" });
     expect(extra.returnValue).toBe(false);
     expect(dialogs.open(ipcEvent(), { type: "beforeunload", message: "", defaultText: "" })).toEqual({ refused: "unknown-type" });
+  });
+
+  // 目的：消息截断要看得出来；潜在缺陷：静默截断让模型照着半句话作答。默认值会被原样作答回页面，不能带标记。
+  it("marks a cut message but keeps the default text unmarked", () => {
+    const opened = new PageDialogs().open(ipcEvent(), { type: "prompt", message: "m".repeat(2_010), defaultText: "d".repeat(2_010) });
+    if (!("dialog" in opened)) throw new Error("not opened");
+    expect(opened.dialog.message).toBe(`${"m".repeat(2_000)}…(+10 chars)`);
+    expect(opened.dialog.defaultText).toBe("d".repeat(2_000));
   });
 });
 
@@ -158,7 +166,7 @@ describe("TabEmulation", () => {
   const pinned = { width: 1280, height: 800, mobile: false };
   const settled = () => new Promise((resolve) => setTimeout(resolve, FOLLOW_SETTLE_MS + 50));
 
-  // 目的：默认按面板大小 1:1 显示，用户看得清、交接时点得准；潜在缺陷：固定视口被等比缩小到看不清（实际出现过：
+  // 目的：默认按面板大小 1:1 显示，用户看得清、在面板里点得准；潜在缺陷：固定视口被等比缩小到看不清（实际出现过：
   // 面板约 450pt 宽时缩放 0.35）。
   it("follows the panel at full size and keeps that size when taken off the panel", async () => {
     const send = vi.fn<Send>(async () => undefined);

@@ -64,7 +64,7 @@ def test_tools_awaiting_a_user_decision_are_standalone() -> None:
     grouped = sorted(
         definition.name
         for definition in get_tool_registry().get_all_definitions()
-        if definition.user_decision is not None
+        if definition.user_decision
         and definition.conversation_presentation != "standalone"
     )
     assert grouped == [], f"需要用户决定的工具必须是独立工具：{grouped}"

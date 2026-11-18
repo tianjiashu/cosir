@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.tools.tool_handler.file_edit.patch_apply import PatchApplyError
+from app.tools.tool_handler.file_edit.patch_diff import FileDiffResult
 
 
 def _context(tmp_path: Path) -> ToolExecutionContext:
@@ -75,7 +76,7 @@ def test_apply_failure_guides_regenerating_the_diff(
         try:
             raise transient_cause
         except OSError as cause:
-            raise PatchApplyError("file is locked", partial_applied=False) from cause
+            raise PatchApplyError("file is locked", applied=[]) from cause
 
     monkeypatch.setattr(
         "app.tools.tool_handler.apply_patch_tool.apply_all_with_diff", fail_apply
@@ -96,7 +97,10 @@ def test_partial_apply_failure_forbids_replaying_the_diff(monkeypatch, tmp_path:
         try:
             raise OSError(0, "file is locked", None, 32)
         except OSError as cause:
-            raise PatchApplyError("file is locked", partial_applied=True) from cause
+            raise PatchApplyError(
+                "file is locked",
+                applied=[FileDiffResult(path="a.txt", status="modified", before="one\n", after="ONE\ntwo\n")],
+            ) from cause
 
     monkeypatch.setattr(
         "app.tools.tool_handler.apply_patch_tool.apply_all_with_diff",
@@ -107,6 +111,11 @@ def test_partial_apply_failure_forbids_replaying_the_diff(monkeypatch, tmp_path:
     assert observation.content.startswith("unified diff application stopped after partial changes. ")
     assert "do not replay this diff unchanged" in observation.content
     assert "file is locked" not in observation.content
+    # 已写入的那部分改动交给界面：调用行显示「部分已写入」并带上它的增删数。
+    assert observation.display_data["status_hint"] == "部分已写入"
+    assert observation.display_data["kind"] == "file-changes"
+    changes = observation.display_data["changes"]
+    assert [(c["path"], c["insertions"], c["deletions"]) for c in changes] == [("a.txt", 2, 1)]
 
 
 def test_hunk_validation_failure_does_not_write_any_file(tmp_path: Path) -> None:
@@ -153,3 +162,15 @@ def test_hunk_count_mismatch_is_repaired_and_names_the_bad_header(tmp_path: Path
     assert "body has source=3 target=3" in observation.content
     # 补丁按正文（ctx+rem+add+ctx = 3/3）应用，文件确实被写入为 'keep\nnew\ntail\n'。
     assert target.read_text(encoding="utf-8") == "keep\nnew\ntail\n"
+
+
+# 目的：每类失败都给出可分辨的调用行短提示（≤8 字），不再一律「补丁失败」；潜在缺陷：原因只有模型看得到。
+def test_apply_patch_failures_carry_distinct_status_hints(monkeypatch, tmp_path: Path) -> None:
+    bad = ApplyPatchTool().execute(_context(tmp_path), patch="not a diff")
+    assert bad.display_data == {"status_hint": "补丁格式错误"}
+    monkeypatch.setattr(
+        "app.tools.tool_handler.apply_patch_tool.validate_all",
+        lambda _operations, _resolver: ["a.txt: context does not match"],
+    )
+    invalid = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
+    assert invalid.display_data == {"status_hint": "补丁校验失败"}

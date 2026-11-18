@@ -120,15 +120,19 @@ describe("estimateMessageHeight", () => {
     expect(estimateMessageHeight(changes(["a", "b", "c"])) - estimateMessageHeight(changes(["a"]))).toBe(56);
   });
 
-  // 目的：交付物按胶囊行估高，产物区内卡片间距按实际的 8 计；潜在缺陷：一枚胶囊按旧的整行列表估高，滚动时跳动。
-  it("交付物按胶囊行估高，同一行再多几枚不变高，与改动卡同处产物区时只加卡片间距", () => {
+  // 目的：交付卡按胶囊行与说明行估高；潜在缺陷：一枚胶囊按旧的整行列表估高、说明不计高，滚动时跳动。
+  it("交付卡按胶囊行估高，同一行再多几枚不变高，是独立的块、与改动卡无关，说明按行加高", () => {
     const present = (count: number) => call("p", "completed", { toolName: "present_deliverables", presentation: "quiet", deliverables: Array.from({ length: count }, (_, i) => deliveredFile(`f${i}.md`)) });
     const base = estimateMessageHeight(assistant(text("完")));
     expect(estimateMessageHeight(assistant(text("完"), present(1))) - base).toBe(36 + 16);
     expect(estimateMessageHeight(assistant(text("完"), present(3)))).toBe(estimateMessageHeight(assistant(text("完"), present(1))));
     expect(estimateMessageHeight(assistant(text("完"), present(4))) - estimateMessageHeight(assistant(text("完"), present(3)))).toBe(44);
     const change = call("w", "completed", { display_data: { kind: "file-changes", changes: [{ path: "a", status: "added" }] } });
-    expect(estimateMessageHeight(assistant(text("完"), change, present(1))) - estimateMessageHeight(assistant(text("完"), change))).toBe(36 + 8);
+    expect(estimateMessageHeight(assistant(text("完"), change, present(1))) - estimateMessageHeight(assistant(text("完"), change))).toBe(36 + 16);
+    const noted = (note: string) => ({ ...present(1), display_data: { kind: "deliverables", note } });
+    // 说明一行 24、与胶囊之间 gap-2；长说明按每行约 52 个汉字折行。
+    expect(estimateMessageHeight(assistant(text("完"), noted("报告"))) - estimateMessageHeight(assistant(text("完"), present(1)))).toBe(24 + 8);
+    expect(estimateMessageHeight(assistant(text("完"), noted("长".repeat(60)))) - estimateMessageHeight(assistant(text("完"), noted("报告")))).toBe(24);
   });
 
   // 潜在缺陷：图片方块与单张大图卡按胶囊高度估，滚动时跳动。

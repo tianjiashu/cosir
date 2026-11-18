@@ -30,7 +30,7 @@ type ImageTileProps = {
  *
  * 裁切而不是按比例完整显示：整页截图这类长图完整塞进小框只剩一条细线；保留顶部是因为截图与文档最有
  * 信息的是开头。完整的图在灯箱里看（长图按宽度铺满、可滚动）。只负责呈现、加载与失败占位，以及转发
- * 打开 / 移除意图；地址从哪来、何时上传由调用方负责。尺寸只有两档，见 `IMAGE_TILE_SIZE`。
+ * 打开 / 移除意图；地址从哪来、何时上传由调用方负责。尺寸见 `IMAGE_TILE_SIZE`。
  */
 function ImageTileImpl({ src, alt, size = "regular", title, state = "ready", errorMessage, onRemove, onOpen, onError, unavailable = false }: ImageTileProps) {
   const { width, height } = IMAGE_TILE_SIZE[size];
@@ -81,7 +81,7 @@ function ImageTileImpl({ src, alt, size = "regular", title, state = "ready", err
   return (
     <Tooltip>
       <TooltipTrigger render={tile} />
-      <TooltipContent side="top" className="break-all">
+      <TooltipContent side="top">
         {title}
         {errorMessage && <p>{errorMessage}</p>}
       </TooltipContent>

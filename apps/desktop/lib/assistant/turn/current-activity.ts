@@ -1,7 +1,12 @@
 import type { BackgroundTaskEntry, TransportActivity, TransportToolCallPart } from "../contract";
 import { toolHeading } from "../tools/tool-catalog";
 
-export type ActivityFeedback = { label: string; animated: boolean };
+/**
+ * 活动行要说的状态。`since` 是这个状态的起点，只取后端事实：执行调用取调用的 `startedAt`，思考取模型步的
+ * `startedAt`。所以「思考中 12秒」只是这一次思考，执行时计的是那次调用，换状态从头算，刷新也接得上。没有
+ * 起点就不计时：静止的等待、模型步之间的空档、还在写参数的调用（后端没有「开始写参数」的时刻）。
+ */
+export type ActivityFeedback = { label: string; animated: boolean; since?: string };
 export const STOPPING_FEEDBACK: ActivityFeedback = { label: "正在停止…", animated: false };
 
 /**
@@ -30,7 +35,7 @@ export function segmentActivity(calls: readonly TransportToolCallPart[], board: 
   if (!executing.length) return unowned;
   const lead = executing.find(call => call.status === "running") ?? executing[0];
   const more = executing.length > 1 ? ` · 另 ${executing.length - 1} 项` : "";
-  return { label: toolHeading(lead.toolName, lead.args, lead.intent).title + more, animated: true };
+  return { label: toolHeading(lead.toolName, lead.args, lead.intent).title + more, animated: true, since: lead.startedAt ?? undefined };
 }
 
 /**
@@ -53,5 +58,5 @@ export function unownedActivity(activity: TransportActivity | null, background: 
   const model = activity.modelActivity;
   if (model?.phase === "responding" && proseStreaming) return null;
   const suffix = jobs.length ? ` · 后台 ${jobs.length} 项` : "";
-  return { label: (model?.phase === "tool_call" ? "正在准备工具" : "思考中") + suffix, animated: true };
+  return { label: (model?.phase === "tool_call" ? "正在准备工具" : "思考中") + suffix, animated: true, since: model?.startedAt };
 }

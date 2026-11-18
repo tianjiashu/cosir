@@ -328,7 +328,27 @@
       "color_scheme": null,
       "follows_panel": true
     },
-    "image": "data:image/jpeg;base64,/9j/AAAA"
+    "image": "data:image/jpeg;base64,/9j/AAAA",
+    "full_page_cut": null
+  },
+  "screenshot_full_page_cut": {
+    "tab_id": "t3",
+    "url": "http://127.0.0.1:5173/login",
+    "title": "Sign in",
+    "loading": false,
+    "status": 200,
+    "emulation": {
+      "width": 1280,
+      "height": 800,
+      "mobile": false,
+      "color_scheme": null,
+      "follows_panel": true
+    },
+    "image": "data:image/jpeg;base64,/9j/AAAA",
+    "full_page_cut": {
+      "page_height": 9812,
+      "shown_height": 4000
+    }
   },
   "tabs": [
     {

@@ -45,6 +45,21 @@ const PAGES: Record<string, string> = {
   </script>`,
   "/clickable": `<title>Clickable</title><div style="cursor: pointer" onclick="document.title = 'card'"><span>Open card</span> <span style="cursor: pointer">details</span></div>
     <a href="/second?q=1">Next</a> <a href="https://example.com/x">External</a>`,
+  "/addressing": `<title>Addressing</title><body style="margin: 0">
+    <div style="width: 160px; height: 40px" onmouseenter="document.title = 'hovered'">Hover me</div>
+    <div draggable="true" style="width: 120px; height: 40px" ondragstart="event.dataTransfer.setData('text', 'card')">Card A</div>
+    <section style="width: 300px; height: 120px" ondragover="event.preventDefault()" ondrop="document.title = 'dropped ' + event.dataTransfer.getData('text')"><h2>Lane B</h2></section>
+    <div style="height: 2000px"></div>
+    <img alt="Logo" width="80" height="60" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='60'%3E%3Crect width='80' height='60' fill='red'/%3E%3C/svg%3E">
+    <h2>Far heading</h2></body>`,
+  "/reading": `<title>Reading</title><h1>Web browser</h1>
+    <p>A <b>web browser</b>, see <a href="/second">Safari</a>.</p>
+    <ul><li>First item</li><li>Second item</li></ul>
+    <button onclick="document.getElementById('state').textContent = 'Done'">Mark</button> <span id="state">Todo</span>
+    <div style="display: none">Hidden text</div>
+    <iframe src="/frame-text" title="Frame"></iframe>
+    <p>After frame</p>`,
+  "/frame-text": `<p>Inside frame text</p>`,
   "/pointer": `<title>Pointer</title><body style="margin: 0">
     <div style="position: absolute; left: 0; top: 0; width: 400px; height: 200px"
       oncontextmenu="event.preventDefault(); document.title = 'menu ' + event.clientX + ',' + event.clientY"
@@ -254,7 +269,7 @@ type LinkOutcome = { ok: true; value: Record<string, unknown> } | { ok: false; c
 /** 后端照参数模型的 `model_dump()` 发送：每个字段都在，未填的为 null。这里按方法与动作类型补齐。 */
 const WIRE_DEFAULTS: Record<string, Record<string, unknown>> = {
   "browser.navigate": { url: null, action: null, tab: null, new_tab: false, viewport: null, color_scheme: null },
-  "browser.snapshot": { tab: null, scope: "page", find: null, from_line: null },
+  "browser.snapshot": { tab: null, format: "outline", scope: "page", find: null, from_line: null },
   "browser.act": { tab: null },
   "browser.logs": { since: null, level: null, failed_only: false, pattern: null, limit: 50, body: null, tab: null },
   "browser.evaluate": { tab: null },
@@ -317,7 +332,7 @@ const navigate = (sessionId: number, target: BrowserNavigation, tab?: string) =>
 test("opens a tab on first navigation and returns a snapshot with refs", async () => {
   const page = pageOf(await navigate(1, { url: `${origin}/form` }));
   expect(page).toMatchObject({ tabId: "t1", title: "Form", otherTabs: [], notes: [] });
-  expect(page.snapshot).toContain(`heading "Sign up" [level=1]`);
+  expect(page.snapshot).toMatch(/heading "Sign up" \[ref=e\d+\] \[level=1\]/);
   expect(page.snapshot).toMatch(/textbox "Email" \[ref=e\d+\] value="a@b.c"/);
   expect(page.snapshot).toMatch(/button "Send" \[ref=e\d+\] \[disabled\]/);
   expect(page.snapshot).toMatch(/link "Next" \[ref=e\d+\]/);
@@ -1081,6 +1096,50 @@ test("emulates a viewport and colour scheme before loading, and keeps them acros
   expect(valueOf(await link("browser.evaluate", 53, { expression: "[innerWidth, navigator.maxTouchPoints > 0]" })).value).toBe("[1280,false]");
 });
 
+// 目的：不靠点击的动作（悬停、拖放、滚入视野、元素截图）也能用 ref 指到非交互元素；潜在缺陷：只靠脚本响应的
+// `<div>` 折叠后只剩文字、标题与图片不带 ref，模型只能先截图量坐标。
+test("addresses non-interactive elements by ref for hover, drag, scroll and element screenshots", async () => {
+  const page = pageOf(await call("navigate", { sessionId: 80, target: { url: `${origin}/addressing` }, context: context(roomy) }));
+  const hover = refOf(page.snapshot, "text", "Hover me");
+  const card = refOf(page.snapshot, "text", "Card A");
+  const lane = refOf(page.snapshot, "heading", "Lane B");
+  const far = refOf(page.snapshot, "heading", "Far heading");
+  const logo = refOf(page.snapshot, "image", "Logo");
+
+  expect(pageOf(await call("act", { sessionId: 80, actions: [{ type: "hover", target: { ref: hover } }] }))).toMatchObject({ execution: { interruption: null }, title: "hovered" });
+  expect(pageOf(await call("act", { sessionId: 80, actions: [{ type: "drag", start: { ref: card }, end: { ref: lane } }] }))).toMatchObject({ execution: { interruption: null }, title: "dropped card" });
+
+  const scrolled = pageOf(await call("act", { sessionId: 80, actions: [{ type: "scroll", ref: far }] })) as ActPage;
+  expect(scrolled.execution.interruption).toBeNull();
+  expect(pageOf(await call("snapshot", { sessionId: 80, view: { scope: "viewport" } })).snapshot).toContain("Far heading");
+
+  const shot = await call("screenshot", { sessionId: 80, fullPage: false, ref: logo });
+  expect(shot.ok, JSON.stringify(shot).slice(0, 300)).toBe(true);
+});
+
+// 目的：只读内容时拿到小得多的正文；潜在缺陷：行内元素把段落拆碎、按钮与隐藏内容混进正文、iframe 的内容丢失或挪到页尾，
+// 或读了正文之后 act 的增量失去比对基准（正文没给 ref，不能当成交付过的大纲）。
+test("reads the page as text with paragraphs, lists and frame content in place, without refs", async () => {
+  const page = valueOf(await link("browser.navigate", 81, { url: `${origin}/reading` }));
+  const mark = refOf(page.snapshot as string, "button", "Mark");
+  const text = valueOf(await link("browser.snapshot", 81, { format: "text" })).snapshot as string;
+  expect(text.split("\n")).toEqual([
+    "# Web browser",
+    "A web browser, see Safari.",
+    "- First item",
+    "- Second item",
+    "Todo",
+    "Inside frame text",
+    "After frame",
+  ]);
+  const found = valueOf(await link("browser.snapshot", 81, { format: "text", find: "second item" })).snapshot as string;
+  expect(found.split("\n").slice(1)).toEqual(["# Web browser", "- Second item"]);
+
+  const changed = observedValueOf(await link("browser.act", 81, { actions: [{ type: "click", ref: mark }] })).snapshot as string;
+  expect(changed).toMatch(/^\(changes since this tab's last browser result: 1 new or changed, 0 removed;/);
+  expect(changed).toContain('"Done"');
+});
+
 // 目的：「看起来可点」的无语义元素也能被 Agent 指定，链接带地址；潜在缺陷：`<div onclick>` 被当成容器折叠掉，模型读得到
 // 文字却点不到；cursor 继承让卡片里每一层都拿到 ref。
 test("gives refs to elements that only look clickable, once per card, and shows link addresses", async () => {
@@ -1215,7 +1274,7 @@ test("returns only what changed after an action, and the whole page after it nav
   const add = refOf(page.snapshot as string, "button", "Add");
   const changed = observedValueOf(await link("browser.act", 65, { actions: [{ type: "click", ref: add }] })).snapshot as string;
   expect(changed).toMatch(/^\(changes since this tab's last browser result: 1 new or changed, 0 removed;/);
-  expect(changed).toContain('text "1" [changed]');
+  expect(changed).toMatch(/text "1" \[ref=e\d+\] \[changed\]/);
   expect(changed).not.toContain("Item 1");
   const still = observedValueOf(await link("browser.act", 65, { actions: [{ type: "hover", ref: add }] })).snapshot as string;
   expect(still).toBe("(nothing on the page changed since this tab's last browser result)");
@@ -1249,7 +1308,8 @@ test("captures a region of the viewport, enlarging small ones, and rejects one r
   const blue = await region({ x: 250, y: 20, width: 100, height: 50 });
   const bluePixel = await pixelAt(blue, 10, 10);
   expect(bluePixel.blue).toBeGreaterThan(200);
-  expect(bluePixel.red).toBeLessThan(60);
+  // 判据是「截到的是蓝块不是红块」（红块的红色 > 200）：Chromium 156 的 JPEG 在纯蓝上红色约 65（实测），留出编码偏移。
+  expect(bluePixel.red).toBeLessThan(100);
   expect(await link("browser.screenshot", 72, { region: { x: 1200, y: 0, width: 500, height: 10 } })).toMatchObject({ ok: false, code: "OUT_OF_VIEWPORT" });
 });
 

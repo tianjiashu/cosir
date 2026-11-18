@@ -4,6 +4,7 @@ import { ansiColor, xtermCardTheme } from "@/components/terminal/xterm-appearanc
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { useThemeState } from "@/lib/theme/theme-preference";
 
+import { DetailBudget } from "../detail-budget";
 import { TerminalOutputParser } from "./output-parser";
 import type { OutputRun, OutputTail } from "./text";
 
@@ -31,12 +32,12 @@ export function useParsedOutput(output: string): { tail: OutputTail | null; read
   return { tail, readText };
 }
 
-/** 卡片里的输出摘要：末尾几行带颜色的文字，完整输出与可点的链接在阅读器。 */
+/** 卡片里的输出摘要：末尾几行带颜色的文字（一行极长时按高度上限只露结尾），完整输出与可点的链接在阅读器。 */
 export function TerminalOutputPreview({ lines }: { lines: OutputRun[][] }) {
   const { resolvedTheme } = useThemeState();
   const theme = useMemo(() => xtermCardTheme(resolvedTheme), [resolvedTheme]);
   return (
-    <pre data-terminal-mode="preview" className="font-mono break-words whitespace-pre-wrap" style={{ color: theme.foreground }}>
+    <DetailBudget anchor="end"><pre data-terminal-mode="preview" className="font-mono break-words whitespace-pre-wrap" style={{ color: theme.foreground }}>
       {lines.map((runs, index) => <div key={index} className="min-h-[1lh]">
         {runs.map((run, runIndex) => <span key={runIndex} style={{
           color: run.color === null ? undefined : ansiColor(run.color, theme),
@@ -44,6 +45,6 @@ export function TerminalOutputPreview({ lines }: { lines: OutputRun[][] }) {
           opacity: run.dim ? 0.7 : undefined,
         }}>{run.text}</span>)}
       </div>)}
-    </pre>
+    </pre></DetailBudget>
   );
 }

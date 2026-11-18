@@ -20,7 +20,6 @@ export type BrowserErrorCode =
   | "PAGE_UNRESPONSIVE"
   | "TAB_BUSY"
   | "OPERATION_UNKNOWN"
-  | "HANDED_OFF"
   | "USER_ACTIVE"
   | "DIALOG_OPEN"
   | "NO_DIALOG"
@@ -73,7 +72,6 @@ export const BROWSER_USER_WORDING: Record<BrowserErrorCode, string> = {
   PAGE_UNRESPONSIVE: "页面没有响应",
   TAB_BUSY: "页面上一次操作尚未结束",
   OPERATION_UNKNOWN: "页面输入状态未知，请关闭标签后重新打开",
-  HANDED_OFF: "页面已交给用户，请先交还",
   USER_ACTIVE: "页面正在被使用",
   DIALOG_OPEN: "页面正在等待弹窗作答",
   NO_DIALOG: "弹窗已不在",

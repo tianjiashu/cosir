@@ -2,7 +2,6 @@ import { memo } from "react";
 import { useAuiState } from "@assistant-ui/react";
 
 import { AgentConfigurationDraftTool } from "@/components/conversation/tools/configuration-draft/agent-configuration-draft-tool";
-import { DeliverablesCard } from "@/components/conversation/tools/reply-presentation/deliverables-card";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
 import { readToolArtifact } from "@/lib/assistant/tools/tool-artifact";
@@ -32,7 +31,7 @@ function StandaloneArtifact({ card, sessionId, interactive, sessionCancelling, i
   return <AgentConfigurationDraftTool inherited={inherited} sessionId={sessionId} toolCallId={card.part.toolCallId} artifact={artifact} interactive={interactive} sessionCancelling={sessionCancelling} />;
 }
 
-/** 产物区：本轮改动（聚合）排在前，其余卡片按调用顺序（交付物组在第一次交付的位置）；每张卡各自隔离渲染错误。 */
+/** 产物区：本轮改动（聚合）排在前，其余卡片按调用顺序；每张卡各自隔离渲染错误。交付卡不在这里，是回合里的块。 */
 export const ArtifactZone = memo(function ArtifactZone({ inherited, sessionId, artifacts, interactive, sessionCancelling }: ArtifactZoneProps) {
   if (artifacts.length === 0) return null;
   return (
@@ -46,16 +45,6 @@ export const ArtifactZone = memo(function ArtifactZone({ inherited, sessionId, a
           fallback={({ onRetry }) => <RenderErrorCard scope="part" label="文件操作记录" onRetry={onRetry} />}
         >
           <ChangesArtifact card={card} sessionId={sessionId} />
-        </RenderIsolationBoundary>
-      ) : card.kind === "deliverables" ? (
-        <RenderIsolationBoundary
-          key="deliverables"
-          scope="part"
-          resetKey={`deliverables:${card.callIndexes.join(",")}`}
-          metadata={{ renderer: "deliverables-card", partIndices: card.callIndexes }}
-          fallback={({ onRetry }) => <RenderErrorCard scope="part" label="交付物" onRetry={onRetry} />}
-        >
-          <DeliverablesCard card={card} sessionId={sessionId} />
         </RenderIsolationBoundary>
       ) : (
         <RenderIsolationBoundary

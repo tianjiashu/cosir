@@ -5,7 +5,7 @@ import { BODY_LIMITS, CANCELED_FAILURE, TabLog } from "@/electron/main/browser/t
 const consoleEntry = (level: "debug" | "info" | "warning" | "error", text: string) => ({ level, text, source: null, frame: null });
 
 describe("TabLog", () => {
-  // 目的：「上次以来」只在页面结果处消费；潜在缺陷：只为拿标签 id 的调用（交接）吞掉了下载完成之类的备注。
+  // 目的：「上次以来」只在页面结果处消费；潜在缺陷：只为拿标签 id 的调用吞掉了下载完成之类的备注。
   it("hands notes and new-log counts to page results only once, and reading logs consumes nothing", () => {
     const log = new TabLog();
     log.note("a download started");
@@ -309,8 +309,8 @@ describe("TabLog response bodies", () => {
     fetchStarted(log, "b");
     log.responseReceived("b", 200, 1.1, false, "application/json");
     const b = log.requestFinished("b", 1.2, 10)!;
-    log.bodyDeferred(a, "a");
-    log.bodyDeferred(b, "b");
+    log.bodyDeferred(a);
+    log.bodyDeferred(b);
     expect(log.readBody(a)!.body).toMatchObject({ state: "deferred", text: null, reason: expect.stringContaining("dialog") });
     expect(log.takeDeferred()).toEqual([{ seq: a, requestId: "a" }, { seq: b, requestId: "b" }]);
     expect(log.takeDeferred()).toEqual([]);
@@ -321,5 +321,14 @@ describe("TabLog response bodies", () => {
     // 迟到的回执不改已定的状态。
     log.bodyCaptured(b, "late");
     expect(log.readBody(b)!.body.state).toBe("unavailable");
+  });
+
+  // 目的：截掉的部分不再保存，要让模型知道读不到全文是工具的上限；潜在缺陷：一个「…」看不出截了多少、是不是页面原文。
+  it("marks how much of a long console message or address was cut", () => {
+    const log = new TabLog();
+    log.console(consoleEntry("error", "x".repeat(520)));
+    log.requestStarted("r", { method: "GET", url: `https://a.test/${"p".repeat(600)}`, resourceType: "Fetch", timestamp: 1 });
+    expect(log.read({ kind: "console", limit: 5 }).entries[0].text).toBe(`${"x".repeat(500)}…(+20 chars)`);
+    expect(log.read({ kind: "network", failedOnly: false, limit: 5 }).entries[0].url).toMatch(/…\(\+115 chars\)$/);
   });
 });

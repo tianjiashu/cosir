@@ -19,7 +19,7 @@ const EMPTY_LAUNCH: TransportRunLaunch = { modelConfigId: null, reasoningEffort:
 
 /** 单测共用的 Session 视角 snapshot 构造器：只填契约必填字段，调用方覆盖需要的部分。 */
 export function transportState(overrides: Partial<TransportState> = {}): TransportState {
-  return { title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [], deliverables: [], ...overrides };
+  return { title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], deliverables: [], ...overrides };
 }
 
 function textPart(text: string): TransportMessagePart {

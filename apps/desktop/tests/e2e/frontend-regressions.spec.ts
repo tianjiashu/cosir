@@ -4,7 +4,7 @@ import type { TransportState } from "../../lib/assistant/contract";
 import { readState, seedState } from "./transport-fixtures";
 import { API_ORIGIN, OUTPUT_DIR } from "./e2e-env";
 
-const emptyState = (): TransportState => ({ title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [], deliverables: [] });
+const emptyState = (): TransportState => ({ title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], deliverables: [] });
 
 test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
@@ -114,7 +114,8 @@ test("工具运行中保持单行，完成拿到展示数据后才可展开且�
   const toolRow = assistant.locator('button[data-slot="call-row"]');
   await expect(toolRow).toBeVisible({ timeout: 3_000 });
   // 命中行拆成可点开的「路径:行号」与高亮正文两部分。
-  const match = assistant.getByText("lifecycle.test.ts:1", { exact: true });
+  // 路径按无障碍名称找：显示被拆成目录、文件名与行号几段，完整名称只在读屏文本里。
+  const match = assistant.getByRole("button", { name: "lifecycle.test.ts:1", exact: true });
   await expect(match).toBeHidden();
   await toolRow.click();
   await expect(match).toBeVisible();
@@ -173,15 +174,14 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   await expect(changes).toContainText("涉及 2 个路径");
   await expect(changes).toContainText("1 次调用");
   const attention = assistant.locator('[data-slot="awaiting-card"]');
-  await expect(attention).toContainText("交给你操作网页");
-  await expect(attention).toContainText("输入完成后点「交还」，Agent 会继续安装");
-  await expect(attention.getByRole("button", { name: "交还" })).toBeVisible();
+  await expect(attention).toContainText("默认间隔要改吗？");
+  await expect(attention.getByRole("button", { name: "提交" })).toBeVisible();
   await assistant.screenshot({ path: `${SHOTS}/impl-settled.png`, animations: "disabled" });
 
   await head.click();
   for (const group of await assistant.locator('[data-slot="activity-head"]').all()) await group.click();
   const rows = assistant.locator("[data-tool-call-id]").filter({ has: page.locator('[data-slot="call-row"]') });
-  // 交接在等交还：就地是等待卡，不是一行调用。
+  // 提问在等回答：就地是等待卡，不是一行调用。
   await expect(rows).toHaveCount(3);
   await expect(rows.nth(0)).toContainText("搜索内容");
   await expect(rows.nth(0)).toContainText('"setInterval|tick" in src/');
@@ -190,7 +190,7 @@ test("交替序列：结束后过程收起带计数，结论、改动卡与等�
   await expect(rows.nth(1).locator('[data-call-status="failed"]')).toHaveCount(1);
   await expect(rows.nth(2)).toContainText("应用补丁");
   await expect(rows.nth(2)).toContainText("src/config.ts");
-  await expect(assistant.locator('[data-tool-call-id="alt-handoff"] [data-slot="awaiting-card"]')).toBeVisible();
+  await expect(assistant.locator('[data-tool-call-id="alt-question"] [data-slot="awaiting-card"]')).toBeVisible();
   await expect(assistant.getByText("先找调度循环在哪里。", { exact: true })).toBeVisible();
   await assistant.screenshot({ path: `${SHOTS}/impl-expanded.png`, animations: "disabled" });
 

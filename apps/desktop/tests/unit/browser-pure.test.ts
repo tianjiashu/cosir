@@ -8,16 +8,17 @@ import type { Box } from "@/electron/main/browser/input/element";
 import { BrowserOperation, type FileChooser } from "@/electron/main/browser/operation";
 import type { BrowserTab } from "@/electron/main/browser/browser-tab";
 import type { SendOptions } from "@/electron/main/browser/cdp-session";
-vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
+vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn(), appendHostLogLine: vi.fn() }));
 import { parseAct, parseDropSessions, parseNavigate, parseSnapshot, type PageAction } from "@/electron/main/browser/params";
 import { addressToUrl, isPageUrl, pageUrl } from "@/electron/main/browser/page-url";
 import { describeTarget } from "@/electron/main/browser/input/targets";
 import { RefRegistry } from "@/electron/main/browser/ref-registry";
 import type { AXNode, SnapshotDocument } from "@/electron/main/browser/snapshot/document";
-import { documentLayout, frameRegion, pointerRoots, visibleNodes, type DomSnapshot } from "@/electron/main/browser/snapshot/layout";
+import { blockNodes, documentLayout, frameRegion, pointerRoots, visibleNodes, type DomSnapshot } from "@/electron/main/browser/snapshot/layout";
 import { deviceRegion, geometryOf, overlayQuad } from "@/electron/main/browser/page-geometry";
 import { buildOutline } from "@/electron/main/browser/snapshot/outline";
-import { changesView, snapshotView } from "@/electron/main/browser/snapshot/views";
+import { changesView, pageTextView, snapshotView } from "@/electron/main/browser/snapshot/views";
+import { buildPageText } from "@/electron/main/browser/snapshot/page-text";
 
 
 function codeOf(run: () => unknown): string {
@@ -34,7 +35,7 @@ describe("params", () => {
   const base = { session_id: 7, limits: { per_session: 5, total: 20 }, download_dir: "/ws/.cosir/Download" };
   // 后端照 model_dump() 原样发送：参数模型的每个字段都在，未填的为 null（导出的 schema 按这个形状校验）。
   const navigate = (args: Record<string, unknown>) => ({ ...base, url: null, action: null, tab: null, new_tab: false, viewport: null, color_scheme: null, ...args });
-  const snapshot = (args: Record<string, unknown>) => ({ ...base, tab: null, scope: "page", find: null, from_line: null, ...args });
+  const snapshot = (args: Record<string, unknown>) => ({ ...base, tab: null, format: "outline", scope: "page", find: null, from_line: null, ...args });
   const wire = {
     hover: (ref: string) => ({ type: "hover", ref, x: null, y: null }),
     click: (args: Record<string, unknown>) => ({ type: "click", ref: null, x: null, y: null, button: "left", click_count: 1, repeat: 1, modifiers: null, ...args }),
@@ -57,11 +58,11 @@ describe("params", () => {
     expect(parseNavigate(navigate({ action: "reload", viewport: "auto" })).emulation).toEqual({ viewport: "follow" });
     expect(parseNavigate(navigate({ action: "reload", color_scheme: "dark" })).emulation).toEqual({ colorScheme: "dark" });
     expect(parseSnapshot(snapshot({}))).toEqual({
-      sessionId: 7, handoffTabs: [], view: { scope: "page" }, context: { limits: { perSession: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
+      sessionId: 7, view: { format: "outline", scope: "page" }, context: { limits: { perSession: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
     });
-    expect(parseSnapshot(snapshot({ from_line: 40, scope: "viewport", find: "Buy" }))).toMatchObject({ view: { scope: "viewport", find: "Buy", fromLine: 40 } });
+    expect(parseSnapshot(snapshot({ format: "text", from_line: 40, scope: "viewport", find: "Buy" }))).toMatchObject({ view: { format: "text", scope: "viewport", find: "Buy", fromLine: 40 } });
     // 每个请求都带上下文（宿主据此刷新上限）；参数模型的字段一个都不能少。
-    expect(codeOf(() => parseSnapshot({ session_id: 7, tab: null, scope: "page", find: null, from_line: null }))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseSnapshot({ session_id: 7, tab: null, format: "outline", scope: "page", find: null, from_line: null }))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseSnapshot({ ...base, tab: null }))).toBe("INVALID_PARAMS");
     expect(parseDropSessions({ session_ids: [1, 2] })).toEqual([1, 2]);
   });
@@ -147,7 +148,7 @@ function formatSnapshot(document: SnapshotDocument, refs: RefRegistry, options: 
 
 /** 一份文档的读取结果（没有 pointer 元素、没有视口内的节点、没有展开的子框架，除非另给）。 */
 function doc(nodes: AXNode[], extra: Partial<SnapshotDocument> = {}): SnapshotDocument {
-  return { nodes, pointer: new Set(), inView: new Set(), frames: new Map(), ...extra };
+  return { nodes, pointer: new Set(), blocks: new Set(), inView: new Set(), frames: new Map(), ...extra };
 }
 
 describe("formatSnapshot", () => {
@@ -163,7 +164,7 @@ describe("formatSnapshot", () => {
     node("10", "Iframe", { parentId: "2" }),
   ];
 
-  it("gives refs only to interactive nodes and folds noise", () => {
+  it("gives refs to lines backed by an element and folds noise", () => {
     const refs = new RefRegistry();
     const snapshot = formatSnapshot(doc(tree), refs);
     expect(snapshot.text).toBe([
@@ -197,6 +198,40 @@ describe("formatSnapshot", () => {
     refs.clear();
     expect(refs.resolve("e1")).toBeUndefined();
     expect(formatSnapshot(doc(tree), refs).text).toContain("[ref=e4]");
+  });
+
+  // 目的：悬停、拖动、滚入视野、元素截图都能指定非交互元素；潜在缺陷：只靠脚本响应的 `<div>` 被折叠后只剩文字、
+  // 指不到；夹着别的元素的容器把 ref 挂到文字上，落点却在容器中心；文档根、列表符号、输入框内部的值拿到没用的 ref。
+  it("addresses every element line, and a folded container through its only text run", () => {
+    const refs = new RefRegistry();
+    const page = doc([
+      node("1", "RootWebArea", { backendDOMNodeId: 1, childIds: ["2", "3", "4", "5", "6"] }),
+      node("2", "banner", { parentId: "1", backendDOMNodeId: 20, childIds: ["2a"] }),
+      node("2a", "StaticText", { parentId: "2", name: { value: "A" }, backendDOMNodeId: 21 }),
+      node("3", "generic", { parentId: "1", backendDOMNodeId: 30, childIds: ["3a"] }),
+      node("3a", "StaticText", { parentId: "3", name: { value: "Hover me" }, backendDOMNodeId: 31 }),
+      node("4", "paragraph", { parentId: "1", backendDOMNodeId: 40, childIds: ["4a", "4b"] }),
+      node("4a", "StaticText", { parentId: "4", name: { value: "Read the" }, backendDOMNodeId: 41 }),
+      node("4b", "link", { parentId: "4", name: { value: "guide" }, backendDOMNodeId: 42 }),
+      node("5", "ListMarker", { parentId: "1", name: { value: "•" }, backendDOMNodeId: 50 }),
+      node("6", "textbox", { parentId: "1", name: { value: "Email" }, backendDOMNodeId: 60, childIds: ["6a"] }),
+      node("6a", "generic", { parentId: "6", backendDOMNodeId: 61, childIds: ["6b"] }),
+      node("6b", "StaticText", { parentId: "6a", name: { value: "a@b.c" }, backendDOMNodeId: 62 }),
+    ]);
+    expect(formatSnapshot(page, refs).text).toBe([
+      "- banner [ref=e1]",
+      "  - text \"A\"",
+      "- text \"Hover me\" [ref=e2]",
+      "- text \"Read the\"",
+      "- link \"guide\" [ref=e3]",
+      "- ListMarker \"•\"",
+      "- textbox \"Email\" [ref=e4]",
+      "  - text \"a@b.c\"",
+    ].join("\n"));
+    // 文字行的 ref 指向容器元素（动作要的是元素的框），说明写成这段文字，工具卡片据此列出目标。
+    expect(refs.resolve("e2")).toEqual({ backendNodeId: 30 });
+    expect(refs.label("e2")).toBe('text "Hover me"');
+    expect(formatSnapshot(page, refs).text).toContain('- text "Hover me" [ref=e2]');
   });
 
   // 目的：快照自己守预算且能接着读；潜在缺陷：长页面后半段的元素模型看不到也点不到。
@@ -258,12 +293,12 @@ describe("formatSnapshot", () => {
     const outline = buildOutline(page, refs);
     expect(snapshotView(outline, { scope: "viewport" }).split("\n")).toEqual([
       "(showing the part of the page in the viewport, with their ancestors: 2 of 4 lines)",
-      "- list \"Orders\"",
-      "  - button \"Delete order 1\" [ref=e1]",
+      "- list \"Orders\" [ref=e1]",
+      "  - button \"Delete order 1\" [ref=e2]",
     ]);
     expect(snapshotView(outline, { find: "order 2" }).split("\n").slice(1)).toEqual([
-      "- list \"Orders\"",
-      "  - button \"Delete order 2\" [ref=e2]",
+      "- list \"Orders\" [ref=e1]",
+      "  - button \"Delete order 2\" [ref=e3]",
     ]);
     expect(snapshotView(outline, { scope: "viewport", find: "footer" })).toBe("(nothing on the page: the part of the page in the viewport, lines matching \"footer\")");
   });
@@ -320,8 +355,163 @@ describe("formatSnapshot", () => {
       "  - text \"Open card\"",
       "- link \"Next\" [ref=e2] url=\"/next?q=1#top\"",
     ]);
-    expect(text).toMatch(/link "Docs" \[ref=e3\] url="https:\/\/docs\.test\/a{90,}…"$/);
+    // 截断的地址不能拿去导航：标出截掉多少，并在同一行提示改点 ref。
+    expect(text).toMatch(/link "Docs" \[ref=e3\] url="https:\/\/docs\.test\/a{90,}…\(\+98 chars\)" \[url cut: click this ref to open it\]$/);
     expect(refs.resolve("e1")).toEqual({ backendNodeId: 20 });
+  });
+
+  // 目的：正文是 Agent 要读的内容；潜在缺陷：长段落截在 200 字，任何视图都拿不回后半段（实测：帖子正文的后几节丢失）。
+  it("keeps long text whole, split into consecutive lines at sentence breaks that find can reach", () => {
+    const sentence = "露营装备第一系统包含炉具与燃料，用来煮饭烧水。";
+    const body = `${sentence.repeat(30)}③ 收纳系统：最后一句。`;
+    const page = [
+      node("1", "RootWebArea", { childIds: ["2"] }),
+      node("2", "paragraph", { parentId: "1", childIds: ["2a"] }),
+      node("2a", "StaticText", { parentId: "2", name: { value: body } }),
+    ];
+    const outline = buildOutline(doc(page), new RefRegistry());
+    const lines = outline.entries.map((entry) => entry.text);
+    expect(lines.length).toBeGreaterThan(1);
+    expect(lines.every((line) => line.startsWith("text \"") && line.length <= 410)).toBe(true);
+    expect(lines.slice(0, -1).every((line) => line.endsWith("。\""))).toBe(true);
+    expect(lines.map((line) => line.slice(6, -1)).join("")).toBe(body);
+    expect(lines.join("")).not.toContain("…");
+    // 第一块沿用原来的键，后续块带块号：增量比对按块认，改了一句只报那一块。
+    expect(outline.entries.map((entry) => entry.key)).toEqual([":2/text0", ...lines.slice(1).map((_, index) => `:2/text0.${index + 1}`)]);
+    expect(snapshotView(outline, { find: "③" })).toContain("③ 收纳系统：最后一句。");
+  });
+
+  // 目的：名字与值超长时只截断、不丢信号；潜在缺陷：模型把工具的截断当成页面上就只有这么多。
+  it("marks how much of a long name or value was cut", () => {
+    const page = [
+      node("1", "RootWebArea", { childIds: ["2"] }),
+      node("2", "textbox", { parentId: "1", backendDOMNodeId: 20, name: { value: "n".repeat(250) }, value: { value: "v".repeat(230) } }),
+    ];
+    const text = formatSnapshot(doc(page), new RefRegistry()).text;
+    expect(text).toContain(`textbox "${"n".repeat(200)}…(+50 chars)"`);
+    expect(text).toContain(`value="${"v".repeat(200)}…(+30 chars)"`);
+  });
+});
+
+describe("buildPageText", () => {
+  // 目的：读文章、文档与搜索结果时一次拿到可读的正文；潜在缺陷：行内元素各成一行把段落拆碎（无障碍树不分行内与块级），
+  // 表单控件与列表符号混进正文，iframe 的内容丢失或挪到页尾，看不见的内容被读出来。
+  it("joins inline content into paragraphs, breaks at blocks, and keeps only content", () => {
+    const page = doc([
+      node("1", "RootWebArea", { childIds: ["h", "p", "ul", "f", "hidden", "zh", "btn"] }),
+      node("h", "heading", { parentId: "1", name: { value: "Web browser" }, backendDOMNodeId: 10, properties: [{ name: "level", value: { value: 1 } }], childIds: ["ht"] }),
+      node("ht", "StaticText", { parentId: "h", name: { value: "Web browser" } }),
+      node("p", "paragraph", { parentId: "1", backendDOMNodeId: 20, childIds: ["p1", "pb", "p2", "pa", "p3", "br", "p4"] }),
+      node("p1", "StaticText", { parentId: "p", name: { value: "A " }, backendDOMNodeId: 21 }),
+      node("pb", "generic", { parentId: "p", backendDOMNodeId: 22, childIds: ["pbt"] }),
+      node("pbt", "StaticText", { parentId: "pb", name: { value: "web browser" }, backendDOMNodeId: 23 }),
+      node("p2", "StaticText", { parentId: "p", name: { value: ", see " }, backendDOMNodeId: 24 }),
+      node("pa", "link", { parentId: "p", name: { value: "Safari" }, backendDOMNodeId: 25, childIds: ["pat"] }),
+      node("pat", "StaticText", { parentId: "pa", name: { value: "Safari" }, backendDOMNodeId: 26 }),
+      node("p3", "StaticText", { parentId: "p", name: { value: "." }, backendDOMNodeId: 27 }),
+      node("br", "LineBreak", { parentId: "p" }),
+      node("p4", "StaticText", { parentId: "p", name: { value: "Second line" }, backendDOMNodeId: 28 }),
+      node("ul", "list", { parentId: "1", backendDOMNodeId: 30, childIds: ["li"] }),
+      node("li", "listitem", { parentId: "ul", backendDOMNodeId: 31, childIds: ["lm", "img", "lt"] }),
+      node("lm", "ListMarker", { parentId: "li", name: { value: "•" } }),
+      node("img", "image", { parentId: "li", name: { value: "Logo" }, backendDOMNodeId: 32 }),
+      node("lt", "StaticText", { parentId: "li", name: { value: "Item" }, backendDOMNodeId: 33 }),
+      node("f", "Iframe", { parentId: "1", name: { value: "Ads" }, backendDOMNodeId: 40 }),
+      node("hidden", "generic", { parentId: "1", ignored: true, childIds: ["ht2"] }),
+      node("ht2", "StaticText", { parentId: "hidden", ignored: true, name: { value: "Secret" } }),
+      node("zh", "paragraph", { parentId: "1", backendDOMNodeId: 50, childIds: ["z1", "za"] }),
+      node("z1", "StaticText", { parentId: "zh", name: { value: "中文" }, backendDOMNodeId: 51 }),
+      node("za", "link", { parentId: "zh", name: { value: "链接" }, backendDOMNodeId: 52, childIds: ["zat"] }),
+      node("zat", "StaticText", { parentId: "za", name: { value: "链接" } }),
+      node("btn", "button", { parentId: "1", name: { value: "Buy" }, backendDOMNodeId: 60 }),
+    ], { blocks: new Set([20, 30, 31, 50]), inView: new Set([10, 21]) });
+    const text = buildPageText(page);
+    expect(text.lines.map((line) => line.text)).toEqual([
+      "# Web browser",
+      "A web browser, see Safari.",
+      "Second line",
+      "- [image: Logo] Item",
+      "[iframe \"Ads\": contents not shown]",
+      "中文链接",
+    ]);
+    expect(text.lines.filter((line) => line.visible).map((line) => line.text)).toEqual(["# Web browser", "A web browser, see Safari."]);
+    expect(text.frames).toBe(1);
+  });
+
+  // 目的：表格一行读成一行；潜在缺陷：单元格是块级、一格一行，数据表读不出哪个值属于哪一行；单元格里的段落把一行拆开。
+  it("writes a table row as one line with its non-empty cells", () => {
+    const page = doc([
+      node("1", "RootWebArea", { childIds: ["r"] }),
+      node("r", "row", { parentId: "1", backendDOMNodeId: 10, childIds: ["c1", "c2", "c3"] }),
+      node("c1", "cell", { parentId: "r", backendDOMNodeId: 11, childIds: ["t1"] }),
+      node("t1", "StaticText", { parentId: "c1", name: { value: "1." } }),
+      node("c2", "cell", { parentId: "r", backendDOMNodeId: 12 }),
+      node("c3", "cell", { parentId: "r", backendDOMNodeId: 13, childIds: ["p1", "p2"] }),
+      node("p1", "paragraph", { parentId: "c3", backendDOMNodeId: 14, childIds: ["t2"] }),
+      node("t2", "StaticText", { parentId: "p1", name: { value: "Title" } }),
+      node("p2", "paragraph", { parentId: "c3", backendDOMNodeId: 15, childIds: ["t3"] }),
+      node("t3", "StaticText", { parentId: "p2", name: { value: "subtitle" } }),
+    ], { blocks: new Set([10, 11, 12, 13, 14, 15]) });
+    expect(buildPageText(page).lines.map((line) => line.text)).toEqual(["1. | Title subtitle"]);
+    // 套着整张内层表格的外层行只是排版：照常断行，内层每行各成一行。
+    const layout = doc([
+      node("1", "RootWebArea", { childIds: ["o"] }),
+      node("o", "LayoutTableRow", { parentId: "1", backendDOMNodeId: 1, childIds: ["oc"] }),
+      node("oc", "LayoutTableCell", { parentId: "o", backendDOMNodeId: 2, childIds: ["a", "b"] }),
+      node("a", "LayoutTableRow", { parentId: "oc", backendDOMNodeId: 3, childIds: ["at"] }),
+      node("at", "StaticText", { parentId: "a", name: { value: "First story" } }),
+      node("b", "LayoutTableRow", { parentId: "oc", backendDOMNodeId: 4, childIds: ["bt"] }),
+      node("bt", "StaticText", { parentId: "b", name: { value: "Second story" } }),
+    ], { blocks: new Set([1, 2, 3, 4]) });
+    expect(buildPageText(layout).lines.map((line) => line.text)).toEqual(["First story", "Second story"]);
+  });
+
+  // 目的：iframe 里的正文接在它所在的位置；潜在缺陷：子框架内容追加到页尾，读的顺序与页面不一致。
+  it("splices frame text where the iframe is", () => {
+    const frame = doc([
+      node("1", "RootWebArea", { childIds: ["2"] }),
+      node("2", "StaticText", { parentId: "1", name: { value: "Inside" } }),
+    ]);
+    const page = doc([
+      node("1", "RootWebArea", { childIds: ["a", "f", "b"] }),
+      node("a", "StaticText", { parentId: "1", name: { value: "Before" } }),
+      node("f", "Iframe", { parentId: "1", backendDOMNodeId: 70 }),
+      node("b", "StaticText", { parentId: "1", name: { value: "After" } }),
+    ], { frames: new Map([[70, frame]]) });
+    expect(buildPageText(page).lines.map((line) => line.text)).toEqual(["Before", "Inside", "After"]);
+  });
+
+  // 目的：筛选与分页和大纲一致，命中行带上所在小节；潜在缺陷：只给孤零零的命中行，模型不知道它属于哪一节。
+  it("filters by query or viewport with section headings, and pages by budget", () => {
+    const text = { frames: 0, lines: [
+      { text: "# Pricing", visible: false, heading: true },
+      { text: "Free plan costs nothing", visible: false, heading: false },
+      { text: "# Support", visible: true, heading: true },
+      { text: "Email us", visible: true, heading: false },
+    ] };
+    expect(pageTextView(text, { find: "free" }).split("\n")).toEqual([
+      "(showing lines matching \"free\", with their section headings: 2 of 4 lines)",
+      "# Pricing",
+      "Free plan costs nothing",
+    ]);
+    expect(pageTextView(text, { scope: "viewport" }).split("\n").slice(1)).toEqual(["# Support", "Email us"]);
+    expect(pageTextView(text, { budget: 40 })).toMatch(/read on with from_line=3$/);
+    expect(pageTextView({ frames: 0, lines: [] })).toBe("(the page has no readable text)");
+  });
+});
+
+describe("blockNodes", () => {
+  // 目的：正文按块级元素断行；潜在缺陷：把 inline-block、display:contents 当成块级，按钮里的图标、包裹层把一句话拆开。
+  it("keeps laid-out nodes whose display is neither inline nor contents", () => {
+    const snapshot: DomSnapshot = {
+      strings: ["auto", "block", "inline", "inline-block", "list-item", "flex"],
+      documents: [{
+        frameId: 0,
+        nodes: { parentIndex: [-1, 0, 1, 1, 0, 0], backendNodeId: [100, 101, 102, 103, 104, 105] },
+        layout: { nodeIndex: [0, 1, 2, 3, 4, 5], styles: [[0, 1], [0, 1], [0, 2], [0, 3], [0, 4], [0, 5]], bounds: Array(6).fill([0, 0, 1, 1]) },
+      }],
+    };
+    expect([...blockNodes(snapshot)]).toEqual([100, 101, 104, 105]);
   });
 });
 
@@ -487,6 +677,7 @@ function fakeSession(
     },
   };
   const tab = {
+    log: { nextSeq: 1 },
     sessionId: 1, tabId: "t1", documentGeneration: 0,
     contents: { isDestroyed: () => false }, noteAgentInput() {}, operationChanged() {}, operationSettled() {},
     refLabel: () => undefined,

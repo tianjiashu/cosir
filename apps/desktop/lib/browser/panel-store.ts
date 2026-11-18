@@ -36,7 +36,7 @@ export const useBrowserPanelStore = create<BrowserPanelState>()((set) => ({
 }));
 
 /**
- * 把某个 Session 的某个标签摆到用户面前：面板切到它，并显示浏览器面板。工具卡片的「打开」、交接弹出、链接与新开标签
+ * 把某个 Session 的某个标签摆到用户面前：面板切到它，并显示浏览器面板。工具卡片的「打开」、链接与新开标签
  * 都经这里，不各自拼这两步。
  */
 export function revealBrowserTab(sessionId: number, tabId: string): void {

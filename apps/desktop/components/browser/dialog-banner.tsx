@@ -10,7 +10,7 @@ import { notify } from "@/lib/notify";
 const TITLES: Record<BrowserDialog["type"], string> = { alert: "网页提示", confirm: "网页请你确认", prompt: "网页请你输入" };
 
 /**
- * 标签上待答的 JS 弹窗：网页内容上方的提示条，与交接提示同一摆法（在原生画面占位区之外，不会被网页盖住）。
+ * 标签上待答的 JS 弹窗：网页内容上方的提示条（在原生画面占位区之外，不会被网页盖住）。
  *
  * 页面在作答前一直停着，所以这是常显的「等你操作」状态，不用弹层。alert 只有「确定」，confirm 有「确定」
  * 「取消」，prompt 带预填默认值的输入框。用户与 Agent（`browser_act` 的 `dialog` 动作）都能作答、先到的生效；

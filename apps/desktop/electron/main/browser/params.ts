@@ -24,7 +24,7 @@ import type { ConsoleLevel, LogQuery } from "./tab-log";
  */
 
 /** 后端每个请求都带、不属于工具参数的键。 */
-const HOST_KEYS = new Set(["session_id", "limits", "download_dir", "handoff_tabs"]);
+const HOST_KEYS = new Set(["session_id", "limits", "download_dir"]);
 
 type ToolName = keyof typeof toolArgsSchemas;
 const ajv = new Ajv2020({ allErrors: false, strict: false });
@@ -36,7 +36,7 @@ const validators = new Map<ToolName, ValidateFunction>(
  * 每个请求都带后端给出的标签上下文：宿主据此刷新上限（页面开出的标签没有请求可带，用最近一次的），下载目录
  * 只在这次请求新建标签时用。
  */
-type SessionRequest = { sessionId: number; context: BrowserTabContext; handoffTabs?: string[] };
+type SessionRequest = { sessionId: number; context: BrowserTabContext };
 /** 指向本 Session 的某个标签（省略即当前标签）。 */
 export type TabRequest = SessionRequest & { tab?: string };
 export type NavigateRequest = TabRequest & {
@@ -97,7 +97,7 @@ export function parseNavigate(params: unknown): NavigateRequest {
 
 export function parseSnapshot(params: unknown): SnapshotRequest {
   const { request, args } = toolRequest("browser_snapshot", params);
-  const view: SnapshotView = { scope: args.scope as "page" | "viewport", fromLine: given(args.from_line as number | null) };
+  const view: SnapshotView = { format: args.format as "outline" | "text", scope: args.scope as "page" | "viewport", fromLine: given(args.from_line as number | null) };
   const find = given(args.find as string | null);
   return { ...request, view: find === undefined ? view : { ...view, find } };
 }
@@ -147,9 +147,7 @@ function toolRequest(tool: ToolName, params: unknown): { request: TabRequest; ar
   const validate = validators.get(tool)!;
   if (!validate(args)) throw invalid(ajv.errorsText(validate.errors, { dataVar: "params" }).slice(0, 500));
   const tab = given(args.tab as string | null);
-  const handed = value.handoff_tabs ?? [];
-  if (!Array.isArray(handed) || handed.some((id) => typeof id !== "string")) throw invalid("handoff_tabs must be an array of tab ids");
-  return { request: { sessionId: sessionId(value.session_id), context: tabContext(value), handoffTabs: handed, ...(tab ? { tab } : {}) }, args };
+  return { request: { sessionId: sessionId(value.session_id), context: tabContext(value), ...(tab ? { tab } : {}) }, args };
 }
 
 /** 线上的鼠标落点：ref 与坐标恰好给了一种（后端校验过），另一种为 null。 */

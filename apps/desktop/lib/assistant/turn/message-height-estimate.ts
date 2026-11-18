@@ -1,4 +1,4 @@
-import { CAPSULE_HEIGHT, deliverableRows, type DeliverablesCard } from "./deliverable-layout";
+import { CAPSULE_HEIGHT, deliverableRows, type DeliverablesBatch } from "./deliverable-layout";
 import type { TransportOutcome, TransportToolCallPart } from "../contract";
 import { resolveDisclosure, processKey, activityKey, agentKey, userMessageKey } from "./disclosure-store";
 import { USER_MESSAGE_CLAMP_HEIGHT, USER_MESSAGE_TOGGLE_HEIGHT } from "./user-message-clamp";
@@ -113,14 +113,18 @@ const STANDALONE_ARTIFACT_CARD = 120;
 const ARTIFACT_GAP = 8;
 // 胶囊行间 `gap-2`。
 const CAPSULE_ROW_GAP = 8;
-function deliverablesHeight(card: DeliverablesCard): number {
+// 交付说明：`text-sm leading-6`，按内容列宽每行约 52 个汉字宽。
+const NOTE_LINE_HEIGHT = 24;
+const NOTE_LINE_UNITS = 52;
+function deliverablesHeight(card: DeliverablesBatch): number {
   const { tileRows, cardHeight, capsuleRows } = deliverableRows(card);
   const sections = [
+    card.note ? textLines(card.note, NOTE_LINE_UNITS) * NOTE_LINE_HEIGHT : 0,
     cardHeight,
     tileRows * IMAGE_TILE_SIZE.regular.height + Math.max(0, tileRows - 1) * IMAGE_TILE_GAP,
     capsuleRows * CAPSULE_HEIGHT + Math.max(0, capsuleRows - 1) * CAPSULE_ROW_GAP,
   ].filter((height) => height > 0);
-  // 方块区与胶囊区之间是 gap-2（deliverables-card）。
+  // 说明、方块区与胶囊区之间是 gap-2（deliverables-card）。
   return sections.reduce((sum, height) => sum + height, 0) + Math.max(0, sections.length - 1) * CAPSULE_ROW_GAP;
 }
 
@@ -155,6 +159,8 @@ function assistantHeight(message: ThreadMessage, sessionId?: number): number {
       blocks.push(height);
     } else if (block.kind === "agent") {
       blocks.push(agentRowHeight(block.part.id, block.part.text, sessionId));
+    } else if (block.kind === "deliverables") {
+      blocks.push(deliverablesHeight(block));
     } else if (block.kind === "standalone") {
       blocks.push(block.part.awaitingUser ? awaitingHeight(block.part, sessionId) : PROCESS_ITEM);
     } else {
@@ -164,8 +170,7 @@ function assistantHeight(message: ThreadMessage, sessionId?: number): number {
   }
   if (layout.artifacts.length) {
     const cards = layout.artifacts.map((card) => card.kind === "changes" ? CHANGES_CARD_CHROME + card.files.length * CHANGES_FILE_ROW
-      : card.kind === "deliverables" ? deliverablesHeight(card)
-        : STANDALONE_ARTIFACT_CARD);
+      : STANDALONE_ARTIFACT_CARD);
     blocks.push(cards.reduce((sum, height) => sum + height, 0) + (cards.length - 1) * ARTIFACT_GAP);
   }
   if (layout.intro) return ROW_GAP + blocks.reduce((sum, block) => sum + block, 0) + Math.max(0, blocks.length - 1) * ZONE_GAP;

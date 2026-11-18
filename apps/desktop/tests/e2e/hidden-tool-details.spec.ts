@@ -33,21 +33,21 @@ test("large details build only on first open, freeze hidden input, and catch up 
   const builds = () => page.evaluate(() => (window as unknown as { detailCounter: { builds: number } }).detailCounter.builds);
   expect(await builds()).toBe(0);
   await row.locator('[data-slot="call-row"]').click();
-  await expect(row.getByText("entry-99", { exact: true })).toBeVisible();
+  await expect(row.getByRole("button", { name: "entry-99", exact: true })).toBeVisible();
   const before = await builds();
   expect(before).toBeGreaterThan(0);
   await row.locator('[data-slot="call-row"]').click();
-  await expect(row.getByText("entry-99", { exact: true })).toBeHidden();
+  await expect(row.getByRole("button", { name: "entry-99", exact: true })).toBeHidden();
   const after = { ...next, display_data: { ...next.display_data, files: [{ path: "latest-entry" }], match_count: 1 } };
   await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { sessionId: 42, state: state([after]) } });
   await expect(row).toContainText("1 个文件");
   expect(await builds()).toBe(before);
   await row.locator('[data-slot="call-row"]').click();
-  await expect(row.getByText("latest-entry", { exact: true })).toBeVisible();
+  await expect(row.getByRole("button", { name: "latest-entry", exact: true })).toBeVisible();
   expect(await builds()).toBeGreaterThan(before);
 });
 
-for (const source of ["call", "artifact"] as const) test(`${source}: Diff keeps DOM, internal scroll and full expansion across folding`, async ({ page, request }) => {
+for (const source of ["call", "artifact"] as const) test(`${source}: Diff keeps DOM and full expansion across folding`, async ({ page, request }) => {
   const patch = ["diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts", "@@ -1 +1,80 @@", "-old", ...Array.from({ length: 80 }, (_, i) => `+line-${i}`), ""].join("\n");
   const part = toolCallPart("write", "write_file", { status: "completed", display_data: { kind: "file-changes", changes: [{ path: "a.ts", status: "modified", patch, insertions: 80, deletions: 1 }] } });
   await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { sessionId: 42, state: state([part]) } });
@@ -56,12 +56,13 @@ for (const source of ["call", "artifact"] as const) test(`${source}: Diff keeps 
   const owner = page.locator(source === "call" ? '[data-tool-call-id="write"]' : '[data-slot="changes-card"]');
   const trigger = source === "call" ? owner.locator('[data-slot="call-row"]') : owner.getByRole("button", { name: /a.ts/ });
   await trigger.click();
-  const scroll = owner.locator(".overflow-auto");
-  await expect(scroll.locator(".diff")).toBeVisible();
-  await scroll.evaluate(el => { el.scrollTop = 250; Object.assign(window, { savedDiff: el }); });
+  // 高度上限归 DetailBudget：收起时截断（不在框内滚动），折叠整条再打开沿用同一份 DOM。
+  const diff = owner.locator(".diff");
+  await expect(diff).toBeVisible();
+  await diff.evaluate(el => { Object.assign(window, { savedDiff: el }); });
   await trigger.click(); await trigger.click();
-  expect(await scroll.evaluate(el => el === (window as unknown as { savedDiff: Element }).savedDiff && el.scrollTop === 250)).toBe(true);
-  await owner.getByRole("button", { name: /展开全部/ }).click();
+  expect(await diff.evaluate(el => el === (window as unknown as { savedDiff: Element }).savedDiff)).toBe(true);
+  await owner.getByRole("button", { name: "显示全部" }).click();
   await trigger.click(); await trigger.click();
   await expect(owner.getByRole("button", { name: "收起", exact: true })).toBeVisible();
 });

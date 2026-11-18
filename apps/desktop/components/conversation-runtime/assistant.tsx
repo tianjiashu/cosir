@@ -10,7 +10,6 @@ import type { TransportState } from "@/lib/assistant/contract";
 import type { ToolCalls } from "@/lib/assistant/tools/tool-call-index";
 import { useSessionTransportConnection } from "@/lib/assistant/transport/use-session-transport-connection";
 import { useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
-import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { newTraceId } from "@/lib/logging/trace-id";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
@@ -56,10 +55,9 @@ export const Assistant = ({
     surface: "conversation",
     performanceProbe,
     onStateCommit: (state: TransportState, toolCalls: ToolCalls) => {
-      // 终端会话、后台工作与交接是 snapshot 投影；镜像给 runtime 之外的页头按钮、终端工作台与浏览器面板。
+      // 终端会话、后台工作与交付清单是 snapshot 投影；镜像给 runtime 之外的页头按钮、终端工作台与侧栏。
       useTerminalWorkbenchStore.getState().syncSessions(sessionId, state.terminal_sessions);
       useBackgroundTasksStore.getState().sync(sessionId, { ...state, toolCalls });
-      useHandoffStore.getState().sync(sessionId, state.handoffs);
       useDeliverablesStore.getState().sync(sessionId, state.deliverables);
     },
   });

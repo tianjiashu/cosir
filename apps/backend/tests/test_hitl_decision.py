@@ -1,9 +1,8 @@
-"""需要用户决定的工具（HITL）：混合批次整批拒绝、决定优先且每轮一条、批准绕过模型直接执行、
-结果追加为消息且占位正文不变。"""
+"""需要用户决定的工具（HITL）：混合批次整批拒绝、决定作为消息交给模型并结算占位、等用户回应的
+决定在用户说了别的话时作废。"""
 
 from __future__ import annotations
 
-import dataclasses
 from types import SimpleNamespace
 from typing import Any
 
@@ -21,7 +20,6 @@ from app.core.tool.schemas import ToolCall, ToolDefinition
 from app.core.workflow import decision_expiry
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
-from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.session_message import (
     AgentMessageBody,
     DecisionBody,
@@ -32,9 +30,6 @@ from app.core.workflow.message_queue.session_message import (
 )
 from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
-from app.core.workflow.node_helper.tool_observation_projection import (
-    settle_decision_observation,
-)
 from app.core.workflow.nodes import prepare_input_node
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.enums.react_route import ReactRoute
@@ -62,7 +57,7 @@ def _definition(name: str, *, hitl: bool = False) -> ToolDefinition:
         description="probe",
         handler=lambda **_: "ok",
         args_model=_NoArgs,
-        user_decision="execute" if hitl else None,
+        user_decision=hitl,
     )
 
 
@@ -245,22 +240,6 @@ async def test_two_hitl_calls_in_one_batch_are_rejected() -> None:
     assert [o.status for o in observations] == ["error", "error"]
 
 
-async def test_single_hitl_call_runs_and_receives_the_decision() -> None:
-    executor = _Executor()
-    decision = DecisionBody(tool_call_id="c1", tool_name="hitl_tool", decision="approve")
-
-    await tool_batch_runner.run_tool_batch(
-        _batch_rc(executor),
-        [ToolCall(tool_name="hitl_tool", arguments="{}", call_id="c1")],
-        "step-1",
-
-        decision,
-    )
-
-    [context] = executor.contexts
-    assert context.user_decision == decision
-
-
 # ---------------------------------------------------------------------------
 # 占位：投影为非终态 pending
 # ---------------------------------------------------------------------------
@@ -313,14 +292,12 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
 
 
 # ---------------------------------------------------------------------------
-# prepare_input：决定优先、每轮一条、先确认再执行
+# prepare_input：决定交给模型，并入时结算占位
 # ---------------------------------------------------------------------------
 
 
-def _prepare_rc(acked: dict[int, SessionMessage], decision_mode: str | None = "execute"):
+def _prepare_rc(acked: dict[int, SessionMessage]):
     tool = _definition("hitl_tool", hitl=True)
-    if decision_mode != "execute":
-        tool = dataclasses.replace(tool, user_decision=decision_mode)
     return runtime_stub(
         message_queue=SimpleNamespace(
             ack=lambda _session, ids: {i: acked[i] for i in ids if i in acked}
@@ -337,69 +314,10 @@ async def _prepare(rc, context: _Context) -> dict[str, Any]:
 
 
 @pytest.mark.usefixtures("isolated_storage")
-async def test_approval_is_taken_first_and_routes_to_tools_without_the_model() -> None:
-    decision = _decision("approve")
-    rc = _prepare_rc({5: decision})
-    rc.mailbox.post(_notice("earlier notice", 4))
-    rc.mailbox.post(decision)
-    context = _Context()
-
-    result = await _prepare(rc, context)
-
-    assert result["next_node"] == ReactRoute.TOOLS
-    assert result["batch"].calls == [_CALL]
-    assert DecisionBody.model_validate(result["batch"].decision) == decision.body
-    # 先确认并写下决定，其余消息留到工具执行完再写入。
-    [written] = context.added
-    assert "<user_decision" in written["message"]["content"]
-    assert rc.mailbox.pop().body == _notice("earlier notice", 4).body
-
-
-@pytest.mark.usefixtures("isolated_storage")
-async def test_accepting_a_decision_claims_the_placeholder_in_the_same_transaction(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """接收决定即把等待占位推到 running（与确认同一事务）：执行期间迟到的重复决定不再被认作在等待。"""
-    emitted: list[Any] = []
-    monkeypatch.setattr(prepare_input_node, "emit", emitted.append)
-    decision = _decision("approve")
-    rc = _prepare_rc({5: decision})
-    rc.mailbox.post(decision)
-    context = _Context(placeholder=ToolMessageMetadata(status="pending"))
-
-    await _prepare(rc, context)
-
-    [(call_id, metadata)] = context.updated
-    assert (call_id, metadata.status) == ("call-hitl", "running")
-    [db] = context.update_sessions
-    assert db is not None  # 加入了确认的事务，而不是提交后再单独写
-    [event] = emitted
-    assert (event.tool_call_id, event.status) == ("call-hitl", "running")
-
-
-@pytest.mark.usefixtures("isolated_storage")
-async def test_rejection_of_an_execute_tool_also_routes_to_the_tool() -> None:
-    """``execute`` 类工具的驳回同样回到工具：它得落定自己的事实，占位也只有执行结果能收尾。"""
-    decision = _decision("reject")
-    rc = _prepare_rc({5: decision})
-    rc.mailbox.post(_notice("note", 4))
-    rc.mailbox.post(decision)
-    context = _Context()
-
-    result = await _prepare(rc, context)
-
-    assert result["next_node"] == ReactRoute.TOOLS
-    assert DecisionBody.model_validate(result["batch"].decision).decision == "reject"
-    [written] = context.added
-    assert "<user_decision" in written["message"]["content"]
-    assert rc.mailbox.pop().body == _notice("note", 4).body
-
-
-@pytest.mark.usefixtures("isolated_storage")
 async def test_reply_tool_approval_goes_to_the_model_not_the_tool() -> None:
-    """``reply`` 类工具（如意图澄清）的「同意」是给模型的回答，不执行原调用。"""
+    """HITL 工具（如意图澄清）的「同意」是给模型的回答，不执行原调用。"""
     decision = _decision("approve")
-    rc = _prepare_rc({5: decision}, decision_mode="reply")
+    rc = _prepare_rc({5: decision})
     rc.mailbox.post(decision)
     context = _Context(placeholder=ToolMessageMetadata(status="pending"))
 
@@ -427,7 +345,7 @@ async def test_reply_decision_settles_the_placeholder_with_the_answer(
         ),
         message_id=5,
     )
-    rc = _prepare_rc({5: decision}, decision_mode="reply")
+    rc = _prepare_rc({5: decision})
     rc.mailbox.post(decision)
     context = _Context(
         placeholder=ToolMessageMetadata(status="pending", display_data={"kind": "probe"})
@@ -454,7 +372,7 @@ async def test_reply_decision_settles_the_placeholder_with_the_answer(
 async def test_late_reply_decision_is_acked_but_not_written(status: str) -> None:
     """决定入口校验通过不代表并入时仍在等待：占位已结算（已作答、已作废）的决定只确认、不交给模型。"""
     decision = _decision("approve")
-    rc = _prepare_rc({5: decision}, decision_mode="reply")
+    rc = _prepare_rc({5: decision})
     rc.mailbox.post(decision)
     context = _Context(placeholder=ToolMessageMetadata(status=status))
 
@@ -462,79 +380,6 @@ async def test_late_reply_decision_is_acked_but_not_written(status: str) -> None
 
     assert result["next_node"] == ReactRoute.MODEL
     assert context.added == [] and context.updated == []
-
-
-@pytest.mark.usefixtures("isolated_storage")
-async def test_only_one_executable_decision_is_taken_per_round() -> None:
-    first, second = _decision("approve", message_id=5), _decision("approve", message_id=6)
-    rc = _prepare_rc({5: first, 6: second})
-    rc.mailbox.post(first)
-    rc.mailbox.post(second)
-    context = _Context()
-
-    result = await _prepare(rc, context)
-
-    # 本轮只执行第一条；第二条留在 mailbox，下一轮再取。
-    assert result["next_node"] == ReactRoute.TOOLS
-    assert len(context.added) == 1
-    assert rc.mailbox.pop() is second
-
-
-@pytest.mark.usefixtures("isolated_storage")
-async def test_decision_already_acked_elsewhere_does_not_execute() -> None:
-    rc = _prepare_rc({})
-    rc.mailbox.post(_decision("approve"))
-    context = _Context()
-
-    result = await _prepare(rc, context)
-
-    assert result["next_node"] == ReactRoute.MODEL
-    assert context.added == []
-
-
-@pytest.mark.usefixtures("isolated_storage")
-async def test_approval_of_a_call_missing_from_context_goes_to_the_model() -> None:
-    decision = _decision("approve")
-    rc = _prepare_rc({5: decision})
-    rc.mailbox.post(decision)
-    context = _Context(call=None)
-
-    result = await _prepare(rc, context)
-
-    assert result["next_node"] == ReactRoute.MODEL
-    assert len(context.added) == 1
-
-
-# ---------------------------------------------------------------------------
-# observe：结果追加为消息，占位只更新展示
-# ---------------------------------------------------------------------------
-
-
-def test_decision_result_is_appended_and_placeholder_only_gets_display_update(isolated_storage) -> None:
-    events: list[Any] = []
-    rc = runtime_stub(event_sink=events.append)
-    context = _Context()
-    observation = tool_success(
-        "hitl_tool", "handed back", tool_call_id="call-hitl", display_data={"kind": "probe"}
-    )
-    batch = ToolBatch(
-        calls=[_CALL],
-        observations=[dataclasses.asdict(observation)],
-        decision={"tool_call_id": "call-hitl", "tool_name": "hitl_tool", "decision": "approve"},
-    )
-
-    with execution_scope(rc, context):
-        settle_decision_observation(batch, step_id="step-1")
-
-    [appended] = context.added
-    assert appended["message"]["role"] == "user"
-    assert "<tool_result" in appended["message"]["content"]
-    assert "handed back" in appended["message"]["content"]
-    assert appended["project_to_transport"] is False
-    [(call_id, metadata)] = context.updated
-    assert (call_id, metadata.status) == ("call-hitl", "completed")
-    assert [event.status for event in events] == ["completed"]
-
 
 
 # ---------------------------------------------------------------------------
@@ -621,12 +466,8 @@ def _user_input(message_id: int = 7) -> SessionMessage:
     return SessionMessage.of(body, message_id=message_id)
 
 
-def _question_rc(acked: dict[int, SessionMessage], lifetime: str = "until_user_input"):
-    rc = _prepare_rc(acked, decision_mode="reply")
-    rc.tool_definitions["hitl_tool"] = dataclasses.replace(
-        rc.tool_definitions["hitl_tool"], decision_lifetime=lifetime
-    )
-    return rc
+def _question_rc(acked: dict[int, SessionMessage]):
+    return _prepare_rc(acked)
 
 
 @pytest.fixture
@@ -688,20 +529,6 @@ async def test_answer_queued_after_the_message_is_dropped(expiry_events: list[An
     assert [metadata.status for _, metadata in context.updated] == ["cancelled"]
     assert len(context.added) == 2  # 作废通知与用户消息
     assert all("<user_decision" not in str(row["message"]["content"]) for row in context.added)
-
-
-@pytest.mark.usefixtures("isolated_storage")
-async def test_decision_awaiting_an_explicit_decision_survives_a_new_user_message(expiry_events: list[Any]) -> None:
-    """一直等到用户决定的等待（交接）不因用户发了新消息而结束。"""
-    message = _user_input()
-    rc = _question_rc({7: message}, lifetime="until_decided")
-    rc.mailbox.post(message)
-    context = _Context(placeholder=ToolMessageMetadata(status="pending"))
-
-    await _prepare(rc, context)
-
-    assert context.updated == [] and expiry_events == []
-    assert len(context.added) == 1
 
 
 @pytest.mark.usefixtures("isolated_storage")

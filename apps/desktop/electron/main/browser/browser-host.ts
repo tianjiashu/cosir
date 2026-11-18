@@ -13,7 +13,7 @@ import type {
   BrowserTabCreator,
   BrowserTabLimits,
 } from "../../shared/host-contract";
-import { BrowserTab, type EvaluateOutcome, type PageSnapshot } from "./browser-tab";
+import { BrowserTab, type EvaluateOutcome, type PageSnapshot, type PageTextRead } from "./browser-tab";
 import { browserPageWebPreferences, type BrowserSessionEvents } from "./browser-partition";
 import { BrowserDownloads } from "./downloads";
 import { browserError } from "./errors";
@@ -24,8 +24,9 @@ import type { ConsoleEntry, LogPage, NetworkEntry, PageDigest, ResponseBody } fr
 import { abortable } from "./abortable";
 import { budgetSignal, deadlineMs, withinDeadline } from "./deadlines";
 import type { Outline } from "./snapshot/outline";
-import { changesView, snapshotView, type SnapshotView } from "./snapshot/views";
+import { changesView, pageTextView, snapshotView, type SnapshotView } from "./snapshot/views";
 import { isPageUrl } from "./page-url";
+import type { Capture } from "./page-capture";
 
 /** 页面类结果（页面、动作、日志、执行 JS、截图）共用的页头：标签、地址、加载、主文档状态码与生效的模拟。线上形状见 `wire.ts`。 */
 export type PageHead = { tabId: string; url: string; title: string; loading: boolean; status: number | null; emulation: Emulation };
@@ -47,7 +48,7 @@ export type LogsResult = PageHead & ({ kind: "console" } & LogPage<ConsoleEntry>
 
 export type EvaluateResult = PageHead & EvaluateOutcome;
 
-export type ScreenshotResult = PageHead & { image: string };
+export type ScreenshotResult = PageHead & Capture;
 
 /** 本 Session 的一个标签（`browser_tabs` 的列表项）。 */
 export type SessionTab = { tabId: string; title: string; url: string; current: boolean; createdBy: BrowserTabCreator; operation: "running" | "stopping" | "unknown" | null };
@@ -66,7 +67,7 @@ type TabEntry = { tab: BrowserTab; ready: Promise<void>; controller: AbortContro
  * 都只经这里操作，不各自持有视图。面向 Agent 的结果是领域类型，线上形状只在 `wire.ts` 转换。
  *
  * 「上次以来」只在这里消费：页面结果（navigate / snapshot / act）组装时取一次标签日志的 `digest`；截图、日志
- * 读取、执行 JS 与交接的首次调用（读的是标签列表）都不碰它，交还时读的是快照、照常消费。
+ * 读取与执行 JS 都不碰它。
  *
  * 标签页与下载都是宿主进程事实：不持久化，后端重启不影响，宿主退出即全部消失；Session 删除后由后端通知
  * `dropSessions` 回收。入参已由 `params.ts` / `ipc.ts` 校验，这里直接信任。
@@ -117,7 +118,6 @@ export class BrowserHost implements BrowserSessionEvents {
     const entry = request.newTab || (!request.tab && !this.current.has(request.sessionId))
       ? await this.open(request.sessionId, request.context, "agent", true, signal)
       : this.select(request.sessionId, request.tab);
-    this.assertAgentMayModify(request, entry.tab);
     return this.operate(entry, signal, async (tab, scoped) => {
       await tab.modify(scoped, (operation) => tab.navigate(request.target, operation, request.emulation));
       const lastKnown = this.head(tab);
@@ -138,7 +138,8 @@ export class BrowserHost implements BrowserSessionEvents {
   }
 
   async snapshot(request: SnapshotRequest, signal: AbortSignal): Promise<PageResult> {
-    return this.operate(this.agentEntry(request), signal, async (tab, scoped) => this.result(tab, await tab.snapshot(), scoped, request.view));
+    return this.operate(this.agentEntry(request), signal, async (tab, scoped) =>
+      this.result(tab, request.view.format === "text" ? await tab.pageText() : await tab.snapshot(), scoped, request.view));
   }
 
   /**
@@ -147,7 +148,6 @@ export class BrowserHost implements BrowserSessionEvents {
    */
   async act(request: ActRequest, signal: AbortSignal): Promise<ActOutcome> {
     const entry = this.agentEntry(request);
-    this.assertAgentMayModify(request, entry.tab);
     const budget = budgetSignal("browser.act", ACT_RESULT_RESERVE_MS, "the call ran out of time before this action");
     return this.operate(entry, signal, async (tab, scoped) => {
       // 回执要能在标签被销毁后仍答复；这里的最后已知页头只作为销毁后的兜底，观察失败时优先读当前页头。
@@ -173,14 +173,13 @@ export class BrowserHost implements BrowserSessionEvents {
 
   async screenshot(request: ScreenshotRequest, signal: AbortSignal): Promise<ScreenshotResult> {
     const entry = this.agentEntry(request);
-    if (request.ref) this.assertAgentMayModify(request, entry.tab);
     return this.operate(entry, signal, async (tab, scoped) => {
       // JPEG：同样的视口，体积比 PNG 小得多，更不容易碰到附件的单图大小上限。区域截图不滚动页面，与视口截图一样
       // 是纯观察，不占修改槽位；元素截图要先把元素滚进视野，按修改处理。
-      const image = request.ref
+      const capture = request.ref
         ? await tab.modify(scoped, (operation) => tab.elementScreenshot(request.ref!, operation))
         : await tab.screenshot("jpeg", { quality: 85, fullPage: request.fullPage, region: request.region });
-      return { ...this.head(tab), image };
+      return { ...this.head(tab), ...capture };
     });
   }
 
@@ -204,7 +203,6 @@ export class BrowserHost implements BrowserSessionEvents {
 
   async evaluate(request: EvaluateRequest, signal: AbortSignal): Promise<EvaluateResult> {
     const entry = this.agentEntry(request);
-    this.assertAgentMayModify(request, entry.tab);
     return this.operate(entry, signal, async (tab, scoped) => {
       const outcome = await tab.modify(scoped, (operation) => tab.evaluate(request.expression, operation));
       return { ...this.head(tab), ...outcome };
@@ -217,7 +215,6 @@ export class BrowserHost implements BrowserSessionEvents {
     if (request.action === "select") this.select(request.sessionId, request.tab!);
     else if (request.action === "close") {
       const { tab } = this.tabFor(request.sessionId, request.tab);
-      this.assertAgentMayModify(request, tab);
       this.close(tab.tabId);
     }
     const current = this.current.get(request.sessionId);
@@ -309,7 +306,7 @@ export class BrowserHost implements BrowserSessionEvents {
     // 原生画面要一直盖着弹层到这里返回，所以不等初始化（收养的弹出页可能要等到第一次加载结束，至多 30 秒；调试器
     // 还没附加时截图立即失败），主线程被占着时也只等很短（`FREEZE_TIMEOUT_MS`）：失败时渲染进程直接收起画面。
     // 冻结帧要和实时画面一样清晰：按屏幕像素出图。
-    return this.require(tabId).tab.screenshot("jpeg", { quality: 70, devicePixels: true, timeoutMs: FREEZE_TIMEOUT_MS });
+    return (await this.require(tabId).tab.screenshot("jpeg", { quality: 70, devicePixels: true, timeoutMs: FREEZE_TIMEOUT_MS })).image;
   }
 
   /**
@@ -371,10 +368,6 @@ export class BrowserHost implements BrowserSessionEvents {
    * 宿主内部错误；操作碰巧在关闭后才返回（页面销毁时 Chromium 会结束在等的 Promise），结果说的是已经不在的标签，
    * 同样报关闭。
    */
-  private assertAgentMayModify(request: TabRequest, tab: BrowserTab): void {
-    if (request.handoffTabs?.includes(tab.tabId)) throw browserError("HANDED_OFF", "this tab is handed to the user; wait for them to hand it back");
-  }
-
   private async operate<T>(
     entry: TabEntry,
     signal: AbortSignal,
@@ -717,14 +710,18 @@ export class BrowserHost implements BrowserSessionEvents {
   /**
    * 页面结果：页头、按请求的视图呈现的快照，以及「上次以来」——这里是它唯一的消费点（日志的 `digest` 与快照的比对
    * 基准 `deliver` 都在这里推进）。`changes`（act 之后）只给与上次结果相比的增量，比不了或变化太多时给整页。
+   * 页面正文不推进比对基准：模型这次没看到 ref，下一次 act 仍与上一次交出去的大纲比。
    */
-  private result(tab: BrowserTab, page: PageSnapshot, signal: AbortSignal, view: SnapshotView & { changes?: boolean } = {}): PageResult {
+  private result(tab: BrowserTab, page: PageSnapshot | PageTextRead, signal: AbortSignal, view: SnapshotView & { changes?: boolean } = {}): PageResult {
     signal.throwIfAborted();
     if (page.document !== tab.documentGeneration) throw browserError("REF_STALE", "the page changed while reading it; read a fresh snapshot");
+    const shown = "outline" in page
+      ? page.outline && { snapshot: this.snapshotText(tab, page.outline, view), frames: page.outline.frames }
+      : page.text && { snapshot: pageTextView(page.text, view), frames: page.text.frames };
     return {
       ...this.head(tab),
-      snapshot: page.outline ? this.snapshotText(tab, page.outline, view) : "",
-      frames: page.outline?.frames ?? 0,
+      snapshot: shown?.snapshot ?? "",
+      frames: shown?.frames ?? 0,
       ...tab.log.digest(),
       otherTabs: this.siblingTabIds(tab),
       dialog: page.dialog,

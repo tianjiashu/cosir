@@ -223,7 +223,7 @@ describe("assistant transport converter", () => {
   // 目的：等待用户与展示数据原样进 artifact，调用行只读这里；参数留在 assistant-ui 的 args 上，标题由前端目录算。
   it("把等待用户与展示数据原样带进 artifact，参数留在 args", () => {
     const awaiting = toToolCallPart(tool("pending", {
-      toolName: "browser_handoff",
+      toolName: "ask_user",
       args: { reason: "交给你登录" },
       awaitingUser: true,
     }));

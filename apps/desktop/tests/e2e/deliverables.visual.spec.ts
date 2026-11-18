@@ -76,7 +76,8 @@ async function open(page: Page, theme: "light" | "dark", snapshot: TransportStat
   await stubWorkspaceFiles(page, { files: STUB_FILES, images: IMAGES });
   await seedState(page.request, SESSION_ID, snapshot);
   await page.goto(`/sessions/${SESSION_ID}`);
-  const card = page.locator('[data-slot="deliverables-card"]');
+  // 多次交付时有多张卡；单卡用例返回的就是唯一那张。
+  const card = page.locator('[data-slot="deliverables-card"]').first();
   await expect(card).toBeVisible();
   // 鼠标移开，避免落在某枚胶囊上触发悬停态。
   await page.mouse.move(0, 0);
@@ -145,11 +146,28 @@ for (const theme of ["light", "dark"] as const) {
       await expect(card).toHaveScreenshot(`outside-${theme}.png`);
     });
 
-    test("V5 回合顺序：正文 → 交付物 → 下一步建议", async ({ page }) => {
+    test("V5 回合顺序：交付物 → 最终回复 → 下一步建议", async ({ page }) => {
       await open(page, theme, state(COMMON.slice(0, 2), true));
       const reply = page.locator('[data-role="assistant"]').last();
       await expect(reply.locator('[data-slot="next-step-card"]')).toBeVisible();
       await expect(reply).toHaveScreenshot(`turn-order-${theme}.png`);
+    });
+
+    test("V14 交付说明与多次交付：每次一张卡、说明在卡片顶部，叠在最终回复之上", async ({ page }) => {
+      const noted = (id: string, deliverables: TransportDeliverable[], note: string): TransportMessagePart => ({
+        type: "tool-call", toolCallId: id, toolName: "present_deliverables", presentation: "quiet",
+        args: { items: deliverables.map((item) => ({ target: item.key })), note }, intent: null, status: "completed", error: null, awaitingUser: false,
+        display_data: { kind: "deliverables", note }, deliverables,
+      });
+      const base = completedState(1, { id: "u-1", parts: [{ type: "text", text: "整理成报告", status: "completed" }] }, [
+        noted("p1", [COMMON[3]], "本地起好的预览站，改完的三个页面都能点进去看。"),
+        noted("p2", [COMMON[0], COMMON[1]], "季度复盘报告和它用到的投放明细；明细已按达人去重，退款订单单列在最后一个工作表。"),
+        { type: "text", text: "报告整理好了，结论在第 2 节。", status: "completed", finalReply: true },
+      ]);
+      await open(page, theme, { ...base, activity: { ...base.activity!, launch: LAUNCH } });
+      const reply = page.locator('[data-role="assistant"]').last();
+      await expect(reply.locator('[data-slot="deliverables-note"]')).toHaveCount(2);
+      await expect(reply).toHaveScreenshot(`notes-${theme}.png`);
     });
 
     test("V6 无宿主的开发模式：没有次按钮", async ({ page }) => {

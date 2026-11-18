@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { toolResultSignal } from "@/lib/assistant/tools/tool-result-signals";
-import { readImageReadDisplay } from "@/components/conversation/tools/image-read-display";
+import { readImageReadDisplay } from "@/lib/assistant/tools/image-read-display";
 import { resolveCallView } from "@/components/conversation/tools/call-view-registry";
 import { imageReadView } from "@/components/conversation/tools/call-views/image-read-view";
 import type { CallViewContext } from "@/components/conversation/tools/call-view";

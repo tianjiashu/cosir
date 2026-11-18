@@ -93,6 +93,71 @@ export function untilStopped(contents: WebContents, timeoutMs: number, until: Ab
   });
 }
 
+const REQUEST_POLL_MS = 100;
+
+/** 落定的结局：哪一层收尾，以及给 Agent 说明用的证据。`aborted`：页面停住或调用取消，调用方不再说明。 */
+export type Settling<T> = { waitedMs: number; reads: number } & (
+  | { by: "stable" | "unreadable" | "aborted" }
+  | { by: "requests"; pending: T[] }
+  | { by: "changing"; changed: number; example: string | null }
+);
+
+/**
+ * 动作之后等页面落定，分两层判定，到 `timeoutMs` 为止：
+ * - 内容请求（`pending`）：还有可能带回内容的请求在路上就继续等，回来之后重新判稳定。只看页面会被骨架屏骗过：
+ *   慢接口期间页面静止好几秒（实测搜索接口 4.7 秒）。
+ * - 页面稳定（`read` 读出 Agent 将看到的大纲）：相隔 `intervalMs` 的两次读取完全相同才算好。只看网络会被两头骗过：
+ *   持续的埋点让它永远等不到安静，走 WebSocket 推送或没有请求的分批渲染它又看不见。
+ *
+ * 已知局限：页面先静止超过 `intervalMs`、之后才由推送送来内容的，两层都分不出来，只能靠到上限后的说明与
+ * Agent 的 `wait_for`。`read` 返回 null（读不了：弹窗挡住、页面崩溃）就不再等，由页面结果去说明。
+ */
+export async function untilPageSettled<T, O>(
+  probe: { pending: () => T[]; read: () => Promise<O | null>; changed: (previous: O, current: O) => { count: number; example: string | null } },
+  options: { intervalMs: number; timeoutMs: number; until: AbortSignal },
+): Promise<Settling<T>> {
+  const start = Date.now();
+  let previous: O | null = null;
+  let reads = 0;
+  let lastChange: { count: number; example: string | null } = { count: 0, example: null };
+  const done = () => ({ waitedMs: Date.now() - start, reads });
+  for (;;) {
+    if (options.until.aborted) return { ...done(), by: "aborted" };
+    const pending = probe.pending();
+    if (pending.length > 0) {
+      // 内容还在路上：它回来之后页面会变，之前读到的稳定与变化都不作数（变化的证据跟着比对基准一起作废，
+      // 否则请求回来后只来得及读一次就到上限时，会拿请求前的变化报「还在变」）。
+      previous = null;
+      lastChange = { count: 0, example: null };
+      if (Date.now() - start >= options.timeoutMs) return { ...done(), by: "requests", pending };
+      await pause(REQUEST_POLL_MS, options.until);
+      continue;
+    }
+    const current = await probe.read();
+    reads += 1;
+    if (current === null) return { ...done(), by: "unreadable" };
+    if (previous !== null) {
+      lastChange = probe.changed(previous, current);
+      if (lastChange.count === 0) return { ...done(), by: "stable" };
+    }
+    previous = current;
+    if (Date.now() - start >= options.timeoutMs) {
+      // 到上限时只读到一次、没看到过变化：没有「还在变」的证据，按好了交出。
+      return lastChange.count > 0 ? { ...done(), by: "changing", changed: lastChange.count, example: lastChange.example } : { ...done(), by: "stable" };
+    }
+    await pause(options.intervalMs, options.until);
+  }
+}
+
+/** 暂停 `ms`；`until` 中止时提前结束（由循环开头统一处理）。 */
+function pause(ms: number, until: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = () => { clearTimeout(timer); until.removeEventListener("abort", finish); resolve(); };
+    const timer = setTimeout(finish, ms);
+    until.addEventListener("abort", finish, { once: true });
+  });
+}
+
 /** 导航真正停止的旁路观察；不随请求取消/弹窗提前结束，用于修改操作交出槽位。 */
 export function navigationCompletion(contents: WebContents): Promise<void> {
   return new Promise((resolve) => {

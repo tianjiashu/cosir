@@ -1,4 +1,5 @@
 import type { Outline, OutlineEntry } from "./outline";
+import type { PageText } from "./page-text";
 
 /**
  * 快照大纲 → 给模型读的文本：每种视图只决定「出哪些行」，行的写法都一样（缩进表示层级，`- ` 开头）。纯函数。
@@ -10,24 +11,57 @@ import type { Outline, OutlineEntry } from "./outline";
 
 const SNAPSHOT_CHAR_BUDGET = 12_000;
 
-/** 选哪部分：整页、只看视口、或按关键词查找（`find`，不区分大小写的子串，与 `scope` 可同时用）。 */
-export type SnapshotView = { scope?: "page" | "viewport"; find?: string; fromLine?: number; budget?: number };
+/**
+ * 选哪部分：整页、只看视口、或按关键词查找（`find`，不区分大小写的子串，与 `scope` 可同时用）；`format` 选投影：
+ * 带 ref 的大纲（默认）或页面正文（`page-text.ts`）。act 之后的增量只有大纲有。
+ */
+export type SnapshotView = { format?: "outline" | "text"; scope?: "page" | "viewport"; find?: string; fromLine?: number; budget?: number };
 
 /**
  * 按视图出文本，从 `fromLine` 起按整行装进预算（行号是这个视图里的行号）。筛选视图只留选中的行与它们的祖先：
- * 没有祖先，模型分不清「删除」按钮是哪一条记录里的。筛选时先说明看的是哪部分、占整页多少行，模型据此知道还有
- * 没看到的内容、要不要换整页读。
+ * 没有祖先，模型分不清「删除」按钮是哪一条记录里的。
  */
-export function snapshotView(outline: Outline, { scope = "page", find, fromLine = 1, budget = SNAPSHOT_CHAR_BUDGET }: SnapshotView = {}): string {
-  if (outline.entries.length === 0) return "(the page has no readable content)";
+export function snapshotView(outline: Outline, view: SnapshotView = {}): string {
+  return projectedView(outline.entries, view, { empty: "(the page has no readable content)", viewport: "the part of the page in the viewport", context: "their ancestors" },
+    line, (matches) => withAncestorIndexes(outline.entries, matches).map((index) => line(outline.entries[index])));
+}
+
+/**
+ * 页面正文按视图出文本，选法与大纲一样。筛选时命中的行带上所在小节的标题：正文没有层级，标题就是它的上下文。
+ */
+export function pageTextView(text: PageText, view: SnapshotView = {}): string {
+  return projectedView(text.lines, view, { empty: "(the page has no readable text)", viewport: "the text in the viewport", context: "their section headings" },
+    (entry) => entry.text, (matches) => {
+      const chosen = new Set<number>();
+      let heading = -1;
+      text.lines.forEach((entry, index) => {
+        if (entry.heading) heading = index;
+        if (!matches(entry)) return;
+        if (heading >= 0) chosen.add(heading);
+        chosen.add(index);
+      });
+      return [...chosen].sort((a, b) => a - b).map((index) => text.lines[index].text);
+    });
+}
+
+/**
+ * 两种投影共用的视图骨架：不筛选就整页分页；筛选（视口内、查找）时由 `select` 按命中规则选出带上下文的行，
+ * 先说明看的是哪部分、占整页多少行，模型据此知道还有没看到的内容、要不要换整页读。
+ */
+function projectedView<T extends { text: string; visible: boolean }>(
+  entries: readonly T[],
+  { scope = "page", find, fromLine = 1, budget = SNAPSHOT_CHAR_BUDGET }: SnapshotView,
+  copy: { empty: string; viewport: string; context: string },
+  render: (entry: T) => string,
+  select: (matches: (entry: T) => boolean) => string[],
+): string {
+  if (entries.length === 0) return copy.empty;
   const query = find?.toLowerCase();
-  const filtered = scope === "viewport" || query !== undefined;
-  if (!filtered) return paged(outline.entries.map(line), fromLine, budget);
-  const chosen = withAncestors(outline.entries, (entry) => (scope !== "viewport" || entry.visible) && (query === undefined || entry.text.toLowerCase().includes(query)));
-  const what = [scope === "viewport" ? "the part of the page in the viewport" : "", query === undefined ? "" : `lines matching ${JSON.stringify(find)}`].filter(Boolean).join(", ");
-  if (chosen.length === 0) return `(nothing on the page: ${what})`;
-  const lines = chosen.map(line);
-  return `(showing ${what}, with their ancestors: ${lines.length} of ${outline.entries.length} lines)\n${paged(lines, fromLine, budget)}`;
+  if (scope !== "viewport" && query === undefined) return paged(entries.map(render), fromLine, budget);
+  const lines = select((entry) => (scope !== "viewport" || entry.visible) && (query === undefined || entry.text.toLowerCase().includes(query)));
+  const what = [scope === "viewport" ? copy.viewport : "", query === undefined ? "" : `lines matching ${JSON.stringify(find)}`].filter(Boolean).join(", ");
+  if (lines.length === 0) return `(nothing on the page: ${what})`;
+  return `(showing ${what}, with ${copy.context}: ${lines.length} of ${entries.length} lines)\n${paged(lines, fromLine, budget)}`;
 }
 
 /**
@@ -45,16 +79,7 @@ const CHANGES_MAX_SHARE = 0.4;
  * 说清比的是什么、怎么拿整页。
  */
 export function changesView(previous: Outline, current: Outline, { budget = SNAPSHOT_CHAR_BUDGET }: { budget?: number } = {}): string | null {
-  const before = new Map(previous.entries.map((entry) => [entry.key, entry]));
-  const now = new Set(current.entries.map((entry) => entry.key));
-  const parentKey = (entries: readonly OutlineEntry[], entry: OutlineEntry) => entries[entry.parent]?.key;
-  const marks = new Map<number, "new" | "changed">();
-  current.entries.forEach((entry, index) => {
-    const old = before.get(entry.key);
-    if (!old) marks.set(index, "new");
-    else if (old.text !== entry.text || parentKey(previous.entries, old) !== parentKey(current.entries, entry)) marks.set(index, "changed");
-  });
-  const removed = previous.entries.filter((entry) => !now.has(entry.key) && (entry.parent < 0 || now.has(previous.entries[entry.parent].key)));
+  const { marks, removed } = outlineChanges(previous, current);
   if (marks.size === 0 && removed.length === 0) return "(nothing on the page changed since this tab's last browser result)";
   if (marks.size + removed.length > current.entries.length * CHANGES_MAX_SHARE) return null;
   const shown = withAncestorIndexes(current.entries, (_, index) => marks.has(index));
@@ -67,11 +92,26 @@ export function changesView(previous: Outline, current: Outline, { budget = SNAP
   return text.length > budget ? null : text;
 }
 
-/** 选中的条目加上它们的全部祖先，保持原顺序。 */
-function withAncestors(entries: readonly OutlineEntry[], keep: (entry: OutlineEntry) => boolean): OutlineEntry[] {
-  return withAncestorIndexes(entries, keep).map((index) => entries[index]);
+/**
+ * 两份大纲按稳定键比对：`marks` 是当前大纲里新出现、文字变了或换了位置（父条目变了）的行（下标 → 种类），
+ * `removed` 是消失的行里最外层的那些。增量视图与落定判「页面稳定」共用这一套规则：模型看到的「变了」与工具判的
+ * 「还在变」是同一件事。
+ */
+export function outlineChanges(previous: Outline, current: Outline): { marks: Map<number, "new" | "changed">; removed: OutlineEntry[] } {
+  const before = new Map(previous.entries.map((entry) => [entry.key, entry]));
+  const now = new Set(current.entries.map((entry) => entry.key));
+  const parentKey = (entries: readonly OutlineEntry[], entry: OutlineEntry) => entries[entry.parent]?.key;
+  const marks = new Map<number, "new" | "changed">();
+  current.entries.forEach((entry, index) => {
+    const old = before.get(entry.key);
+    if (!old) marks.set(index, "new");
+    else if (old.text !== entry.text || parentKey(previous.entries, old) !== parentKey(current.entries, entry)) marks.set(index, "changed");
+  });
+  const removed = previous.entries.filter((entry) => !now.has(entry.key) && (entry.parent < 0 || now.has(previous.entries[entry.parent].key)));
+  return { marks, removed };
 }
 
+/** 选中的条目加上它们的全部祖先，保持原顺序（返回下标）。 */
 function withAncestorIndexes(entries: readonly OutlineEntry[], keep: (entry: OutlineEntry, index: number) => boolean): number[] {
   const included = new Set<number>();
   entries.forEach((entry, index) => {

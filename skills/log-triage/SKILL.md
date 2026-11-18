@@ -173,7 +173,7 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 
 - Run：`running` / `suspended` / `completed` / `failed` / `cancelled`，没有 `pending`（Run 直接以 running 创建）。合法迁移在 `apps/backend/app/models/enums/conversation_run_status.py:RunTransition`：`running → suspended`（等后台结果或用户决定）、`suspended → running`（唤醒）、`running → completed | failed`、`running | suspended → cancelled`、`cancelled | failed → running`（用户恢复）。`suspended` 是正常等待，不等于卡死；后端重启会把遗留的 `running` 收敛为 `cancelled`（`end_reason=runtime_restarted`）。
 - 工具卡片状态：tool 行 `metadata_json.status` 取 `pending / running / completed / failed / cancelled`。
-  **判读口径**：`pending` 带 `background` 是后台命令还在跑；`pending` 不带 `background` 是等用户决定（HITL，如 `browser_handoff` 等交还）；`running` 是决定已接收、正在重放；Run 被取消或重启收敛时残留占位会被推到 `cancelled`。没有 tool 行的调用（`tools` 里显示 `no_result`）通常意味着进程被强杀后没再启动。`tool_call_id` 在 Task 内唯一，`tools` 子命令按它配对。
+  **判读口径**：`pending` 带 `background` 是后台命令还在跑；`pending` 不带 `background` 是等用户决定（HITL，目前只有 `ask_user`；决定并入时同一事务推到 `completed`）；`running` 是工具正在执行（准入通过后由执行器发出，执行中进程被强杀会残留）；Run 被取消或重启收敛时残留占位会被推到 `cancelled`。没有 tool 行的调用（`tools` 里显示 `no_result`）通常意味着进程被强杀后没再启动。`tool_call_id` 在 Task 内唯一，`tools` 子命令按它配对。
 - 消息角色：`system` / `user` / `assistant` / `tool`（OpenAI SDK 格式）。assistant 的工具调用在 `message_json.tool_calls[]`（`{id, type, function: {name, arguments}}`，`arguments` 是 JSON 字符串）；工具结果是 tool 消息的 `content` + `tool_call_id`。所有输入进模型时都是 user 角色，来源看 `metadata_json.kind`。
 
 **边界提醒**：`app.sqlite3`（业务事实）与固定 JSONL 日志文件（诊断旁路）职责分离，不要拿日志判断 Run

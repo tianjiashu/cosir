@@ -74,7 +74,7 @@ def test_search_content_recurses_directory_and_skips_binary(tmp_path: Path) -> N
 
     assert observation.status == "success"
     assert "src/main.py:1:>needle" in (observation.content or "")
-    assert observation.display_data["skipped_files"] == 1
+    assert observation.display_data["page"] == {"offset": 0, "total": 1}
 
 
 def test_search_content_returns_structured_engine_page_and_paginates(tmp_path: Path) -> None:
@@ -230,3 +230,20 @@ def test_find_files_has_cooperative_thread_timeout(tmp_path: Path, monkeypatch) 
 
     assert observation.status == "error"
     assert observation.display_data["status_hint"] == "搜索超时"
+
+
+# 目的：列表结果数量有上限（卡片与模型共用），超出由 schema 拒绝而不是整份下发；潜在缺陷：limit=5000 时全量渲染。
+def test_list_tools_reject_limits_above_the_shared_maximum() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from app.config.constant import Constant
+    from app.tools.tool_models.find_files_args import FindFilesArgs
+    from app.tools.tool_models.search_content_args import SearchContentArgs
+
+    top = Constant.Tools.LIST_RESULT_LIMIT_MAX
+    assert SearchContentArgs(pattern="x", path=".", limit=top).limit == top
+    with pytest.raises(ValidationError):
+        SearchContentArgs(pattern="x", path=".", limit=top + 1)
+    with pytest.raises(ValidationError):
+        FindFilesArgs(pattern="*", path=".", limit=top + 1)

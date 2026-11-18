@@ -69,7 +69,7 @@ export type TransportToolCallPart = {
   /** 后端工具调用生命周期状态，已由传输入口校验。 */
   status: TransportToolStatus;
   /**
-   * 是否在等用户决定（HITL 审批、交接）。后端在投影工具结果时一处计算（占位行 `pending` 且不是后台
+   * 是否在等用户决定（HITL，如提问）。后端在投影工具结果时一处计算（占位行 `pending` 且不是后台
    * 占位）、每次显式写；前端据此把调用提进「等待用户」区，不从 `status === "pending"` 推断——
    * pending 同时也表示「排队待执行」。
    */
@@ -83,7 +83,7 @@ export type TransportToolCallPart = {
    */
   background?: TransportBackgroundWork;
   /**
-   * 交付记录（只有 `present_deliverables`）：投影自结果行 metadata，交付那一刻的观察。回合聚合卡读它，
+   * 交付记录（只有 `present_deliverables`）：投影自结果行 metadata，交付那一刻的观察。交付卡读它，
    * 去重只比较后端算好的 `key`。工作区内文件的现状（大小、是否还在）由卡片现读，不从这里取。
    */
   deliverables?: TransportDeliverable[];
@@ -209,7 +209,8 @@ export type TransportMessage = {
  * `status` 判断「运行中 / 已停下」，按 `turn` 认出当前回复，按 `resumable` 决定能否恢复，都不推断。
  */
 export type TransportActivity = {
-  modelActivity: { stepId: string; phase: "waiting" | "reasoning" | "responding" | "tool_call" } | null;
+  /** 当前模型步的瞬时阶段；`startedAt` 是这一步开始的时刻（同一步内换阶段不变），「思考中」的计时只认它。 */
+  modelActivity: { stepId: string; phase: "waiting" | "reasoning" | "responding" | "tool_call"; startedAt: string } | null;
   status: TransportRunStatus;
   /** 这个 Run 最后一个可见回合（还没有可见回合时为 null）：它的回复就是当前回复。 */
   turn: number | null;
@@ -310,20 +311,6 @@ export type BackgroundTaskEntry = {
   endedAt: string | null;
 };
 
-/**
- * 一次进行中的交接（snapshot 顶层 `handoffs`）：Agent 把一个资源交给用户、等用户交还。
- *
- * 事实源是后端进程内的交接登记表，按登记先后排列，同一资源至多一条；后端重启后清空（工具卡片上的交还入口
- * 仍在）。`resourceId` 是交出去的浏览器标签 id（目前唯一可交接的资源），「交还」即对 `toolCallId` 作出
- * HITL 决定。
- */
-export type HandoffEntry = {
-  toolCallId: string;
-  toolName: string;
-  resourceId: string;
-  reason: string;
-};
-
 /** Session 级 Transport state。 */
 /** 更早历史的一页：完整历史中 `[messageOffset, messageOffset + messages.length)` 这一段。 */
 export type TransportHistoryPage = {
@@ -351,8 +338,6 @@ export type TransportState = {
   background_tasks: BackgroundTaskEntry[];
   /** 正在前台等待、可转到后台的工具调用 id（必填，可为空数组）；只服务工具卡片的「转到后台」。 */
   foreground_waits: string[];
-  /** 进行中的交接（必填，可为空数组）；面板的交接提示与自动弹出读它。 */
-  handoffs: HandoffEntry[];
   /** 会话交付清单（必填，可为空数组）：后端从完整历史投影，按 key 去重、最近在前；侧栏「产出」卡读它。 */
   deliverables: TransportDeliverable[];
 };

@@ -73,18 +73,19 @@ test("A5/A10 running activity survives hidden process, is static for reduced mot
   await seedState(request, 42, state([running]));
   await page.goto("/sessions/42");
   const feedback = page.locator('[data-slot="current-activity"]');
-  const dots = feedback.locator('[data-slot="activity-dots"]');
-  await expect(dots).toHaveAttribute("data-active", "true");
+  const label = feedback.locator('[data-slot="current-activity-label"]');
+  await expect(label).toHaveAttribute("data-thinking-active", "true");
+  await expect(feedback.locator('[data-slot="activity-dots"]')).toHaveCount(0);
   await expect(page.locator('[data-slot="turn"] .animate-spin')).toHaveCount(0);
   // 运行中收起过程：正在工作的那一段仍然可见。
   await page.locator('[data-slot="process-head"]').click();
   await expect(feedback).toContainText("读取文件");
   await page.emulateMedia({ reducedMotion: "reduce" });
-  expect(await dots.locator("span").first().evaluate(el => getComputedStyle(el).animationName)).toBe("none");
+  expect(await label.evaluate(el => getComputedStyle(el).animationName)).toBe("none");
   const suspended = state([call("read")]); suspended.activity!.status = "suspended";
   await seedState(request, 42, suspended);
   await expect(feedback).toContainText("等待继续");
-  await expect(dots).toHaveAttribute("data-active", "false");
+  await expect(label).toHaveAttribute("data-thinking-active", "false");
 });
 
 test("A10 automatic folding hands focus from the hidden process to its heading", async ({ page, request }) => {
@@ -100,9 +101,11 @@ test("A10 automatic folding hands focus from the hidden process to its heading",
 });
 
 test("A10 a call awaiting the user stays visible in place, then folds with the process once decided", async ({ page, request }) => {
-  const waiting = toolCallPart("hand", "browser_handoff", {
-    presentation: "standalone", status: "pending", awaitingUser: true, args: { reason: "完成登录" },
-    display_data: { kind: "browser-page", tab_id: "t1", url: "https://example.test/login", title: "登录", handoff_reason: "完成登录后交还" },
+  const waiting = toolCallPart("hand", "ask_user", {
+    presentation: "standalone", status: "pending", awaitingUser: true, args: { questions: [] },
+    display_data: { kind: "user-question", questions: [{ question: "用哪种存储？", header: "存储", multi_select: false, options: [
+      { label: "Cookie", description: "后端下发" }, { label: "localStorage", description: "实现最快" },
+    ] }] },
   });
   const final = text("结论", true);
   await seedState(request, 42, state([waiting, final], outcome("completed", { durationMs: 8000 })));
@@ -113,7 +116,7 @@ test("A10 a call awaiting the user stays visible in place, then folds with the p
   const card = page.locator('[data-tool-call-id="hand"] [data-slot="awaiting-card"]');
   await expect(card).toBeVisible();
   // 焦点在卡片的按钮上时作出决定：卡片原地变回一行并随过程收起，卸载的按钮不拦着折叠。
-  await card.getByRole("button", { name: "交还" }).focus();
+  await card.getByRole("button", { name: "提交" }).focus();
   await seedState(request, 42, state([{ ...waiting, status: "completed", awaitingUser: false }, final], outcome("completed", { durationMs: 8000 })));
   await expect(card).toHaveCount(0);
   await expect(page.locator('[data-tool-call-id="hand"]')).toBeHidden();

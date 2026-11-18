@@ -22,12 +22,12 @@ export function completedState(
       { id: `assistant-turn-${turn}`, role: "assistant", parts: assistantParts, turn, inherited: false, outcome, source: null },
     ],
     messageOffset: 0, activity: { modelActivity: null, turn, resumable: false, ...activityOutcome, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
-    terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [], deliverables: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [], deliverables: [],
   };
 }
 
 /** 种子 state 可省略进程内事实（终端会话、看板、前台等待）与 `messageOffset`：模拟后端注入它们，并按历史窗口裁剪。 */
-type ProcessFacts = "terminal_sessions" | "background_tasks" | "foreground_waits" | "handoffs" | "deliverables" | "messageOffset";
+type ProcessFacts = "terminal_sessions" | "background_tasks" | "foreground_waits" | "deliverables" | "messageOffset";
 type SeedState = Omit<TransportState, ProcessFacts> & Partial<Pick<TransportState, ProcessFacts>>;
 
 /** 让模拟后端持有这份 state：attach 首帧与 `readState` 读到的是同一份事实。 */

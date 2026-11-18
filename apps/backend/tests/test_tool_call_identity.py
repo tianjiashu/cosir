@@ -6,8 +6,10 @@
 
 import asyncio
 
-from app.core.tool.handoff.handoff_registry import HandoffLease, HandoffRegistry
+import pytest
+
 from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_schemas
+from app.models.errors.session_command_errors import SessionCommandConflictError
 from app.service import depends
 from app.service.conversation.tool_decision_service import ToolDecisionService
 from app.tools.tool_handler.terminal.command_results import command_results
@@ -108,7 +110,7 @@ async def test_a_reused_id_cannot_steal_the_result_of_running_background_work(
         await env.close()
 
 
-async def test_two_pending_decisions_with_the_same_id_are_decided_separately(
+async def test_a_reused_vendor_id_is_rewritten_and_addressed_separately(
     backend_env, tmp_path, monkeypatch
 ):
     hitl = {"intent": "批准"}
@@ -127,14 +129,15 @@ async def test_two_pending_decisions_with_the_same_id_are_decided_separately(
         env.send("继续", delivery="immediate")
         await asyncio.sleep(0.1)
         await env.parked()
+        # 厂商复用了同一个 id：第二次改写成 ``h_2``；用户说了话，第一次提问随之作废。
         waiting = [p["toolCallId"] for p in tool_parts(env.live()) if p["awaitingUser"]]
-        assert waiting == ["h", "h_2"]
-        await asyncio.to_thread(ToolDecisionService().submit, env.session.id, "h", "approve")
-        await asyncio.sleep(0.1)
-        await env.parked()
+        assert waiting == ["h_2"]
+        with pytest.raises(SessionCommandConflictError):
+            ToolDecisionService().submit(env.session.id, "h", "approve")
+        await asyncio.to_thread(ToolDecisionService().submit, env.session.id, "h_2", "approve")
+        await env.until("completed")
         statuses = {p["toolCallId"]: p["status"] for p in tool_parts(env.cold())}
-        assert statuses["h"] == "completed"
-        assert statuses["h_2"] == "pending"
+        assert statuses == {"h": "cancelled", "h_2": "completed"}
     finally:
         await env.close()
 
@@ -193,11 +196,3 @@ async def test_same_id_in_two_sessions_runs_independently(backend_env, tmp_path,
         commands.release()
         await env.close()
 
-
-def test_handoffs_with_the_same_id_stay_in_their_own_session():
-    registry = HandoffRegistry()
-    registry.begin(HandoffLease("call_0", 1, "browser_handoff", "t1", "r"))
-    registry.begin(HandoffLease("call_0", 2, "browser_handoff", "t2", "r"))
-    ended = registry.end(1, "call_0")
-    assert ended is not None and ended.session_id == 1
-    assert [lease.session_id for lease in registry.leases(2)] == [2]

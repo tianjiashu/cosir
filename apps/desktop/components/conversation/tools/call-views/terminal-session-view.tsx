@@ -1,3 +1,4 @@
+import { terminalTitle } from "@/lib/terminal/terminal-sessions";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { CallOpenButton } from "../call-open-button";
 import type { CallView } from "../call-view";
@@ -38,8 +39,8 @@ function lineRange(value: unknown): string | null {
 function TerminalMeta({ data }: { data: Record<string, unknown> }) {
   if (typeof data.terminal_count === "number") return <>{data.terminal_count} 个终端</>;
   const wait = waitResultLabel(data.wait_result);
-  const summary = text(data.input_summary);
-  if (summary !== undefined) return <>{[summary, wait].filter(Boolean).join(" · ")}</>;
+  // 填入的命令已在目标里；用户唯一要知道的是回车归他按。
+  if (text(data.input_summary) !== undefined) return <>{["等你回车", wait].filter(Boolean).join(" · ")}</>;
   if (data.screen === true || Array.isArray(data.lines)) {
     return <>{[data.screen === true ? "全屏画面" : lineRange(data.lines), wait].filter(Boolean).join(" · ") || "读取输出"}</>;
   }
@@ -61,11 +62,22 @@ function RevealTerminalAction({ data, sessionId }: { data: Record<string, unknow
 }
 
 /**
+ * 目标写用户认得的终端名（「终端 2」），不写会话 id；不在会话列表里的是 Agent 自己运行中的命令。
+ * 填入时带上填入的那行命令。
+ */
+function TerminalTarget({ sessionId, terminalId, command }: { sessionId: number; terminalId: string; command: string | undefined; }) {
+  const name = useTerminalWorkbenchStore((state) => terminalTitle(state.bySession[sessionId]?.sessions ?? [], terminalId)) ?? "运行中的命令";
+  return <>{command === undefined ? name : `${name} · ${command}`}</>;
+}
+
+/**
  * `terminal-session`（`terminal_*`）：标题与目标由前端工具目录按工具名 + 参数算出，这里只投影结果——
  * 没有展开体（终端输出在终端面板里看）。
  */
 export const terminalSessionView: CallView = (data, context) => {
+  const terminalId = text(data.terminal_id);
   return {
+    target: terminalId === undefined ? undefined : <TerminalTarget sessionId={context.sessionId} terminalId={terminalId} command={text(context.args.command)} />,
     meta: <TerminalMeta data={data} />,
     actions: (context.interactive ? <RevealTerminalAction data={data} sessionId={context.sessionId} /> : null),
   };

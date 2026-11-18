@@ -859,7 +859,7 @@ def test_run_and_tool_status_events_publish_the_session_status(
     _append_user_input(event_projector)
     event_projector.process(
         ToolCallCreatedEvent(
-            session_id=1, run_id=1, turn=1, tool_call_id="call-hitl", tool_name="browser_handoff"
+            session_id=1, run_id=1, turn=1, tool_call_id="call-hitl", tool_name="ask_user"
         )
     )
     event_projector.process(

@@ -229,13 +229,13 @@ function toolTraceState() {
 }
 
 /**
- * 交替序列（设计文档 §5 场景 A–D 的合成）：思考 → 叙述 → 搜索 → 叙述 → 失败的命令 → 改动 → 交接（等待用户）→ 结论。
+ * 交替序列（设计文档 §5 场景 A–D 的合成）：思考 → 叙述 → 搜索 → 叙述 → 失败的命令 → 改动 → 提问（等你回答）→ 结论。
  * `phase` 为 running 时结论还没出、最后一步是正在运行的命令；settled 时回合已结束，带耗时。
  */
 function alternatingSequenceState(phase) {
   const turn = 79;
   // 图标、动词与标题由前端工具目录按工具名 + 参数算出，夹具只给真实形状的参数。
-  const call = (toolCallId, toolName, args, status, extra = {}) => ({presentation: ["delegate_task", "fork_session", "browser_handoff", "ask_user"].includes(toolName) ? "standalone" : toolName === "wait_messages" ? "quiet" : "activity",
+  const call = (toolCallId, toolName, args, status, extra = {}) => ({presentation: ["delegate_task", "fork_session", "ask_user"].includes(toolName) ? "standalone" : toolName === "wait_messages" ? "quiet" : "activity",
     type: "tool-call", awaitingUser: false, toolCallId, toolName, args, status, error: null,
     display_data: null, ...extra,
   });
@@ -254,7 +254,6 @@ function alternatingSequenceState(phase) {
     call("alt-patch", "apply_patch", { patch: "diff --git a/src/config.ts b/src/config.ts\n" }, "completed", {
       display_data: {
         kind: "file-changes",
-        diff_stats: { total_files: 2, total_insertions: 30, total_deletions: 6 },
         changes: [
           { path: "src/config.ts", status: "modified", insertions: 9, deletions: 2, patch: "diff --git a/src/config.ts b/src/config.ts\n--- a/src/config.ts\n+++ b/src/config.ts\n@@ -31 +31,2 @@\n-export const tick = 250\n+export const tickMs = read('scheduler.tickMs', 250)\n+export const tickRange = [50, 5000]\n" },
           { path: "src/session.ts", status: "modified", insertions: 21, deletions: 4, patch: null },
@@ -268,11 +267,14 @@ function alternatingSequenceState(phase) {
     }));
   } else {
     parts.push(
-      call("alt-handoff", "browser_handoff", { tab: "tab-alt", reason: "输入 sudo 密码" }, "pending", {
+      call("alt-question", "ask_user", { questions: [] }, "pending", {
         awaitingUser: true,
         display_data: {
-          kind: "browser-page", tab_id: "tab-alt", url: "https://example.test/sudo", title: "sudo 确认",
-          handoff_reason: "输入完成后点「交还」，Agent 会继续安装",
+          kind: "user-question",
+          questions: [{ question: "默认间隔要改吗？", header: "间隔", multi_select: false, options: [
+            { label: "保持 250", description: "与现在一致" },
+            { label: "改成 500", description: "更省电" },
+          ] }],
         },
       }),
       { type: "text", text: "已把调度间隔改为读配置项 `scheduler.tickMs`，默认值仍是 250。\n\n新增 3 个单测，`bun test` 全部通过。", status: "completed", finalReply: true },
@@ -409,7 +411,7 @@ function wireState(sessionId, state = states.get(sessionId)) {
     terminal_sessions: (terminalSessions.get(sessionId) ?? []).map((session) => session.entry),
     background_tasks: backgroundTasks.get(sessionId) ?? [],
     foreground_waits: (foregroundWaits.get(sessionId) ?? []).map((entry) => entry.toolCallId),
-    handoffs: [],
+   
     deliverables: sessionDeliverables(state.messages),
   };
 }
@@ -598,7 +600,7 @@ function handleMessage(res, body, sessionId) {
     modelConfigId: body.modelConfigId ?? DEFAULT_LAUNCH.modelConfigId,
     reasoningEffort: body.reasoningEffort ?? null,
   };
-  // 与后端一致：用户发了新消息，等用户回应的等待（提问）作废为「未作答」；交接不受影响。
+  // 与后端一致：用户发了新消息，等用户回应的等待（提问）作废为「未作答」。
   const base = settleAwaiting(states.get(sessionId) ?? emptyState(), (part) => part.display_data?.kind === "user-question", (part) => ({
     ...part, status: "cancelled", awaitingUser: false, error: "未作答",
   }));

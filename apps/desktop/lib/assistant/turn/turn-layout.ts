@@ -1,7 +1,8 @@
 import { executingInForeground, segmentActivity, unownedActivity, type ActivityFeedback } from "./current-activity";
 import type { BackgroundTaskEntry } from "../contract";
+import { callImages, type CallImage } from "../tools/call-images";
 import { readFileChanges, type FileChange } from "../tools/file-changes";
-import { collectDeliverables, type DeliverablesCard } from "./deliverable-layout";
+import { collectDeliverableBatches, type DeliverablesBatch } from "./deliverable-layout";
 import type { TransportActivity, TransportAgentMessagePart, TransportMessagePart, TransportOutcome, TransportTextPart, TransportToolCallPart } from "../contract";
 import { toolHeading, toolVerb } from "../tools/tool-catalog";
 import { toolResultSignal } from "../tools/tool-result-signals";
@@ -30,24 +31,35 @@ export type ProcessItem = NarrationItem | CallItem | StandaloneItem | AgentItem;
 export type VerbCount = { label: string; count: number };
 /**
  * 活动段：两次中断（旁白、独立工具、Agent 来信）之间的思考与工具调用，用户眼里的「一段工作」，只占一行。
- * `live` 是这段此刻在做什么（执行中的调用，或回合最后一段上的思考、等待）：运行时这一行说它并连续计时
- * （起点见 `segment-clock`），段结束原地换回 `summary` 汇总；还没有调用的段（`calls` 为空）只在运行时存在，
- * 出现旁白即被替换。`key` 取上一次中断之后的位置，所以从思考进入第一次调用、中间夹着空白正文或静默调用，
- * 都是同一段、同一个计时。运行中的段在收起过程时也常显。
+ * `live` 是这段此刻在做什么（执行中的调用，或回合最后一段上的思考、等待）：运行时这一行说它并计这个状态的
+ * 时长（起点见 `ActivityFeedback.since`），段结束原地换回 `summary` 汇总；还没有调用的段（`calls` 为空）只在
+ * 运行时存在，出现旁白即被替换。`key` 取上一次中断之后的位置，所以从思考进入第一次调用、中间夹着空白正文或
+ * 静默调用，都是同一段、同一行。运行中的段在收起过程时也常显。
  */
 export type ActivityGroup = { kind: "activity"; key: string; index: number; calls: CallItem[]; summary: CallSummary; live: ActivityFeedback | null };
-export type TurnBlock = NarrationItem | StandaloneItem | AgentItem | ActivityGroup;
-/** 工具组摘要：按动词计数与失败、取消数。只在组上有，回合过程不另做汇总。 */
+/**
+ * 交付卡（一次 `present_deliverables` 一张）是回合里的一个块，不属于过程：过程收起时也常显，所以收起后它紧贴在
+ * 最终回复上方。它像旁白一样切断活动段——交付是一件有结果的事，前后的调用分成两段。
+ */
+export type DeliverablesBlock = DeliverablesBatch;
+export type TurnBlock = NarrationItem | StandaloneItem | AgentItem | ActivityGroup | DeliverablesBlock;
+/**
+ * 工具组摘要：按动词计数、失败与取消数，以及这一段的产出——文件改动的增删行数之和（逐次操作相加，不是
+ * 工作区净变化）与产出的图片（按出现顺序）。只在组上有，回合过程不另做汇总。问题之外的结果信号（非零退出、
+ * 部分成功）仍只留在调用行。
+ */
 export type CallSummary = {
   verbCounts: VerbCount[];
   failedCount: number;
   cancelledCount: number;
+  diff: { insertions: number; deletions: number };
+  images: readonly CallImage[];
 };
 export type FileOperation = { toolCallId: string; change: FileChange };
 export type ChangedFile = { path: string; operations: FileOperation[] };
 export type ChangesCard = { kind: "changes"; files: ChangedFile[]; totals: { files: number; calls: number }; callIndexes: number[] };
 export type StandaloneArtifactCard = { kind: StandaloneArtifactKind; index: number; part: TransportToolCallPart };
-export type ArtifactCard = ChangesCard | StandaloneArtifactCard | DeliverablesCard;
+export type ArtifactCard = ChangesCard | StandaloneArtifactCard;
 export type AnswerItem = { index: number; part: TransportTextPart };
 export type TurnLayout = {
   /** 直接引用 canonical parts，供下一版复用未变区间；不反向还原 AUI content。 */
@@ -59,8 +71,9 @@ export type TurnLayout = {
   /** 过程里的全部条目（标题据此判断能否展开）。 */
   process: { items: ProcessItem[] };
   /**
-   * 产出卡是这一回合的报告，只在落定后出现，与过程默认收起同一刻：运行中出现会被之后的过程一路
-   * 往下推，挂起时出现又会在唤醒时消失。运行中每次操作的那一行就是反馈。
+   * 产出卡（改动、配置草稿）是这一回合的报告，只在落定后出现，与过程默认收起同一刻：它排在回复之后，运行中
+   * 出现会被之后的过程一路往下推，挂起时出现又会在唤醒时消失。运行中每次操作的那一行就是反馈。交付卡不在这里，
+   * 它是 `blocks` 里的块（见 `DeliverablesBlock`）。
    */
   artifacts: ArtifactCard[];
   /**
@@ -105,13 +118,18 @@ export function describeVerbCounts(summary: CallSummary): string {
 /** Summaries count calls, not files/steps. Control calls can expose errors without pretending to be work. */
 export function summarizeCalls(calls: readonly CallItem[]): CallSummary {
   const verbs = new Map<string, number>();
-  let failedCount = 0, cancelledCount = 0;
+  let failedCount = 0, cancelledCount = 0, insertions = 0, deletions = 0;
+  const images: CallImage[] = [];
   for (const { part } of calls) {
     if (part.presentation !== "quiet") verbs.set(callVerb(part), (verbs.get(callVerb(part)) ?? 0) + 1);
     if (part.status === "failed") failedCount++;
     else if (part.status === "cancelled") cancelledCount++;
+    if (part.display_data?.kind === CHANGES_KIND) {
+      for (const change of readFileChanges(part.display_data.changes)) { insertions += change.insertions; deletions += change.deletions; }
+    }
+    images.push(...callImages(part.display_data));
   }
-  return { verbCounts: [...verbs].map(([label, count]) => ({ label, count })), failedCount, cancelledCount };
+  return { verbCounts: [...verbs].map(([label, count]) => ({ label, count })), failedCount, cancelledCount, diff: { insertions, deletions }, images };
 }
 
 /**
@@ -122,8 +140,11 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
   const hasFinalReply = outcome?.status === "completed" && parts.some((part) => part.type === "text" && part.finalReply && part.text.trim());
   const blocks: TurnBlock[] = [], items: ProcessItem[] = [];
   const answer: AnswerItem[] = [], artifacts: ArtifactCard[] = [];
-  const changes: CallItem[] = [], deliverableCalls: CallItem[] = [];
-  const previousArtifacts = new Map(previous?.artifacts.flatMap(card => card.kind === "changes" || card.kind === "deliverables" ? [] : [[card.index, card] as const]));
+  const changes: CallItem[] = [];
+  const previousArtifacts = new Map(previous?.artifacts.flatMap(card => card.kind === "changes" ? [] : [[card.index, card] as const]));
+  // 交付卡要先看完整个回合（后来重交的成果从前一张卡里去掉），再在调用的位置插进块序列。
+  const batches = new Map(collectDeliverableBatches(parts.flatMap((part, index) => part.type === "tool-call" && part.deliverables?.length ? [{ index, part }] : []))
+    .map((batch) => [batch.index, reuseBatch(batch, previous)] as const));
   let group: ActivityGroup | null = null;
   // 当前活动段从哪里开始：上一次中断之后的位置，段的身份取它（见 `ActivityGroup`）。
   let segmentStart = 0;
@@ -139,6 +160,13 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
       if (!hasFinalReply || part.finalReply) answer.push({ index, part });
       if (item.inProcess) items.push(item);
     } else if (part.type === "tool-call") {
+      const batch = batches.get(index);
+      if (batch) {
+        group = null;
+        segmentStart = index + 1;
+        blocks.push(batch);
+        continue;
+      }
       if (part.presentation === "standalone") {
         group = null;
         segmentStart = index + 1;
@@ -150,7 +178,6 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
       if (!group) { group = { kind: "activity", key: `interval:${segmentStart}`, index, calls: [], summary: summarizeCalls([]), live: null }; blocks.push(group); }
       const item: CallItem = { kind: "call", index, part };
       if (visibleCall(part)) { group.calls.push(item); items.push(item); }
-      if (part.deliverables?.length) deliverableCalls.push(item);
       const kind = part.display_data?.kind;
       if (kind === CHANGES_KIND) changes.push(item);
       else if (kind === NEXT_STEP_KIND) nextStep = previous?.nextStep?.part === part ? previous.nextStep : { index, part };
@@ -198,13 +225,7 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
       blocks[i] = old;
     } else block.summary = summarizeCalls(block.calls);
   }
-  // 交付物卡放在本回合第一次带记录的调用的位置（其余单卡按调用下标有序，插到第一个下标更大的卡之前）。
-  if (deliverableCalls.length) {
-    const old = previous?.artifacts.find(card => card.kind === "deliverables");
-    const card = old?.kind === "deliverables" && sameCalls(old.callIndexes, deliverableCalls, previous) ? old : collectDeliverables(deliverableCalls)!;
-    const at = artifacts.findIndex(other => other.kind !== "changes" && other.index > card.index);
-    artifacts.splice(at === -1 ? artifacts.length : at, 0, card);
-  }
+  hoistDeliverablesAboveReply(blocks);
   if (changes.length) {
     const old = previous?.artifacts.find(card => card.kind === "changes");
     artifacts.unshift(old?.kind === "changes" && sameCalls(old.callIndexes, changes, previous) ? old : aggregateChanges(changes));
@@ -226,17 +247,39 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
  * 折叠的组藏住，不能承载等待。
  */
 export function visibleTurnBlock(block: TurnBlock, open: boolean): boolean {
+  if (block.kind === "deliverables") return true;
   if (block.kind === "narration") return open || !block.inProcess;
   if (block.kind === "agent") return open;
   if (block.kind === "standalone") return open || block.live || block.part.awaitingUser;
   return block.live !== null || block.calls.length > 0 && open;
 }
 
-function sameLive(left: ActivityFeedback | null, right: ActivityFeedback | null): boolean {
-  return left === right || (left !== null && right !== null && left.label === right.label && left.animated === right.animated);
+/**
+ * 交付卡排在最终回复之上：模型先交付、再写答案时（提示词要求的顺序）它本来就在那里；把答案和交付写进同一条回复时，
+ * 调用排在答案正文之后，落定后（有了最终回复的标记）把它提到第一段最终回复之前，多张保持原顺序。运行中不移动——
+ * 那时还不知道哪段是最终回复。只挪块的位置，槽位（`index`）不变。
+ */
+function hoistDeliverablesAboveReply(blocks: TurnBlock[]): void {
+  const reply = blocks.findIndex(block => block.kind === "narration" && block.part.finalReply);
+  if (reply === -1) return;
+  const late = blocks.filter((block, i) => i > reply && block.kind === "deliverables");
+  if (!late.length) return;
+  const rest = blocks.filter(block => !late.includes(block));
+  rest.splice(rest.indexOf(blocks[reply]), 0, ...late);
+  blocks.splice(0, blocks.length, ...rest);
 }
 
-/** 聚合卡（改动、交付物）能否复用上一版：参与的调用槽位与 canonical part 身份都没变。 */
+/** 交付卡能否沿用上一版：同一槽位、同一 canonical part，且去重后留下的成果不变。 */
+function reuseBatch(batch: DeliverablesBatch, previous?: TurnLayout | null): DeliverablesBatch {
+  const old = previous?.blocks.find((block): block is DeliverablesBlock => block.kind === "deliverables" && block.index === batch.index);
+  return old && old.part === batch.part && old.items.length === batch.items.length && old.items.every((entry, i) => entry.deliverable === batch.items[i].deliverable) ? old : batch;
+}
+
+function sameLive(left: ActivityFeedback | null, right: ActivityFeedback | null): boolean {
+  return left === right || (left !== null && right !== null && left.label === right.label && left.animated === right.animated && left.since === right.since);
+}
+
+/** 改动聚合卡能否复用上一版：参与的调用槽位与 canonical part 身份都没变。 */
 function sameCalls(oldIndexes: readonly number[], calls: readonly CallItem[], previous?: TurnLayout | null): boolean {
   return oldIndexes.length === calls.length && calls.every((call, i) => oldIndexes[i] === call.index && previous?.parts[call.index] === call.part);
 }

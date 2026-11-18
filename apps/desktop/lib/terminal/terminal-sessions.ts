@@ -47,6 +47,16 @@ export function terminalTabs(sessions: readonly TerminalSessionEntry[], selected
   }));
 }
 
+/**
+ * 用户看到的终端名：在标签栏里就用标签名（只有一个时叫「终端」），已结束的按它在标签栏时的编号（「终端 N」），
+ * 与用户见过的名字一致；入口提醒与工具调用行共用。不在列表里（如 Agent 自己运行中的命令）为 null。
+ */
+export function terminalTitle(sessions: readonly TerminalSessionEntry[], terminalSessionId: string): string | null {
+  const index = sessions.findIndex((session) => session.terminalSessionId === terminalSessionId);
+  if (index === -1) return null;
+  return terminalTabs(sessions, null).find((tab) => tab.session.terminalSessionId === terminalSessionId)?.title ?? `终端 ${index + 1}`;
+}
+
 /** 异常结束：会话失败，或 shell 以非 0 退出码退出；用户主动关闭不算。 */
 function isAbnormalTerminalEnd(session: Pick<TerminalSessionEntry, "status" | "exitCode">): boolean {
   return session.status === "failed" || (session.status === "exited" && session.exitCode !== null && session.exitCode !== 0);
@@ -71,19 +81,13 @@ export function terminalBadge(
   acknowledgedEnds: readonly string[],
 ): TerminalBadge {
   if (sessions === null) return { count: 0, tone: null, hint: null };
-  const tabs = terminalTabs(sessions, null);
-  // 已结束的会话不在标签栏里，按它在标签栏时的编号称呼（「终端 N」），与用户看到过的名字一致。
-  const titleOf = (session: TerminalSessionEntry) => (
-    tabs.find((tab) => tab.session.terminalSessionId === session.terminalSessionId)?.title
-      ?? `终端 ${sessions.indexOf(session) + 1}`
-  );
-  const count = tabs.length;
+  const count = terminalTabs(sessions, null).length;
   const failed = sessions.filter((session) => isAbnormalTerminalEnd(session) && !acknowledgedEnds.includes(session.terminalSessionId));
   if (failed.length > 0) {
     const [first] = failed;
     const detail = first.status === "failed" ? "会话失败" : `退出码 ${first.exitCode}`;
     const more = failed.length > 1 ? `等 ${failed.length} 个终端` : "";
-    return { count, tone: "attention", hint: `「${titleOf(first)}」${more}异常结束（${detail}）` };
+    return { count, tone: "attention", hint: `「${terminalTitle(sessions, first.terminalSessionId)}」${more}异常结束（${detail}）` };
   }
   return { count, tone: null, hint: null };
 }

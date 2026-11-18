@@ -6,7 +6,7 @@
  * 实现：input/actions.ts、operation.ts（effect/NoEffectError）。
  */
 import { describe, expect, it, vi } from "vitest";
-vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
+vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn(), appendHostLogLine: vi.fn() }));
 
 import { runActions, type ActResult } from "@/electron/main/browser/input/actions";
 import type { PageAction } from "@/electron/main/browser/params";

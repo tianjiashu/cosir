@@ -17,9 +17,8 @@ from app.models.session_kind import SESSION_KINDS, USER_FACING_SESSION_TYPES, Se
 
 pytestmark = pytest.mark.usefixtures("backend_env")
 
-# 只能给用户能操作的对话：需要用户作答的 HITL / 交接、配置草稿与回复呈现。
+# 只能给用户能操作的对话：需要用户作答的 HITL、配置草稿与回复呈现。
 _USER_SURFACE_ONLY = {
-    "browser_handoff",
     "propose_agent_configuration",
     "ask_user",
     "present_deliverables",
@@ -46,7 +45,7 @@ def test_rule_table_is_closed_over_its_own_references() -> None:
     definitions = get_tool_registry().get_all_definitions()
     assert {rule.tool for rule in DERIVATIONS.values()} <= {tool.name for tool in definitions}
     assert all(
-        tool.requires_user_surface for tool in definitions if tool.user_decision is not None
+        tool.requires_user_surface for tool in definitions if tool.user_decision
     )
 
 

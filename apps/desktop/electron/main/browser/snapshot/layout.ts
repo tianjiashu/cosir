@@ -7,7 +7,12 @@
  * 元素截图要的是此刻的位置，另由 `input/element.ts` 的 `box` 现量。
  */
 
-/** `DOMSnapshot.captureSnapshot`（`computedStyles: ["cursor"]`）结果里本模块用到的字段。 */
+/** 快照读取时要的计算样式，顺序即 `layout.styles` 每一项里的下标。 */
+export const SNAPSHOT_STYLES = ["cursor", "display"] as const;
+const CURSOR = SNAPSHOT_STYLES.indexOf("cursor");
+const DISPLAY = SNAPSHOT_STYLES.indexOf("display");
+
+/** `DOMSnapshot.captureSnapshot`（`computedStyles: SNAPSHOT_STYLES`）结果里本模块用到的字段。 */
 export type DomSnapshot = {
   strings: string[];
   documents: {
@@ -74,7 +79,7 @@ export function pointerRoots(snapshot: DomSnapshot): Set<number> {
     const parents = nodes.parentIndex ?? [];
     const ids = nodes.backendNodeId ?? [];
     const cursor = new Map<number, string>();
-    layout.nodeIndex.forEach((nodeIndex, i) => cursor.set(nodeIndex, snapshot.strings[layout.styles[i]?.[0]] ?? ""));
+    layout.nodeIndex.forEach((nodeIndex, i) => cursor.set(nodeIndex, snapshot.strings[layout.styles[i]?.[CURSOR]] ?? ""));
     const styledAncestor = (index: number): number => {
       let at = parents[index] ?? -1;
       while (at >= 0 && !cursor.has(at)) at = parents[at] ?? -1;
@@ -87,4 +92,21 @@ export function pointerRoots(snapshot: DomSnapshot): Set<number> {
     }
   }
   return roots;
+}
+
+/**
+ * 块级元素（backendNodeId）：有布局、`display` 既不是行内（`inline…`）也不是 `contents` 的节点。正文视图据此断行：
+ * 无障碍树不分行内与块级，只看它，「A <b>web browser</b>, often…」会碎成好几行。没有布局的节点不在其中，按行内处理、
+ * 由子孙决定（实测 `display: contents` 的节点没有布局）。
+ */
+export function blockNodes(snapshot: DomSnapshot): Set<number> {
+  const blocks = new Set<number>();
+  for (const { nodes, layout } of snapshot.documents) {
+    const ids = nodes.backendNodeId ?? [];
+    layout.nodeIndex.forEach((nodeIndex, i) => {
+      const display = snapshot.strings[layout.styles[i]?.[DISPLAY]] ?? "";
+      if (display && !display.startsWith("inline") && display !== "contents") blocks.add(ids[nodeIndex]);
+    });
+  }
+  return blocks;
 }

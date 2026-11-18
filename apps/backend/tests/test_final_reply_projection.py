@@ -61,7 +61,7 @@ def test_live_and_rebuild_agree(status, reason, content, expected):
             run_id=1,
             status=RunStatus(status),
             end_reason=reason,
-            response_sequence=2,
+            response_sequences=[2],
         ),
     )
     validate_snapshot(state)
@@ -120,7 +120,7 @@ def test_all_text_parts_from_final_response_marked_and_structured_result_does_no
             run_id=1,
             status=RunStatus.COMPLETED,
             end_reason="stop",
-            response_sequence=2,
+            response_sequences=[2],
         ),
     )
     apply(state, RunResultUpdatedEvent(session_id=7, run_id=1, end_reason="structured_output_failed"))
@@ -143,7 +143,7 @@ def _complete_turn(state, run_id: int, turn: int, text: str, end_reason: str = "
             run_id=run_id,
             status=RunStatus.COMPLETED,
             end_reason=end_reason,
-            response_sequence=turn,
+            response_sequences=[turn],
         ),
     )
 

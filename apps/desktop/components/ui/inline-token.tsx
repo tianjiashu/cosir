@@ -62,7 +62,7 @@ export function InlineToken({
           ><XIcon aria-hidden="true" /></button>
         )}
       </TooltipTrigger>
-      <TooltipContent id={descriptionId} role="tooltip" className="break-all">{description}</TooltipContent>
+      <TooltipContent id={descriptionId} role="tooltip">{description}</TooltipContent>
     </Tooltip>
   );
 }

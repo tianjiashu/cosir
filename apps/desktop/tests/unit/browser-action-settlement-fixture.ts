@@ -107,6 +107,7 @@ export function makeSession(config: FixtureConfig = {}): Fixture {
   };
 
   const tab = {
+    log: { nextSeq: 1 },
     sessionId: 1,
     tabId: "t1",
     documentGeneration: 0,

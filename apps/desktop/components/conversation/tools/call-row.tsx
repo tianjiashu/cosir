@@ -1,3 +1,4 @@
+import { PathText } from "@/components/workspace-references/workspace-path-link";
 import { DeferredDetail } from "./deferred-detail";
 import { projectCallStatus } from "@/lib/assistant/tools/call-status";
 import { toolResultSignal } from "@/lib/assistant/tools/tool-result-signals";
@@ -44,7 +45,7 @@ const CLICKABLE_ROW_CLASS = "hover:bg-muted cursor-pointer";
  * 行只说「在做什么」和「出了问题」：运行中标题扫光（`projectCallStatus`），跑过 3 秒标题后出现时长，成功不说话，异常按工具失败、取消、
  * 等你操作、实体异常（视图的 `status`）的优先级出现在元信息。
  *
- * 等你操作时例外：视图给了等待卡片（`CallPresentation.awaiting`，交接、提问）就原地画成卡片，决定之后变回这一行。
+ * 等你操作时例外：视图给了等待卡片（`CallPresentation.awaiting`，如提问）就原地画成卡片，决定之后变回这一行。
  * 元信息与展开体由 kind 视图注册表按 `display_data.kind` 给出（没有 kind 时只有标题与状态）；已有结构化部分
  * 结果仍可展开。归侧栏的后台工作没有详情与操作，整行是定位到看板的按钮。
  * 可展开时整行是折叠按钮，视图给的行尾动作渲染在按钮之外（避免按钮嵌套），悬停范围因此放在外层；开合记在
@@ -80,7 +81,7 @@ function CallRowContent({ sessionId, toolCallId, toolName, args, artifact, inter
   }
 
   // 标题与 `turn-layout.callTitle` 同源：都按工具目录从参数算出。
-  const { title, target } = toolHeading(toolName, args, artifact.intent);
+  const { title, target, targetIsPath } = toolHeading(toolName, args, artifact.intent);
   const feedback = projectCallStatus(status, artifact.awaitingUser, artifact.background, workStatus);
   const kindMeta = resolved?.meta;
   const signal = failed || cancelled ? null : toolResultSignal(artifact.display_data);
@@ -98,17 +99,19 @@ function CallRowContent({ sessionId, toolCallId, toolName, args, artifact, inter
       <ToolIcon name={toolIconName(toolName)} className="text-muted-foreground size-3.5" aria-hidden="true" />
       <ThinkingLabel data-slot="call-title" active={feedback.animated && !inherited} className="min-w-0 truncate" title={title}>{title}</ThinkingLabel>
       {!inherited && <CallElapsed startedAt={artifact.startedAt} />}
-      <span data-slot="call-target" className="text-muted-foreground min-w-0 truncate font-mono text-xs" title={target ?? undefined}>
-        {resolved?.target ?? target}
+      {/* 窄时目标先让位（收缩系数更大），标题后让位；路径省略中间目录、保住文件名。 */}
+      <span data-slot="call-target" className="text-muted-foreground flex min-w-0 shrink-[4] font-mono text-xs" title={target ?? undefined}>
+        {resolved?.target ?? (target === null ? null : targetIsPath ? <PathText path={target} /> : <span className="truncate">{target}</span>)}
       </span>
       {expandable && <DisclosureChevron open={open} reveal className="text-muted-foreground" />}
       <span className="flex-1" aria-hidden="true" />
-      {(kindMeta || stateMeta || signal) && (
-        <span data-slot="call-meta" className="text-muted-foreground flex max-w-[45%] shrink-0 items-center gap-1.5 truncate text-xs">
-          {kindMeta}
-          {kindMeta && stateMeta && <span aria-hidden="true">·</span>}
+      {/* 窄时让位的先后：目标 → 标题 → 结果量（只在超过 45% 时截断）；问题（失败原因、取消、等你操作、实体状态、
+          结果信号）单独一格、不收缩，长标题挤不掉它。 */}
+      {kindMeta && <span data-slot="call-meta" className="text-muted-foreground flex max-w-[45%] shrink-0 items-center gap-1.5 truncate text-xs">{kindMeta}</span>}
+      {(stateMeta || signal) && (
+        <span data-slot="call-problem" className="text-muted-foreground flex shrink-0 items-center gap-1.5 text-xs">
           {stateMeta}
-          {signal && <span className="text-warning">{kindMeta || stateMeta ? " · " : ""}{signal}</span>}
+          {signal && <span className="text-warning">{stateMeta ? "· " : ""}{signal}</span>}
         </span>
       )}
       {inherited && unfinished ? <span className="text-xs text-muted-foreground">继承时未结束</span> : <CallStatus status={status} awaitingUser={artifact.awaitingUser} label={feedback.label} />}

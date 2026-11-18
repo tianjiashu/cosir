@@ -10,7 +10,6 @@ import pytest
 
 from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
 from app.core.workflow.message_queue.session_message import NoticeBody, SessionMessage
-from app.service.conversation.tool_decision_service import ToolDecisionService
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces as spaces
 from tests.live_cold_support import LiveColdEnv, tool_call, tool_parts
 from tests.sdk_fixtures import sdk_events
@@ -132,35 +131,6 @@ async def test_run_outcomes_agree(backend_env, tmp_path, monkeypatch, name):
         await env.close()
 
 
-async def test_a_pending_decision_survives_a_failed_run(backend_env, tmp_path, monkeypatch):
-    """决定在 Run 失败后仍可作出：卡片必须还在等，不能只在实时快照里变成已取消。"""
-    env = LiveColdEnv(
-        tmp_path,
-        monkeypatch,
-        [
-            ([{"tool_calls": [tool_call("h1", "probe_hitl", {"intent": "批准"})]}], "tool_calls"),
-            RuntimeError("model down"),
-            ([{"content": "结论"}], "stop"),
-        ],
-    )
-    try:
-        env.send()
-        assert (await env.parked()).status == "suspended"
-        env.send("唤醒", delivery="immediate")
-        await env.until("failed")
-        [part] = tool_parts(env.live())
-        assert (part["status"], part["awaitingUser"]) == ("pending", True)
-        env.assert_parity()
-
-        await asyncio.to_thread(ToolDecisionService().submit, env.session.id, "h1", "approve")
-        await env.until("completed")
-        [part] = tool_parts(env.live())
-        assert (part["status"], part["awaitingUser"]) == ("completed", False)
-        env.assert_parity()
-    finally:
-        await env.close()
-
-
 async def test_a_failure_during_a_tool_batch_settles_its_calls(backend_env, tmp_path, monkeypatch):
     """工具批次被异常打断：没有结果的调用落占位并投影，不靠刷新才看到结局。"""
     from app.core.workflow.nodes import tools_node
@@ -261,7 +231,8 @@ async def test_a_queued_notice_reaches_the_model_right_before_the_input_that_sta
         await env.close()
 
 
-async def test_a_cancelled_run_keeps_its_pending_decision(backend_env, tmp_path, monkeypatch):
+async def test_a_cancelled_run_ends_its_pending_decision(backend_env, tmp_path, monkeypatch):
+    """停下发起提问的 Run 也结束这次提问：实时与冷重建都不再显示「等你操作」。"""
     env = LiveColdEnv(
         tmp_path,
         monkeypatch,
@@ -273,7 +244,7 @@ async def test_a_cancelled_run_keeps_its_pending_decision(backend_env, tmp_path,
         await AssistantTransportService().cancel(env.session.id)
         await env.until("cancelled")
         [part] = tool_parts(env.live())
-        assert part["awaitingUser"] is True
+        assert (part["status"], part["awaitingUser"]) == ("cancelled", False)
         env.assert_parity()
     finally:
         await env.close()

@@ -16,7 +16,7 @@ export type CallViewContext = {
   toolName: string;
   artifact: ToolArtifact;
   args: Record<string, unknown>;
-  /** 只读展示面（子 Agent 阅读器、后台看板）不提供写入交互（停止、交还、转到后台）。 */
+  /** 只读展示面（子 Agent 阅读器、后台看板）不提供写入交互（停止、转到后台）。 */
   interactive: boolean;
   /** 用户已请求停止整个 Session 的当前活动，工具级停止入口随之收起。 */
   sessionCancelling: boolean;

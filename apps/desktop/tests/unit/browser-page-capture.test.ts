@@ -59,4 +59,13 @@ describe("captureScreenshot 截区", () => {
     await captureScreenshot(freeze.send, "png", { devicePixels: true });
     expect(freeze.clip().clip.scale).toBe(1);
   });
+
+  // 目的：整页截图封顶后要说清截了多少；潜在缺陷：模型以为图里就是整页，漏看下面的内容（或每次都被告知「可能截断」而不知真假）。
+  it("reports the real page height only when a full-page capture was cut", async () => {
+    const page = fakeSend();
+    await expect(captureScreenshot(page.send, "jpeg", { fullPage: true })).resolves.toEqual({ image: "data:image/jpeg;base64,AAAA", fullPageCut: { pageHeight: 6000, shownHeight: 4000 } });
+    expect(page.clip().clip.height).toBe(4000);
+    const viewport = fakeSend();
+    await expect(captureScreenshot(viewport.send, "jpeg", {})).resolves.toMatchObject({ fullPageCut: null });
+  });
 });

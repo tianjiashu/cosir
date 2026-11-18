@@ -11,33 +11,53 @@ import { BrowserOperation, type FileChooser } from "./operation";
 import type { BrowserDialog, BrowserDialogAnswer, BrowserNavigation, BrowserTabCreator, BrowserTabSummary } from "../../shared/host-contract";
 import { BROWSER_PAGE_DIALOG_CHANNEL, type BrowserPageDialogRequest } from "../../shared/browser-page-bridge";
 import type { PageAction } from "./params";
-import { captureScreenshot, type CaptureOptions } from "./page-capture";
+import { captureScreenshot, type Capture, type CaptureOptions } from "./page-capture";
 import { PageDialogs } from "./page-dialogs";
 import { evaluateExpression, type Evaluation } from "./page-evaluate";
-import { ERR_ABORTED, navigationCompletion, untilStopped, waitForLoad } from "./page-loading";
+import { ERR_ABORTED, navigationCompletion, untilPageSettled, untilStopped, waitForLoad } from "./page-loading";
 import { PageFrames } from "./page-frames";
 import { TabHighlight } from "./tab-highlight";
 import { RefRegistry, type PageNode } from "./ref-registry";
 import { buildOutline, type Outline } from "./snapshot/outline";
+import { outlineChanges } from "./snapshot/views";
 import { readSnapshot } from "./snapshot/read";
+import type { SnapshotDocument } from "./snapshot/document";
+import { buildPageText, type PageText } from "./snapshot/page-text";
 import { TabEmulation, type Applied, type Emulation, type EmulationRequest } from "./tab-emulation";
-import { BODY_LIMITS, CANCELED_FAILURE, TabLog, type ConsoleLevel } from "./tab-log";
+import { BODY_LIMITS, CANCELED_FAILURE, endpointOf, TabLog, type ConsoleLevel } from "./tab-log";
 import { isPageUrl } from "./page-url";
 import { abortable } from "./abortable";
+import { observeTabNetwork } from "./diagnostics/tab-network";
 
 const NAVIGATION_TIMEOUT_MS = 30_000;
-/** 加载完成后再等一下：多数页面在 load 之后还会渲染首屏内容。 */
+/** 动作之后先等一下再看是否在加载：点击触发的导航是异步开始的。 */
 const SETTLE_MS = 250;
 /** 动作触发导航后最多等多久加载结束；超时不算失败，快照会标「仍在加载」。 */
 const ACTION_SETTLE_TIMEOUT_MS = 15_000;
+/** 判页面稳定的两次读取相隔多久（读一次大纲实测 40~80ms）：也是动作之后最短的渲染留白。 */
+const STABLE_INTERVAL_MS = 300;
+/** 落定最多等多久：导航后页面要拉首屏数据，给得宽一些；每个动作之后的变化通常更小。 */
+const NAVIGATION_SETTLE_LIMIT_MS = 3_000;
+const ACTION_SETTLE_LIMIT_MS = 2_000;
+/**
+ * 操作结束、用户输入或页面跳转之后这么久内发起的请求，不当作「页面自己发起」：点击后延迟加载的内容（推荐区、懒加载）
+ * 是上一个动作的后果，不能因此把它的接口记成后台流量；埋点与轮询会在宽限期之外照样出现，很快被认出。
+ */
+const BACKGROUND_GRACE_MS = 3_000;
+/** 等不到时备注里列出几条仍在进行的请求；举例的变化行截到多长。 */
+const PENDING_LISTED = 3;
+const EXAMPLE_MAX_CHARS = 80;
 /** 用户最近一次输入后多久内 Agent 的动作被拒（设计稿决定记录：2 秒）。 */
 const USER_ACTIVE_WINDOW_MS = 2_000;
 /** 动作结束后多久内到达的输入事件仍算 Agent 的（合成按键的事件可能稍晚才派发）。 */
 const AGENT_INPUT_GRACE_MS = 500;
 /** 采集一条响应体最多等多久：后台读取，等不到就记为没采到，不拖住别的事。 */
 const BODY_CAPTURE_TIMEOUT_MS = 5_000;
-/** 开发期 Electron 往每个页面的 console 注入的安全警告：与网页无关，不进日志。 */
-const ELECTRON_NOISE = /^%cElectron Security Warning/;
+/**
+ * 开发期 Electron 往每个页面的 console 注入的安全警告（警告级别）：与网页无关，不进日志，否则每个页面结果都多报一条
+ * 警告。Electron 45 起消息不再以 `%c` 样式占位开头（实测）；页面结果的警告计数由桌面 E2E 的表单页守着。
+ */
+const ELECTRON_NOISE = /^Electron Security Warning/;
 
 /** 读到的页面：快照大纲（怎么呈现由拿结果的一方选视图，见 `snapshot/views.ts`），或挡住页面的弹窗。 */
 export type PageSnapshot = {
@@ -46,6 +66,9 @@ export type PageSnapshot = {
   document: number;
   dialog: BrowserDialog | null;
 };
+
+/** 读到的页面正文（见 `snapshot/page-text.ts`），弹窗规则与 `PageSnapshot` 相同。 */
+export type PageTextRead = { text: PageText | null; document: number; dialog: BrowserDialog | null };
 
 /** 上一次交给 Agent 的大纲，及它属于第几个文档：增量快照的比对基准（见 `BrowserTab.deliver`）。 */
 type Delivered = { document: number; outline: Outline };
@@ -132,6 +155,13 @@ export class BrowserTab {
   readonly emulation: TabEmulation;
   /** 最近一次真实用户输入的时间（毫秒）；`USER_ACTIVE` 据此判断。 */
   private lastUserInputAt = 0;
+  /**
+   * 最近一次活动的时间（毫秒）：任何输入（含鼠标、触摸与 Agent 的合成输入）与主框架跨文档导航开始。只用于判定请求是不是
+   * 「页面自己发起」（`pageInitiated`），不影响 `USER_ACTIVE`——那条只认键盘，规则另有来由。
+   */
+  private lastActivityAt = 0;
+  /** 上一次修改操作落定的时间（毫秒），同上只供 `pageInitiated` 留宽限期。 */
+  private lastOperationEndedAt = 0;
   /** 在此之前到达的输入事件来自 Agent 自己的动作，不算用户输入（见构造函数里的说明）。 */
   private agentKeyUntil = 0;
   private agentChooserUntil = 0;
@@ -181,6 +211,7 @@ export class BrowserTab {
     });
     contents.on("did-start-navigation", (details) => {
       if (!details.isMainFrame || details.isSameDocument) return;
+      this.lastActivityAt = Date.now();
       this.log.navigationStarted();
     });
     // 主框架换了文档：提交成功（`did-navigate`），或导航失败、换成错误页（Electron 对错误页只发 `did-fail-load`）。
@@ -206,13 +237,15 @@ export class BrowserTab {
     contents.on("console-message", (details) => this.consoleMessage(details));
     contents.ipc.on(BROWSER_PAGE_DIALOG_CHANNEL, (event, request: BrowserPageDialogRequest) => this.dialogRequested(event, request));
     // CDP 合成的鼠标与文字输入不触发 before-input-event，但合成键盘事件可能触发（实测：提交表单时回车的
-    // keyUp）。仅在合成键盘派发后的短时间窗抑制误判；它只是近期键盘输入启发式，可靠接手依靠显式 handoff。
+    // keyUp）。仅在合成键盘派发后的短时间窗抑制误判；它只是近期键盘输入启发式，不是锁。
     contents.on("before-input-event", () => {
       if (Date.now() < this.agentKeyUntil) return;
       this.lastUserInputAt = Date.now();
     });
+    contents.on("input-event", () => { this.lastActivityAt = Date.now(); });
     contents.once("destroyed", () => events.onGone());
     this.subscribeCdp();
+    observeTabNetwork(this.session, contents, { tabId, sessionId });
   }
 
   get dialog(): BrowserDialog | null {
@@ -304,7 +337,7 @@ export class BrowserTab {
       const asked = "url" in target ? `opening ${target.url.slice(0, 200)}` : `going ${target.action === "reload" ? "to reload" : target.action}`;
       this.log.note(`${asked} did not open a new page (it may have started a download, returned no content or been blocked); the tab stays on ${contents.getURL().slice(0, 200)}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    await this.settle(operation, NAVIGATION_SETTLE_LIMIT_MS);
   }
 
   /**
@@ -325,13 +358,24 @@ export class BrowserTab {
    * 本标签有待答弹窗时不读树（页面停着，读不到），只报弹窗；被同进程别的标签的弹窗停住时以 `DIALOG_OPEN` 失败。
    */
   async snapshot(): Promise<PageSnapshot> {
+    const { content, ...read } = await this.read();
+    return { ...read, outline: content && buildOutline(content, this.refs, { pageUrl: this.contents.getURL() }) };
+  }
+
+  /** 同一次读取投影成页面正文（`snapshot/page-text.ts`）：不分配 ref，弹窗规则同 `snapshot`。 */
+  async pageText(): Promise<PageTextRead> {
+    const { content, ...read } = await this.read();
+    return { ...read, text: content && buildPageText(content) };
+  }
+
+  private async read(): Promise<{ content: SnapshotDocument | null; document: number; dialog: BrowserDialog | null }> {
     this.assertAlive();
-    if (this.dialogs.current) return { outline: null, document: this.document, dialog: this.dialogs.current };
+    if (this.dialogs.current) return { content: null, document: this.document, dialog: this.dialogs.current };
     const generation = this.document;
-    const document = await readSnapshot(this.session, this.frames, (error) => {
+    const content = await readSnapshot(this.session, this.frames, (error) => {
       logDesktopEvent("INFO", "browser", "browser_frame_read_failed", { tab_id: this.tabId }, error);
     });
-    return { document: generation, outline: buildOutline(document, this.refs, { pageUrl: this.contents.getURL() }), dialog: this.dialogs.current };
+    return { content, document: generation, dialog: this.dialogs.current };
   }
 
   /** 修改槽位由标签持有；未知输入不允许新操作覆盖。 */
@@ -352,6 +396,7 @@ export class BrowserTab {
   operationSettled(operation: BrowserOperation): void {
     if (this.operation !== operation) return;
     this.operation = null;
+    this.lastOperationEndedAt = Date.now();
     this.events.onChange();
   }
   get documentGeneration(): number { return this.document; }
@@ -362,7 +407,7 @@ export class BrowserTab {
     if (method === "Input.dispatchKeyEvent") this.agentKeyUntil = Date.now() + AGENT_INPUT_GRACE_MS;
   }
 
-  /** USER_ACTIVE 仅为近期键盘活动提示；明确交接由请求准入负责。 */
+  /** USER_ACTIVE 仅为近期键盘活动提示，不是锁。 */
   async act(actions: readonly PageAction[], signal: AbortSignal): Promise<ActResult> {
     this.assertAlive();
     if (Date.now() - this.lastUserInputAt < USER_ACTIVE_WINDOW_MS) throw browserError("USER_ACTIVE", "the user recently used this page");
@@ -430,7 +475,7 @@ export class BrowserTab {
     this.session.send<{ body: string; base64Encoded: boolean }>("Network.getResponseBody", { requestId }, { untracked: true, timeoutMs: BODY_CAPTURE_TIMEOUT_MS }).then(
       ({ body, base64Encoded }) => this.log.bodyCaptured(seq, base64Encoded ? Buffer.from(body, "base64").toString("utf8") : body),
       (error: unknown) => {
-        if (error instanceof HostMethodError && error.code === "DIALOG_OPEN") this.log.bodyDeferred(seq, requestId);
+        if (error instanceof HostMethodError && error.code === "DIALOG_OPEN") this.log.bodyDeferred(seq);
         else this.log.bodyUnavailable(seq, `the browser no longer had the body (${error instanceof Error ? error.message : String(error)}); the page may have moved on`);
       },
     );
@@ -454,14 +499,14 @@ export class BrowserTab {
   }
 
   /** 截图前先收起高亮框：它会进 CDP 截图（实测），Agent 与冻结帧都不该截到它。 */
-  async screenshot(format: "jpeg" | "png", options: CaptureOptions = {}): Promise<string> {
+  async screenshot(format: "jpeg" | "png", options: CaptureOptions = {}): Promise<Capture> {
     this.assertAlive();
     await this.highlighter.clear();
     return captureScreenshot(this.session.send.bind(this.session), format, options);
   }
 
   /** 只截一个元素（先滚入视野再量，与动作取落点同一套几何）；元素已不在、没有尺寸时报 `REF_STALE` / `NOT_INTERACTABLE`。 */
-  async elementScreenshot(ref: string, operation: BrowserOperation): Promise<string> {
+  async elementScreenshot(ref: string, operation: BrowserOperation): Promise<Capture> {
     this.assertAlive();
     const session = operation;
     const area = await box(session, await element(session, ref));
@@ -551,7 +596,7 @@ export class BrowserTab {
     session.on("Network.requestWillBeSent", ({ requestId, type, timestamp, request, redirectResponse }: Request) => {
       // 重定向：同一 requestId 以新地址再发一次，上一跳带着它的状态码结束。
       if (redirectResponse) this.log.responseReceived(requestId, redirectResponse.status, timestamp, true);
-      this.log.requestStarted(requestId, { method: request.method, url: request.url, resourceType: type ?? "Other", timestamp });
+      this.log.requestStarted(requestId, { method: request.method, url: request.url, resourceType: type ?? "Other", timestamp }, this.pageInitiated());
     });
     session.on("Network.responseReceived", ({ requestId, timestamp, response }: { requestId: string; timestamp: number; response: { status: number; mimeType?: string } }) => {
       this.log.responseReceived(requestId, response.status, timestamp, false, response.mimeType ?? null);
@@ -598,16 +643,65 @@ export class BrowserTab {
   }
 
   /**
-   * 动作之后：页面在加载（点了链接、提交了表单）就等它结束，有时限、超时不报错，再留一点渲染时间。
-   * 页面停住（弹窗）、调用取消或标签关闭（`signal`）时不再等：结果里报出弹窗，或由 `BrowserHost` 报关闭。
+   * 导航与每个动作之后的唯一落定点：页面在加载（点了链接、提交了表单）就等它结束（有时限、超时不报错），再按
+   * `untilPageSettled` 分层等页面落定——这一步之后发出、不属于后台流量的请求都回来，且大纲前后两次读取相同。到上限时
+   * 按没满足的那一层留一条备注随页面结果交给 Agent：它要知道快照缺东西是「数据没到」还是「页面一直在变」，以及
+   * 接下来怎么办。每次落定都写一条日志（哪一层收尾、等了多久、读了几次），据此调上限与判定规则。
+   * 页面停住（弹窗）、调用取消或标签关闭时不再等：结果里报出弹窗，或由 `BrowserHost` 报关闭。
    */
-  async settle(signal: AbortSignal): Promise<void> {
+  async settle(operation: BrowserOperation, timeoutMs = ACTION_SETTLE_LIMIT_MS): Promise<void> {
     const contents = this.contents;
-    // 点击触发的导航是异步开始的：先等一下再看是否在加载。
+    const until = AbortSignal.any([operation.signal, this.session.pausedSignal]);
     await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
-    if (this.events.pausedBy() || signal.aborted) return;
-    if (contents.isLoading()) await untilStopped(contents, ACTION_SETTLE_TIMEOUT_MS, AbortSignal.any([signal, this.session.pausedSignal]));
-    await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
+    if (this.events.pausedBy() || until.aborted) return;
+    if (contents.isLoading()) await untilStopped(contents, ACTION_SETTLE_TIMEOUT_MS, until);
+    if (this.events.pausedBy() || until.aborted || contents.isDestroyed()) return;
+    let ignored = 0;
+    const outcome = await untilPageSettled({
+      pending: () => {
+        const requests = this.log.pendingRequests(operation.requestsFrom);
+        ignored = Math.max(ignored, requests.ignored);
+        return requests.waiting;
+      },
+      read: () => this.settleRead(),
+      changed: (previous: Outline, current: Outline) => {
+        const { marks, removed } = outlineChanges(previous, current);
+        const first = marks.keys().next();
+        const example = first.done ? removed[0]?.text ?? null : current.entries[first.value].text;
+        return { count: marks.size + removed.length, example: example && example.slice(0, EXAMPLE_MAX_CHARS) };
+      },
+    }, { intervalMs: STABLE_INTERVAL_MS, timeoutMs, until });
+    logDesktopEvent("INFO", "browser", "browser_page_settled", { tab_id: this.tabId, session_id: this.sessionId, by: outcome.by, waited_ms: outcome.waitedMs, reads: outcome.reads, background_ignored: ignored });
+    const next = "if something you expect is missing, use a wait_for action for text you expect, or read a fresh browser_snapshot shortly.";
+    const waited = `waited ${(outcome.waitedMs / 1000).toFixed(1)}s`;
+    if (outcome.by === "requests") {
+      const { pending } = outcome;
+      const listed = pending.slice(0, PENDING_LISTED).map((entry) => `${entry.method} ${endpointOf(entry.url)}`).join(", ");
+      const more = pending.length > PENDING_LISTED ? ` and ${pending.length - PENDING_LISTED} more` : "";
+      const one = pending.length === 1;
+      this.log.note(`${pending.length} request${one ? "" : "s"} that may carry page content ${one ? "was" : "were"} still running when this result was taken (${waited}): ${listed}${more}. Parts of the page may not have rendered yet: ${next}`);
+    } else if (outcome.by === "changing") {
+      const example = outcome.example ? `, e.g. ${outcome.example}` : "";
+      this.log.note(`the page was still changing when this result was taken (${waited}; ${outcome.changed} line${outcome.changed === 1 ? "" : "s"} differed between the last two reads${example}). It may be live content such as a timer, carousel or streaming text: ${next}`);
+    }
+  }
+
+  /**
+   * 此刻发起的请求是不是页面自己发起的：没有 Agent 操作在进行，且离上次操作落定、上次活动都已超过宽限期。是的话，
+   * 它记为页面自己发起；同一接口页面自己反复发起后才算后台流量（`TabLog.pendingRequests`），之后落定不再等它。
+   */
+  private pageInitiated(): boolean {
+    return this.operation === null && Date.now() - Math.max(this.lastOperationEndedAt, this.lastActivityAt) > BACKGROUND_GRACE_MS;
+  }
+
+  /** 落定时读一次大纲；读不了（弹窗挡住、读取失败）返回 null，落定就此结束，读取失败记日志，页面结果会另行说明。 */
+  private async settleRead(): Promise<Outline | null> {
+    try {
+      return (await this.snapshot()).outline;
+    } catch (error) {
+      logDesktopEvent("INFO", "browser", "browser_settle_read_failed", { tab_id: this.tabId, session_id: this.sessionId }, error);
+      return null;
+    }
   }
 
   /**
@@ -645,4 +739,3 @@ export class BrowserTab {
 
 /** Electron `console-message` 的级别名 → 日志级别。 */
 const CONSOLE_LEVELS: Record<string, ConsoleLevel> = { debug: "debug", info: "info", warning: "warning", error: "error" };
-

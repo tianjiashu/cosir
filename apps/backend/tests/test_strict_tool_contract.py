@@ -109,7 +109,7 @@ def test_registered_tool_prompts_are_english_and_documented():
 @pytest.mark.usefixtures("backend_env")
 def test_registered_tools_are_strict_and_survive_session_json_snapshot():
     definitions = get_tool_registry().get_all_definitions()
-    assert {"mcp", "browser_handoff", "terminal_write", "execute_terminal"} <= {
+    assert {"mcp", "ask_user", "terminal_write", "execute_terminal"} <= {
         tool.name for tool in definitions
     }
     for tool in definitions:

@@ -1,4 +1,4 @@
-import { WorkspacePathLink } from "@/components/workspace-references/workspace-path-link";
+import { PathText, WorkspacePathLink } from "@/components/workspace-references/workspace-path-link";
 import { cn } from "@/lib/utils";
 import type { CallView } from "../call-view";
 import { readArray, readRecords, readString } from "../display-data-readers";
@@ -31,7 +31,7 @@ export const contentSearchView: CallView = (data) => {
       const isContext = item.is_match === false;
       return (
         <li key={`${path}${line}-${index}`} className={cn(DETAIL_ROW_CLASS, isContext && "text-muted-foreground")}>
-          <WorkspacePathLink path={path} line={typeof item.line === "number" ? item.line : undefined} className="max-w-[45%] shrink-0">{path}{line}</WorkspacePathLink>
+          <WorkspacePathLink path={path} line={typeof item.line === "number" ? item.line : undefined} className="max-w-[45%] shrink-0"><PathText path={path} suffix={line} /></WorkspacePathLink>
           <span className="min-w-0 truncate font-mono">
             {isContext ? readString(item.content, "") : <HighlightedMatch text={readString(item.content, "")} pattern={pattern} />}
           </span>

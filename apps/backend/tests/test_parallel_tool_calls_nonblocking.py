@@ -121,7 +121,7 @@ def _make_operations(executor: _FakeToolExecutor) -> SimpleNamespace:
             session_id=1, workspace_id=1, workspace_root=Path("."), run_id=1
         ),
         admitted_tools=frozenset({_PARALLEL_TOOL}),
-        tool_definitions={_PARALLEL_TOOL: SimpleNamespace(parallel_mode="parallel", user_decision=None)},
+        tool_definitions={_PARALLEL_TOOL: SimpleNamespace(parallel_mode="parallel", user_decision=False)},
     )
 
 

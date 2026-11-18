@@ -7,7 +7,7 @@ const seed = async (request: APIRequestContext, state: TransportState) => {
   await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { sessionId: 42, entries: state.background_tasks } });
   return request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { sessionId: 42, state, hold: true } });
 };
-const model = (parts: TransportMessagePart[], phase: "reasoning" | "responding" | null = null) => transportState({ messages: [userMessage("u", 1, "统一意图验收"), assistantMessage("a", 1, parts)], activity: activity(1, "running", { modelActivity: phase ? { stepId: "s", phase } : null }) });
+const model = (parts: TransportMessagePart[], phase: "reasoning" | "responding" | null = null) => transportState({ messages: [userMessage("u", 1, "统一意图验收"), assistantMessage("a", 1, parts)], activity: activity(1, "running", { modelActivity: phase ? { stepId: "s", phase, startedAt: new Date().toISOString() } : null }) });
 test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
   await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42, title: "统一意图验收" } });
@@ -51,7 +51,7 @@ for (const colorScheme of ["light", "dark"] as const) test(`I6–I9 ${colorSchem
   expect(await feedback.evaluate(el => { const row = el.closest('[data-slot="activity-head"]')!; return row.scrollWidth <= row.clientWidth + 1; })).toBe(true);
   expect(await feedback.locator('[data-slot="current-activity-label"]').evaluate(el => getComputedStyle(el).textOverflow)).toBe("ellipsis");
   await page.emulateMedia({ reducedMotion: "reduce" });
-  expect(await feedback.locator('[data-slot="activity-dots"] > span').first().evaluate(el => getComputedStyle(el).animationName)).toBe("none");
+  expect(await feedback.locator('[data-slot="current-activity-label"]').evaluate(el => getComputedStyle(el).animationName)).toBe("none");
   await page.screenshot({ path: test.info().outputPath(`intent-${colorScheme}-narrow.png`), animations: "disabled" });
 });
 

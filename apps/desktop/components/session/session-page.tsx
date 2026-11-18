@@ -6,7 +6,6 @@ import { getSession, type WorkspaceSession } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { TerminalWorkbench } from "@/components/terminal/terminal-workbench";
 import { useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
-import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
@@ -111,7 +110,6 @@ export function SessionPage({
     useTerminalWorkbenchStore.getState().syncSessions(sessionId, null);
     useBackgroundTasksStore.getState().sync(sessionId, null);
     useDeliverablesStore.getState().sync(sessionId, null);
-    useHandoffStore.getState().sync(sessionId, null);
   }, [sessionId]);
 
   if (error) return (

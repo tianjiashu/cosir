@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
+vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn(), appendHostLogLine: vi.fn() }));
 import type { CdpSession } from "@/electron/main/browser/cdp-session";
 import { TabHighlight } from "@/electron/main/browser/tab-highlight";
 

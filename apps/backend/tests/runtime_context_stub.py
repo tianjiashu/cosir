@@ -53,6 +53,9 @@ class _StubRegistry:
     def get_all_tool_names(self) -> list[str]:
         return sorted(self._definitions)
 
+    def reply_tool_names(self) -> frozenset[str]:
+        return frozenset(name for name, item in self._definitions.items() if getattr(item, "part_of_reply", False))
+
 
 class _StubRegistryProxy:
     """注册表替身：每次读取都取 ``rc`` 的当前工具定义，用例创建替身后改字段仍生效。"""

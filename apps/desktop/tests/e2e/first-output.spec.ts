@@ -11,7 +11,7 @@ test.beforeEach(async ({ request }) => {
 
 const state = (phase: NonNullable<TransportActivity["modelActivity"]>["phase"] | null, parts: TransportMessagePart[] = []) => transportState({
   messages: [userMessage("u", 1), assistantMessage("a", 1, parts)],
-  activity: activity(1, "running", { modelActivity: phase ? { stepId: "step-2", phase } : null }),
+  activity: activity(1, "running", { modelActivity: phase ? { stepId: "step-2", phase, startedAt: new Date().toISOString() } : null }),
 });
 
 test("model status survives tools without exposing reasoning or a disclosure", async ({ page, request }) => {
@@ -62,6 +62,6 @@ test("dark quiet waiting and reduced motion preserve status without a tool card"
   await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { sessionId: 42, entries: [] } });
   await seedState(request, 42, state("reasoning"));
   await expect(status).toHaveText("思考中");
-  expect(await status.locator('[data-slot="activity-dots"] > span').first().evaluate(el => getComputedStyle(el).animationName)).toBe("none");
+  expect(await status.locator('[data-slot="current-activity-label"]').evaluate(el => getComputedStyle(el).animationName)).toBe("none");
   await page.screenshot({ path: `${OUTPUT_DIR}/model-thinking-dark.png` });
 });

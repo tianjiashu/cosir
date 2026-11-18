@@ -358,7 +358,7 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
         tool_executor=Executor(),
         admitted_tools=frozenset({"execute_terminal"}),
         tool_definitions={
-            "execute_terminal": SimpleNamespace(parallel_mode="serial", user_decision=None)
+            "execute_terminal": SimpleNamespace(parallel_mode="serial", user_decision=False)
         },
         run=SimpleNamespace(id=9, session_id=7),
         session=SimpleNamespace(id=7, extra=SessionExtra()),

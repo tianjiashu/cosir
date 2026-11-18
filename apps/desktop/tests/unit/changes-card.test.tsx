@@ -14,7 +14,7 @@ describe("file operation history", () => {
     const html = renderToStaticMarkup(<ChangesCard card={card} sessionId={1} messageId="m" />);
     expect(html).toContain("新建");
     expect(html).toContain("a.ts");
-    expect(html).not.toContain("Diff 数据不可用");
+    expect(html).not.toContain("改动过大");
   });
 
   it("shows repeated operations instead of a synthesized final status/net diff", () => {

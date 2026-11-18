@@ -90,7 +90,7 @@ def test_streaming_preview_includes_denied_registered_tool(monkeypatch) -> None:
 def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -> None:
     received = []
 
-    async def run_calls(_rc, calls, _step_id, _decision=None):
+    async def run_calls(_rc, calls, _step_id):
         received.extend(calls)
         return [
             ToolObservation(
@@ -125,7 +125,7 @@ def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
     """tools 节点把注册调用交给执行器，由门禁拒绝本轮禁用工具。"""
     received = []
 
-    async def run_calls(_rc, calls, _step_id, _decision=None):
+    async def run_calls(_rc, calls, _step_id):
         received.extend(calls)
         return []
 
@@ -175,10 +175,10 @@ def _batch_runtime(executor):
         run=SimpleNamespace(id=4, session_id=3),
         tool_definitions={
             "read_file": SimpleNamespace(
-                name="read_file", parallel_mode="serial", user_decision=None
+                name="read_file", parallel_mode="serial", user_decision=False
             ),
             "write_file": SimpleNamespace(
-                name="write_file", parallel_mode="serial", user_decision=None
+                name="write_file", parallel_mode="serial", user_decision=False
             ),
         },
         tool_executor=executor,
@@ -266,7 +266,7 @@ def test_run_tool_batch_projects_only_terminal_when_executor_never_starts(monkey
 def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
     """挂起由工具声明：同批其它调用照常执行与闭合，任一观察带 suspend 即整批挂起。"""
 
-    async def run_calls(_rc, _calls, _step_id, _batch, _decision=None):
+    async def run_calls(_rc, _calls, _step_id):
         return [
             ToolObservation(tool_name="read_file", status="success", tool_call_id="call-1"),
             ToolObservation(
@@ -455,7 +455,7 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
     """tools 节点不解析参数：残缺 JSON 原样交给执行器，由准入门禁形成错误观察。"""
     called = []
 
-    async def run_calls(_rc, calls, _step_id, _decision=None):
+    async def run_calls(_rc, calls, _step_id):
         called.extend(calls)
         return []
 

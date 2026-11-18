@@ -4,9 +4,6 @@
 校验，而是按这里导出的 ``tool-args.schema.json`` 校验（键为工具名）。改了参数模型后重新运行本脚本，
 ``tests/test_browser_contract_guard.py`` 会在导出文件过期时失败。
 
-``browser_handoff`` 不在其中：它发给宿主的是 ``browser.tabs`` / ``browser.snapshot`` 请求，按那两个
-工具的 schema 校验（参数也用那两个工具的模型构造，字段齐全）。
-
 用法（在 apps/backend 下）::
 
     uv run python scripts/export_browser_tool_schema.py

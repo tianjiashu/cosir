@@ -52,7 +52,7 @@ function askingState(): TransportState {
       contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z",
     },
     queued_messages: [],
-    terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [], deliverables: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [], deliverables: [],
   };
 }
 

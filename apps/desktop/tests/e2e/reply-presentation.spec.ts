@@ -7,7 +7,7 @@ import { API_ORIGIN as origin } from "./e2e-env";
 import { stubWorkspaceFiles, type StubFile } from "./workspace-files-stubs";
 
 /**
- * 回复呈现（`present_deliverables` / `offer_next_step`）：交付物是正文下的一组胶囊，只读 part 上的交付记录；下一步建议只挂在
+ * 回复呈现（`present_deliverables` / `offer_next_step`）：交付物是最终回复上方的一组胶囊（一次交付一张卡，可带说明），只读 part 上的交付记录；下一步建议只挂在
  * 会话最后一条正常完成的回复上，点按钮等于替用户发出标签原文。
  */
 
@@ -338,4 +338,65 @@ test("侧栏「产出」卡列出整个会话的交付物：去重、最近在�
   await expect(rows).toHaveCount(7);
   await rows.filter({ hasText: "report.md" }).click();
   await expect(page.getByTestId("workspace-files-surface").getByRole("tab", { name: /report\.md/ })).toBeVisible();
+});
+
+/** 一次交付：调用带这批的说明（展示数据 `note`），回合里还有一段过程。 */
+const presentCall = (id: string, deliverables: TransportDeliverable[], note: string | null): TransportMessagePart => ({
+  ...(FILES as Extract<TransportMessagePart, { type: "tool-call" }>), toolCallId: id,
+  args: { items: deliverables.map((item) => ({ target: item.key })), note }, display_data: { kind: "deliverables", note }, deliverables,
+});
+const READ: TransportMessagePart = {
+  type: "tool-call", toolCallId: "call-read", toolName: "read_file", presentation: "activity", args: { path: "docs/report.md" },
+  intent: "看报告", status: "completed", error: null, awaitingUser: false, display_data: null,
+};
+const slots = (page: Page) => page.locator('[data-role="assistant"] [data-slot="turn"] > div:not([hidden])').evaluateAll((nodes) =>
+  nodes.map((node) => node.getAttribute("data-slot") ?? "").filter((slot) => ["prose-part", "deliverables-part", "process-part"].includes(slot)));
+
+// 目的：交付卡带说明、排在最终回复之上，过程收起也在；潜在缺陷：卡片落在回复下方、随过程折叠消失，或说明没显示。
+test("一次交付：说明在卡片顶部，卡片在最终回复之上，过程收起时紧贴回复", async ({ page, request }) => {
+  const state = completedState(1, { id: "u-1", parts: [{ type: "text", text: "写一份报告", status: "completed" }] }, [
+    READ, { type: "text", text: "先看一下现有的。", status: "completed" },
+    presentCall("p1", [DELIVERABLES[0], DELIVERABLES[3]], "报告与原始数据；表格已按点赞数排序。"),
+    { type: "text", text: "报告写好了。", status: "completed", finalReply: true },
+  ]);
+  await open(page, request, state);
+  const card = page.locator('[data-slot="deliverables-card"]');
+  await expect(card.locator('[data-slot="deliverables-note"]')).toHaveText("报告与原始数据；表格已按点赞数排序。");
+  await expect(card).toHaveAccessibleName("报告与原始数据；表格已按点赞数排序。");
+  expect(await slots(page)).toEqual(["deliverables-part", "prose-part"]);
+  await page.locator('[data-slot="process-head"]').click();
+  expect(await slots(page)).toEqual(["process-part", "prose-part", "deliverables-part", "prose-part"]);
+});
+
+// 目的：多次交付一次一张卡、各带各的说明；潜在缺陷：合成一张后说明对不上，重交的文件出现两次，或答案与交付写在一起时卡片夹在答案下面。
+test("多次交付：每次一张卡、各带说明，重交的成果只在后一张；答案与交付同一条回复时卡片也在回复之上", async ({ page, request }) => {
+  const state = completedState(1, { id: "u-1", parts: [{ type: "text", text: "改页面", status: "completed" }] }, [
+    READ, presentCall("p1", [DELIVERABLES[2], DELIVERABLES[0]], "本地起好的预览站。"),
+    { type: "text", text: "完整答案在这里。", status: "completed", finalReply: true },
+    presentCall("p2", [DELIVERABLES[0], DELIVERABLES[1]], "改完的报告和构建产物。"),
+    { type: "text", text: "想细看告诉我。", status: "completed", finalReply: true },
+  ]);
+  await seedState(request, SESSION_ID, state);
+  await page.goto(`/sessions/${SESSION_ID}`);
+  await expect(page.getByText("想细看告诉我。")).toBeVisible();
+  const cards = page.locator('[data-slot="deliverables-card"]');
+  await expect(cards.locator('[data-slot="deliverables-note"]')).toHaveText(["本地起好的预览站。", "改完的报告和构建产物。"]);
+  await expect(cards.nth(0).locator('[data-slot="deliverable-capsule"]')).toHaveCount(1);
+  await expect(cards.nth(1).locator('[data-slot="deliverable-capsule"]')).toHaveCount(2);
+  expect(await slots(page)).toEqual(["deliverables-part", "deliverables-part", "prose-part", "prose-part"]);
+  await page.screenshot({ path: test.info().outputPath("multiple.png"), animations: "disabled" });
+});
+
+// 目的：交付那一刻卡片就出现；潜在缺陷：运行中看不到交付物，要等回合结束才冒出来。
+test("运行中交付卡即时出现在调用的位置", async ({ page, request }) => {
+  const done = completedState(1, { id: "u-1", parts: [{ type: "text", text: "写一份报告", status: "completed" }] }, [
+    READ, presentCall("p1", [DELIVERABLES[0]], "报告初稿。"), { type: "text", text: "正在写总结", status: "running" },
+  ]);
+  const [user, reply] = done.messages;
+  const running = { ...done, messages: [user, { ...reply, outcome: null }], activity: { ...done.activity!, status: "running" as const, endReason: null } };
+  await request.post(`${origin}/__test__/seed-state`, { data: { sessionId: SESSION_ID, hold: true, state: running } });
+  await page.goto(`/sessions/${SESSION_ID}`);
+  await expect(page.locator('[data-slot="deliverables-note"]')).toHaveText("报告初稿。");
+  // 末尾那行是运行中的当前状态（还在想），卡片在它和正文之上、调用的位置。
+  expect(await slots(page)).toEqual(["process-part", "deliverables-part", "prose-part", "process-part"]);
 });

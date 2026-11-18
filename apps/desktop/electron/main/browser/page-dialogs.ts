@@ -2,6 +2,7 @@ import type { IpcMainEvent } from "electron";
 
 import { BROWSER_DIALOG_TYPES, type BrowserDialog, type BrowserDialogAnswer } from "../../shared/host-contract";
 import type { BrowserPageDialogReply, BrowserPageDialogRequest } from "../../shared/browser-page-bridge";
+import { clipText } from "./text-clip";
 
 const MESSAGE_MAX_CHARS = 2_000;
 /** 宿主内单调递增：作答按 id 指明是哪一个弹窗。 */
@@ -37,7 +38,8 @@ export class PageDialogs {
     const dialog: BrowserDialog = {
       id: ++lastDialogId,
       type,
-      message: String(request.message).slice(0, MESSAGE_MAX_CHARS),
+      // 消息只用于展示，截断时标出截掉了多少；默认值可能被原样作答回页面，不加标记。
+      message: clipText(String(request.message), MESSAGE_MAX_CHARS),
       defaultText: type === "prompt" ? String(request.defaultText).slice(0, MESSAGE_MAX_CHARS) : "",
     };
     this.pending = { dialog, event };

@@ -1,4 +1,4 @@
-import { BotIcon, GlobeIcon, HandIcon, Maximize2Icon, MessageSquareWarningIcon, Minimize2Icon, PlusIcon, XIcon } from "lucide-react";
+import { BotIcon, GlobeIcon, Maximize2Icon, MessageSquareWarningIcon, Minimize2Icon, PlusIcon, XIcon } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
 import { AgentActivityBar } from "@/components/browser/agent-activity-bar";
@@ -6,7 +6,6 @@ import { BrowserView } from "@/components/browser/browser-view";
 import { BrowserDialogBanner } from "@/components/browser/dialog-banner";
 import { DownloadBar } from "@/components/browser/download-bar";
 import { WebPageIcon } from "@/components/links/link-target-icon";
-import { HandoffBanner } from "@/components/handoff/handoff-banner";
 import { DockFrame, type DockSizing } from "@/components/layout/dock-frame";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { Input } from "@/components/ui/input";
@@ -17,8 +16,6 @@ import { openUserTab } from "@/lib/browser/open-tab";
 import { displayedTab, useBrowserPanelStore } from "@/lib/browser/panel-store";
 import { useSessionBrowserDownloads, useSessionBrowserTabs } from "@/lib/browser/host-state-store";
 import { desktopHost } from "@/lib/desktop-host";
-import { handoffOn, useHandoffStore } from "@/lib/handoff/handoff-store";
-import { handBackHandoff } from "@/lib/handoff/use-hand-back";
 import { tabLabel } from "@/lib/browser/browser-tab-label";
 import { useSessionExecutionStatus } from "@/lib/session-status/session-status-store";
 import { notify } from "@/lib/notify";
@@ -31,10 +28,8 @@ import { cn } from "@/lib/utils";
  * 弹窗开出的标签跟随、关闭后回到来源或最新的标签，规则都在那里）。`+` 与空状态里的地址栏都经 `openUserTab`
  * 在这个 Session 里新开标签。关闭标签就是关掉宿主里的标签页（Agent 也就看不到了），与在交互终端里关闭会话一致。
  *
- * 「等你操作」的状态在标签条上各有标记、选中时在网页上方显示提示条（都在原生画面占位区之外）：待答的网页
- * 弹窗优先于交接，因为弹窗不答页面就停着；两者都没有时，Agent 在运行或正在操作这个标签就显示一行提示
- * （`AgentActivityBar`）。关闭交接中的标签即交还：宿主无法把「标签关了」告诉后端，用户在
- * 这里关掉它是唯一能及时唤醒 Agent 的时机；重放时后端报告标签已不在。这个 Session 最近的下载显示在面板底部：下载归
+ * 待答的网页弹窗在标签条上有标记、选中时在网页上方显示提示条（都在原生画面占位区之外）；没有弹窗时，Agent 在
+ * 运行或正在操作这个标签就显示一行提示（`AgentActivityBar`）。这个 Session 最近的下载显示在面板底部：下载归
  * Session 不归标签（弹出页下载后常自己关掉），所以与显示哪个标签、有没有标签都无关。
  */
 export function BrowserPanel({ sessionId, sizing, maximized, onToggleMaximized, onClose }: {
@@ -51,9 +46,6 @@ export function BrowserPanel({ sessionId, sizing, maximized, onToggleMaximized, 
   const active = displayedTab(tabs, selectedId);
   const host = desktopHost;
   const canOpen = host !== null && sessionId !== null;
-  const handoffs = useHandoffStore((state) => (sessionId === null ? null : state.sessions[sessionId]));
-  const handoffOf = (tabId: string) => handoffOn(handoffs, tabId);
-  const activeHandoff = active ? handoffOf(active.tabId) : null;
   const agentRunning = useSessionExecutionStatus(sessionId) === "running";
 
   const openTab = (url?: string) => {
@@ -62,11 +54,7 @@ export function BrowserPanel({ sessionId, sizing, maximized, onToggleMaximized, 
   };
   // 有标签才有关闭按钮，而标签只来自宿主镜像、按 Session 筛选：走到这里宿主与 Session 必然在。
   const closeTab = (tabId: string) => {
-    const handoff = handoffOf(tabId);
-    host!.browser.close(tabId).then(
-      () => { if (handoff) void handBackHandoff(sessionId!, handoff.toolCallId); },
-      (error: unknown) => notify.error("关闭标签页失败", { error }),
-    );
+    host!.browser.close(tabId).catch((error: unknown) => notify.error("关闭标签页失败", { error }));
   };
 
   return (
@@ -96,9 +84,7 @@ export function BrowserPanel({ sessionId, sizing, maximized, onToggleMaximized, 
                         ? <BotIcon className="text-info size-3.5 shrink-0 animate-pulse" aria-label="Agent 正在操作" />
                         : tab.loading
                         ? <Spinner className="size-3.5 shrink-0" />
-                        : handoffOf(tab.tabId)
-                          ? <HandIcon className="text-info size-3.5 shrink-0" aria-label="交接中" />
-                          : <WebPageIcon url={tab.url} className="size-3.5" />}
+                        : <WebPageIcon url={tab.url} className="size-3.5" />}
                     <span className="truncate">{title}</span>
                   </button>
                   <TooltipIconButton tooltip="关闭标签页" side="bottom" className="size-6 shrink-0 opacity-60 hover:opacity-100" aria-label={`关闭 ${title}`} onClick={() => closeTab(tab.tabId)}>
@@ -136,9 +122,8 @@ export function BrowserPanel({ sessionId, sizing, maximized, onToggleMaximized, 
               dialog={active.dialog}
             />
           )}
-          {activeHandoff && <HandoffBanner sessionId={sessionId} entry={activeHandoff} />}
           {active.operation === "unknown" && <p role="status" className="px-3 py-2 text-sm text-warning">页面操作尚未确认结束，暂不能继续自动操作。请先检查页面，必要时关闭重开；不要重复提交。</p>}
-          {!active.dialog && !activeHandoff && active.operation !== "unknown" && (agentRunning || active.agentBusy) && <AgentActivityBar busy={active.agentBusy} />}
+          {!active.dialog && active.operation !== "unknown" && (agentRunning || active.agentBusy) && <AgentActivityBar busy={active.agentBusy} />}
           <BrowserView key={active.tabId} host={host} tabId={active.tabId} url={active.url} loading={active.loading} crashed={active.crashed} />
         </>
       ) : (
@@ -157,11 +142,10 @@ function NewTabPrompt({ onOpen }: { onOpen: (url: string) => void }) {
     if (address.trim()) onOpen(address.trim());
   };
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
+    <div className="flex flex-1 items-center justify-center p-6">
       <form className="flex w-full max-w-md items-center gap-2" onSubmit={submit}>
         <Input aria-label="网址" className={cn("h-9")} placeholder="输入网址" value={address} spellCheck={false} onChange={(event) => setAddress(event.target.value)} />
       </form>
-      <p className="text-muted-foreground text-center text-xs">Agent 在这个会话里打开的网页也会出现在这里。</p>
     </div>
   );
 }

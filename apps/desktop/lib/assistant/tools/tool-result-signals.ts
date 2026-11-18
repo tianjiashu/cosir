@@ -7,12 +7,12 @@ export function toolResultSignal(data: TransportToolDisplayData | null | undefin
     case "terminal-result":
       return data.end === "timed_out" ? "超时" : null;
     case "image-read":
-      return Array.isArray(data.failures) && data.failures.length > 0 ? "部分图片读取失败" : null;
-    case "browser-page":
-      return Array.isArray(data.steps) && data.steps.some((step) => {
-        const status = (step as { status?: string } | null)?.status;
-        return status === "failed" || status === "skipped";
-      }) ? "动作未全部完成" : null;
+      return Array.isArray(data.failures) && data.failures.length > 0 ? `${data.failures.length} 张失败` : null;
+    case "browser-page": {
+      // 停下的那步之后才有 skipped，所以只看 failed / unknown；unknown 是「可能已生效、须先看页面」，比失败更要留意。
+      const statuses = Array.isArray(data.steps) ? data.steps.map((step) => (step as { status?: string } | null)?.status) : [];
+      return statuses.includes("unknown") ? "结果不确定" : statuses.includes("failed") ? "动作未全部完成" : null;
+    }
     case "web-fetch-urls":
       return data.partial === true ? "部分成功" : null;
     case "mcp-tool-result":

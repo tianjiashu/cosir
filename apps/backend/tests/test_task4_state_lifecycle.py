@@ -335,7 +335,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             return [run]
 
     service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
-    session_runtime_spaces.get_or_create(7).get_working_snapshot(lambda: 
+    session_runtime_spaces.get_or_create(7).get_working_snapshot(lambda:
         {
             "title": "session",
             "messages": [
@@ -363,7 +363,6 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             "terminal_sessions": [],
             "background_tasks": [],
             "foreground_waits": [],
-            "handoffs": [],
             "deliverables": [],
             "queued_messages": [],
         }

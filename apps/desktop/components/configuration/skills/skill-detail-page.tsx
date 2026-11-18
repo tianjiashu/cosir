@@ -97,7 +97,7 @@ export function SkillDetailPage({ workspaceId, name }: { workspaceId: number | n
           {skill.also_at.length > 0 && (
             <Tooltip>
               <TooltipTrigger className="hover:text-foreground focus-ring rounded-sm underline decoration-dotted underline-offset-2">· 同一份也在 {skill.also_at.length} 处</TooltipTrigger>
-              <TooltipContent className="flex-col items-start font-mono">{skill.also_at.map((location) => <span key={location} className="break-all">{location}</span>)}</TooltipContent>
+              <TooltipContent className="flex-col items-start font-mono">{skill.also_at.map((location) => <span key={location}>{location}</span>)}</TooltipContent>
             </Tooltip>
           )}
         </p>

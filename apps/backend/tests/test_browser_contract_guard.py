@@ -101,14 +101,18 @@ def test_page_sample_renders_header_logs_notes_and_fenced_snapshot(samples: dict
     page = samples["page"]
     content = page_text(page)
 
-    first, emulation = content.splitlines()[:2]
-    assert first == "tab t3 · Sign in · http://127.0.0.1:5173/login · HTTP 404"
-    assert emulation == "viewport 390×844 mobile, dark"
-    assert "other tabs in this session: t1" in content
+    assert content.splitlines()[:6] == [
+        "tab: t3",
+        "url: http://127.0.0.1:5173/login (HTTP 404)",
+        "title: Sign in",
+        "viewport: 390×844 mobile, dark",
+        "other tabs: t1",
+        "frames not shown: 1 (their contents are not in this snapshot; browser_screenshot "
+        "shows what they display)",
+    ]
     assert (
-        "new on this page since this tab's last page result: 2 console errors, 1 console warning, "
-        "1 failed request (read browser_logs without since to see them; narrow down with level "
-        "or failed_only)"
+        "new logs since this tab's last page result: 2 console errors, 1 console warning, "
+        "1 failed request (see browser_logs)"
     ) in content
     assert f"- {page['notes'][0]}" in content
     assert f"<page_snapshot>\n{page['snapshot']}\n</page_snapshot>" in content
@@ -121,9 +125,8 @@ def test_act_observation_failure_sample_renders_the_header_and_the_reason(
     observation = act_observation("browser_act", outcome, [{"type": "click"}])
     content = observation.content
 
-    assert content.startswith("completed 1 of 1 action(s).")
-    assert "tab t3 · Sign in · http://127.0.0.1:5173/login · HTTP 200" in content
-    assert "page observation unavailable (DIALOG_OPEN:" in content
+    assert content.splitlines()[:2] == ["actions: 1 of 1 done", "tab: t3"]
+    assert "page observation unavailable: DIALOG_OPEN:" in content
     assert "Answer it first with a browser_act dialog action" in content
     assert content.rstrip().endswith("Read a fresh snapshot before continuing.")
 
@@ -138,22 +141,28 @@ def test_act_observation_failure_for_a_closed_tab_explains_the_stale_header(
     }
     content = act_observation("browser_act", outcome, [{"type": "click"}]).content
     assert (
-        "the tab was closed; the page header above is the page as it was before the actions."
-        in content
+        "the tab was closed; the header above is the page before the actions." in content
     )
     assert "Pass one of this session's tab ids" in content
 
 
 def test_act_sample_renders_the_failure_and_the_dialog(samples: dict[str, Any]) -> None:
     act = samples["act"]
-    content = page_text(act["observation"], lead=act_summary(act, 3))
+    content = page_text(act["observation"], lead=act_summary(act))
 
     lines = content.splitlines()
-    assert lines[0].startswith("completed 1 of 3 action(s).")
-    assert "tab t3 · Sign in · http://127.0.0.1:5173/login · HTTP 200" in lines
-    # 视口总是写（默认值也写），没有新日志时不写计数行。
-    assert "viewport 1280×800 (follows the browser panel)" in lines
-    assert "new on this page" not in content
+    # 停下的原因与失败那一步的错误相同：错误只写在那一步上，stopped 只给建议。
+    assert lines[:5] == [
+        "actions: 1 of 3 done",
+        "- 1 done",
+        "- 2 failed (DIALOG_OPEN: the page is paused: it is showing a confirm dialog (#7))",
+        "- 3 skipped",
+        "stopped: " + BROWSER_ERRORS["DIALOG_OPEN"][0],
+    ]
+    assert content.count("the page is paused") == 1
+    # 页面结果总是写视口（默认值也写），没有新日志时不写计数行。
+    assert "viewport: 1280×800 (follows the browser panel)" in lines
+    assert "new logs" not in content
     assert "showing dialog 7 (confirm)" in content
     assert "<dialog_message>\nmessage: Delete it?\n</dialog_message>" in content
     assert "<page_snapshot>" not in content
@@ -175,11 +184,10 @@ def test_console_logs_sample_renders_fenced_entries_and_older_entries(
         "#12 [error] Uncaught TypeError: x is undefined (at http://127.0.0.1:5173/src/main.ts:42)",
         "#15 [warning] deprecated API (in frame http://localhost:6006/embed)",
     ]
-    assert "older matching entries of this page were not returned" in content
-    assert (
-        "to read only entries with a sequence number at or after 16 later, pass since=16."
-        in content
-    )
+    assert "older: more matching entries of this page not shown" in content
+    assert content.splitlines()[-1] == "next: since=16"
+    # 日志结果用不上视口。
+    assert "viewport" not in content
     assert "dropped" not in content
 
 
@@ -194,10 +202,10 @@ def test_network_logs_sample_renders_outcomes_drops_and_more_after(
         "#21 POST http://127.0.0.1:5173/api/login → failed: net::ERR_CONNECTION_REFUSED (XHR)",
         "#22 GET http://127.0.0.1:5173/api/stream → no response yet (Fetch) · body: capturing",
     ]
-    assert "entries before #18 were dropped" in content
-    assert "more matching entries follow; pass since=23 to read on." in content
-    assert "read browser_logs without since later to see their final state." in content
-    assert "older matching entries" not in content
+    assert "dropped: entries before #18 (over capacity, cannot be read)" in content
+    assert "next: since=23 (more matching entries follow)" in content
+    assert "read without since later for their outcome." in content
+    assert "older:" not in content
 
 
 def test_response_body_samples_render_the_body_or_why_there_is_none(
@@ -228,7 +236,7 @@ def test_evaluate_samples_render_each_outcome(samples: dict[str, Any]) -> None:
     assert "<script_error>\nReferenceError: foo is not defined\n</script_error>" in error
     assert "<script_result>" not in error
 
-    assert "the expression returned undefined." in evaluate_text(samples["evaluate_undefined"])
+    assert "value: undefined" in evaluate_text(samples["evaluate_undefined"])
     assert "cut off at the size limit" in evaluate_text(samples["evaluate_truncated"])
 
     dialog = evaluate_text(samples["evaluate_dialog"])
@@ -239,10 +247,21 @@ def test_evaluate_samples_render_each_outcome(samples: dict[str, Any]) -> None:
 
 def test_screenshot_and_tabs_samples_render(samples: dict[str, Any]) -> None:
     shot = screenshot_text(samples["screenshot"])
-    assert shot.splitlines()[:2] == [
-        "tab t3 · Sign in · http://127.0.0.1:5173/login · HTTP 200",
-        "viewport 1280×800 (follows the browser panel)",
+    assert shot.splitlines() == [
+        "tab: t3",
+        "url: http://127.0.0.1:5173/login (HTTP 200)",
+        "title: Sign in",
+        "viewport: 1280×800 (follows the browser panel)",
+        "screenshot: the viewport (the image follows)",
     ]
+    # 整页截图从页面顶端算起，像素不是视口坐标；没截断时不提截断，免得模型以为下面还有内容。
+    whole = screenshot_text(samples["screenshot"], full_page=True)
+    assert "pixels are not viewport coordinates" in whole
+    assert "covers only the top" not in whole
+    # 真截断时说明页面多高、图里有多少、怎么看剩下的。
+    cut = screenshot_text(samples["screenshot_full_page_cut"], full_page=True)
+    assert "the page is 9812px tall and this image covers only the top 4000px" in cut
+    assert "scroll down and take viewport screenshots" in cut
     assert build_browser_page_display_data(samples["screenshot"])["tab_id"] == "t3"
     assert screenshot_bytes(samples["screenshot"]).startswith(b"\xff\xd8")
 
@@ -250,3 +269,11 @@ def test_screenshot_and_tabs_samples_render(samples: dict[str, Any]) -> None:
         "t1 (opened by the user) · Home · http://127.0.0.1:5173/",
         "t3 (current) · Sign in · http://127.0.0.1:5173/login",
     ]
+    # select / close 先写结论，再列操作之后的标签；关掉最后一个时说明已经没有标签。
+    assert tabs_text(samples["tabs"], "select", "t3").splitlines()[0] == "selected: t3"
+    assert tabs_text([], "close", "t3") == "closed: t3\nthis session has no open tabs"
+    # 未收敛的修改操作标在标签上，模型先看列表就能避开 TAB_BUSY。
+    busy = [{**samples["tabs"][1], "operation": "running"}]
+    assert tabs_text(busy) == (
+        "t3 (current, an operation is still running) · Sign in · http://127.0.0.1:5173/login"
+    )

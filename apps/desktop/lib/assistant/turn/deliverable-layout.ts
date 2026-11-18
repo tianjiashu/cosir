@@ -1,33 +1,36 @@
 import { IMAGE_TILE_SIZE } from "@/lib/image/tile-size";
 import type { TransportDeliverable, TransportMessage, TransportToolCallPart } from "../contract";
 
-/** 聚合卡里的一项：记录本身与来自哪次调用（同一 `key` 只留最后一次，`toolCallId` 也随之取最后一次）。 */
+/** 交付卡里的一项：记录本身与来自哪次调用。 */
 export type DeliverableEntry = { deliverable: TransportDeliverable; toolCallId: string };
 
 /**
- * 一个回合的全部交付物合成的一张卡（`present_deliverables` 可以在一个回合里调用多次）。
- * `index` 是本回合第一次**带记录**的调用的位置：失败或取消的调用没有记录，不占位。
+ * 一次 `present_deliverables` 调用的交付卡：放在调用的位置（`index`），顶部是这批的说明（展示数据的 `note`），
+ * 下面是这批的成果。一次一张而不是整个回合合成一张：说明属于它那一批，合在一起就对不上号。
  */
-export type DeliverablesCard = { kind: "deliverables"; index: number; items: DeliverableEntry[]; callIndexes: number[] };
+export type DeliverablesBatch = { kind: "deliverables"; index: number; part: TransportToolCallPart; note: string | null; items: DeliverableEntry[] };
 
 /** 胶囊每行按对话内容列最大宽度下的枚数估高；窄窗口的误差由虚拟列表的实测高度修正。 */
 export const CAPSULES_PER_ROW = 3;
 
+/** 这批交付的说明（后端已去空白、空串为 null）；不是交付卡的展示数据时为 null。 */
+export function deliverablesNote(data: TransportToolCallPart["display_data"]): string | null {
+  return data?.kind === "deliverables" && typeof data.note === "string" ? data.note : null;
+}
+
 /**
- * 按调用顺序合并交付记录：同一 `key`（后端算好的判等值）只留最后一次，位置也取最后一次——与工具内去重
- * 同一规则，模型「再交付一遍」时卡片落在最新的位置。规则只在这里，回合布局与估高都调它。
+ * 把一个回合里带记录的调用排成交付卡，按调用顺序。同一 `key`（后端算好的判等值）只留最后一次——与工具内去重
+ * 同一规则，模型「再交付一遍」时只出现在后一张卡里；前一张的成果全被后来重交时整张不出现（它的说明也随之作废）。
+ * 失败、取消、运行中的调用没有记录，不成卡。规则只在这里，回合布局与估高都调它。
  */
-export function collectDeliverables(calls: ReadonlyArray<{ index: number; part: TransportToolCallPart }>): DeliverablesCard | null {
-  const recorded = calls.filter((call) => call.part.deliverables?.length);
-  if (!recorded.length) return null;
-  const byKey = new Map<string, DeliverableEntry>();
-  for (const { part } of recorded) {
-    for (const deliverable of part.deliverables ?? []) {
-      byKey.delete(deliverable.key);
-      byKey.set(deliverable.key, { deliverable, toolCallId: part.toolCallId });
-    }
-  }
-  return { kind: "deliverables", index: recorded[0].index, items: [...byKey.values()], callIndexes: recorded.map((call) => call.index) };
+export function collectDeliverableBatches(calls: ReadonlyArray<{ index: number; part: TransportToolCallPart }>): DeliverablesBatch[] {
+  const latest = new Map<string, string>();
+  for (const { part } of calls) for (const deliverable of part.deliverables ?? []) latest.set(deliverable.key, part.toolCallId);
+  return calls.flatMap(({ index, part }) => {
+    const items = (part.deliverables ?? []).filter((deliverable) => latest.get(deliverable.key) === part.toolCallId)
+      .map((deliverable) => ({ deliverable, toolCallId: part.toolCallId }));
+    return items.length ? [{ kind: "deliverables" as const, index, part, note: deliverablesNote(part.display_data), items }] : [];
+  });
 }
 
 /** 方块一行按对话内容列宽度下的枚数估高（120 宽、间距 8）。 */
@@ -57,11 +60,11 @@ export function cardSize(width: number, height: number): { width: number; height
 export type DeliverableImageCard = { entry: DeliverableEntry; size: { width: number; height: number } };
 
 /**
- * 方块一行在上、胶囊在下。本回合只有一张图、记录里有宽高（SVG 与读不出的位图没有），且按比例装进 360×240 后
+ * 方块一行在上、胶囊在下。这张卡只有一张图、记录里有宽高（SVG 与读不出的位图没有），且按比例装进 360×240 后
  * 不窄于方块时，它放大成单张大图卡（`card`）；竖长截图装进去只剩一条细线，不如方块裁切保留顶部。判定只看交付记录，
  * 渲染与估高用同一个结果，首帧就是最终形态。
  */
-export function deliverableGroups(card: DeliverablesCard): { tiles: DeliverableEntry[]; capsules: DeliverableEntry[]; card: DeliverableImageCard | null } {
+export function deliverableGroups(card: Pick<DeliverablesBatch, "items">): { tiles: DeliverableEntry[]; capsules: DeliverableEntry[]; card: DeliverableImageCard | null } {
   const tiles = card.items.filter((entry) => isTile(entry.deliverable));
   const capsules = card.items.filter((entry) => !isTile(entry.deliverable));
   const only = tiles.length === 1 ? tiles[0] : null;
@@ -72,7 +75,7 @@ export function deliverableGroups(card: DeliverablesCard): { tiles: DeliverableE
 }
 
 /** 估高用的尺寸：方块行数、单张大图卡的高度（没有时为 0）、胶囊行数；实际高度由虚拟列表实测修正。 */
-export function deliverableRows(card: DeliverablesCard): { tileRows: number; cardHeight: number; capsuleRows: number } {
+export function deliverableRows(card: Pick<DeliverablesBatch, "items">): { tileRows: number; cardHeight: number; capsuleRows: number } {
   const groups = deliverableGroups(card);
   return {
     tileRows: Math.ceil(groups.tiles.length / TILES_PER_ROW),

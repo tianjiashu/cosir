@@ -1,3 +1,5 @@
+import { clipText } from "./text-clip";
+
 /** 被取消的请求记下的失败说明（`read` 照样列出，`digest` 不计）。 */
 export const CANCELED_FAILURE = "canceled";
 
@@ -5,6 +7,8 @@ export const CANCELED_FAILURE = "canceled";
 const CAPACITY = { event: 50, console: 1000, network: 1000 } as const;
 /** 单条文本（console 消息、地址）的上限：模型要的是线索，整段压缩代码或 data URL 没有用。 */
 const TEXT_MAX_CHARS = 500;
+/** 同一接口的几次发起相隔不到这么久（秒，CDP 时间戳）算同一批：一次动作的扇出，不是周期性的重复。 */
+const FAN_OUT_WINDOW_S = 0.05;
 
 export type ConsoleLevel = "debug" | "info" | "warning" | "error";
 const LEVEL_RANK: Record<ConsoleLevel, number> = { debug: 0, info: 1, warning: 2, error: 3 };
@@ -24,6 +28,8 @@ export const BODY_LIMITS = {
 
 /** 采集响应体的请求类型：只有页面脚本发的请求（接口调用）。文档、脚本、图片等不采。 */
 const CAPTURED_TYPES = new Set(["Fetch", "XHR"]);
+/** 落定要等的请求类型：页面内容靠它们到达（文档与脚本发的接口调用）。图片、媒体、字体等不影响快照里有没有内容。 */
+const DATA_TYPES = new Set(["Document", "XHR", "Fetch"]);
 /** 不会正常结束、没有可采正文的请求类型。 */
 const STREAMING_TYPES = new Set(["EventSource"]);
 
@@ -78,7 +84,7 @@ export type PageDigest = {
  *
  * 读取方各带游标，读取本身不消费任何东西：
  * - 页面结果（navigate / snapshot / act）经 `digest` 取「Agent 上次拿到页面结果以来」的事件与计数，并推进这一个
- *   游标——它是唯一的消费点，所以只为拿标签 id 的调用（如交接）不会吞掉备注；
+ *   游标——它是唯一的消费点，截图、日志与执行 JS 不会吞掉备注；
  * - `browser_logs` 按调用方给的 `since` 读，不动页面结果的游标。
  *
  * 网络条目在请求开始时取序号（`browser_logs` 按它翻页）、之后原地补上状态与耗时；「上次以来」的失败按落定
@@ -86,7 +92,7 @@ export type PageDigest = {
  * 而漏掉。
  *
  * 响应体是网络条目的附属事实，与条目同生共死：请求结束时由 `BrowserTab` 采下写回（本类不发 CDP），之后导航、
- * 页面停住都照样能读；条目被容量挤掉时正文随之释放。采集被弹窗挡住的条目记为 deferred 并留下 requestId，
+ * 页面停住都照样能读；条目被容量挤掉时正文随之释放。采集被弹窗挡住的条目记为 deferred，
  * 弹窗答完后由 `BrowserTab` 取走补采（`takeDeferred`）。
  */
 export class TabLog {
@@ -117,8 +123,53 @@ export class TabLog {
   private storedBytes = 0;
   /** 没有正文时的原因（pending / deferred / unavailable 等）。 */
   private readonly bodyReasons = new Map<NetworkEntry, string>();
-  /** 采集被弹窗挡住、等补采的条目 → CDP requestId。 */
-  private readonly deferred = new Map<NetworkEntry, string>();
+  /**
+   * 当前页面上页面自己发起过的接口（来源 + 路径 → 发起过的 CDP requestId）：没有 Agent 操作、也没有近期用户活动时
+   * 页面仍发起它们。发起过两次以上的才算后台流量（埋点、轮询、定时拉取总会重复），落定不再等；只发起过一次的
+   * （空闲时懒加载的一次查询）不算，否则 GraphQL 这类所有请求同一路径的接口一次就被整体认成后台。是不是「页面自己
+   * 发起」由标签判定（它持有操作与输入的事实，见 `BrowserTab`），这里只记结论；换文档清空。
+   */
+  private readonly pageInitiated = new Map<string, Set<string>>();
+  /** 条目 → CDP requestId 与发起时刻（CDP 时间戳，秒）：同一请求的重定向跳共用 requestId，不算重复。 */
+  private readonly requests = new Map<NetworkEntry, { id: string; startedAt: number }>();
+  /** 采集被弹窗挡住、等补采的条目（补采用的 requestId 在 `requests`）。 */
+  private readonly deferred = new Set<NetworkEntry>();
+
+  /** 下一条记录会拿到的序号：每一步动作开始时记下，落定只等这之后发出的请求（之前就在跑的轮询不算）。 */
+  get nextSeq(): number {
+    return this.seq + 1;
+  }
+
+  /**
+   * 落定要等的请求：序号不小于 `from`（这一步开始以来）、还没结束的数据请求（`DATA_TYPES`），且它的接口不是后台流量——
+   * 页面自己反复发起过（`pageInitiated`），或这一步里隔开时间重复发起（刚打开的新页面上，埋点还没机会在操作之间被
+   * 观察到，靠重复认出）。重复按「发起时刻」分批数：相隔不到 `FAN_OUT_WINDOW_S` 的算同一批，是一次动作的扇出（一次
+   * 点击发出的几条 GraphQL 查询），照等；周期性的埋点、轮询在不同时刻反复出现，才认作后台。翻页这类每步一次的请求
+   * 因此照等。`ignored` 是按这两条没等的在途请求数，只给落定日志用。流式的 EventSource 不会结束，不在其中。
+   *
+   * 已知局限：同一接口的串行依赖请求（第一条回来后才发第二条）在两个时刻出现，第二条会被当成重复而不等。
+   */
+  pendingRequests(from: number): { waiting: NetworkEntry[]; ignored: number } {
+    const starts = new Map<string, Map<string, number>>();
+    for (const entry of this.network) {
+      if (entry.seq < from || !DATA_TYPES.has(entry.resourceType)) continue;
+      const endpoint = endpointOf(entry.url);
+      const { id, startedAt } = this.requests.get(entry)!;
+      const ids = starts.get(endpoint) ?? new Map<string, number>();
+      ids.set(id, Math.min(ids.get(id) ?? startedAt, startedAt));
+      starts.set(endpoint, ids);
+    }
+    const waiting: NetworkEntry[] = [];
+    let ignored = 0;
+    for (const { entry } of this.inFlight.values()) {
+      if (entry.seq < from || !DATA_TYPES.has(entry.resourceType)) continue;
+      const endpoint = endpointOf(entry.url);
+      const background = (this.pageInitiated.get(endpoint)?.size ?? 0) >= 2 || batches([...(starts.get(endpoint)?.values() ?? [])]) >= 2;
+      if (background) ignored += 1;
+      else waiting.push(entry);
+    }
+    return { waiting, ignored };
+  }
 
   note(text: string): void {
     this.push(this.events, CAPACITY.event, { seq: this.next(), text }, (dropped) => {
@@ -133,7 +184,8 @@ export class TabLog {
     });
   }
 
-  requestStarted(requestId: string, request: { method: string; url: string; resourceType: string; timestamp: number }): void {
+  /** `byPage`：这个请求是页面自己发起的（标签判定），记进 `pageInitiated`。 */
+  requestStarted(requestId: string, request: { method: string; url: string; resourceType: string; timestamp: number }, byPage = false): void {
     const entry: NetworkEntry = {
       seq: this.next(),
       method: request.method,
@@ -153,8 +205,14 @@ export class TabLog {
       this.releaseBody(dropped);
       this.bodyReasons.delete(dropped);
       this.deferred.delete(dropped);
+      this.requests.delete(dropped);
     });
     this.inFlight.set(requestId, { entry, startedAt: request.timestamp });
+    this.requests.set(entry, { id: requestId, startedAt: request.timestamp });
+    if (byPage && DATA_TYPES.has(request.resourceType)) {
+      const endpoint = endpointOf(entry.url);
+      this.pageInitiated.set(endpoint, (this.pageInitiated.get(endpoint) ?? new Set<string>()).add(requestId));
+    }
   }
 
   /**
@@ -221,13 +279,13 @@ export class TabLog {
     }
   }
 
-  /** 采集时页面停在弹窗：留下 requestId，弹窗答完后补采。 */
-  bodyDeferred(seq: number, requestId: string): void {
+  /** 采集时页面停在弹窗：记下条目，弹窗答完后补采。 */
+  bodyDeferred(seq: number): void {
     const entry = this.pendingCapture(seq);
     if (!entry) return;
     entry.body = { ...entry.body!, state: "deferred" };
     this.bodyReasons.set(entry, "the page was paused by a dialog; the body is captured after the dialog is answered");
-    this.deferred.set(entry, requestId);
+    this.deferred.add(entry);
   }
 
   bodyUnavailable(seq: number, reason: string): void {
@@ -239,10 +297,10 @@ export class TabLog {
 
   /** 取走全部等补采的条目（转回 pending，结果照常经 `bodyCaptured` 等写回）。 */
   takeDeferred(): { seq: number; requestId: string }[] {
-    const taken = [...this.deferred].map(([entry, requestId]) => {
+    const taken = [...this.deferred].map((entry) => {
       entry.body = { ...entry.body!, state: "pending" };
       this.bodyReasons.set(entry, "the body is being captured; read it again shortly");
-      return { seq: entry.seq, requestId };
+      return { seq: entry.seq, requestId: this.requests.get(entry)!.id };
     });
     this.deferred.clear();
     return taken;
@@ -282,6 +340,7 @@ export class TabLog {
   pageStarted(): void {
     this.pageStart = this.navigationStart ?? this.seq + 1;
     this.navigationStart = null;
+    this.pageInitiated.clear();
   }
 
   /** 页面结果用：取「上次以来」的事件与（当前页面的）计数，并推进交付游标。 */
@@ -399,6 +458,22 @@ function defaultReason(state: BodyState): string | null {
   }
 }
 
+/** 截掉的部分不再保存：模型要知道读不到全文是工具的上限。 */
 function clip(text: string): string {
-  return text.length > TEXT_MAX_CHARS ? `${text.slice(0, TEXT_MAX_CHARS)}…` : text;
+  return clipText(text, TEXT_MAX_CHARS);
+}
+
+/**
+ * 接口的身份：来源 + 路径。查询参数常带时间戳与签名，同一个上报接口每次都不同；落定判后台流量与备注里列出
+ * 「哪个接口没回来」用的都是它（查询参数还常带令牌，不进备注）。
+ */
+export function endpointOf(url: string): string {
+  if (!URL.canParse(url)) return url;
+  const { origin, pathname } = new URL(url);
+  return `${origin}${pathname}`;
+}
+
+/** 发起时刻分成几批：按时间排好，与上一次相隔超过 `FAN_OUT_WINDOW_S` 就是新的一批。 */
+function batches(startedAt: number[]): number {
+  return startedAt.sort((a, b) => a - b).filter((time, index, all) => index === 0 || time - all[index - 1] > FAN_OUT_WINDOW_S).length;
 }

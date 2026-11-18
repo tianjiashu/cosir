@@ -127,7 +127,8 @@ describe("wire samples", () => {
   });
 
   it("screenshots and tab lists", () => {
-    expect(screenshotWire({ ...head(200, defaultEmulation), image: "data:image/jpeg;base64,/9j/AAAA" })).toEqual(samples.screenshot);
+    expect(screenshotWire({ ...head(200, defaultEmulation), image: "data:image/jpeg;base64,/9j/AAAA", fullPageCut: null })).toEqual(samples.screenshot);
+    expect(screenshotWire({ ...head(200, defaultEmulation), image: "data:image/jpeg;base64,/9j/AAAA", fullPageCut: { pageHeight: 9812, shownHeight: 4000 } })).toEqual(samples.screenshot_full_page_cut);
     expect(tabsWire([
       { tabId: "t1", title: "Home", url: "http://127.0.0.1:5173/", current: false, createdBy: "user", operation: null },
       { tabId: "t3", title: "Sign in", url: "http://127.0.0.1:5173/login", current: true, createdBy: "agent", operation: null },
@@ -154,7 +155,7 @@ describe("argument keys the host reads", () => {
   const host = { session_id: 7, limits: { per_session: 5, total: 20 }, download_dir: "/ws/.cosir/Download" };
   const cases: [keyof typeof schemas, (params: unknown) => unknown, Record<string, unknown>][] = [
     ["browser_navigate", parseNavigate, { url: "https://example.com/z", action: null, tab: "t9", new_tab: true, viewport: { width: 391, height: 845, mobile: true }, color_scheme: "dark" }],
-    ["browser_snapshot", parseSnapshot, { tab: "t9", scope: "viewport", find: "needle", from_line: 37 }],
+    ["browser_snapshot", parseSnapshot, { tab: "t9", format: "text", scope: "viewport", find: "needle", from_line: 37 }],
     ["browser_screenshot", parseScreenshot, { tab: "t9", full_page: false, ref: "e4", region: null }],
     ["browser_tabs", parseTabs, { tab: "t9", action: "close" }],
     ["browser_logs", parseLogs, { kind: "console", since: 41, level: "warning", failed_only: false, pattern: "needle", limit: 7, body: null, tab: "t9" }],

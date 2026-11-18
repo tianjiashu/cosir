@@ -44,15 +44,24 @@ export class BrowserOperation {
   private effectDepth = 0;
   effectStarted = false;
   private done: Promise<void> | null = null;
+  /**
+   * 这一步开始时标签日志的下一个序号：落定只等它之后发出的数据请求（`BrowserTab.settle`）。每一步（`beginStep`）刷新，
+   * 动作序列里每个动作只等自己带来的请求；导航只有一步，就是操作开始时。
+   */
+  requestsFrom: number;
 
   constructor(readonly tab: BrowserTab, signal: AbortSignal) {
+    this.requestsFrom = tab.log.nextSeq;
     this.signal = AbortSignal.any([signal, this.controller.signal]);
     this.signal.addEventListener("abort", () => this.change("stopping"), { once: true });
     this.record("browser_operation_started");
   }
 
   /** 每步结算独立；定位失败不能被前一步的副作用污染。 */
-  beginStep(): void { this.effectStarted = false; }
+  beginStep(): void {
+    this.effectStarted = false;
+    this.requestsFrom = this.tab.log.nextSeq;
+  }
 
   cdp = <T = unknown>(method: string, params: Record<string, unknown> = {}, options: SendOptions = {}): Promise<T> => {
     this.signal.throwIfAborted();
@@ -180,7 +189,7 @@ export class BrowserOperation {
   on<T>(method: string, handler: (params: T) => void): () => void { return this.tab.session.on(method, handler); }
   resolveRef(ref: string): PageNode { return this.tab.resolveRef(ref); }
   frameOffset(cdpSessionId: string | undefined) { return this.tab.frames.offset(cdpSessionId, this.cdp); }
-  settle(): Promise<void> { return this.tab.settle(this.signal); }
+  settle(): Promise<void> { return this.tab.settle(this); }
   geometry() { return readGeometry(this.cdp); }
   toInput(point: { x: number; y: number }) { return this.tab.emulation.toInput(point); }
   paused() { return this.tab.paused(); }

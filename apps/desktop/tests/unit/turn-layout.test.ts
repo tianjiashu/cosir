@@ -119,13 +119,13 @@ describe("stable conversation projection", () => {
     expect(card.files[0].operations.map((op) => [op.toolCallId, op.change.status, op.change.insertions])).toEqual([["edit", "modified", 3], ["new", "added", 12]]);
   });
   it("keeps artifacts and required decisions available independently of process folding", () => {
-    const handoff = call("handoff", { toolName: "browser_handoff", presentation: "standalone", awaitingUser: true, status: "pending", display_data: { kind: "browser-page" } });
+    const question = call("question", { toolName: "ask_user", presentation: "standalone", awaitingUser: true, status: "pending", display_data: { kind: "user-question" } });
     const draft = call("draft", { display_data: { kind: "agent-configuration-draft" } });
-    const layout = projectTurn([handoff, draft, text("回复", true)], "settled", outcome("completed"));
+    const layout = projectTurn([question, draft, text("回复", true)], "settled", outcome("completed"));
     expect(layout.defaultProcessOpen).toBe(false);
     // 过程收起时，等你操作的调用仍在原位置常显；决定之后随过程开合。
     expect(visibleTurnBlock(layout.blocks[0], false)).toBe(true);
-    expect(visibleTurnBlock({ ...layout.blocks[0], part: { ...handoff, awaitingUser: false } } as typeof layout.blocks[0], false)).toBe(false);
+    expect(visibleTurnBlock({ ...layout.blocks[0], part: { ...question, awaitingUser: false } } as typeof layout.blocks[0], false)).toBe(false);
     expect(layout.artifacts.map((item) => item.kind)).toEqual(["agent-configuration-draft"]);
   });
 });
@@ -150,29 +150,39 @@ describe("回复呈现工具", () => {
   const offer = (id: string, ask: string, overrides: Partial<TransportToolCallPart> = {}) =>
     call(id, { toolName: "offer_next_step", presentation: "quiet", display_data: { kind: "next-step", ask, replies: ["好"] }, ...overrides });
 
-  // 目的：卡片就是这两个工具的呈现；潜在缺陷：静默调用又在过程里多出一行，或交付物卡随过程折叠消失。
-  it("交付物进产物区、建议单独给出，两者都不在过程里留调用行", () => {
+  // 目的：卡片就是这两个工具的呈现；潜在缺陷：静默调用又在过程里多出一行，或交付卡随过程折叠消失。
+  it("交付卡是回合里的块、过程收起也常显；建议单独给出；两者都不在过程里留调用行", () => {
     const layout = projectTurn([files, offer("o1", "继续吗？"), text("做完了", true)], "settled", outcome("completed"));
-    expect(layout.artifacts.map((item) => item.kind)).toEqual(["deliverables"]);
+    expect(layout.blocks.map((block) => block.kind)).toEqual(["deliverables", "activity", "narration"]);
+    expect(visibleTurnBlock(layout.blocks[0], false)).toBe(true);
+    expect(layout.artifacts).toEqual([]);
     expect(layout.nextStep?.part.toolCallId).toBe("o1");
     expect(layout.process.items).toHaveLength(0);
   });
 
-  // 目的：交付物组排在它所在的位置、改动卡仍在最前；潜在缺陷：两次交付出现两张卡，或流式追加正文时卡片重建导致胶囊重挂载。
-  it("一个回合的多次交付合成一张卡，放在第一次交付的位置，正文流式追加时保持同一引用", () => {
-    const draft = call("draft", { toolName: "propose_agent_configuration", presentation: "quiet", display_data: { kind: "agent-configuration-draft" } });
+  // 目的：一次交付一张卡、放在调用的位置，运行中就出现；潜在缺陷：说明对不上那批成果、卡片要等落定才出现，或流式追加正文时卡片重建导致胶囊重挂载。
+  it("每次交付一张卡、在调用的位置，运行中就在，正文流式追加时保持同一引用", () => {
     const change = call("w", { display_data: { kind: "file-changes", changes: [{ path: "a.md", status: "added" }] } });
-    const parts = [change, present("p1", ["a.md"]), draft, present("p2", ["b.md", "a.md"]), text("a")];
-    // 产出卡是回合的报告：运行中不出现（否则被之后的过程一路往下推），落定后才出现。
-    expect(projectTurn(parts, "running").artifacts).toEqual([]);
-    const first = projectTurn(parts, "settled", outcome("completed"));
-    expect(first.artifacts.map((item) => item.kind)).toEqual(["changes", "deliverables", "agent-configuration-draft"]);
-    const card = first.artifacts[1];
+    const parts = [change, present("p1", ["a.md"]), call("r", {}), present("p2", ["b.md", "a.md"]), text("a")];
+    const kinds = (layout: ReturnType<typeof projectTurn>) => layout.blocks.map((block) => block.kind === "deliverables" ? block.part.toolCallId : block.kind);
+    const running = projectTurn(parts, "running");
+    // p1 的 a.md 后来又交付了一遍，只留在 p2 里，p1 整张不出现、留在活动段里静默；交付卡像旁白一样切断活动段。
+    expect(kinds(running)).toEqual(["activity", "p2", "narration"]);
+    const first = projectTurn(parts, "settled", outcome("completed"), running);
+    const card = first.blocks.find((block) => block.kind === "deliverables")!;
     expect(card.kind === "deliverables" && card.items.map((item) => item.deliverable.key)).toEqual(["/w/b.md", "/w/a.md"]);
+    expect(first.artifacts.map((item) => item.kind)).toEqual(["changes"]);
     const streamed = projectTurn([...parts.slice(0, -1), text("ab")], "settled", outcome("completed"), first);
-    expect(streamed.artifacts[1]).toBe(card);
-    const more = projectTurn([...parts.slice(0, -1), present("p3", ["c.md"])], "settled", outcome("completed"), streamed);
-    expect(more.artifacts[1]).not.toBe(card);
+    expect(streamed.blocks.find((block) => block.kind === "deliverables")).toBe(card);
+  });
+
+  // 目的：交付卡在最终回复之上；潜在缺陷：模型把答案和交付写进同一条回复时，卡片夹在答案与收尾之间。
+  it("落定后排在最终回复之后的交付卡提到第一段最终回复之前，运行中不动", () => {
+    const parts = [call("r", {}), text("完整答案"), present("p", ["a.md"]), text("收尾")];
+    const kinds = (layout: ReturnType<typeof projectTurn>) => layout.blocks.map((block) => block.kind);
+    expect(kinds(projectTurn(parts, "running"))).toEqual(["activity", "narration", "deliverables", "narration"]);
+    const settled = [parts[0], { ...text("完整答案"), finalReply: true }, parts[2], { ...text("收尾"), finalReply: true }] as TransportMessagePart[];
+    expect(kinds(projectTurn(settled, "settled", outcome("completed")))).toEqual(["activity", "deliverables", "narration", "narration"]);
   });
 
   it("同一回合多次建议只认最后一次，失败的调用没有展示数据、不算", () => {
@@ -188,5 +198,48 @@ describe("回复呈现工具", () => {
     const part = offer("o1", "继续吗？");
     const first = projectTurn([part, text("a")], "running");
     expect(projectTurn([part, text("ab")], "running", null, first).nextStep).toBe(first.nextStep);
+  });
+});
+
+describe("活动段汇总的产出", () => {
+  const SHA = (c: string) => c.repeat(64);
+  const edit = (id: string, changes: { path: string; insertions: number; deletions: number }[]) => toolCallPart(id, "edit_file", {
+    status: "completed", display_data: { kind: "file-changes", changes: changes.map((change) => ({ ...change, status: "modified", patch: null })) },
+  });
+  const read = (id: string, assets: string[]) => toolCallPart(id, "read_image", {
+    status: "completed", display_data: { kind: "image-read", images: assets.map((asset, i) => ({ path: `img/${id}-${i}.png`, asset_id: asset, width: 1, height: 1 })), failures: [] },
+  });
+  const shot = (id: string, asset: string) => toolCallPart(id, "browser_screenshot", {
+    status: "completed", display_data: { kind: "browser-page", tab_id: "t1", url: "https://example.com", title: "示例", screenshot: asset },
+  });
+  const group = (parts: TransportMessagePart[], previous?: TurnLayout) => {
+    const layout = projectTurn(parts, "running", null, previous ?? null);
+    return { layout, group: layout.blocks.find((block): block is ActivityGroup => block.kind === "activity")! };
+  };
+
+  // 目的：汇总行的「改了多少、看到了什么」与调用行同源；潜在缺陷：只数第一个文件、图片顺序乱、失败调用冒出图片。
+  it("sums every file operation and lists images in the order they appeared", () => {
+    const failed = toolCallPart("bad", "read_image", { status: "failed", display_data: null });
+    const mcp = toolCallPart("m1", "mcp", { status: "completed", display_data: { kind: "mcp-tool-result", action: "call", server_name: "figma", tool_name: "render", scope: "system", images: [SHA("d")] } });
+    const { group: g } = group([
+      edit("e1", [{ path: "a.ts", insertions: 3, deletions: 1 }, { path: "b.ts", insertions: 2, deletions: 0 }]),
+      read("r1", [SHA("a"), SHA("b")]), failed, shot("s1", SHA("c")), mcp,
+      edit("e2", [{ path: "a.ts", insertions: 1, deletions: 4 }]),
+    ]);
+    expect(g.summary.diff).toEqual({ insertions: 6, deletions: 5 });
+    expect(g.summary.images).toEqual([
+      { assetId: SHA("a"), alt: "img/r1-0.png" }, { assetId: SHA("b"), alt: "img/r1-1.png" }, { assetId: SHA("c"), alt: "示例" },
+      { assetId: SHA("d"), alt: "figma / render" },
+    ]);
+  });
+
+  // 目的：运行中新的调用到达时汇总跟着累加，没变时沿用旧对象（行不重渲染）。
+  it("grows with new calls and is reused while calls stay the same", () => {
+    const first = [read("r1", [SHA("a")])];
+    const one = group(first);
+    expect(group(first, one.layout).group).toBe(one.group);
+    const two = group([...first, shot("s1", SHA("c"))], one.layout);
+    expect(two.group.summary.images.map((image) => image.assetId)).toEqual([SHA("a"), SHA("c")]);
+    expect(two.group.summary.diff).toEqual({ insertions: 0, deletions: 0 });
   });
 });

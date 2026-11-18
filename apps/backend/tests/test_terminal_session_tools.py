@@ -57,7 +57,7 @@ def test_exactly_four_terminal_tools_are_built() -> None:
         definitions[name].group == TOOL_GROUP_TERMINAL
         for name in ("terminal_list", "terminal_read", "terminal_stop")
     )
-    assert all(definition.user_decision is None for definition in definitions.values())
+    assert not any(definition.user_decision for definition in definitions.values())
 
 
 def test_write_schema_is_strict_and_fills_without_running() -> None:

@@ -26,7 +26,7 @@ const parentState: TransportState = {
   ],
   messageOffset: 0,
   activity: {modelActivity: null, turn: 1, resumable: false, status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
-  terminal_sessions: [], background_tasks: [], foreground_waits: [], handoffs: [], deliverables: [],
+  terminal_sessions: [], background_tasks: [], foreground_waits: [], deliverables: [],
 };
 
 test.beforeEach(async ({ request }) => {

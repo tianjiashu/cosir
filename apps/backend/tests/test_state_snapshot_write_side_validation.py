@@ -98,7 +98,7 @@ def test_validation_covers_only_what_a_change_touched() -> None:
     inside = ConversationStateMutation("set", ("messages", 1, "parts", 0, "status"), "completed")
     validate_mutated(state, [inside])
     validate_mutated(state, [ConversationStateMutation("append-text", ("messages", 1, "parts", 0, "text"), "!")])
-    validate_mutated(state, [ConversationStateMutation("set", ("handoffs",), [])])
+    validate_mutated(state, [ConversationStateMutation("set", ("foreground_waits",), [])])
 
     with pytest.raises(ValueError):  # 整条消息替换：与其他消息共用 id 唯一性，整份校验
         validate_mutated(state, [ConversationStateMutation("set", ("messages", 1), state["messages"][1])])

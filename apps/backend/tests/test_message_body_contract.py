@@ -14,7 +14,7 @@ from app.core.workflow.message_queue.message_bodies import (
     EnqueuedMessageBody,
     MessageBody,
     SessionMessageKind,
-    ToolResultBody,
+    ToolImageBody,
     WakeScope,
 )
 from app.core.workflow.message_queue.message_bodies.notice import (
@@ -24,7 +24,7 @@ from app.core.workflow.message_queue.message_bodies.notice import (
 )
 
 _ENQUEUED = get_args(MessageBody)
-"""入队消息类型；``ToolResultBody`` 不在其中（只写 context、不进队列）。"""
+"""入队消息类型；``ToolImageBody`` 不在其中（只写 context、不进队列）。"""
 
 _REQUIRED = ("KIND", "TAG", "PROMPT_GUIDE", "PRIORITY", "DEFAULT_PROJECTED", "WAKE")
 
@@ -70,7 +70,7 @@ def test_kind_registry_round_trips_every_enqueued_body() -> None:
 def test_model_input_bodies_are_tagged_and_unique() -> None:
     """进模型的类型都要有标签并声明读法（可为 None）；``tag`` 唯一，提示词才能按它列出消息协议。"""
 
-    assert ToolResultBody in MODEL_INPUT_BODIES
+    assert ToolImageBody in MODEL_INPUT_BODIES
     assert set(_ENQUEUED) <= set(MODEL_INPUT_BODIES)
     assert len(set(MODEL_INPUT_BODIES)) == len(MODEL_INPUT_BODIES)
 

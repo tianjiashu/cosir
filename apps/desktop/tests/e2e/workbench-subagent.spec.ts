@@ -40,7 +40,9 @@ test("主 Thread 委派后可在 Workbench 打开子 Agent 并接收只读流", 
   await expect(page.locator('[data-tool-call-id="delegate-ref-500"]')).toBeVisible();
   const row = page.locator('[data-tool-call-id="delegate-ref-500"]');
   await expect(row).toContainText("审查代码");
-  await expect(row).toContainText("delegate_reviewer");
+  // 目标写子 Agent 的名字而不是配置 id；子会话在跑时行上说「运行中」。
+  await expect(row).not.toContainText("delegate_reviewer");
+  await expect(row).toContainText("运行中");
   const openReviewer = page.getByRole("button", { name: "打开子 Agent 工作台：审查代码" });
   await openReviewer.click();
 

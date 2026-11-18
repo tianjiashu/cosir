@@ -22,9 +22,10 @@ def _context(root: Path) -> SimpleNamespace:
     return SimpleNamespace(workspace_root=root, tool_call_id="call_1", session_id=1)
 
 
-def _present(root: Path, *items: tuple[str, str | None]):
+def _present(root: Path, *items: tuple[str, str | None], note: str | None = None):
     return PresentDeliverablesTool().execute(
         items=[{"target": target, "caption": caption} for target, caption in items],
+        note=note,
         execution_context=_context(root),
     )
 
@@ -55,7 +56,7 @@ def test_observes_files_directories_and_web_addresses(workspace: Path, tmp_path:
     )
 
     assert observation.status == "success"
-    assert not observation.display_data
+    assert observation.display_data == {"kind": "deliverables", "note": None}
     assert observation.deliverables == (
         DeliveredFile(
             workspace_path="docs/report.md",
@@ -297,5 +298,32 @@ def test_definitions_are_quiet_sidebar_only_and_given_to_the_main_agent() -> Non
         definition = tool.to_definition()
         assert definition.conversation_presentation == "quiet"
         assert definition.requires_user_surface
-        assert definition.user_decision is None
+        assert definition.user_decision is False
         assert definition.name in main_agent().allowed_tools
+
+
+# 目的：这批交付的说明进展示数据给卡片看；潜在缺陷：空白说明画出一行空白、超长说明撑出卡片、整批失败还留着说明。
+@pytest.mark.usefixtures("backend_env")
+def test_note_goes_to_the_card_display_only(workspace: Path) -> None:
+    from app.tools.tool_models import PresentDeliverablesArgs
+    from app.tools.tool_models.present_deliverables_args import PRESENT_DELIVERABLES_NOTE_MAX
+
+    noted = _present(workspace, ("docs/report.md", None), note="  报告与原始数据，表已按点赞排序  ")
+    assert noted.display_data == {"kind": "deliverables", "note": "报告与原始数据，表已按点赞排序"}
+    assert noted.deliverables is not None
+    assert _present(workspace, ("docs/report.md", None), note="   ").display_data == {
+        "kind": "deliverables",
+        "note": None,
+    }
+    # 部分失败：照常呈现通过的，说明保留。
+    partial = _present(workspace, ("docs/report.md", None), ("missing.md", None), note="报告")
+    assert partial.display_data == {"kind": "deliverables", "note": "报告"}
+    # 全部失败：没有卡片，也就没有说明（错误态不带成功态 kind）。
+    failed = _present(workspace, ("missing.md", None), note="报告")
+    assert failed.status == "error"
+    assert not (failed.display_data or {}).get("kind")
+    # 超长在参数边界拒绝（schema 同一份上限），不截断成半句话。
+    with pytest.raises(ValidationError):
+        PresentDeliverablesArgs.model_validate(
+            {"items": [{"target": "a", "caption": None}], "note": "长" * (PRESENT_DELIVERABLES_NOTE_MAX + 1)}
+        )

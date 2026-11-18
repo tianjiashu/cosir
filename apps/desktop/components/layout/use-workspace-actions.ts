@@ -19,7 +19,6 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { forgetMessageHeights } from "@/lib/assistant/turn/message-height-cache";
 import { useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
-import { useHandoffStore } from "@/lib/handoff/handoff-store";
 import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-store";
 import { useWorkbenchStore } from "@/lib/workbench/workbench-store";
 import { baseName } from "@/lib/files/file-name";
@@ -176,7 +175,6 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedSessionId:
     useWorkbenchStore.getState().forgetSessions(deletedSessionIds);
     useBackgroundTasksStore.getState().forget(deletedSessionIds);
     useDeliverablesStore.getState().forget(deletedSessionIds);
-    useHandoffStore.getState().forget(deletedSessionIds);
     forgetMessageHeights(deletedSessionIds);
     forgetCommands(deletedSessionIds);
     useModelSelectionStore.getState().forgetSessions(deletedSessionIds);

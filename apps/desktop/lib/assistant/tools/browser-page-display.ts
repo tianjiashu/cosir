@@ -16,8 +16,6 @@ export type BrowserPageDisplay = {
   title: string;
   /** 截图的附件 asset id（`browser_screenshot`）。 */
   screenshot?: string;
-  /** 交接给用户时要用户做的事（`browser_handoff`）。 */
-  handoffReason?: string;
   /** `browser_act` 的每一步。 */
   steps?: BrowserActStep[];
 };
@@ -33,7 +31,6 @@ export function readBrowserPageDisplay(value: unknown): BrowserPageDisplay | nul
   if (typeof data.url !== "string" || typeof data.title !== "string") return null;
   const display: BrowserPageDisplay = { tabId: data.tab_id, url: data.url, title: data.title };
   if (typeof data.screenshot === "string" && ATTACHMENT_ASSET_ID.test(data.screenshot)) display.screenshot = data.screenshot;
-  if (typeof data.handoff_reason === "string" && data.handoff_reason.trim()) display.handoffReason = data.handoff_reason;
   if (Array.isArray(data.steps)) {
     const steps = data.steps.map(readStep);
     if (steps.every((step) => step !== null)) display.steps = steps as BrowserActStep[];

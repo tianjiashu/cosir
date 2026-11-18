@@ -2,6 +2,7 @@ import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type Rea
 import { MessagePrimitive, useAuiState, useScrollLock } from "@assistant-ui/react";
 
 import { CallRow } from "@/components/conversation/tools/call-row";
+import { DeliverablesCard } from "@/components/conversation/tools/reply-presentation/deliverables-card";
 import { NextStepCard } from "@/components/conversation/tools/reply-presentation/next-step-card";
 import { readNextStep } from "@/components/conversation/tools/reply-presentation/reply-presentation-display";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
@@ -59,7 +60,7 @@ const CallRowByIndex = memo(function CallRowByIndex({ index, sessionId, interact
 });
 
 /**
- * 助手消息按原始 part 顺序保留稳定槽位，工具区间摘要与正文交替。正常完成且有最终回复时隐藏过程，
+ * 助手消息按原始 part 顺序保留稳定槽位，工具区间摘要、交付卡与正文交替。正常完成且有最终回复时隐藏过程，
  * 不移动正文 DOM；等你操作的调用在原位置常显（就地画成卡片，见 `CallRow`），文件结果独立保留。布局由 projectTurn 给出，活动计时读取 startedAt，
  * 终态读取 outcome.durationMs，不创造挂起原因或猜测模型最终答复。
  */
@@ -108,11 +109,17 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
         const hidden = !visibleTurnBlock(block, processOpen);
         return <div key={block.kind === "activity" ? `activity:${block.key}` : `part:${block.index}`}
           hidden={hidden}
-          data-slot={block.kind === "narration" ? "prose-part" : "process-part"} data-part-index={block.index} className="min-w-0">
+          data-slot={block.kind === "narration" ? "prose-part" : block.kind === "deliverables" ? "deliverables-part" : "process-part"} data-part-index={block.index} className="min-w-0">
           {block.kind === "narration" ? <div className="text-foreground text-chat leading-7">
             <MessagePrimitive.PartByIndex index={block.index} components={TEXT_PART_COMPONENTS} />
           </div> : block.kind === "agent" ? <AgentMessageRow id={block.part.id} text={block.part.text} source={block.part.source} sessionId={sessionId} />
             : block.kind === "standalone" ? <CallRowByIndex index={block.index} sessionId={sessionId} interactive={interactive} sessionCancelling={cancelling} visible={!hidden} inherited={inherited} />
+            : block.kind === "deliverables" ? <RenderIsolationBoundary
+              scope="part"
+              resetKey={`deliverables:${block.part.toolCallId}`}
+              metadata={{ renderer: "deliverables-card", partId: block.part.toolCallId, partIndex: block.index }}
+              fallback={({ onRetry }) => <RenderErrorCard scope="part" label="交付物" onRetry={onRetry} />}
+            ><DeliverablesCard card={block} sessionId={sessionId} /></RenderIsolationBoundary>
             : <ProcessBlock sessionId={sessionId} messageId={messageId} group={block} feedback={block.key === stoppingSegment ? STOPPING_FEEDBACK : undefined} visible={!hidden} renderCall={renderCall} />}
         </div>;
       })}

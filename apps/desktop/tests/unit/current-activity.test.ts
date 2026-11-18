@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { segmentActivity, unownedActivity } from "@/lib/assistant/turn/current-activity";
 import { projectCallStatus } from "@/lib/assistant/tools/call-status";
-import { segmentStartedAt } from "@/lib/assistant/turn/segment-clock";
 import { projectTurn, visibleTurnBlock, type ActivityGroup, type TurnLayout } from "@/lib/assistant/turn/turn-layout";
 import type { TransportMessagePart } from "@/lib/assistant/contract";
 import { activity, toolCallPart } from "./transport-fixtures";
 
+const T0 = "2026-11-18T04:00:00.000Z";
 const job = { toolCallId: "bg", kind: "terminal_command" as const, label: "检查导出", status: "running" as const, startedAt: "2026-01-01", endedAt: null };
 const none = new Set<string>();
 const segments = (layout: TurnLayout) => layout.blocks.filter((block): block is ActivityGroup => block.kind === "activity");
@@ -15,13 +15,13 @@ const streaming = (value: string): TransportMessagePart => ({ type: "text", text
 
 describe("unowned activity", () => {
   it("names model phases and waits, with background work as a suffix only while running", () => {
-    const model = activity(1, "running", { modelActivity: { stepId: "s", phase: "reasoning" } });
-    expect(unownedActivity(model)).toEqual({ label: "思考中", animated: true });
+    const model = activity(1, "running", { modelActivity: { stepId: "s", phase: "reasoning", startedAt: T0 } });
+    expect(unownedActivity(model)).toEqual({ label: "思考中", animated: true, since: T0 });
     expect(unownedActivity(model, [job])?.label).toBe("思考中 · 后台 1 项");
-    expect(unownedActivity(activity(1, "running", { modelActivity: { stepId: "s", phase: "tool_call" } }))?.label).toBe("正在准备工具");
-    expect(unownedActivity(activity(1, "running", { modelActivity: { stepId: "s", phase: "responding" } }))).toBeNull();
-    // 步与步之间也是思考，不另起「正在处理」。
-    expect(unownedActivity(activity(1, "running"))?.label).toBe("思考中");
+    expect(unownedActivity(activity(1, "running", { modelActivity: { stepId: "s", phase: "tool_call", startedAt: T0 } }))).toMatchObject({ label: "正在准备工具" });
+    expect(unownedActivity(activity(1, "running", { modelActivity: { stepId: "s", phase: "responding", startedAt: T0 } }))).toBeNull();
+    // 步与步之间也是思考，不另起「正在处理」；这几十毫秒没有模型步起点，不计时。
+    expect(unownedActivity(activity(1, "running"))).toEqual({ label: "思考中", animated: true, since: undefined });
     expect(unownedActivity(activity(1, "cancelled"))).toBeNull();
     expect(unownedActivity(activity(1, "suspended"))).toEqual({ label: "等待继续", animated: false });
     expect(unownedActivity(activity(1, "suspended"), [job])).toEqual({ label: "后台执行：检查导出", animated: false });
@@ -49,9 +49,9 @@ describe("segment activity", () => {
 });
 
 describe("one segment, one row, one clock", () => {
-  const model = activity(1, "running", { modelActivity: { stepId: "s", phase: "reasoning" } });
+  const model = activity(1, "running", { modelActivity: { stepId: "s", phase: "reasoning", startedAt: T0 } });
   const idle = { ...model, modelActivity: null };
-  const responding = { ...model, modelActivity: { stepId: "s", phase: "responding" as const } };
+  const responding = { ...model, modelActivity: { stepId: "s", phase: "responding" as const, startedAt: T0 } };
   const call = toolCallPart("read", "read_file", { intent: "检查配置", status: "running" });
 
   it("thinking, preparing, executing and thinking again are one segment with one identity", () => {
@@ -93,13 +93,23 @@ describe("one segment, one row, one clock", () => {
     expect(segments(projectTurn([call], "settled"))[0].live).toBeNull();
   });
 
-  it("the segment clock keeps its start and moves it only earlier", () => {
-    const first = segmentStartedAt(9, "m", "interval:0", undefined);
-    expect(segmentStartedAt(9, "m", "interval:0", undefined)).toBe(first);
-    const earlier = new Date(Date.parse(first) - 60_000).toISOString();
-    expect(segmentStartedAt(9, "m", "interval:0", earlier)).toBe(earlier);
-    // 调用结束、后端清掉 startedAt 之后不往回跳。
-    expect(segmentStartedAt(9, "m", "interval:0", undefined)).toBe(earlier);
+  // 目的：计时只认后端起点，换状态从头算；潜在缺陷：调用在 pending 时就开始计时，把写参数的时间算进执行。
+  it("the row times the current state from backend facts only", () => {
+    const callStart = "2026-11-18T04:00:20.000Z";
+    const pending = { ...call, status: "pending" as const, startedAt: null };
+    const writing = projectTurn([text("先看看。"), pending], "running", null, null, idle);
+    expect(segments(writing)[0].live).toEqual({ label: "检查配置", animated: true, since: undefined });
+    const running = projectTurn([text("先看看。"), { ...call, startedAt: callStart }], "running", null, writing, idle);
+    expect(segments(running)[0].live?.since).toBe(callStart);
+    // 调用之后的下一次思考取新模型步的起点，不接调用、也不接上一次思考。
+    const next = "2026-11-18T04:00:21.000Z";
+    const step = (id: string, since: string) => activity(1, "running", { modelActivity: { stepId: id, phase: "reasoning", startedAt: since } });
+    const thinking = projectTurn([text("先看看。"), { ...call, status: "completed" }], "running", null, running, step("s2", next));
+    expect(segments(thinking)[0].live).toEqual({ label: "思考中", animated: true, since: next });
+    // 同一文案、不同起点：段要换新对象，否则活动行沿用旧计时。
+    const later = projectTurn(thinking.parts, "running", null, thinking, step("s3", "2026-11-18T04:00:40.000Z"));
+    expect(segments(later)[0]).not.toBe(segments(thinking)[0]);
+    expect(segments(projectTurn(thinking.parts, "running", null, thinking, step("s2", next)))[0]).toBe(segments(thinking)[0]);
   });
 
   it("distinguishes pending queue, background execution, settling, waits and terminal states on call rows", () => {

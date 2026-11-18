@@ -41,3 +41,18 @@ def test_display_data_keeps_the_complete_oversized_patch() -> None:
 
     assert change["patch"] == format_git_diff(result)
     assert "truncated" not in change
+
+
+# 目的：超大文件的 diff 不进快照与推送，卡片仍能说出改了多少；潜在缺陷：整段下发撑爆快照，或连计数一起丢掉。
+def test_patch_over_the_display_budget_is_omitted_but_counts_remain(monkeypatch) -> None:
+    from app.config.constant import Constant
+
+    monkeypatch.setattr(Constant.Tools, "DISPLAY_PATCH_MAX_CHARS", 200)
+    small = FileDiffResult(path="a.py", status="modified", before="old\n", after="new\n")
+    large = FileDiffResult(path="b.py", status="modified", before="old\n" * 80, after="new\n" * 80)
+
+    changes = build_file_change_display_data([small, large])["changes"]
+
+    assert changes[0]["patch"] == format_git_diff(small)
+    assert changes[1]["patch"] is None
+    assert (changes[1]["insertions"], changes[1]["deletions"]) == (80, 80)

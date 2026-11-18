@@ -1,14 +1,20 @@
 import path from "node:path";
 
-import { app, session, type DownloadItem, type WebContents, type WebPreferences } from "electron";
+import { app, session, type DownloadItem, type Session, type WebContents, type WebPreferences } from "electron";
 
 import { logDesktopEvent } from "../desktop-log";
+import { observeCookieChanges } from "./diagnostics/cookie-changes";
 
 /**
  * 内置浏览器的持久分区：全部 Session 共用一个，登录一次处处可用（决定见设计稿「分区粒度」）；与应用自身的
  * 默认会话隔离，网页拿不到渲染进程的存储与权限。
  */
 const BROWSER_PARTITION = "persist:cosir-browser";
+
+/** 内置浏览器分区的 Electron 会话；只能在应用 ready 之后取。 */
+export function browserPartitionSession(): Session {
+  return session.fromPartition(BROWSER_PARTITION);
+}
 
 /**
  * 每个标签页的 webPreferences；新建的标签与页面开出的标签（`setWindowOpenHandler` 的
@@ -42,9 +48,11 @@ export type BrowserSessionEvents = {
  * - 站点权限（剪贴板、全屏、通知、定位、摄像头、麦克风、录屏……）一律授权：先能用，询问与限制留给统一的安全设计
  *   （AGENTS.md 待办「安全与权限」）。权限检查走 Electron 默认（授权）；请求只在这里落日志，便于排查谁用了什么。
  * - 下载登记到来源标签所属的 Session，落盘到标签创建时定下的下载目录（`downloads.ts`）。
+ * - Cookie 变化落进网络诊断日志（`diagnostics/cookie-changes.ts`）。
  */
 export function configureBrowserSession(events: BrowserSessionEvents): void {
-  const browserSession = session.fromPartition(BROWSER_PARTITION);
+  const browserSession = browserPartitionSession();
+  observeCookieChanges(browserSession);
   browserSession.setPermissionRequestHandler((webContents, permission, callback) => {
     logDesktopEvent("INFO", "browser", "browser_permission_granted", { permission, url: webContents.getURL().slice(0, 200) });
     callback(true);
@@ -59,3 +67,4 @@ export function configureBrowserSession(events: BrowserSessionEvents): void {
 export function configureBrowserUserAgent(): void {
   app.userAgentFallback = app.userAgentFallback.replace(/ Electron\/\S+/, "");
 }
+

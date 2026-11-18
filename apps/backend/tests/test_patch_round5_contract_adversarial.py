@@ -1028,22 +1028,18 @@ def test_display_payload_patch_reproduces_the_disk_change(tmp_path: pathlib.Path
     assert removed == ["-one"], f"展示 diff 的删除行与实际不符: {projected!r}"
 
 
-# Purpose: the diff statistics surfaced to the client must count the applied lines, not the
-# header lines, and must agree with the per-change counters. Defect type: miscounted stats.
-def test_diff_stats_count_only_real_changes(tmp_path: pathlib.Path) -> None:
+# Purpose: the per-change counters surfaced to the client must count the applied lines, not the
+# header lines; no separate total is sent (the client sums changes). Defect type: miscounted stats.
+def test_change_counters_count_only_real_changes(tmp_path: pathlib.Path) -> None:
     (tmp_path / "m.txt").write_bytes(b"one\ntwo\nthree\n")
     patch = _section("m.txt", "@@ -1,3 +1,3 @@", "-one", "+ONE", " two", "-three", "+THREE") + "\n"
 
     observation = _execute(tmp_path, patch, 6203)
 
     assert observation.status == "success", observation.content
-    stats = observation.display_data["diff_stats"]
-    assert stats["total_files"] == 1
-    assert stats["total_insertions"] == 2, f"新增行计数错误: {stats!r}"
-    assert stats["total_deletions"] == 2, f"删除行计数错误: {stats!r}"
+    assert "diff_stats" not in observation.display_data
     change = observation.display_data["changes"][0]
-    per_change = (change["insertions"], change["deletions"])
-    assert per_change == (2, 2), f"单文件统计与总统计不一致: {change!r}"
+    assert (change["insertions"], change["deletions"]) == (2, 2), f"单文件统计错误: {change!r}"
 
 
 # Purpose: a hunk whose context does not appear must be reported as a not-found hunk, never

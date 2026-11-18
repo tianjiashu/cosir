@@ -38,7 +38,8 @@ describe("detail availability without building body", () => {
 
   it("mcp call results with images expand to thumbnails", () => {
     const presentation = resolve({ kind: "mcp-tool-result", action: "call", server_name: "shots", tool_name: "capture", images: ["a".repeat(64)] });
-    expect(presentation?.meta).toBe("shots · capture · 1 张图片");
+    // 服务与工具已在目标里，元信息不再重复。
+    expect(presentation?.meta).toBe("1 张图片");
     expect(renderToStaticMarkup(<>{presentation!.detail!.render()}</>)).toContain("MCP 工具返回的图片");
   });
 

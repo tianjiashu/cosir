@@ -87,6 +87,8 @@ class _ModelHarness:
             add_message=add_message,
             save_model_response=save_model_response,
             abandon_model_response=lambda: None,
+            # 只有一条回复：最终回复就是刚保存的那条（多条回复的规则见 test_final_reply_rule）。
+            final_reply=lambda _reply_tools: ([1], self.messages[-1].get("content") or ""),
         )
 
     async def _astream(self, _messages: list[Any], **kwargs: Any) -> AsyncIterator[ChunkEvent]:
@@ -193,7 +195,7 @@ def test_finish_reason_completes_final_response(monkeypatch: Any) -> None:
     assert harness.completed is True
     assert harness.failed is False
     assert harness.completion_fields == {
-        "response_sequence": 1,
+        "response_sequences": [1],
         "final_output": "已完成回答。",
         "end_reason": "stop",
     }
@@ -218,7 +220,7 @@ def test_any_finish_reason_without_tool_calls_completes_run(
     assert harness.completed is True
     assert harness.failed is False
     assert harness.completion_fields == {
-        "response_sequence": 1,
+        "response_sequences": [1],
         "final_output": "回答到一半",
         "end_reason": finish_reason,
     }
@@ -263,7 +265,7 @@ def test_empty_content_with_finish_reason_completes_run(monkeypatch: Any) -> Non
     assert harness.completed is True
     assert harness.failed is False
     assert harness.completion_fields == {
-        "response_sequence": 1,
+        "response_sequences": [1],
         "final_output": "",
         "end_reason": "stop",
     }

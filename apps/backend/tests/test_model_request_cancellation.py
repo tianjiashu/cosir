@@ -142,6 +142,7 @@ def bind_node(monkeypatch, model):
     context = SimpleNamespace(
         load_message=lambda: [],
         save_model_response=save,
+        final_reply=lambda _reply_tools: ([len(snapshots)], snapshots[-1].choices[0].message.content or ""),
     )
 
     def transition_run(_run_id, transition, **kwargs):

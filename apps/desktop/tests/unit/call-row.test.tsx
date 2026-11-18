@@ -72,11 +72,13 @@ describe("CallRow 标题与目标", () => {
     expect(read).toContain("lucide-eye");
   });
 
-  it("命令的标题使用统一 intent，不重复命令", () => {
+  it("命令的标题使用统一 intent，不重复命令；没写意图时目标露首行", () => {
     const html = render({ intent: "运行后端单元测试" }, { toolName: "execute_terminal", args: { command: "uv run pytest -q\necho done" } });
     expect(html).toContain("运行后端单元测试");
     expect(html).not.toContain("uv run pytest -q");
-    expect(html).not.toContain("echo done");
+    const bare = render({}, { toolName: "execute_terminal", args: { command: "uv run pytest -q\necho done" } });
+    expect(bare).toContain("uv run pytest -q");
+    expect(bare).not.toContain("echo done");
     expect(html).toContain("lucide-terminal");
   });
 
@@ -198,13 +200,14 @@ describe("CallRow kind 视图", () => {
     </MemoryRouter>,
   );
 
-  it.each(["running", "completed", null])("子会话 %s 时委派行不说状态，且不读展示数据", (status) => {
+  // 目的：派生调用当场完成、行上没有扫光，子会话还在跑只能由行说；完成是常态不说话；推送没到不猜。
+  it.each([["running", "运行中"], ["completed", null], [null, null]])("子会话 %s 时委派行说 %s，且不读展示数据", (status, label) => {
     sessionStatuses.set(501, status);
     const html = render({
       display_data: { kind: "delegation-result", title: "审查代码", child_session_id: 501, status: "completed" },
     });
-    expect(html).not.toContain("运行中");
-    expect(html).not.toContain("已完成");
+    if (label) expect(html).toContain(label);
+    else expect(html).not.toMatch(/运行中|已完成/);
   });
 
   it.each([["failed", "运行失败"], ["cancelled", "已停止"], ["suspended", "等待结果"]])("子会话 %s 时委派行报异常", (status, label) => {
@@ -365,26 +368,13 @@ describe("终端卡片", () => {
 });
 
 describe("CallRow 等你操作：就地画成卡片", () => {
-  const handoff = { kind: "browser-page", tab_id: "t1", url: "https://a.test/login", title: "登录", handoff_reason: "在页面上完成登录后交还" };
   const question = { kind: "user-question", questions: [{ question: "用哪种存储？", header: "存储", options: [{ label: "Cookie", description: "后端下发" }, { label: "本地", description: "实现最快" }], multi_select: false }] };
   const awaiting = (display_data: Record<string, unknown>): Partial<ToolArtifact> => ({ presentation: "standalone", backendStatus: "pending", awaitingUser: true, display_data });
 
-  it("交接：卡片取代调用行，标题按工具目录、说明取交接原因，可交还；是对话流里唯一用信息蓝边框的容器", () => {
-    const html = render(awaiting(handoff), { toolName: "browser_handoff", args: { tab: "t1", reason: "完成登录" } });
-    expect(html).toContain('data-slot="awaiting-card"');
-    expect(html).not.toContain('data-slot="call-row"');
-    expect(html).toContain("交给你操作网页");
-    expect(html).toContain("在页面上完成登录后交还");
-    expect(html).toContain(">交还<");
-    expect(html).toContain("border-[color-mix(in_oklab,var(--info)_38%,transparent)]");
-  });
-
-  it("只读面不提供交还", () => {
-    expect(render(awaiting(handoff), { toolName: "browser_handoff", interactive: false })).not.toContain(">交还<");
-  });
-
-  it("提问：画成提问卡片", () => {
+  it("提问：卡片取代调用行；是对话流里唯一用信息蓝边框的容器", () => {
     const html = render(awaiting(question), { toolName: "ask_user", args: { questions: question.questions } });
+    expect(html).toContain('data-slot="awaiting-card"');
+    expect(html).toContain("border-[color-mix(in_oklab,var(--info)_38%,transparent)]");
     expect(html).toContain('data-slot="question-card"');
     expect(html).toContain("用哪种存储？");
     expect(html).not.toContain('data-slot="call-row"');

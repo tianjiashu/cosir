@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TabEvents, TabOptions } from "@/electron/main/browser/browser-tab";
 import { abortable } from "@/electron/main/browser/abortable";
 
-vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
+vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn(), appendHostLogLine: vi.fn() }));
 vi.mock("@/electron/main/browser/browser-tab", () => ({
   get BrowserTab() { return FakeTab; },
 }));
@@ -109,25 +109,23 @@ describe("BrowserHost 资源生命周期", () => {
     await expect(snapshot).resolves.toMatchObject({ tabId: "t1", snapshot: "- text 'page'" });
   });
 
-  // 目的：区域截图与视口截图一样是纯观察；潜在缺陷：区域截图误走修改槽位，交接中被拒、或把标签标成 Agent 正忙。
-  it("takes a region screenshot as an observation, also during a handoff", async () => {
+  // 目的：区域截图与视口截图一样是纯观察；潜在缺陷：区域截图误走修改槽位、或把标签标成 Agent 正忙。
+  it("takes a region screenshot as an observation", async () => {
     const host = new BrowserHost(() => null);
     const opening = host.userOpen(1, limits);
     tab().finish();
     await opening;
-    const screenshot = vi.fn(async () => "data:image/jpeg;base64,AAAA");
+    const screenshot = vi.fn(async () => ({ image: "data:image/jpeg;base64,AAAA", fullPageCut: null }));
     Object.assign(tab(), { screenshot });
     const region = { x: 10, y: 20, width: 300, height: 200 };
-    await expect(host.screenshot({ sessionId: 1, context: limits, handoffTabs: ["t1"], fullPage: false, region }, new AbortController().signal))
+    await expect(host.screenshot({ sessionId: 1, context: limits, fullPage: false, region }, new AbortController().signal))
       .resolves.toMatchObject({ tabId: "t1", image: "data:image/jpeg;base64,AAAA" });
     expect(screenshot).toHaveBeenCalledWith("jpeg", { quality: 85, fullPage: false, region });
     expect(tab().modify).not.toHaveBeenCalled();
-    await expect(host.screenshot({ sessionId: 1, context: limits, handoffTabs: ["t1"], fullPage: false, ref: "e1" }, new AbortController().signal))
-      .rejects.toMatchObject({ code: "HANDED_OFF" });
   });
 
-  // 目的：读正文按序号找请求、交接中照样能读；潜在缺陷：找不到时静默返回空正文，或交接把只读的日志读取也拦下。
-  it("reads a response body by sequence number, also during a handoff, and rejects an unknown number", async () => {
+  // 目的：读正文按序号找请求；潜在缺陷：找不到时静默返回空正文。
+  it("reads a response body by sequence number and rejects an unknown number", async () => {
     const host = new BrowserHost(() => null);
     const opening = host.userOpen(1, limits);
     tab().finish();
@@ -136,7 +134,7 @@ describe("BrowserHost 资源生命周期", () => {
     const body = { ...entry.body, text: "{}", truncated: false, reason: null };
     Object.assign(tab().log, { readBody: vi.fn((seq: number) => (seq === 20 ? { entry, body } : null)) });
 
-    const read = await host.logs({ sessionId: 1, context: limits, handoffTabs: ["t1"], body: 20 }, new AbortController().signal);
+    const read = await host.logs({ sessionId: 1, context: limits, body: 20 }, new AbortController().signal);
     expect(read).toMatchObject({ tabId: "t1", kind: "response_body", entry: { seq: 20 }, body: { text: "{}" } });
     await expect(host.logs({ sessionId: 1, context: limits, body: 99 }, new AbortController().signal))
       .rejects.toMatchObject({ code: "INVALID_PARAMS", message: expect.stringContaining("#99") });

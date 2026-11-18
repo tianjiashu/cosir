@@ -240,8 +240,9 @@ function validateActivity(value: unknown, path: string): void {
   requireExactKeys(activity, ["status", "turn", "resumable", "endReason", "error", "usage", "contextWindowTotal", "launch", "startedAt", "modelActivity"], path);
   if (activity.modelActivity !== null) {
     const model = requireRecord(activity.modelActivity, `${path}.modelActivity`);
-    requireExactKeys(model, ["stepId", "phase"], path);
+    requireExactKeys(model, ["stepId", "phase", "startedAt"], path);
     requireString(model.stepId, path);
+    requireString(model.startedAt, path);
     if (activity.status !== "running" || !["waiting", "reasoning", "responding", "tool_call"].includes(model.phase as string)) throw new TransportSnapshotValidationError(path, "模型活动阶段");
   }
   if (activity.turn !== null) requirePositiveInteger(activity.turn, `${path}.turn`);
@@ -406,7 +407,7 @@ export function validateTransportUpdate(previous: TransportState, next: Transpor
 
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["title", "messages", "messageOffset", "activity", "terminal_sessions", "background_tasks", "foreground_waits", "handoffs", "deliverables", ...(state.fork === undefined ? [] : ["fork"]), ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  requireExactKeys(state, ["title", "messages", "messageOffset", "activity", "terminal_sessions", "background_tasks", "foreground_waits", "deliverables", ...(state.fork === undefined ? [] : ["fork"]), ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
   // 允许为空：未开始的会话还没有标题，首条用户输入并入时才命名。
   if (typeof state.title !== "string") throw new TransportSnapshotValidationError("title", "字符串");
   if (state.fork !== undefined) {
@@ -445,23 +446,6 @@ export function parseTransportState(value: unknown): TransportState {
     const toolCallId = requireString(value, `foreground_waits[${index}]`);
     if (toolCallId === "" || foregroundIds.has(toolCallId)) throw new TransportSnapshotValidationError(`foreground_waits[${index}]`, "非空且在 Session 内唯一");
     foregroundIds.add(toolCallId);
-  });
-  if (!Array.isArray(state.handoffs)) throw new TransportSnapshotValidationError("handoffs", "数组");
-  const handoffCalls = new Set<string>();
-  const handoffResources = new Set<string>();
-  state.handoffs.forEach((raw, index) => {
-    const path = `handoffs[${index}]`;
-    const entry = requireRecord(raw, path);
-    requireExactKeys(entry, ["toolCallId", "toolName", "resourceId", "reason"], path);
-    const toolCallId = requireString(entry.toolCallId, `${path}.toolCallId`);
-    const resourceId = requireString(entry.resourceId, `${path}.resourceId`);
-    requireString(entry.toolName, `${path}.toolName`);
-    requireString(entry.reason, `${path}.reason`);
-    if (toolCallId === "" || resourceId === "" || handoffCalls.has(toolCallId) || handoffResources.has(resourceId)) {
-      throw new TransportSnapshotValidationError(path, "调用与资源非空且唯一");
-    }
-    handoffCalls.add(toolCallId);
-    handoffResources.add(resourceId);
   });
   return state as unknown as TransportState;
 }

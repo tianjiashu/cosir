@@ -1,4 +1,7 @@
-import { app, Menu, type MenuItemConstructorOptions } from "electron";
+import { app, Menu, shell, type MenuItemConstructorOptions } from "electron";
+
+import type { BrowserNetLogCapture } from "./browser/diagnostics/netlog-capture";
+import { appLogDir } from "./paths";
 
 /**
  * 应用菜单。不用 Electron 的默认菜单：默认的「视图」菜单里，刷新（Cmd+R）刷新的是整个应用窗口，缩放（Cmd + / -）
@@ -8,13 +11,25 @@ import { app, Menu, type MenuItemConstructorOptions } from "electron";
  *
  * 所以「视图」菜单（刷新、缩放、开发者工具）只在开发时保留；编辑菜单必须保留：复制、粘贴、全选等快捷键在 macOS
  * 上靠它才生效，应用的输入框与内置浏览器的网页都要用。
+ *
+ * 「诊断」菜单打包后也在：内置浏览器出网络问题时，用户在复现那一刻开启原生网络记录（`BrowserNetLogCapture`），
+ * 开始与结束都会重装菜单以刷新可用项。
  */
-export function installAppMenu(): void {
+export function installAppMenu(netLog: BrowserNetLogCapture): void {
   const template: MenuItemConstructorOptions[] = [
     ...(process.platform === "darwin" ? [{ role: "appMenu" } as const] : [{ role: "fileMenu" } as const]),
     { role: "editMenu" },
     ...(app.isPackaged ? [] : [{ role: "viewMenu" } as const]),
     { role: "windowMenu" },
+    {
+      label: "诊断",
+      submenu: [
+        { label: "开始记录浏览器网络（15 分钟）", enabled: !netLog.active, click: () => netLog.start() },
+        { label: "停止记录浏览器网络", enabled: netLog.active, click: () => void netLog.stop() },
+        { type: "separator" },
+        { label: "打开日志文件夹", click: () => void shell.openPath(appLogDir()) },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }

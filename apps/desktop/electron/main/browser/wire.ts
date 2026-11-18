@@ -68,7 +68,8 @@ export function evaluateWire(result: EvaluateResult) {
 }
 
 export function screenshotWire(shot: ScreenshotResult) {
-  return { ...pageHeadWire(shot), image: shot.image };
+  const cut = shot.fullPageCut;
+  return { ...pageHeadWire(shot), image: shot.image, full_page_cut: cut && { page_height: cut.pageHeight, shown_height: cut.shownHeight } };
 }
 
 export function tabsWire(tabs: SessionTab[]) {

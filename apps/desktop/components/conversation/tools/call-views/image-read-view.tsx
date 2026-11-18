@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useAttachmentWorkspaceId } from "@/components/conversation/thread/attachment-context";
 import { ImageStrip } from "@/components/image/image-strip";
 import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
-import { readImageReadDisplay, type ImageReadDisplay } from "../image-read-display";
+import { readImageReadDisplay, type ImageReadDisplay } from "@/lib/assistant/tools/image-read-display";
 import type { CallView } from "../call-view";
 
 /** 读到的图片按对话图片的统一外观横排，路径放进悬停提示；地址按消息附件同一规则解析。 */

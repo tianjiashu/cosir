@@ -19,8 +19,11 @@ const ELEMENT_MAX_ZOOM = 4;
  */
 export type CaptureOptions = { quality?: number; fullPage?: boolean; element?: Box; region?: Box; devicePixels?: boolean; timeoutMs?: number };
 
+/** 截到的图（data URL）；整页截图因页面过长被截断时另报页面实际高度与图里的高度（CSS 像素），其余为 null。 */
+export type Capture = { image: string; fullPageCut: { pageHeight: number; shownHeight: number } | null };
+
 /**
- * 截图，返回 data URL。用 CDP 而不是 `capturePage`：视图摘离窗口时后者不可用（§8）。截区（`clip`）是文档坐标：
+ * 截图，返回 data URL 与整页截断的事实（模型据此知道下面还有内容、要滚动去看，而不是页面到此为止）。用 CDP 而不是 `capturePage`：视图摘离窗口时后者不可用（§8）。截区（`clip`）是文档坐标：
  * 视口与元素的位置都要加上滚动。
  *
  * 按 CSS 像素出图（`clip.scale = 1 / 设备像素比`）：可视视口多大就是多大的图，不随屏幕倍率翻倍——模型按
@@ -28,7 +31,7 @@ export type CaptureOptions = { quality?: number; fullPage?: boolean; element?: B
  * 像素一致（几何见 `page-geometry.ts`）。`fullPage` 截整页，高度封顶。`devicePixels` 按屏幕像素出图、`timeoutMs`
  * 缩短每条命令的时限，都只给浏览器面板的冻结帧用。
  */
-export async function captureScreenshot(send: CdpSession["send"], format: "jpeg" | "png", options: CaptureOptions = {}): Promise<string> {
+export async function captureScreenshot(send: CdpSession["send"], format: "jpeg" | "png", options: CaptureOptions = {}): Promise<Capture> {
   const timing = { timeoutMs: options.timeoutMs };
   const { visual, content, deviceRatio } = await readGeometry((method, params) => send(method, params, timing));
   const clip = options.element
@@ -46,7 +49,11 @@ export async function captureScreenshot(send: CdpSession["send"], format: "jpeg"
     // 元素可能比视口大（长表格）：超出视口的部分也要画出来。
     captureBeyondViewport: Boolean(options.fullPage || options.element),
   }, timing);
-  return `data:image/${format};base64,${data}`;
+  const cut = !options.element && !options.region && options.fullPage && content.height > FULL_PAGE_MAX_HEIGHT;
+  return {
+    image: `data:image/${format};base64,${data}`,
+    fullPageCut: cut ? { pageHeight: Math.round(content.height), shownHeight: FULL_PAGE_MAX_HEIGHT } : null,
+  };
 }
 
 /** 区域（视口坐标）换到文档坐标；任何一部分在可视视口外都拒绝。 */

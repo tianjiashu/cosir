@@ -229,7 +229,6 @@ def test_snapshot_rejects_a_source_on_assistant_messages() -> None:
         "terminal_sessions": [],
         "background_tasks": [],
         "foreground_waits": [],
-        "handoffs": [],
         "deliverables": [],
         "queued_messages": [],
     }

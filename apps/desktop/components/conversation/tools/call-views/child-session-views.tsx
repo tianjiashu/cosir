@@ -14,16 +14,15 @@ import { readAgentSessionResultDisplay, readDelegationDisplay, readForkDisplay, 
 import { ToolStopButton, useStopRequest } from "../tool-stop-button";
 
 /**
- * 子会话自身的异常（失败、已停止、等待结果）或在等你操作：派生调用当场完成，`completed` 只表示子会话已建好、任务说明已投递，
- * 子会话做得怎样只有这里知道（结论另以汇报消息到达）。
- * 运行中由调用行标题的扫光表达，完成是常态，都不说话。读会话状态推送而不是展示数据：展示数据是调用那一刻
- * 的快照，子 Run 之后还会变；推送还没到（null）时不显示，不猜。
+ * 子会话此刻的状态：运行中、异常（失败、已停止、等待结果）或在等你操作。派生调用当场完成，`completed` 只表示
+ * 子会话已建好、任务说明已投递，调用行没有扫光——子会话还在跑只能由这里说；完成是常态，不说话。
+ * 读会话状态推送而不是展示数据：展示数据是调用那一刻的快照，子 Run 之后还会变；推送还没到（null）时不显示，不猜。
  */
 function ChildSessionProblem({ childSessionId }: { childSessionId: number | undefined; }) {
   const presentation = executionStatusPresentation(useSessionExecutionStatus(childSessionId));
   const awaitingUser = useSessionAwaitingUserCalls(childSessionId) > 0;
   if (awaitingUser) return <span className="text-info">{AWAITING_USER_LABEL}</span>;
-  if (!presentation || presentation.active) return null;
+  if (!presentation) return null;
   return <span className={cn(presentation.tone === "destructive" && "text-destructive")}>{presentation.label}</span>;
 }
 

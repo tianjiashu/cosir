@@ -10,7 +10,7 @@ vi.mock("electron", () => ({
   WebContentsView: class { webContents = contents; setBounds() {} getBounds() { return { x: 0, y: 0, width: 0, height: 0 }; } },
 }));
 vi.mock("@/electron/main/browser/browser-partition", () => ({ browserPageWebPreferences: () => ({}) }));
-vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
+vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn(), appendHostLogLine: vi.fn() }));
 import { BrowserTab, type TabEvents } from "@/electron/main/browser/browser-tab";
 import { browserError } from "@/electron/main/browser/errors";
 import { BODY_LIMITS } from "@/electron/main/browser/tab-log";

@@ -102,8 +102,8 @@ def summarize_tool_calls(
     状态取结果行 metadata 的 ``status``（卡片状态的事实源）。判读口径：
 
     - ``pending`` 且带 ``background``：后台命令还在跑（或重启前没结算完）；
-    - ``pending`` 不带 ``background``：等用户决定（HITL）或交接等交还；
-    - ``running``：决定已接收、正在重放执行；
+    - ``pending`` 不带 ``background``：等用户决定（HITL，目前只有 ``ask_user``；决定并入时推到 ``completed``）；
+    - ``running``：工具正在执行（执行中进程被强杀会残留）；
     - 没有结果行（``no_result``）：调用后进程被强杀且没再启动，或 assistant 行未进上下文。
     Run 被取消或重启收敛时，后端会把残留占位推到 ``cancelled``，所以正常库里 ``no_result`` 很少见。
 

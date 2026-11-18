@@ -158,7 +158,7 @@ def _operations_with_executor(
         or ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=Path("."), run_id=0),
         admitted_tools=frozenset(allowed or ()),
         tool_definitions={
-            name: SimpleNamespace(parallel_mode=mode, user_decision=None)
+            name: SimpleNamespace(parallel_mode=mode, user_decision=False)
             for name, mode in (parallel_modes or {}).items()
         },
         session=SimpleNamespace(id=1, extra=SessionExtra()),

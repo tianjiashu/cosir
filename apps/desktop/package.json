@@ -88,7 +88,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react-swc": "^4.1.0",
-    "electron": "44.7.2",
+    "electron": "45.3.4",
     "esbuild": "0.28.2",
     "eslint": "^9",
     "globals": "14.0.0",

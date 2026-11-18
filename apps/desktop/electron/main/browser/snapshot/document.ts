@@ -21,12 +21,15 @@ export type SnapshotDocument = {
   nodes: readonly AXNode[];
   /** 最外层 pointer 元素（`pointerRoots`，按所在会话算）。 */
   pointer: ReadonlySet<number>;
+  /** 块级元素（`blockNodes`，按所在会话算）：正文视图据此断行。 */
+  blocks: ReadonlySet<number>;
   /** 与视口里看得见的区域相交的节点（`layout.ts`）：「只看视口」的视图据此筛选。 */
   inView: ReadonlySet<number>;
   frames: ReadonlyMap<number, SnapshotDocument | null>;
 };
 
 const FRAME_ROLES = new Set(["Iframe", "IframePresentational"]);
+const TEXT_ROLES = new Set(["StaticText", "text"]);
 
 /** 装着子框架的节点（隐藏的不算：它们不输出，也不值得去读）。 */
 export function isFrameNode(node: AXNode): boolean {
@@ -35,6 +38,16 @@ export function isFrameNode(node: AXNode): boolean {
 
 export function isFrameRole(role: string): boolean {
   return FRAME_ROLES.has(role);
+}
+
+/** 正文文字节点：大纲与页面正文两种投影按同一规则认出文字。 */
+export function isTextRole(role: string): boolean {
+  return TEXT_ROLES.has(role);
+}
+
+/** 子框架没接上内容时说明原因（`frames` 里没有 = 没读，`null` = 读失败）；两种投影各自排版，措辞只此一份。 */
+export function frameContentNote(content: null | undefined): string {
+  return `contents ${content === null ? "could not be read" : "not shown"}`;
 }
 
 export function stringValue(value: AXValue | undefined): string {

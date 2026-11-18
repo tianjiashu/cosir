@@ -9,6 +9,7 @@ import { handleAppProtocol, registerAppScheme } from "./app-protocol";
 import { BackendSupervisor } from "./backend/supervisor";
 import { BrowserHost } from "./browser/browser-host";
 import { configureBrowserSession, configureBrowserUserAgent } from "./browser/browser-partition";
+import { BrowserNetLogCapture } from "./browser/diagnostics/netlog-capture";
 import { registerBrowserMethods } from "./browser/browser-methods";
 import { logDesktopEvent } from "./desktop-log";
 import { confirmExit } from "./exit-confirmation";
@@ -54,6 +55,8 @@ function bootstrap(): void {
   const hostMethods = new HostMethodRegistry();
   const browser = new BrowserHost(getMainWindow);
   registerBrowserMethods(hostMethods, browser);
+  // 复现问题时由用户从应用菜单开启；菜单可用项随采集状态刷新。
+  const netLog: BrowserNetLogCapture = new BrowserNetLogCapture(() => installAppMenu(netLog));
   const hostLink = new HostLinkClient({
     token: hostToken,
     host: { platform: process.platform, pid: process.pid, version: app.getVersion() },
@@ -79,7 +82,7 @@ function bootstrap(): void {
     registerHostIpc(supervisor, browser);
     followNativeThemeInTitleBar();
     applyDockIcon();
-    installAppMenu();
+    installAppMenu(netLog);
     // 窗口先出现，后端在后台启动；前端经启动门禁呈现 starting / ready / failed。
     createMainWindow();
     installTray({ show: showMainWindow, quit: () => app.quit() });
@@ -108,7 +111,7 @@ function bootstrap(): void {
     if (backendStopped) return;
     event.preventDefault();
     browser.closeAll();
-    void supervisor.stop().finally(() => {
+    void Promise.all([supervisor.stop(), netLog.stop()]).finally(() => {
       backendStopped = true;
       logDesktopEvent("INFO", "app", "application_exited");
       app.exit(0);

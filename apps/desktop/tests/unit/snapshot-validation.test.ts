@@ -74,29 +74,10 @@ describe("Transport snapshot validation", () => {
     expect(() => parseTransportState(transportState({
       terminal_sessions: [{ ...terminalSession("t1"), generation: "g1" } as never],
     }))).toThrow(TransportSnapshotValidationError);
-    // 交接不在会话条目上，在顶层 `handoffs`。
-    expect(() => parseTransportState(transportState({
-      terminal_sessions: [{ ...terminalSession("t1"), handoff: null } as never],
-    }))).toThrow(TransportSnapshotValidationError);
     // 会话只由用户创建，不再有创建者字段。
     expect(() => parseTransportState(transportState({
       terminal_sessions: [{ ...terminalSession("t1"), createdBy: "user" } as never],
     }))).toThrow(TransportSnapshotValidationError);
-  });
-
-  it("handoffs 是必填数组：字段固定、只接受浏览器表面、调用与资源各自唯一", () => {
-    const withoutHandoffs: Record<string, unknown> = { ...transportState() };
-    delete withoutHandoffs.handoffs;
-    expect(() => parseTransportState(withoutHandoffs)).toThrow(/snapshot/);
-
-    const entry = { toolCallId: "c1", toolName: "browser_handoff", resourceId: "t1", reason: "登录" };
-    const snapshot = transportState({ handoffs: [entry, { ...entry, toolCallId: "c2", resourceId: "t2" }] });
-    expect(parseTransportState(snapshot)).toBe(snapshot);
-
-    // 交接只有浏览器标签一种资源，不再带资源类型字段。
-    expect(() => parseTransportState(transportState({ handoffs: [{ ...entry, surface: "browser" } as never] }))).toThrow(TransportSnapshotValidationError);
-    expect(() => parseTransportState(transportState({ handoffs: [entry, { ...entry, toolCallId: "c2" }] }))).toThrow(/handoffs\[1\]/);
-    expect(() => parseTransportState(transportState({ handoffs: [{ ...entry, extra: 1 } as never] }))).toThrow(TransportSnapshotValidationError);
   });
 
   it("rejects a missing messages field instead of treating it as an empty conversation", () => {
@@ -269,7 +250,7 @@ describe("Transport snapshot validation", () => {
 
   // 目的：等待用户是后端每次显式写的事实，缺省会让「排队待执行」与「等你操作」再次混在 pending 里。
   it("工具调用的 awaitingUser 必须是布尔值，缺省或非布尔都拒绝", () => {
-    const base = {presentation: "activity",  type: "tool-call", toolCallId: "h1", toolName: "browser_handoff", status: "pending", args: {} };
+    const base = {presentation: "activity",  type: "tool-call", toolCallId: "h1", toolName: "ask_user", status: "pending", args: {} };
     expect(() => parseTransportState(withToolPart(base))).toThrow("messages[0].parts[0].awaitingUser");
     expect(() => parseTransportState(withToolPart({ ...base, awaitingUser: "true" }))).toThrow("awaitingUser");
     const awaiting = withToolPart({ ...base, awaitingUser: true });
@@ -324,11 +305,13 @@ describe("history window", () => {
 
 describe("model activity boundary", () => {
   it("only running carries a valid phase and the phase never carries raw reasoning", () => {
-    const modelActivity = { stepId: "step-2", phase: "reasoning" as const };
+    const modelActivity = { stepId: "step-2", phase: "reasoning" as const, startedAt: "2026-11-18T04:00:00.000Z" };
     const snapshot = transportState({ activity: activity(1, "running", { modelActivity }) });
     expect(parseTransportState(snapshot)).toBe(snapshot);
     expect(() => parseTransportState(transportState({ activity: activity(1, "cancelled", { modelActivity }) }))).toThrow();
     expect(() => parseTransportState(transportState({ activity: activity(1, "running", { modelActivity: { ...modelActivity, text: "private" } as never }) }))).toThrow();
+    const { startedAt: _, ...withoutStart } = modelActivity;
+    expect(() => parseTransportState(transportState({ activity: activity(1, "running", { modelActivity: withoutStart as never }) }))).toThrow();
     expect(() => parseTransportState(transportState({ messages: [assistantMessage("a", 1, [{ type: "reasoning", text: "private" } as never])] }))).toThrow();
   });
 });

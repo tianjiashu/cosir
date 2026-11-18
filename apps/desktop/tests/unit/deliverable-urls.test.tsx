@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { describeDeliverable } from "@/components/conversation/tools/reply-presentation/deliverable-label";
 import { DeliverablesCard } from "@/components/conversation/tools/reply-presentation/deliverables-card";
 import { createQueryClient } from "@/lib/query/query-client";
+import { toolCallPart } from "./transport-fixtures";
 
 /** 与后端 `DeliveredUrl` 共用的样本表：后端收下的（accepted）前端必须解析得了。 */
 const samples = JSON.parse(readFileSync(path.resolve(__dirname, "../../../backend/tests/fixtures/deliverable_urls.json"), "utf-8")) as { accepted: string[] };
@@ -19,7 +20,7 @@ describe("交付网址的前后端契约", () => {
   it.each(samples.accepted)("后端收下的 %s 前端能解析、能渲染", (value) => {
     expect(() => new URL(value)).not.toThrow();
     expect(describeDeliverable(url(value)).meta).not.toBe("");
-    const card = { kind: "deliverables" as const, index: 0, callIndexes: [0], items: [{ deliverable: url(value), toolCallId: "c" }] };
+    const card = { kind: "deliverables" as const, index: 0, part: toolCallPart("c", "present_deliverables"), note: null, items: [{ deliverable: url(value), toolCallId: "c" }] };
     expect(() => renderToStaticMarkup(<QueryClientProvider client={createQueryClient()}><DeliverablesCard sessionId={1} card={card} /></QueryClientProvider>)).not.toThrow();
   });
 });

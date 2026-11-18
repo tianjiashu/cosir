@@ -10,7 +10,7 @@ vi.mock("electron", () => ({
   WebContentsView: class { webContents = contents; setBounds() {} },
 }));
 vi.mock("@/electron/main/browser/browser-partition", () => ({ browserPageWebPreferences: () => ({}) }));
-vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn() }));
+vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn(), appendHostLogLine: vi.fn() }));
 import { BrowserHost } from "@/electron/main/browser/browser-host";
 
 const flush = async () => { for (let i = 0; i < 16; i += 1) await Promise.resolve(); };

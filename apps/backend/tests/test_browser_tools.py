@@ -12,7 +12,6 @@ import base64
 import json
 import re
 from concurrent.futures import Future
-from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,11 +24,9 @@ from pydantic import ValidationError
 
 import app.tools.tool_handler.browser.screenshot as screenshot_module
 from app.config.settings import Settings
-from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
-from app.core.workflow.message_queue.session_message import DecisionBody
 from app.service import depends as service_depends
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.session.session_service import SessionService
@@ -37,7 +34,6 @@ from app.tools.host.errors import UNAVAILABLE, HostCallError
 from app.tools.tool_handler.browser import (
     BrowserActTool,
     BrowserEvaluateTool,
-    BrowserHandoffTool,
     BrowserLogsTool,
     BrowserNavigateTool,
     BrowserScreenshotTool,
@@ -49,7 +45,6 @@ from app.tools.tool_handler.browser.rendering import logs_text
 from app.tools.tool_models import (
     BrowserActArgs,
     BrowserEvaluateArgs,
-    BrowserHandoffArgs,
     BrowserLogsArgs,
     BrowserNavigateArgs,
     BrowserScreenshotArgs,
@@ -159,7 +154,6 @@ def test_navigate_sends_session_and_tab_context(
         "session_id": 42,
         "limits": {"per_session": 3, "total": 9},
         "download_dir": str(Path(".").resolve() / ".cosir" / "Download"),
-        "handoff_tabs": [],
         "url": "https://example.com/",
         "action": None,
         "tab": None,
@@ -190,12 +184,14 @@ def test_page_content_fences_the_snapshot_and_reports_context(
     _install(monkeypatch, page)
 
     content = (
-        BrowserSnapshotTool().execute("t1", "page", None, None, execution_context=context).content
+        BrowserSnapshotTool().execute("t1", "outline", "page", None, None, execution_context=context).content
     )
 
-    assert content.startswith("tab t1 · Example · https://example.com/ (still loading)")
-    assert "other tabs in this session: t2" in content
-    assert "2 embedded frame(s)" in content
+    assert content.startswith(
+        "tab: t1\nurl: https://example.com/ (HTTP 200, still loading)\ntitle: Example\n"
+    )
+    assert "other tabs: t2" in content
+    assert "frames not shown: 2" in content
     assert "- the page showed a confirm dialog" in content
     # 页面文字不能伪造快照边界。
     assert content.count("</page_snapshot>") == 1
@@ -252,7 +248,7 @@ def test_page_blocked_by_dialog_reports_it_instead_of_a_snapshot(
     _install(monkeypatch, {**PAGE, "snapshot": "", "dialog": dialog})
 
     content = (
-        BrowserSnapshotTool().execute(None, "page", None, None, execution_context=context).content
+        BrowserSnapshotTool().execute(None, "outline", "page", None, None, execution_context=context).content
     )
 
     assert "<page_snapshot>" not in content
@@ -284,13 +280,13 @@ def test_snapshot_pages_from_the_given_line(
 ) -> None:
     link = _install(monkeypatch, PAGE)
 
-    BrowserSnapshotTool().execute(None, "page", None, 120, execution_context=context)
-    BrowserSnapshotTool().execute(None, "viewport", "Buy", None, execution_context=context)
+    BrowserSnapshotTool().execute(None, "outline", "page", None, 120, execution_context=context)
+    BrowserSnapshotTool().execute(None, "text", "viewport", "Buy", None, execution_context=context)
 
-    assert link.calls[0][1]["from_line"] == 120
-    # 不分页时发 null：宿主按「未给」从第 1 行读；视图参数原样转发。
+    assert (link.calls[0][1]["from_line"], link.calls[0][1]["format"]) == (120, "outline")
+    # 不分页时发 null：宿主按「未给」从第 1 行读；视图参数（含投影 format）原样转发。
     sent = link.calls[1][1]
-    assert (sent["from_line"], sent["scope"], sent["find"]) == (None, "viewport", "Buy")
+    assert (sent["format"], sent["from_line"], sent["scope"], sent["find"]) == ("text", None, "viewport", "Buy")
 
 
 def _validated(tool: Any, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -748,8 +744,7 @@ def test_every_tool_sends_exactly_the_exported_wire_shape(
     """请求方向的契约：handler 实际发给宿主的参数（去掉宿主自己的三个键）必须符合导出的 schema。
 
     导出的 schema 要求参数模型的每个字段都在；handler 漏转发一个字段，宿主只会在运行时报
-    ``INVALID_PARAMS``——这里在测试里拦下。截图要存附件，在它自己的用例里用同一个断言；
-    handoff 用 tabs / snapshot 的参数模型构造请求，形状天然一致。
+    ``INVALID_PARAMS``——这里在测试里拦下。截图要存附件，在它自己的用例里用同一个断言。
     """
 
     link = _install(monkeypatch, outcome)
@@ -764,7 +759,7 @@ def _assert_wire_shape(tool_name: str, call: tuple[str, dict[str, Any], Any]) ->
     sent = {
         k: v
         for k, v in params.items()
-        if k not in ("session_id", "limits", "download_dir", "handoff_tabs")
+        if k not in ("session_id", "limits", "download_dir")
     }
     errors = [error.message for error in Draft202012Validator(schema).iter_errors(sent)]
     assert method == f"browser.{tool_name.removeprefix('browser_')}"
@@ -778,7 +773,6 @@ def test_models_export_strict_schemas() -> None:
         BrowserActArgs,
         BrowserScreenshotArgs,
         BrowserTabsArgs,
-        BrowserHandoffArgs,
         BrowserLogsArgs,
         BrowserEvaluateArgs,
     ):
@@ -844,7 +838,7 @@ def test_act_reports_where_it_stopped_and_returns_the_fresh_page(
     # 校验后 model_dump() 的字典原样发给宿主（每个字段都在）。
     assert params["actions"] == actions
     first_line = observation.content.splitlines()[0]
-    assert first_line.startswith("completed 1 of 2 action(s).")
+    assert first_line == "actions: 1 of 2 done"
     assert "Use refs from the latest snapshot." in observation.content
     assert "<page_snapshot>" in observation.content
     # 卡片列出每一步：结局按宿主报的停在哪一步定，失败那步带短提示，目标说明来自宿主。
@@ -878,8 +872,10 @@ def test_screenshot_is_stored_as_attachment_and_handed_to_the_model(
     assert path == f".cosir/Attachment/{asset_id}.jpeg"
     assert (tmp_path / path).is_file()
     assert observation.display_data["kind"] == "browser-page"
-    assert observation.content.startswith("tab t2 · (untitled) · https://example.com/ · HTTP 200")
-    assert "screenshot of this tab (the image follows)." in observation.content
+    assert observation.content.startswith(
+        "tab: t2\nurl: https://example.com/ (HTTP 200)\ntitle: (untitled)"
+    )
+    assert "screenshot: the viewport (the image follows)" in observation.content
     assert BrowserScreenshotTool().to_definition().returns_images is True
 
     # 元素截图：只截那个元素，正文说明截的是哪个（图上的像素与视口坐标对不上）。
@@ -889,7 +885,7 @@ def test_screenshot_is_stored_as_attachment_and_handed_to_the_model(
     assert link.calls[1][1]["ref"] == "e7"
     _assert_wire_shape("browser_screenshot", link.calls[1])
     assert (
-        "screenshot of element e7; its pixels are not viewport coordinates (the image follows)."
+        "screenshot: element e7; pixels are not viewport coordinates (the image follows)"
         in element.content
     )
 
@@ -900,7 +896,7 @@ def test_screenshot_is_stored_as_attachment_and_handed_to_the_model(
     )
     assert link.calls[2][1]["region"] == box
     _assert_wire_shape("browser_screenshot", link.calls[2])
-    assert "screenshot of the given region; its pixels are not viewport coordinates" in region.content
+    assert "screenshot: the given region; pixels are not viewport coordinates" in region.content
 
 
 def test_tabs_lists_with_the_current_tab_marked(
@@ -933,85 +929,6 @@ def test_tabs_lists_with_the_current_tab_marked(
     )
     with pytest.raises(ValidationError):
         BrowserTabsArgs(action="close")
-
-
-def _decided(context: ToolExecutionContext) -> ToolExecutionContext:
-    return replace(
-        context,
-        user_decision=DecisionBody(
-            tool_call_id="call-9", tool_name="browser_handoff", decision="approve"
-        ),
-    )
-
-
-def test_handoff_registers_the_tab_then_returns_the_page(
-    monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
-) -> None:
-    link = _install(monkeypatch, PAGE, tabs=TABS)
-
-    waiting = BrowserHandoffTool().execute("sign in", None, execution_context=context)
-    assert waiting.awaiting_decision and waiting.suspend
-    # 只列标签、不读快照：宿主读快照会取走备注，交接前发生的事会丢。
-    assert [(method, params["action"]) for method, params, _ in link.calls] == [
-        ("browser.tabs", "list")
-    ]
-    assert waiting.display_data["handoff_reason"] == "sign in"
-    assert BrowserHandoffTool().to_definition().user_decision == "execute"
-    [lease] = handoff_registry.leases(42)
-    assert (lease.resource_id, lease.tool_call_id) == ("t1", "call-9")
-
-    # 同一个标签不能再交接一次。
-    again = BrowserHandoffTool().execute(
-        "sign in", "t1", execution_context=replace(context, tool_call_id="call-10")
-    )
-    assert again.status == "error" and again.display_data == {"status_hint": "已在交接中"}
-
-    returned = BrowserHandoffTool().execute("sign in", None, execution_context=_decided(context))
-    assert not returned.awaiting_decision
-    assert returned.content.startswith("the user handed the page back.")
-    assert handoff_registry.leases(42) == []
-    # 交还时按交接时解析出的标签取快照，不再按「当前标签」。
-    assert link.calls[-1][1]["tab"] == "t1"
-
-
-def test_handing_back_a_closed_tab_ends_the_handoff_as_success(
-    monkeypatch: pytest.MonkeyPatch, context: ToolExecutionContext
-) -> None:
-    _install(monkeypatch, PAGE, tabs=TABS)
-    BrowserHandoffTool().execute("sign in", None, execution_context=context)
-    _install(monkeypatch, HostCallError("TAB_NOT_FOUND", "no such tab"))
-
-    returned = BrowserHandoffTool().execute("sign in", None, execution_context=_decided(context))
-
-    assert returned.status == "success"
-    assert "no longer open" in returned.content
-    assert handoff_registry.leases(42) == []
-
-
-@pytest.mark.parametrize(
-    ("tab", "tabs", "expected"),
-    [("t2", TABS, "t2"), (None, TABS, "t1"), ("t9", TABS, None), (None, [], None)],
-)
-def test_handoff_resolves_the_tab_from_the_tab_list(
-    monkeypatch: pytest.MonkeyPatch,
-    context: ToolExecutionContext,
-    tab: str | None,
-    tabs: list[dict[str, Any]],
-    expected: str | None,
-) -> None:
-    _install(monkeypatch, PAGE, tabs=tabs)
-
-    observation = BrowserHandoffTool().execute("sign in", tab, execution_context=context)
-
-    if expected is None:
-        assert observation.status == "error"
-        assert observation.display_data == {"status_hint": "标签不存在"}
-        assert handoff_registry.leases(42) == []
-    else:
-        assert observation.display_data["tab_id"] == expected
-        [lease] = handoff_registry.leases(42)
-        assert lease.resource_id == expected
-        handoff_registry.end(7, "call-9")
 
 
 def test_navigate_sends_emulation_before_loading(
@@ -1081,7 +998,7 @@ def test_logs_sends_every_field_and_renders_entries(
     assert {
         key: params[key]
         for key in params
-        if key not in ("session_id", "limits", "download_dir", "handoff_tabs")
+        if key not in ("session_id", "limits", "download_dir")
     } == {
         "kind": "console",
         "since": None,
@@ -1178,7 +1095,9 @@ def test_evaluate_error_is_a_script_result_with_the_page_header(
     # 脚本抛错是脚本的结果（同终端命令的非零退出），工具调用本身成功。
     assert observation.status == "success"
     assert observation.display_data["kind"] == "browser-page"
-    assert observation.content.startswith("tab t1 · Example · https://example.com/ · HTTP 200")
+    assert observation.content.startswith(
+        "tab: t1\nurl: https://example.com/ (HTTP 200)\ntitle: Example\nscript error"
+    )
     assert "<script_error>\nError: nope\n</script_error>" in observation.content
 
 
@@ -1208,29 +1127,6 @@ def test_navigate_viewport_accepts_auto_to_follow_the_panel_again() -> None:
         BrowserNavigateArgs(url=url, viewport="panel")  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("operation", ["running", "stopping", "unknown"])
-def test_handoff_requires_host_operation_to_have_settled(monkeypatch, context, operation):
-    _install(monkeypatch, [{**TABS[0], "operation": operation}])
-    result = BrowserHandoffTool().execute("please sign in", None, execution_context=context)
-    assert result.status == "error"
-    assert [
-        lease
-        for lease in handoff_registry.leases(context.session_id)
-        if lease.resource_id == "t1"
-    ] == []
-
-
-def test_handoff_constraint_is_attached_to_subsequent_requests(monkeypatch, context):
-    link = _install(monkeypatch, TABS)
-    result = BrowserHandoffTool().execute("please sign in", None, execution_context=context)
-    assert result.awaiting_decision
-    link.outcome = PAGE
-    BrowserSnapshotTool().execute(
-        tab="t1", scope="page", find=None, from_line=None, execution_context=context
-    )
-    assert link.calls[-1][1]["handoff_tabs"] == ["t1"]
-
-
 def test_act_unknown_receipt_survives_missing_observation(monkeypatch, context):
     _install(
         monkeypatch,
@@ -1253,7 +1149,8 @@ def test_act_unknown_receipt_survives_missing_observation(monkeypatch, context):
     result = BrowserActTool().execute(
         _actions({"type": "press", "key": "Enter"}), None, execution_context=context
     )
-    assert "do not replay unknown actions" in result.content
+    assert "- 1 unknown (CANCELLED: stopped)" in result.content
+    assert "do not replay it" in result.content
     assert "page observation unavailable" in result.content
     assert result.display_data["steps"][0]["status"] == "unknown"
 
