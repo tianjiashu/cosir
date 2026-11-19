@@ -1,53 +1,49 @@
-"""工具执行管线门面：单次工具调用的唯一执行入口。
+"""单次工具调用的唯一执行入口：准入 → 开始前查取消 → running → 调 handler → 输出预算。
 
-本模块承载 ``ToolExecutor``——模型请求的工具调用从「准入」到「归一化观察」的完整
-管线编排：
+handler 在调用线程里直接执行：没有子进程隔离，也没有硬超时强杀。需要时限的工具在 handler 里自己守
+（如 ``search_content`` 的截止时间、浏览器的宿主方法时限），需要中途停下的工具自己轮询取消信号
+（终端命令经 ``should_stop_call``）。门禁规则归 ``ToolAccessGate``、预算算法归 ``ToolOutputBudget``，
+本模块只编排它们并承担 handler 调用本身。
 
-    ToolAccessGate（注册表查询 / Agent 工具白名单 / 参数解码与校验）
-        → running 投影（经 workflow ``emit``）
-        → ToolHandlerRunner（thread 直跑 或 process 隔离 + 硬超时强杀）
-        → ToolObservationBudget（模型通道预算与超限落盘）
-
-管线只做编排：每个阶段的实现各自收口在对应协作者中，本模块不含隔离执行细节、
-门禁规则或预算算法，也**不投影 Transport 状态**——running 与终态都由调用方
-（``run_tool_batch``）经 workflow 的 ``emit`` 发出，tools 因此不依赖 Transport。
-门禁拒绝和执行器返回的观察都会经过模型输出预算；只有真正交给 ``ToolHandlerRunner``
-的路径会投影 running。
+running 由这里在真正调用 handler 之前经 workflow ``emit`` 发出，终态由调用方（``tools_node``）发出；
+两者都只是 core 的执行事件，tools 因此不依赖 Transport，也因为要 ``emit``，执行器只能在 workflow
+作用域内调用。门禁拒绝、取消与执行结果都经过模型输出预算。
 """
 
-from collections.abc import Collection
+import json
+import traceback
+from collections.abc import Collection, Mapping
 from dataclasses import replace
+from typing import Any
 
+from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.tool.execute.tool_access_gate import ToolAccessGate, ToolGateOutcome
-from app.core.tool.execute.tool_handler_runner import ToolHandlerRunner
-from app.core.tool.execute.tool_observation_budget import ToolObservationBudget
-from app.core.tool.schemas import (
-    ToolCall,
-    ToolExecutionContext,
-    ToolObservation,
-)
+from app.core.tool.execute.tool_access_gate import ToolAccessGate
+from app.core.tool.execute.tool_output_budget import ToolOutputBudget
+from app.core.tool.results.tool_cancelled import tool_cancelled
+from app.core.tool.results.tool_error import tool_error
+from app.core.tool.results.tool_success import tool_success
+from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext, ToolObservation
 from app.core.tool.tool_registry import ToolRegistry
+from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
+from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.node_helper import emit
+from app.models.enums.error_kind import ErrorKind
 from app.models.message_metadata import ToolMessageMetadata
+
+# 取消只在调用 handler 之前检查，所以检出时调用一定还没执行：如实说没跑过，模型恢复后才敢在需要时重做。
+_NOT_STARTED_REASON = (
+    "the user stopped the session before this tool call started, so it was not executed and "
+    "has no effects. Call it again later only if it is still needed."
+)
 
 
 class ToolExecutor:
-    """模型请求工具调用的统一执行入口（执行管线门面）。
-
-    职责边界：
-    - 负责：按固定时序编排准入门禁、handler 隔离执行和输出预算，正常返回时给出归一化的
-      :class:`ToolObservation`。
-    - 不负责：门禁判定规则（``ToolAccessGate``）、子进程隔离与超时强杀（``ToolHandlerRunner``）、
-      预算算法（``ToolObservationBudget``）、Transport 状态投影（调用方经 ``emit``）、
-      handler 业务逻辑。
-    """
+    """模型请求工具调用的统一执行入口。不负责终态事件（调用方经 ``emit``）与 handler 业务逻辑。"""
 
     def __init__(self, registry: ToolRegistry) -> None:
-        self._registry = registry
         self._gate = ToolAccessGate(registry)
-        self._runner = ToolHandlerRunner()
-        self._budget = ToolObservationBudget()
+        self._budget = ToolOutputBudget()
 
     def execute(
         self,
@@ -55,47 +51,87 @@ class ToolExecutor:
         execution_context: ToolExecutionContext,
         allowed_tool_names: Collection[str],
     ) -> ToolObservation:
-        """执行单次工具调用并返回归一化观察。
+        """执行单次工具调用并返回归一化观察，``content`` 一律经过输出预算，``display_data`` 不截断。
 
-        编排顺序：准入门禁 → running 投影 → handler 隔离执行 → 输出预算。
-        门禁拒绝只经过输出预算，不投影 running。
-
-        参数:
-            call: 模型请求的工具调用。
-            execution_context: 本次调用的完整运行时边界，由调用方按 ``call`` 构造（含
-                ``tool_call_id``）；本方法直接信任身份，并在准入后附加原始调用意图。
-            allowed_tool_names: 本轮准入的工具名；不在其中的已注册工具被拒绝。
-
-        返回:
-            成功为 ``status="success"``；拒绝或执行失败为 ``error``；取消为 ``cancelled``。
-            所有返回路径的 ``content`` 均经过输出预算，``display_data`` 不截断。
-
-        异常:
-            未归一化异常原样上抛，由调用方收口为错误观察。
-
-        副作用:
-            按 ``execution_mode`` 在当前线程或隔离子进程执行 handler；handler 自身可能产生外部
-            副作用。
+        ``execution_context`` 由调用方按 ``call`` 构造（含 ``tool_call_id``），这里只在准入后附加调用意图。
+        门禁拒绝与开始前的取消都不发 running：只有真正调用 handler 的调用才算开始运行，卡片不会先闪一下
+        「运行中」。handler 抛的异常收口为 error 观察；执行链自身的异常原样上抛，由调用方收口。
         """
 
-        gate_outcome: ToolGateOutcome = self._gate.evaluate(
-            call, execution_context, allowed_tool_names
-        )
+        gate_outcome = self._gate.evaluate(call, execution_context, allowed_tool_names)
         if gate_outcome.denial is not None:
             return self._budget.apply(gate_outcome.denial, execution_context)
         tool = gate_outcome.tool
         execution_context = replace(execution_context, call_intent=gate_outcome.intent)
-
-        # 决定重放的 running 已由认领事务发布，带着原卡的预览。重复发布会清掉预览。
-        if execution_context.user_decision is None:
-            emit(
-                ToolCallStatusChangedEvent(
-                    session_id=execution_context.session_id,
-                    run_id=execution_context.run_id,
-                    step_id=execution_context.step_id,
-                    tool_call_id=execution_context.tool_call_id,
-                    result=ToolMessageMetadata(status="running"),
-                )
+        if cancellation_registry.is_cancelled(execution_context.session_id):
+            log.info(
+                "tool_execution_cancelled",
+                extra={
+                    "msg": "Session 已停止，工具调用在开始前中止",
+                    "data": {"tool_name": tool.name, "tool_call_id": execution_context.tool_call_id},
+                },
             )
-        observation = self._runner.execute(tool, gate_outcome.arguments, execution_context)
+            observation = tool_cancelled(
+                tool.name, tool_call_id=execution_context.tool_call_id, reason=_NOT_STARTED_REASON
+            )
+            return self._budget.apply(observation, execution_context)
+
+        emit(
+            ToolCallStatusChangedEvent(
+                session_id=execution_context.session_id,
+                run_id=execution_context.run_id,
+                step_id=execution_context.step_id,
+                tool_call_id=execution_context.tool_call_id,
+                result=ToolMessageMetadata(status="running"),
+            )
+        )
+        observation = self._run_handler(tool, gate_outcome.arguments, execution_context)
         return self._budget.apply(observation, execution_context)
+
+    def _run_handler(
+        self, tool: ToolDefinition, arguments: Mapping[str, Any], execution_context: ToolExecutionContext
+    ) -> ToolObservation:
+        """调用 handler；退出前释放本次调用的工具级取消信号（只有运行中的终端命令会打它）。
+
+        handler 跑完就保留真实结果，即使执行期间用户停止了 Session：副作用已经发生，改判为取消会让模型
+        误以为操作没执行；Run 级停止交给 workflow 的下一个检查点收敛。
+        """
+
+        tool_call_id = execution_context.tool_call_id
+        try:
+            result = tool.handler(**arguments, execution_context=execution_context)
+        except Exception as exc:
+            log.error(
+                "tool_handler_failed",
+                extra={
+                    "msg": "工具 handler 执行抛异常",
+                    "data": {
+                        "error_kind": ErrorKind.RUNTIME_FAILED.value,
+                        "tool_name": tool.name,
+                        "traceback": traceback.format_exc(),
+                    },
+                },
+            )
+            return tool_error(
+                tool.name,
+                f"the tool handler raised an exception: {exc}. Inspect the underlying tool failure "
+                "and change the plan before calling the tool again.",
+                tool_call_id=tool_call_id,
+            )
+        finally:
+            tool_call_cancellation_registry.clear(execution_context.session_id, tool_call_id)
+        return self._normalize_result(tool, result, tool_call_id)
+
+    @staticmethod
+    def _normalize_result(tool: ToolDefinition, payload: Any, tool_call_id: str) -> ToolObservation:
+        """观察透传（缺 ``tool_call_id`` 时注入），dict/list 经 ``json.dumps``，其余经 ``str()`` 包成成功观察。"""
+
+        if isinstance(payload, ToolObservation):
+            if tool_call_id and not payload.tool_call_id:
+                return replace(payload, tool_call_id=tool_call_id)
+            return payload
+        if isinstance(payload, dict | list):
+            content = json.dumps(payload, ensure_ascii=False, default=str)
+        else:
+            content = str(payload)
+        return tool_success(tool.name, content, tool_call_id=tool_call_id)

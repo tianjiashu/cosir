@@ -9,8 +9,7 @@
 - 负责：解析工具定义、按 ``allowed_tool_names`` 做 Agent 级门禁、参数解码与校验（规则在
   ``validation.call_arguments``，与其他需要业务参数的地方同源），并把各类拒绝的原因文案归一为
   面向模型的富文本观察。
-- 不负责：隔离执行与硬超时强杀、输出预算（以上归 ``ToolHandlerRunner`` /
-  ``ToolObservationBudget``）。
+- 不负责：handler 执行、输出预算（以上归 ``ToolExecutor`` / ``ToolOutputBudget``）。
 """
 
 from collections.abc import Collection
@@ -37,31 +36,13 @@ class ToolGateOutcome:
         arguments: 准入后的最终参数字典（已过 schema 校验）；被拒时为空字典。
         denial: 被拒时的归一化 error 观察；通过时为 ``None``。该观察**尚未**过输出
             预算，由 ``ToolExecutor`` 统一应用，保证所有返回路径预算口径一致。
+        intent: 从原始调用提取的调用意图，模型漏写时为 ``None``。
     """
 
     tool: ToolDefinition | None = None
     arguments: dict[str, object] = field(default_factory=dict)
     denial: ToolObservation | None = None
     intent: str | None = None
-
-    @property
-    def admitted(self) -> bool:
-        """返回本次调用是否通过准入门禁。
-
-        参数:
-            无。
-
-        返回:
-            ``tool`` 非空且 ``denial`` 为空时返回 ``True``；否则 ``False``。
-
-        异常:
-            无。
-
-        副作用:
-            无（只读自身字段）。
-        """
-
-        return self.tool is not None and self.denial is None
 
 
 class ToolAccessGate:
@@ -89,7 +70,7 @@ class ToolAccessGate:
         self,
         call: ToolCall,
         execution_context: ToolExecutionContext,
-        allowed_tool_names: Collection[str] | None = None,
+        allowed_tool_names: Collection[str],
     ) -> ToolGateOutcome:
         """按顺序执行三段准入检查并返回判定结果。
 
@@ -101,8 +82,7 @@ class ToolAccessGate:
         参数:
             call: 模型请求的工具调用，含工具名、原始参数串与调用 id。
             execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）。
-            allowed_tool_names: 当前 Agent profile 允许运行的工具名；为 None 表示
-                调用方不增加 Agent 级门禁。
+            allowed_tool_names: 本次 Run 准入的工具名；不在其中的已注册工具被拒绝。
 
         返回:
             :class:`ToolGateOutcome`：通过时 ``admitted=True`` 且携带工具定义与最终
@@ -126,7 +106,7 @@ class ToolAccessGate:
                 )
             )
 
-        if allowed_tool_names is not None and tool.name not in allowed_tool_names:
+        if tool.name not in allowed_tool_names:
             return ToolGateOutcome(
                 denial=tool_error(
                     tool.name,

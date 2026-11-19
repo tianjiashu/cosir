@@ -142,24 +142,6 @@ class ToolOutputBudget:
     """统一约束模型可见工具输出，并为超限内容保存 workspace artifact。"""
 
     def __init__(self, max_chars: int = Constant.Tools.MAX_OUTPUT_CHARS) -> None:
-        """初始化输出预算。
-
-        参数:
-            max_chars: 模型可见 ``content`` 的最大字符数；缺省取
-                ``Constant.Tools.MAX_OUTPUT_CHARS``（与工具系统装配时的取值同源）。
-
-        返回:
-            无。
-
-        异常:
-            ValueError: ``max_chars`` 小于 1 时抛出。
-
-        副作用:
-            无。
-        """
-
-        if max_chars < 1:
-            raise ValueError("max_chars must be greater than zero")
         self._max_chars = max_chars
 
     def apply(
