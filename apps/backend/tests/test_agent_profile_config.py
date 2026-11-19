@@ -55,7 +55,7 @@ def _system_source(monkeypatch: pytest.MonkeyPatch, directory: Path) -> AgentPro
 def _base_registry() -> AgentProfileRegistry:
     """构造包含代码内通用 Agent 和主 Agent 的进程目录。"""
 
-    registry, _ = registry_with([builtin_child_profile("general-assistant"), main_agent()])
+    registry, _ = registry_with([builtin_child_profile("general-purpose"), main_agent()])
     return registry
 
 
@@ -198,18 +198,18 @@ def test_workspace_catalog_isolated_and_rejects_baseline_collision(tmp_path: Pat
     _write_config(directory, "workspace-reader")
     catalog = _base_registry()
 
-    assert catalog.resolve(workspace, "general-assistant") is not None
+    assert catalog.resolve(workspace, "general-purpose") is not None
     assert catalog.resolve(workspace, "workspace-reader") is not None
     assert catalog.resolve(workspace.parent / "other", "workspace-reader") is None
 
     # agent_id 与 system 基线冲突：保留先注册的 system profile，workspace 文件被跳过，
     # 装载不因冲突中断（system 生效，不抛配置异常）。
-    _write_config(directory, "general-assistant", _document("general-assistant"))
+    _write_config(directory, "general-purpose", _document("general-purpose"))
 
     collision = _base_registry()
-    resolved = collision.resolve(workspace, "general-assistant")
+    resolved = collision.resolve(workspace, "general-purpose")
     assert resolved is not None
-    assert resolved.description == builtin_child_profile("general-assistant").description
+    assert resolved.description == builtin_child_profile("general-purpose").description
     # 同一目录内的非冲突文件仍正常装载。
     assert collision.resolve(workspace, "workspace-reader") is not None
 

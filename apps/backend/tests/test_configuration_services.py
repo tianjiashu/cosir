@@ -175,20 +175,20 @@ def test_builtin_agent_is_editable_but_not_deletable(
     )
     registry = _configuration_registry()
     service = _service(monkeypatch, registry)
-    current = _document(service, "general-assistant")
+    current = _document(service, "general-purpose")
     updated = AgentConfiguration(
         **{**current.__dict__, "description": "可编辑的系统通用 Agent"}
     )
 
-    service.update("general-assistant", updated)
+    service.update("general-purpose", updated)
 
     assert (
-        registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "general-assistant").description
+        registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "general-purpose").description
         == "可编辑的系统通用 Agent"
     )
-    assert (tmp_path / "agents" / "general-assistant.json").is_file()
+    assert (tmp_path / "agents" / "general-purpose.json").is_file()
     with pytest.raises(AgentConfigurationError):
-        service.delete("general-assistant")
+        service.delete("general-purpose")
 
 
 def test_global_instruction_enforces_token_budget(
@@ -439,7 +439,7 @@ def test_agent_configuration_lists_only_registered_profiles(
     with pytest.raises(FileExistsError):
         service.create(
             AgentConfiguration(
-                agent_id="general-assistant",
+                agent_id="general-purpose",
                 role="child",
                 description="重复内置 ID",
                 system_prompt="x",
@@ -448,10 +448,10 @@ def test_agent_configuration_lists_only_registered_profiles(
         )
     listed_ids = {item.configuration.agent_id for item in service.list_entries()}
     # 改坏的文件不进列表，同名 main_agent 文件顶替不了主 Agent，主 Agent 也不在子 Agent 列表里。
-    assert listed_ids == {"general-assistant", "only_read_child_agent"}
-    built_in = _entry(service, "general-assistant")
+    assert listed_ids == {"general-purpose", "Explore", "Plan"}
+    built_in = _entry(service, "general-purpose")
     assert built_in.builtin is True
-    assert built_in.path == directory / "general-assistant.json"
+    assert built_in.path == directory / "general-purpose.json"
 
 
 def test_settings_preserves_file_source_across_repeated_loads(

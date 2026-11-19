@@ -223,16 +223,16 @@ def test_catalog_readable_again_but_empty_says_so() -> None:
     skills = SKILLS.describe(ItemDiff.between(previous, {}), {}, previous)
 
     assert "readable again; available: []" in mcp
-    assert "readable again; available: []" in skills
+    assert "readable again; no Skills are available." in skills
 
 
 def test_updated_skill_asks_to_reload_and_shows_new_description() -> None:
-    old = PromptSourceEntry(fingerprint="old", text='{"name": "review", "description": "d1"}')
-    items = {"review": SourceItem("new", '{"name": "review", "description": "d2"}')}
+    old = PromptSourceEntry(fingerprint="old", text="- review: d1")
+    items = {"review": SourceItem("new", "- review: d2")}
 
     text = SKILLS.describe(ItemDiff.between({"review": old}, items), items, {"review": old})
 
-    assert 'Description changed: [{"name": "review", "description": "d2"}]' in text
+    assert "Description changed:\n    - review: d2" in text
     assert "load it again" in text
 
 

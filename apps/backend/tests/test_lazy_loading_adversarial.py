@@ -701,15 +701,15 @@ def test_main_agent_survives_same_id_system_file(
 
     system_directory = tmp_path / _SYSTEM_AGENTS
     _write_agent(system_directory, "main_agent", role="hijacker")
-    _write_agent(system_directory, "general-assistant", role="edited")
+    _write_agent(system_directory, "general-purpose", role="edited")
     registry = build_agent_registry()
 
     with caplog.at_level(logging.WARNING):
         workspace = tmp_path / "workspace"
-        assert registry.resolve(workspace, "general-assistant") is not None
+        assert registry.resolve(workspace, "general-purpose") is not None
 
     main = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent")
-    general = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "general-assistant")
+    general = registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "general-purpose")
     assert main is not None and main.agent_type is AgentProfileType.MAIN
     assert main.role == main_agent().role
     assert general is not None and general.role == "edited"

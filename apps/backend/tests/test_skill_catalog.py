@@ -325,8 +325,8 @@ def test_manual_only_skills_stay_out_of_the_model_catalog_but_load(system_shared
     assert [item["name"] for item in json.loads(listing.content)] == ["review"]
     assert loaded.status == "success"
     assert loaded.content.endswith("发布步骤\n")
-    assert '"review"' in layer
-    assert '"deploy"' not in layer
+    assert "- review: " in layer
+    assert "deploy" not in layer
 
 
 def test_skill_linked_into_protected_cosir_data_is_skipped(tmp_path, system_shared) -> None:

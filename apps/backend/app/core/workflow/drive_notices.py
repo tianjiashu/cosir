@@ -155,15 +155,15 @@ def tool_availability_notice(
     只报禁用、不枚举可用：可用集合由 Session 固化的 schema 与系统提示词的工具目录表达，在通知里再列
     一遍既拉长这段 canonical 历史，又会紧跟在禁用清单后面被读成「这些都被禁用」。
 
-    - ``announced`` 为 ``None``（模型从没被告知过）：完整说明。
+    - 全部可用且模型从没被告知过禁用（``announced`` 为 ``None`` 或空）：不通知——可用集合 schema 已表达。
+    - ``announced`` 为 ``None`` 且有禁用：完整说明。
     - 集合有变化：说明新禁用 / 恢复的工具，并附当前禁用清单，使单条通知自洽。
     - 未变化但仍有禁用：简短提醒，防止模型在长对话里遗忘。
-    - 未变化且全部可用：不通知。
     """
 
     if announced is None:
         if not banned:
-            return f"{_TOOL_NOTICE_PREFIX} all tools are available."
+            return None
         return f"{_TOOL_NOTICE_PREFIX} disabled ({_disabled(banned)})."
     if banned == announced:
         if not banned:

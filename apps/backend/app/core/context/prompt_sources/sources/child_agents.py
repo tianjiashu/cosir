@@ -1,7 +1,11 @@
 """子 Agent 目录来源：本工作区可见的 CHILD Agent，供委派时挑选。
 
-只在 Session 固化了委派工具时出现。条目键为 agent_id，文本是一行摘要（id、描述、可用工具）；
-系统提示词正文不进目录。读取的是进程级 Agent 注册表。
+只在 Session 固化了委派工具时出现。条目键为 agent_id，文本是单行无序列表项 ``- id: 描述``；指纹取
+这两个字段而不是文本，改写法不算配置变化。读取的是进程级 Agent 注册表。
+
+不列可用工具与系统提示词正文：主 Agent 按描述挑选，能力边界（如只读）由描述写明；配置里的
+``allowed_tools`` 也不是子 Session 实际拿到的工具（创建时还会按 Session 类型与派生深度过滤，见
+``session_tool_scope``），照抄会说错，还让每个会话的提示词多出整串工具名。
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from app.core.context.prompt_sources.source import (
     SourceItems,
     fingerprint,
 )
+from app.core.context.prompt_sources.sources.metadata_encoding import prompt_line
 from app.core.tool.schemas.tool_names import TOOL_DELEGATE_TASK
 from app.models.message_metadata import PromptSourceEntry
 
@@ -40,11 +45,9 @@ class ChildAgentsSource(PromptSource):
         for profile in get_agent_registry().list(context.workspace_root):
             if profile.agent_type is not AgentProfileType.CHILD:
                 continue
-            text = (
-                f"- agent_id: {profile.agent_id} | description: {profile.description or ''} | "
-                f"allowed_tools: {profile.allowed_tools}"
-            )
-            items[profile.agent_id] = SourceItem(fingerprint(text), text)
+            description = profile.description or ""
+            text = f"- {prompt_line(profile.agent_id)}: {prompt_line(description)}"
+            items[profile.agent_id] = SourceItem(fingerprint(profile.agent_id, description), text)
         return items
 
     def render(self, items: SourceItems) -> str:

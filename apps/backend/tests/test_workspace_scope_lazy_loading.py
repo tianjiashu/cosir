@@ -100,7 +100,7 @@ def test_lazy_load_merges_and_keeps_builtin_profiles(tmp_path: Path) -> None:
 
     assert registry.resolve(workspace, "workspace-reader") is not None
     # 内置 CHILD 与主 Agent 仍在 system 作用域内可用（否则所有委派与 Run 都解析不到 Agent）。
-    assert registry.resolve(workspace, "general-assistant") is not None
+    assert registry.resolve(workspace, "general-purpose") is not None
     assert registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "main_agent") is not None
 
 

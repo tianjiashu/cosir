@@ -20,7 +20,7 @@ class DelegateTaskArgs(BaseModel):
     child_agent_id: str = Field(
         description=(
             "The child agent to run the task, from the available child agents listed in your "
-            "instructions: pick the one whose description and allowed_tools fit the task."
+            "instructions: pick the one whose description fits the task."
         )
     )
     agent_name: str = Field(

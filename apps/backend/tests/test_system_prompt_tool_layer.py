@@ -94,7 +94,9 @@ def test_tool_layer_projects_child_catalog_without_main_profile(monkeypatch) -> 
 
     assert layer.startswith("<tool_layer>\n")
     assert layer.endswith("\n</tool_layer>")
-    assert "agent_id: reviewer" in layer
+    assert "- reviewer: Reviews changes." in layer
+    # 目录不列工具：主 Agent 按描述挑选，配置里的工具清单也不是子 Session 实际拿到的。
+    assert "Tools:" not in layer
     assert "Reviews changes." in layer
     assert "main_agent" not in layer
 
@@ -211,9 +213,8 @@ def test_tool_layer_injects_workspace_visible_mcp_and_skill_catalogs(tmp_path) -
     assert '"workspace-tools"' in layer
     assert '"not-tested"' not in layer
     assert '"disabled-server"' not in layer
-    assert '"review"' in layer
-    assert '"Review code changes."' in layer
-    assert '"disabled"' not in layer
+    assert "- review: Review code changes." in layer
+    assert "- disabled:" not in layer
     assert "\\u003c/tool_layer\\u003e" in layer
     assert layer.endswith("\n</tool_layer>")
 
@@ -241,7 +242,7 @@ def test_build_orders_tool_layer_between_agent_and_global(
     assert prompt.index("<tool_layer>") < prompt.index("<global_layer>")
     # workspace 层标签带属性（abs_path=...），故只比较前缀。
     assert prompt.index("<global_layer>") < prompt.index("<workspace_layer")
-    assert "agent_id: reviewer" in prompt
+    assert "- reviewer: " in prompt
 
 
 def test_build_omits_agent_catalog_without_delegation_tool(
@@ -260,5 +261,5 @@ def test_build_omits_agent_catalog_without_delegation_tool(
         child, str(redirect_system_cosir.parent), child.allowed_tools
     ).text
 
-    assert "agent_id:" not in prompt
+    assert "Available child agents" not in prompt
     assert "read_file to read" in prompt

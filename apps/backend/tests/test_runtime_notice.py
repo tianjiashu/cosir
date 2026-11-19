@@ -144,14 +144,11 @@ def test_agent_fork_is_told_and_refused_fork_session_without_changing_its_schema
 
 
 def test_derivation_rules_do_not_announce_tools_the_session_never_had(monkeypatch) -> None:
-    """委派子 Session 的 schema 本来就没有 ``fork_session``，不能通知成「被禁用」。"""
+    """委派子 Session 的 schema 本来就没有 ``fork_session``，不能通知成「被禁用」；没有禁用就什么都不说。"""
     space = _space(RunMailbox())
     space.current_task = SimpleNamespace(id=1, session_type=SessionType.DELEGATED, derivation_depth=1)
 
-    [notice] = _notices(monkeypatch, space)
-
-    assert notice.banned_tools == []
-    assert "all tools are available" in notice.content
+    assert _notices(monkeypatch, space) == []
 
 
 def test_tool_availability_compares_with_what_the_context_last_said(monkeypatch) -> None:
@@ -329,8 +326,8 @@ def test_tool_availability_notice_rules() -> None:
     def f(*names: str) -> frozenset[str]:
         return frozenset(names)
 
-    # 未知：完整说明，禁用清单标明是 Session 级。
-    assert notice(None, f()) == "Tool availability notice: all tools are available."
+    # 未知：全部可用时不通知（schema 已表达）；有禁用时完整说明，禁用清单标明是 Session 级。
+    assert notice(None, f()) is None
     assert notice(None, f("fork_session", "delegate_task")) == (
         "Tool availability notice: disabled (for this session: delegate_task, fork_session)."
     )

@@ -1,6 +1,6 @@
 """主 Agent 与内置子 Agent 的装配契约测试。
 
-系统作用域由代码维护的 ``main_agent`` 与内置子 Agent（``general-assistant``、``only_read_child_agent``）
+系统作用域由代码维护的 ``main_agent`` 与内置子 Agent（``general-purpose``、``Explore``）
 组成：内置子 Agent 的事实源是系统 ``.cosir/agents`` 下的配置文件，启动装配在文件缺失时写入出厂值。
 本模块以「系统作用域能解析出哪些 profile、文件与内存怎样对应」为断言对象。
 """
@@ -54,13 +54,13 @@ def test_general_child_profile_carries_its_factory_prompt(monkeypatch) -> None:
         "app.config.configuration.get_agent_registry",
         lambda: registry_with()[0],
     )
-    profile = builtin_child_profile("general-assistant")
+    profile = builtin_child_profile("general-purpose")
     prompt = SystemPromptBuilder.build(
         profile, str(Path(__file__).resolve()), profile.allowed_tools
     ).text
 
     assert profile.agent_type is AgentProfileType.CHILD
-    assert profile.agent_id == "general-assistant"
+    assert profile.agent_id == "general-purpose"
     assert profile.system_prompt.strip()
     assert not hasattr(profile, "prompt_file_path")
     assert "You handle exactly one focused task delegated by the parent agent." in prompt
@@ -70,22 +70,24 @@ def test_builtin_child_profiles_are_seeded_and_complete(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """系统作用域含主 Agent 与两个内置子 Agent，且通用与只读 profile 均具有对应工具能力。"""
+    """系统作用域含主 Agent 与三个内置子 Agent，且通用与只读 profile 均具有对应工具能力。"""
 
     profiles = _code_defined_profiles(monkeypatch, tmp_path)
 
     assert {profile.agent_id for profile in profiles} == {
-        "general-assistant",
-        "only_read_child_agent",
+        "general-purpose",
+        "Explore",
+        "Plan",
         "main_agent",
     }
     children = [profile for profile in profiles if profile.agent_type is AgentProfileType.CHILD]
     assert {profile.agent_id for profile in children} == {
-        "general-assistant",
-        "only_read_child_agent",
+        "general-purpose",
+        "Explore",
+        "Plan",
     }
     assert all(profile.system_prompt.strip() for profile in children)
-    general = next(profile for profile in children if profile.agent_id == "general-assistant")
+    general = next(profile for profile in children if profile.agent_id == "general-purpose")
     assert {
         "write_file",
         "apply_patch",
@@ -98,7 +100,7 @@ def test_system_registry_contains_only_builtin_children(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """空目录起步时只有两个内置子 Agent，workspace 作用域也只继承它们。"""
+    """空目录起步时只有三个内置子 Agent，workspace 作用域也只继承它们。"""
 
     monkeypatch.setattr("app.config.configuration._TOOL_REGISTRY", None)
     monkeypatch.setattr("app.config.configuration._TOOL_EXECUTOR", None)
@@ -108,7 +110,7 @@ def test_system_registry_contains_only_builtin_children(
     )
     registry = build_agent_registry()
 
-    builtins = {"general-assistant", "only_read_child_agent"}
+    builtins = {"general-purpose", "Explore", "Plan"}
     assert registry.child_agent_ids(AgentProfileRegistry.SYSTEM_WORKSPACE) == builtins
     assert registry.child_agent_ids(tmp_path / "workspace") == builtins
 
@@ -132,11 +134,11 @@ def test_main_profile_prompt_is_injected_and_child_catalog_follows_allowed_tools
     assert "<agent_layer>" in prompt_without_tools
     assert "主 Agent 执行协议" in prompt_without_tools
     # 没有委派工具时不投影子 Agent 目录；文件工具的公共声明照常注入。
-    assert "agent_id:" not in prompt_without_tools
+    assert "Available child agents" not in prompt_without_tools
     assert "read_file to read" in prompt_without_tools
-    assert "general-assistant" not in prompt_without_tools
+    assert "general-purpose" not in prompt_without_tools
 
-    registry, _ = registry_with([builtin_child_profile("general-assistant")])
+    registry, _ = registry_with([builtin_child_profile("general-purpose")])
     monkeypatch.setattr(
         "app.config.configuration.get_agent_registry",
         lambda: registry,
@@ -148,7 +150,7 @@ def test_main_profile_prompt_is_injected_and_child_catalog_follows_allowed_tools
     assert profile.description is None
     assert not hasattr(profile, "prompt_file_path")
     assert "<tool_layer>" in prompt_with_delegation
-    assert "general-assistant" in prompt_with_delegation
+    assert "general-purpose" in prompt_with_delegation
 
 
 def test_main_profile_without_configured_prompt_skips_agent_layer() -> None:
@@ -163,7 +165,7 @@ def test_main_profile_without_configured_prompt_skips_agent_layer() -> None:
 def test_registry_projects_only_child_profiles() -> None:
     """registry 摘要和 ID 列表只暴露 CHILD，不包含 MAIN。"""
 
-    generic = builtin_child_profile("general-assistant")
+    generic = builtin_child_profile("general-purpose")
     main_profile = main_agent()
     registry, _ = registry_with([generic, main_profile])
 
@@ -190,7 +192,7 @@ def test_builtin_children_leave_model_route_to_parent_run(
 def test_child_profile_model_settings_keep_custom_overrides() -> None:
     """运行时配置保留定义自有的模型偏好，不原地写共享定义。"""
 
-    child = builtin_child_profile("general-assistant")
+    child = builtin_child_profile("general-purpose")
     custom = ModelSettings(temperature=0.2)
     child.model_settings = custom
 

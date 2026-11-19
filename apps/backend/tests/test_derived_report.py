@@ -83,7 +83,7 @@ class _Model:
                 "delegate_task",
                 {
                     "intent": "review",
-                    "child_agent_id": "general-assistant",
+                    "child_agent_id": "general-purpose",
                     "agent_name": "review",
                     "message": ASSIGNMENT,
                 },

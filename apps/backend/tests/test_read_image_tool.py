@@ -148,5 +148,5 @@ def test_definition_schema_and_agent_exposure() -> None:
     assert not validate_tool_arguments(
         {"paths": []}, definition.parameters_schema, ReadImageArgs
     ).ok
-    for profile in (main_agent(), builtin_child_profile("general-assistant"), builtin_child_profile("only_read_child_agent")):
+    for profile in (main_agent(), builtin_child_profile("general-purpose"), builtin_child_profile("Explore")):
         assert TOOL_READ_IMAGE in profile.allowed_tools

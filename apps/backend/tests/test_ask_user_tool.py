@@ -150,7 +150,7 @@ def test_definition_declares_a_turn_scoped_reply_decision() -> None:
 
 def test_only_the_main_agent_is_given_the_tool() -> None:
     assert "ask_user" in main_agent().allowed_tools
-    assert "ask_user" not in builtin_child_profile("general-assistant").allowed_tools
+    assert "ask_user" not in builtin_child_profile("general-purpose").allowed_tools
 
 
 # ---------------------------------------------------------------------------

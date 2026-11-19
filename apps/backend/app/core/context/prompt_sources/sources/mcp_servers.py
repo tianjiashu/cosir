@@ -20,7 +20,7 @@ from app.core.context.prompt_sources.source import (
     SourceItems,
     fingerprint,
 )
-from app.core.context.prompt_sources.sources.prompt_json import prompt_json
+from app.core.context.prompt_sources.sources.metadata_encoding import prompt_json
 from app.core.tool.schemas.tool_names import TOOL_MCP
 from app.models.message_metadata import PromptSourceEntry
 from app.utils.file_signature import stat_signature

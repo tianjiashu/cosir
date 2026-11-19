@@ -54,36 +54,36 @@ def test_edit_survives_rebuild(monkeypatch: pytest.MonkeyPatch) -> None:
     """改造前的缺陷：代码定义先注册，同名文件被跳过，重启后编辑丢失。"""
 
     service = _service(monkeypatch, build_agent_registry())
-    current = next(entry for entry in service.list_entries() if entry.configuration.agent_id == "general-assistant")
+    current = next(entry for entry in service.list_entries() if entry.configuration.agent_id == "general-purpose")
     service.update(
-        "general-assistant",
+        "general-purpose",
         AgentConfiguration(**{**current.configuration.__dict__, "description": "用户改过的说明"}),
     )
 
     rebuilt = build_agent_registry()
-    assert rebuilt.resolve(SYSTEM, "general-assistant").description == "用户改过的说明"
+    assert rebuilt.resolve(SYSTEM, "general-purpose").description == "用户改过的说明"
 
 
 def test_broken_file_is_kept_skipped_and_does_not_fail(caplog: pytest.LogCaptureFixture) -> None:
     directory = _system_directory(build_agent_registry())
-    broken = directory / "general-assistant.json"
+    broken = directory / "general-purpose.json"
     broken.write_text("{broken", encoding="utf-8")
 
     registry = build_agent_registry()
 
-    assert registry.resolve(SYSTEM, "general-assistant") is None
-    assert registry.resolve(SYSTEM, "only_read_child_agent") is not None
+    assert registry.resolve(SYSTEM, "general-purpose") is None
+    assert registry.resolve(SYSTEM, "Explore") is not None
     assert broken.read_text(encoding="utf-8") == "{broken"
 
 
 def test_deleted_file_is_regenerated_on_rebuild() -> None:
     directory = _system_directory(build_agent_registry())
-    (directory / "only_read_child_agent.json").unlink()
+    (directory / "Explore.json").unlink()
 
     registry = build_agent_registry()
 
-    assert (directory / "only_read_child_agent.json").is_file()
-    assert registry.resolve(SYSTEM, "only_read_child_agent") is not None
+    assert (directory / "Explore.json").is_file()
+    assert registry.resolve(SYSTEM, "Explore") is not None
 
 
 def test_builtin_agents_cannot_be_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -102,8 +102,8 @@ def test_workspace_cannot_shadow_builtin_agent(tmp_path: Path, monkeypatch: pyte
 
     registry = build_agent_registry()
     service = _service(monkeypatch, registry, workspace=tmp_path / "workspace")
-    factory = next(agent for agent in BUILTIN_CHILD_AGENTS if agent.agent_id == "general-assistant")
+    factory = next(agent for agent in BUILTIN_CHILD_AGENTS if agent.agent_id == "general-purpose")
 
     with pytest.raises(AgentConfigurationError):
         service.create(AgentConfiguration(**{**factory.__dict__, "role": "工作区覆盖"}))
-    assert registry.resolve(tmp_path / "workspace", "general-assistant").role == factory.role
+    assert registry.resolve(tmp_path / "workspace", "general-purpose").role == factory.role

@@ -205,7 +205,7 @@ def test_delegate_writes_the_child_depth(
     )
 
     result = delegate_task.DelegateTaskTool().execute(
-        child_agent_id="general-assistant",
+        child_agent_id="general-purpose",
         agent_name="Scope",
         message="Perform this scoped task.",
         execution_context=context,
@@ -218,7 +218,7 @@ def test_delegate_writes_the_child_depth(
 
     def delegate_to(writable_root: str):
         return delegate_task.DelegateTaskTool().execute(
-            child_agent_id="general-assistant", agent_name="Scope", message="Do it.",
+            child_agent_id="general-purpose", agent_name="Scope", message="Do it.",
             writable_root=writable_root, execution_context=context,
         )
 
