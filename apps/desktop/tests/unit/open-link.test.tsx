@@ -21,7 +21,7 @@ const notifyInfo = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notify: { info: notifyInfo, error: vi.fn(), success: vi.fn() } }));
 
 import { ExternalLinkRow } from "@/components/conversation/tools/call-views/detail-parts";
-import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
+import { MARKDOWN_LINK_COMPONENTS, MarkdownLinkScope } from "@/components/links/markdown-links";
 import { LinkSessionContext, useOpenLink, useWebOnlyLinkOpener, type LinkOpener } from "@/components/links/use-open-link";
 import { markdownRehypePlugins } from "@/components/markdown/markdown-rendering-config";
 import { ReferenceBridgeProvider } from "@/components/workspace-references/reference-bridge";
@@ -173,8 +173,11 @@ function renderMarkdown(text: string, options?: { documentDir?: string; webOnly?
     // 只认网页是一种打开方式（打开器），不是链接组件的开关。
     const web = useWebOnlyLinkOpener("document");
     const opener = useOpenLink("document");
-    const components = useMarkdownLinkComponents(options?.webOnly ? web : opener, { documentDir: options?.documentDir });
-    return <Streamdown mode="static" rehypePlugins={markdownRehypePlugins} components={components}>{text}</Streamdown>;
+    return (
+      <MarkdownLinkScope opener={options?.webOnly ? web : opener} documentDir={options?.documentDir}>
+        <Streamdown mode="static" rehypePlugins={markdownRehypePlugins} components={MARKDOWN_LINK_COMPONENTS}>{text}</Streamdown>
+      </MarkdownLinkScope>
+    );
   }
   return renderToStaticMarkup(inWorkspace(<Doc />));
 }
@@ -191,8 +194,11 @@ describe("markdown links", () => {
     // 文件面板的 Markdown 没有所属 Session，本机网页退回文件面板。
     expect(renderMarkdown("[r](out/report.html)")).toContain('title="在文件面板打开 out/report.html"');
     function InSession() {
-      const components = useMarkdownLinkComponents(useOpenLink("message"));
-      return <Streamdown mode="static" rehypePlugins={markdownRehypePlugins} components={components}>{"[r](out/report.html)"}</Streamdown>;
+      return (
+        <MarkdownLinkScope opener={useOpenLink("message")}>
+          <Streamdown mode="static" rehypePlugins={markdownRehypePlugins} components={MARKDOWN_LINK_COMPONENTS}>{"[r](out/report.html)"}</Streamdown>
+        </MarkdownLinkScope>
+      );
     }
     const html = renderToStaticMarkup(inWorkspace(<LinkSessionContext.Provider value={3}><InSession /></LinkSessionContext.Provider>));
     expect(html).toContain('title="在内置浏览器打开 /repo/out/report.html"');
@@ -260,8 +266,11 @@ it("selecting the already active file cancels an older pending link", async () =
 describe("link icons", () => {
   function renderLinks(icons: boolean, text: string) {
     function Doc() {
-      const components = useMarkdownLinkComponents(useOpenLink("message"), { icons });
-      return <Streamdown mode="static" rehypePlugins={markdownRehypePlugins} components={components}>{text}</Streamdown>;
+      return (
+        <MarkdownLinkScope opener={useOpenLink("message")} icons={icons}>
+          <Streamdown mode="static" rehypePlugins={markdownRehypePlugins} components={MARKDOWN_LINK_COMPONENTS}>{text}</Streamdown>
+        </MarkdownLinkScope>
+      );
     }
     return renderToStaticMarkup(inWorkspace(<Doc />));
   }
@@ -294,5 +303,13 @@ describe("ExternalLinkRow", () => {
     const html = renderToStaticMarkup(inWorkspace(<ExternalLinkRow rawUrl="javascript:alert(1)" title="bad" />));
     expect(html).not.toContain("<a");
     expect(html).toContain("bad");
+  });
+});
+
+// 目的：每个 Markdown 渲染面都声明链接交给谁；潜在缺陷：漏了作用域时退回 Streamdown 的默认链接，绕过打开器。
+describe("markdown link scope", () => {
+  it("throws when a renderer has no link scope", () => {
+    const render = () => renderToStaticMarkup(<Streamdown mode="static" components={MARKDOWN_LINK_COMPONENTS}>{"[a](https://example.com)"}</Streamdown>);
+    expect(render).toThrow(/MarkdownLinkScope/);
   });
 });

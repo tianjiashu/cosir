@@ -3,7 +3,7 @@ import { CheckIcon, SearchIcon } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { matchesShortcut } from "@/lib/keyboard/shortcuts";
+import { formatKeys, matchesShortcut } from "@/lib/keyboard/shortcuts";
 import { toggleSelection } from "@/lib/selection/range-selection";
 import { cn } from "@/lib/utils";
 import type { ModelDiscovery } from "./use-model-discovery";
@@ -12,7 +12,7 @@ import type { ModelDiscovery } from "./use-model-discovery";
  * 从远端模型目录里勾选要加入的模型，外加手动输入（目录拉不到、或目录里没有时用）。
  *
  * 勾选沿用文件管理器的手势，但以复选框为主入口：单击切换（误点不会清掉已选的），Shift+单击连选一段，
- * ⌘/Ctrl+单击与单击相同；键盘 ↑↓ 移动、空格切换、Shift+空格连选，⌘/Ctrl+A 全选当前搜索结果。
+ * ⌘/Ctrl+单击与单击相同；键盘 ↑↓ 移动、空格切换、Shift+空格连选，`selectAllModels` 全选当前搜索结果。
  * 已在连接下的模型显示为「已添加」且不可选。选中集合由调用方持有。
  */
 export function ModelPicker({
@@ -86,7 +86,7 @@ export function ModelPicker({
             />
           </div>
           <div className="text-muted-foreground flex items-center gap-2 text-xs">
-            <span className="flex-1">Shift+单击可连选</span>
+            <span className="flex-1">按住 {formatKeys("shift")} 单击可连选</span>
             <button type="button" className="hover:text-foreground focus-ring rounded px-1" disabled={disabled || selectable.length === 0} onClick={() => setVisible(true)}>全选</button>
             <button type="button" className="hover:text-foreground focus-ring rounded px-1" disabled={disabled} onClick={() => setVisible(false)}>全不选</button>
           </div>

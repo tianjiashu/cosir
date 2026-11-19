@@ -5,7 +5,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { MENU_CONTENT_CLASS, MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
 import type { TerminalSessionEntry } from "@/lib/assistant/contract";
-import { isMac } from "@/lib/platform";
+import { shortcutLabel } from "@/lib/keyboard/shortcuts";
 import type { TerminalShell } from "@/lib/terminal/terminal-api";
 import { terminalStatusPresentation } from "@/lib/terminal/terminal-sessions";
 import { cn } from "@/lib/utils";
@@ -100,10 +100,6 @@ export function TerminalEndedMenu({
   );
 }
 
-const SHORTCUTS = isMac
-  ? { copy: "⌘C", paste: "⌘V", find: "⌘F" }
-  : { copy: "Ctrl+C", paste: "Ctrl+V", find: "Ctrl+F" };
-
 /**
  * 终端窗格的右键菜单：复制、粘贴、查找——低频操作的唯一落点，不在页头加按钮。两个平台行为一致：
  * 不采用 Windows Terminal 的「右键即粘贴」，终端里的命令常来自模型，误粘贴即执行的代价更高。
@@ -159,11 +155,11 @@ export function TerminalContextMenu({
         >
           <ContextMenu.Item className={TERMINAL_MENU_ITEM_CLASS} disabled={!hasSelection} onSelect={() => void getView()?.copySelection()}>
             <span className="flex-1">复制</span>
-            <span className="text-muted-foreground text-2xs">{SHORTCUTS.copy}</span>
+            <span className="text-muted-foreground text-2xs">{shortcutLabel("terminalCopy")}</span>
           </ContextMenu.Item>
           <ContextMenu.Item className={TERMINAL_MENU_ITEM_CLASS} disabled={!connected} onSelect={() => void getView()?.pasteFromClipboard()}>
             <span className="flex-1">粘贴</span>
-            <span className="text-muted-foreground text-2xs">{SHORTCUTS.paste}</span>
+            <span className="text-muted-foreground text-2xs">{shortcutLabel("terminalPaste")}</span>
           </ContextMenu.Item>
           <ContextMenu.Item
             className={TERMINAL_MENU_ITEM_CLASS}
@@ -172,7 +168,7 @@ export function TerminalContextMenu({
             }}
           >
             <span className="flex-1">查找</span>
-            <span className="text-muted-foreground text-2xs">{SHORTCUTS.find}</span>
+            <span className="text-muted-foreground text-2xs">{shortcutLabel("terminalSearch")}</span>
           </ContextMenu.Item>
         </ContextMenu.Content>
       </ContextMenu.Portal>

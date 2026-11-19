@@ -50,8 +50,12 @@ export function useTextPage(workspaceId: number, info: FileInfo) {
     before,
     setPosition,
     /** 从 `next` 字节处读起，滚到顶。 */
-    go: (next: number) => setPosition({ offset: next, before: undefined, tail: false, scrollTop: 0 }),
+    go: (next: number) => setPosition({ offset: next, before: undefined, tail: false, anchor: undefined }),
+    /** 用户手动选过编码（按文件记住）；否则用后端识别结果。 */
+    manualEncoding: position?.encoding !== undefined,
     /** 换编码从开头重读。 */
     setEncoding: (value: string) => setPosition({ encoding: value, offset: 0, tail: false, before: undefined }),
+    /** 回到后端识别的编码，从开头重读。 */
+    resetEncoding: () => setPosition({ encoding: undefined, offset: 0, tail: false, before: undefined }),
   };
 }

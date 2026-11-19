@@ -107,8 +107,12 @@ test("streaming prose preserves manual scrolling and settles at the bottom witho
   const original = await prose.elementHandle();
   const originalParagraph = await prose.locator("p").first().elementHandle();
   const viewport = page.locator(".aui-thread-root .overflow-y-auto").first();
+  const toBottom = page.getByRole("button", { name: "回到底部", exact: true });
   await viewport.evaluate(el => { el.scrollTop = 0; });
-  await page.getByRole("button", { name: "回到底部", exact: true }).click();
+  // 「回到底部」在粘底的页脚里，只在离底时可用：用户不用滚动就能点到，所以 `scroll: "none"`。让 Playwright
+  // 自动滚进视野会把对话滚到底、按钮随之禁用，点击就再也成功不了（偶发失败的原因）。
+  await expect(toBottom).toBeEnabled();
+  await toBottom.click({ scroll: "none" });
   await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(3);
   const beforeAppend = await viewport.evaluate(el => el.scrollTop);
   const suffix = "\n\n追加的末尾内容。";
@@ -116,7 +120,8 @@ test("streaming prose preserves manual scrolling and settles at the bottom witho
   await expect(prose).toContainText("追加的末尾内容。");
   // 项目显式 autoScroll=false；追加不追底，仍由用户选择何时回到底部。
   await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBeCloseTo(beforeAppend, 0);
-  await page.getByRole("button", { name: "回到底部", exact: true }).click();
+  await expect(toBottom).toBeEnabled();
+  await toBottom.click({ scroll: "none" });
   await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(3);
   await seedState(request, 42, done([text(body + suffix, true)], 3000));
   await expect(page.locator('[data-slot="turn-status"]')).toHaveCount(0);

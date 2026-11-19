@@ -1,7 +1,8 @@
 import { useElementSize } from "@/hooks/use-element-size";
 import { copyText } from "@/lib/clipboard";
 import { useChangeBrowserVisibility } from "@/lib/workspace-files/visibility";
-import { IgnoreMenuItem, openKeyboardContextMenu } from "./ignore-menu-item";
+import { IgnoreMenuItem } from "./ignore-menu-item";
+import { isContextMenuKey, openContextMenuAt } from "@/components/ui/keyboard-context-menu";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
 import { workspaceDirectoryRef, workspaceFileRef } from "@/lib/workspace-references/ref-capsule";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
@@ -255,17 +256,14 @@ export function FileTree({
       ref={container}
       className="flex min-h-0 flex-1 flex-col"
       onKeyDown={(event) => {
-        if (
-          event.key === "ContextMenu" ||
-          (event.shiftKey && event.key === "F10")
-        ) {
+        if (isContextMenuKey(event)) {
           const row = tree.current?.focusedNode;
           if (!row) return;
           const trigger = container.current?.querySelector<HTMLElement>(
             `[data-file-path="${CSS.escape(row.data.entry.path)}"]`,
           );
           if (!trigger) return;
-          openKeyboardContextMenu(event, trigger);
+          openContextMenuAt(event, trigger);
         }
       }}
       data-testid="workspace-file-tree"

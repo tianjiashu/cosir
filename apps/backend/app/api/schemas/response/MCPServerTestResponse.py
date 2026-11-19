@@ -13,6 +13,8 @@ class MCPServerTestResponse(BaseModel):
     tools: list[dict[str, Any]]
     error: str | None = None
     failure_kind: str | None = None
+    # 下一步是「登录授权」（由后端失败归类给出，前端不按 ``failure_kind`` 自行判断）。
+    needs_sign_in: bool = False
     agent_available: bool = False
 
 

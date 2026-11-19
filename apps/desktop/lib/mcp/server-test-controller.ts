@@ -27,8 +27,12 @@ export type MCPServerTestApi = {
   onSettled: () => void;
 };
 
-const failed = (error: string): MCPServerTestResult => ({
-  status: "completed", success: false, tools: [], error, failure_kind: null, agent_available: false,
+/**
+ * 请求本身没拿到后端结果时界面自己给的失败。`needsSignIn`：这次是在登录授权（取消或请求失败），这是界面自己
+ * 知道的事实，照样给出「登录授权」让用户重来；普通测试失败没有这个下一步。
+ */
+const failed = (error: string, needsSignIn = false): MCPServerTestResult => ({
+  status: "completed", success: false, tools: [], error, failure_kind: null, needs_sign_in: needsSignIn, agent_available: false,
 });
 
 /**
@@ -54,7 +58,7 @@ export class MCPServerTestController {
 
   readonly getSnapshot = () => this.states;
 
-  /** 连接测试：从不打开浏览器，需要授权时结果的 `failure_kind` 为 `authorization_required`。 */
+  /** 连接测试：从不打开浏览器，需要授权时结果的 `needs_sign_in` 为真。 */
   async test(key: string, config: MCPServerConfiguration): Promise<void> {
     const generation = this.begin(key, { phase: "testing" });
     const result = await this.api.test(config).catch((error: unknown) => failed(userErrorMessage(error, "MCP 连接测试失败")));
@@ -83,14 +87,14 @@ export class MCPServerTestController {
       this.set(key, { phase: "authorizing", flowId: outcome.flow_id, host: new URL(outcome.authorization_url).host });
       this.settle(key, generation, await this.api.wait(outcome.flow_id));
     } catch (error) {
-      this.settle(key, generation, failed(userErrorMessage(error, "MCP 登录授权失败")));
+      this.settle(key, generation, failed(userErrorMessage(error, "MCP 登录授权失败"), true));
     }
   }
 
   /** 放弃登录授权：界面立刻恢复，后端结束等待、关掉回调监听；正在等的请求随后失败返回会被丢弃。 */
   cancel(key: string): void {
     if (this.states[key]?.phase !== "authorizing") return;
-    this.begin(key, { phase: "done", result: failed("已取消授权") });
+    this.begin(key, { phase: "done", result: failed("已取消授权", true) });
   }
 
   /** 丢掉一个键的进展（如打开或关闭编辑框时清掉草稿的结果），进行中的授权一并结束。 */

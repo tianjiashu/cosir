@@ -153,6 +153,30 @@
   --skill-foreground: oklch(0.38 0.13 295);
   --skill-background: oklch(0.95 0.035 295);
   --skill-border: oklch(0.82 0.07 295);
+  /* 代码阅读字号：文件阅读器、配置编辑器与 Markdown 代码块共用；终端与 diff 是紧凑面，仍用 12px。 */
+  --text-code: 0.8125rem;
+  --text-code--line-height: 1.25rem;
+  /*
+   * 语法配色的调色板（GitHub 配色），唯一事实源：CodeMirror 的高亮类（lib/syntax/syntax-highlighter.ts）与
+   * Shiki 的代码块主题（lib/syntax/shiki-theme.ts）都只读这组变量，名字是 Shiki `createCssVariablesTheme` 的约定
+   * （前缀 --syntax-）。哪类语法元素用哪个颜色的原则写在 shiki-theme.ts，两边的映射按它对齐。
+   */
+  --syntax-foreground: var(--foreground);
+  --syntax-background: var(--background);
+  --syntax-token-keyword: #cf222e;
+  --syntax-token-string: #0a3069;
+  --syntax-token-string-expression: #0a3069;
+  --syntax-token-comment: #6e7781;
+  --syntax-token-constant: #0550ae;
+  --syntax-token-function: #8250df;
+  --syntax-token-tag: #116329;
+  --syntax-token-parameter: var(--foreground);
+  --syntax-token-punctuation: var(--foreground);
+  --syntax-token-link: #0a3069;
+  /* diff 的增、删、改（Markdown 的 ```diff 代码块与 CodeMirror 的 diff 语法）：跟随语义色，深浅色自然切换。 */
+  --syntax-token-inserted: var(--success);
+  --syntax-token-deleted: var(--destructive);
+  --syntax-token-changed: var(--warning);
 }
 
 .dark {
@@ -195,6 +219,13 @@
   --skill-foreground: oklch(0.84 0.08 295);
   --skill-background: oklch(0.29 0.04 295);
   --skill-border: oklch(0.46 0.07 295);
+  --syntax-token-keyword: #ff7b72;
+  --syntax-token-string: #a5d6ff;
+  --syntax-token-string-expression: #a5d6ff;
+  --syntax-token-comment: #8b949e;
+  --syntax-token-constant: #79c0ff;
+  --syntax-token-function: #d2a8ff;
+  --syntax-token-tag: #7ee787;
 }
 
 /*
@@ -513,13 +544,68 @@ body > :not(#root) > * {
  */
 .aui-diff-view {
   --diff-font-family: var(--app-font-mono);
-  --diff-gutter-insert-background-color: color-mix(in oklab, var(--success) 22%, transparent);
-  --diff-gutter-delete-background-color: color-mix(in oklab, var(--destructive) 22%, transparent);
   --diff-code-insert-background-color: color-mix(in oklab, var(--success) 12%, transparent);
   --diff-code-delete-background-color: color-mix(in oklab, var(--destructive) 12%, transparent);
   --diff-code-insert-edit-background-color: color-mix(in oklab, var(--success) 30%, transparent);
   --diff-code-delete-edit-background-color: color-mix(in oklab, var(--destructive) 30%, transparent);
+  /* 行号栏与代码同一浓度，不另成色块；`--diff-gutter-digits` 由 FileDiff 按最大行号的位数给出。 */
+  --diff-gutter-insert-text-color: var(--muted-foreground);
+  --diff-gutter-delete-text-color: var(--muted-foreground);
+  --diff-gutter-insert-background-color: var(--diff-code-insert-background-color);
+  --diff-gutter-delete-background-color: var(--diff-code-delete-background-color);
 }
+.aui-diff-view .diff-gutter-col {
+  width: calc(var(--diff-gutter-digits, 3) * 1ch + 1.5ch);
+}
+.aui-diff-view .diff-gutter {
+  padding: 0 0.75ch;
+  color: var(--muted-foreground);
+  cursor: default;
+}
+/* 行首的 +/− 不靠颜色也能分清增删；伪元素不进复制内容。绝对定位让折行与代码首列对齐。 */
+.aui-diff-view .diff-code {
+  position: relative;
+  padding-left: 2.5ch;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.aui-diff-view .diff-code-insert::before,
+.aui-diff-view .diff-code-delete::before {
+  position: absolute;
+  left: 0.75ch;
+  user-select: none;
+}
+.aui-diff-view .diff-code-insert::before {
+  content: "+";
+  color: var(--success);
+}
+.aui-diff-view .diff-code-delete::before {
+  content: "−";
+  color: var(--destructive);
+}
+/* 两段改动之间的分隔行：跳过的行数与这段所在的上下文（diff 头里 @@ 之后的那一句）。 */
+.aui-diff-view .diff-decoration-content {
+  padding: 0.125rem 0.75ch;
+  background: color-mix(in oklab, var(--muted) 60%, transparent);
+  color: var(--muted-foreground);
+}
+
+/* 语法高亮类：类名由 lib/syntax/syntax-highlighter.ts 给出（CodeMirror 与 diff 共用），颜色只取 --syntax-*。 */
+.syntax-keyword { color: var(--syntax-token-keyword); }
+.syntax-string { color: var(--syntax-token-string); }
+.syntax-string-expression { color: var(--syntax-token-string-expression); }
+.syntax-comment { color: var(--syntax-token-comment); }
+.syntax-constant { color: var(--syntax-token-constant); }
+.syntax-function { color: var(--syntax-token-function); }
+.syntax-tag { color: var(--syntax-token-tag); }
+.syntax-heading { color: var(--syntax-token-constant); font-weight: 600; }
+.syntax-strong { font-weight: 600; }
+.syntax-emphasis { font-style: italic; }
+.syntax-strikethrough { text-decoration: line-through; }
+.syntax-link { color: var(--syntax-token-link); text-decoration: underline; }
+.syntax-deleted { color: var(--syntax-token-deleted); }
+.syntax-inserted { color: var(--syntax-token-inserted); }
+.syntax-changed { color: var(--syntax-token-changed); }
 
 /* 终端工作台里 Agent 填入行的来源标记：xterm 装饰元素占首个单元格，画左侧色条；只在 Agent 把一行命令填进提示符时出现。 */
 .terminal-agent-input-mark {

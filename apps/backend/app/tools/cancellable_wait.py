@@ -3,6 +3,10 @@
 执行器只在调用 handler 之前检查一次取消，也不做硬超时（见 ``ToolExecutor``）。
 把工作投到别处（MCP 连接池的循环、宿主工具链路）再等结果的工具，只能自己在等待期间现读取消信号、
 自己守时限；这里是这件事的唯一实现，各工具不再各写一份。
+
+两个出口各用自己的异常，不复用 ``TimeoutError``：future 里冒出来的异常原样上浮，其中也可能有
+``TimeoutError``（如 MCP 建连超时），若等待自己的时限也抛它，调用方就分不清「请求可能已执行、只是没等到」
+和「对端在建连阶段就超时、请求没发出」，会把后者错说成前者。
 """
 
 from __future__ import annotations
@@ -19,8 +23,20 @@ T = TypeVar("T")
 _POLL_SECONDS = 0.1
 
 
+# 停下的是已经发给对端的请求：撤销只是不再等它，对端可能已经执行了。默认取消文案「没有产生结果」
+# 对在副作用之前就停下的工具成立，对这里不成立，所以使用方取消时一律用这句。
+STOPPED_IN_FLIGHT_REASON = (
+    "the user stopped this call while its request was in flight; the other side may already have "
+    "acted on it. Check the current state before repeating it."
+)
+
+
 class ToolCallStopped(Exception):
     """等待期间检出 Session 停止或本次调用被单独取消；请求已撤销。"""
+
+
+class CallDeadlineExceeded(Exception):
+    """等待超过了调用方给的时限；请求已撤销，对端可能已经执行了。"""
 
 
 def wait_for_call(
@@ -36,7 +52,7 @@ def wait_for_call(
 
     异常:
         ToolCallStopped: 检出取消。
-        TimeoutError: 超过 ``timeout_seconds``。
+        CallDeadlineExceeded: 超过 ``timeout_seconds``。
         其余: ``future`` 自身的异常原样上浮。
     """
 
@@ -52,4 +68,4 @@ def wait_for_call(
             raise ToolCallStopped
         if time.monotonic() >= deadline:
             future.cancel()
-            raise TimeoutError
+            raise CallDeadlineExceeded

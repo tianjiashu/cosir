@@ -5,7 +5,12 @@ import { mermaid } from "@streamdown/mermaid";
 import { defaultRehypePlugins, type MermaidOptions, type StreamdownProps } from "streamdown";
 import "katex/dist/katex.min.css";
 
+import { syntaxTheme } from "@/lib/syntax/shiki-theme";
+
 import { useThemeState, type ThemeState } from "@/lib/theme/theme-preference";
+
+/** 代码块的 Shiki 主题（`lib/syntax/shiki-theme.ts`）；浅色、深色两格是同一个，颜色随 `.dark` 切换。 */
+export const markdownShikiTheme: NonNullable<StreamdownProps["shikiTheme"]> = [syntaxTheme, syntaxTheme];
 
 /**
  * 所有 Markdown 渲染面共用的 Streamdown 插件配置（流式的 `MarkdownText` 与整篇渲染的 `StaticMarkdown`）。

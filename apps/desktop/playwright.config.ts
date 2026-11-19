@@ -28,8 +28,9 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      // --strictPort：端口被占时 Vite 报错退出，而不是悄悄换端口。
-      command: `${npm} run dev -- --host 127.0.0.1 --port ${WEB_PORT} --strictPort`,
+      // --strictPort：端口被占时 Vite 报错退出，而不是悄悄换端口。vite.e2e.config.ts：不监听文件、不热更新，
+      // 运行中别处保存代码不会让测试页重载。
+      command: `${npm} run dev -- --config vite.e2e.config.ts --host 127.0.0.1 --port ${WEB_PORT} --strictPort`,
       url: WEB_ORIGIN,
       env: { VITE_BACKEND_URL: API_ORIGIN },
       reuseExistingServer: false,

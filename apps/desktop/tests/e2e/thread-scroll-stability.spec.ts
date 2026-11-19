@@ -85,7 +85,10 @@ test("已结束的长对话从顶部回到底部一步到位", async ({ page, re
   const viewport = page.locator(".aui-thread-root .overflow-y-auto").first();
   await expect(page.getByRole("button", { name: "回到底部", exact: true })).toBeDisabled();
   await viewport.evaluate(el => { el.scrollTop = 2000; });
-  await page.getByRole("button", { name: "回到底部", exact: true }).click();
+  // 「回到底部」在粘底的页脚里，只在离底时可用：用户不用滚动就能点到，所以 `scroll: "none"`。让 Playwright
+  // 自动滚进视野会把对话滚到底、按钮随之禁用，点击就再也成功不了（偶发失败的原因）。
+  await expect(page.getByRole("button", { name: "回到底部", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "回到底部", exact: true }).click({ scroll: "none" });
   await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 1000 }).toBeLessThan(3);
 });
 
@@ -121,7 +124,8 @@ test("运行中上翻历史保留不连续尾行之间的高度，正文增长�
   await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBeCloseTo(before, 0);
   // 同一交互仍能明确回到底部，且当前两条消息始终挂载。
   await expect(page.locator('[data-index="78"]')).toHaveCount(1);
-  await page.getByRole("button", { name: "回到底部", exact: true }).click();
+  await expect(page.getByRole("button", { name: "回到底部", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "回到底部", exact: true }).click({ scroll: "none" });
   await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(3);
   const bottomBefore = await viewport.evaluate(el => el.scrollTop);
   await request.post(`${origin}/__test__/append-text`, { data: { sessionId: SESSION_ID, messageIndex: 79, partIndex: 0, text: "\n\n回到底部后的增长".repeat(30) } });

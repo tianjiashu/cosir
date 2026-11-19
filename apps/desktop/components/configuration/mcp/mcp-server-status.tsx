@@ -9,6 +9,7 @@ import type { MCPServerStatus } from "@/lib/api/extensions";
 const STATUS_LABELS: Partial<Record<MCPServerStatus, { label: string; tone: "warning" | "neutral" }>> = {
   untested: { label: "待测试", tone: "neutral" },
   missing_variables: { label: "需要填写变量", tone: "warning" },
+  invalid_configuration: { label: "配置有误", tone: "warning" },
   authorization_required: { label: "需要登录授权", tone: "warning" },
 };
 
@@ -35,7 +36,7 @@ export function MCPServerStatusLine({
   onCancel: () => void;
 }) {
   const result = testState?.phase === "done" ? testState.result : null;
-  const needsSignIn = status === "authorization_required" || result?.failure_kind === "authorization_required";
+  const needsSignIn = status === "authorization_required" || result?.needs_sign_in === true;
   // 主状态已经说了「需要登录授权」「需要填写变量」时，不再把同一件事当成失败原因重复一遍。
   const showResult = result !== null && !(status !== null && STATUS_EXPLAINED_FAILURES.has(result.failure_kind ?? ""));
   const badge = status !== null ? STATUS_LABELS[status] : undefined;

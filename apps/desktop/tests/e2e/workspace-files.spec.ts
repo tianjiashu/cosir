@@ -280,6 +280,10 @@ test("阅读优先、每文件偏好、标签键盘和搜索恢复", async ({ pa
   await expect(surface.locator(".cm-findMatch-current")).toHaveText("greet");
   await expect(surface.getByRole("button", { name: "在整个文件中查找", exact: true })).toHaveCount(0);
   expect(findRequests).toEqual([]);
+  // 查找下一处的快捷键（登记表 findNext）在阅读器里同样生效；只有一处时回绕停在原处。只读文件没有替换。
+  await page.keyboard.press(process.platform === "darwin" ? "Meta+g" : "F3");
+  await expect(surface.getByText("1/1", { exact: true })).toBeVisible();
+  await expect(surface.getByRole("button", { name: "切换替换" })).toHaveCount(0);
   await surface.getByRole("button", { name: "关闭搜索", exact: true }).click();
   await expect(surface.locator(".cm-findMatch")).toHaveCount(0);
   await surface.getByRole("button", { name: "切换目录面板", exact: true }).click();
@@ -483,7 +487,11 @@ test("搜索停止重试、未扫描原因与编码变更重跑查找", async ({
   await surface.getByRole("button", { name: "在整个文件中查找", exact: true }).click();
   await expect.poll(() => findStarted).toBe(true);
   await surface.getByRole("button", { name: "更多阅读选项", exact: true }).click();
+  // 编码平时只说识别结果，点「更改」才出下拉；手动选过之后显示「恢复自动」。
+  await expect(page.getByText("编码 UTF-8 · 自动识别")).toBeVisible();
+  await page.getByRole("button", { name: "更改", exact: true }).click();
   await page.getByLabel("文本编码").selectOption("cp1252");
+  await expect(page.getByRole("button", { name: "恢复自动", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   // 换编码后查找按新编码重跑：旧请求被中止，结果来自新编码。
   await expect.poll(() => findEncodings.at(-1)).toBe("cp1252");
@@ -702,4 +710,73 @@ test("链接指向不存在的文件：不留坏标签，提到的文件名改�
   await expect(surface.getByRole("button", { name: "重新读取" })).toHaveCount(0);
   await surface.getByRole("button", { name: "关闭标签" }).click();
   await expect(surface.getByRole("tab", { name: "main.py", exact: true })).toHaveCount(0);
+});
+
+// 目的：Markdown 的阅读位置按行记录，渲染与源码两个视图共用，渲染视图在内容异步变高时守住同一段；
+// 潜在缺陷：按像素恢复，图片或 Mermaid 图加载后上面被撑高，回来时落在别的段落；切视图落到不相干的地方。
+test("Markdown 渲染与源码共用阅读位置，内容异步变高后仍停在同一段", async ({ page }) => {
+  await mockFiles(page);
+  const long = Array.from({ length: 120 }, (_, index) => `第 ${index + 1} 段：阅读位置回归。`).join("\n\n");
+  await page.route("**/workspaces/*/files/text?*", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("path") !== "README.md") return route.fallback();
+    return route.fulfill({ json: { text: long, offset: 0, next_offset: null, size: long.length, version: "v1", encoding: "utf-8" } });
+  });
+  await page.goto("/");
+  await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
+  await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
+  await page.getByRole("button", { name: "浏览工作区文件" }).click();
+  const surface = page.getByTestId("workspace-files-surface");
+  await surface.getByRole("treeitem", { name: "README.md", exact: true }).click();
+  const markdown = surface.locator(".aui-md");
+  await expect(markdown).toContainText("第 120 段");
+  const host = markdown.locator("xpath=..");
+  // 渲染视图顶部的那一段（第一个底边在视口顶部之下的段落）。
+  const renderedTop = () => host.evaluate((element) => {
+    const top = element.getBoundingClientRect().top;
+    return [...element.querySelectorAll("p")].find((p) => p.getBoundingClientRect().bottom > top + 1)?.textContent ?? "";
+  });
+  const sourceTop = () => surface.locator(".cm-scroller").evaluate((element) => {
+    const top = element.getBoundingClientRect().top;
+    return [...element.querySelectorAll(".cm-line")].find((line) => line.textContent && line.getBoundingClientRect().bottom > top + 1)?.textContent ?? "";
+  });
+  await host.evaluate((element) => {
+    const target = [...element.querySelectorAll("p")].find((p) => p.textContent?.startsWith("第 60 段"))!;
+    element.scrollTop += target.getBoundingClientRect().top - element.getBoundingClientRect().top;
+  });
+  await expect.poll(renderedTop).toContain("第 60 段");
+
+  await surface.getByRole("button", { name: "查看源码", exact: true }).click();
+  await expect.poll(sourceTop).toContain("第 60 段");
+  await surface.getByRole("button", { name: "查看预览", exact: true }).click();
+  await expect.poll(renderedTop).toContain("第 60 段");
+
+  // 模拟上方的图片异步加载完成、把内容撑高：用户还没动过，就仍停在同一段。
+  await markdown.evaluate((element) => {
+    const filler = document.createElement("div");
+    filler.style.height = "800px";
+    element.firstElementChild!.before(filler);
+  });
+  await expect.poll(renderedTop).toContain("第 60 段");
+});
+
+// 目的：工作区信息晚于对话第一帧到达时，已渲染消息里的链接在工作区就绪后变成可点，点击按最新的工作区打开；
+// 潜在缺陷：链接组件靠换实例传递打开器，Streamdown 最外层缓存不看 components，链接永远停在纯文本。
+test("工作区晚于第一帧到达：消息里的链接就绪后可点并在文件面板打开", async ({ page, request }) => {
+  await mockFiles(page);
+  await page.route(/\/workspaces$/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.fallback();
+  });
+  await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
+  const state = await readState(request, 42);
+  state.messages[1].parts = [{ type: "text" as const, text: "入口见 [main](main.py)，核心在 `main.py`。", status: "completed" as const }];
+  await seedState(request, 42, state);
+  await page.goto("/sessions/42");
+  const message = page.locator('main [data-index="1"]');
+  await expect(message).toContainText("入口见");
+  const link = message.getByRole("link", { name: "main" });
+  await expect(link).toBeVisible();
+  await link.click();
+  const surface = page.getByTestId("workspace-files-surface");
+  await expect(surface.getByRole("tab", { name: "main.py", exact: true })).toHaveAttribute("aria-selected", "true");
 });

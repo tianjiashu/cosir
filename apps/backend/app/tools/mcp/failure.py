@@ -40,6 +40,18 @@ class MCPFailureKind(StrEnum):
     OTHER = "other"
 
 
+# 「下一步是登录授权」：首次需要授权、授权超时、授权被拒都一样，用户再点一次「登录授权」即可。
+_SIGN_IN_KINDS = frozenset(
+    {
+        MCPFailureKind.AUTHORIZATION_REQUIRED,
+        MCPFailureKind.AUTHORIZATION_TIMEOUT,
+        MCPFailureKind.AUTHORIZATION_DENIED,
+    }
+)
+# 失败多半是一时的（服务没起、网络抖动），或者缺的是凭据而不是定义本身有错：都不说明这份定义在本机用不了，
+# 测试记录保留。认不出原因的（``OTHER``）按「失败即关闭」撤销。
+_KEEPS_TEST_KINDS = _SIGN_IN_KINDS | {MCPFailureKind.UNREACHABLE, MCPFailureKind.TIMEOUT}
+
 _STATUS_HINTS: dict[MCPFailureKind, str] = {
     MCPFailureKind.MISSING_VARIABLES: "缺少变量",
     MCPFailureKind.AUTHORIZATION_REQUIRED: "需要登录",
@@ -136,6 +148,22 @@ class MCPFailure:
             case MCPFailureKind.OTHER:
                 return self.detail
 
+    @property
+    def needs_sign_in(self) -> bool:
+        """下一步是让用户点「登录授权」：配置页据此给出按钮，前端不按归类名自行判断。"""
+
+        return self.kind in _SIGN_IN_KINDS
+
+    @property
+    def invalidates_test(self) -> bool:
+        """这次失败是否说明这份定义在本机用不了：是就撤销测试记录（Agent 不再看到这个服务）。
+
+        超时、连不上多半是一时的；需要登录说明缺的是凭据，Agent 照样能看到它、调用时得到「请用户登录」。
+        撤销这些会让一次网络抖动就让 Agent 失去服务，用户还得重测。
+        """
+
+        return self.kind not in _KEEPS_TEST_KINDS
+
     def status_hint(self) -> str:
         """调用行的短提示（≤8 字）：与配置页同一份归类，只说原因的类别，细节在配置页与给模型的说法里。"""
 
@@ -152,11 +180,7 @@ class MCPFailure:
                     f"MCP server {name} needs environment variables that are not set: {names}. "
                     "Ask the user to set them in cosir's MCP settings, then retry."
                 )
-            case (
-                MCPFailureKind.AUTHORIZATION_REQUIRED
-                | MCPFailureKind.AUTHORIZATION_TIMEOUT
-                | MCPFailureKind.AUTHORIZATION_DENIED
-            ):
+            case kind if kind in _SIGN_IN_KINDS:
                 return (
                     f"MCP server {name} needs the user to sign in. Ask the user to open cosir's "
                     "MCP settings and use 'Sign in' on this server, then retry."
@@ -174,7 +198,13 @@ class MCPFailure:
                     f"MCP server {name} could not start: command "
                     f"{self.server.config.command!r} was not found. Ask the user to install it."
                 )
-            case MCPFailureKind.UNREACHABLE | MCPFailureKind.TIMEOUT | MCPFailureKind.OTHER:
+            case MCPFailureKind.TIMEOUT:
+                # 只来自建连或列目录（调用本身的时限由 ``mcp_tool`` 另行说明），两者都没有副作用。
+                return (
+                    f"MCP server {name} did not respond in time (a stdio server may still be "
+                    "starting); the request was not completed. Retry once."
+                )
+            case MCPFailureKind.UNREACHABLE | MCPFailureKind.OTHER:
                 return (
                     f"MCP server {name} failed: {self.detail}. "
                     "Check whether the server is running, then retry once."

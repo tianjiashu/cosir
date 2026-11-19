@@ -42,17 +42,24 @@ class _AuthServer:
     refreshes: int = 0
     authorize_queries: list[dict[str, str]] = field(default_factory=list)
     valid_tokens: set[str] = field(default_factory=set)
+    # 像 OAuth 2.1 要求公共客户端那样轮换 refresh token：每次刷新都作废用掉的那一个。
+    valid_refresh_tokens: set[str] = field(default_factory=set)
     issued: int = 0
+    expires_in: int = 3600
+    # 置位后 MCP 端点对请求一律回 500（模拟长连接中途服务端出错）。
+    failing: bool = False
 
     def issue(self) -> dict[str, object]:
         self.issued += 1
         access = f"access-{self.issued}"
+        refresh = f"refresh-{self.issued}"
         self.valid_tokens.add(access)
+        self.valid_refresh_tokens.add(refresh)
         return {
             "access_token": access,
             "token_type": "Bearer",
-            "expires_in": 3600,
-            "refresh_token": f"refresh-{self.issued}",
+            "expires_in": self.expires_in,
+            "refresh_token": refresh,
         }
 
 
@@ -101,9 +108,15 @@ async def _protected_server() -> AsyncIterator[tuple[_AuthServer, str]]:
         if path == "/token":
             form = parse_qs((await request.body()).decode())
             if form["grant_type"] == ["refresh_token"]:
+                [refresh] = form["refresh_token"]
+                if refresh not in state.valid_refresh_tokens:
+                    return JSONResponse({"error": "invalid_grant"}, status_code=400)
+                state.valid_refresh_tokens.discard(refresh)
                 state.refreshes += 1
             return JSONResponse(state.issue())
         if path.startswith("/mcp"):
+            if state.failing and request.method == "POST":
+                return PlainTextResponse("boom", status_code=500)
             token = request.headers.get("authorization", "").removeprefix("Bearer ")
             if token not in state.valid_tokens:
                 return PlainTextResponse(
@@ -288,5 +301,170 @@ def test_cancelled_sign_in_stops_waiting_and_a_new_sign_in_works() -> None:
             with pytest.raises(KeyError):
                 await waiting
             assert (await _sign_in(server)).success is True
+
+    asyncio.run(scenario())
+
+
+def _page_status(name: str = "remote") -> str:
+    """配置页上这个服务的主状态（与 ``GET`` 服务列表同一条推导）。"""
+
+    [entry] = [item for item in MCPConfigurationService().visible() if item.server.name == name]
+    return entry.status
+
+
+# B1 潜在缺陷：授权记录按服务名只存一条、地址一变就整条换掉，测一份改了地址的草稿（不保存）就把
+# 已保存服务的令牌抹掉；配置页查不到旧地址的记录，只看「测试通过」，还显示「可用」。
+def test_testing_a_draft_with_another_url_keeps_the_saved_servers_sign_in() -> None:
+    async def scenario() -> None:
+        async with _protected_server() as (auth, base):
+            saved = _server(base)
+            MCPConfigurationService().update([saved.config])
+            assert (await _sign_in(saved)).success is True
+            assert _page_status() == "available"
+
+            # 编辑框里把地址改成另一个（同一服务的不同路径）去测试，不保存。
+            draft = saved.config.model_copy(update={"url": f"{base}/mcp?draft=1"})
+            probe = await MCPConfigurationService().test(draft)
+            assert probe.success is False
+
+            record = MCPMachineState.read().oauth(saved, f"{base}/mcp")
+            assert record is not None and record.tokens is not None, "已保存服务的令牌被草稿测试抹掉了"
+            assert json.loads(await _call_through_pool(saved)) == {"echo": "hi"}
+            assert _page_status() == "available"
+
+    asyncio.run(scenario())
+
+
+# B2 潜在缺陷：「需要重新登录」只在拿到新令牌时清掉；改用静态 token 后测试通过，页面仍卡在「需要登录授权」。
+def test_passing_test_clears_a_stale_sign_in_required_mark() -> None:
+    async def scenario() -> None:
+        async with _protected_server() as (auth, base):
+            server = _server(base)
+            MCPConfigurationService().update([server.config])
+            with pytest.raises(BaseException) as error:
+                await _call_through_pool(server)  # Agent 调用发现没有令牌，打上「需要重新登录」
+            assert MCPFailure.from_exception(error.value, server).kind == MCPFailureKind.AUTHORIZATION_REQUIRED
+            assert _page_status() == "authorization_required"
+
+            # 用户改为在请求头里写静态 token（地址不变），保存并测试，测试通过。
+            auth.valid_tokens.add("static-token")
+            fixed = server.config.model_copy(update={"headers": {"Authorization": "Bearer static-token"}})
+            MCPConfigurationService().update([fixed])
+            result = await MCPConfigurationService().test(fixed)
+            assert result.success is True
+
+            assert _page_status() == "available", "测试已通过，页面仍显示需要登录授权"
+
+    asyncio.run(scenario())
+
+
+# 潜在缺陷：为了不让草稿影响已保存配置而不让草稿落盘，会让「新建服务、先登录、再保存」丢掉令牌。
+def test_signing_in_before_saving_keeps_the_sign_in_after_saving() -> None:
+    async def scenario() -> None:
+        async with _protected_server() as (auth, base):
+            draft = _server(base)
+            assert (await _sign_in(draft)).success is True
+
+            MCPConfigurationService().update([draft.config])
+
+            assert _page_status() == "available"
+            assert json.loads(await _call_through_pool(draft)) == {"echo": "hi"}
+            assert auth.issued == 1
+
+    asyncio.run(scenario())
+
+
+def test_saving_keeps_only_the_current_url_sign_in() -> None:
+    """授权按地址分开存：保存后只留当前地址的那份，测过的草稿地址随之裁掉。"""
+
+    saved = _server("http://127.0.0.1:1")
+    MCPMachineState.update_oauth(saved, "http://127.0.0.1:1/mcp", tokens={"access_token": "kept"})
+    MCPMachineState.update_oauth(saved, "http://127.0.0.1:1/other", needs_authorization=True)
+
+    MCPConfigurationService().update([saved.config])
+
+    assert set(MCPMachineState.read().server(saved).oauth) == {"http://127.0.0.1:1/mcp"}
+
+
+# B3 潜在缺陷：SDK 只在初始化时读一次存储；配置页测试刷新令牌、轮换掉 refresh token 后，连接池长连接手里的
+# 旧 refresh token 作废，下次刷新失败就被判成「需要登录」。
+def test_a_long_lived_connection_refreshes_with_the_latest_stored_token() -> None:
+    async def scenario() -> None:
+        async with _protected_server() as (auth, base):
+            auth.expires_in = 1
+            server = _server(base)
+            assert (await _sign_in(server)).success is True
+            pool = MCPConnectionPool()
+            try:
+
+                async def call() -> str:
+                    future = pool.submit(pool.call_tool(server, "echo", {"value": "hi"}))
+                    return MCPCallResult.from_sdk(await asyncio.wrap_future(future)).text
+
+                assert json.loads(await call()) == {"echo": "hi"}  # 长连接拿着第一份令牌
+                await asyncio.sleep(1.2)
+                # 配置页测试用另一个 provider 刷新，服务端轮换掉第一份 refresh token。
+                assert (await MCPConfigurationService().test(server.config)).success is True
+                assert auth.refreshes == 1
+                await asyncio.sleep(1.2)
+
+                assert json.loads(await call()) == {"echo": "hi"}
+                assert auth.refreshes == 2
+                assert MCPMachineState.read().oauth(server, f"{base}/mcp").needs_authorization is False
+            finally:
+                await asyncio.to_thread(pool.close)
+
+    asyncio.run(scenario())
+
+
+async def _call_with_deadline(pool: MCPConnectionPool, server: ScopedMCPServer) -> str:
+    """经长连接调用一次；10 秒兜底只为让挂住的调用变成失败的断言，而不是卡住整个测试。"""
+
+    future = pool.submit(pool.call_tool(server, "echo", {"value": "hi"}))
+    result = await asyncio.wait_for(asyncio.wrap_future(future), timeout=10)
+    return MCPCallResult.from_sdk(result).text
+
+
+# 潜在缺陷：长连接建好之后服务端撤销了令牌（refresh 也失效），授权失败发生在传输层的后台任务里，没有传回
+# 正在等响应的调用，调用一直挂到外层 90 秒时限，最后被说成「调用超时、服务可能已执行」。
+def test_revoked_sign_in_on_a_live_connection_fails_the_call_promptly() -> None:
+    async def scenario() -> None:
+        async with _protected_server() as (auth, base):
+            server = _server(base)
+            assert (await _sign_in(server)).success is True
+            pool = MCPConnectionPool()
+            try:
+                assert json.loads(await _call_with_deadline(pool, server)) == {"echo": "hi"}
+                auth.valid_tokens.clear()
+                auth.valid_refresh_tokens.clear()
+
+                with pytest.raises(BaseException) as error:
+                    await _call_with_deadline(pool, server)
+
+                assert MCPFailure.from_exception(error.value, server).kind == MCPFailureKind.AUTHORIZATION_REQUIRED
+                assert MCPMachineState.read().oauth(server, f"{base}/mcp").needs_authorization is True
+            finally:
+                await asyncio.to_thread(pool.close)
+
+    asyncio.run(scenario())
+
+
+# 同一根因的另一种表现：长连接中途服务端回 500，调用同样挂住而不是报连接失败。
+def test_server_error_on_a_live_connection_fails_the_call_promptly() -> None:
+    async def scenario() -> None:
+        async with _protected_server() as (auth, base):
+            server = _server(base)
+            assert (await _sign_in(server)).success is True
+            pool = MCPConnectionPool()
+            try:
+                assert json.loads(await _call_with_deadline(pool, server)) == {"echo": "hi"}
+                auth.failing = True
+
+                with pytest.raises(BaseException) as error:
+                    await _call_with_deadline(pool, server)
+
+                assert not isinstance(error.value, asyncio.TimeoutError), "调用挂住了，没有报错"
+            finally:
+                await asyncio.to_thread(pool.close)
 
     asyncio.run(scenario())

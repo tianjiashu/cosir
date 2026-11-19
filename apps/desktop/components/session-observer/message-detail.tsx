@@ -3,7 +3,9 @@ import { ArrowLeftIcon, CopyIcon, WrapTextIcon } from "lucide-react";
 import { copyText } from "@/lib/clipboard";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
-import { ReadonlyTextViewer } from "@/components/text-viewer/readonly-text-viewer";
+import { ReadonlyTextViewer, type TextViewerHandle } from "@/components/text-viewer/readonly-text-viewer";
+import { EditorFindScope } from "@/components/code-editor/editor-find-scope";
+import type { ReadingAnchor } from "@/lib/reading/reading-anchor";
 import type { ObservedMessage } from "@/lib/api/session-observation";
 import {
   cacheUsage,
@@ -37,7 +39,8 @@ export function MessageDetail({
 }) {
   const [preferredTab, setTab] = useState<DetailTab>("content");
   const [wrap, setWrap] = useState(true);
-  const scrollPositions = useRef(new Map<string, number>());
+  const scrollPositions = useRef(new Map<string, ReadingAnchor>());
+  const viewer = useRef<TextViewerHandle>(null);
 
   const related = useMemo(
     () => relatedMessages(message, messages),
@@ -238,22 +241,30 @@ export function MessageDetail({
           </dl>
         </div>
       )}
-      <div
-        className="min-h-0 flex-1 text-xs"
-        data-testid="observer-detail-content"
+      <EditorFindScope
+        target={{
+          find: (term, direction) => viewer.current?.find(term, direction) ?? null,
+          refresh: (term) => viewer.current?.refresh(term) ?? null,
+        }}
+        contentKey={readingKey}
+        label="在消息中查找"
+        className="min-h-0 flex-1"
       >
-        <ReadonlyTextViewer
-          key={readingKey}
-          text={text}
-          name={plainText ? "message.txt" : "message.json"}
-          ariaLabel={`${tabs.find((item) => item.value === tab)!.label} · 消息 #${message.sequence}`}
-          wrap={wrap}
-          scrollTop={scrollPositions.current.get(readingKey) ?? 0}
-          onScroll={(top) => {
-            scrollPositions.current.set(readingKey, top);
-          }}
-        />
-      </div>
+        <div className="h-full" data-testid="observer-detail-content">
+          <ReadonlyTextViewer
+            ref={viewer}
+            key={readingKey}
+            text={text}
+            name={plainText ? "message.txt" : "message.json"}
+            ariaLabel={`${tabs.find((item) => item.value === tab)!.label} · 消息 #${message.sequence}`}
+            wrap={wrap}
+            anchor={scrollPositions.current.get(readingKey)}
+            onAnchorChange={(anchor) => {
+              scrollPositions.current.set(readingKey, anchor);
+            }}
+          />
+        </div>
+      </EditorFindScope>
     </section>
   );
 }

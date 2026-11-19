@@ -56,7 +56,7 @@ export function ImagePreview({
           </TooltipIconButton>
           <AddToChatButton workspaceId={workspaceId} path={info.path} />
         </>}
-        options={<p className="text-xs text-muted-foreground">
+        details={<p>
           {size.width > 0 ? `${size.width} × ${size.height}` : "尺寸读取中"}
           {reduced && " · 大图缩略预览"}
         </p>}

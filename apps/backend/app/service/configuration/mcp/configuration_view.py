@@ -16,8 +16,16 @@ from app.config.settings import Settings
 from app.service.configuration.mcp.configuration import ScopedMCPServer
 from app.service.configuration.mcp.machine_state import MCPMachineState
 
-# 按优先级从高到低：停用了就不谈其他；缺必填变量时连不上；授权失效时 Agent 调不通；再看有没有测过。
-ServerStatus = Literal["disabled", "missing_variables", "authorization_required", "untested", "available"]
+# 按优先级从高到低：停用了就不谈其他；缺必填变量时连不上；变量值展开后不合法（如 url 少了 http://）时
+# 也连不上；授权失效时 Agent 调不通；再看有没有测过。
+ServerStatus = Literal[
+    "disabled",
+    "missing_variables",
+    "invalid_configuration",
+    "authorization_required",
+    "untested",
+    "available",
+]
 # ``cosir``：值在 cosir 的系统 ``.env`` 里，配置页可以改；``shell``：值来自用户的 shell 环境，启动时优先于
 # ``.env``（``Settings`` 只 ``setdefault``），配置页改不动，只能在 shell 里改。
 VariableSource = Literal["unset", "cosir", "shell"]
@@ -84,9 +92,15 @@ def _status(
         return "disabled"
     if any(item.source == "unset" and not item.has_default for item in variables):
         return "missing_variables"
-    if server.config.transport != "stdio":
-        # 必填变量都在，展开不会失败；授权记录认的是实际地址。
-        record = machine.oauth(server, server.connection_config().url)
+    try:
+        # 必填变量都在，展开只可能因为值不合法而失败：收成这一个服务的状态，不让整个列表（与保存后的返回）
+        # 因一个服务报错。
+        connection = server.connection_config()
+    except ValueError:
+        return "invalid_configuration"
+    # 授权记录认的是实际地址。不走 OAuth 的服务（含改用静态 token 的）不看这条标记：它只对 OAuth 有意义。
+    if server.config.uses_oauth:
+        record = machine.oauth(server, connection.url)
         if record is not None and record.needs_authorization:
             return "authorization_required"
     return "available" if machine.passed(server) else "untested"

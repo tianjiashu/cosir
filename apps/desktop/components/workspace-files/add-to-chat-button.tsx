@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * 阅读工具栏的「添加到对话」：有选区时添加选区指针（源码行号，或渲染视图 / PDF 里的行 / 页），否则添加
- * 整个文件。同时承接 Ctrl/Cmd+L。用图标而不用会变的文字区分两种状态：有选区时按钮高亮，提示里写明
+ * 整个文件。同时承接快捷键 `addToChat`。用图标而不用会变的文字区分两种状态：有选区时按钮高亮，提示里写明
  * 添加什么。引用只带路径与定位，正文由 Agent 按路径自己读。
  */
 export function AddToChatButton({ workspaceId, path, selection = null }: {

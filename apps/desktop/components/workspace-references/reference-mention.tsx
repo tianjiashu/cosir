@@ -10,6 +10,7 @@ import {
 import { useReferenceBridge } from "./reference-bridge";
 import { workspaceDirectoryRef, workspaceFileRef } from "@/lib/workspace-references/ref-capsule";
 import { WorkspaceFileIcon } from "@/components/workspace-files/file-icon";
+import { formatKeys } from "@/lib/keyboard/shortcuts";
 
 /** 使用编辑器的真实选区识别 @；输入法组合输入期间不提交候选，也不抢 Enter 发送。 */
 export function ReferenceMention({
@@ -157,7 +158,7 @@ export function ReferenceMention({
     >
       <p className="px-2 py-1 text-xs text-muted-foreground">
         {status ||
-          (entries.length ? "选择文件或目录 · Esc 关闭" : "没有匹配项")}
+          (entries.length ? `选择文件或目录 · ${formatKeys("escape")} 关闭` : "没有匹配项")}
       </p>
       {entries.map((entry, i) => (
         <button

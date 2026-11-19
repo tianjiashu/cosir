@@ -1,4 +1,5 @@
-import { matchesShortcut } from "@/lib/keyboard/shortcuts";
+import type { HostPlatform } from "@/electron/shared/host-contract";
+import { isMacKeyboard, matchesShortcut } from "@/lib/keyboard/shortcuts";
 
 /**
  * 交互终端的按键归属规则（纯函数，沿用 VS Code 约定）。
@@ -7,7 +8,9 @@ import { matchesShortcut } from "@/lib/keyboard/shortcuts";
  * - macOS：Cmd+C / Cmd+V 复制粘贴，Ctrl+C 恒为中断。
  * - 作为中断送入的 Ctrl+C 与其他按键一样走普通输入通道（后端从不拒绝用户输入）；作为复制的 Ctrl+C
  *   不产生任何输入，因此后端不会把它记为用户在打字、不会让 Agent 的输入等待。
- * - 面板内搜索与切换终端（让给应用开关面板，不送入终端）的键位登记在 `lib/keyboard/shortcuts.ts`。
+ * - 面板内搜索、切换终端（让给应用开关面板，不送入终端）与恒定的复制 / 粘贴键（`terminalCopy` / `terminalPaste`，
+ *   右键菜单的按键提示也取它们）登记在 `lib/keyboard/shortcuts.ts`；「有选区时 Ctrl+C 复制、否则中断」与普通
+ *   Ctrl+V 是终端语义，不是快捷键，留在这里。
  * - 输入法组合中（IME）一律交给 xterm，不拦截。
  * - macOS 的行编辑键改发 shell 认识的序列（`{ send }`）：xterm 6 把 Option+方向键编成 `ESC[1;3D`，
  *   zsh / bash 默认没有绑定；Cmd+方向键与 Cmd+Backspace 则什么都不发。Windows 不翻译：Ctrl+方向键、
@@ -31,14 +34,13 @@ const MAC_COMMAND_SEQUENCES: Record<string, string> = { ArrowLeft: "\x01", Arrow
 
 export function resolveTerminalKeyAction(
   event: TerminalKeyEvent,
-  { isMac, hasSelection }: { isMac: boolean; hasSelection: boolean },
+  { platform, hasSelection }: { platform: HostPlatform; hasSelection: boolean },
 ): TerminalKeyAction {
   if (event.isComposing) return "terminal";
   const key = event.key.toLowerCase();
-  const keyboard = isMac ? "darwin" : "win32";
-  if (matchesShortcut(event, "toggleTerminal", keyboard)) return "app";
-  if (matchesShortcut(event, "terminalSearch", keyboard)) return "search";
-  if (isMac) {
+  if (matchesShortcut(event, "toggleTerminal", platform)) return "app";
+  if (matchesShortcut(event, "terminalSearch", platform)) return "search";
+  if (isMacKeyboard(platform)) {
     if (!event.ctrlKey && !event.shiftKey) {
       const sequence = event.altKey && !event.metaKey
         ? MAC_OPTION_SEQUENCES[event.key]
@@ -47,14 +49,13 @@ export function resolveTerminalKeyAction(
           : undefined;
       if (sequence !== undefined) return { send: sequence };
     }
-    if (!event.metaKey || event.ctrlKey || event.altKey) return "terminal";
-    if (key === "c") return hasSelection ? "copy" : "app";
-    if (key === "v") return "native-paste";
+    if (matchesShortcut(event, "terminalCopy", platform)) return hasSelection ? "copy" : "app";
+    if (matchesShortcut(event, "terminalPaste", platform)) return "native-paste";
     return "terminal";
   }
+  if (matchesShortcut(event, "terminalCopy", platform)) return "copy";
+  if (matchesShortcut(event, "terminalPaste", platform)) return "paste";
   if (!event.ctrlKey || event.metaKey || event.altKey) return "terminal";
-  if (event.shiftKey && key === "c") return "copy";
-  if (event.shiftKey && key === "v") return "paste";
   if (!event.shiftKey && key === "c") return hasSelection ? "copy" : "terminal";
   if (!event.shiftKey && key === "v") return "native-paste";
   return "terminal";

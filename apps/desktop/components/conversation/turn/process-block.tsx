@@ -11,7 +11,7 @@ import { ImageStrip } from "@/components/image/image-strip";
 import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
 import type { CallImage } from "@/lib/assistant/tools/call-images";
 import { cn } from "@/lib/utils";
-import { DiffStat } from "../tools/call-views/file-changes-view";
+import { DiffStat } from "../tools/file-diff";
 
 /**
  * 活动段这一行：运行时是「扫光的当前状态 · 这个状态的计时 · 改动量 · 箭头」，思考计这一次思考、执行计那次

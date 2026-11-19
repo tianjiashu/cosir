@@ -11,10 +11,11 @@ import { workspaceFiles, useFilesStore } from "@/lib/workspace-files/workspace-f
 import { useTextPage } from "@/lib/workspace-files/use-text-page";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
-import { EncodingSelect } from "./encoding-select";
+import { EncodingControl } from "./encoding-control";
+import { shortcutLabel, withShortcut } from "@/lib/keyboard/shortcuts";
 import { SearchIcon } from "lucide-react";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { ReadingToolbar, type ReadingNavigation } from "./reading-toolbar";
+import { ReadingMenuItem, ReadingToolbar, type ReadingNavigation } from "./reading-toolbar";
 import { useTextFind } from "./text-find";
 import { OutlineButton, revealSourceLine } from "@/components/markdown/outline-button";
 import type { TextViewerHandle } from "@/components/text-viewer/readonly-text-viewer";
@@ -42,7 +43,7 @@ export function TextPreview({
   view?: ReactNode;
 }) {
   const [selection, setSelection] = useState<RefCapsule | null>(null);
-  const { page, position, offset, encoding, tail, before, go, setEncoding, setPosition } = useTextPage(workspaceId, info);
+  const { page, position, offset, encoding, manualEncoding, tail, before, go, setEncoding, resetEncoding, setPosition } = useTextPage(workspaceId, info);
   const preference = useFilesStore(
     (s) => workspaceFiles(s.byWorkspace, workspaceId).preferences[info.path],
   );
@@ -103,10 +104,8 @@ export function TextPreview({
       wrap={wrap}
       reveal={wholeFile ? reveal : undefined}
       onRevealed={() => setPosition({ reveal: undefined })}
-      scrollTop={position?.scrollTop ?? 0}
-      onScroll={(scrollTop) =>
-        setPosition({ scrollTop })
-      }
+      anchor={position?.anchor}
+      onAnchorChange={(anchor) => setPosition({ anchor })}
     />
   );
   const markdown = page.data && (
@@ -122,10 +121,8 @@ export function TextPreview({
       }}
       workspaceId={workspaceId}
       path={info.path}
-      scrollTop={position?.previewScrollTop ?? 0}
-      onScroll={(previewScrollTop) =>
-        setPosition({ previewScrollTop })
-      }
+      anchor={position?.anchor}
+      onAnchorChange={(anchor) => setPosition({ anchor })}
     />
   );
   return (
@@ -153,7 +150,7 @@ export function TextPreview({
           )}
         </>}
         actions={<>
-          <TooltipIconButton ref={searchTrigger} tooltip="查找文件内容" aria-label="查找文件内容" className="size-8 shrink-0" aria-expanded={find.open}
+          <TooltipIconButton ref={searchTrigger} tooltip={withShortcut("查找文件内容", "findInFile")} aria-label="查找文件内容" className="size-8 shrink-0" aria-expanded={find.open}
             onClick={find.toggle}><SearchIcon /></TooltipIconButton>
           <AddToChatButton
             workspaceId={workspaceId}
@@ -161,26 +158,11 @@ export function TextPreview({
             selection={selection}
           />
         </>}
-        options={<>
-          <EncodingSelect value={encoding} onChange={setEncoding} />
-          {!rendered && (
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-pressed={wrap}
-              onClick={() =>
-                setPreference(workspaceId, info.path, { wrap: !wrap })
-              }
-            >
-              自动换行
-            </Button>
-          )}
-          <span className="text-muted-foreground">
-            {rendered
-              ? "Ctrl/Cmd+F 查找 · Enter / Shift+Enter 下一处 / 上一处"
-              : "Ctrl/Cmd+F 查找 · Alt+G 跳转到行"}
-          </span>
+        options={rendered ? undefined : <>
+          <ReadingMenuItem checked={wrap} onClick={() => setPreference(workspaceId, info.path, { wrap: !wrap })}>自动换行</ReadingMenuItem>
+          <ReadingMenuItem shortcut={shortcutLabel("goToLine")} onClick={() => editor.current?.goToLine()}>跳转到行…</ReadingMenuItem>
         </>}
+        details={<EncodingControl encoding={encoding} detected={info.encoding} manual={manualEncoding} onChange={setEncoding} onReset={resetEncoding} />}
       />
       {/* 查找浮层挂在不随读取状态变化的容器上：换编码、换分段时查找条与输入的词都保留。 */}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -221,7 +203,7 @@ export function TextPreview({
               setPosition({
                 before: page.data!.offset,
                 tail: false,
-                scrollTop: 0,
+                anchor: undefined,
               })
             }
           >

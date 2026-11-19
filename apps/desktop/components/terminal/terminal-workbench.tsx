@@ -49,7 +49,7 @@ export function TerminalWorkbench({ sessionId }: { sessionId: number }) {
   // 搜索只属于打开它时可见的那个会话；切走、收起面板即关闭（见下方渲染期收敛）。
   const [searchSessionId, setSearchSessionId] = useState<string | null>(null);
   const [searchResult, setSearchResult] = useState<{ index: number; count: number } | null>(null);
-  // 每次「打开查找」递增：查找条已开着时再按 Ctrl/Cmd+F（或右键「查找」）也把焦点拉回输入框。
+  // 每次「打开查找」递增：查找条已开着时再按查找键（`terminalSearch`，或右键「查找」）也把焦点拉回输入框。
   const [searchFocusKey, setSearchFocusKey] = useState(0);
   const viewsRef = useRef(new Map<string, TerminalView>());
   const sectionRef = useRef<HTMLElement | null>(null);

@@ -1,5 +1,5 @@
 import { EditorSelection, type EditorState, type TransactionSpec } from "@codemirror/state";
-import { EditorView } from "codemirror";
+import type { EditorView } from "@codemirror/view";
 
 import { isImeComposing } from "@/lib/keyboard/ime";
 import { matchesShortcut, type ShortcutId } from "@/lib/keyboard/shortcuts";

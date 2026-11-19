@@ -90,6 +90,9 @@
   border: 0;
   border-radius: 0;
   background: var(--background);
+  /* 库默认 text-sm；代码阅读字号与 CodeMirror 共用 globals.css 的 --text-code。 */
+  font-size: var(--text-code);
+  line-height: var(--text-code--line-height);
 }
 
 /*

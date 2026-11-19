@@ -6,7 +6,7 @@ import { Terminal, type IDisposable, type ITheme } from "@xterm/xterm";
 
 import { requestConfirmation } from "@/lib/confirm/confirm-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { isMac, isWindows } from "@/lib/platform";
+import { isWindows, platform } from "@/lib/platform";
 import {
   TerminalConnection,
   type TerminalConnectionState,
@@ -342,7 +342,7 @@ export class TerminalView {
   }
 
   private handleKey(event: KeyboardEvent): boolean {
-    const action = resolveTerminalKeyAction(event, { isMac, hasSelection: this.terminal.hasSelection() });
+    const action = resolveTerminalKeyAction(event, { platform, hasSelection: this.terminal.hasSelection() });
     // keyup / keypress 跟随 keydown 的归属：被拦截的组合键不应再以 keypress 漏进终端。
     if (event.type !== "keydown") return action === "terminal";
     if (typeof action === "object") {

@@ -189,6 +189,7 @@ def _test_response(result: MCPServerTestResult) -> MCPServerTestResponse:
         tools=result.tools,
         error=result.error,
         failure_kind=result.failure_kind,
+        needs_sign_in=result.needs_sign_in,
         agent_available=result.agent_available,
     )
 

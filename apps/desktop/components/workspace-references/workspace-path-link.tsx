@@ -12,7 +12,7 @@ import { useOpenWorkspacePath } from "./use-open-workspace-path";
  * 路径不在当前工作区内或没有活动工作区时退化为同样样式的纯文本，不给出点了没反应的入口。
  * `children` 缺省时显示路径（`PathText`：放不下时省略中间目录、保住文件名）；`line` 给出时打开后定位到该行
  * （搜索命中、读取起始行）。
- * 路径前带对象图标；`plain` 用在调用行上，那里的图标位置已留给动作。
+ * 路径前带对象图标。不放进调用行：行可能整行是按钮，那里打开文件走行尾的「打开」（`OpenWorkspaceFileButton`）。
  */
 export function WorkspacePathLink({
   path,
@@ -20,7 +20,6 @@ export function WorkspacePathLink({
   line,
   children,
   className,
-  plain = false,
 }: {
   path: string;
   /** 目录在文件树里展开定位，文件打开为标签。 */
@@ -28,14 +27,13 @@ export function WorkspacePathLink({
   line?: number;
   children?: ReactNode;
   className?: string;
-  plain?: boolean;
 }) {
   const files = useOpenWorkspacePath();
   const links = useOpenLink("tool");
   const target = files?.resolve(path) ?? null;
   const content = (
     <>
-      {!plain && <LinkTargetIcon target={{ kind: "workspace", path, directory }} className="mr-1.5 size-3.5" />}
+      <LinkTargetIcon target={{ kind: "workspace", path, directory }} className="mr-1.5 size-3.5" />
       {children ?? <PathText path={path} />}
     </>
   );

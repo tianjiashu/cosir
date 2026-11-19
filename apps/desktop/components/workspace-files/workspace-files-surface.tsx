@@ -31,6 +31,7 @@ import { FileSearch } from "./file-search";
 import { FilePreview } from "./file-preview";
 import { FileReadingTabs, FileTabBar, FileTabPanels } from "./file-reading-tabs";
 import { READING_ROW_CLASS } from "./reading-toolbar";
+import { formatKeys } from "@/lib/keyboard/shortcuts";
 
 /**
  * 文件面板：当前工作区的文件浏览器，整块渲染停靠外框。
@@ -177,7 +178,7 @@ export function WorkspaceFilesSurface({
                       data-slot="input-group-control"
                       className="min-w-0 flex-1 bg-transparent text-sm outline-none"
                       aria-label="搜索工作区文件名"
-                      placeholder="搜索文件名或路径，Enter 查找"
+                      placeholder={`搜索文件名或路径，${formatKeys("enter")} 查找`}
                       value={query}
                       onChange={(e) => patch(workspaceId, { searchText: e.target.value, searchRequest: null })}
                       onKeyDown={(e) => {

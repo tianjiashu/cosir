@@ -13,6 +13,9 @@ HTTP / SSE / 停止请求。工具 handler 在工作线程里经 :meth:`MCPConne
   旧连接重建；被禁用或撤销测试状态的服务不再被调用方选中，其连接由空闲回收关闭。
 - 连接级失败（见 ``is_connection_failure``）或 owner task 已结束时丢弃连接，下一次调用重连；
   失败的那次调用不在池内重放——工具可能有副作用，是否重试交给模型。
+- owner task 先结束时，在途请求带着它结束的原因立刻失败（:meth:`_Connection.request`）。会话的请求在别的 task
+  里等响应，传输层出错（长连接中途授权失效、服务端回 500）时 SDK 以取消的方式拆掉会话，给在途请求回
+  「连接已关闭」的那一步也一并被取消，不在这里收口，调用会一直挂到工具时限，原因也丢了。
 - 工具目录随连接缓存，收到 ``tools/list_changed`` 通知或调用了目录里没有的工具时刷新。
 
 线程模型：``_connections`` 等状态只在池的事件循环线程上读写；``_lock`` 只保护循环线程的
@@ -26,7 +29,7 @@ import hashlib
 import re
 import threading
 import time
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from concurrent.futures import Future
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -50,6 +53,8 @@ T = TypeVar("T")
 
 # 建立连接（stdio 拉起子进程 + initialize 握手）的上限；与配置界面连接测试的量级一致。
 CONNECT_TIMEOUT_SECONDS = 30.0
+# 连上之后一次 ``tools/list`` 的上限：只管请求本身，不含建连（冷启动慢的服务不该因此永远列不出目录）。
+LIST_TOOLS_TIMEOUT_SECONDS = 20.0
 # 连接空闲超过该时长即关闭：stdio 服务是常驻子进程，不能无限占用资源。
 IDLE_TIMEOUT_SECONDS = 600.0
 _REAP_INTERVAL_SECONDS = 60.0
@@ -140,10 +145,16 @@ class MCPConnectionPool:
     # ------------------------------------------------------------------
 
     async def list_tools(self, server: ScopedMCPServer) -> list[types.Tool]:
-        """返回服务的工具目录（优先用连接缓存）。"""
+        """返回服务的工具目录（优先用连接缓存）。
+
+        建连与列目录分别限时：建连归 ``CONNECT_TIMEOUT_SECONDS``，列目录只限连上之后的请求。列目录超时抛
+        ``TimeoutError``，它是 ``OSError`` 的子类，``_use`` 会把它当连接级失败丢弃连接：连上了却 20 秒不回
+        目录的服务，下次重连是合理的。
+        """
 
         async with self._use(server) as connection:
-            return await connection.tools()
+            async with asyncio.timeout(LIST_TOOLS_TIMEOUT_SECONDS):
+                return await connection.tools()
 
     async def call_tool(
         self,
@@ -182,7 +193,7 @@ class MCPConnectionPool:
                         },
                     },
                 )
-            return await connection.session.call_tool(tool_name, arguments)
+            return await connection.call_tool(tool_name, arguments)
 
     @asynccontextmanager
     async def _use(self, server: ScopedMCPServer) -> AsyncIterator[_Connection]:
@@ -280,7 +291,11 @@ class MCPConnectionPool:
 
 
 class _Connection:
-    """一个服务的长连接：owner task 持有会话上下文，直到被要求关闭或传输失败。"""
+    """一个服务的长连接：owner task 持有会话上下文，直到被要求关闭或传输失败。
+
+    会话只在本类里使用，所有请求都经 :meth:`request`：调用方在别的 task 里，只有这里能把 owner 结束的事实
+    交给它们。
+    """
 
     def __init__(self, server: ScopedMCPServer, fingerprint: str) -> None:
         self.server = server
@@ -293,16 +308,45 @@ class _Connection:
         self._ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._close_requested = asyncio.Event()
         self._owner: asyncio.Task[None] | None = None
+        # owner 结束的信号与原因（传输失败时的异常；被要求关闭时为 ``None``）：在途请求据此失败。
+        self._ended = asyncio.Event()
+        self._failure: BaseException | None = None
 
     @property
     def alive(self) -> bool:
         return self._session is not None and self._owner is not None and not self._owner.done()
 
-    @property
-    def session(self) -> ClientSession:
-        if self._session is None:
-            raise ConnectionError(f"MCP connection to {self.server.name} is closed")
-        return self._session
+    async def request(self, operation: Callable[[ClientSession], Awaitable[T]]) -> T:
+        """在会话上发一次请求，与连接存续一起等：owner 先结束就取消请求，抛出它结束的原因。
+
+        原因是传输失败的异常（常是包着 ``MCPAuthorizationRequired`` 或 ``HTTPStatusError`` 的异常组，由
+        ``MCPFailure`` 按叶子归类）；被要求关闭时抛 ``ConnectionError``。调用方被取消时请求一并取消。
+
+        异常:
+            ConnectionError: 连接已关闭，或在请求期间被关闭。
+        """
+
+        if self._session is None or self._ended.is_set():
+            raise self._end_reason()
+        call = asyncio.ensure_future(operation(self._session))
+        ended = asyncio.ensure_future(self._ended.wait())
+        try:
+            await asyncio.wait({call, ended}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            ended.cancel()
+            if not call.done():
+                call.cancel()
+        if call.done() and not call.cancelled():
+            return call.result()
+        raise self._end_reason()
+
+    def _end_reason(self) -> BaseException:
+        if self._failure is not None:
+            return self._failure
+        return ConnectionError(f"MCP connection to {self.server.name} is closed")
+
+    async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> types.CallToolResult:
+        return await self.request(lambda session: session.call_tool(tool_name, arguments))
 
     async def open(self) -> None:
         """启动 owner task 并等待握手完成；失败或超时时关闭连接并上抛原因。"""
@@ -344,7 +388,7 @@ class _Connection:
 
     async def tools(self) -> list[types.Tool]:
         if self._tools is None:
-            self._tools = (await self.session.list_tools()).tools
+            self._tools = (await self.request(lambda session: session.list_tools())).tools
         return self._tools
 
     async def find_tool(self, tool_name: str) -> types.Tool | None:
@@ -367,6 +411,7 @@ class _Connection:
                 self._ready.set_result(None)
                 await self._close_requested.wait()
         except Exception as exc:
+            self._failure = exc
             if not self._ready.done():
                 self._ready.set_exception(exc)
             elif not self.closing:
@@ -382,6 +427,7 @@ class _Connection:
                 )
         finally:
             self._session = None
+            self._ended.set()
             if not self._ready.done():
                 self._ready.set_exception(
                     ConnectionError(f"MCP connection to {self.server.name} closed before ready")

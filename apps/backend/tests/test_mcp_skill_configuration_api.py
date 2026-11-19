@@ -135,6 +135,7 @@ def test_mcp_draft_test_counts_once_the_same_config_is_saved(client, tools_ok) -
         "tools": _SEARCH_TOOLS,
         "error": None,
         "failure_kind": None,
+        "needs_sign_in": False,
         "agent_available": False,
     }
     saved = client.put("/configuration/mcp-servers", json={"servers": [config]})
@@ -197,6 +198,39 @@ def test_mcp_saved_server_test_failure_revokes_availability(client, tools_ok) ->
     assert client.get("/configuration/mcp-servers").json()["servers"][0]["status"] == "untested"
 
 
+# B7 潜在缺陷：网络抖一下就撤销测试记录，Agent 失去这个服务、用户还得重测。
+def test_a_transient_test_failure_keeps_the_server_available(client, monkeypatch) -> None:
+    config = _server()
+    client.put("/configuration/mcp-servers", json={"servers": [config]})
+
+    async def reachable(server, interaction=None):
+        return _SEARCH_TOOLS
+
+    async def unreachable(server, interaction=None):
+        raise ConnectionError("connection refused")
+
+    monkeypatch.setattr(mcp_configuration_service, "list_server_tools", reachable)
+    client.post("/configuration/mcp-servers/test", json=config)
+    monkeypatch.setattr(mcp_configuration_service, "list_server_tools", unreachable)
+    failed = client.post("/configuration/mcp-servers/test", json=config).json()
+
+    assert (failed["success"], failed["failure_kind"]) == (False, "unreachable")
+    assert client.get("/configuration/mcp-servers").json()["servers"][0]["status"] == "available"
+
+
+# B4 潜在缺陷：一个服务的地址变量展开后不合法，整个列表与保存都报 400，连改变量的卡片都看不到。
+def test_an_invalid_expanded_url_only_marks_that_server(client, monkeypatch) -> None:
+    monkeypatch.setenv("BAD_MCP_URL", "localhost:3000")
+    broken = {"name": "remote", "transport": "streamable_http", "url": "${BAD_MCP_URL}", "enabled": True}
+
+    saved = client.put("/configuration/mcp-servers", json={"servers": [_server(), broken]})
+    listed = client.get("/configuration/mcp-servers")
+
+    assert (saved.status_code, listed.status_code) == (200, 200)
+    statuses = {item["name"]: item["status"] for item in listed.json()["servers"]}
+    assert statuses == {"local-search": "untested", "remote": "invalid_configuration"}
+
+
 def test_mcp_test_returns_timeout_result(client, monkeypatch) -> None:
     async def list_tools(server, interaction=None):
         await asyncio.sleep(0.02)
@@ -214,6 +248,7 @@ def test_mcp_test_returns_timeout_result(client, monkeypatch) -> None:
         "tools": [],
         "error": "连接超时（首次启动可能在下载依赖，可稍后重试）",
         "failure_kind": "timeout",
+        "needs_sign_in": False,
         "agent_available": False,
     }
 

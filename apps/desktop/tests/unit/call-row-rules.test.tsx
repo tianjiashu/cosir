@@ -27,11 +27,13 @@ describe("meta says only what the target does not", () => {
     expect(html(view({ kind: "terminal-session", terminal_id: "t1", input_summary: "npm run dev" }, { command: "npm run dev" })?.meta)).toBe("等你回车");
   });
 
-  it("marks a single new file and links its path as the target", () => {
+  // 目标只是文字（行可能整行是按钮），打开文件放在行尾「打开」。
+  it("marks a single new file and opens its path from the row actions", () => {
     const presentation = view({ kind: "file-changes", changes: [{ path: "src/router.ts", status: "added", patch: null, insertions: 48, deletions: 0 }] });
     expect(html(presentation?.meta)).toContain("新建");
     expect(html(presentation?.meta)).toContain("+48");
-    expect((presentation?.target as React.ReactElement<{ path: string }>).props.path).toBe("src/router.ts");
+    expect(presentation?.target).toBeUndefined();
+    expect((presentation?.actions as React.ReactElement<{ path: string }>).props.path).toBe("src/router.ts");
   });
 });
 

@@ -11,7 +11,7 @@ from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
-from app.tools.cancellable_wait import ToolCallStopped, wait_for_call
+from app.tools.cancellable_wait import CallDeadlineExceeded, ToolCallStopped, wait_for_call
 
 
 def _context() -> ToolExecutionContext:
@@ -43,6 +43,16 @@ def test_cancel_signal_cancels_future() -> None:
 
 def test_deadline_cancels_future() -> None:
     future: Future[int] = Future()
-    with pytest.raises(TimeoutError):
+    with pytest.raises(CallDeadlineExceeded):
         wait_for_call(future, None, 0.2)
     assert future.cancelled()
+
+
+def test_timeout_raised_by_the_future_is_not_the_wait_deadline() -> None:
+    """future 自己的 ``TimeoutError``（如对端建连超时）原样上浮，不冒充等待时限到了。"""
+
+    failed: Future[int] = Future()
+    failed.set_exception(TimeoutError())
+    with pytest.raises(TimeoutError):
+        wait_for_call(failed, None, 5)
+    assert not issubclass(CallDeadlineExceeded, TimeoutError)

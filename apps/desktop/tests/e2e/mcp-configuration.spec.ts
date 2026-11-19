@@ -44,7 +44,7 @@ test("MCP 服务按作用域分节：状态正常不说话，要动手的事留�
     await route.fulfill({ json: listing });
   });
   await page.route(`${API_ORIGIN}/workspaces/7/configuration/mcp-servers/test`, (route) => route.fulfill({
-    json: { status: "completed", success: true, tools: [], error: null, failure_kind: null, agent_available: true },
+    json: { status: "completed", success: true, tools: [], error: null, failure_kind: null, needs_sign_in: false, agent_available: true },
   }));
   await page.goto("/workspaces/7/configuration/mcp");
 
@@ -83,7 +83,7 @@ test("MCP 服务按作用域分节：状态正常不说话，要动手的事留�
 test("草稿的测试结论只对应测过的那份内容：改了任何一处就不显示，改回原样又显示", async ({ page }) => {
   await page.route(`${API_ORIGIN}/workspaces/7/configuration/mcp-servers`, (route) => route.fulfill({ json: listing }));
   await page.route(`${API_ORIGIN}/workspaces/7/configuration/mcp-servers/test`, (route) => route.fulfill({
-    json: { status: "completed", success: true, tools: [], error: null, failure_kind: null, agent_available: true },
+    json: { status: "completed", success: true, tools: [], error: null, failure_kind: null, needs_sign_in: false, agent_available: true },
   }));
   await page.goto("/workspaces/7/configuration/mcp");
 

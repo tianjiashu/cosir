@@ -13,7 +13,7 @@ import { useStreamedSearch } from "./use-streamed-search";
 
 /**
  * 文本阅读器的查找：就地查当前显示的内容，源码视图交给只读编辑器（`TextViewerHandle.find`），Markdown 渲染
- * 视图交给 DOM 高亮（`useDomFind`）。查找条与终端共用 `FindBar`，Ctrl/Cmd+F 打开或重新聚焦。
+ * 视图交给 DOM 高亮（`useDomFind`）。查找条与终端共用 `FindBar`，查找键（登记表 `findInFile`）打开或重新聚焦。
  *
  * 只有分段读取的大文件（`wholeFile` 为假）才需要后端：查找条多一个「在整个文件中查找」，结果列表点开对应
  * 分段（`onJump`）。整份加载的文件从不请求后端，也就不会出现「从匹配处截断、行号从 1 重新计」的跳转。
@@ -56,6 +56,12 @@ export function useTextFind({ workspaceId, info, encoding, rendered, wholeFile, 
   useReadingCommand("find", () => {
     setOpen(true);
     setFocusKey((key) => key + 1);
+  });
+  useReadingCommand("findNext", () => {
+    if (open && term.current) run(term.current, "next");
+  });
+  useReadingCommand("findPrevious", () => {
+    if (open && term.current) run(term.current, "previous");
   });
   const latestRun = useRef(run);
   latestRun.current = run;

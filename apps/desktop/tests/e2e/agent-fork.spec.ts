@@ -125,7 +125,10 @@ test("继承历史共用文件、终端和错误展示，展开状态跨虚拟�
   await expect(page.getByText("继承展示验收", { exact: true })).toBeVisible();
   const turn = page.locator('[data-slot="turn"]').filter({ hasText: "继承展示验收" });
   await turn.locator('[data-slot="activity-head"]').click();
-  await expect(turn.getByRole("button", { name: "src/review.py", exact: true })).toBeVisible();
+  // 路径是行上的文字（行可能整行是按钮），打开文件走行尾的「打开」。
+  const fileRow = turn.locator('[data-tool-call-id="context-file"]');
+  await expect(fileRow.locator('[data-slot="call-target"]')).toContainText("review.py");
+  await expect(fileRow.getByRole("button", { name: "在文件面板打开 src/review.py", exact: true })).toHaveCount(1);
   await expect(turn.getByText(/L12-L24/)).toBeVisible();
   await expect(turn.getByText(/文件过大，已截断/)).toBeVisible();
   await expect(turn.getByText("失败后仍保留输出", { exact: true })).toBeVisible();

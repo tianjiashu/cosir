@@ -72,7 +72,7 @@ class SkillTool(HandlerBase):
                     self.name,
                     json.dumps(payload, ensure_ascii=False, indent=2),
                     display_data=build_skill_list_display_data(
-                        [{**item, "scope": skill.scope.kind} for item, skill in zip(payload, skills)]
+                        [{**item, "scope": skill.scope.kind} for item, skill in zip(payload, skills, strict=False)]
                     ),
                 )
             if skill_name is None:

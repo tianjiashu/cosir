@@ -13,7 +13,12 @@ from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 from app.service import depends as service_depends
-from app.tools.cancellable_wait import ToolCallStopped, wait_for_call
+from app.tools.cancellable_wait import (
+    STOPPED_IN_FLIGHT_REASON,
+    CallDeadlineExceeded,
+    ToolCallStopped,
+    wait_for_call,
+)
 from app.tools.host.errors import CANCELLED, TIMEOUT, UNAVAILABLE, HostCallError
 
 
@@ -44,7 +49,7 @@ def call_host(
         return wait_for_call(future, execution_context, timeout_seconds)
     except ToolCallStopped as exc:
         raise HostCallError(CANCELLED, "the tool call was cancelled") from exc
-    except TimeoutError as exc:
+    except CallDeadlineExceeded as exc:
         raise HostCallError(TIMEOUT, f"no response within {timeout_seconds:.0f} seconds") from exc
 
 
@@ -54,7 +59,7 @@ def host_error_observation(
     """把链路层失败转成工具观察；工具未解释的能力层错误码按通用失败处理。"""
 
     if error.code == CANCELLED:
-        return tool_cancelled(tool_name, tool_call_id)
+        return tool_cancelled(tool_name, tool_call_id, reason=STOPPED_IN_FLIGHT_REASON)
     if error.code == UNAVAILABLE:
         return tool_error(
             tool_name,

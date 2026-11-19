@@ -8,6 +8,10 @@
 
 进程内协调状态，不持久化、不跨重启（重启后用户重新点「登录授权」即可）。同一个服务同一时刻只有一次授权：
 再次授权会取消上一次（它占着回调端口）。没被取走结果的已结束授权留到同一服务下次授权时清掉。
+
+每个授权都有收尾：``begin`` 的请求被取消（前端断开）时后台任务一并取消，不会挂满时限后再写记录；删除
+工作区时按作用域取消（:meth:`MCPAuthorizationFlows.cancel_scope`），迟到的结果不会把已删除作用域的记录写回来。
+只是配置页的编排、没有工具使用，所以在 service 层；建连时用到的回调监听与 provider 仍在 ``tools/mcp/oauth``。
 """
 
 from __future__ import annotations
@@ -16,13 +20,17 @@ import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING
 
 from app.config.logging.logger import log
 from app.tools.mcp.oauth.callback_listener import OAuthCallbackListener, OAuthCallbackTimeout
-from app.tools.mcp.oauth.provider import AUTHORIZATION_TIMEOUT_SECONDS, AuthorizationInteraction
+from app.tools.mcp.oauth.provider import AuthorizationInteraction
 
-T = TypeVar("T")
+if TYPE_CHECKING:
+    from app.service.configuration.mcp.configuration_service import MCPServerTestResult
+
+# 用户在浏览器里完成授权的时限。
+AUTHORIZATION_TIMEOUT_SECONDS = 300.0
 
 
 @dataclass(frozen=True)
@@ -34,33 +42,31 @@ class PendingAuthorization:
 
 
 @dataclass
-class _Flow(Generic[T]):
+class _Flow:
     server_key: tuple[str, str, str]
-    task: asyncio.Task[T]
+    task: asyncio.Task[MCPServerTestResult]
 
 
-class MCPAuthorizationFlows(Generic[T]):
-    """按 ``flow_id`` 登记进行中的交互授权；``T`` 是一次测试的结果类型。只在后端事件循环上使用。
-
-    登记表由使用方（配置服务）持有一份进程级实例，结果类型在那里确定。
-    """
+class MCPAuthorizationFlows:
+    """按 ``flow_id`` 登记进行中的交互授权。只在后端事件循环上使用；配置服务持有一份进程级实例。"""
 
     def __init__(self) -> None:
-        self._flows: dict[str, _Flow[T]] = {}
+        self._flows: dict[str, _Flow] = {}
 
     async def begin(
         self,
         server_key: tuple[str, str, str],
         callback_port: int | None,
-        run: Callable[[AuthorizationInteraction], Awaitable[T]],
+        run: Callable[[AuthorizationInteraction], Awaitable[MCPServerTestResult]],
         *,
         timeout_before_authorization: float,
-    ) -> T | PendingAuthorization:
+    ) -> MCPServerTestResult | PendingAuthorization:
         """开一个回调监听并运行 ``run``；先结束就返回结果，先拿到授权地址就转入后台等用户授权。
 
         异常:
             TimeoutError: 在时限内既没结束也没拿到授权地址（连接或发现卡住）；已取消。
             OSError: 回调端口被占用（固定了 ``callback_port`` 时可能发生）。
+            CancelledError: 等待途中请求被取消（前端断开）；后台任务一并取消、不登记。
             其余: ``run`` 自身的异常原样上浮。
         """
 
@@ -71,7 +77,7 @@ class MCPAuthorizationFlows(Generic[T]):
             if not authorization_url.done():
                 authorization_url.set_result(url)
 
-        async def body() -> T:
+        async def body() -> MCPServerTestResult:
             async with OAuthCallbackListener(callback_port) as listener:
 
                 async def wait_callback() -> tuple[str, str | None]:
@@ -84,11 +90,17 @@ class MCPAuthorizationFlows(Generic[T]):
                 return await run(AuthorizationInteraction(listener.redirect_uri, offer, wait_callback))
 
         task = asyncio.get_running_loop().create_task(body())
-        done, _ = await asyncio.wait(
-            {task, authorization_url},
-            timeout=timeout_before_authorization,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        try:
+            done, _ = await asyncio.wait(
+                {task, authorization_url},
+                timeout=timeout_before_authorization,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except BaseException:
+            # 还没登记，没有别人会收尾：不取消就挂满授权时限，之后照常写记录。
+            task.cancel()
+            authorization_url.cancel()
+            raise
         if task in done:
             authorization_url.cancel()
             return task.result()
@@ -107,7 +119,7 @@ class MCPAuthorizationFlows(Generic[T]):
         authorization_url.cancel()
         raise TimeoutError
 
-    async def wait(self, flow_id: str) -> T:
+    async def wait(self, flow_id: str) -> MCPServerTestResult:
         """等一次授权的最终结果（测试自身的结果）。
 
         异常:
@@ -142,6 +154,21 @@ class MCPAuthorizationFlows(Generic[T]):
                 "data": {"scope": flow.server_key[0], "server_name": flow.server_key[2], "flow_id": flow_id},
             },
         )
+
+    def cancel_scope(self, scope_key: str) -> None:
+        """取消一个作用域里进行中的全部授权（删除工作区前调用）：迟到的结果不再写回已删除作用域的记录。"""
+
+        for flow_id, flow in list(self._flows.items()):
+            if flow.server_key[0] == scope_key:
+                flow.task.cancel()
+                del self._flows[flow_id]
+                log.info(
+                    "mcp_oauth_authorization_dropped",
+                    extra={
+                        "msg": "作用域被删除，进行中的 MCP 登录授权已取消",
+                        "data": {"scope": scope_key, "server_name": flow.server_key[2], "flow_id": flow_id},
+                    },
+                )
 
     def _cancel_server(self, server_key: tuple[str, str, str]) -> None:
         for flow_id, flow in list(self._flows.items()):

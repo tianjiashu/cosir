@@ -1,4 +1,5 @@
 import type { LineRange } from "@/lib/links/resolve-link";
+import type { ReadingAnchor } from "@/lib/reading/reading-anchor";
 import { create } from "zustand";
 
 type FileTab = { path: string; pinned: boolean };
@@ -6,10 +7,10 @@ export type ReadingPosition = {
   offset: number;
   before?: number;
   tail?: boolean;
-  scrollTop: number;
+  /** 阅读位置（按行，渲染与源码视图共用；见 `ReadingAnchor`）；没有时从这一段的开头读。 */
+  anchor?: ReadingAnchor;
   encoding?: string;
-  previewScrollTop?: number;
-  /** 待定位的行范围（链接带行号打开时写入）；文本预览选中并居中后清除，之后照常按 `scrollTop` 恢复。 */
+  /** 待定位的行范围（链接带行号打开时写入）；文本预览选中并居中后清除，之后照常按 `anchor` 恢复。 */
   reveal?: LineRange;
   /** 待定位的 PDF 页码（引用带页码打开时写入）；PDF 预览跳转后清除。 */
   revealPage?: number;
@@ -174,10 +175,7 @@ export const useFilesStore = create<{
             positions: {
               ...files.positions,
               [path]: {
-                ...(files.positions[path] ?? {
-                  offset: 0,
-                  scrollTop: 0,
-                }),
+                ...(files.positions[path] ?? { offset: 0 }),
                 ...patch,
               },
             },

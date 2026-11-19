@@ -21,7 +21,7 @@ describe("workspace file sessions", () => {
     expect(
       workspaceFiles(useFilesStore.getState().byWorkspace, 1).tabs.map((t) => t.path),
     ).toEqual(["config.json", "main.py"]);
-    store.position(1, "main.py", { offset: 100, scrollTop: 200 });
+    store.position(1, "main.py", { offset: 100, anchor: { line: 12, offset: 4 } });
     store.close(1, "main.py");
     expect(workspaceFiles(useFilesStore.getState().byWorkspace, 1).active).toBe(
       "config.json",
@@ -36,15 +36,15 @@ describe("workspace file sessions", () => {
     const store = useFilesStore.getState();
     store.open(1, "README.md", true);
     store.preference(1, "README.md", { view: "source", wrap: true });
-    store.position(1, "README.md", { previewScrollTop: 180 });
+    store.position(1, "README.md", { anchor: { line: 30, offset: 0 } });
     store.open(1, "main.py");
     expect(workspaceFiles(useFilesStore.getState().byWorkspace, 1).browsing).toBe(
       false,
     );
     expect(
       workspaceFiles(useFilesStore.getState().byWorkspace, 1).positions["README.md"]
-        .previewScrollTop,
-    ).toBe(180);
+        .anchor,
+    ).toEqual({ line: 30, offset: 0 });
     store.close(1, "README.md");
     store.open(1, "README.md");
     expect(

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { listDetail, pageRange } from "@/components/conversation/tools/call-views/detail-parts";
-import { FileDiff, parseFileDiff } from "@/components/conversation/tools/call-views/file-changes-view";
+import { FileDiff, parseFileDiff } from "@/components/conversation/tools/file-diff";
 import { readFileChanges } from "@/lib/assistant/tools/file-changes";
 
 // 目的：列表只是其中一页时如实说明范围与总数；潜在缺陷：把「这一页」当「全部」，或第一页且已全部时多一句废话。

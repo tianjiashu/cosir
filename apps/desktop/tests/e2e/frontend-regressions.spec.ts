@@ -255,6 +255,9 @@ test("连续 Run 的 context meter 是 Session 级且每个 Run 都保留 usage 
   await expect(unknownProgress).not.toHaveAttribute("aria-valuenow");
   await expect(unknownProgress).toHaveAttribute("aria-valuetext", "尚未完成有效测量");
   await page.keyboard.press("Escape");
+  // 要测的是「从关闭状态悬停能打开」：先等弹层关完。关闭动画期间进入触发器，悬停打开会被 Base UI 吞掉
+  // （弹层卸载时清掉了触发器的驻留计时器），而正在关闭的弹层又仍算可见，下面的断言会白白通过。
+  await expect(unknownProgress).toHaveCount(0);
   await contextMeter.hover();
   await expect(unknownProgress).toBeVisible();
   await page.mouse.move(10, 10);
@@ -265,11 +268,10 @@ test("连续 Run 的 context meter 是 Session 级且每个 Run 都保留 usage 
   await expect(contextMeter).toContainText("上下文 1%");
   await expect(page.getByTestId("run-usage-display")).toContainText("1.5k tokens");
   const cacheMissRow = page.locator("dt").filter({ hasText: "缓存未命中" }).locator("xpath=following-sibling::dd[1]");
-  // 流结束后消息页脚仍会因 Reasoning 收起等布局收敛而位移，悬停可能落空，故重试直到浮层打开。
-  await expect(async () => {
-    await page.getByTestId("run-usage-display").hover();
-    await expect(cacheMissRow).toHaveText("—", { timeout: 1_000 });
-  }).toPass();
+  // 用量在 Run 运行中就已显示，但脚注要到落定才插入诊断操作，用量随之横移：先等落定再悬停，不然会悬停到空处。
+  await expect(page.locator('[data-slot="turn"]').last()).toHaveAttribute("data-phase", "settled");
+  await page.getByTestId("run-usage-display").hover();
+  await expect(cacheMissRow).toHaveText("—");
   await page.mouse.move(10, 10);
   await expect(contextMeter).toHaveAttribute("aria-label", "上下文 1%");
   await contextMeter.focus();

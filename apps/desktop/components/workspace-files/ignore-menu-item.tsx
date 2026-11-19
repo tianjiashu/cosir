@@ -1,4 +1,3 @@
-import type { KeyboardEvent } from "react";
 import { ContextMenu } from "radix-ui";
 import { EyeOffIcon } from "lucide-react";
 import { MENU_ITEM_CLASS } from "@/components/ui/menu-tokens";
@@ -32,25 +31,5 @@ export function IgnoreMenuItem({
             : "忽略此文件"}
       </ContextMenu.Item>
     </>
-  );
-}
-
-/** WebView 对 Shift+F10 的原生行为不一致，统一交给现有 Radix 菜单处理。 */
-export function openKeyboardContextMenu(
-  event: KeyboardEvent<HTMLElement>,
-  target: HTMLElement = event.currentTarget,
-) {
-  if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))
-    return;
-  event.preventDefault();
-  event.stopPropagation();
-  const bounds = target.getBoundingClientRect();
-  target.dispatchEvent(
-    new MouseEvent("contextmenu", {
-      bubbles: true,
-      cancelable: true,
-      clientX: bounds.left + 20,
-      clientY: bounds.top + bounds.height / 2,
-    }),
   );
 }

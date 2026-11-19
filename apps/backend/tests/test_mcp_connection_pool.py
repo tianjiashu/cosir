@@ -128,8 +128,9 @@ def test_unknown_tool_is_reported_without_dropping_connection(pool):
     assert _bump(pool, server)["pid"] == first["pid"]
 
 
-def test_cancelled_tool_call_returns_promptly_and_keeps_connection(pool, tmp_path, monkeypatch):
-    server = _server()
+def _make_available(server: ScopedMCPServer, pool: MCPConnectionPool, tmp_path, monkeypatch) -> None:
+    """写进系统级配置并记一次测试通过，让 MCP 工具能选中它，且用这个池。"""
+
     config_path = tmp_path / "system-cosir" / "config" / "mcp_servers.json"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
@@ -137,15 +138,34 @@ def test_cancelled_tool_call_returns_promptly_and_keeps_connection(pool, tmp_pat
     )
     MCPMachineState.record_pass(server)
     monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
-    first = _bump(pool, server)
-    context = ToolExecutionContext(
+
+
+def _tool_context(tool_call_id: str) -> ToolExecutionContext:
+    return ToolExecutionContext(
         session_id=9001,
         workspace_id=1,
         workspace_root=Path("."),
         step_id="step-1",
         run_id=1,
-        tool_call_id="call-slow",
+        tool_call_id=tool_call_id,
     )
+
+
+def _slow_start_server(seconds: float) -> ScopedMCPServer:
+    """启动先睡一会儿再握手的服务，模拟冷启动慢的 ``npx`` 类服务。"""
+
+    code = f"import time\ntime.sleep({seconds})\n{_SERVER_CODE}"
+    return ScopedMCPServer(
+        ExtensionScope.system(),
+        MCPServerConfig(name="slowstart", command=sys.executable, args=["-c", code]),
+    )
+
+
+def test_cancelled_tool_call_returns_promptly_and_keeps_connection(pool, tmp_path, monkeypatch):
+    server = _server()
+    _make_available(server, pool, tmp_path, monkeypatch)
+    first = _bump(pool, server)
+    context = _tool_context("call-slow")
     threading.Timer(
         0.5, tool_call_cancellation_registry.mark_cancelled, args=(9001, "call-slow")
     ).start()
@@ -163,8 +183,46 @@ def test_cancelled_tool_call_returns_promptly_and_keeps_connection(pool, tmp_pat
         tool_call_cancellation_registry.clear(9001, "call-slow")
 
     assert observation.status == "cancelled"
+    # 请求已经发给服务，停下只是不再等：不能说成「没有结果」，模型才不会把副作用重做一遍。
+    assert "may already have acted on it" in observation.content
     assert time.monotonic() - started < 5
     assert _bump(pool, server)["pid"] == first["pid"]
+
+
+# 潜在缺陷：建连超时与调用超时都是 TimeoutError，建连没成功也被说成「请求已放弃，服务可能已执行」。
+def test_connect_timeout_is_reported_as_not_sent(pool, tmp_path, monkeypatch):
+    server = _slow_start_server(3)
+    _make_available(server, pool, tmp_path, monkeypatch)
+    monkeypatch.setattr("app.tools.mcp.connection_pool.CONNECT_TIMEOUT_SECONDS", 0.5)
+
+    observation = MCPTool().execute(
+        action="call",
+        server_name=server.name,
+        tool_name="bump",
+        arguments={},
+        execution_context=_tool_context("call-connect"),
+    )
+
+    assert observation.status == "error"
+    assert "did not respond in time" in observation.content
+    assert "may still have acted" not in observation.content
+    assert observation.display_data == {"status_hint": "连接超时"}
+
+
+# 潜在缺陷：列目录给「建连 + 列目录」整体的时限比建连时限短，冷启动慢的服务永远列不出目录。
+def test_slow_starting_server_can_still_be_listed(pool, tmp_path, monkeypatch):
+    server = _slow_start_server(1.5)
+    _make_available(server, pool, tmp_path, monkeypatch)
+    monkeypatch.setattr("app.tools.mcp.connection_pool.LIST_TOOLS_TIMEOUT_SECONDS", 0.5)
+
+    observation = MCPTool().execute(
+        action="list", execution_context=_tool_context("call-list")
+    )
+
+    assert observation.status == "success"
+    [entry] = observation.display_data["servers"]
+    assert "error" not in entry
+    assert {tool["name"] for tool in entry["tools"]} >= {"bump", "slow"}
 
 
 def test_same_name_in_another_scope_gets_its_own_connection(pool, tmp_path):

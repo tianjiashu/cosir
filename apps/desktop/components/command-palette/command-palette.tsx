@@ -31,7 +31,7 @@ export type CommandPaletteProps = {
 };
 
 /**
- * ⌘K 命令面板：跨工作区搜索会话、执行固定操作、跳转配置页。
+ * 命令面板（快捷键 `commandPalette`）：跨工作区搜索会话、执行固定操作、跳转配置页。
  *
  * 只消费 props，不自行取数或导航——数据与跳转由 AppLayout 提供，面板因此不依赖路由与查询缓存。
  * 过滤 / 排序 / 截断在 command-palette-model 中完成，cmdk 以 `shouldFilter={false}` 只负责

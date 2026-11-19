@@ -114,6 +114,18 @@ class MCPServerConfig(BaseModel):
             raise ValueError(f"MCP 服务不能引用 cosir 内部变量：{', '.join(reserved)}")
         return self
 
+    @property
+    def uses_oauth(self) -> bool:
+        """远程服务且请求头没有自带 ``Authorization`` 时走 OAuth（服务不要求认证时 OAuth 也不会触发）。
+
+        自带 ``Authorization``（静态 token，常写成 ``Bearer ${TOKEN}``）是用户选定的认证方式，401 只说明
+        token 不对，不该转去走授权流程。建连（``oauth/provider``）与配置页状态都按这一条判断。
+        """
+
+        return self.transport != "stdio" and not any(
+            key.lower() == "authorization" for key in self.headers
+        )
+
     def variable_references(self) -> list[VariableReference]:
         """引用到的变量，按首次出现排序；同名多处引用时，只要有一处没有默认值就算必填。"""
 

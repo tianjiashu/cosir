@@ -5,8 +5,6 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   SearchIcon,
-  ZoomInIcon,
-  ZoomOutIcon,
 } from "lucide-react";
 import {
   EventBus,
@@ -31,7 +29,8 @@ import { useDomSelection } from "@/hooks/use-dom-selection";
 import { AddToChatButton } from "./add-to-chat-button";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 import { useReadingCommand } from "@/lib/workspace-files/reading-commands";
-import { ReadingToolbar, type ReadingNavigation } from "./reading-toolbar";
+import { ReadingMenuItem, ReadingToolbar, type ReadingNavigation } from "./reading-toolbar";
+import { withShortcut } from "@/lib/keyboard/shortcuts";
 import { FindBar } from "@/components/ui/find-bar";
 import type { FindDirection, FindResult } from "@/lib/find/next-match";
 
@@ -90,6 +89,12 @@ export default function PdfPreview({
   useReadingCommand("find", () => {
     setShowSearch(true);
     setFocusKey((key) => key + 1);
+  });
+  useReadingCommand("findNext", () => {
+    if (showSearch && lastQuery.current) find(lastQuery.current, "next");
+  });
+  useReadingCommand("findPrevious", () => {
+    if (showSearch && lastQuery.current) find(lastQuery.current, "previous");
   });
   const closeSearch = () => {
     busRef.current?.dispatch("findbarclose", { source: null });
@@ -201,17 +206,17 @@ export default function PdfPreview({
             disabled={page >= pages} onClick={() => viewerRef.current?.nextPage()}>
             <ChevronRightIcon />
           </TooltipIconButton>
-          <TooltipIconButton ref={searchTrigger} tooltip="查找 PDF 内容" aria-label="查找 PDF 内容" className="size-8 shrink-0"
+          <TooltipIconButton ref={searchTrigger} tooltip={withShortcut("查找 PDF 内容", "findInFile")} aria-label="查找 PDF 内容" className="size-8 shrink-0"
             aria-expanded={showSearch} onClick={() => showSearch ? closeSearch() : setShowSearch(true)}>
             <SearchIcon />
           </TooltipIconButton>
           <AddToChatButton workspaceId={workspaceId} path={info.path} selection={selection} />
         </>}
         // 页面默认随面板宽度适配，缩放是少用操作，放进「更多」让窄面板的工具栏保持一行。
-        options={<div className="flex gap-1">
-          <Button size="sm" variant="ghost" onClick={() => viewerRef.current?.decreaseScale()}><ZoomOutIcon />缩小</Button>
-          <Button size="sm" variant="ghost" onClick={() => viewerRef.current?.increaseScale()}><ZoomInIcon />放大</Button>
-        </div>}
+        options={<>
+          <ReadingMenuItem keepOpen onClick={() => viewerRef.current?.decreaseScale()}>缩小</ReadingMenuItem>
+          <ReadingMenuItem keepOpen onClick={() => viewerRef.current?.increaseScale()}>放大</ReadingMenuItem>
+        </>}
       />
       {passwordRequired && (
         <form

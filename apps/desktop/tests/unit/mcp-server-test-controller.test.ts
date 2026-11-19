@@ -8,7 +8,7 @@ const config = (name: string): MCPServerConfiguration => ({
 });
 
 const result = (success: boolean, extra: Partial<MCPServerTestResult> = {}): MCPServerTestResult => ({
-  status: "completed", success, tools: [], error: success ? null : "boom", failure_kind: null, agent_available: true, ...extra,
+  status: "completed", success, tools: [], error: success ? null : "boom", failure_kind: null, needs_sign_in: false, agent_available: true, ...extra,
 });
 
 /** 可以手动结算的 Promise：用来模拟「一个服务还在测、另一个已经出结果」。 */
@@ -88,6 +88,8 @@ describe("MCPServerTestController", () => {
     expect(api.cancel).toHaveBeenCalledWith("f1");
     const state = controller.getSnapshot()["server:linear"];
     expect(state?.phase === "done" && state.result.error).toBe("已取消授权");
+    // 取消的是一次登录授权：仍给出「登录授权」让用户重来。
+    expect(state?.phase === "done" && state.result.needs_sign_in).toBe(true);
   });
 
   // 潜在缺陷：关掉或重开编辑框只丢了前端进展，后端的回调监听一直挂到超时。

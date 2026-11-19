@@ -16,8 +16,8 @@ function key(key: string, modifiers: Partial<TerminalKeyEvent> = {}): TerminalKe
   };
 }
 
-const windows = (hasSelection: boolean) => ({ isMac: false, hasSelection });
-const mac = (hasSelection: boolean) => ({ isMac: true, hasSelection });
+const windows = (hasSelection: boolean) => ({ platform: "win32" as const, hasSelection });
+const mac = (hasSelection: boolean) => ({ platform: "darwin" as const, hasSelection });
 
 describe("终端按键归属（VS Code 规则）", () => {
   it("Windows / Linux：有选中时 Ctrl+C 复制，否则作为中断送入终端", () => {

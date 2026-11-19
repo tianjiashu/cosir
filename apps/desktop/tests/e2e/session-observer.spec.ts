@@ -208,8 +208,11 @@ test("刷新保留列表与正文位置，失败保留旧结果，新范围不�
   await page.goto("/session-observer?session_id=42&turn=1");
   await page.getByRole("option", { name: "#3 工具结果 · read_file", exact: true }).click();
   const editor = detail(page).locator(".cm-scroller");
-  await editor.evaluate((node) => {
+  // 等编辑器完成首次测量再滚：之前它按估算行高排版，测量后会修正滚动锚点，提前写的位置会被挪走。
+  const scrolled = await editor.evaluate(async (node) => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     node.scrollTop = 400;
+    return node.scrollTop;
   });
   await list(page).evaluate((node) => {
     node.scrollTop = 500;
@@ -229,7 +232,7 @@ test("刷新保留列表与正文位置，失败保留旧结果，新范围不�
   expect(
     Math.abs((await list(page).evaluate((node) => node.scrollTop)) - top),
   ).toBeLessThan(3);
-  expect(await editor.evaluate((node) => node.scrollTop)).toBeGreaterThan(350);
+  expect(Math.abs((await editor.evaluate((node) => node.scrollTop)) - scrolled)).toBeLessThan(3);
   api.fail(true);
   await page.getByRole("button", { name: "刷新", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText(
@@ -246,6 +249,35 @@ test("刷新保留列表与正文位置，失败保留旧结果，新范围不�
   await expect(page.getByRole("alert")).toContainText("读取失败");
   await expect(detail(page)).toHaveCount(0);
 });
+// 目的：正文查看器重建（切页签再切回、开关自动换行）后回到同一行；潜在缺陷：按像素恢复，测量后锚点修正，
+// 每重建一次位置就漂一次（400 → 312 → 243）。
+test("正文查看器重建后回到同一行", async ({ page }) => {
+  await mock(page);
+  await page.goto("/session-observer?session_id=42&turn=1");
+  await page.getByRole("option", { name: "#3 工具结果 · read_file", exact: true }).click();
+  const editor = detail(page).locator(".cm-scroller");
+  const topLine = () => editor.evaluate((node) => {
+    const top = node.getBoundingClientRect().top;
+    return [...node.querySelectorAll(".cm-line")].find((line) => line.getBoundingClientRect().bottom > top + 1)?.textContent ?? "";
+  });
+  const scrolled = await editor.evaluate(async (node) => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    node.scrollTop = 400;
+    return node.scrollTop;
+  });
+  const line = await topLine();
+  expect(line).toMatch(/^line \d+/);
+  for (let round = 0; round < 3; round++) {
+    await detail(page).getByRole("button", { name: "JSON", exact: true }).click();
+    await detail(page).getByRole("button", { name: "内容", exact: true }).click();
+    await expect.poll(() => editor.evaluate((node) => node.scrollTop)).toBeCloseTo(scrolled, 0);
+  }
+  await detail(page).getByRole("button", { name: "自动换行" }).click();
+  await expect.poll(topLine).toBe(line);
+  await detail(page).getByRole("button", { name: "自动换行" }).click();
+  await expect.poll(topLine).toBe(line);
+});
+
 test("详情用量、JSON、查找与键盘浏览，窄窗口返回保位", async ({ page }) => {
   await mock(page);
   await page.goto("/session-observer?session_id=42&turn=1");
@@ -266,7 +298,20 @@ test("详情用量、JSON、查找与键盘浏览，窄窗口返回保位", asyn
   await page.keyboard.press(
     process.platform === "darwin" ? "Meta+f" : "Control+f",
   );
-  await expect(detail(page).locator(".cm-search")).toBeVisible();
+  // 查找用应用的查找条（与文件面板、终端同一个），不是 CodeMirror 自带的搜索面板。
+  const find = detail(page).getByRole("search");
+  await expect(find).toBeVisible();
+  await expect(detail(page).locator(".cm-search")).toHaveCount(0);
+  await find.getByLabel("在消息中查找").fill("tool_calls");
+  await expect(find).toContainText("1/1");
+  await expect(detail(page).locator(".cm-findMatch-current")).toHaveCount(1);
+  await page.keyboard.press("Escape");
+  await expect(find).toBeHidden();
+  await expect(detail(page).locator(".cm-findMatch-current")).toHaveCount(0);
+  // 跳转到行的键位来自登记表（所有平台 Ctrl+G）。
+  await detail(page).locator(".cm-content").focus();
+  await page.keyboard.press("Control+g");
+  await expect(detail(page).locator(".cm-goto-line")).toBeVisible();
   await page.keyboard.press("Escape");
   const handle = page.getByRole("separator", { name: "调整消息列表宽度" });
   await handle.focus();

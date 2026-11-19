@@ -1,5 +1,6 @@
 import { useChangeBrowserVisibility } from "@/lib/workspace-files/visibility";
-import { IgnoreMenuItem, openKeyboardContextMenu } from "./ignore-menu-item";
+import { IgnoreMenuItem } from "./ignore-menu-item";
+import { openKeyboardContextMenu } from "@/components/ui/keyboard-context-menu";
 import { ContextMenu } from "radix-ui";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
 import { workspaceFileRef } from "@/lib/workspace-references/ref-capsule";

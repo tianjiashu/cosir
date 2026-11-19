@@ -32,7 +32,12 @@ from app.service.configuration.mcp.configuration import (
     ScopedMCPServer,
     available_servers,
 )
-from app.tools.cancellable_wait import ToolCallStopped, wait_for_call
+from app.tools.cancellable_wait import (
+    STOPPED_IN_FLIGHT_REASON,
+    CallDeadlineExceeded,
+    ToolCallStopped,
+    wait_for_call,
+)
 from app.tools.display.mcp_display import (
     build_mcp_call_display_data,
     build_mcp_catalog_display_data,
@@ -48,10 +53,9 @@ from app.tools.mcp.failure import MCPFailure
 from app.tools.mcp.result_images import StoredResultImages
 from app.tools.tool_models.mcp_args import MCPArgs
 
-# 单次调用（含必要的建连）的时限；thread 工具没有执行器硬超时，由 handler 自己执行。
+# 单次调用（含必要的建连）的时限；执行器不做硬超时，由 handler 自己守。``list`` 也用它兜底：单个服务的
+# 建连与列目录各有连接池的时限（最坏约 50 秒），慢服务只让自己的条目失败，不拖累整份目录。
 CALL_TIMEOUT_SECONDS = 90.0
-# ``list`` 并发发现各服务，单个服务的时限；慢服务只让自己的条目失败，不拖累整份目录。
-DISCOVERY_TIMEOUT_SECONDS = 20.0
 
 
 class MCPTool(HandlerBase):
@@ -141,13 +145,9 @@ class MCPTool(HandlerBase):
             return _catalog_observation([])
         pool = service_depends.get_mcp_connection_pool()
 
-        async def discover(server: ScopedMCPServer) -> list[types.Tool]:
-            async with asyncio.timeout(DISCOVERY_TIMEOUT_SECONDS):
-                return await pool.list_tools(server)
-
         async def discover_all() -> list[list[types.Tool] | BaseException]:
             return await asyncio.gather(
-                *(discover(server) for server in selected), return_exceptions=True
+                *(pool.list_tools(server) for server in selected), return_exceptions=True
             )
 
         try:
@@ -155,8 +155,8 @@ class MCPTool(HandlerBase):
                 pool.submit(discover_all()), execution_context, CALL_TIMEOUT_SECONDS
             )
         except ToolCallStopped:
-            return tool_cancelled(self.name)
-        except TimeoutError:
+            return tool_cancelled(self.name, reason=STOPPED_IN_FLIGHT_REASON)
+        except CallDeadlineExceeded:
             log.warning(
                 "mcp_discovery_timed_out",
                 extra={
@@ -223,8 +223,9 @@ class MCPTool(HandlerBase):
                 )
             )
         except ToolCallStopped:
-            return tool_cancelled(self.name)
-        except TimeoutError:
+            return tool_cancelled(self.name, reason=STOPPED_IN_FLIGHT_REASON)
+        except CallDeadlineExceeded:
+            # 只有等待本身的时限：建连超时等 future 里冒出的 TimeoutError 落到下面的通用分支归类。
             _log_call_failure(server, tool_name, execution_context, "timeout")
             return tool_error(
                 self.name,

@@ -1,11 +1,10 @@
 """给远程 MCP 服务挂上 OAuth：SDK 的 ``OAuthClientProvider`` 加上 cosir 的两条规则。
 
-规则一：**只有用户点「测试连接」时才会打开浏览器授权**（``AuthorizationInteraction``）。Agent 调用与
+规则一：**只有用户点「登录授权」时才会打开浏览器**（``AuthorizationInteraction``）。Agent 调用与
 连接池建连不交互：需要授权时记下「需重新授权」并抛 :class:`MCPAuthorizationRequired`，由工具把这件事
 告诉模型、由配置页提示用户。运行中途弹出登录页会打断用户，也不知道是谁要授权。
 
-规则二：请求头里已经带了 ``Authorization``（静态 token，常写成 ``Bearer ${TOKEN}``）的服务不挂 OAuth：
-那是用户选定的认证方式，401 只说明 token 不对，不该转去走授权流程。
+规则二：请求头里已经带了 ``Authorization`` 的服务不挂 OAuth（判断在 ``MCPServerConfig.uses_oauth``）。
 
 发现授权服务器、动态注册、PKCE、换取与刷新令牌都由 SDK 完成；令牌与注册信息的存放见
 ``service/configuration/mcp/machine_state``。
@@ -29,8 +28,6 @@ from app.service.configuration.mcp.configuration import (
 )
 from app.tools.mcp.oauth.token_storage import ServerTokenStorage
 
-# 用户在浏览器里完成授权的时限。
-AUTHORIZATION_TIMEOUT_SECONDS = 300.0
 # 不交互时 SDK 仍要求客户端元数据带回调地址；它只在注册与授权时用到，而这两步不交互时不会发生。
 _UNUSED_REDIRECT_URI = "http://127.0.0.1/callback"
 
@@ -52,11 +49,15 @@ class AuthorizationInteraction:
     wait_callback: Callable[[], Awaitable[tuple[str, str | None]]]
 
 
-class _StoredExpiryProvider(OAuthClientProvider):
-    """从存储加载令牌时一并恢复过期时间。
+class _StorageSyncedProvider(OAuthClientProvider):
+    """让 SDK 的令牌与本机存储保持同步；只覆写 SDK 的两个私有步骤，行为由 ``test_mcp_oauth`` 守住。
 
-    SDK 加载存储的令牌时不恢复过期时间，过期的令牌会被当作有效发出去，收到 401 再走完整授权；在不交互
-    的场景里这等于「重启后必须重新授权」，而本可以用刷新令牌静默续期。
+    - 加载时恢复过期时间：SDK 加载存储的令牌时不恢复它，过期的令牌会被当作有效发出去，收到 401 再走完整
+      授权；在不交互的场景里这等于「重启后必须重新授权」，而本可以用刷新令牌静默续期。
+    - 刷新前重读存储：SDK 只在初始化时读一次存储，之后一直用内存里的那份。同一个服务常有多个 provider 同时
+      存在（连接池里每个工作区一条长连接、配置页测试各自一个），服务端刷新时轮换 refresh token，一方刷新后
+      另一方手里的就作废了；它下次用旧的去刷新会失败，被判成「需要登录」。刷新前换成存储里最新的那份即可。
+      两边恰好同时刷新时仍会有一方失败，那时重测一次即可恢复（测试通过会清掉「需要登录」）。
     """
 
     def __init__(self, *, storage: ServerTokenStorage, **kwargs: object) -> None:
@@ -67,13 +68,11 @@ class _StoredExpiryProvider(OAuthClientProvider):
         await super()._initialize()
         self.context.token_expiry_time = self._cosir_storage.stored_expiry()
 
-
-def uses_oauth(config: MCPServerConfig) -> bool:
-    """远程服务且请求头没有自带 ``Authorization`` 时走 OAuth（服务不要求认证时 OAuth 也不会触发）。"""
-
-    return config.transport != "stdio" and not any(
-        key.lower() == "authorization" for key in config.headers
-    )
+    async def _refresh_token(self) -> httpx.Request:
+        stored = await self._cosir_storage.get_tokens()
+        if stored is not None and stored.refresh_token:
+            self.context.current_tokens = stored
+        return await super()._refresh_token()
 
 
 def oauth_auth(
@@ -83,7 +82,7 @@ def oauth_auth(
 ) -> httpx.Auth | None:
     """为变量已展开的建连配置构造 httpx 认证；stdio 服务与自带 ``Authorization`` 头的服务返回 ``None``。"""
 
-    if not uses_oauth(config):
+    if not config.uses_oauth:
         return None
     oauth = config.oauth or MCPOAuthConfig()
     redirect_uri = interaction.redirect_uri if interaction is not None else _UNUSED_REDIRECT_URI
@@ -99,7 +98,7 @@ def oauth_auth(
     else:
         redirect_handler = _with_configured_scope(interaction.on_redirect, oauth.scope)
         callback_handler = interaction.wait_callback
-    return _StoredExpiryProvider(
+    return _StorageSyncedProvider(
         server_url=config.url,
         client_metadata=OAuthClientMetadata(
             client_name="cosir",
@@ -110,7 +109,6 @@ def oauth_auth(
         storage=storage,
         redirect_handler=redirect_handler,
         callback_handler=callback_handler,
-        timeout=AUTHORIZATION_TIMEOUT_SECONDS,
     )
 
 

@@ -54,6 +54,18 @@ test("a partly written patch shows its changes on the row and in the segment tot
   await expect(call(page, "cmd").locator('[data-slot="call-target"]')).toHaveText("npm test --watch=false");
 });
 
+// 目的：可展开的行整行是按钮，打开文件只走行尾「打开」；潜在缺陷：路径做成行内按钮，按钮套按钮、一次点击既打开文件又展开详情。
+test("an expandable file row keeps opening the file outside the row button", async ({ page, request }) => {
+  await open(page, request, 1100);
+  const row = call(page, "patch");
+  await expect(row).toHaveAttribute("aria-expanded", "false");
+  await expect(row.locator("button, a, [role=button]")).toHaveCount(0);
+  await page.locator('[data-tool-call-id="patch"]').hover();
+  await page.getByRole("button", { name: "在文件面板打开 src/router.ts" }).click();
+  await expect(page.getByRole("complementary", { name: "文件", exact: true })).toBeVisible();
+  await expect(row).toHaveAttribute("aria-expanded", "false");
+});
+
 test("a delegated agent says it is running, then goes quiet when done", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
   await request.post(`${API_ORIGIN}/__test__/seed-delegation`);

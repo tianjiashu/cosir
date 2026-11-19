@@ -1,11 +1,11 @@
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { useMemo, useLayoutEffect, type ComponentProps, type RefObject } from "react";
+import { createContext, useContext, type ComponentProps, type RefObject } from "react";
 import { useDomSelection } from "@/hooks/use-dom-selection";
 import type { DomTextSelection } from "@/lib/workspace-files/dom-selection-locator";
 import { useQuery } from "@tanstack/react-query";
 import { useWatchedPaths } from "@/lib/workspace-files/file-watch-store";
 import type { ExtraProps } from "streamdown";
-import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
+import { MarkdownLinkScope, useMarkdownLinkScope } from "@/components/links/markdown-links";
 import { useOpenLink } from "@/components/links/use-open-link";
 import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { parentPath } from "@/lib/workspace-files/workspace-files-store";
@@ -13,6 +13,8 @@ import { useFileResourceSrc, useResourceLoadFailure } from "@/lib/workspace-file
 import { isUnreadableImage } from "@/lib/api/workspace-files";
 import { fileInfoQueryOptions } from "@/lib/query/query-options";
 import { fileReadProblem } from "@/lib/workspace-files/read-problem";
+import type { ReadingAnchor } from "@/lib/reading/reading-anchor";
+import { useRenderedAnchor } from "@/lib/reading/rendered-anchor";
 
 function LocalImage({
   id,
@@ -46,13 +48,36 @@ function LocalImage({
     <span>图片加载中…</span>
   );
 }
+/** 预览所属的工作区：图片按工作区读本地文件。 */
+const PreviewWorkspaceContext = createContext<number | null>(null);
+
+/**
+ * 文档里的图片：按与链接相同的规则解析（同一个链接作用域），工作区图片读本地文件显示，外部图片不自动加载。
+ * 模块级、身份恒定，会变的工作区与打开器从 context 读（理由见 `StaticMarkdown`）。
+ */
+function DocumentImage({ src, alt, node }: ComponentProps<"img"> & ExtraProps) {
+  void node;
+  const { opener, documentDir } = useMarkdownLinkScope();
+  const workspaceId = useContext(PreviewWorkspaceContext)!;
+  const target = typeof src === "string" ? opener.resolve(src, documentDir) : null;
+  return target?.kind === "workspace" && !target.directory ? (
+    <LocalImage id={workspaceId} path={target.path} alt={alt} />
+  ) : (
+    <span className="text-muted-foreground">
+      外部图片：{alt || "未自动加载"}
+    </span>
+  );
+}
+
+const PREVIEW_COMPONENTS = { img: DocumentImage } as const;
+
 export function MarkdownPreview({
   hostRef: host,
   text,
   workspaceId,
   path,
-  scrollTop,
-  onScroll,
+  anchor,
+  onAnchorChange,
   onSelectSelection,
 }: {
   /** 滚动容器；阅读器经它做就地查找与大纲跳转。 */
@@ -60,44 +85,27 @@ export function MarkdownPreview({
   text: string;
   workspaceId: number;
   path: string;
-  scrollTop: number;
-  onScroll: (top: number) => void;
+  /** 打开时恢复到的阅读位置（与源码视图共用）；之后内容异步变高由浏览器的滚动锚定保持。 */
+  anchor?: ReadingAnchor;
+  onAnchorChange: (anchor: ReadingAnchor) => void;
   onSelectSelection?: (selection: DomTextSelection | null) => void;
 }) {
   useDomSelection(host, (value) => onSelectSelection?.(value));
-  useLayoutEffect(() => {
-    if (host.current) host.current.scrollTop = scrollTop;
-  }, []);
+  useRenderedAnchor(host, anchor, onAnchorChange);
   const documentDir = parentPath(path);
   const opener = useOpenLink("document");
-  const links = useMarkdownLinkComponents(opener, { documentDir });
-  const components = useMemo(
-    () => ({
-      ...links,
-      // 文档里的工作区图片按与链接相同的规则解析，读本地文件显示；外部图片不自动加载。
-      img: ({ src, alt, node }: ComponentProps<"img"> & ExtraProps) => {
-        void node;
-        const target = typeof src === "string" ? opener.resolve(src, documentDir) : null;
-        return target?.kind === "workspace" && !target.directory ? (
-          <LocalImage id={workspaceId} path={target.path} alt={alt} />
-        ) : (
-          <span className="text-muted-foreground">
-            外部图片：{alt || "未自动加载"}
-          </span>
-        );
-      },
-    }),
-    [links, opener, documentDir, workspaceId],
-  );
   return (
     <div
       ref={host}
-      onScroll={(event) => onScroll(event.currentTarget.scrollTop)}
       className="h-full overflow-auto px-6 py-5"
     >
       {/* 限制行宽：面板铺满时正文仍保持易读的行长。 */}
       <div className="aui-md mx-auto max-w-3xl">
-        <StaticMarkdown components={components}>{text}</StaticMarkdown>
+        <PreviewWorkspaceContext.Provider value={workspaceId}>
+          <MarkdownLinkScope opener={opener} documentDir={documentDir}>
+            <StaticMarkdown components={PREVIEW_COMPONENTS}>{text}</StaticMarkdown>
+          </MarkdownLinkScope>
+        </PreviewWorkspaceContext.Provider>
       </div>
     </div>
   );

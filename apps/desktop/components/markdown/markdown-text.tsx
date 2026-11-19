@@ -1,8 +1,7 @@
 import { StreamdownTextPrimitive } from "@assistant-ui/react-streamdown";
 
-import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
-import { useOpenLink } from "@/components/links/use-open-link";
-import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/components/markdown/markdown-rendering-config";
+import { MARKDOWN_LINK_COMPONENTS } from "@/components/links/markdown-links";
+import { markdownPlugins, markdownRehypePlugins, markdownShikiTheme, useMermaidOptions } from "@/components/markdown/markdown-rendering-config";
 
 /**
  * 流式正文逐字淡入。必须按字切：默认按空白切词，一整句中文会被当成一个单位。模块级常量是因为 Streamdown
@@ -14,21 +13,20 @@ const STREAM_REVEAL = { animation: "fadeIn", duration: 160, sep: "char", stagger
  * Assistant 正文和 reasoning 的唯一 Markdown 边界。
  * Streamdown 负责不完整 Markdown、代码高亮、公式、Mermaid 图表、CJK 标点与流式淡入；
  * 组件本身不解析内容，也不把渲染结果写回 runtime 或服务端。链接与行内代码里的工作区路径
- * 经 `useMarkdownLinkComponents` 识别、由链接打开入口统一打开（所属 Session 来自 `LinkSessionContext`）。
+ * 经链接组件识别、交给外层 `MarkdownLinkScope` 的打开器（对话线程声明，所属 Session 来自线程）。
  */
 export function MarkdownText() {
   const mermaidOptions = useMermaidOptions();
-  const components = useMarkdownLinkComponents(useOpenLink("message"), { icons: true });
   return (
     <StreamdownTextPrimitive
       mode="streaming"
       defer
       plugins={markdownPlugins}
       rehypePlugins={markdownRehypePlugins}
-      shikiTheme={["github-light", "github-dark"]}
+      shikiTheme={markdownShikiTheme}
       animated={STREAM_REVEAL}
       mermaid={mermaidOptions}
-      components={components}
+      components={MARKDOWN_LINK_COMPONENTS}
       className="aui-md !space-y-3 leading-6"
     />
   );

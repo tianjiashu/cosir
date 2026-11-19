@@ -179,12 +179,12 @@ export function AppLayout() {
     [conversationSessionId, rail.close],
   );
 
-  // ---- 命令面板（⌘K）：搜索会话、开始新会话、跳转配置 ----
+  // ---- 命令面板（`commandPalette`）：搜索会话、开始新会话、跳转配置 ----
   const [paletteOpen, setPaletteOpen] = useState(false);
   useAppHotkey("commandPalette", () => setPaletteOpen(true));
 
   // ---- 导航意图 ----
-  // 开始新会话的唯一入口（侧栏「新会话」与工作区「+」、⌘N、命令面板）：带工作区时先显式选中它，
+  // 开始新会话的唯一入口（侧栏「新会话」与工作区「+」、快捷键 `newConversation`、命令面板）：带工作区时先显式选中它，
   // 不带时沿用当前选择。选中工作区只经这类显式意图改变，点侧栏工作区行不会改。
   const { selectWorkspace } = catalog;
   const startNewConversation = useCallback((workspaceId?: number) => {

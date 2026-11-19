@@ -242,3 +242,6 @@ def test_host_error_observation(code: str, status: str, hint: str | None) -> Non
     assert observation.tool_call_id == "call-1"
     if hint is not None:
         assert observation.display_data == {"status_hint": hint}
+    if code == CANCELLED:
+        # 请求已经发给宿主（浏览器的修改操作可能已生效），停下不能说成「没有结果」。
+        assert "may already have acted on it" in observation.content

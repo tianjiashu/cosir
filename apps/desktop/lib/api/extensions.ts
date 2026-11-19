@@ -40,8 +40,14 @@ export type MCPVariableStatus = {
   has_default: boolean;
 };
 
-/** 后端由本机事实推出的主状态（规则只在后端 `configuration_view`）：停用 > 缺变量 > 需要授权 > 待测试 > 可用。 */
-export type MCPServerStatus = "disabled" | "missing_variables" | "authorization_required" | "untested" | "available";
+/** 后端由本机事实推出的主状态（规则只在后端 `configuration_view`）：停用 > 缺变量 > 配置有误 > 需要授权 > 待测试 > 可用。 */
+export type MCPServerStatus =
+  | "disabled"
+  | "missing_variables"
+  | "invalid_configuration"
+  | "authorization_required"
+  | "untested"
+  | "available";
 
 /**
  * 配置页列出的一个可见服务：`variables` 是它引用的环境变量；`literal_fields` 是工作区服务里直接写了值的
@@ -61,13 +67,17 @@ type MCPDiscoveredTool = {
   input_schema: Record<string, unknown>;
 };
 
-/** 一次连接测试（或登录授权）的结果：成功时带发现的工具，失败时带归类后的原因与 `failure_kind`。 */
+/**
+ * 一次连接测试（或登录授权）的结果：成功时带发现的工具，失败时带归类后的原因与 `failure_kind`。
+ * `needs_sign_in` 是后端失败归类给出的下一步「登录授权」，前端只读它，不按 `failure_kind` 自行判断。
+ */
 export type MCPServerTestResult = {
   status: "completed";
   success: boolean;
   tools: MCPDiscoveredTool[];
   error: string | null;
   failure_kind: string | null;
+  needs_sign_in: boolean;
   agent_available: boolean;
 };
 

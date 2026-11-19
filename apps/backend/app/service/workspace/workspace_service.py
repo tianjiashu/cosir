@@ -10,6 +10,7 @@
   （委托给 ``SessionService``）。
 """
 
+import asyncio
 from pathlib import Path
 
 from app.config.configuration import get_agent_registry
@@ -20,6 +21,7 @@ from app.models import SessionRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service import depends as service_depends
 from app.service.configuration.extension_scope import ExtensionScope
+from app.service.configuration.mcp.configuration_service import MCPConfigurationService
 from app.service.configuration.mcp.machine_state import MCPMachineState
 from app.session_runtime.workspace_operation_registry import workspace_operations
 from app.storage.store_engines import main_db_factory
@@ -295,6 +297,10 @@ class WorkspaceService:
             DeletionBusyError: workspace 正被其他结构性操作占用。
         """
 
+        workspace = await asyncio.to_thread(self.get_workspace, workspace_id)
+        # 先于删除取消这个工作区进行中的 MCP 登录授权：授权在事件循环上运行，删除在工作线程里丢掉本机记录，
+        # 不先取消，迟到的授权结果会把已删除作用域的记录写回来。
+        MCPConfigurationService.cancel_authorizations(ExtensionScope.workspace(workspace.root_path))
         await self._session_service.stop_then_delete(
             lambda: set(self._session_crud.list_ids_by_workspace(workspace_id)),
             lambda: self.delete_workspace(workspace_id),

@@ -8,9 +8,10 @@ import { SkillFileTree, useSkillFileTreeState } from "@/components/configuration
 import { useSkillLinkOpener } from "@/components/configuration/skills/skill-link-opener";
 import { useSkillActions } from "@/components/configuration/skills/use-skill-actions";
 import { configurationPath } from "@/components/configuration/configuration-tabs";
-import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
+import { MarkdownLinkScope } from "@/components/links/markdown-links";
 import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { ReadonlyTextViewer, type TextViewerHandle } from "@/components/text-viewer/readonly-text-viewer";
+import { EditorFindScope } from "@/components/code-editor/editor-find-scope";
 import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
@@ -170,9 +171,7 @@ function SkillFileReader({ workspaceId, skill, path, onOpenFile }: { workspaceId
   const [view, setView] = useState<"rendered" | "source">(markdown ? "rendered" : "source");
   const markdownHost = useRef<HTMLDivElement>(null);
   const textViewer = useRef<TextViewerHandle>(null);
-  const linkComponents = useMarkdownLinkComponents(useSkillLinkOpener(skill, onOpenFile), {
-    documentDir: parentPath(path),
-  });
+  const skillLinks = useSkillLinkOpener(skill, onOpenFile);
   const fileQuery = useQuery({
     queryKey: queryKeys.skillFile(workspaceId, skill.name, path),
     queryFn: ({ signal }) => getSkillFile(workspaceId, skill.name, path, { signal }),
@@ -206,12 +205,22 @@ function SkillFileReader({ workspaceId, skill, path, onOpenFile }: { workspaceId
           : <LoadingState label="正在读取文件…" />
       ) : view === "rendered" ? (
         <div ref={markdownHost} className="aui-md min-h-0 flex-1 overflow-y-auto px-6 py-5 leading-6">
-          <StaticMarkdown components={linkComponents} className="!space-y-3">{text}</StaticMarkdown>
+          <MarkdownLinkScope opener={skillLinks} documentDir={parentPath(path)}>
+            <StaticMarkdown className="!space-y-3">{text}</StaticMarkdown>
+          </MarkdownLinkScope>
         </div>
       ) : (
-        <div className="min-h-0 flex-1 text-xs">
-          <ReadonlyTextViewer ref={textViewer} text={text} name={path} ariaLabel={`只读文件 ${path}`} wrap scrollTop={0} onScroll={() => {}} />
-        </div>
+        <EditorFindScope
+          target={{
+            find: (term, direction) => textViewer.current?.find(term, direction) ?? null,
+            refresh: (term) => textViewer.current?.refresh(term) ?? null,
+          }}
+          contentKey={text}
+          label="在文件中查找"
+          className="min-h-0 flex-1"
+        >
+          <ReadonlyTextViewer ref={textViewer} text={text} name={path} ariaLabel={`只读文件 ${path}`} wrap />
+        </EditorFindScope>
       )}
     </section>
   );

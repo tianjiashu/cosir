@@ -35,7 +35,10 @@ export function detailsLiveInRail({ artifact, surface = "timeline", interactive,
 export type CallPresentation = {
   /** 工具状态看不出的实体异常（子会话失败）；工具自身失败、取消、等你操作优先。正常时渲染为空。 */
   status?: ReactNode;
-  /** 取代目录算出的目标文字，只用于让目标可交互（路径可点开），内容仍是同一个目标。 */
+  /**
+   * 取代目录算出的目标文字，只用于目录算不出的实时名称（终端名）。只放文字、不放可交互内容：行有详情或归侧栏时
+   * 整行是按钮，里面再放按钮会嵌套；要打开目标用 `actions` 里的「打开」。
+   */
   target?: ReactNode;
   /** 只写调用结果（大小、数量）；目标已在行上，元信息不再重复路径、模式或查询词。 */
   meta?: ReactNode;

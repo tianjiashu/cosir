@@ -58,7 +58,8 @@ import { ComposerInsertionProvider } from "@/components/composer/composer-insert
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { notify } from "@/lib/notify";
-import { LinkSessionContext } from "@/components/links/use-open-link";
+import { LinkSessionContext, useOpenLink } from "@/components/links/use-open-link";
+import { MarkdownLinkScope } from "@/components/links/markdown-links";
 
 export type ThreadProps = {
   /** 只渲染 canonical message UI，不提供写入操作。 */
@@ -95,10 +96,13 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
   const emptyFrame = useContext(EmptyThreadFrameContext);
   const framed = isEmpty && !readonly ? emptyFrame : null;
   const messageComponents = useMemo(() => ({ Message: ThreadMessage }), []);
+  // 线程里所有消息（助手回复、用户消息、Agent 来信）共用一个链接作用域：所属 Session 就是这个线程的。
+  const messageLinks = useOpenLink("message", sessionId);
   return (
     <ThreadContext.Provider value={{ sessionId, workspaceId, workspaceRoot, forkingMessageId, onForkMessage, onResumeBusiness, cancelling, readonly }}>
       <AttachmentWorkspaceContext.Provider value={workspaceId}>
       <LinkSessionContext.Provider value={sessionId}>
+      <MarkdownLinkScope opener={messageLinks} icons>
       <ThreadPrimitive.Root className="aui-root aui-thread-root bg-background flex h-full min-h-0 min-w-0 flex-col">
         {/*
           顶部锚点固定最新回合的用户消息，答案在其下方增长，流式 token 不会持续把滚动位置重新
@@ -136,6 +140,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
         </ThreadPrimitive.Viewport>
         </>)}
       </ThreadPrimitive.Root>
+      </MarkdownLinkScope>
       </LinkSessionContext.Provider>
       </AttachmentWorkspaceContext.Provider>
     </ThreadContext.Provider>

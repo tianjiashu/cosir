@@ -1,19 +1,27 @@
 import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type Ref } from "react";
-import { basicSetup, EditorView } from "codemirror";
-import { Compartment, EditorState } from "@codemirror/state";
-import { placeholder as editorPlaceholder } from "@codemirror/view";
+import { EditorState, Prec } from "@codemirror/state";
+import { EditorView, placeholder as editorPlaceholder } from "@codemirror/view";
 import { markdown } from "@codemirror/lang-markdown";
 
-import { editorTheme, useEditorSyntaxTheme } from "@/components/code-editor/code-editor-theme";
-import { useMarkdownLinkComponents } from "@/components/links/markdown-links";
+import { editorTheme } from "@/components/code-editor/code-editor-theme";
+import { editorSetup } from "@/components/code-editor/editor-setup";
+import { findInEditor, refreshFindInEditor, replaceInEditor } from "@/components/code-editor/editor-find";
+import { EditorFindScope } from "@/components/code-editor/editor-find-scope";
+import type { FindDirection, FindResult } from "@/lib/find/next-match";
+import { MarkdownLinkScope } from "@/components/links/markdown-links";
 import { useWebOnlyLinkOpener } from "@/components/links/use-open-link";
 import { handleMarkdownKeydown } from "@/components/markdown-editor/markdown-editor-keymap";
 import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { ViewToggle } from "@/components/ui/view-toggle";
+import { scrollRenderedTo } from "@/lib/reading/rendered-anchor";
 
 type SourceEditorHandle = {
   /** 视口顶部所在的源码行（1 起）。 */
   topLine: () => number;
+  /** 应用查找条用：查找（空词清除高亮）、编辑后重算、替换。 */
+  find: (term: string, direction: FindDirection) => FindResult;
+  refresh: (term: string) => FindResult;
+  replace: (term: string, replacement: string, all: boolean) => FindResult;
 };
 
 // 右上角浮着视图切换按钮，正文右侧让出它的宽度。
@@ -26,8 +34,6 @@ function SourceEditor({ value, onChange, placeholder, ariaLabel, ref }: {
   ariaLabel: string;
   ref: Ref<SourceEditorHandle>;
 }) {
-  const syntaxTheme = useEditorSyntaxTheme();
-  const themeCompartment = useRef(new Compartment());
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const suppressChangeRef = useRef(false);
@@ -38,6 +44,9 @@ function SourceEditor({ value, onChange, placeholder, ariaLabel, ref }: {
       const view = viewRef.current!;
       return view.state.doc.lineAt(view.lineBlockAtHeight(view.scrollDOM.scrollTop).from).number;
     },
+    find: (term, direction) => findInEditor(viewRef.current!, term, direction),
+    refresh: (term) => refreshFindInEditor(viewRef.current!, term),
+    replace: (term, replacement, all) => replaceInEditor(viewRef.current!, term, replacement, all),
   }), []);
 
   useEffect(() => {
@@ -48,18 +57,18 @@ function SourceEditor({ value, onChange, placeholder, ariaLabel, ref }: {
     const state = EditorState.create({
       doc: value,
       extensions: [
-        basicSetup,
+        editorSetup,
         markdown(),
         editorTheme,
         toggleClearance,
-        themeCompartment.current.of(syntaxTheme),
         EditorView.lineWrapping,
         // 占位由 CodeMirror 画在首行内容里，天然避开行号栏。
         ...(placeholder ? [editorPlaceholder(placeholder)] : []),
         EditorView.contentAttributes.of({ "aria-label": ariaLabel }),
-        EditorView.domEventHandlers({
+        // 高于编辑器键表：Markdown 命令是内层，同键时它优先（登记表的 `overrides`，如斜体覆盖扩大选区）。
+        Prec.highest(EditorView.domEventHandlers({
           keydown: (event, view) => handleMarkdownKeydown(view, event),
-        }),
+        })),
         EditorView.updateListener.of((update) => {
           if (!update.docChanged) return;
           if (!suppressChangeRef.current) onChangeRef.current(update.state.doc.toString());
@@ -72,7 +81,7 @@ function SourceEditor({ value, onChange, placeholder, ariaLabel, ref }: {
       view.destroy();
       viewRef.current = null;
     };
-    // 只在挂载时建一次：value 与主题由下面两个 effect 增量同步，重建会丢掉光标与撤销历史。
+    // 只在挂载时建一次：value 由下面的 effect 增量同步，重建会丢掉光标与撤销历史；深浅色由 CSS 变量切换。
   }, []);
 
   useEffect(() => {
@@ -85,34 +94,15 @@ function SourceEditor({ value, onChange, placeholder, ariaLabel, ref }: {
     suppressChangeRef.current = false;
   }, [value]);
 
-  useEffect(() => {
-    viewRef.current?.dispatch({
-      effects: themeCompartment.current.reconfigure(syntaxTheme),
-    });
-  }, [syntaxTheme]);
-
   return <div ref={containerRef} className="h-full" aria-label={ariaLabel} />;
-}
-
-/** 把预览滚到不晚于 `line` 的最后一个标题；它之前没有标题时回到顶部。 */
-function scrollPreviewToLine(host: HTMLElement, line: number) {
-  let target: HTMLElement | null = null;
-  // `data-source-line` 也打在正文块上（选区求行范围用），这里只认标题。
-  for (const heading of host.querySelectorAll<HTMLElement>("[data-source-line]")) {
-    if (!/^H[1-6]$/.test(heading.tagName)) continue;
-    if (Number(heading.dataset.sourceLine) > line) break;
-    target = heading;
-  }
-  host.scrollTop = target
-    ? target.getBoundingClientRect().top - host.getBoundingClientRect().top + host.scrollTop
-    : 0;
 }
 
 /**
  * Markdown 编辑器：源码与预览二选一，右上角一键切换；填满父容器，高度由调用方决定。
  *
  * 源码编辑器始终挂载，看预览时只是隐藏（`visibility` 而非卸载或 `display: none`），所以切回来光标、
- * 撤销历史和滚动位置都在；预览只在显示时渲染。切到预览时按源码视口顶部的行，滚到它所在的标题。
+ * 撤销历史和滚动位置都在；预览只在显示时渲染。切到预览时按源码视口顶部的行，滚到它所在的那一块
+ * （与文件面板同一条规则，`lib/reading/rendered-anchor.ts`）。
  * 组件不负责保存、请求或业务校验。
  */
 export function MarkdownEditor({
@@ -130,10 +120,10 @@ export function MarkdownEditor({
   const source = useRef<SourceEditorHandle>(null);
   const preview = useRef<HTMLDivElement>(null);
   const previewLine = useRef(1);
-  const links = useMarkdownLinkComponents(useWebOnlyLinkOpener("configuration"));
+  const links = useWebOnlyLinkOpener("configuration");
 
   useLayoutEffect(() => {
-    if (rendered) scrollPreviewToLine(preview.current!, previewLine.current);
+    if (rendered) scrollRenderedTo(preview.current!, { line: previewLine.current, offset: 0 });
   }, [rendered]);
 
   const toggle = () => {
@@ -143,13 +133,25 @@ export function MarkdownEditor({
 
   return (
     <div className="bg-background relative h-full min-h-0 overflow-hidden rounded-xl border">
-      <div className={rendered ? "invisible absolute inset-0" : "absolute inset-0"}>
+      <EditorFindScope
+        target={{
+          find: (term, direction) => source.current?.find(term, direction) ?? null,
+          refresh: (term) => source.current?.refresh(term) ?? null,
+          replace: (term, replacement, all) => source.current?.replace(term, replacement, all) ?? null,
+        }}
+        contentKey={value}
+        label="在源码中查找"
+        barClassName="top-2 right-12"
+        className={rendered ? "invisible absolute inset-0" : "absolute inset-0"}
+      >
         <SourceEditor ref={source} value={value} onChange={onChange} placeholder={placeholder} ariaLabel={ariaLabel} />
-      </div>
+      </EditorFindScope>
       {rendered && (
         <div ref={preview} className="absolute inset-0 overflow-auto px-6 py-5">
           <div className="aui-md mx-auto max-w-3xl leading-6">
-            <StaticMarkdown components={links} className="!space-y-3">{value}</StaticMarkdown>
+            <MarkdownLinkScope opener={links}>
+              <StaticMarkdown className="!space-y-3">{value}</StaticMarkdown>
+            </MarkdownLinkScope>
           </div>
         </div>
       )}
