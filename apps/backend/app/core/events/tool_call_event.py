@@ -54,7 +54,7 @@ class ToolCallStatusChangedEvent(WorkflowEventEnvelope):
     迁移统一由本类型表达。
 
     时序：``running`` 只在调用通过准入、即将交给 handler 时发出；终态由两处发出——**执行即投影**
-    （``run_tool_batch`` 在每个调用结束时发出，早于 ``ToolMessage`` 落 canonical context）与
+    （``tools_node`` 在每个调用结束时发出，早于 ``ToolMessage`` 落 canonical context）与
     **结算兜底**（``settle_observations``，在写 ``ToolMessage`` 之后）。取消不得早于执行层的强杀与
     输出排空：执行层在检出取消的瞬间只产出观察与日志，不发状态事件（见 ``tool_terminal_projection`` 的时序说明）。两处对同一调用
     产生相同终态，由消费方按自迁移幂等吸收。

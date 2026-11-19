@@ -55,8 +55,8 @@ class ConversationStateToolCallPart(TypedDict):
     toolName: str
     presentation: ToolPresentation
     status: ToolCallStatus
-    # 「等你操作」：占位行 ``pending`` 且不是后台占位（HITL 等决定、交接等交还）。建 part 时为 ``False``，
-    # 由 ``project_tool_result`` 在每次结果投影时显式写，决定到达、重放后清回 ``False``；冷重建再按
+    # 「等你操作」：占位行 ``pending`` 且不是后台占位（HITL 等用户决定）。建 part 时为 ``False``，
+    # 由 ``project_tool_result`` 在每次结果投影时显式写，决定到达后清回 ``False``；冷重建再按
     # 行级规则（``awaits_user``：继承副本与撤回移出的调用不能决定）纠正一次。失败与否看 ``status``。
     awaitingUser: bool
     args: NotRequired[dict[str, object]]
@@ -67,7 +67,7 @@ class ConversationStateToolCallPart(TypedDict):
     display_data: NotRequired[dict[str, object] | None]
     # 后台占位的工作记录：存在即后台占位，``pending`` 即「后台执行中」；投影自占位行 metadata。
     background: NotRequired[ConversationBackgroundWork]
-    # 交付记录（只有 ``present_deliverables``）：投影自结果行 metadata，回合聚合卡与产出清单都读它。
+    # 交付记录（只有 ``present_deliverables``）：投影自结果行 metadata，交付卡与产出清单都读它。
     deliverables: NotRequired[list[ConversationDeliverable]]
     # 进入 ``running`` 的时刻（ISO 8601，取自状态事件），前端据此本地计时运行时长；其余时候为
     # ``None``（建 part、冷重建与离开 running 时）。冷重建没有运行中的调用，所以恒为 ``None``。

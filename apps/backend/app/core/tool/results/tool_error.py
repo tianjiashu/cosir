@@ -2,7 +2,7 @@
 
 本模块承载失败观察的**唯一收口** :func:`tool_error`，以及文件类工具复用的
 :func:`os_error_message`。``ToolAccessGate``（未知工具/权限拒绝/参数非法）、
-``ToolHandlerRunner``（启动失败/超时/handler 异常）以及各 handler（路径越界/无匹配等）的
+``ToolExecutor``（handler 异常）以及各 handler（路径越界/无匹配等）的
 失败分支全部经此构造。交给模型的失败文本（错误事实 + 下一步建议）由调用点直接写成一段
 ``content``：只有调用点知道该失败能否靠改参数修好，重试与否用自然语言写进建议里，
 工厂不再拼装固定的 ``error:`` / ``hint:`` / ``reason:`` 模板。
@@ -96,6 +96,7 @@ def tool_error(
     content: str,
     tool_call_id: str = "",
     status_hint: str | None = None,
+    partial_display: dict | None = None,
 ) -> ToolObservation:
     """构造失败的工具观察结果（纯工厂函数）。
 
@@ -108,6 +109,9 @@ def tool_error(
         status_hint: 客户端短提示，建议约 5 个字，最长 8 个字符；不会回传给模型。省略时按
             ``tool_name`` 选择工具默认提示。错误观察的 ``display_data`` 固定只包含该提示，
             不承载目标、结果或完整错误原因。
+        partial_display: 失败前已经实际发生的结构化部分结果（成功态展示投影，带 ``kind``），如补丁写了一部分
+            文件后失败时的 ``file-changes``：用户要看到「它其实改了什么」，调用行与汇总的增删数也算上它。
+            只放执行器真实收集到的事实，不得伪造成功数据。
     """
     observation = ToolObservation(
         tool_name=tool_name,
@@ -115,6 +119,6 @@ def tool_error(
         content=content,
         tool_call_id=tool_call_id,
     )
-    # 错误 UI 通道只保留后端显式传入的短提示；完整失败文本仅供模型通道。
-    observation.display_data = {"status_hint": normalize_status_hint(tool_name, status_hint)}
+    # 错误 UI 通道只有短提示与真实发生的部分结果；完整失败文本仅供模型通道。
+    observation.display_data = {**(partial_display or {}), "status_hint": normalize_status_hint(tool_name, status_hint)}
     return observation

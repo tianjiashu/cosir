@@ -6,12 +6,12 @@
 ``<user_decision>`` 交给模型，同一个 Run 接着干。本工具没有自己的业务事实：等待与否看占位行，
 回答在占位的展示数据里。
 
-提问等的是用户的回应（``decision_lifetime="until_user_input"``）：用户不理卡片直接发消息、或模型又问
+提问等的是用户的回应：用户不理卡片直接发消息、或模型又问
 一次，旧提问作废（``decision_expiry``）。只给侧栏会话（``user_decision`` 工具天然需要用户界面），
 子 Agent 需要用户决定时在结论里交代，由上级去问。
 """
 
-from typing import Any, ClassVar
+from typing import Any
 
 from app.core.tool.handler.question.ask_user_answers import AskUserAnswers
 from app.core.tool.handler.question.ask_user_args import AskUserArgs
@@ -46,7 +46,6 @@ class AskUserTool(HandlerBase):
         "asking about in the question itself."
     )
     args_model: type[AskUserArgs] = AskUserArgs
-    timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_USER_QUESTION
 
     def execute(
@@ -75,11 +74,8 @@ class AskUserTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            execution_mode="thread",
-            user_decision="reply",
+            user_decision=True,
             decision_model=AskUserAnswers,
-            decision_lifetime="until_user_input",
         )
 
 

@@ -6,7 +6,6 @@
 from app.config.logging.logger import log
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.node_helper.tool_observation_projection import (
-    settle_decision_observation,
     settle_observations,
     withhold_unviewable_images,
     write_tool_images,
@@ -22,13 +21,9 @@ async def _observe_node(state: ReactExecutionState) -> dict[str, object]:
     """
     batch = state.batch
     step_id = f"step-{state.step_count}"  # 工具是 model 步的延续，复用同一步 step_id
-    # 写 canonical tool 消息后再投影终态，冷重建与实时快照使用同一份结果。用户批准后的 HITL
-    # 执行不写 tool 消息：占位已是协议结果，结果追加为消息（见 settle_decision_observation）。
+    # 写 canonical tool 消息后再投影终态，冷重建与实时快照使用同一份结果。
     withhold_unviewable_images(batch)
-    if batch.decision is not None:
-        settle_decision_observation(batch, step_id=step_id)
-    else:
-        settle_observations(batch, step_id=step_id)
+    settle_observations(batch, step_id=step_id)
     # 图片只能放在 user 消息里，且须排在整批 tool 消息之后（见 ``write_tool_images``）。
     write_tool_images(batch)
     log.info(

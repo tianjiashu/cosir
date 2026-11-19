@@ -22,9 +22,9 @@ from app.core.tool.tool_base import HandlerBase
 from app.core.tool.tool_grouping import TOOL_GROUP_FILE_EDIT
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.display.file_change_display import build_file_change_display_data
-from app.tools.tool_handler.file_edit.syntax_check import check_source_syntax, format_syntax_reason
 from app.tools.tool_handler.file_edit.line_numbered import looks_like_line_numbered
 from app.tools.tool_handler.file_edit.patch_diff import FileDiffResult
+from app.tools.tool_handler.file_edit.syntax_check import check_source_syntax, format_syntax_reason
 from app.tools.tool_handler.file_edit.text_match import TextMatchError, replace_exact
 from app.tools.tool_handler.file_observations import file_observations
 from app.tools.tool_handler.security.path_resolver import PathResolver
@@ -44,7 +44,6 @@ class EditFileTool(HandlerBase):
     name = TOOL_EDIT_FILE
     description = EDIT_FILE_DESCRIPTION
     args_model = EditFileArgs
-    timeout_seconds = 30.0
     group = TOOL_GROUP_FILE_EDIT
 
     def execute(
@@ -58,23 +57,28 @@ class EditFileTool(HandlerBase):
         """替换并原子回写；所有失败都收口为错误观察，不向上抛。相对路径按工作区根解析，写入边界是可写根。"""
 
         if not old_string:
-            return tool_error(self.name, "old_string is empty. Provide the exact text to replace.")
+            return tool_error(
+                self.name, "old_string is empty. Provide the exact text to replace.", status_hint="原文为空"
+            )
         if old_string == new_string:
             return tool_error(
                 self.name,
                 "old_string and new_string are identical, no changes would be made. "
                 "Provide a different new_string, or skip the call if no change is needed.",
+                status_hint="无需改动",
             )
-        resolver = PathResolver(execution_context.workspace_root, execution_context.writable_root)
+        resolver = PathResolver(
+            execution_context.workspace_root, execution_context.writable_root, execution_context.scratch_dir
+        )
         device_error = resolver.blocked_device_reason(path)
         if device_error:
-            return tool_error(self.name, device_error)
+            return tool_error(self.name, device_error, status_hint="路径不可写")
         resolved, error = resolver.resolve_for_write(path)
         if resolved is None:
-            return tool_error(self.name, f"could not edit the file: {error}.")
+            return tool_error(self.name, f"could not edit the file: {error}.", status_hint="路径不可写")
         device_error = resolver.blocked_device_reason(path, resolved)
         if device_error:
-            return tool_error(self.name, device_error)
+            return tool_error(self.name, device_error, status_hint="路径不可写")
         try:
             # read_text 按通用换行读入（\r\n → \n），与 read_file 给模型看的一致；写回时
             # atomic_write_text 按原文件还原换行风格。
@@ -83,6 +87,7 @@ class EditFileTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"{os_error_message(exc, 'read the file')}. Make the file readable, then call edit_file again.",
+                status_hint="无法读取",
             )
         try:
             new_content, _ = replace_exact(original, old_string, new_string, replace_all=replace_all)
@@ -91,20 +96,23 @@ class EditFileTool(HandlerBase):
                 self.name,
                 f"could not edit the file: {exc}. Read the current file with read_file, then retry "
                 "with old_string copied exactly from it.",
+                status_hint=exc.status_hint,
             )
         if looks_like_line_numbered(new_content):
             return tool_error(
                 self.name,
                 "resulting content appears line-numbered. Remove the 'N| ' display prefixes from new_string.",
+                status_hint="内容带行号",
             )
         if cancellation_registry.is_cancelled(execution_context.session_id):
             return tool_cancelled(tool_name=self.name)
         try:
-            atomic_write_text(resolved, new_content, containment_root=resolver.writable_root)
+            atomic_write_text(resolved, new_content, containment_root=resolver.write_containment(resolved))
         except OSError as exc:
             return tool_error(
                 self.name,
                 f"{os_error_message(exc, 'write the file')}. Make the file writable, then call edit_file again.",
+                status_hint="无法写入",
             )
         file_observations.record(execution_context.session_id, resolved)
         display_data = build_file_change_display_data(
@@ -124,10 +132,8 @@ class EditFileTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("filesystem",),
         )
 
 
 def build_edit_file_definition() -> ToolDefinition:
-    return EditFileTool().to_definition_if_avaliable()
+    return EditFileTool().to_definition()

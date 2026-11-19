@@ -1,9 +1,12 @@
 """受保护路径：Agent 的文件工具不得读写的 cosir 自身数据（唯一事实源）。
 
 系统 ``.cosir`` 里有 ``.env`` 与 ``config/models.json``（模型 Key）、MCP 配置、业务库与日志，Agent
-读到就等于拿到凭据与全部对话历史，写进去就能改 cosir 自己的配置，所以整棵子树禁读禁写。其中 cosir 专属
-Skill 目录 ``skills/`` 例外、只读放行：Skill 正文过长时，``skill`` 工具会让模型按绝对路径用 ``read_file``
-读剩下的部分；不放行写，Agent 改不了 cosir 专属 Skill（以后的内置 Skill 也在这一侧）。
+读到就等于拿到凭据与全部对话历史，写进去就能改 cosir 自己的配置，所以整棵子树禁读禁写。两处例外：
+
+- cosir 专属 Skill 目录 ``skills/`` 只读放行：Skill 正文过长时，``skill`` 工具会让模型按绝对路径用
+  ``read_file`` 读剩下的部分；不放行写，Agent 改不了 cosir 专属 Skill（以后的内置 Skill 也在这一侧）。
+- 会话临时目录 ``scratch/`` 整棵可读（父 Agent 读子 Agent 的中间产物、分叉读来源写过的东西），
+  只有调用方传入的「本会话的临时目录」可写。里面只有 Agent 自己的工作产物，没有凭据。
 
 根目录来自路径变量（``system_cosir_dir()`` 随 ``CODING_AGENT_DATA_DIR`` 与测试 ``override`` 变化），每次
 :meth:`ProtectedPaths.current` 现取，不写死、不缓存。权限模型扩展为多条规则时见设计稿
@@ -22,7 +25,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.utils.path.file_identity import FileIdentity, RootDirectory
-from app.utils.path.system_cosir import system_cosir_dir, system_cosir_skills_dir
+from app.utils.path.system_cosir import (
+    system_cosir_dir,
+    system_cosir_skills_dir,
+    system_scratch_dir,
+)
 
 
 def _root_or_none(path: Path) -> RootDirectory | None:
@@ -43,23 +50,34 @@ class ProtectedPaths:
     """
 
     root: RootDirectory | None
-    readable: RootDirectory | None
+    # 子树内可读的例外：Skill 目录与全部会话临时目录；还不存在的不在其中。
+    readable: tuple[RootDirectory, ...]
 
     @classmethod
     def current(cls) -> ProtectedPaths:
-        return cls(_root_or_none(system_cosir_dir()), _root_or_none(system_cosir_skills_dir()))
+        readable = (_root_or_none(system_cosir_skills_dir()), _root_or_none(system_scratch_dir()))
+        return cls(_root_or_none(system_cosir_dir()), tuple(root for root in readable if root is not None))
 
     def denies_read(self, path: str | Path) -> bool:
-        """路径（跟随符号链接后）是否禁读：在受保护子树内，且不在 Skill 只读例外里。"""
+        """路径（跟随符号链接后）是否禁读：在受保护子树内，且不在可读例外里。"""
 
         if self.root is None or not self.root.contains(path):
             return False
-        return self.readable is None or not self.readable.contains(path)
+        return not any(root.contains(path) for root in self.readable)
 
-    def denies_write(self, path: str | Path) -> bool:
-        """路径是否禁写：受保护子树内一律不可写，Skill 目录也不例外。"""
+    def denies_write(self, path: str | Path, *, own_scratch: Path | None = None) -> bool:
+        """路径是否禁写：受保护子树内一律不可写，只有 ``own_scratch``（调用方会话的临时目录）例外。
 
-        return self.root is not None and self.root.contains(path)
+        例外由调用方逐次传入而不是挂在本类上：本类是进程级规则，不知道是哪个会话在写；别的会话的临时目录
+        仍然禁写。目录还不存在时不放行（由会话生命周期在驱动开始前建好）。
+        """
+
+        if self.root is None or not self.root.contains(path):
+            return False
+        if own_scratch is None:
+            return True
+        scratch = _root_or_none(own_scratch)
+        return scratch is None or not scratch.contains(path)
 
     def is_denied_root(self, directory: Path) -> bool:
         """``directory`` 是否正是受保护根，供遍历剪枝。
@@ -83,12 +101,13 @@ class ProtectedPaths:
         if write:
             return (
                 f"path is inside cosir's own data directory ({root}): {path}. Files there "
-                "cannot be modified by tools."
+                "cannot be modified by tools, except in this session's own scratch directory."
             )
         return (
             f"path is inside cosir's own data directory ({root}): {path}. It holds settings, "
             f"API keys and conversation history and cannot be read; only skills under "
-            f"{system_cosir_skills_dir()} are readable."
+            f"{system_cosir_skills_dir()} and session scratch directories under "
+            f"{system_scratch_dir()} are readable."
         )
 
 

@@ -4,7 +4,6 @@ from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
 from app.tools.tool_models.browser_args import (
     BrowserActArgs,
     BrowserEvaluateArgs,
-    BrowserHandoffArgs,
     BrowserLogsArgs,
     BrowserNavigateArgs,
     BrowserScreenshotArgs,
@@ -35,7 +34,6 @@ __all__ = [
     "ApplyPatchArgs",
     "BrowserActArgs",
     "BrowserEvaluateArgs",
-    "BrowserHandoffArgs",
     "BrowserLogsArgs",
     "BrowserNavigateArgs",
     "BrowserScreenshotArgs",

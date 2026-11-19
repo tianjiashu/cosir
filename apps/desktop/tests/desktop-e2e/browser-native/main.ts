@@ -41,7 +41,7 @@ const server = http.createServer((req, res) => {
   }
   if (url === "/settle-ticker") {
     res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(`<title>Ticker</title><p id="t">0</p><script>let n=0;setInterval(()=>{document.getElementById('t').textContent='tick '+(++n)},100)</script>`);
+    res.end(`<title>Ticker</title><p id="t">0</p><button>Poke</button><script>let n=0;setInterval(()=>{document.getElementById('t').textContent='tick '+(++n)},100)</script>`);
     return;
   }
   if (url === "/settle-batches") {
@@ -72,6 +72,18 @@ const server = http.createServer((req, res) => {
   if (url === "/poll-page") {
     res.writeHead(200, { "Content-Type": "text/html" });
     res.end(`<title>Poll</title><p id="d">none</p><button onclick="fetch('/detail').then(r=>r.text()).then(t=>{document.getElementById('d').textContent=t})">Detail</button><script>setInterval(()=>fetch('/poll?t='+Date.now()),300)</script>`);
+    return;
+  }
+  // 落定 h（GraphQL）：所有操作走 /graphql。页面每 300ms 轮询一次通知，空闲时自己查过一次 Feed；点「Load」同时查
+  // Feed（1.6 秒）与 User（0.8 秒）——Feed 比 User 晚回来，必须靠它自己被等到，不能被 User 顺带。
+  if (url === "/graphql") {
+    let body = ""; req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => { const op = (JSON.parse(body) as { operationName: string }).operationName; setTimeout(() => res.end(`GQL_${op}`), op === "Feed" ? 1_600 : op === "User" ? 800 : 30); });
+    return;
+  }
+  if (url === "/graphql-page") {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(`<title>GraphQL</title><ul id="l"></ul><button onclick="q('Feed',1);q('User',1)">Load</button><script>function q(op,show){return fetch('/graphql',{method:'POST',body:JSON.stringify({operationName:op,query:'{x}'})}).then(r=>r.text()).then(t=>{if(show){let li=document.createElement('li');li.textContent=t;document.getElementById('l').append(li)}})}setInterval(()=>q('Notifications'),300);setTimeout(()=>q('Feed'),5000)</script>`);
     return;
   }
   if (url === "/redirect") { res.writeHead(302, { Location: "/redirected" }); res.end(); return; }
@@ -186,10 +198,11 @@ void app.whenReady().then(async () => {
       const data = await go("/settle-page", true);
       assert.ok(data.result.snapshot.includes("DATA_ARRIVED_TEXT"), data.result.snapshot);
       assert.ok(!/still (running|changing)/.test(data.notes), data.notes);
-      // b) 持续埋点：只等内容接口，埋点不拖住、不进备注。
+      // b) 持续埋点：只等内容接口，埋点不拖住；它不算「可能带内容」的请求，只在「没等」的提示里出现一次。
       const beacons = await go("/settle-beacon-page");
       assert.ok(beacons.result.snapshot.includes("DATA_ARRIVED_TEXT"), beacons.result.snapshot);
-      assert.ok(!/still (running|changing)/.test(beacons.notes), beacons.notes);
+      assert.ok(!/may carry page content|still changing/.test(beacons.notes), beacons.notes);
+      assert.ok(!beacons.notes.includes("beacon") || /^not waited for: .*beacon/m.test(beacons.notes), beacons.notes);
       assert.ok(beacons.ms < 3_000, `beacon page took ${beacons.ms}ms`);
       // c) 没有请求、分几批渲染：等到最后一批。
       const batches = await go("/settle-batches");
@@ -197,6 +210,12 @@ void app.whenReady().then(async () => {
       // d) 一直在变：到上限交出，并说明是页面在变。
       const ticker = await go("/settle-ticker");
       assert.ok(ticker.notes.includes("the page was still changing") && ticker.notes.includes("wait_for"), ticker.notes);
+      // 一次 act 里每个动作各自落定：结论汇总成一条，说明几个动作之后还在变。
+      const poke = click(ref(ticker.result.snapshot, "Poke"));
+      const pokes = await host.act({ sessionId: 7, context, actions: [poke, poke, poke] }, signal());
+      const changing = pokes.observation!.notes.filter((note) => note.includes("the page was still changing"));
+      assert.equal(changing.length, 1, pokes.observation!.notes.join("\n"));
+      assert.ok(changing[0].includes("after all 3 actions"), changing[0]);
       // e) 内容接口永远不回来：到上限交出，并列出它。
       const hanging = await go("/settle-hang-page");
       assert.ok(hanging.ms < 6_000, `took ${hanging.ms}ms`);
@@ -224,6 +243,14 @@ void app.whenReady().then(async () => {
       assert.ok(!detail.observation?.notes.some((note) => note.includes("/poll")), detail.observation?.notes.join("\n"));
       assert.ok(ms < 2_600, `detail click took ${ms}ms`);
       host.userClose(items.tabId);
+      // h) GraphQL：按操作名分接口，轮询的 Notifications 不连累内容查询；页面自己只查过一次的 Feed 也不算后台流量，
+      // 点击带来的 Feed 照样等到。
+      const gql = await host.navigate({ sessionId: 9, context, newTab: true, target: { url: `${origin}/graphql-page` } }, signal());
+      // 空闲 Feed 在加载后 5 秒发出，离导航落定已超过宽限期，记为页面自己发起；它回来之前点击。
+      await new Promise((resolve) => setTimeout(resolve, 5_500));
+      const load = await host.act({ sessionId: 9, context, actions: [click(ref(gql.snapshot, "Load"))] }, signal());
+      assert.ok(load.observation?.snapshot.includes("GQL_Feed") && load.observation.snapshot.includes("GQL_User"), load.observation?.snapshot);
+      host.userClose(gql.tabId);
     });
     await check("a redirect into a stopped service worker's scope does not hang navigation", async () => {
       // Electron 44（Chromium 152）的 ServiceWorkerAutoPreload 缺陷（上游 559592113）：Worker 停止后，经跳转进入它作用范围的

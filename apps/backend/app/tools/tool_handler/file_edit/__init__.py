@@ -11,7 +11,7 @@ from app.tools.tool_handler.file_edit.patch_apply import (
 )
 from app.tools.tool_handler.file_edit.patch_diff import (
     FileDiffResult,
-    build_diff_stats,
+    count_diff_lines,
     format_git_diff,
     format_unified_diff,
 )
@@ -32,7 +32,7 @@ __all__ = [
     "PatchOperation",
     "PatchParseOutcome",
     "apply_all_with_diff",
-    "build_diff_stats",
+    "count_diff_lines",
     "format_git_diff",
     "format_unified_diff",
     "parse_git_unified_diff",

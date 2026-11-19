@@ -37,7 +37,7 @@ from app.tools.tool_handler.write_file import build_write_file_definition
 
 
 def build_tool_registry() -> ToolRegistry:
-    """注册全部内置工具定义；构建函数返回 ``None`` 的工具（如无可用 Provider 的 Web 工具）由注册表跳过。
+    """注册全部内置工具定义。web 工具不论 Firecrawl 是否配置都注册：没配置时调用返回配置说明。
 
     Agent registry 必须先于本函数装配：部分定义构建时读取它。
     """

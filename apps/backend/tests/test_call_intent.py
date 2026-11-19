@@ -97,7 +97,6 @@ def test_handler_only_receives_business_args_context_keeps_original_intent(
             (
                 value,
                 execution_context.call_intent,
-                execution_context.for_process_execution().call_intent,
             )
         )
         return ToolObservation(tool_name="probe", status="success", content="ok")
@@ -116,7 +115,7 @@ def test_handler_only_receives_business_args_context_keeps_original_intent(
     )
     assert ToolExecutor(registry).execute(call, context(tmp_path), {"probe"}).status == "success"
     # ``intent`` 是调用意图，不进业务参数：收紧空白后只留在运行上下文里。
-    assert seen == [(1, "检查数据", "检查数据")]
+    assert seen == [(1, "检查数据")]
 
 
 def test_mcp_json_normalization_is_not_revalidated(tmp_path):
@@ -144,7 +143,7 @@ def test_mcp_json_normalization_is_not_revalidated(tmp_path):
             }
         ),
     )
-    result = ToolAccessGate(registry).evaluate(call, context(tmp_path))
+    result = ToolAccessGate(registry).evaluate(call, context(tmp_path), {"mcp"})
     assert result.denial is None
     assert result.arguments["arguments"] == {"query": "x"}
     assert "intent" not in result.arguments
@@ -208,15 +207,14 @@ def test_stream_close_intent_matches_cold_projection_even_without_execution(
     assert mutation.value == expected
 
 
-def process_intent_probe(value, *, execution_context):
-    """可 pickle 的真实子进程 handler；若意图作为业务 kwarg 泄漏，调用直接失败。"""
+def intent_probe(value, *, execution_context):
+    """若意图作为业务 kwarg 泄漏，调用直接失败。"""
     return ToolObservation(
         tool_name="probe", status="success", content=f"{value}:{execution_context.call_intent}"
     )
 
 
-@pytest.mark.parametrize("mode", ["thread", "process"])
-def test_intent_reaches_actual_handler_context_in_both_execution_modes(tmp_path, monkeypatch, mode):
+def test_intent_reaches_actual_handler_context(tmp_path, monkeypatch):
     registry = ToolRegistry(
         [
             ToolDefinition(
@@ -224,8 +222,7 @@ def test_intent_reaches_actual_handler_context_in_both_execution_modes(tmp_path,
                 group="test",
                 description="probe",
                 args_model=Args,
-                handler=process_intent_probe,
-                execution_mode=mode,
+                handler=intent_probe,
             )
         ]
     )

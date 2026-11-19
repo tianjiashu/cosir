@@ -1,25 +1,37 @@
 """Firecrawl 客户端：``web_search`` 与 ``web_fetch`` 唯一的远端实现，两个工具直接调用。
 
-只负责请求 Firecrawl 并把响应归一化为结果值对象；URL 安全校验、结果投影与输出预算归工具。
+只负责请求 Firecrawl 并把响应归一化为结果值对象；URL 检查与结果渲染归工具。
 
-搜索只接受项目配置的 v2 协议：网页结果位于 ``data.web``；旧版或错误响应直接报协议错误。
+配置（Key 与自建服务地址）每次请求现读 ``Settings``：配置中心保存后经 ``Settings.load`` 刷新，下一次调用
+即生效，不用重启。没配置或 Key 被拒都抛 :class:`FirecrawlNotConfiguredError`，正文是给 Agent 的配置说明，
+两个工具原样转交——工具一直在工具集合里，由 Agent 把怎么配置转告用户。
+
+搜索只接受 v2 协议：网页结果位于 ``data.web``；旧版或错误响应直接报协议错误，不当成「没有结果」。
 """
 
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any
 
 import httpx
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
+from app.config.settings import Settings
 from app.utils.http_proxy import ProxyHttpClient
 
-MISSING_CONFIGURATION_MESSAGE = (
-    "Firecrawl is unavailable: set FIRECRAWL_API_KEY or FIRECRAWL_API_URL."
+# 给 Agent 的配置说明：界面名称与配置中心一致（系统配置 → 环境变量 → 网页工具），用户照着就能找到。
+_SETUP_STEPS = (
+    "Tell the user how to set it up, then stop calling web_search and web_fetch until they say "
+    "it is done:\n"
+    "1. Get an API key at https://www.firecrawl.dev (sign up and copy the key from the "
+    "dashboard). If they run their own Firecrawl server, they need its address instead.\n"
+    '2. In this app, open 系统配置 → 环境变量 → 网页工具 and paste the key into "API Key" '
+    '(or the server address into "服务地址").\n'
+    "3. Save. It takes effect on the next call; no restart is needed."
 )
+_NOT_CONFIGURED = f"web search and fetch are not set up: they need a Firecrawl API key. {_SETUP_STEPS}"
+_KEY_REJECTED = "the Firecrawl API key was rejected (HTTP {status}). " + _SETUP_STEPS
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,151 +41,71 @@ class WebSearchItem:
     title: str
     url: str
     description: str
-    position: int
 
 
 @dataclass(frozen=True, slots=True)
 class WebFetchItem:
-    """一页网页抓取结果。
-
-    ``content`` 已按调用方的 ``char_limit`` 截断，``truncated`` 标记原文是否被裁剪，使模型能区分
-    「页面就这么短」与「正文被截断」。
-    """
+    """一页网页抓取结果；``truncated`` 区分「页面就这么短」与「正文按 ``char_limit`` 截断了」。"""
 
     url: str
-    title: str
-    content: str
-    metadata: dict[str, object]
+    title: str = ""
+    content: str = ""
+    metadata: dict[str, object] | None = None
     truncated: bool = False
     error: str = ""
 
 
-class FirecrawlUnavailableError(RuntimeError):
-    """本地缺少 Firecrawl 配置；重试无意义，工具应给出不可重试的配置指引。"""
+class FirecrawlNotConfiguredError(RuntimeError):
+    """没配置或 Key 被拒：重试没有意义，正文是让 Agent 转告用户的配置说明。"""
+
+    def __init__(self, message: str, *, status_hint: str) -> None:
+        super().__init__(message)
+        self.status_hint = status_hint
 
 
 class FirecrawlRequestError(RuntimeError):
-    """远端返回业务失败或响应不符合 v2 协议；不把协议错误解释为空结果。"""
+    """远端返回业务失败或响应不符合 v2 协议。"""
 
 
 class FirecrawlClient:
-    """通过 Firecrawl API 执行网页搜索与网页抓取。"""
+    """通过 Firecrawl API 执行网页搜索与网页抓取；复用的 httpx 客户端随系统代理变化重建。"""
 
-    def __init__(self, api_key: str | None = None, base_url: str | None = None) -> None:
-        """读取 ``FIRECRAWL_API_KEY`` / ``FIRECRAWL_API_URL``（显式传入优先）。
-
-        复用的同步 httpx 客户端由 ``ProxyHttpClient`` 持有，代理变化时自动重建，系统代理开关变化
-        因此无需重启进程即对后续请求生效。
-        """
-
-        self._api_key = api_key if api_key is not None else os.environ.get("FIRECRAWL_API_KEY", "")
-        self._base_url = (
-            base_url if base_url is not None else os.environ.get("FIRECRAWL_API_URL", "")
-        )
+    def __init__(self) -> None:
         self._proxy_http_client = ProxyHttpClient()
 
     def search(self, query: str, limit: int) -> list[WebSearchItem]:
-        """使用 Firecrawl API 执行网页搜索。
+        """``limit`` 已由参数模型限定在上限内；远端无结果时返回空列表。"""
 
-        参数:
-            query: 搜索关键词。
-            limit: 最多返回的搜索结果数量。
-
-        返回:
-            归一化后的网页搜索结果；远端无结果时返回空列表（属正常语义）。
-
-        异常:
-            FirecrawlUnavailableError: 缺少 Firecrawl 配置时抛出。
-            FirecrawlRequestError: 远端返回业务失败或搜索响应不符合 v2 协议时抛出。
-            httpx.HTTPError: Firecrawl API 请求失败时抛出。
-
-        副作用:
-            发起 Firecrawl Search API 网络请求。
-        """
-
-        effective_limit = min(limit, Constant.Web.SEARCH_LIMIT_MAX)
-        payload = self._post(
-            "search",
-            {"query": query, "limit": effective_limit, "sources": ["web"]},
-        )
+        payload = self._post("search", {"query": query, "limit": limit, "sources": ["web"]})
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict) or not isinstance(data.get("web"), list):
+            raise FirecrawlRequestError("Firecrawl v2 search response requires a data.web array.")
         return [
             WebSearchItem(
-                title=str(item.get("title", "")),
-                url=str(item.get("url", "")),
-                description=str(item.get("description") or item.get("markdown") or ""),
-                position=position,
+                title=str(item.get("title") or ""),
+                url=str(item["url"]),
+                description=str(item.get("description") or ""),
             )
-            for position, item in enumerate(
-                _search_result_items(payload)[:effective_limit], start=1
-            )
+            for item in data["web"][:limit]
+            if isinstance(item, dict) and item.get("url")
         ]
 
-    def fetch(
-        self,
-        urls: list[str],
-        output_format: str,
-        char_limit: int,
-    ) -> list[WebFetchItem]:
-        """并发调用 Firecrawl Scrape API 逐页提取网页正文。
+    def fetch(self, urls: list[str], output_format: str, char_limit: int) -> list[WebFetchItem]:
+        """并发逐页抓取，结果顺序与 ``urls`` 一致；单页失败只让那一页带 ``error``，不中断其余页面。
 
-        参数:
-            urls: 待提取的网页地址列表。
-            output_format: 请求 Firecrawl 返回的正文格式。
-            char_limit: 每页正文最大保留字符数；超出部分截断并置 ``truncated``。
-
-        返回:
-            与 ``urls`` 顺序一致、归一化并截断到字符上限的正文结果；单页失败时
-            该页结果带 ``error`` 且不中断其余页面。
-
-        异常:
-            FirecrawlUnavailableError: 缺少 Firecrawl 配置时抛出（不逐页吞掉，
-                交由调用方给出不可重试的配置指引）。
-
-        副作用:
-            并发发起至多 ``Constant.Web.FIRECRAWL_MAX_CONCURRENT_SCRAPES`` 个
-            Firecrawl Scrape API 请求。
+        没配置或 Key 被拒对每一页都一样，所以不逐页吞掉，直接上抛给工具。
         """
 
-        if not urls:
-            return []
-        worker_count = min(len(urls), Constant.Web.FIRECRAWL_MAX_CONCURRENT_SCRAPES)
-        with ThreadPoolExecutor(max_workers=worker_count) as pool:
-            return list(
-                pool.map(
-                    lambda url: self._scrape_one(url, output_format, char_limit),
-                    urls,
-                )
-            )
+        workers = min(len(urls), Constant.Web.FIRECRAWL_MAX_CONCURRENT_SCRAPES)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return list(pool.map(lambda url: self._scrape_one(url, output_format, char_limit), urls))
 
-    def _scrape_one(
-        self,
-        url: str,
-        output_format: str,
-        char_limit: int,
-    ) -> WebFetchItem:
-        """抓取单个 URL 并归一化为提取结果。
-
-        参数:
-            url: 待抓取的网页地址。
-            output_format: 请求 Firecrawl 返回的正文格式。
-            char_limit: 本页正文最大保留字符数。
-
-        返回:
-            成功时为带正文的提取结果；请求失败或响应结构异常时为带 ``error`` 的
-            空结果（不影响同批次其他页面）。
-
-        异常:
-            FirecrawlUnavailableError: 缺少 Firecrawl 配置时向上抛出，不在本方法吞掉。
-
-        副作用:
-            发起一次 Firecrawl Scrape API 网络请求。
-        """
-
+    def _scrape_one(self, url: str, output_format: str, char_limit: int) -> WebFetchItem:
         try:
             payload = self._post("scrape", {"url": url, "formats": [output_format]})
-        except (httpx.HTTPError, FirecrawlRequestError) as exc:
-            # 单页失败必须落日志：部分失败时上层返回 success，模型侧看不到堆栈，
-            # 缺少此条记录将无法事后定位是哪一页、因何失败。
+        except (httpx.HTTPError, FirecrawlRequestError, ValueError) as exc:
+            # ValueError 是响应不是 JSON（网关或代理返回的 HTML 错误页）：只算这一页失败。
+            # 部分失败时工具按成功返回，模型看不到堆栈，所以单页失败在这里落日志。
             log.warning(
                 "web_fetch_page_failed",
                 extra={
@@ -181,120 +113,70 @@ class FirecrawlClient:
                     "data": {"url": url, "format": output_format, "error": str(exc)},
                 },
             )
-            return WebFetchItem(
-                url=url,
-                title="",
-                content="",
-                metadata={},
-                error=f"Firecrawl scrape failed: {exc}",
-            )
+            return WebFetchItem(url=url, error=f"Firecrawl scrape failed: {exc}")
         data = payload.get("data") if isinstance(payload, dict) else None
         if not isinstance(data, dict):
-            return WebFetchItem(
-                url=url,
-                title="",
-                content="",
-                metadata={},
-                error="Firecrawl scrape response missing 'data' object.",
-            )
-        metadata = _clean_metadata(data.get("metadata")) or {
+            return WebFetchItem(url=url, error="Firecrawl scrape response missing 'data' object.")
+        raw_metadata = data.get("metadata")
+        metadata = {
             key: value
-            for key, value in data.items()
-            if key not in Constant.Web.FIRECRAWL_FETCH_MAPPED_FIELDS
+            for key, value in (raw_metadata.items() if isinstance(raw_metadata, dict) else ())
+            if key not in Constant.Web.FIRECRAWL_METADATA_NOISE_KEYS
         }
-        content = str(
-            data.get(output_format) or data.get("markdown") or data.get("content") or ""
+        content = Constant.Web.BASE64_IMAGE_PATTERN.sub(
+            lambda match: f"[IMAGE: {match.group(1)}]", str(data.get(output_format) or "")
         )
         return WebFetchItem(
             url=str(data.get("url") or url),
-            title=str(metadata.get("title", "")),
+            title=str(metadata.get("title") or ""),
             content=content[:char_limit],
             truncated=len(content) > char_limit,
             metadata=metadata,
             error=str(data.get("error") or ""),
         )
 
-    def _get_client(self) -> httpx.Client:
-        """返回复用的同步 httpx 客户端（代理变化时自动重建）。
-
-        委托 ``self._proxy_http_client``（``ProxyHttpClient``）持有缓存：每次取 client 都会重新
-        解析一次系统代理，仅当解析到的代理与已缓存 client 所用代理不一致时才关闭旧 client 并重建，
-        从而让系统代理开关变化在**不重启后端进程**的情况下对后续 web 请求实时生效。
-        ``search`` / ``fetch`` 共享同一实例。
-
-        参数:
-            无。
-
-        返回:
-            注入了当前系统代理（若启用）的 httpx.Client 实例。
-
-        异常:
-            无（构造失败由调用方 ``_post`` 的 httpx.HTTPError 路径统一处理）。
-
-        副作用:
-            代理变化时由 holder 关闭旧 client 并重建新 client。
-        """
-
-        return self._proxy_http_client.get(timeout=Constant.Web.REQUEST_TIMEOUT_SECONDS)
-
     def _post(self, endpoint: str, body: dict[str, object]) -> object:
-        """向 Firecrawl API 发送 JSON 请求。
+        """发一次请求并返回 JSON；失败与成功都落结构化日志（只记是否带 Key，不记 Key 原文）。
 
-        参数:
-            endpoint: Firecrawl API 相对端点。
-            body: JSON 请求体。
-
-        返回:
-            Firecrawl 返回的 JSON 响应。
-
-        异常:
-            FirecrawlUnavailableError: 缺少 Firecrawl 配置时抛出。
-            httpx.HTTPError: HTTP 请求失败（含传输层失败与非 2xx 状态码）时抛出。
-            FirecrawlRequestError: HTTP 200 但远端返回 success:false 等业务失败时抛出。
-
-        副作用:
-            发起 Firecrawl API 网络请求；按成功 / 失败分别写 info / error 结构化日志
-            （仅记录是否携带凭据，不输出 api_key 原文）。
+        异常: ``FirecrawlNotConfiguredError``（没配置、401/403）、``httpx.HTTPError``（传输失败与其余
+        非 2xx）、``FirecrawlRequestError``（HTTP 200 但 ``success: false``）、``ValueError``（响应不是 JSON）。
         """
 
-        if not (self._api_key or self._base_url):
-            raise FirecrawlUnavailableError(MISSING_CONFIGURATION_MESSAGE)
-        request_headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
-        base_url = self._base_url.rstrip("/") or Constant.Web.FIRECRAWL_DEFAULT_BASE_URL
+        api_key, base_url = Settings.FIRECRAWL_API_KEY, Settings.FIRECRAWL_API_URL
+        if not (api_key or base_url):
+            raise FirecrawlNotConfiguredError(_NOT_CONFIGURED, status_hint="未配置网页工具")
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        url = f"{(base_url.rstrip('/') or Constant.Web.FIRECRAWL_DEFAULT_BASE_URL)}/{endpoint}"
         started = time.monotonic()
+        status_code: int | None = None
         try:
-            response = self._get_client().post(
-                f"{base_url}/{endpoint}", json=body, headers=request_headers
-            )
-        except httpx.HTTPError as exc:
-            # 传输层失败（连接错误 / 超时 / 协议错误）拿不到响应对象，此处单独记录，
-            # 否则最常见的网络故障将没有任何带 endpoint 与耗时的定位线索。
-            self._log_call_failure(endpoint, None, started, exc)
-            raise
-        status_code = response.status_code
-        try:
+            client = self._proxy_http_client.get(timeout=Constant.Web.REQUEST_TIMEOUT_SECONDS)
+            response = client.post(url, json=body, headers=headers)
+            status_code = response.status_code
+            if status_code in (401, 403):
+                raise FirecrawlNotConfiguredError(
+                    _KEY_REJECTED.format(status=status_code), status_hint="Key 无效"
+                )
             response.raise_for_status()
-        except httpx.HTTPError as exc:
-            self._log_call_failure(endpoint, status_code, started, exc)
-            raise
-        payload = response.json()
-        # HTTP 200 也可能携带 success:false（如远端超时、限流），必须转成显式失败，
-        # 否则会被上层当成「查到了 0 条结果」而误导模型。
-        if isinstance(payload, dict) and payload.get("success") is False:
-            error_text = str(payload.get("error") or "Firecrawl API request failed.")
+            payload = response.json()
+            # HTTP 200 也可能带 success:false（远端超时、限流）：转成显式失败，否则会被当成「0 条结果」。
+            if isinstance(payload, dict) and payload.get("success") is False:
+                raise FirecrawlRequestError(str(payload.get("error") or "Firecrawl API request failed."))
+        except Exception as exc:
             log.error(
-                "firecrawl_api_reported_failure",
+                "firecrawl_api_call_failed",
                 extra={
-                    "msg": "Firecrawl API 返回业务失败",
+                    "msg": "Firecrawl API 调用失败",
                     "data": {
                         "endpoint": endpoint,
                         "status_code": status_code,
                         "latency_ms": round((time.monotonic() - started) * 1000, 2),
-                        "error": error_text,
+                        "error": str(exc),
+                        "has_api_key": bool(api_key),
                     },
                 },
             )
-            raise FirecrawlRequestError(error_text)
+            raise
         log.info(
             "firecrawl_api_call_succeeded",
             extra={
@@ -308,89 +190,3 @@ class FirecrawlClient:
         )
         return payload
 
-    def _log_call_failure(
-        self,
-        endpoint: str,
-        status_code: int | None,
-        started_at: float,
-        error: Exception,
-    ) -> None:
-        """记录一次 Firecrawl 调用失败的结构化日志。
-
-        参数:
-            endpoint: 调用的 Firecrawl API 相对端点。
-            status_code: HTTP 状态码；传输层失败拿不到响应时为 ``None``。
-            started_at: ``time.monotonic()`` 记录的请求开始时刻。
-            error: 传输层异常或非 2xx 状态码异常。
-
-        返回:
-            无。
-
-        异常:
-            无（仅构造日志，不参与失败传播）。
-
-        副作用:
-            写一条 error 级日志，含端点、状态码、耗时与失败原因；只记录是否携带
-            凭据（``has_api_key``），绝不输出 api_key 原文。
-        """
-
-        log.error(
-            "firecrawl_api_call_failed",
-            extra={
-                "msg": "Firecrawl API 调用失败",
-                "data": {
-                    "endpoint": endpoint,
-                    "status_code": status_code,
-                    "latency_ms": round((time.monotonic() - started_at) * 1000, 2),
-                    "error": str(error),
-                    "has_api_key": bool(self._api_key),
-                },
-            },
-        )
-
-
-def _search_result_items(payload: object) -> list[dict[str, Any]]:
-    """从 Firecrawl 搜索响应中取出网页结果项。
-
-    参数:
-        payload: Firecrawl Search API 返回的 JSON 对象。
-
-    返回:
-        v2 ``data.web`` 中具有 ``url`` 的结果字典；有效的空数组表示无搜索结果。
-
-    异常:
-        FirecrawlRequestError: 缺少 v2 ``data.web`` 数组，包括旧版响应。
-
-    副作用:
-        无（纯解析）。
-    """
-
-    data = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(data, dict) or not isinstance(data.get("web"), list):
-        raise FirecrawlRequestError("Firecrawl v2 search response requires a data.web array.")
-    return [item for item in data["web"] if isinstance(item, dict) and item.get("url")]
-
-
-def _clean_metadata(metadata: object) -> dict[str, object]:
-    """剔除 metadata 中体积大且对模型阅读无价值的键。
-
-    参数:
-        metadata: Firecrawl 返回的原始 metadata 对象。
-
-    返回:
-        去除 ``_METADATA_NOISE_KEYS`` 后的元数据副本；非字典输入返回空字典。
-
-    异常:
-        无。
-
-    副作用:
-        无（纯函数）。
-    """
-
-    if not isinstance(metadata, dict):
-        return {}
-    return {
-        key: value
-        for key, value in metadata.items()
-        if key not in Constant.Web.FIRECRAWL_METADATA_NOISE_KEYS
-    }

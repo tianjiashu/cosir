@@ -4,7 +4,7 @@
 
 `ToolObservation.display_data` 是供界面消费的结构化结果，不是模型正文或执行事实源。呈现类别由 ToolDefinition.conversation_presentation 声明，Transport 在实时与重建时投影；动词、图标、目标与无意图时的标题由前端 tool-catalog 声明，详情按 kind 路由；producer 只投影已有结果，不额外 IO。完整模型结果不通过 UI 字段重复传播。
 
-成功观察可不提供展示数据；提供时必须有稳定 kind。错误/取消由工具结果治理收口为短提示；实际已收集的结构化部分结果可保留 kind（终端取消、超时输出），不把部分结果解释为成功。Transport 的 completed 只表示调用完成，pending 可能是后台占位；awaitingUser 与 background 必须读取显式字段。Run 状态不等于工具状态，后台 completed 不等于业务成功。
+成功观察可不提供展示数据；提供时必须有稳定 kind。错误/取消由工具结果治理收口为短提示（`status_hint`，≤8 字，由失败的调用点按原因分类给出，如「原文未匹配」「需先读取」「需要登录」）；实际已收集的结构化部分结果可保留 kind（终端取消、超时输出，补丁部分写入后失败时的 `file-changes`），不把部分结果解释为成功。Transport 的 completed 只表示调用完成，pending 可能是后台占位；awaitingUser 与 background 必须读取显式字段。Run 状态不等于工具状态，后台 completed 不等于业务成功。
 
 调用意图由 `ToolDefinition.to_model_tool_definition` 在模型可见 schema 根部统一注入必填 `intent`，不进入业务 Args、Hook 参数、handler kwargs、宿主参数或 MCP 远端参数。执行准入拆出后放入 `ToolExecutionContext.call_intent`：必填是对模型的要求，缺失或非法不拒绝调用（值为 `None`，记 `tool_call_intent_missing` 日志，标题回落到动词），因为它只服务展示，而不强制 strict 的厂商会在长参数调用里漏写；Hook 不得改写该保留字段。终端后台标签消费同一上下文，缺失时回落到命令首个非空行，不再使用工具专有 `description`。
 
@@ -44,7 +44,6 @@
 | `browser_screenshot` | `browser-page` | 结构化结果见第 4 节 |
 | `browser_logs` | `browser-page` | 结构化结果见第 4 节 |
 | `browser_evaluate` | `browser-page` | 结构化结果见第 4 节 |
-| `browser_handoff` | `browser-page` | 结构化结果见第 4 节 |
 | `browser_tabs` | 无 | 结构化结果见第 4 节 |
 | `wait_messages` | 无 | 结构化结果见第 4 节 |
 | `delegate_task` | `delegation-result` | 结构化结果见第 4 节 |
@@ -53,7 +52,7 @@
 | `session_status` | `agent-session-result` | 结构化结果见第 4 节 |
 | `propose_agent_configuration` | `agent-configuration-draft` | 结构化结果见第 4 节 |
 | `ask_user` | `user-question` | 结构化结果见第 4 节 |
-| `present_deliverables` | 无 | 不写展示数据：交付记录是结果行 metadata 的 `deliverables`（持久化事实），投影为工具 part 的 `deliverables` 字段（`type`、`key`、`caption`，文件另有 `workspacePath`、`absolutePath`、`kind`、`size`、`width`、`height`，目录有前两者，网址有 `url`），回合聚合卡与产出清单读它 |
+| `present_deliverables` | `deliverables` | 展示数据只带这批交付的说明；交付记录是结果行 metadata 的 `deliverables`（持久化事实），投影为工具 part 的 `deliverables` 字段（`type`、`key`、`caption`，文件另有 `workspacePath`、`absolutePath`、`kind`、`size`、`width`、`height`，目录有前两者，网址有 `url`），交付卡与产出清单读它 |
 | `offer_next_step` | `next-step` | 结构化结果见第 4 节 |
 | `mcp` | `mcp-tool-result` | 结构化结果见第 4 节 |
 | `skill` | `skill-content` | 结构化结果见第 4 节 |
@@ -66,19 +65,20 @@
 |---|---|
 | read-file-meta | path、line_range（start/end，end 可为 END/null）、file_size；可选 truncated/status_hint，不含文件正文 |
 | image-read | images[{path,asset_id,width,height}]、failures[{path,hint}]；失败图片数与调用数不同 |
-| file-changes | changes[{path,status,patch,insertions,deletions}]、diff_stats；status 只有 added / modified（删除与移动走终端）；同路径多次操作保持原序，patch 可为空，不代表最终文件内容 |
-| content-search-results | pattern、path、matches[{path,line,content,is_match}]、page、total_rows、match_count、scanned_files、skipped_files |
-| file-list | files[{path}]、pattern、path、page、match_count |
+| file-changes | changes[{path,status,patch,insertions,deletions}]（不另带总数，客户端逐项相加）；status 只有 added / modified（删除与移动走终端）；同路径多次操作保持原序，不代表最终文件内容；patch 为空串表示内容没变，为 null 表示超出展示上限（`DISPLAY_PATCH_MAX_CHARS`）未下发 |
+| content-search-results | pattern、path、matches[{path,line,content,is_match}]、page{offset,total}（按输出行计，含上下文行）、match_count |
+| file-list | files[{path}]、pattern、path、page{offset,total}、match_count；列表条数受 `LIST_RESULT_LIMIT_MAX` 约束 |
 | terminal-result | command、workdir、output、end（exited/signaled/timed_out/cancelled/start_failed/worker_failed），exit_code 只在 exited、signal 只在 signaled 时出现；启动时与后台占位只有 command/workdir，不能把缺失 exit_code 当作零；`output` 是原始文本的最近一段（窗口见 `core/tool/terminal_output_window.py`），可选 `output_omitted_lines`（前面省略的行数）与 `output_log_path`（完整输出日志的工作区相对路径，只在超过模型预算时存在） |
 | terminal-session | list: terminal_count；read/write: terminal_id/lines/screen/wait_result，可含 input_summary（write 为填入的命令摘要） |
 | web-search-results | query、results[{title,url}]，不含网页正文 |
 | web-fetch-urls | partial（必有 boolean）、urls[{url}]；URL 可能包含失败页面，URL 数不是成功页数；全部失败走错误观察，不出现此 kind |
-| browser-page | tab_id/url/title；可含 screenshot（asset ID）、handoff_reason、steps[{action,target,status,hint}]；步骤 status 为 done/failed/skipped/unknown；done 只表示输入执行完成，unknown 表示可能生效、须观察后决定，skipped 不算执行失败 |
+| browser-page | tab_id/url/title；可含 screenshot（asset ID）、steps[{action,target,status,hint}]；步骤 status 为 done/failed/skipped/unknown；done 只表示输入执行完成，unknown 表示可能生效、须观察后决定，skipped 不算执行失败 |
 | delegation-result | title、child_agent_id；可含 role/delegation_id/child_session_id/writable_root（子会话被收窄时的可写根，相对工作区根） |
 | fork-session-result | title、child_session_id；可含 writable_root（同上） |
 | agent-session-result | send: operation/session_id/agent_name；status 另带 final_output/end_reason；当前 Session 状态由既有 Session 读取路径提供 |
 | agent-configuration-draft | status=draft、agent_id、role、description、system_prompt；保存和编辑属于 Workbench，遵守调用方只读限制 |
 | user-question | questions[{question,header,options[{label,description,preview?}],multi_select}]（参数原样）；作答后补 decision（approve / reject）、answers{问题原文: label 或自由文字，多选为列表}、annotations{问题原文: {notes}}；全部跳过只有 decision=reject；作废（未作答）不补字段，状态为 cancelled |
+| deliverables | note（这批交付的说明，去空白后为空即 null，长度上限在参数模型）：卡片顶部的一两句话，按纯文本显示；一次调用一张卡，交付项读 part 上的交付记录，不在这里 |
 | next-step | ask、replies[1–2]：回复下方的一个问题与按钮，第一个是推荐；不是等待中的决定，后端不登记，点按钮即替用户发出标签原文；前端只在会话最后一条正常完成的回复上显示，同一回合只认最后一次 |
 | mcp-tool-result | action=call: server_name/tool_name/scope/images（结果图片的附件 asset id，卡片显示缩略图）；action=list: servers[{server_name,scope,tools[{name,description}],error?}]（输入 schema 只给模型），`scope` 为 system / workspace，单服务 error 不改变整个调用的生命周期 |
 | skill-content | action=list: skills[{name,description,scope}]；action=load: skill_name/resource_path/scope，正文只进模型上下文 |

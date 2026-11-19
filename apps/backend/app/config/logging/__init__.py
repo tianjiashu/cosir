@@ -30,7 +30,7 @@ def __getattr__(name: str) -> object:
         name: 访问的导出名称。
 
     返回:
-        对应的日志配置对象、handler 类型或进程桥函数。
+        对应的日志配置对象或 handler 类型。
 
     异常:
         AttributeError: 名称不是本包公开 API 时抛出。
@@ -39,12 +39,9 @@ def __getattr__(name: str) -> object:
         首次访问配置/handler 名称时导入对应子模块。
     """
 
-    if name in {"configure_logging", "install_logging_for_current_process", "shutdown_logging"}:
+    if name in {"configure_logging", "shutdown_logging"}:
         configuration = importlib.import_module("app.config.logging.configuration")
         return getattr(configuration, name)
-    if name in {"get_log_queue", "stop_queue_listener"}:
-        process_bridge = importlib.import_module("app.config.logging.process_bridge")
-        return getattr(process_bridge, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -56,11 +53,8 @@ __all__ = [
     "configure_logging",
     "current_log_context",
     "current_log_file",
-    "get_log_queue",
-    "install_logging_for_current_process",
     "install_msg_relocation",
     "merge_log_context",
     "reset_log_context",
     "shutdown_logging",
-    "stop_queue_listener",
 ]

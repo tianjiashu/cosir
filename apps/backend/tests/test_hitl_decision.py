@@ -28,13 +28,12 @@ from app.core.workflow.message_queue.session_message import (
     SessionMessage,
     UserInputBody,
 )
-from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
-from app.core.workflow.nodes import prepare_input_node
+from app.core.workflow.nodes import prepare_input_node, tools_node
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.enums.react_route import ReactRoute
 from app.models.message_metadata import ToolMessageMetadata
-from tests.runtime_context_stub import runtime_stub
+from tests.runtime_context_stub import run_batch, runtime_stub
 
 # prepare_input 用替身上下文：每步的配置对账另有专门测试。
 pytestmark = pytest.mark.usefixtures("skip_configuration_reconcile")
@@ -195,7 +194,7 @@ class _Executor:
 def batch_events(monkeypatch):
     """批次直接调用测试独立收集事件，生产仍由执行作用域装配 sink。"""
     events = []
-    monkeypatch.setattr(tool_batch_runner, "emit", events.append)
+    monkeypatch.setattr(tools_node, "emit", events.append)
     return events
 
 
@@ -217,7 +216,7 @@ async def test_mixed_hitl_batch_is_rejected_without_executing_anything() -> None
         ToolCall(tool_name="plain_tool", arguments="{}", call_id="c2"),
     ]
 
-    observations = await tool_batch_runner.run_tool_batch(rc, calls, "step-1")
+    observations = await run_batch(rc, calls)
 
     assert executor.contexts == []
     assert [o.status for o in observations] == ["error", "error"]
@@ -232,9 +231,7 @@ async def test_two_hitl_calls_in_one_batch_are_rejected() -> None:
         ToolCall(tool_name="hitl_tool", arguments="{}", call_id="c2"),
     ]
 
-    observations = await tool_batch_runner.run_tool_batch(
-        _batch_rc(executor), calls, "step-1"
-    )
+    observations = await run_batch(_batch_rc(executor), calls)
 
     assert executor.contexts == []
     assert [o.status for o in observations] == ["error", "error"]

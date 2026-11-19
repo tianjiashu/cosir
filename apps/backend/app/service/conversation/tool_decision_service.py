@@ -23,7 +23,7 @@ from app.storage.write_transaction import begin_immediate
 
 
 class ToolDecisionService:
-    """校验并入队 ``DecisionBody``；不等工具执行，决定之后的去向由 ``ToolDefinition.user_decision`` 决定。"""
+    """校验并入队 ``DecisionBody``；决定作为消息交给模型，不等工具执行。"""
 
     def submit(
             self,
@@ -93,7 +93,7 @@ class ToolDecisionService:
         calls = service_depends.get_session_context_service().awaiting_decision_calls(session_id)
         definitions = (get_tool_registry().get_tool_definition(name) for name, _ in calls.values())
         return any(
-            definition is not None and definition.decision_lifetime == "until_user_input"
+            definition is not None and definition.user_decision
             for definition in definitions
         )
 

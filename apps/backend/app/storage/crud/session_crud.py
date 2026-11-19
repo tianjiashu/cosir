@@ -93,7 +93,7 @@ class SessionCrud:
                 为 None 时由本方法自开事务并自动提交。
             extra: Session 扩展 JSON（如 fork 来源、派生调用）。
             tool_schemas: 创建时固化的模型工具 schema。
-            derivation_depth: 派生深度；由派生方按 ``core.tool.derivation.child_depth`` 算出，用户新建
+            derivation_depth: 派生深度；由派生方按 ``core.tool.multi_agent.derivation.child_depth`` 算出，用户新建
                 与用户 fork 为 0。
 
         返回:

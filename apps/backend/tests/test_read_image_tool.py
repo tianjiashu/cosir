@@ -134,7 +134,7 @@ def test_import_is_idempotent_and_leaves_the_source_untouched(tmp_path: Path) ->
     assert first == again
     assert republished.descriptor.asset_id == first.descriptor.asset_id
     assert source.read_bytes() == before
-    assert list((root / ".cosir" / "Attachment" / ".uploading").iterdir()) == []
+    assert not list((root / ".cosir" / "Attachment").glob(".*.part"))
     with pytest.raises(ImageNormalizationError) as missing:
         service.import_image(1, tmp_path / "nope.png")
     assert missing.value.code == "ATTACHMENT_NOT_FOUND"
@@ -143,7 +143,6 @@ def test_import_is_idempotent_and_leaves_the_source_untouched(tmp_path: Path) ->
 def test_definition_schema_and_agent_exposure() -> None:
     definition = ReadImageTool().to_definition()
     assert definition.returns_images is True
-    assert definition.execution_mode == "thread"
     schema = strict_parameters_schema(ReadImageArgs)
     assert schema["properties"]["paths"]["maxItems"] == 10
     assert not validate_tool_arguments(

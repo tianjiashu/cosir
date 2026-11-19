@@ -70,8 +70,9 @@ class RunStatusChangedEvent(WorkflowEventEnvelope):
     usage_stats: RunUsageStats | None = None
     error: RunError | None = None
     changed_at: datetime
-    # 已提交的最终模型响应身份，仅用于事件投影，不另存 Run 字段。
-    response_sequence: int | None = None
+    # 最终回复所在的已提交模型回复序号（可不止一条，见 ``core/context/final_reply``），仅用于事件投影，
+    # 不另存 Run 字段。
+    response_sequences: list[int] = Field(default_factory=list)
 
 
 class RunResultUpdatedEvent(WorkflowEventEnvelope):

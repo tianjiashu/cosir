@@ -212,8 +212,6 @@ def test_search_tool_schemas_are_split_and_thread_based() -> None:
 
     assert content_definition.name == "search_content"
     assert files_definition.name == "find_files"
-    assert content_definition.execution_mode == "thread"
-    assert files_definition.execution_mode == "thread"
     assert "target" not in content_definition.args_model.model_json_schema()["properties"]
     assert "target" not in files_definition.args_model.model_json_schema()["properties"]
 

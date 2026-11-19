@@ -289,8 +289,9 @@ def test_end_turn_is_accepted_as_normal_finish_reason(monkeypatch: Any) -> None:
 @pytest.mark.parametrize("arguments", ['{"path":', "[1]", "null", '{"n":NaN}'])
 def test_invalid_tool_arguments_reach_executor_unparsed(monkeypatch, arguments):
     """模型与 tools 节点都不解析参数：原始参数串原样交给执行器，由准入门禁判定。"""
-    from unittest.mock import AsyncMock
+    from unittest.mock import Mock
 
+    from app.core.tool.schemas import ToolObservation
     from app.core.workflow.nodes import tools_node as tools_module
 
     response = sdk_completion(
@@ -312,12 +313,12 @@ def test_invalid_tool_arguments_reach_executor_unparsed(monkeypatch, arguments):
     assert patch["next_node"] == ReactRoute.TOOLS
     assert harness.messages[-1]["tool_calls"][0]["function"]["arguments"] == arguments
     assert patch["batch"].calls[0]["function"]["arguments"] == arguments
-    run_batch = AsyncMock(return_value=[])
-    monkeypatch.setattr(tools_module, "run_tool_batch", run_batch)
-    harness.runtime_config.tool_definitions["read_file"].need_HIL = False
+    run_call = Mock(return_value=ToolObservation(tool_name="read_file", status="success", tool_call_id="call"))
+    monkeypatch.setattr(tools_module, "_execute_call", run_call)
+    harness.runtime_config.tool_definitions["read_file"].user_decision = False
     monkeypatch.setattr(tools_module, "_runtime_context", lambda: harness.runtime_config)
     asyncio.run(tools_module._tools_node(_state().model_copy(update=patch)))
-    (call,) = run_batch.call_args.args[1]
+    call = run_call.call_args.args[1]
     assert call.call_id == "call"
     assert call.arguments == arguments
 

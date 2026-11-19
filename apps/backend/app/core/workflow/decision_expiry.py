@@ -1,5 +1,5 @@
-"""「等用户回应」的等待决定何时过期、怎么过期、怎么告诉模型（``ToolDefinition.decision_lifetime
-== "until_user_input"``，目前是提问）。整条规则只在这里。
+"""「等用户回应」的等待决定何时过期、怎么过期、怎么告诉模型（``ToolDefinition.user_decision``
+的工具，目前是提问）。整条规则只在这里。
 
 这类决定问的是「此刻做不做这件事」：用户作答、跳过，或者不理它、直接说了别的话——那句话就是
 回应。它不按回合算：别的 Agent 发来的消息同样开启回合，却与用户答不答无关；Run 正常完成后提问
@@ -42,9 +42,12 @@ from app.storage.store_engines import main_db_factory
 UNANSWERED_HINT = "未作答"
 
 def ends_on_user_input(tool_name: str) -> bool:
-    """这个工具的等待决定是否等的是用户的回应：用户说了别的话就结束（``ToolDefinition.decision_lifetime``）。"""
+    """这个工具的等待决定是否等的是用户的回应：用户说了别的话就结束（``ToolDefinition.user_decision``）。
+
+    已不在注册表里的工具（旧会话里残留的等待占位）不算。
+    """
     definition = get_tool_registry().get_tool_definition(tool_name)
-    return definition is not None and definition.decision_lifetime == "until_user_input"
+    return definition is not None and definition.user_decision
 
 
 ExpiryCause = Literal["user_message", "run_stopped", "run_ended"]

@@ -4,6 +4,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # 一次最多交付几项：卡片是「成果」的清单，多了就退化成文件操作记录。
 PRESENT_DELIVERABLES_MAX = 5
+# 说明的长度上限：卡片顶部一两句话，内容列里最多三行，所以前端不截断。
+PRESENT_DELIVERABLES_NOTE_MAX = 120
 
 
 class DeliverableTarget(BaseModel):
@@ -41,4 +43,15 @@ class PresentDeliverablesArgs(BaseModel):
         min_length=1,
         max_length=PRESENT_DELIVERABLES_MAX,
         description=f"Things to show to the user (at most {PRESENT_DELIVERABLES_MAX}).",
+    )
+    note: str | None = Field(
+        default=None,
+        max_length=PRESENT_DELIVERABLES_NOTE_MAX,
+        description=(
+            "One or two sentences in the user's language shown above the cards: what this set "
+            "is and where to start, e.g. \"The report and its raw data; the table is sorted by "
+            f"likes.\" At most {PRESENT_DELIVERABLES_NOTE_MAX} characters. Describe the "
+            "deliverables only; your conclusions go in your answer. Pass null if the cards speak "
+            "for themselves."
+        ),
     )

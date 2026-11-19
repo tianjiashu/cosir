@@ -1,6 +1,6 @@
 import type { BrowserDialog } from "../../shared/host-contract";
 import type { ActOutcome, EvaluateResult, LogsResult, PageHead, PageResult, ScreenshotResult, SessionTab } from "./browser-host";
-import type { NetworkEntry } from "./tab-log";
+import type { ConsoleEntry, NetworkEntry } from "./tab-log";
 
 /**
  * `browser.*` 方法的出站适配：领域结果（驼峰）→ 后端读取的线上形状（蛇形）。与入站的 `params.ts` 对称，线上形状
@@ -50,7 +50,7 @@ export function logsWire(logs: LogsResult) {
     return { ...pageHeadWire(logs), kind: logs.kind, entry: networkEntryWire(logs.entry), body: { state, mime, size, text, truncated, reason } };
   }
   const entries = logs.kind === "console"
-    ? logs.entries.map(({ seq, level, text, source, frame }) => ({ seq, level, text, source, frame }))
+    ? logs.entries.map(consoleEntryWire)
     : logs.entries.map(networkEntryWire);
   return {
     ...pageHeadWire(logs),
@@ -63,8 +63,16 @@ export function logsWire(logs: LogsResult) {
   };
 }
 
+function consoleEntryWire({ seq, level, text, source, frame }: ConsoleEntry) {
+  return { seq, level, text, source, frame };
+}
+
 export function evaluateWire(result: EvaluateResult) {
-  return { ...pageHeadWire(result), value: result.value, truncated: result.truncated, error: result.error, dialog: dialogWire(result.dialog) };
+  const { entries, moreAfter, next } = result.console;
+  return {
+    ...pageHeadWire(result), value: result.value, truncated: result.truncated, error: result.error, dialog: dialogWire(result.dialog),
+    console: { entries: entries.map(consoleEntryWire), more_after: moreAfter, next },
+  };
 }
 
 export function screenshotWire(shot: ScreenshotResult) {

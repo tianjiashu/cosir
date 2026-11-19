@@ -1,7 +1,7 @@
 """执行器替身共用的事件辅助：替身按真实 ``ToolExecutor`` 的契约自行发出 running。
 
 真实执行器在通过准入、即将交给 handler 时经 ``tool_executor.emit`` 发 running；用例把
-``tool_executor.emit`` 与 ``tool_batch_runner.emit`` 补成同一个记录器，替身调用本辅助即可让
+``tool_executor.emit`` 与 ``tools_node.emit`` 补成同一个记录器，替身调用本辅助即可让
 running 与批次入口发出的终态落在同一时间线上。
 """
 

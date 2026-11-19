@@ -63,27 +63,20 @@ _CHILD_TOOL_SPECS = [
         SendMessageTool,
         SendMessageArgs,
         build_send_message_definition,
-        30.0,
     ),
     (
         "session_status",
         SessionStatusTool,
         SessionStatusArgs,
         build_session_status_definition,
-        10.0,
     ),
     (
         "wait_messages",
         WaitMessagesTool,
         WaitMessagesArgs,
         build_wait_messages_definition,
-        10.0,
     ),
 ]
-
-# 装配期可能被条件跳过的工具（无可用 Provider 的 Web 工具）。
-_CONDITIONALLY_SKIPPED_TOOLS = frozenset({"web_search", "web_fetch"})
-
 
 @pytest.fixture
 def storage(tmp_path: Path) -> Iterator[None]:
@@ -257,9 +250,8 @@ def test_registry_is_subset_of_canonical_names_and_only_web_tools_may_be_missing
     canonical = set(ALL_TOOL_NAMES)
 
     assert names <= canonical, f"注册了非规范工具名: {names - canonical}"
-    missing = canonical - names
-    unexpected_missing = missing - _CONDITIONALLY_SKIPPED_TOOLS
-    assert unexpected_missing == set(), f"非 Web 工具被意外跳过: {unexpected_missing}"
+    # web 工具不论 Firecrawl 是否配置都注册（没配置时调用返回配置说明），所以全部规范工具都在。
+    assert canonical - names == set(), f"内置工具被意外跳过: {canonical - names}"
     assert _REMOVED_TOOL_NAME not in names
 
 
@@ -320,7 +312,7 @@ def test_registry_reads_are_thread_safe(storage: None) -> None:
 
 
 @pytest.mark.parametrize(
-    ("tool_name", "tool_cls", "args_model", "factory", "timeout_seconds"),
+    ("tool_name", "tool_cls", "args_model", "factory"),
     _CHILD_TOOL_SPECS,
     ids=[spec[0] for spec in _CHILD_TOOL_SPECS],
 )
@@ -330,9 +322,8 @@ def test_child_tool_args_model_permission_and_name_contract(
     tool_cls: type,
     args_model: type,
     factory: object,
-    timeout_seconds: float,
 ) -> None:
-    """目的：每个存留 child 工具的 name / args_model / timeout 契约未被破坏。
+    """目的：每个存留 child 工具的 name / args_model 契约未被破坏。
 
     潜在缺陷类型：删除动作连带改坏兄弟工具的权限标签或参数模型绑定。
     """
@@ -340,11 +331,10 @@ def test_child_tool_args_model_permission_and_name_contract(
     tool = tool_cls()
     assert tool.name == tool_name
     assert tool.args_model is args_model
-    assert tool.timeout_seconds == timeout_seconds
 
 
 @pytest.mark.parametrize(
-    ("tool_name", "tool_cls", "args_model", "factory", "timeout_seconds"),
+    ("tool_name", "tool_cls", "args_model", "factory"),
     _CHILD_TOOL_SPECS,
     ids=[spec[0] for spec in _CHILD_TOOL_SPECS],
 )
@@ -354,7 +344,6 @@ def test_child_tool_to_definition_is_consistent(
     tool_cls: type,
     args_model: type,
     factory: object,
-    timeout_seconds: float,
 ) -> None:
     """目的：to_definition() 返回的定义字段自洽，且工厂函数等价于实例方法。
 
@@ -366,14 +355,11 @@ def test_child_tool_to_definition_is_consistent(
 
     assert definition.name == tool_name
     assert definition.args_model is args_model
-    assert definition.execution_mode == "thread"
-    assert definition.timeout_seconds > 0
     assert definition.handler is not None
 
     built = factory()
     assert built.name == definition.name
     assert built.args_model is definition.args_model
-    assert built.execution_mode == definition.execution_mode
 
 
 def test_child_tool_definitions_match_registry_definitions(storage: None) -> None:
@@ -383,7 +369,7 @@ def test_child_tool_definitions_match_registry_definitions(storage: None) -> Non
     """
 
     registry = build_tool_registry()
-    for tool_name, _tool_cls, args_model, _factory, _timeout in _CHILD_TOOL_SPECS:
+    for tool_name, _tool_cls, args_model, _factory in _CHILD_TOOL_SPECS:
         definition = registry.get_tool_definition(tool_name)
         assert definition is not None, f"{tool_name} 未注册"
         assert definition.args_model is args_model

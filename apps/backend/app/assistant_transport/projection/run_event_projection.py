@@ -150,8 +150,7 @@ def plan_run_status_changed(
     for part_index, part in enumerate(reply["parts"]):
         if (
             part["type"] == "text"
-            and event.response_sequence is not None
-            and part.get("sourceSequence") == event.response_sequence
+            and part.get("sourceSequence") in event.response_sequences
             and is_final_reply(target, event.end_reason, part["text"])
         ):
             mutations.append(

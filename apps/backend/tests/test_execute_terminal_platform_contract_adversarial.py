@@ -487,11 +487,10 @@ def test_registry_skips_duplicate_name_and_keeps_single_definition(
 # ----------------------------------------------------------------------
 
 
-def test_definition_runs_in_thread_with_background_capability() -> None:
-    """execute_terminal 是 thread 工具并声明后台结果：命令要能转到后台，作业必须由后端进程持有。"""
+def test_definition_declares_background_capability() -> None:
+    """execute_terminal 的参数要求声明 background：命令要能转到后台，作业由后端进程持有。"""
 
     definition = ExecuteTerminalTool().to_definition()
-    assert definition.execution_mode == "thread"
     assert "background" in definition.normalized().parameters_schema["required"]
 
 

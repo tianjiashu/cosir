@@ -1,7 +1,7 @@
 """send_message 只负责向同工作区的另一 Session 投递 Agent 消息；调度由收件方的 actor 决定。"""
 
 import json
-from typing import ClassVar, cast
+from typing import cast
 
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileConfigError, AgentProfileType
@@ -53,7 +53,6 @@ class SendMessageTool(HandlerBase):
         "your writable root; tell the user instead."
     )
     args_model: type[SendMessageArgs] = SendMessageArgs
-    timeout_seconds: ClassVar[float] = 30.0
     group = TOOL_GROUP_CHILD_AGENT
 
     def __init__(self) -> None:
@@ -181,8 +180,6 @@ class SendMessageTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            execution_mode="thread",
         )
 
 

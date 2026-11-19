@@ -207,7 +207,27 @@
     "value": "{\"user\":null,\"items\":3}",
     "truncated": false,
     "error": null,
-    "dialog": null
+    "dialog": null,
+    "console": {
+      "entries": [
+        {
+          "seq": 12,
+          "level": "info",
+          "text": "items loaded 3",
+          "source": "http://127.0.0.1:5173/src/app.ts:41",
+          "frame": null
+        },
+        {
+          "seq": 14,
+          "level": "error",
+          "text": "Blocked a frame with origin",
+          "source": null,
+          "frame": "https://pay.example.com/widget"
+        }
+      ],
+      "more_after": true,
+      "next": 15
+    }
   },
   "evaluate_error": {
     "tab_id": "t3",
@@ -225,7 +245,12 @@
     "value": null,
     "truncated": false,
     "error": "ReferenceError: foo is not defined",
-    "dialog": null
+    "dialog": null,
+    "console": {
+      "entries": [],
+      "more_after": false,
+      "next": 12
+    }
   },
   "page_prompt": {
     "tab_id": "t3",
@@ -272,7 +297,12 @@
     "value": "undefined",
     "truncated": false,
     "error": null,
-    "dialog": null
+    "dialog": null,
+    "console": {
+      "entries": [],
+      "more_after": false,
+      "next": 12
+    }
   },
   "evaluate_truncated": {
     "tab_id": "t3",
@@ -290,7 +320,12 @@
     "value": "[1,2,3",
     "truncated": true,
     "error": null,
-    "dialog": null
+    "dialog": null,
+    "console": {
+      "entries": [],
+      "more_after": false,
+      "next": 12
+    }
   },
   "evaluate_dialog": {
     "tab_id": "t3",
@@ -313,6 +348,11 @@
       "type": "confirm",
       "message": "Proceed?",
       "default_text": ""
+    },
+    "console": {
+      "entries": [],
+      "more_after": false,
+      "next": 12
     }
   },
   "screenshot": {

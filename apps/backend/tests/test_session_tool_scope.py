@@ -1,7 +1,7 @@
 """Session 类型规则（``models.session_kind``）决定各类 Session 固化的工具面，并守住规则表的扩展点。
 
 对真实注册表断言：需要用户界面来自工具自己的声明（``needs_user_surface`` / ``user_decision``），
-新增工具不必改任何清单；派生工具是封闭集合，按工具名登记在 ``core.tool.derivation``。
+新增工具不必改任何清单；派生工具是封闭集合，按工具名登记在 ``core.tool.multi_agent.derivation``。
 """
 
 from __future__ import annotations

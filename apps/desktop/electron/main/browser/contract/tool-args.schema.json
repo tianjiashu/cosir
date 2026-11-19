@@ -707,11 +707,25 @@
     "additionalProperties": false,
     "properties": {
       "expression": {
-        "description": "JavaScript expression evaluated in the page; its value comes back as JSON. Use an IIFE such as (() => { ... })() for statements; a returned Promise is awaited.",
+        "description": "JavaScript expression evaluated in the page; its value comes back as JSON. Use an IIFE such as (() => { ... })() for statements; a returned Promise is awaited. With ref, the element is available as el, e.g. el.value.",
         "maxLength": 20000,
         "minLength": 1,
         "title": "Expression",
         "type": "string"
+      },
+      "ref": {
+        "anyOf": [
+          {
+            "pattern": "^e\\d+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Element ref such as e12 from a snapshot: the expression runs with that element as el, inside the frame it belongs to, which also reaches elements in cross-origin iframes. Null to run in the page's main frame.",
+        "title": "Ref"
       },
       "tab": {
         "anyOf": [
@@ -730,6 +744,7 @@
     },
     "required": [
       "expression",
+      "ref",
       "tab"
     ],
     "title": "BrowserEvaluateArgs",

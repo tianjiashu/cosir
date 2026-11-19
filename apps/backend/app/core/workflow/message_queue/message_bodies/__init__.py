@@ -12,7 +12,7 @@
 一次。标签名与读法和 render 同处一个类，改消息格式时就地同步，提示词无需另改。
 外部来源文本（用户反馈、子 Agent / 后台任务输出）里出现的同名标签先转义，防止伪造边界。
 
-新增一种消息：在本包加一个 body 模块（入队的继承 :class:`EnqueuedMessageBody`；``ToolResultBody``、
+新增一种消息：在本包加一个 body 模块（入队的继承 :class:`EnqueuedMessageBody`；
 ``ToolImageBody`` 这类由节点直接写 context、不入队的不继承），再登记进本文件的 :data:`MessageBody`、
 :data:`MODEL_INPUT_BODIES` 与 ``_BODY_OF_KIND``——三者与登记处同处一文件，避免只改其中一半。
 """
@@ -28,7 +28,6 @@ from app.core.workflow.message_queue.message_bodies.decision import DecisionBody
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, notices_to_context
 from app.core.workflow.message_queue.message_bodies.rendering import escape_tag, render_time
 from app.core.workflow.message_queue.message_bodies.tool_image import ToolImageBody
-from app.core.workflow.message_queue.message_bodies.tool_result import ToolResultBody
 from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch, UserInputBody
 
 __all__ = [
@@ -45,7 +44,6 @@ __all__ = [
     "RunLaunch",
     "SessionMessageKind",
     "ToolImageBody",
-    "ToolResultBody",
     "UserInputBody",
     "WakeScope",
     "escape_tag",
@@ -53,7 +51,7 @@ __all__ = [
     "render_time",
 ]
 
-# 入队消息的联合类型；``ToolResultBody`` / ``ToolImageBody`` 不在其中（节点直接写 context）。
+# 入队消息的联合类型；``ToolImageBody`` 不在其中（节点直接写 context）。
 MessageBody = (
     UserInputBody | AgentMessageBody | NoticeBody | DecisionBody | BackgroundResultBody
 )
@@ -63,12 +61,11 @@ LaunchInputBody = UserInputBody | AgentMessageBody
 LAUNCH_INPUT_BODIES: tuple[type[LaunchInputBody], ...] = (UserInputBody, AgentMessageBody)
 
 # 进模型的全部带标签 user 消息类型，顺序即系统提示词里消息协议的列出顺序；新增类型须加入。
-MODEL_INPUT_BODIES: tuple[type[EnqueuedMessageBody | ToolResultBody | ToolImageBody], ...] = (
+MODEL_INPUT_BODIES: tuple[type[EnqueuedMessageBody | ToolImageBody], ...] = (
     UserInputBody,
     AgentMessageBody,
     NoticeBody,
     DecisionBody,
-    ToolResultBody,
     ToolImageBody,
     BackgroundResultBody,
 )

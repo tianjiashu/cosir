@@ -25,6 +25,12 @@ export type Evaluation = { value: string | null; truncated: boolean; error: stri
 /**
  * 在页面主世界执行 JS 表达式，等待 Promise，把值转成 JSON 文本（截断）。
  *
+ * 给了 `element`（快照里某个元素在其所在会话里的对象句柄，`send` 由调用方绑到那个会话）时，表达式包成
+ * `function (el) { return (<表达式>); }` 在元素上调用（`Runtime.callFunctionOn`），`el` 与 `this` 都是这个元素，
+ * 求值发生在元素所在框架的主世界：同源、同进程跨源与跨进程 iframe 都够得着，且不必开 `Runtime.enable` 取上下文 id。
+ * 包装而不要求模型自己写函数声明：同一个参数只有一种写法；表达式写错是脚本的语法错误，照常报回。
+ * 元素句柄在结束时随对象组一起释放（解析失败、调用在求值前就被取消时，句柄随页面回收）。
+ *
  * 不让 CDP 按值返回（`returnByValue`）：遇到 `window`、循环引用这类对象它会以协议错误失败，变成宿主内部错误；
  * 改为拿到对象句柄后在页面里 `JSON.stringify`，转不了的如实报成脚本错误。DOM 节点、函数、`NaN`、BigInt 等不是
  * JSON 的值，返回它们的简短描述（作为 JSON 字符串）。
@@ -38,14 +44,18 @@ export type Evaluation = { value: string | null; truncated: boolean; error: stri
  * 用 `Runtime.evaluate` 不开 `Runtime.enable`（见 `BrowserTab` 的说明）；不给用户激活，脚本不能借它绕过弹出窗口
  * 的拦截。页面停住（弹窗）时 `send` 以 `DIALOG_OPEN` 失败，由调用方判断是不是脚本自己弹的。
  */
-export async function evaluateExpression(send: Send, expression: string, signal: AbortSignal): Promise<Evaluation> {
+export async function evaluateExpression(send: Send, expression: string, signal: AbortSignal, element: string | null = null): Promise<Evaluation> {
   const objectGroup = `cosir-evaluate-${++evaluations}`;
+  const common = { awaitPromise: true, returnByValue: false, userGesture: false, objectGroup };
+  const [method, params] = element === null
+    ? ["Runtime.evaluate", { expression, ...common }]
+    : ["Runtime.callFunctionOn", {
+      objectId: element, functionDeclaration: `function (el) {\nreturn (\n${expression}\n);\n}`, arguments: [{ objectId: element }], ...common,
+    }];
   try {
     let response: EvaluateResponse;
     try {
-      response = await send("Runtime.evaluate", {
-        expression, awaitPromise: true, returnByValue: false, userGesture: false, objectGroup,
-      }, { signal, timeoutMs: EVALUATE_TIMEOUT_MS }) as EvaluateResponse;
+      response = await send(method, params, { signal, timeoutMs: EVALUATE_TIMEOUT_MS }) as EvaluateResponse;
     } catch (error) {
       // 只有求值本身的结局才是脚本的结果；之后转 JSON 的命令失败照常上抛。
       return await interrupted(send, error, signal);
@@ -55,10 +65,11 @@ export async function evaluateExpression(send: Send, expression: string, signal:
   } finally {
     // 释放失败（页面已停住或已导航）不影响结果：句柄随页面一起回收。
     send("Runtime.releaseObjectGroup", { objectGroup }).catch(() => undefined);
+    if (element !== null) send("Runtime.releaseObject", { objectId: element }).catch(() => undefined);
   }
 }
 
-/** 求值没有正常返回：超时与取消时打断仍在跑的脚本；页面跳走是脚本的结果；弹窗（`DIALOG_OPEN`）等宿主错误照常上抛。 */
+/** 求值没有正常返回：超时与取消时打断仍在跑的脚本；页面或框架跳走是脚本的结果；弹窗（`DIALOG_OPEN`）等宿主错误照常上抛。 */
 async function interrupted(send: Send, error: unknown, signal: AbortSignal): Promise<Evaluation> {
   const timedOut = error instanceof HostMethodError && error.code === "PAGE_UNRESPONSIVE";
   const stopped = (timedOut || signal.aborted) && await stopIfRunning(send);
@@ -68,7 +79,7 @@ async function interrupted(send: Send, error: unknown, signal: AbortSignal): Pro
       : `the expression did not finish within ${EVALUATE_TIMEOUT_MS / 1000} seconds (it is waiting on a Promise that has not settled)`);
   }
   if (error instanceof HostMethodError || signal.aborted) throw error;
-  return failed(`the expression did not finish: ${error instanceof Error ? error.message : String(error)} (the page navigated or reloaded meanwhile)`);
+  return failed(`the expression did not finish: ${error instanceof Error ? error.message : String(error)} (the page or frame navigated or reloaded meanwhile)`);
 }
 
 /** 主线程还被占着就打断它，返回是否打断成功；探测回得来（空闲、只在等 Promise）就什么也不做。 */

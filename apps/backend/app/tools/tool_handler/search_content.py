@@ -124,11 +124,8 @@ class SearchContentTool(HandlerBase):
                 path=path,
                 matches=page.matches,
                 offset=offset,
-                limit=limit,
                 total_rows=page.total_rows,
                 match_count=page.match_count,
-                scanned_files=page.scanned_files,
-                skipped_files=page.skipped_files,
             ),
         )
 
@@ -141,18 +138,13 @@ class SearchContentTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("filesystem",),
-            execution_mode="thread",
-            # 只读、彼此独立：模型一次发出的多个读取真正并发执行（见 tool_batch_runner）。
-            parallel_mode="parallel",
         )
 
 
 def build_search_content_definition() -> ToolDefinition:
     """构造 search_content 的注册定义。"""
 
-    return SearchContentTool().to_definition_if_avaliable()
+    return SearchContentTool().to_definition()
 
 
 def _format_content(matches: tuple[Any, ...]) -> str:

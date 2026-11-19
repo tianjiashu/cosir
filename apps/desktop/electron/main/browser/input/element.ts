@@ -83,6 +83,15 @@ export async function mutateOn(session: BrowserOperation, node: PageNode, fn: st
   return session.effect(async () => pageString(await runOnPage(session, objectId, node.sessionId, fn, args)));
 }
 
+/**
+ * ref → 元素的对象句柄与所在会话，给执行任意脚本（`browser_evaluate`）用；只读，调用方须在 effect 外取。
+ * 句柄由调用方释放（`Runtime.releaseObject`，发到同一会话）。
+ */
+export async function elementObject(session: BrowserOperation, ref: string): Promise<{ sessionId: string | undefined; objectId: string }> {
+  const node = await element(session, ref);
+  return { sessionId: node.sessionId, objectId: await resolveObject(session, node) };
+}
+
 async function resolveObject(session: BrowserOperation, node: PageNode): Promise<string> {
   const { object } = await onNode<{ object: { objectId: string } }>(session, node, "DOM.resolveNode");
   return object.objectId;

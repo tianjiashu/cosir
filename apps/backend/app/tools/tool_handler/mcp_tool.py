@@ -1,8 +1,8 @@
 """Agent 侧 MCP 工具目录与调用入口。
 
-以 thread 模式运行：连接由进程级 ``MCPConnectionPool`` 常驻持有，handler 在工具线程里把协程投到
-池的事件循环上，经 ``wait_for_call`` 等待并轮询取消信号与调用时限（thread 工具的执行器只在执行前
-检查一次取消，也不做硬超时）。取消或超时只撤销这次请求，连接保留供下次复用。
+连接由进程级 ``MCPConnectionPool`` 常驻持有，handler 在工具线程里把协程投到池的事件循环上，经
+``wait_for_call`` 等待并轮询取消信号与调用时限（执行器只在调用前检查一次取消，也不做硬超时）。取消或超时
+只撤销这次请求，连接保留供下次复用。
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import Any
 from mcp import types
 
 from app.config.logging.logger import log
-from app.core.tool.execute.thread_wait import ToolCallStopped, wait_for_call
+from app.core.tool.results.external_content import ExternalContent
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
@@ -32,6 +32,7 @@ from app.service.configuration.mcp.configuration import (
     ScopedMCPServer,
     available_servers,
 )
+from app.tools.cancellable_wait import ToolCallStopped, wait_for_call
 from app.tools.display.mcp_display import (
     build_mcp_call_display_data,
     build_mcp_catalog_display_data,
@@ -72,7 +73,6 @@ class MCPTool(HandlerBase):
         "keep their session state."
     )
     args_model = MCPArgs
-    timeout_seconds = CALL_TIMEOUT_SECONDS
     group = TOOL_GROUP_MCP
 
     def execute(
@@ -97,6 +97,7 @@ class MCPTool(HandlerBase):
             return tool_error(
                 self.name,
                 f"{exc}. Fix the local MCP config file, then retry.",
+                status_hint="配置有误",
             )
 
         if action == "list":
@@ -105,6 +106,7 @@ class MCPTool(HandlerBase):
                     self.name,
                     "server_name is required to look up a tool's schema. "
                     "Use action='list' to find which server has the tool.",
+                    status_hint="参数无效",
                 )
             return self._list(servers, server_name, tool_name, query, execution_context)
 
@@ -113,6 +115,7 @@ class MCPTool(HandlerBase):
                 self.name,
                 "MCP call requires server_name and tool_name. "
                 "Use action='list' to see servers and tools, then supply both names.",
+                status_hint="参数无效",
             )
         server = next((item for item in servers if item.name == server_name), None)
         if server is None:
@@ -169,6 +172,7 @@ class MCPTool(HandlerBase):
                 self.name,
                 f"MCP discovery timed out after {CALL_TIMEOUT_SECONDS:.0f} seconds. "
                 "Retry with server_name to discover one server.",
+                status_hint="连接超时",
             )
 
         catalog: list[dict[str, Any]] = []
@@ -198,6 +202,7 @@ class MCPTool(HandlerBase):
                 self.name,
                 f"MCP server {server_name} has no tool named {tool_name}. "
                 "Use action='list' with this server_name to see its tools.",
+                status_hint="工具不存在",
             )
         return _catalog_observation(catalog)
 
@@ -226,6 +231,7 @@ class MCPTool(HandlerBase):
                 f"MCP call timed out after {CALL_TIMEOUT_SECONDS:.0f} seconds; the request was "
                 "abandoned but the server may still have acted on it. Check its state before "
                 "retrying.",
+                status_hint="调用超时",
             )
         except MCPToolArgumentsError as exc:
             _log_call_failure(server, tool_name, execution_context, "invalid_arguments", error=str(exc))
@@ -233,24 +239,36 @@ class MCPTool(HandlerBase):
                 self.name,
                 f"{exc}. The request was not sent. Fix the arguments to match this input schema "
                 f"and call again: {json.dumps(exc.schema, ensure_ascii=False)}",
+                status_hint="参数无效",
             )
         except MCPToolNotFoundError as exc:
             _log_call_failure(server, tool_name, execution_context, "tool_not_found")
             return tool_error(
                 self.name,
                 f"{exc}. " "List the server's tools again and use a valid tool name.",
+                status_hint="工具不存在",
             )
         except Exception as exc:
             failure = MCPFailure.from_exception(exc, server)
             _log_call_failure(server, tool_name, execution_context, failure.kind, error=failure.detail)
-            return tool_error(self.name, failure.for_model())
+            return tool_error(self.name, failure.for_model(), status_hint=failure.status_hint())
 
         if result.is_error:
             _log_call_failure(server, tool_name, execution_context, "server_reported_error")
+            # 报错正文也是服务器给的，同样进 untrusted 块。
+            external = ExternalContent()
+            reported = (
+                external.block("mcp_result", result.text, server.name)
+                if result.text
+                else "The MCP server reported a tool call failure without details."
+            )
             return tool_error(
                 self.name,
-                f"{result.text or 'MCP server reported a tool call failure'}. "
-                "Check the arguments and the server's response before deciding whether to retry.",
+                external.close(
+                    f"The MCP server reported a tool call failure:\n{reported}\n"
+                    "Check the arguments and the server's response before deciding whether to retry."
+                ),
+                status_hint="工具报错",
             )
         return _call_observation(server, tool_name, result, execution_context)
 
@@ -263,8 +281,6 @@ class MCPTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("mcp",),
         )
 
 
@@ -274,7 +290,8 @@ def _call_observation(
     result: MCPCallResult,
     execution_context: ToolExecutionContext,
 ) -> ToolObservation:
-    """成功结果：图片存进工作区附件（``StoredResultImages``），经工具图片通道交给模型。
+    """成功结果：服务器给的文字进 untrusted 块（``ExternalContent``），图片说明是本仓写的、在块外；
+    图片存进工作区附件（``StoredResultImages``），经工具图片通道交给模型。
 
     MCP 工具只是有时带图，不能像专门看图的工具那样声明 ``returns_images`` 由门禁整个拒绝；模型
     看不了图时由 observe 统一改写成说明（``withhold_unviewable_images``），这里不判断模型能力。
@@ -290,9 +307,11 @@ def _call_observation(
             "tool_name": tool_name,
         },
     )
+    external = ExternalContent()
+    text = external.block("mcp_result", result.text, server.name) if result.text else ""
     return tool_success(
         TOOL_MCP,
-        "\n".join(part for part in [result.text, *images.notes] if part),
+        external.close("\n".join(part for part in [text, *images.notes] if part)),
         display_data=build_mcp_call_display_data(
             server_name=server.name,
             tool_name=tool_name,
@@ -317,9 +336,19 @@ def _catalog_tools(tools: list[types.Tool], tool_name: str | None, query: str | 
 
 
 def _catalog_observation(catalog: list[dict[str, Any]]) -> ToolObservation:
+    """目录：每个服务一个 ``mcp_tools`` 块。工具名称、说明与 schema 都是服务器自己写的（可能夹带指令，即「工具投毒」），
+    与调用结果一样按外部内容交给模型。"""
+
+    external = ExternalContent()
+    blocks = [
+        external.block(
+            "mcp_tools", json.dumps(entry, ensure_ascii=False, indent=2), entry["server_name"]
+        )
+        for entry in catalog
+    ]
     return tool_success(
         TOOL_MCP,
-        json.dumps(catalog, ensure_ascii=False, indent=2),
+        external.close("\n".join(blocks)) if blocks else "no MCP servers are available",
         display_data=build_mcp_catalog_display_data(catalog),
     )
 
@@ -330,6 +359,7 @@ def _server_not_found(server_name: str) -> ToolObservation:
         TOOL_MCP,
         f"MCP server not available: {server_name}. It is not configured, is disabled, or has not "
         "passed a connection test on this machine. Use action='list' to see available servers.",
+        status_hint="服务不可用",
     )
 
 

@@ -12,11 +12,11 @@ from app.utils.atomic_write import atomic_write_text
 
 
 class PatchApplyError(RuntimeError):
-    """Apply failure with a flag indicating whether earlier files were written."""
+    """应用中途失败；``applied`` 是失败前已经写入的文件（按顺序），空表示一个都没写。"""
 
-    def __init__(self, message: str, *, partial_applied: bool) -> None:
+    def __init__(self, message: str, *, applied: list[FileDiffResult]) -> None:
         super().__init__(message)
-        self.partial_applied = partial_applied
+        self.applied = applied
 
 
 def _resolve_patch_path(resolver: PathResolver, path: str) -> tuple[Path | None, str]:
@@ -158,7 +158,7 @@ def apply_all_with_diff(
             atomic_write_text(
                 resolved,
                 after,
-                containment_root=resolver.writable_root,
+                containment_root=resolver.write_containment(resolved),
             )
             results.append(
                 FileDiffResult(
@@ -169,5 +169,5 @@ def apply_all_with_diff(
                 )
             )
         except (OSError, RuntimeError, UnicodeDecodeError) as exc:
-            raise PatchApplyError(str(exc), partial_applied=bool(results)) from exc
+            raise PatchApplyError(str(exc), applied=results) from exc
     return results

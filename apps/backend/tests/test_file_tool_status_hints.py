@@ -13,7 +13,9 @@ from app.tools.tool_handler.write_file import WriteFileTool
 
 
 def _context(root: Path, session_id: int = 41):
-    return SimpleNamespace(session_id=session_id, run_id=1, workspace_root=root, writable_root=root, tool_call_id="c")
+    return SimpleNamespace(
+        session_id=session_id, run_id=1, workspace_root=root, writable_root=root, scratch_dir=None, tool_call_id="c"
+    )
 
 
 # 目的：编辑失败时用户分得清「原文对不上」与「原文不唯一」；潜在缺陷：一律显示「编辑失败」。

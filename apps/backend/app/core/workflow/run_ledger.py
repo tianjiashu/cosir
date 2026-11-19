@@ -12,6 +12,7 @@ snapshot，重启收敛时尚无订阅者）。创建 Run 在提交 Session 当�
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import cast
 
 from sqlalchemy.orm import Session as DbSession
@@ -104,7 +105,7 @@ class RunLedger:
         final_output: str | None = None,
         usage_stats: RunUsageStats | None = None,
         error_message: str | None = None,
-        response_sequence: int | None = None,
+        response_sequences: Sequence[int] = (),
         db: DbSession | None = None,
     ) -> RunRecord | None:
         """按迁移表执行一次条件迁移；当前状态不在来源集合内时返回 ``None``，不写库、不发事件。
@@ -152,7 +153,7 @@ class RunLedger:
                 usage_stats=usage_stats,
                 error=error,
                 changed_at=record.updated_at,
-                response_sequence=response_sequence,
+                response_sequences=list(response_sequences),
             )
         )
         return record

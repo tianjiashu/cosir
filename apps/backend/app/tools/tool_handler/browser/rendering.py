@@ -4,9 +4,13 @@
 ``tests/test_browser_contract_guard.py`` 用这里的函数逐个渲染样例：字段改名或缺失会在那里以
 ``KeyError`` 暴露。
 
-信任边界：快照、弹窗消息、日志条目、脚本的值与报错 ``escape_tag`` 后放进边界标签。页头与标签列表
-里的页面标题、备注（含网站给的下载文件名、新窗口地址）目前仍在标签外，见 AGENTS.md 待办
-「工具备注统一呈现」。
+格式：页头与结论写成 ``键: 值`` 的短行（值里可能出现 ``·``，按位置分隔会读错），大段内容放进边界标签；
+怎么用游标、怎么读日志这类不随结果变的说明归工具描述，不在每次结果里重复。
+
+信任边界：网站给出的字符串一律经 ``ExternalContent`` 放进 untrusted 块（来源是标签地址的主机名）：页面
+标题、快照、备注（含网站给的下载文件名、新窗口地址）、弹窗消息、日志条目、响应体、脚本的值与报错。块外只写
+宿主确定的事实（标签 id、地址、状态码、视口）与工具自己的说明，结果末尾一句收尾。每个结果一个
+``_PageRender``，块与收尾句同属这一个结果。
 """
 
 from __future__ import annotations
@@ -14,12 +18,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.core.tool.results.external_content import ExternalContent
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolObservation
-from app.core.workflow.message_queue.message_bodies.rendering import escape_tag
-from app.tools.display.browser_display import build_browser_page_display_data
-from app.tools.tool_handler.browser.errors import failure_advice
+from app.tools.display.browser_display import build_act_steps, build_browser_page_display_data
+from app.tools.tool_handler.browser.errors import failure_advice, failure_hint
 
+TITLE_TAG = "page_title"
+NOTES_TAG = "page_notes"
+TABS_TAG = "tab_list"
 SNAPSHOT_TAG = "page_snapshot"
 DIALOG_TAG = "dialog_message"
 SCRIPT_RESULT_TAG = "script_result"
@@ -29,37 +36,70 @@ BODY_TAG = "response_body"
 _LOG_NOUNS = {"console": "console message", "network": "network request"}
 
 
-def fenced(text: str, tag: str) -> str:
-    return f"<{tag}>\n{escape_tag(text, tag)}\n</{tag}>"
-
-
 def _counted(count: int, noun: str) -> str:
     return f"{count} {noun}{'' if count == 1 else 's'}"
 
 
-def header_lines(head: dict[str, Any]) -> list[str]:
-    """页头：标签 · 标题 · 地址（加载中、HTTP 状态码），另起一行写生效的视口与模拟。
+class _PageRender:
+    """一个标签页结果的渲染：网站给的文字以这个标签的主机名为来源进 untrusted 块，``close`` 定稿并追加收尾句。"""
 
-    所有页面类结果（页面、日志、脚本、截图）共用；``status`` 为 null（如 about:blank）时不写。
-    视口总是写：模型据它判断看到的是桌面还是手机布局，默认值也不必在后端另存一份。
-    """
+    def __init__(self, head: dict[str, Any]) -> None:
+        self._external = ExternalContent()
+        self._source = ExternalContent.source_of(head["url"])
+        self._head = head
 
-    line = f"tab {head['tab_id']} · {head['title'] or '(untitled)'} · {head['url']}"
-    if head["loading"]:
-        line += " (still loading)"
-    if head["status"] is not None:
-        line += f" · HTTP {head['status']}"
-    lines = [line]
-    emulation = head["emulation"]
-    viewport = f"viewport {emulation['width']}×{emulation['height']}"
-    if emulation["mobile"]:
-        viewport += " mobile"
-    if emulation["follows_panel"]:
-        # 跟随面板的视口会随用户调整面板而变：坐标以最近一次截图为准。
-        viewport += " (follows the browser panel)"
-    scheme = emulation["color_scheme"]
-    lines.append(f"{viewport}, {scheme}" if scheme is not None else viewport)
-    return lines
+    def block(self, tag: str, text: str) -> str:
+        return self._external.block(tag, text, self._source)
+
+    def close(self, lines: list[str]) -> str:
+        return self._external.close("\n".join(lines))
+
+    def header(self, *, viewport: bool = True) -> list[str]:
+        """页头：标签、地址（HTTP 状态码、加载中）与标题（网站给的，进块），页面类结果另带生效的视口与模拟。
+
+        ``status`` 为 null（如 about:blank）时不写。页面、act 与截图结果写视口：模型据它判断看到的是桌面还是
+        手机布局、坐标按多大算，默认值也不必在后端另存一份；日志与脚本结果用不上，``viewport=False`` 省掉。
+        """
+
+        head = self._head
+        states = [f"HTTP {head['status']}"] if head["status"] is not None else []
+        if head["loading"]:
+            states.append("still loading")
+        url = f"url: {head['url']}"
+        if states:
+            url += f" ({', '.join(states)})"
+        title = self.block(TITLE_TAG, head["title"]) if head["title"] else "title: (untitled)"
+        lines = [f"tab: {head['tab_id']}", url, title]
+        if viewport:
+            emulation = head["emulation"]
+            line = f"viewport: {emulation['width']}×{emulation['height']}"
+            if emulation["mobile"]:
+                line += " mobile"
+            if emulation["color_scheme"] is not None:
+                line += f", {emulation['color_scheme']}"
+            if emulation["follows_panel"]:
+                # 跟随面板的视口会随用户调整面板而变：坐标以最近一次截图为准。
+                line += " (follows the browser panel)"
+            lines.append(line)
+        return lines
+
+    def dialog_notice(self, dialog: dict[str, Any]) -> str:
+        """页面被 JS 弹窗停住时的说明：弹窗文字（含 prompt 默认值）进 untrusted 块。"""
+
+        kind = dialog["type"]
+        message = [f"message: {dialog['message']}"]
+        if kind == "prompt":
+            default = json.dumps(dialog["default_text"], ensure_ascii=False)
+            message.append(f"default answer (used when accepting without text): {default}")
+        return "\n".join(
+            [
+                f"the page is showing dialog {dialog['id']} ({kind}) and is paused until it is "
+                "answered:",
+                self.block(DIALOG_TAG, "\n".join(message)),
+                f"Answer it with a browser_act dialog action with id {dialog['id']} (accept or "
+                "dismiss) before doing anything else on this tab.",
+            ]
+        )
 
 
 def _new_logs_line(new_logs: dict[str, int]) -> str | None:
@@ -71,83 +111,71 @@ def _new_logs_line(new_logs: dict[str, int]) -> str | None:
     parts = [_counted(count, noun) for count, noun in counts if count]
     if not parts:
         return None
-    return (
-        f"new on this page since this tab's last page result: {', '.join(parts)} "
-        "(read browser_logs without since to see them; narrow down with level or failed_only)"
-    )
-
-
-def dialog_notice(dialog: dict[str, Any]) -> str:
-    """页面被 JS 弹窗停住时的说明：弹窗文字（含 prompt 默认值）进同一个边界标签。"""
-
-    kind = dialog["type"]
-    fenced_lines = [f"message: {dialog['message']}"]
-    if kind == "prompt":
-        default = json.dumps(dialog["default_text"], ensure_ascii=False)
-        fenced_lines.append(f"default answer (used when accepting without text): {default}")
-    return "\n".join(
-        [
-            f"the page is showing dialog {dialog['id']} ({kind}) and is paused until it is "
-            "answered:",
-            fenced("\n".join(fenced_lines), DIALOG_TAG),
-            f"Answer it with a browser_act dialog action with id {dialog['id']} (accept or "
-            "dismiss) before doing anything else on this tab.",
-        ]
-    )
+    # 怎么读（不带 since、按 level / failed_only 筛）写在 browser_logs 的描述里。
+    return f"new logs since this tab's last page result: {', '.join(parts)} (see browser_logs)"
 
 
 def page_text(page: dict[str, Any], *, lead: str | None = None) -> str:
-    """页面结果（navigate / snapshot / act / 交还）：结论句、页头、上下文、快照或弹窗说明。
+    """页面结果（navigate / snapshot / act）：结论句、页头、上下文、快照或弹窗说明。
 
     页面被本标签的 JS 弹窗挡住时（``dialog`` 非空）宿主读不到快照，正文改为说明弹窗与作答方式。
     """
 
+    render = _PageRender(page)
     lines = [lead] if lead else []
-    lines.extend(header_lines(page))
+    lines.extend(render.header())
     if page["other_tabs"]:
-        lines.append(f"other tabs in this session: {', '.join(page['other_tabs'])}")
+        lines.append(f"other tabs: {', '.join(page['other_tabs'])}")
     if page["frames"]:
+        # 没展开的子框架没有任何路能读进快照：直说，并指出截图能看到它们显示的内容。
         lines.append(
-            f"the page has {page['frames']} embedded frame(s) whose contents are not shown"
+            f"frames not shown: {page['frames']} (their contents are not in this snapshot; "
+            "browser_screenshot shows what they display)"
         )
     new_logs = _new_logs_line(page["new_logs"])
     if new_logs is not None:
         lines.append(new_logs)
     if page["notes"]:
-        lines.append("since this tab's last page result:")
-        lines.extend(f"- {note}" for note in page["notes"])
+        # 备注由宿主写成句子，但引用了网站给的文字（下载文件名、新窗口地址），整体进块。
+        lines.append("notes since this tab's last page result:")
+        lines.append(render.block(NOTES_TAG, "\n".join(f"- {note}" for note in page["notes"])))
     if page["dialog"] is not None:
-        lines.append(dialog_notice(page["dialog"]))
+        lines.append(render.dialog_notice(page["dialog"]))
     else:
-        lines.append(fenced(page["snapshot"], SNAPSHOT_TAG))
-    return "\n".join(lines)
+        lines.append(render.block(SNAPSHOT_TAG, page["snapshot"]))
+    return render.close(lines)
 
 
-def act_summary(outcome: dict[str, Any], total: int) -> str:
-    """``browser_act`` 的结论句：全部完成，或停在第几步、为什么、下一步怎么办。"""
+def act_summary(outcome: dict[str, Any]) -> str:
+    """``browser_act`` 的结论：做完几步；没全做完时逐步列出结局，再写停在哪、下一步怎么办。
+
+    停下的原因常常就是失败那一步的错误（样例里两者相同），相同时只写建议、不再复述错误。「做完不代表网站
+    接受了」是每次都成立的说明，写在工具描述里。步骤的目标说明（元素文字）来自网页，只给卡片、不进正文：
+    模型按序号就知道是哪一步。
+    """
 
     execution = outcome["execution"]
     steps = execution["steps"]
     completed = sum(step["status"] == "done" for step in steps)
-    lines = [
-        f"completed {completed} of {total} action(s). "
-        "Input completion does not confirm the website's business result."
-    ]
-    for index, step in enumerate(steps):
-        if step["status"] in ("failed", "unknown"):
-            error = step["error"]
-            lines.append(
-                f"action {index + 1}: {step['status']} ({error['code']}: {error['message']})."
-            )
-    if execution["interruption"] is not None:
-        error = execution["interruption"]
-        lines.append(
-            f"stopped: {error['code']}: {error['message']}. {failure_advice(error['code'])}"
-        )
+    # 宿主按动作逐一回报（跳过的也在），步数就是动作数；`build_act_steps` 的 strict zip 守着这一点。
+    lines = [f"actions: {completed} of {len(steps)} done"]
+    if completed < len(steps):
+        for index, step in enumerate(steps):
+            line = f"- {index + 1} {step['status']}"
+            if step["error"] is not None:
+                line += f" ({step['error']['code']}: {step['error']['message']})"
+            lines.append(line)
+    interruption = execution["interruption"]
+    if interruption is not None:
+        advice = failure_advice(interruption["code"])
+        if any(step["error"] == interruption for step in steps):
+            lines.append(f"stopped: {advice}")
+        else:
+            lines.append(f"stopped: {interruption['code']}: {interruption['message']}. {advice}")
     if any(step["status"] == "unknown" for step in steps):
         lines.append(
-            "Some input may already have taken effect. Observe the page before continuing; "
-            "do not replay unknown actions."
+            "unknown: that input may already have taken effect; observe the page before "
+            "continuing and do not replay it."
         )
     return "\n".join(lines)
 
@@ -156,26 +184,21 @@ def act_observation(
     tool_name: str, outcome: dict[str, Any], actions: list[dict[str, Any]]
 ) -> ToolObservation:
     """执行回执独立于观察；页面已关闭或读不到时仍把已知事实交给模型和 UI。"""
-    from app.tools.display.browser_display import build_act_steps
-    from app.tools.tool_handler.browser.errors import failure_hint
-
-    lead = act_summary(outcome, len(actions))
+    lead = act_summary(outcome)
     page = outcome["observation"]
     if page is not None:
         content = page_text(page, lead=lead)
     else:
         error = outcome["observation_error"]
-        lines = [lead, *header_lines(outcome)]
+        render = _PageRender(outcome)
+        lines = [lead, *render.header()]
         if error["code"] == "TAB_NOT_FOUND":
-            lines.append(
-                "the tab was closed; the page header above is the page as it was before the "
-                "actions."
-            )
+            lines.append("the tab was closed; the header above is the page before the actions.")
         lines.append(
-            f"page observation unavailable ({error['code']}: {error['message']}); "
+            f"page observation unavailable: {error['code']}: {error['message']}. "
             f"{failure_advice(error['code'])} Read a fresh snapshot before continuing."
         )
-        content = "\n".join(lines)
+        content = render.close(lines)
     return tool_success(
         tool_name=tool_name,
         content=content,
@@ -240,68 +263,66 @@ def _network_entry(entry: dict[str, Any]) -> str:
 def response_body_text(result: dict[str, Any]) -> str:
     """``browser_logs`` 读正文：页头、请求本身，再是正文（边界标签内）或没有正文的原因。"""
 
-    lines = header_lines(result)
+    render = _PageRender(result)
+    lines = render.header(viewport=False)
     lines.append(f"request: {_network_line(result['entry'])}")
     body = result["body"]
     if body["text"] is None:
         lines.append(f"no body: {body['reason']}")
-        return "\n".join(lines)
+        return render.close(lines)
     described = f"{body['mime'] or 'text'}, {_size(body['size'])}"
     if body["truncated"]:
         described += f"; only the first {_size(len(body['text'].encode('utf-8')))} were kept"
     lines.append(f"response body ({described}):")
-    lines.append(fenced(body["text"], BODY_TAG))
-    return "\n".join(lines)
+    lines.append(render.block(BODY_TAG, body["text"]))
+    return render.close(lines)
 
 
 def logs_text(result: dict[str, Any]) -> str:
-    """``browser_logs``：页头、条目（边界标签内）与游标说明；读正文的结果交给 ``response_body_text``。"""
+    """``browser_logs``：页头、条目（边界标签内）与游标；读正文的结果交给 ``response_body_text``。"""
 
     kind = result["kind"]
     if kind == "response_body":
         return response_body_text(result)
     noun = _LOG_NOUNS[kind]
-    lines = header_lines(result)
+    render = _PageRender(result)
+    lines = render.header(viewport=False)
     entries = result["entries"]
     if entries:
-        render = _console_entry if kind == "console" else _network_entry
+        entry_line = _console_entry if kind == "console" else _network_entry
         lines.append(f"{_counted(len(entries), noun)}, oldest first:")
-        lines.append(fenced("\n".join(render(entry) for entry in entries), LOG_TAGS[kind]))
+        lines.append(
+            render.block(LOG_TAGS[kind], "\n".join(entry_line(entry) for entry in entries))
+        )
     else:
         lines.append(f"no matching {noun}s.")
     if result["dropped_before"] is not None:
         lines.append(
-            f"entries before #{result['dropped_before']} were dropped to stay within capacity "
-            "and cannot be read."
+            f"dropped: entries before #{result['dropped_before']} (over capacity, cannot be read)"
         )
     if result["more_before"]:
         lines.append(
-            "older matching entries of this page were not returned; raise limit, or pass since "
-            "to read forward from an earlier number."
+            "older: more matching entries of this page not shown (raise limit, or pass an earlier since)"
         )
-    if result["more_after"]:
-        lines.append(f"more matching entries follow; pass since={result['next']} to read on.")
-    else:
-        lines.append(
-            f"to read only entries with a sequence number at or after {result['next']} later, "
-            f"pass since={result['next']}."
-        )
+    follows = " (more matching entries follow)" if result["more_after"] else ""
+    lines.append(f"next: since={result['next']}{follows}")
     # 网络条目在请求开始时取序号、结局之后才补；用游标读过的在途请求不会因 since 重读出现，
     # 明确告诉模型最终结局从哪里看（省略 since 的默认读取）。
     if kind == "network" and any(
         entry["status"] is None and entry["failure"] is None for entry in entries
     ):
-        lines.append(
-            "some requests above have no outcome yet; read browser_logs without since later to "
-            "see their final state."
-        )
-    return "\n".join(lines)
+        lines.append("requests with no response yet: read without since later for their outcome.")
+    return render.close(lines)
 
 
 def evaluate_text(result: dict[str, Any]) -> str:
-    """``browser_evaluate``：页头，加上返回值、脚本报错或脚本弹出的弹窗三者之一。"""
+    """``browser_evaluate``：页头，加上返回值、脚本报错或脚本弹出的弹窗三者之一，再附执行期间的 console。
 
-    lines = header_lines(result)
+    console 条目与 ``browser_logs`` 同一渲染与边界标签；游标总是给出，求值返回之后才异步打出的日志从它接着读。
+    """
+
+    render = _PageRender(result)
+    lines = render.header(viewport=False)
     if result["dialog"] is not None:
         lines.append(
             "the script opened a page dialog and is paused on it; this call has ended without a "
@@ -309,54 +330,101 @@ def evaluate_text(result: dict[str, Any]) -> str:
             "is not returned: do not run it again to finish it (that repeats its effects); if "
             "you need a value, read it with a separate expression that changes nothing."
         )
-        lines.append(dialog_notice(result["dialog"]))
+        lines.append(render.dialog_notice(result["dialog"]))
     elif result["error"] is not None:
-        lines.append("the script did not return a value:")
-        lines.append(fenced(result["error"], SCRIPT_ERROR_TAG))
+        lines.append("script error (no value returned):")
+        lines.append(render.block(SCRIPT_ERROR_TAG, result["error"]))
     elif result["value"] == "undefined":
-        lines.append("the expression returned undefined.")
+        lines.append("value: undefined")
     else:
-        note = " (cut off at the size limit; return a smaller part)" if result["truncated"] else ""
-        lines.append(f"the expression's value as JSON{note}:")
-        lines.append(fenced(result["value"], SCRIPT_RESULT_TAG))
-    return "\n".join(lines)
+        note = ", cut off at the size limit; return a smaller part" if result["truncated"] else ""
+        lines.append(f"value (JSON{note}):")
+        lines.append(render.block(SCRIPT_RESULT_TAG, result["value"]))
+    console = result["console"]
+    if console["entries"]:
+        lines.append(
+            f"{_counted(len(console['entries']), 'console message')} during this call, oldest first:"
+        )
+        lines.append(
+            render.block(
+                LOG_TAGS["console"],
+                "\n".join(_console_entry(entry) for entry in console["entries"]),
+            )
+        )
+    follows = "more messages follow; " if console["more_after"] else ""
+    lines.append(
+        f"later console output: {follows}browser_logs kind=console since={console['next']}"
+    )
+    return render.close(lines)
 
 
-def tabs_text(tabs: list[dict[str, Any]]) -> str:
-    """``browser_tabs`` 的列表。标出用户开的标签（与 terminal_list 标出会话创建者一致）：
-    用户可能正在用它。"""
-
-    lines = [
-        f"{item['tab_id']}{' (current)' if item['current'] else ''}"
-        f"{' (opened by the user)' if item['created_by'] == 'user' else ''} · "
-        f"{item['title'] or '(untitled)'} · {item['url']}"
-        for item in tabs
-    ]
-    return "\n".join(lines) or "this session has no open tabs"
+_TAB_OPERATIONS = {
+    "running": "an operation is still running",
+    "stopping": "an operation is stopping",
+    "unknown": "last input state unknown",
+}
 
 
-def screenshot_text(shot: dict[str, Any], ref: str | None = None, region: bool = False) -> str:
-    """``browser_screenshot``：页头（视口截图的像素尺寸就是视口尺寸），图片随后附上。元素与区域截图的像素
-    与视口坐标对不上（元素带边距、小的会放大），所以说明截的是什么、坐标别从图上量。"""
+def tabs_text(tabs: list[dict[str, Any]], action: str = "list", tab: str | None = None) -> str:
+    """``browser_tabs``：select / close 先写一行结论，再列出操作之后的标签。
+
+    宿主在操作完成后才取列表，所以结论行只复述这次做了什么，不必让模型对比前后两次列表。标出用户开的标签
+    （与 terminal_list 标出会话创建者一致：用户可能正在用它）与未收敛的修改操作（这时再操作会得到
+    ``TAB_BUSY`` / ``OPERATION_UNKNOWN``，先看列表就能避开）。
+
+    列表里有各个网站的标题，整张列表进一个 untrusted 块，来源写「open tabs」：标题来自不同网站，按行拆块
+    只会成倍增加标签。
+    """
+
+    lines = [] if action == "list" else [f"{'selected' if action == 'select' else 'closed'}: {tab}"]
+    if not tabs:
+        lines.append("this session has no open tabs")
+        return "\n".join(lines)
+    listed = []
+    for item in tabs:
+        marks = ["current"] if item["current"] else []
+        if item["created_by"] == "user":
+            marks.append("opened by the user")
+        if item["operation"] is not None:
+            marks.append(_TAB_OPERATIONS[item["operation"]])
+        label = f"{item['tab_id']} ({', '.join(marks)})" if marks else item["tab_id"]
+        listed.append(f"{label} · {item['title'] or '(untitled)'} · {item['url']}")
+    external = ExternalContent()
+    lines.append(external.block(TABS_TAG, "\n".join(listed), "open tabs"))
+    return external.close("\n".join(lines))
+
+
+def screenshot_text(
+    shot: dict[str, Any], *, ref: str | None = None, region: bool = False, full_page: bool = False
+) -> str:
+    """``browser_screenshot``：页头（视口截图的像素尺寸就是视口尺寸），说明截的是什么，图片随后附上。
+
+    取景优先级与宿主一致（``page-capture.ts``：元素 > 区域 > 整页）。元素与区域截图带边距、小的会放大，
+    整页截图从页面顶端算起：三者的像素都不是视口坐标，坐标别从图上量。整页截图只在宿主报告真的截断了
+    （``full_page_cut``）时说明页面多高、图里有多少、怎么看剩下的；没截断时不提，免得模型以为下面还有。
+    """
 
     if ref:
-        what = f"screenshot of element {ref}; its pixels are not viewport coordinates"
+        what = f"element {ref}; pixels are not viewport coordinates"
     elif region:
-        what = "screenshot of the given region; its pixels are not viewport coordinates"
+        what = "the given region; pixels are not viewport coordinates"
+    elif full_page:
+        what = "the whole page from its top; pixels are not viewport coordinates"
+        cut = shot["full_page_cut"]
+        if cut is not None:
+            what += (
+                f"; the page is {cut['page_height']}px tall and this image covers only the top "
+                f"{cut['shown_height']}px: scroll down and take viewport screenshots to see the rest"
+            )
     else:
-        what = "screenshot of this tab"
-    return "\n".join([*header_lines(shot), f"{what} (the image follows)."])
+        what = "the viewport"
+    render = _PageRender(shot)
+    return render.close([*render.header(), f"screenshot: {what} (the image follows)"])
 
 
-def page_observation(
-    tool_name: str,
-    page: dict[str, Any],
-    *,
-    lead: str | None = None,
-    steps: list[dict[str, Any]] | None = None,
-) -> ToolObservation:
+def page_observation(tool_name: str, page: dict[str, Any]) -> ToolObservation:
     return tool_success(
         tool_name=tool_name,
-        content=page_text(page, lead=lead),
-        display_data=build_browser_page_display_data(page, steps=steps),
+        content=page_text(page),
+        display_data=build_browser_page_display_data(page),
     )

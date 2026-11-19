@@ -172,8 +172,6 @@ class ExecuteTerminalTool(HandlerBase):
 
     name = TOOL_EXECUTE_TERMINAL
     description = _DESCRIPTION
-    # thread 工具的 timeout_seconds 只是元数据（执行器不强杀）；命令级缺省与钳制见参数模型常量。
-    timeout_seconds = MAX_COMMAND_TIMEOUT_S
     group = TOOL_GROUP_TERMINAL
 
 
@@ -408,7 +406,13 @@ class ExecuteTerminalTool(HandlerBase):
             result: ExecutionResult | None = None
             try:
                 result = backend.execute(
-                    command, str(cwd), timeout_s, output, shell=shell
+                    command,
+                    str(cwd),
+                    timeout_s,
+                    output,
+                    shell=shell,
+                    # 本会话的临时目录：提示词让模型在命令里用这个变量，不必抄绝对路径。
+                    extra_env={"COSIR_SCRATCH_DIR": str(execution_context.scratch_dir)},
                 )
             finally:
                 # 收尾顺序只在这里：先封存输出（剩下的文本与行交给实时通道和读取方），再关实时通道，
@@ -612,10 +616,7 @@ class ExecuteTerminalTool(HandlerBase):
             group=self.group,
             description=self.description,
             handler=self.execute,
-            args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("shell",),
-            execution_mode="thread",  # 作业须由后端进程持有才能转到后台，见模块 docstring
+            args_model=self.args_model,  # 作业须由后端进程持有才能转到后台，见模块 docstring
         )
         return replace(definition, parameters_schema=self._build_parameters_schema())
 
@@ -726,19 +727,5 @@ def build_execute_terminal_definition() -> ToolDefinition:
 
     命令执行时的允许作用域（工作区根）由运行时经 ``execution_context.workspace_root``
     注入，不在此处绑定到任何具体工作区根目录，因此该工厂无参数。
-
-    返回:
-        ``ToolDefinition``，供 ``ToolRegistry`` 注册；返回值恒非 None——
-        ``to_definition_if_avaliable`` 只在 ``avaliable()`` 为假时返回 None，而本工具未覆写
-        ``avaliable()``（基类恒为 True）。保留 ``ToolDefinition`` 而非 ``ToolDefinition | None``
-        标注与仓内其余 ``build_*_definition`` 一致：``ToolRegistry.register`` 的形参类型是
-        ``ToolDefinition``，标成可为 None 会在 ``tool_registration`` 的注册调用点
-        引入 mypy 类型错误。
-
-    异常:
-        无。
-
-    副作用:
-        创建 ``ExecuteTerminalTool`` 实例与定义对象，不执行命令。
     """
-    return ExecuteTerminalTool().to_definition_if_avaliable()
+    return ExecuteTerminalTool().to_definition()

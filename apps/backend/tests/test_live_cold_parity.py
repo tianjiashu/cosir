@@ -135,10 +135,10 @@ async def test_a_failure_during_a_tool_batch_settles_its_calls(backend_env, tmp_
     """工具批次被异常打断：没有结果的调用落占位并投影，不靠刷新才看到结局。"""
     from app.core.workflow.nodes import tools_node
 
-    async def explode(*_args, **_kwargs):
+    def explode(*_args, **_kwargs):
         raise RuntimeError("batch failed")
 
-    monkeypatch.setattr(tools_node, "run_tool_batch", explode)
+    monkeypatch.setattr(tools_node, "_execute_call", explode)
     (tmp_path / "a.txt").write_text("x")
     env = LiveColdEnv(
         tmp_path,

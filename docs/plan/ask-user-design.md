@@ -141,7 +141,7 @@ The user answered: "<question>"="<answer>", "<question>"="<answer>". Read the an
 ## 6. 现有机制已覆盖、不用改的
 
 - **只给侧栏会话**：`user_decision` 工具自动算「需要用户界面」（`ToolDefinition.requires_user_surface`），按 `SESSION_KINDS` 不进子 Agent 的工具列表。Claude Code 同样不给子 Agent。子 Agent 需要用户决定时，在结论里交代，由上级去问。
-- **只能单独调用**：需要用户决定的工具不和其他调用同批执行（`tool_batch_runner`）。
+- **只能单独调用**：需要用户决定的工具不和其他调用同批执行（`tools_node`）。
 - **「等你操作」**：part 的 `awaitingUser`、session feed 计数、侧栏与标题徽标都已经从等待占位推导。
 - **fork**：占位在切点前、结论在切点后的调用按未继承结算（现状）。
 - **撤回**：撤回回合时删除队列里这些调用的决定（现状）。

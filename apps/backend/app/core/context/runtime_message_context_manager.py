@@ -28,6 +28,7 @@ from app.core.context.context_store import (
     SESSION_SYSTEM_PROMPT_SEQUENCE,
     ContextStore,
 )
+from app.core.context.final_reply import CommittedResponse, final_reply_sequences
 from app.core.context.prompt_sources.source import SourceContext
 from app.core.context.prompt_sources.view import PromptSourceView
 from app.core.context.tool_call_closure import (
@@ -58,6 +59,7 @@ from app.models.session_context import (
     SessionContextRecord,
 )
 from app.utils.message_content import content_to_text
+from app.utils.path.system_cosir import session_scratch_dir
 from app.utils.workspace_instruction import find_workspace_instruction_file
 
 
@@ -132,7 +134,11 @@ class RuntimeMessageContextManager:
         self._system_entry = store.get_system_prompt(self.current_session_id)
         if self._system_entry is None:
             prompt = SystemPromptBuilder.build(
-                self.agent, self.workspace.root_path, self.tool_names, self.writable_root
+                self.agent,
+                self.workspace.root_path,
+                self.tool_names,
+                self.writable_root,
+                session_scratch_dir(self.current_session_id),
             )
             self._system_entry = store.create_system_prompt(
                 self.current_session_id,
@@ -242,8 +248,7 @@ class RuntimeMessageContextManager:
         的 :meth:`begin_run` 从库重建，不会留下错位的 working copy。
 
         当前批次里已有的结果（如取消、中断占位）原地覆盖，保留消息身份和序号。HITL 的等待
-        占位不走这里：决定可能在之后的模型步甚至之后的 Run 才到，届时调用已不属于当前批次，
-        所以执行结果统一另行追加为 user 消息（见 ``settle_decision_observation``），占位只经
+        占位写下后不再覆盖：用户的决定另行作为 user 消息并入，占位只经
         :meth:`update_tool_result_metadata` 更新卡片状态，历史前缀因此不变。缺少调用依据的新
         结果在写库前报 ContextProtocolError，不伪造调用或丢弃执行结果。流式预览的取消占位
         可以没有纳入上下文的调用，但必须 include_in_context=False，仅供 Transport 重建。
@@ -479,10 +484,10 @@ class RuntimeMessageContextManager:
     ) -> ToolMessageMetadata:
         """只替换一条工具结果行的展示 metadata，模型可见正文不变；返回实际写入的 metadata。
 
-        HITL 执行结果另行追加为消息，等待占位仍是模型协议上的结果；这里只把占位的卡片状态推到
-        终态，历史前缀因此不变。结果没有带
-        展示数据时沿用占位的（HITL 卡片由占位的展示数据决定，如交接的页面预览）。传入
-        ``db`` 时加入调用方事务（接收决定时与确认同一事务把占位推到 ``running``）。
+        HITL 的决定另行作为消息并入，等待占位仍是模型协议上的结果；这里只把占位的卡片状态推到
+        终态，历史前缀因此不变。新 metadata 没有带展示数据时沿用占位的（HITL 卡片由占位的展示数据
+        决定，如提问的题目）。传入
+        ``db`` 时加入调用方事务（决定并入时与确认同一事务把占位推到 ``completed``）。
 
         异常:
             KeyError: 上下文中没有该调用的结果行。
@@ -701,6 +706,23 @@ class RuntimeMessageContextManager:
             [entry.message for entry in self._effective_entries()],
             workspace_id=self.workspace.id,
         )
+
+    def final_reply(self, reply_tools: frozenset[str]) -> tuple[list[int], str]:
+        """本 Run 最终回复的回复序号与正文（各段按顺序、空段跳过，以空行相连）；规则见 ``core/context/final_reply``。
+
+        只在 Run 以无工具调用的回复结束时调用：那条回复已提交进 working copy。
+        """
+
+        responses = [
+            entry for entry in self._entries
+            if entry.run_id == self.current_run_id and entry.message["role"] == "assistant"
+        ]
+        sequences = final_reply_sequences(
+            [CommittedResponse.from_message(entry.sequence, entry.turn, entry.message) for entry in responses],
+            reply_tools,
+        )
+        texts = (content_to_text(entry.message.get("content")) for entry in responses if entry.sequence in sequences)
+        return sequences, "\n\n".join(text for text in texts if text.strip())
 
     def _effective_entries(self) -> list[ContextEntry]:
         """返回 system、历史和当前 run 条目的有序列表。"""

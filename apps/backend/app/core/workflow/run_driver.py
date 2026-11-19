@@ -33,6 +33,7 @@ from app.service.depends import (
     get_run_ledger,
     get_session_context_service,
 )
+from app.service.session.session_scratch import ensure_session_scratch
 
 
 class RunDriver:
@@ -67,6 +68,9 @@ class RunDriver:
             结束前回收本 Run 遗留的工具级取消信号（Session 级信号归调度方的释放边界）。
         """
 
+        # 临时目录在驱动开始前建好：终端第一条命令就可能 cd 进去，写类文件工具也只认已存在的目录。建不出来
+        # 只记日志、不让 Run 失败（见 ``session_scratch``）。
+        ensure_session_scratch(run.session_id)
         try:
             rc = RuntimeContext.for_run(run, preceding_run)
             await self._workflow.run(rc)

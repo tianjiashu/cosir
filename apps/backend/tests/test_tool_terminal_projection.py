@@ -1,8 +1,8 @@
 """工具终态映射与单次调用生命周期投影的边界测试。
 
 终态映射（``tool_terminal_projection``）是纯函数；单次调用的 ``running`` / 终态事件由
-``tool_batch_runner._execute_call`` 发出（执行器本身不再投影任何 Transport 状态），这里用
-``runtime_stub`` 搭最小 Run 作用域，并替换 ``tool_batch_runner.emit`` 捕获事件。
+``tools_node._execute_call`` 发出（执行器本身不再投影任何 Transport 状态），这里用
+``runtime_stub`` 搭最小 Run 作用域，并替换 ``tools_node.emit`` 捕获事件。
 """
 
 from __future__ import annotations
@@ -55,8 +55,8 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.node_helper import tool_batch_runner
 from app.core.workflow.node_helper.common import execution_scope
+from app.core.workflow.nodes import tools_node
 from app.models.message_metadata import ToolMessageMetadata
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.tool_handler.read_file import ReadFileTool
@@ -99,7 +99,7 @@ class _MemorySnapshotOwner:
 
 
 class _EventRecorder:
-    """线程安全的事件记录器；替换 ``tool_batch_runner.emit`` 使用。"""
+    """线程安全的事件记录器；替换 ``tools_node.emit`` 使用。"""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -116,7 +116,7 @@ class _EventRecorder:
 def _install_recorder(monkeypatch: pytest.MonkeyPatch) -> _EventRecorder:
     """running 由执行器发出、终态由批次入口发出：两个出口接到同一记录器，按发生顺序断言。"""
     recorder = _EventRecorder()
-    monkeypatch.setattr(tool_batch_runner, "emit", recorder)
+    monkeypatch.setattr(tools_node, "emit", recorder)
     monkeypatch.setattr(tool_executor_module, "emit", recorder)
     return recorder
 
@@ -500,7 +500,7 @@ def test_success_emits_running_then_completed(
         tmp_path, _make_read_file_executor(tmp_path), projected={"call-ok": "read_file"}
     )
 
-    observation = tool_batch_runner._execute_call(
+    observation = tools_node._execute_call(
         rc,
         ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-ok"),
         "step-1",
@@ -546,7 +546,7 @@ def test_running_is_emitted_only_after_admission(
         allows=frozenset({"probe"}),
     )
 
-    tool_batch_runner._execute_call(
+    tools_node._execute_call(
         rc, ToolCall(tool_name="probe", arguments='{"intent": "验证工具行为"}', call_id="call-probe"), "s",  _NO_LOOP
     )
 
@@ -564,7 +564,7 @@ def test_unknown_tool_emits_failed_without_running(
         tmp_path, _make_read_file_executor(tmp_path), projected={"call-unknown": "no_such_tool"}
     )
 
-    observation = tool_batch_runner._execute_call(
+    observation = tools_node._execute_call(
         rc,
         ToolCall(tool_name="no_such_tool", arguments='{"intent": "验证工具行为"}', call_id="call-unknown"),
         "s",
@@ -591,7 +591,7 @@ def test_profile_denied_tool_emits_failed_without_running(
         allows=frozenset({"other_tool"}),
     )
 
-    observation = tool_batch_runner._execute_call(
+    observation = tools_node._execute_call(
         rc,
         ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-denied"),
         "s",
@@ -614,7 +614,7 @@ def test_invalid_arguments_emit_failed_without_running(
         tmp_path, _make_read_file_executor(tmp_path), projected={"call-bad": "read_file"}
     )
 
-    observation = tool_batch_runner._execute_call(
+    observation = tools_node._execute_call(
         rc,
         ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "nonexistent": 1}', call_id="call-bad"),
         "s",
@@ -641,7 +641,7 @@ def test_denied_calls_emit_failure_without_running(
     )
 
     for tool_name, call_id in (("no_such_tool", "call-unregistered"), ("read_file", "call-banned")):
-        tool_batch_runner._execute_call(
+        tools_node._execute_call(
             rc,
             ToolCall(tool_name=tool_name, arguments=arguments, call_id=call_id),
             "s",
@@ -678,7 +678,7 @@ def test_execute_call_specializes_context_per_call(
         allows=frozenset({"probe"}),
     )
 
-    tool_batch_runner._execute_call(
+    tools_node._execute_call(
         rc, ToolCall(tool_name="probe", arguments='{"intent": "验证工具行为"}', call_id="call-a"), "s",  _NO_LOOP
     )
 
@@ -706,7 +706,6 @@ def test_malformed_display_data_still_emits_failed_terminal(
         description="handler returning malformed display_data",
         handler=_bad_handler,
         args_model=_ProbeArgs,
-        execution_mode="thread",
     )
     rc, batch = _runtime(
         tmp_path,
@@ -715,7 +714,7 @@ def test_malformed_display_data_still_emits_failed_terminal(
         allows=frozenset({"bad_display"}),
     )
 
-    observation = tool_batch_runner._execute_call(
+    observation = tools_node._execute_call(
         rc,
         ToolCall(tool_name="bad_display", arguments='{"intent": "验证工具行为"}', call_id="call-bad-display"),
         "s",
@@ -745,7 +744,7 @@ def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
     )
 
     with execution_scope(rc, SimpleNamespace()):  # type: ignore[arg-type]
-        observation = tool_batch_runner._execute_call(
+        observation = tools_node._execute_call(
             rc,
             ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-ok"),
             "s",
@@ -793,7 +792,7 @@ def test_executor_exception_becomes_error_observation_and_failed_terminal(
     )
 
     with caplog.at_level("ERROR"):
-        observation = tool_batch_runner._execute_call(
+        observation = tools_node._execute_call(
             rc,
             ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为"}', call_id="call-boom"),
             "s",
@@ -826,7 +825,7 @@ def test_executor_exception_after_start_closes_running_card(
         projected={"call-late": "read_file"},
     )
 
-    observation = tool_batch_runner._execute_call(
+    observation = tools_node._execute_call(
         rc,
         ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为"}', call_id="call-late"),
         "s",
@@ -848,7 +847,7 @@ def test_executor_exception_emits_failure(
     recorder = _install_recorder(monkeypatch)
     rc, batch = _runtime(tmp_path, _RaisingExecutor(RuntimeError("x")))
 
-    observation = tool_batch_runner._execute_call(
+    observation = tools_node._execute_call(
         rc,
         ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为"}', call_id="call-hidden"),
         "s",
@@ -861,28 +860,8 @@ def test_executor_exception_emits_failure(
 
 
 # ---------------------------------------------------------------------------
-# D. process 隔离工具与待用户决定
+# D. 挂起与待用户决定
 # ---------------------------------------------------------------------------
-
-
-def _process_isolated_probe_handler(
-    *, execution_context: Any, output_sink: Any = None
-) -> ToolObservation:
-    """process 隔离探针 handler：模块级、可 pickle，在子进程内被调用。
-
-    返回体写入执行进程的 ``os.getpid()``，供父进程断言「handler 确在独立子进程内运行」，
-    从而把「父进程投影 + 子进程不投影」缩并为可验证的父进程侧证据。
-    """
-
-    import os
-
-    return ToolObservation(
-        tool_name="process_probe",
-        status="success",
-        content=f"probe body pid={os.getpid()}",
-        tool_call_id="",
-        display_data={"kind": "probe"},
-    )
 
 
 def _suspending_probe_handler(
@@ -898,52 +877,6 @@ def _suspending_probe_handler(
         display_data={"kind": "probe"},
         waiting=AwaitMessages(),
     )
-
-
-def test_projection_happens_in_parent_for_process_isolated_tool(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """process 隔离工具的生命周期事件只在父进程发出：running 与终态各恰一次。
-
-    用模块级可 pickle handler 注册一个 ``execution_mode="process"`` 工具，走真实
-    ``ToolHandlerRunner`` 的子进程链路；记录器只存在于父进程。
-    """
-
-    import os
-
-    recorder = _install_recorder(monkeypatch)
-    definition = ToolDefinition(
-        name="process_probe",
-        group="probe",
-        description="process isolation probe",
-        handler=_process_isolated_probe_handler,
-        args_model=_ProbeArgs,
-        execution_mode="process",
-        timeout_seconds=30.0,
-    )
-    rc, batch = _runtime(
-        tmp_path,
-        ToolExecutor(ToolRegistry([definition])),
-        projected={"call-proc": "process_probe"},
-        allows=frozenset({"process_probe"}),
-    )
-
-    observation = tool_batch_runner._execute_call(
-        rc,
-        ToolCall(tool_name="process_probe", arguments='{"intent": "验证工具行为"}', call_id="call-proc"),
-        "s",
-
-        _NO_LOOP,
-    )
-
-    # 无论子进程链路是否成功（Windows + coverage 下 spawn 可能失败，属环境限制），父进程都必须
-    # 恰发出一次 running 与一次与该观察同值的终态。
-    assert recorder.statuses("call-proc") == ["running", terminal_status(observation.status)]
-    if observation.status == "success":
-        assert recorder.events[-1].result.display_data == {"kind": "probe"}
-        # handler 在独立子进程中运行（PID 与父进程不同）。
-        assert f"pid={os.getpid()}" not in (observation.content or "")
-        assert "probe body pid=" in (observation.content or "")
 
 
 def test_suspending_tool_still_closes_its_call_in_the_same_step(
@@ -966,7 +899,7 @@ def test_suspending_tool_still_closes_its_call_in_the_same_step(
         allows=frozenset({"suspend_probe"}),
     )
 
-    observation = tool_batch_runner._execute_call(
+    observation = tools_node._execute_call(
         rc,
         ToolCall(tool_name="suspend_probe", arguments='{"intent": "验证工具行为"}', call_id="call-suspend"),
         "s",
@@ -1059,14 +992,14 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
 
 
 # ---------------------------------------------------------------------------
-# H. 并行批次：每个调用各投一态、互不串台
+# H. 多线程同时执行：每个调用各投一态、互不串台
 # ---------------------------------------------------------------------------
 
 
-def test_parallel_batch_projects_each_call_independently(
+def test_concurrent_calls_project_each_call_independently(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """多线程并发执行同批调用时，每个 call 各自 running→completed，call_id 不串台。"""
+    """调用在多个线程里同时执行时（不同 Session 的工具线程），每个 call 各自 running→completed，call_id 不串台。"""
 
     (tmp_path / "a.txt").write_text("AAA", encoding="utf-8")
     (tmp_path / "b.txt").write_text("BBB", encoding="utf-8")
@@ -1083,7 +1016,7 @@ def test_parallel_batch_projects_each_call_independently(
         name = "a.txt" if index % 2 == 0 else "b.txt"
         call_id = f"call-{index}"
         barrier.wait()
-        results[call_id] = tool_batch_runner._execute_call(
+        results[call_id] = tools_node._execute_call(
             rc,
             ToolCall(tool_name="read_file", arguments=json.dumps({"intent": "读取测试文件", "path": name}), call_id=call_id),
             "s",
@@ -1119,14 +1052,14 @@ def test_mixed_batch_distinct_statuses_do_not_cross_talk(
         projected={"call-good": "read_file", "call-bad": "no_such_tool"},
     )
 
-    tool_batch_runner._execute_call(
+    tools_node._execute_call(
         rc,
         ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "good.txt"}', call_id="call-good"),
         "s",
 
         _NO_LOOP,
     )
-    tool_batch_runner._execute_call(
+    tools_node._execute_call(
         rc,
         ToolCall(tool_name="no_such_tool", arguments='{"intent": "验证工具行为"}', call_id="call-bad"),
         "s",

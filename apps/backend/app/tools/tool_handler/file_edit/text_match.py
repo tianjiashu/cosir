@@ -10,7 +10,14 @@ from difflib import SequenceMatcher
 
 
 class TextMatchError(ValueError):
-    """原文没有命中或命中多处；消息是面向模型的英文短句，没命中时附最近行提示。"""
+    """原文没有命中或命中多处；消息是面向模型的英文短句，没命中时附最近行提示。
+
+    ``status_hint`` 是给调用行的短提示：两种失败要用户分辨（原文对不上 vs 原文太短不唯一）。
+    """
+
+    def __init__(self, message: str, *, status_hint: str) -> None:
+        super().__init__(message)
+        self.status_hint = status_hint
 
 
 def replace_exact(content: str, old: str, new: str, *, replace_all: bool = False) -> tuple[str, int]:
@@ -27,12 +34,14 @@ def replace_exact(content: str, old: str, new: str, *, replace_all: bool = False
         hint = find_closest_lines(old, content)
         raise TextMatchError(
             "no exact match for the text in the file"
-            + (f"\n\nDid you mean one of these sections?\n{hint}" if hint else "")
+            + (f"\n\nDid you mean one of these sections?\n{hint}" if hint else ""),
+            status_hint="原文未匹配",
         )
     if count > 1 and not replace_all:
         raise TextMatchError(
             f"the text matches {count} places in the file; include more surrounding lines "
-            "to make it unique, or replace every occurrence"
+            "to make it unique, or replace every occurrence",
+            status_hint="原文不唯一",
         )
     return content.replace(old, new), count
 

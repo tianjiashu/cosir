@@ -11,7 +11,6 @@ Run。是否继续等由模型决定（再次调用本工具）。没有任何�
 唤醒，返回成功又会让模型以为自己在等。
 """
 
-from typing import ClassVar
 
 from app.core.tool.background_commands import background_commands
 from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
@@ -45,7 +44,6 @@ class WaitMessagesTool(HandlerBase):
         "without pausing."
     )
     args_model: type[WaitMessagesArgs] = WaitMessagesArgs
-    timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_CHILD_AGENT
 
     def execute(self, execution_context: ToolExecutionContext) -> ToolObservation:
@@ -79,9 +77,6 @@ class WaitMessagesTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            execution_mode="thread",
-            parallel_mode="serial",
         )
 
 

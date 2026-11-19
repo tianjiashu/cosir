@@ -6,14 +6,23 @@
 
 记的是文件的 ``(mtime_ns, size)``：读或写之后现取，比对时再取一次。进程内、不持久化：后端重启或分叉
 出的新 Session 都要重读一次才能覆盖（Claude Code 同样按对话记）。Session 删除提交后由
-``SessionService`` 回收。工具在线程池里并发执行，读写都在锁内。
+``SessionService`` 回收。不同 Session 的工具在各自的工作线程里并发执行，读写都在锁内。
 """
 
 from __future__ import annotations
 
 import os
 import threading
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class OverwriteRefusal:
+    """拒绝覆盖的原因：``reason`` 给模型（含下一步），``status_hint`` 给调用行（没读过 vs 读后被改过）。"""
+
+    reason: str
+    status_hint: str
 
 
 class FileObservations:
@@ -43,21 +52,23 @@ class FileObservations:
             else:
                 self._seen[key] = stamp
 
-    def overwrite_refusal(self, session_id: int, path: Path) -> str | None:
-        """覆盖已有文件 ``path`` 前调用；可以覆盖返回 ``None``，否则返回面向模型的拒绝原因。"""
+    def overwrite_refusal(self, session_id: int, path: Path) -> OverwriteRefusal | None:
+        """覆盖已有文件 ``path`` 前调用；可以覆盖返回 ``None``，否则返回拒绝原因。"""
 
         key, stamp = self._key(session_id, path), self._stamp(path)
         with self._lock:
             seen = self._seen.get(key)
         if seen is None:
-            return (
+            return OverwriteRefusal(
                 "this file already exists and you have not read it in this conversation. Read it "
-                "with read_file first, or use edit_file for a partial change"
+                "with read_file first, or use edit_file for a partial change",
+                status_hint="需先读取",
             )
         if seen != stamp:
-            return (
+            return OverwriteRefusal(
                 "this file changed after you last read it (by the user, a command or another "
-                "session). Read it again with read_file before overwriting it"
+                "session). Read it again with read_file before overwriting it",
+                status_hint="文件已变化",
             )
         return None
 

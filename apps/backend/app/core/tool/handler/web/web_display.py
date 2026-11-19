@@ -1,38 +1,21 @@
-"""网页工具的 UI 展示数据构造。"""
+"""网页工具的卡片展示数据：卡片只列出处，摘要、正文与逐页错误只给模型。网站名称与图标由前端从 URL 取。"""
 
-from collections.abc import Iterable, Mapping
 from typing import Any
 
-
-def build_web_search_display_data(
-    *, query: str, results: Iterable[Mapping[str, Any]]
-) -> dict[str, Any]:
-    """构造网页搜索展示数据。
-
-    UI 只消费 query、标题和 URL；摘要和排名留在模型结果通道。
-    """
-
-    projected = []
-    for item in results:
-        url = item.get("url")
-        if not isinstance(url, str) or not url:
-            continue
-        title = item.get("title")
-        projected.append({"title": title if isinstance(title, str) else "", "url": url})
-    return {"kind": "web-search-results", "query": query, "results": projected}
+from app.core.tool.handler.web.firecrawl_client import WebFetchItem, WebSearchItem
 
 
-def build_web_fetch_display_data(
-    *, urls: Iterable[str], partial: bool = False
-) -> dict[str, Any]:
-    """构造网页抓取的 URL 列表。
-
-    UI 不消费正文、metadata 或逐站点错误；网站名称和图标由前端从 URL 处理。
-    """
-
-    data: dict[str, Any] = {
-        "kind": "web-fetch-urls",
-        "partial": partial,
-        "urls": [{"url": url} for url in urls if isinstance(url, str) and url],
+def build_web_search_display_data(*, query: str, results: list[WebSearchItem]) -> dict[str, Any]:
+    return {
+        "kind": "web-search-results",
+        "query": query,
+        "results": [{"title": item.title, "url": item.url} for item in results],
     }
-    return data
+
+
+def build_web_fetch_display_data(items: list[WebFetchItem]) -> dict[str, Any]:
+    return {
+        "kind": "web-fetch-urls",
+        "partial": any(item.error for item in items),
+        "urls": [{"url": item.url} for item in items],
+    }

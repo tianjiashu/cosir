@@ -143,3 +143,25 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
     rc.cancel_end_reason = lambda: "user_cancelled"
     install_runtime_singletons(rc)
     return rc
+
+
+async def run_batch(rc: Any, calls: list[Any]) -> list[Any]:
+    """经 tools 节点执行一批 ``ToolCall``（step_id 为 ``step-1``），返回观察；替身 ``rc`` 装进执行作用域。"""
+
+    from app.core.workflow.execution_state.tool_batch import ToolBatch
+    from app.core.workflow.node_helper.common import execution_scope
+    from app.core.workflow.nodes.tools_node import _tools_node
+
+    batch = ToolBatch(
+        calls=[
+            {
+                "id": call.call_id,
+                "type": "function",
+                "function": {"name": call.tool_name, "arguments": call.arguments},
+            }
+            for call in calls
+        ]
+    )
+    with execution_scope(rc, SimpleNamespace()):
+        patch = await _tools_node(ReactExecutionState(step_count=1, batch=batch))
+    return patch["batch"].observations

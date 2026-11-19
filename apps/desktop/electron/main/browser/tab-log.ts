@@ -9,6 +9,8 @@ const CAPACITY = { event: 50, console: 1000, network: 1000 } as const;
 const TEXT_MAX_CHARS = 500;
 /** 同一接口的几次发起相隔不到这么久（秒，CDP 时间戳）算同一批：一次动作的扇出，不是周期性的重复。 */
 const FAN_OUT_WINDOW_S = 0.05;
+/** 接口身份里 GraphQL 操作名的上限：批量请求会把很多名字连在一起。 */
+const OPERATION_MAX_CHARS = 120;
 
 export type ConsoleLevel = "debug" | "info" | "warning" | "error";
 const LEVEL_RANK: Record<ConsoleLevel, number> = { debug: 0, info: 1, warning: 2, error: 3 };
@@ -79,8 +81,8 @@ export type PageDigest = {
 };
 
 /**
- * 一个标签的页面日志：页面事件（拦下的跳转、下载结果、弹窗收尾……，即给 Agent 的备注）、console 与网络请求，
- * 共用一个单调递增、永不复用的序号。「上次以来」的唯一事实源。
+ * 一个标签的页面日志：页面事件（拦下的跳转、下载结果、弹窗收尾……，即给 Agent 的备注；对页面状态的落定结论不是事件，
+ * 在 `SettleNotes`）、console 与网络请求，共用一个单调递增、永不复用的序号。「上次以来」的唯一事实源。
  *
  * 读取方各带游标，读取本身不消费任何东西：
  * - 页面结果（navigate / snapshot / act）经 `digest` 取「Agent 上次拿到页面结果以来」的事件与计数，并推进这一个
@@ -100,8 +102,8 @@ export class TabLog {
   private readonly events: EventEntry[] = [];
   private readonly consoleEntries: ConsoleEntry[] = [];
   private readonly network: NetworkEntry[] = [];
-  /** 进行中的请求：CDP requestId → 条目与开始时间（CDP 单调时钟，秒）。 */
-  private readonly inFlight = new Map<string, { entry: NetworkEntry; startedAt: number }>();
+  /** 进行中的请求：CDP requestId → 条目（发起时刻等条目元数据在 `requests`）。 */
+  private readonly inFlight = new Map<string, NetworkEntry>();
   /** 当前页面（最近一次主框架跨文档导航）的第一个序号。 */
   private pageStart = 1;
   /**
@@ -124,14 +126,16 @@ export class TabLog {
   /** 没有正文时的原因（pending / deferred / unavailable 等）。 */
   private readonly bodyReasons = new Map<NetworkEntry, string>();
   /**
-   * 当前页面上页面自己发起过的接口（来源 + 路径 → 发起过的 CDP requestId）：没有 Agent 操作、也没有近期用户活动时
+   * 当前页面上页面自己发起过的接口（接口身份见 `endpointOf` → 发起过的 CDP requestId）：没有 Agent 操作、也没有近期用户活动时
    * 页面仍发起它们。发起过两次以上的才算后台流量（埋点、轮询、定时拉取总会重复），落定不再等；只发起过一次的
-   * （空闲时懒加载的一次查询）不算，否则 GraphQL 这类所有请求同一路径的接口一次就被整体认成后台。是不是「页面自己
+   * （空闲时懒加载的一次查询）不算，否则一次空闲请求就让这个接口在本页面上永远不等。是不是「页面自己
    * 发起」由标签判定（它持有操作与输入的事实，见 `BrowserTab`），这里只记结论；换文档清空。
    */
   private readonly pageInitiated = new Map<string, Set<string>>();
-  /** 条目 → CDP requestId 与发起时刻（CDP 时间戳，秒）：同一请求的重定向跳共用 requestId，不算重复。 */
-  private readonly requests = new Map<NetworkEntry, { id: string; startedAt: number }>();
+  /** 条目 → CDP requestId、发起时刻（CDP 时间戳，秒）与接口身份：同一请求的重定向跳共用 requestId，不算重复。 */
+  private readonly requests = new Map<NetworkEntry, { id: string; startedAt: number; endpoint: string }>();
+  /** 本页面上已经提示过「没等」的接口：同一接口一份文档只提示一次，埋点页面的备注因此有上限；换文档清空。 */
+  private readonly unwaitedNoticed = new Set<string>();
   /** 采集被弹窗挡住、等补采的条目（补采用的 requestId 在 `requests`）。 */
   private readonly deferred = new Set<NetworkEntry>();
 
@@ -144,31 +148,49 @@ export class TabLog {
    * 落定要等的请求：序号不小于 `from`（这一步开始以来）、还没结束的数据请求（`DATA_TYPES`），且它的接口不是后台流量——
    * 页面自己反复发起过（`pageInitiated`），或这一步里隔开时间重复发起（刚打开的新页面上，埋点还没机会在操作之间被
    * 观察到，靠重复认出）。重复按「发起时刻」分批数：相隔不到 `FAN_OUT_WINDOW_S` 的算同一批，是一次动作的扇出（一次
-   * 点击发出的几条 GraphQL 查询），照等；周期性的埋点、轮询在不同时刻反复出现，才认作后台。翻页这类每步一次的请求
-   * 因此照等。`ignored` 是按这两条没等的在途请求数，只给落定日志用。流式的 EventSource 不会结束，不在其中。
+   * 点击并发请求同一接口，如批量拉取几页），照等；周期性的埋点、轮询在不同时刻反复出现，才认作后台。翻页这类每步一次的请求
+   * 因此照等。`unwaited` 是按这两条没等的在途请求，交给落定日志与「没等」的提示（`SettleNotes`）。流式的
+   * EventSource 不会结束，不在其中。
    *
-   * 已知局限：同一接口的串行依赖请求（第一条回来后才发第二条）在两个时刻出现，第二条会被当成重复而不等。
+   * 已知局限：同一接口（GraphQL 为同一操作）的串行依赖请求（第一条回来后才发第二条）在两个时刻出现，第二条会被当成
+   * 重复而不等；这类情况由「没等」的提示交给 Agent。
    */
-  pendingRequests(from: number): { waiting: NetworkEntry[]; ignored: number } {
+  pendingRequests(from: number): { waiting: NetworkEntry[]; unwaited: NetworkEntry[] } {
     const starts = new Map<string, Map<string, number>>();
     for (const entry of this.network) {
       if (entry.seq < from || !DATA_TYPES.has(entry.resourceType)) continue;
-      const endpoint = endpointOf(entry.url);
-      const { id, startedAt } = this.requests.get(entry)!;
+      const { id, startedAt, endpoint } = this.requests.get(entry)!;
       const ids = starts.get(endpoint) ?? new Map<string, number>();
       ids.set(id, Math.min(ids.get(id) ?? startedAt, startedAt));
       starts.set(endpoint, ids);
     }
     const waiting: NetworkEntry[] = [];
-    let ignored = 0;
-    for (const { entry } of this.inFlight.values()) {
+    const unwaited: NetworkEntry[] = [];
+    for (const entry of this.inFlight.values()) {
       if (entry.seq < from || !DATA_TYPES.has(entry.resourceType)) continue;
-      const endpoint = endpointOf(entry.url);
+      const { endpoint } = this.requests.get(entry)!;
       const background = (this.pageInitiated.get(endpoint)?.size ?? 0) >= 2 || batches([...(starts.get(endpoint)?.values() ?? [])]) >= 2;
-      if (background) ignored += 1;
-      else waiting.push(entry);
+      (background ? unwaited : waiting).push(entry);
     }
-    return { waiting, ignored };
+    return { waiting, unwaited };
+  }
+
+  /** 请求还没结束（被容量挤掉的不算：读不到了）。 */
+  running(entry: NetworkEntry): boolean {
+    const request = this.requests.get(entry);
+    return request !== undefined && this.inFlight.get(request.id) === entry;
+  }
+
+  /** 条目的接口身份（`endpointOf`），备注里列出请求时用；条目须还在日志里。 */
+  endpoint(entry: NetworkEntry): string {
+    return this.requests.get(entry)!.endpoint;
+  }
+
+  /** 记下本页面已提示过这个接口「没等」；之前已提示过时返回 false。 */
+  noticeUnwaited(endpoint: string): boolean {
+    if (this.unwaitedNoticed.has(endpoint)) return false;
+    this.unwaitedNoticed.add(endpoint);
+    return true;
   }
 
   note(text: string): void {
@@ -184,8 +206,8 @@ export class TabLog {
     });
   }
 
-  /** `byPage`：这个请求是页面自己发起的（标签判定），记进 `pageInitiated`。 */
-  requestStarted(requestId: string, request: { method: string; url: string; resourceType: string; timestamp: number }, byPage = false): void {
+  /** `byPage`：这个请求是页面自己发起的（标签判定），记进 `pageInitiated`。`postData` 只用来认接口身份，不保存。 */
+  requestStarted(requestId: string, request: { method: string; url: string; resourceType: string; timestamp: number; postData?: string }, byPage = false): void {
     const entry: NetworkEntry = {
       seq: this.next(),
       method: request.method,
@@ -201,16 +223,16 @@ export class TabLog {
     this.push(this.network, CAPACITY.network, entry, (dropped) => {
       this.lastDropped.network = dropped.seq;
       this.newFailures.delete(dropped);
-      for (const [id, flight] of this.inFlight) if (flight.entry === dropped) this.inFlight.delete(id);
+      for (const [id, flight] of this.inFlight) if (flight === dropped) this.inFlight.delete(id);
       this.releaseBody(dropped);
       this.bodyReasons.delete(dropped);
       this.deferred.delete(dropped);
       this.requests.delete(dropped);
     });
-    this.inFlight.set(requestId, { entry, startedAt: request.timestamp });
-    this.requests.set(entry, { id: requestId, startedAt: request.timestamp });
+    this.inFlight.set(requestId, entry);
+    const endpoint = endpointOf(request.url, request.postData);
+    this.requests.set(entry, { id: requestId, startedAt: request.timestamp, endpoint });
     if (byPage && DATA_TYPES.has(request.resourceType)) {
-      const endpoint = endpointOf(entry.url);
       this.pageInitiated.set(endpoint, (this.pageInitiated.get(endpoint) ?? new Set<string>()).add(requestId));
     }
   }
@@ -222,12 +244,12 @@ export class TabLog {
   responseReceived(requestId: string, status: number, timestamp: number, final = false, mime: string | null = null): void {
     const flight = this.inFlight.get(requestId);
     if (!flight) return;
-    this.update(flight.entry, { status });
+    this.update(flight, { status });
     if (final) {
-      flight.entry.body = null;
+      flight.body = null;
       this.finish(requestId, timestamp);
-    } else if (flight.entry.body?.state === "pending") {
-      flight.entry.body.mime = mime;
+    } else if (flight.body?.state === "pending") {
+      flight.body.mime = mime;
     }
   }
 
@@ -236,7 +258,7 @@ export class TabLog {
    * 单条缓冲的在这里直接定状态，不必采。`encodedLength` 是 `loadingFinished` 的传输大小。
    */
   requestFinished(requestId: string, timestamp: number, encodedLength: number): number | null {
-    const entry = this.inFlight.get(requestId)?.entry;
+    const entry = this.inFlight.get(requestId);
     this.finish(requestId, timestamp);
     if (!entry?.body || entry.body.state !== "pending") return null;
     if (entry.body.mime !== null && !isTextMime(entry.body.mime)) {
@@ -254,8 +276,8 @@ export class TabLog {
   requestFailed(requestId: string, errorText: string, timestamp: number): void {
     const flight = this.inFlight.get(requestId);
     if (flight) {
-      this.update(flight.entry, { failure: clip(errorText) });
-      flight.entry.body = null;
+      this.update(flight, { failure: clip(errorText) });
+      flight.body = null;
     }
     this.finish(requestId, timestamp);
   }
@@ -341,11 +363,12 @@ export class TabLog {
     this.pageStart = this.navigationStart ?? this.seq + 1;
     this.navigationStart = null;
     this.pageInitiated.clear();
+    this.unwaitedNoticed.clear();
   }
 
   /** 页面结果用：取「上次以来」的事件与（当前页面的）计数，并推进交付游标。 */
   digest(): PageDigest {
-    const notes = this.events.filter((event) => event.seq >= this.delivered).map((event) => event.text);
+    const notes = this.undeliveredNotes();
     if (this.droppedEvents > 0) notes.unshift(`(${this.droppedEvents} earlier notes were dropped)`);
     const since = Math.max(this.delivered, this.pageStart);
     const newConsole = this.consoleEntries.filter((entry) => entry.seq >= since);
@@ -407,7 +430,7 @@ export class TabLog {
   private finish(requestId: string, timestamp: number): void {
     const flight = this.inFlight.get(requestId);
     if (!flight) return;
-    flight.entry.durationMs = Math.max(0, Math.round((timestamp - flight.startedAt) * 1000));
+    flight.durationMs = Math.max(0, Math.round((timestamp - this.requests.get(flight)!.startedAt) * 1000));
     this.inFlight.delete(requestId);
   }
 
@@ -464,13 +487,32 @@ function clip(text: string): string {
 }
 
 /**
- * 接口的身份：来源 + 路径。查询参数常带时间戳与签名，同一个上报接口每次都不同；落定判后台流量与备注里列出
- * 「哪个接口没回来」用的都是它（查询参数还常带令牌，不进备注）。
+ * 接口的身份：来源 + 路径，GraphQL 请求再加上操作名（`https://x/graphql (Feed)`）。查询参数常带时间戳与签名，同一个
+ * 上报接口每次都不同，所以不算在内；GraphQL 的所有操作走同一路径，不加操作名的话一次点击的几条查询、页面自己的
+ * 轮询查询与内容查询都混成一个接口。落定判后台流量与备注里列出「哪个接口没回来」用的都是它（查询参数还常带令牌，
+ * 不进备注）。
  */
-export function endpointOf(url: string): string {
+function endpointOf(url: string, postData?: string): string {
   if (!URL.canParse(url)) return url;
-  const { origin, pathname } = new URL(url);
-  return `${origin}${pathname}`;
+  const parsed = new URL(url);
+  const operation = graphqlOperation(parsed, postData);
+  return `${parsed.origin}${parsed.pathname}${operation === null ? "" : ` (${operation})`}`;
+}
+
+/**
+ * GraphQL 的操作名：请求体里的 `operationName`（批量请求是数组，取全部），或 GET 持久化查询放在查询参数里的。只认这个
+ * 协议约定的字段；请求体不像 GraphQL 就没有操作名。
+ */
+function graphqlOperation(url: URL, postData: string | undefined): string | null {
+  const fromQuery = url.searchParams.get("operationName");
+  if (fromQuery) return clipText(fromQuery, OPERATION_MAX_CHARS);
+  if (!postData?.includes("operationName")) return null;
+  let body: unknown;
+  try { body = JSON.parse(postData); } catch { return null; }
+  const names = (Array.isArray(body) ? body : [body])
+    .map((item: unknown) => (item !== null && typeof item === "object" ? (item as { operationName?: unknown }).operationName : undefined))
+    .filter((name): name is string => typeof name === "string" && name !== "");
+  return names.length === 0 ? null : clipText(names.join(","), OPERATION_MAX_CHARS);
 }
 
 /** 发起时刻分成几批：按时间排好，与上一次相隔超过 `FAN_OUT_WINDOW_S` 就是新的一批。 */

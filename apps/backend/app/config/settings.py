@@ -58,13 +58,18 @@ class Settings:
     MAIN_AGENT_MAX_STEPS: ClassVar[int] = 300
 
     # Agent 派生（委派、fork）的最大深度：深度达到它的 Session 创建时不给派生工具
-    # （``core.tool.session_tool_scope``）。只影响之后新建的 Session，已建出的 Session 工具面不变。
+    # （``core.tool.multi_agent.session_tool_scope``）。只影响之后新建的 Session，已建出的 Session 工具面不变。
     AGENT_MAX_DERIVATION_DEPTH: ClassVar[int] = 2
 
     # 内置浏览器的标签上限：每个 Session 与全进程。宿主不存配置，后端每次请求新建标签时随参数带过去，
     # 所以保存配置后下一次工具调用即生效；调小不关闭已有标签。
     BROWSER_MAX_TABS_PER_SESSION: ClassVar[int] = 5
     BROWSER_MAX_TABS: ClassVar[int] = 20
+
+    # Firecrawl（web_search / web_fetch 的服务）：Key 与自建服务地址，两者都空即未配置。客户端每次请求现读，
+    # 所以在配置中心保存后下一次调用即生效。
+    FIRECRAWL_API_KEY: ClassVar[str] = ""
+    FIRECRAWL_API_URL: ClassVar[str] = ""
 
     # 记录由系统配置文件注入的值，使配置中心能够与桌面宿主/启动器提供的进程环境区分。
     _LOADED_ENV_VALUES: ClassVar[dict[str, str]] = {}
@@ -170,3 +175,5 @@ class Settings:
         cls.AGENT_MAX_DERIVATION_DEPTH = cls._env_positive_int("AGENT_MAX_DERIVATION_DEPTH", 2)
         cls.BROWSER_MAX_TABS_PER_SESSION = cls._env_positive_int("BROWSER_MAX_TABS_PER_SESSION", 5)
         cls.BROWSER_MAX_TABS = cls._env_positive_int("BROWSER_MAX_TABS", 20)
+        cls.FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "").strip()
+        cls.FIRECRAWL_API_URL = os.environ.get("FIRECRAWL_API_URL", "").strip()

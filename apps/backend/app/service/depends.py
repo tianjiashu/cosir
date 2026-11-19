@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from app.assistant_transport.service.conversation_state_service import (
         ConversationStateService,
     )
+    from app.assistant_transport.service.user_input_service import UserInputService
     from app.core.workflow.message_queue.session_message_queue import SessionMessageQueue
     from app.core.workflow.run_ledger import RunLedger
     from app.service.conversation.session_context_service import (
@@ -35,9 +36,8 @@ if TYPE_CHECKING:
     from app.service.model_config import ModelConfigService
     from app.service.model_config.model_discovery_service import ModelDiscoveryService
     from app.service.recover_service import RecoverService
-    from app.service.session.session_service import SessionService
     from app.service.session.session_feed import SessionFeed
-    from app.assistant_transport.service.user_input_service import UserInputService
+    from app.service.session.session_service import SessionService
     from app.service.workspace.workspace_service import WorkspaceService
     from app.service.workspace_files.file_watch import WorkspaceFileWatcher
     from app.service.workspace_files.workspace_files_service import WorkspaceFilesService

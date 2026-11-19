@@ -72,9 +72,6 @@ def test_base_delegate_definition_does_not_freeze_candidates(
     assert "Available child agents" not in payload["description"]
     assert "enum" not in child_property
     assert "{ids}" not in child_property["description"]
-    # 同回复内并行委派仍是工具调用契约：delegate_task 声明工具级并行；结论逐条以消息回投，
-    # 等待由 wait_messages 挂起承担，不再需要「同一回复里批量等待」的提示。
-    assert base_delegate_definition.parallel_mode == "parallel"
 
 
 def test_workspace_profiles_do_not_cross_workspace_boundaries(

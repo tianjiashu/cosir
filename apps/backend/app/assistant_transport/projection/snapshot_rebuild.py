@@ -2,7 +2,7 @@
 
 与实时投影（``event_projection``）同源：回合、回复 id、结局与 ``activity`` 的规则两边一致，刷新后的
 快照与实时推进出的快照同形。这里不访问 Session、快照存储、工具或进程内 registry；终端会话、看板、
-前台等待、交接与排队消息含进程内或队列事实，由 state service 在重建后填入。
+前台等待与排队消息含进程内或队列事实，由 state service 在重建后填入。
 """
 
 from __future__ import annotations
@@ -43,6 +43,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
     empty_snapshot,
 )
 from app.assistant_transport.state.message_identity import reply_id, user_message_id
+from app.core.context.final_reply import CommittedResponse, final_reply_sequences
 from app.core.tool.call_intent import display_call_arguments
 from app.core.tool.presentation import ToolPresentation
 from app.models.conversation_input import MessageSource, UserInputPresentation
@@ -149,6 +150,8 @@ def rebuild_snapshot(
     runs: Sequence[RunRecord],
     context_rows: Sequence[SessionContextRecord],
     presentations: Mapping[str, ToolPresentation],
+    *,
+    reply_tools: frozenset[str] = frozenset(),
 ) -> ConversationStateSnapshot:
     """从 Session、它的全部 Run 与 context 行装配 Session 级快照。
 
@@ -179,7 +182,7 @@ def rebuild_snapshot(
     for run in runs:
         rows = run_groups.get(run.id, [])
         run_messages = _turn_messages(
-            rows, presentations, inherited=False, final_sequence=_final_sequence(run, rows)
+            rows, presentations, inherited=False, final_sequences=_final_sequences(run, rows, reply_tools)
         )
         messages.extend(run_messages)
         last_reply = next((m for m in reversed(run_messages) if m["role"] == "assistant"), None)
@@ -226,26 +229,26 @@ def rebuild_snapshot(
     return snapshot
 
 
-def _final_sequence(
-    run: RunRecord, rows: list[SessionContextRecord]
-) -> int | None:
-    """这个 Run 的最终回复正文所在的 context 序号；最后一条已提交的回复带工具调用或不算最终回复时为空。"""
+def _final_sequences(
+    run: RunRecord, rows: list[SessionContextRecord], reply_tools: frozenset[str]
+) -> frozenset[int]:
+    """这个 Run 最终回复所在的 context 序号（与模型节点同一规则，见 ``core/context/final_reply``）；
+    Run 没有正常结束、或最终回复全是空正文时为空。"""
 
     committed = [
         row
         for row in rows
         if row.project_to_transport and row.include_in_context and row.message["role"] == "assistant"
     ]
-    if not committed:
-        return None
-    last = committed[-1]
-    if last.message.get("tool_calls") or not is_final_reply(
-        run.status,
-        cast(AssistantMessageMetadata, last.metadata).finish_reason,
-        content_to_text(last.message.get("content")),
-    ):
-        return None
-    return last.sequence
+    sequences = final_reply_sequences(
+        [CommittedResponse.from_message(row.sequence, row.turn, row.message) for row in committed], reply_tools
+    )
+    if not sequences:
+        return frozenset()
+    texts = "".join(content_to_text(row.message.get("content")) for row in committed if row.sequence in sequences)
+    if not is_final_reply(run.status, cast(AssistantMessageMetadata, committed[-1].metadata).finish_reason, texts):
+        return frozenset()
+    return frozenset(sequences)
 
 
 def _turn_messages(
@@ -253,7 +256,7 @@ def _turn_messages(
     presentations: Mapping[str, ToolPresentation],
     *,
     inherited: bool,
-    final_sequence: int | None = None,
+    final_sequences: frozenset[int] = frozenset(),
 ) -> list[ConversationStateMessage]:
     """把一个 Run（``inherited`` 时是继承来的历史）的 context 行按回合投影为消息。
 
@@ -314,7 +317,7 @@ def _turn_messages(
                     )
             elif row_message["role"] == "assistant":
                 _append_assistant_parts(
-                    reply, row_message, tool_parts, row.sequence, row.sequence == final_sequence
+                    reply, row_message, tool_parts, row.sequence, row.sequence in final_sequences
                 )
         if reply["parts"] or opened_by_input:
             turn_messages.append(reply)

@@ -1,6 +1,5 @@
 """``terminal_stop`` handler：停止 Agent 自己仍在运行的 ``execute_terminal`` 命令。"""
 
-from typing import ClassVar
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -42,7 +41,6 @@ class TerminalStopTool(HandlerBase):
         "user opened cannot be stopped."
     )
     args_model = TerminalStopArgs
-    timeout_seconds: ClassVar[float] = Constant.Terminal.COMMAND_STOP_WAIT_SECONDS + 5
     group = TOOL_GROUP_TERMINAL
 
     def execute(
@@ -108,7 +106,4 @@ class TerminalStopTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("shell",),
-            execution_mode="thread",
         )

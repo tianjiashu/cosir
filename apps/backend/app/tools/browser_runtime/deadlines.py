@@ -19,8 +19,6 @@ HOST_DEADLINES: Final[dict[str, float]] = {
 }
 # 链路往返的余量：后端比宿主多等这么多，宿主的答复（包括超时答复）总能先到，模型拿得到做到了哪一步。
 _LINK_MARGIN_SECONDS = 5.0
-# 工具线程自己的收尾（如截图存成附件）。
-_TOOL_MARGIN_SECONDS = 10.0
 
 
 def host_timeout(method: str) -> float:
@@ -28,8 +26,3 @@ def host_timeout(method: str) -> float:
 
     return HOST_DEADLINES[method] + _LINK_MARGIN_SECONDS
 
-
-def tool_timeout(*methods: str) -> float:
-    """工具的执行时限：一次执行里依次调用的这些方法的等待时限之和，再加工具自己收尾的余量。"""
-
-    return sum(host_timeout(method) for method in methods) + _TOOL_MARGIN_SECONDS

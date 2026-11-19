@@ -116,7 +116,6 @@ class FindFilesTool(HandlerBase):
                 path=path,
                 files=paths,
                 offset=offset,
-                limit=limit,
                 match_count=page.total_files,
             ),
         )
@@ -130,15 +129,10 @@ class FindFilesTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("filesystem",),
-            execution_mode="thread",
-            # 只读、彼此独立：模型一次发出的多个读取真正并发执行（见 tool_batch_runner）。
-            parallel_mode="parallel",
         )
 
 
 def build_find_files_definition() -> ToolDefinition:
     """构造 find_files 的注册定义。"""
 
-    return FindFilesTool().to_definition_if_avaliable()
+    return FindFilesTool().to_definition()

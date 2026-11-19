@@ -14,6 +14,7 @@ from app.models import (
 )
 from app.models.enums.run_status import RunTransition
 from app.service import depends as service_depends
+from app.service.session.session_scratch import reclaim_orphan_scratch
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.storage.store_engines import main_db_factory
 
@@ -57,6 +58,7 @@ class RecoverService:
         3. 被收敛的 Run 留下的提问作废；把重启前还在等结果的占位推到「已中断」，再给受影响的
            Session 各投一条重启通知：它只唤醒挂起的 Run（在 ``wait_messages`` 上等的工作已经没了，
            不叫醒就一直挂着），不开新 Run，空闲的 Session 随下次驱动并入。
+        4. 回收已不存在的会话留下的临时目录（与前三步无依赖，放最后）。
         """
 
         recovered_runs = self.recover_orphaned_runs()
@@ -78,6 +80,8 @@ class RecoverService:
             interrupted.setdefault(session_id, set()).update(calls)
         interrupted_session_ids = set(interrupted)
         self.notify_interrupted(interrupted)
+        # 4. 删掉已不存在的会话留下的临时目录（上次没删完或删除失败的）；后台线程执行，不拖慢启动。
+        reclaim_orphan_scratch(service_depends.get_session_service().existing_session_ids)
         log.info(
             "backend_restart_recovered",
             extra={

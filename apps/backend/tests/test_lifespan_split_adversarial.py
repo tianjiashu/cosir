@@ -721,7 +721,7 @@ def stubbed_lifespan(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         return _stub
 
     monkeypatch.setattr(
-        lifespan_module, "install_logging_for_current_process", record("install_logging")
+        lifespan_module, "configure_logging", record("install_logging")
     )
     monkeypatch.setattr(lifespan_module, "shutdown_logging", _shutdown_logging_stub(recorder))
     monkeypatch.setattr(lifespan_module.Settings, "load", staticmethod(record("settings_load")))

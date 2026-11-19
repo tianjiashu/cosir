@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 from mcp import types
+from pydantic import BaseModel, Field
 
 from app.config.configuration import get_tool_registry
 from app.core.tool.schemas import ToolExecutionContext
@@ -119,6 +120,47 @@ def test_registered_tools_are_strict_and_survive_session_json_snapshot():
         Draft202012Validator.check_schema(function["parameters"])
         _assert_strict_schema(function["parameters"])
         assert tool.normalized().to_model_tool_definition() == function
+
+
+def _schema_annotation_titles(schema) -> list[str]:
+    """收集 schema 节点自身的 title 注解；``properties`` / ``$defs`` 的键是名字，不算注解。"""
+    found: list[str] = []
+    if isinstance(schema, dict):
+        if isinstance(schema.get("title"), str):
+            found.append(schema["title"])
+        for key, value in schema.items():
+            if key in ("properties", "$defs") and isinstance(value, dict):
+                for child in value.values():
+                    found.extend(_schema_annotation_titles(child))
+            elif key != "title":
+                found.extend(_schema_annotation_titles(value))
+    elif isinstance(schema, list):
+        for value in schema:
+            found.extend(_schema_annotation_titles(value))
+    return found
+
+
+@pytest.mark.usefixtures("backend_env")
+def test_registered_tool_schemas_carry_no_pydantic_titles():
+    """title 只是字段名或类名的人读形式，对模型没有信息量，统一出口不发出。"""
+    for tool in get_tool_registry().get_all_definitions():
+        assert _schema_annotation_titles(tool.to_model_tool_definition()["parameters"]) == [], tool.name
+
+
+def test_title_stripping_keeps_business_field_named_title():
+    class Nested(BaseModel):
+        title: str = Field(description="Business field that happens to be named title.")
+
+    class Args(BaseModel):
+        title: str = Field(description="Top-level business field named title.")
+        items: list[Nested]
+
+    schema = strict_parameters_schema(Args)
+    assert _schema_annotation_titles(schema) == []
+    assert schema["properties"]["title"]["description"] == "Top-level business field named title."
+    assert set(schema["required"]) == {"title", "items"}
+    nested = schema["$defs"]["Nested"]
+    assert "title" in nested["properties"] and nested["required"] == ["title"]
 
 
 def test_default_fields_are_required_in_model_request_without_changing_local_defaults():

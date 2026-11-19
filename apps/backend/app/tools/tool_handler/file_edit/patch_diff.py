@@ -146,44 +146,11 @@ def _count_removed(diff: str) -> int:
     )
 
 
-def build_diff_stats(results: list[FileDiffResult]) -> dict:
-    """汇总多个文件的 diff 统计。
+def count_diff_lines(result: FileDiffResult) -> tuple[int, int]:
+    """返回一个文件这次修改的 ``(新增行数, 删除行数)``，不含 diff 头与 ``@@`` 提示。
 
-    参数:
-        results: 各文件的 before/after 快照与状态。
-
-    返回:
-        结构化统计字典：``total_files`` / ``total_insertions`` / ``total_deletions`` /
-        ``files[]``（``path`` / ``status`` / ``insertions`` / ``deletions``）。``insertions`` 计
-        ``+`` 行数，``deletions`` 计 ``-`` 行数（均不含 ``@@`` 与上下文行）。
-
-    异常:
-        无。
-
-    副作用:
-        无。
+    展示数据只逐文件带计数，总数由客户端逐项相加：不另下发汇总，同一事实不出现第二个来源。
     """
 
-    files: list[dict] = []
-    total_insertions = 0
-    total_deletions = 0
-    for result in results:
-        diff = format_unified_diff(result.before, result.after, result.path)
-        insertions = _count_added(diff)
-        deletions = _count_removed(diff)
-        files.append(
-            {
-                "path": result.path,
-                "status": result.status,
-                "insertions": insertions,
-                "deletions": deletions,
-            }
-        )
-        total_insertions += insertions
-        total_deletions += deletions
-    return {
-        "total_files": len(results),
-        "total_insertions": total_insertions,
-        "total_deletions": total_deletions,
-        "files": files,
-    }
+    diff = format_unified_diff(result.before, result.after, result.path)
+    return _count_added(diff), _count_removed(diff)

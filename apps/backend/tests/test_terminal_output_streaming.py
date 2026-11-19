@@ -37,7 +37,6 @@ from app.core.events import (
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
-from app.core.workflow.node_helper.tool_batch_runner import run_tool_batch
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
 from app.models.session_extra import SessionExtra
@@ -47,7 +46,7 @@ from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal.live_output_channel import LiveOutputChannel
-from tests.runtime_context_stub import runtime_stub
+from tests.runtime_context_stub import run_batch, runtime_stub
 from tests.tool_output_support import truncated_artifact_path
 from tests.transport_fixtures import consumed
 
@@ -326,7 +325,7 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
 
 @pytest.mark.asyncio
 async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Path) -> None:
-    """``run_tool_batch`` 在事件循环线程按批次构造执行边界，工具执行发生在循环线程之外。
+    """tools 节点在事件循环线程按批次构造执行边界，工具执行发生在循环线程之外。
 
     通道本身由 ``execute_terminal`` 在工具执行线程按 ``event_loop`` / ``event_sink`` 创建；本用例
     守住这两项与 Run / step 事实确实由批次入口从 ``RuntimeContext`` 取得并透传。
@@ -358,7 +357,7 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
         tool_executor=Executor(),
         admitted_tools=frozenset({"execute_terminal"}),
         tool_definitions={
-            "execute_terminal": SimpleNamespace(parallel_mode="serial", user_decision=False)
+            "execute_terminal": SimpleNamespace(user_decision=False)
         },
         run=SimpleNamespace(id=9, session_id=7),
         session=SimpleNamespace(id=7, extra=SessionExtra()),
@@ -367,12 +366,9 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
         event_sink=sink,
     )
 
-    from app.core.workflow.node_helper.common import execution_scope
-
-    with execution_scope(rc, SimpleNamespace()):
-        observations = await run_tool_batch(
-            rc, [ToolCall(tool_name="execute_terminal", arguments="{}", call_id="call-1")], "step-1"
-        )
+    observations = await run_batch(
+        rc, [ToolCall(tool_name="execute_terminal", arguments="{}", call_id="call-1")]
+    )
 
     assert len(observations) == 1
     [context] = received

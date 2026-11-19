@@ -45,7 +45,6 @@ class SkillTool(HandlerBase):
         "scripts, run it with execute_terminal."
     )
     args_model = SkillArgs
-    timeout_seconds = 10.0
     group = TOOL_GROUP_SKILL
 
     def execute(
@@ -114,8 +113,6 @@ class SkillTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("skill", "filesystem"),
         )
 
 

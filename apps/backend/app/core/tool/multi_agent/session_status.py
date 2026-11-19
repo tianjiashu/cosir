@@ -1,7 +1,7 @@
 """session_status 工具：读取自己派生的 Session（委派子 Agent、Agent fork）当前 Run 的状态与最终输出。"""
 
 import json
-from typing import Any, ClassVar
+from typing import Any
 
 from app.core.tool.multi_agent.args.session_status_args import SessionStatusArgs
 from app.core.tool.results.tool_error import tool_error
@@ -30,7 +30,6 @@ class SessionStatusTool(HandlerBase):
         "already finished, instead of waiting."
     )
     args_model: type[SessionStatusArgs] = SessionStatusArgs
-    timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_CHILD_AGENT
 
     def __init__(self) -> None:
@@ -112,8 +111,6 @@ class SessionStatusTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            execution_mode="thread",
         )
 
 def build_session_status_definition() -> ToolDefinition:

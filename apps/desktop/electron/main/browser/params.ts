@@ -52,7 +52,8 @@ export type ScreenshotRequest = TabRequest & { fullPage: boolean; ref?: string; 
 export type TabsRequest = TabRequest & { action: "list" | "select" | "close" };
 /** 列一页日志，或按序号读一条网络请求的响应体（`body`，后端已保证其余过滤条件为空）。 */
 export type LogsRequest = TabRequest & ({ query: LogQuery } | { body: number });
-export type EvaluateRequest = TabRequest & { expression: string };
+/** `ref`：在快照里的这个元素上执行（表达式里用 `el`）。 */
+export type EvaluateRequest = TabRequest & { expression: string; ref?: string };
 
 /** `ControlOrMeta` 在 macOS 上是 Meta、其他平台是 Control（与 Playwright 同名约定），模型不必知道宿主平台。 */
 export type Modifier = "Alt" | "Control" | "Meta" | "Shift" | "ControlOrMeta";
@@ -131,7 +132,8 @@ export function parseLogs(params: unknown): LogsRequest {
 
 export function parseEvaluate(params: unknown): EvaluateRequest {
   const { request, args } = toolRequest("browser_evaluate", params);
-  return { ...request, expression: args.expression as string };
+  const ref = given(args.ref as string | null);
+  return { ...request, expression: args.expression as string, ...(ref ? { ref } : {}) };
 }
 
 export function parseDropSessions(params: unknown): number[] {

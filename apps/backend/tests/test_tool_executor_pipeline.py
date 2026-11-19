@@ -4,7 +4,7 @@
 - ``ToolAccessGate`` 三段准入（注册表命中 / Agent profile 门禁 / 参数校验）
 - ``ToolExecutor`` 编排（成功执行 / 拒绝归一化 / list_tools）
 - running 事件只在真正交给 handler 前由执行器发出一次；门禁拒绝与 stale 拦截不发
-- 拒绝观察一律经 ``ToolObservationBudget`` 治理（模型通道长度限制与截断口径和成功路径一致）
+- 拒绝观察一律经 ``ToolOutputBudget`` 治理（模型通道长度限制与截断口径和成功路径一致）
 """
 
 from collections.abc import Collection
@@ -16,11 +16,9 @@ import pytest
 
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.execute.tool_executor import ToolExecutor
-from app.core.tool.execute.tool_observation_budget import ToolObservationBudget
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.schemas import (
     ToolCall,
-    ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
 )
@@ -84,12 +82,13 @@ def _execute(
 ) -> ToolObservation:
     """以「全部已注册工具都准入」为默认值调用执行器，用例只覆盖它关心的参数。
 
-    与生产调用方 ``run_tool_batch`` 一致，按调用把 ``tool_call_id`` 特化进执行上下文：
+    与生产调用方 tools 节点一致，按调用把 ``tool_call_id`` 特化进执行上下文：
     执行器信任二者一致，成功观察的 ``tool_call_id`` 取自执行上下文。
     """
 
     if allowed_tool_names is None:
-        allowed_tool_names = set(executor._registry.get_all_tool_names())
+        # 本文件的执行管线只注册了 read_file（见 ``_make_executor``）。
+        allowed_tool_names = {"read_file"}
     return executor.execute(
         call,
         execution_context=replace(execution_context, tool_call_id=call.call_id),
@@ -136,7 +135,7 @@ def test_observation_budget_keeps_display_data_complete() -> None:
         display_data={"kind": "file-changes", "changes": [{"patch": patch}]},
     )
 
-    result = ToolObservationBudget().apply(observation, execution_context=None)
+    result = ToolOutputBudget().apply(observation, execution_context=None)
 
     assert result.display_data == observation.display_data
 
@@ -237,6 +236,7 @@ def test_file_write_executes_without_change_tracking_service(tmp_path: Path) -> 
             call_id="call-write-without-service",
         ),
         _make_context(tmp_path),
+        allowed_tool_names={"write_file"},
     )
 
     assert observation.status == "success"
@@ -248,20 +248,15 @@ def test_denial_observation_passes_through_budget(
 ) -> None:
     """拒绝观察也应过同一道预算：把预算压到极小后 content 被截断。"""
 
-    monkeypatch.setattr(
-        "app.core.tool.execute.tool_output_budget.ToolOutputBudget.apply",
-        lambda self, observation, context: observation,
-    )
     observed: dict[str, Any] = {}
-    original_apply = ToolObservationBudget.apply
 
     def _spy_apply(
-        self: ToolObservationBudget, observation: ToolObservation, context: Any
+        self: ToolOutputBudget, observation: ToolObservation, context: Any
     ) -> ToolObservation:
         observed["called"] = True
-        return original_apply(self, observation, context)
+        return observation
 
-    monkeypatch.setattr(ToolObservationBudget, "apply", _spy_apply)
+    monkeypatch.setattr(ToolOutputBudget, "apply", _spy_apply)
 
     executor = _make_executor(tmp_path)
     _execute(
@@ -274,7 +269,7 @@ def test_denial_observation_passes_through_budget(
 
 
 def test_gate_evaluate_unknown_tool(tmp_path: Path) -> None:
-    """直接调用门禁：未注册工具返回 denial 且 admitted=False。"""
+    """直接调用门禁：未注册工具返回 denial。"""
 
     from app.core.tool.execute.tool_access_gate import ToolAccessGate
 
@@ -283,20 +278,11 @@ def test_gate_evaluate_unknown_tool(tmp_path: Path) -> None:
     outcome = gate.evaluate(
         ToolCall(tool_name="ghost", arguments='{"intent": "验证工具行为"}', call_id="call-8"),
         _make_context(tmp_path),
+        {"read_file"},
     )
 
-    assert outcome.admitted is False
     assert outcome.tool is None
     assert outcome.denial is not None
-
-
-def test_tool_definition_contract(tmp_path: Path) -> None:
-    """read_file 的定义应保持 thread 隔离模式（合并后契约不变）。"""
-
-    definition: ToolDefinition = ReadFileTool().to_definition()
-
-    assert definition.execution_mode == "thread"
-    assert definition.timeout_seconds == 10.0
 
 
 @pytest.fixture(autouse=True)
@@ -319,16 +305,14 @@ def test_running_emitted_once_before_handler(
 ) -> None:
     """成功路径上执行器恰好发出一次 running，且早于 handler 运行。"""
 
-    from app.core.tool.execute.tool_handler_runner import ToolHandlerRunner
-
     order: list[str] = []
-    original_execute = ToolHandlerRunner.execute
+    original_run = ToolExecutor._run_handler
 
-    def _spy_execute(self: ToolHandlerRunner, *args: Any, **kwargs: Any) -> ToolObservation:
+    def _spy_run(self: ToolExecutor, *args: Any, **kwargs: Any) -> ToolObservation:
         order.append("handler")
-        return original_execute(self, *args, **kwargs)
+        return original_run(self, *args, **kwargs)
 
-    monkeypatch.setattr(ToolHandlerRunner, "execute", _spy_execute)
+    monkeypatch.setattr(ToolExecutor, "_run_handler", _spy_run)
     _record_running(order, monkeypatch)
     executor = _make_executor(tmp_path)
     observation = _execute(

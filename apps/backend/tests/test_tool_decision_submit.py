@@ -92,7 +92,7 @@ def test_claimed_call_is_no_longer_awaiting(awaiting) -> None:
 
 
 def test_concurrent_submissions_enqueue_exactly_one(awaiting, monkeypatch: pytest.MonkeyPatch) -> None:
-    """用户交还与运行时代为落定同时提交：判定与入队在一个写事务里，后到的一方看到已提交。"""
+    """两次决定同时提交：判定与入队在一个写事务里，后到的一方看到已提交。"""
     queue = depends.get_session_message_queue()
     original = queue.pending_nowait
     first_checked = threading.Event()

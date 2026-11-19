@@ -27,11 +27,6 @@ BROWSER_ERRORS: dict[str, tuple[str, str]] = {
         "and open a new one if needed.",
         "输入状态未知",
     ),
-    "HANDED_OFF": (
-        "This tab belongs to the user until they hand it back. Read-only observation "
-        "is still available.",
-        "等待用户交还",
-    ),
     "TAB_NOT_FOUND": (
         "Pass one of this session's tab ids (see browser_tabs), or open a page with browser_navigate.",
         "标签不存在",
@@ -43,7 +38,7 @@ BROWSER_ERRORS: dict[str, tuple[str, str]] = {
         "标签已满",
     ),
     "NAVIGATION_BLOCKED": (
-        "Only web pages (http, https) and local files can be opened.",
+        "Use an http(s) URL, or an absolute path or file:// URL for a local file.",
         "地址被拦截",
     ),
     "NAVIGATION_FAILED": (
@@ -56,12 +51,12 @@ BROWSER_ERRORS: dict[str, tuple[str, str]] = {
         "页面无响应",
     ),
     "USER_ACTIVE": (
-        "Wait a few seconds and try again, or use browser_handoff if the user should finish it.",
+        "Wait a few seconds and try again, or ask the user to finish it and tell you.",
         "用户正在操作",
     ),
     "DIALOG_OPEN": (
-        "Answer it first with a browser_act dialog action on the tab showing it, using the dialog "
-        "id given above; if that tab is not one of this session's tabs, wait for the user to answer "
+        "Answer it first with a browser_act dialog action on the tab showing it, using its dialog "
+        "id; if that tab is not one of this session's tabs, wait for the user to answer "
         "it.",
         "页面有弹窗",
     ),
@@ -123,4 +118,6 @@ def browser_error_observation(tool_name: str, error: HostCallError) -> ToolObser
     if known is None:
         return host_error_observation(tool_name, error)
     advice, hint = known
-    return tool_error(tool_name, f"{error.message}. {advice}", status_hint=hint)
+    # 带上错误码，与 browser_act 停在某一步时的写法一致；宿主的消息可能自带句号。
+    message = error.message.rstrip(".")
+    return tool_error(tool_name, f"{error.code}: {message}. {advice}", status_hint=hint)

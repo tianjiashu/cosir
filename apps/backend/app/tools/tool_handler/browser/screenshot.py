@@ -1,33 +1,27 @@
 """``browser_screenshot``：截取标签页画面，经工具图片通道交给模型看。"""
 
 import base64
-from typing import Any, ClassVar
+from typing import Any
 
 from app.config.logging.logger import log
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_BROWSER_SCREENSHOT,
-    ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_BROWSER
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.attachment.image_normalizer import ImageNormalizationError
-from app.tools.browser_runtime.browser_call import call_browser
-from app.tools.browser_runtime.deadlines import tool_timeout
 from app.tools.display.browser_display import (
     build_browser_page_display_data,
 )
-from app.tools.host.errors import HostCallError
-from app.tools.tool_handler.browser.errors import browser_error_observation
+from app.tools.tool_handler.browser.browser_tool import BrowserTool
 from app.tools.tool_handler.browser.rendering import screenshot_text
 from app.tools.tool_models import BrowserScreenshotArgs
 
 
-class BrowserScreenshotTool(HandlerBase):
+class BrowserScreenshotTool(BrowserTool):
     """截图存进工作区附件目录（与用户上传同一套规则），以 ``images`` 交给工具图片通道。
 
     模型看不了图片时由准入门禁按 ``returns_images`` 统一拒绝，这里不再判断。
@@ -46,8 +40,8 @@ class BrowserScreenshotTool(HandlerBase):
         "possible while the page shows a dialog; answer it first."
     )
     args_model = BrowserScreenshotArgs
-    timeout_seconds: ClassVar[float] = tool_timeout("browser.screenshot")
-    group = TOOL_GROUP_BROWSER
+    method = "browser.screenshot"
+    returns_images = True
 
     def execute(
         self,
@@ -58,17 +52,27 @@ class BrowserScreenshotTool(HandlerBase):
         *,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-        try:
-            shot = call_browser(
-                "browser.screenshot",
-                execution_context,
-                tab=tab,
-                full_page=full_page,
-                ref=ref,
-                region=region,
-            )
-        except HostCallError as error:
-            return browser_error_observation(self.name, error)
+        return self.call(
+            execution_context,
+            lambda shot: self._attach(
+                shot, execution_context, ref=ref, region=region is not None, full_page=full_page
+            ),
+            tab=tab,
+            full_page=full_page,
+            ref=ref,
+            region=region,
+        )
+
+    def _attach(
+        self,
+        shot: dict[str, Any],
+        execution_context: ToolExecutionContext,
+        *,
+        ref: str | None,
+        region: bool,
+        full_page: bool,
+    ) -> ToolObservation:
+        """截图存成工作区附件，作为工具图片交给模型。"""
         data = screenshot_bytes(shot)
         try:
             saved = AttachmentService().save_image(
@@ -89,25 +93,11 @@ class BrowserScreenshotTool(HandlerBase):
             )
         return tool_success(
             self.name,
-            screenshot_text(shot, ref, region is not None),
+            screenshot_text(shot, ref=ref, region=region, full_page=full_page),
             display_data=build_browser_page_display_data(
                 shot, screenshot=saved.descriptor.asset_id
             ),
             images=[saved.path],
-        )
-
-    def to_definition(self) -> ToolDefinition:
-        return ToolDefinition(
-            name=self.name,
-            group=self.group,
-            description=self.description,
-            handler=self.execute,
-            args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("browser",),
-            execution_mode="thread",
-            parallel_mode="serial",
-            returns_images=True,
         )
 
 

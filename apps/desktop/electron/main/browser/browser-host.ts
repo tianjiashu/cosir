@@ -204,7 +204,7 @@ export class BrowserHost implements BrowserSessionEvents {
   async evaluate(request: EvaluateRequest, signal: AbortSignal): Promise<EvaluateResult> {
     const entry = this.agentEntry(request);
     return this.operate(entry, signal, async (tab, scoped) => {
-      const outcome = await tab.modify(scoped, (operation) => tab.evaluate(request.expression, operation));
+      const outcome = await tab.modify(scoped, (operation) => tab.evaluate(request.expression, request.ref, operation));
       return { ...this.head(tab), ...outcome };
     });
   }
@@ -519,7 +519,8 @@ export class BrowserHost implements BrowserSessionEvents {
 
   /**
    * 页面自己关掉了（`window.close()`，常见于弹窗式登录完成、弹出页下载之后）：注销，并把它还没交给 Agent 的备注
-   * （如下载结果）转给来源标签——没有来源时给 Session 的当前标签——不随标签一起消失。
+   * （如下载结果）转给来源标签——没有来源时给 Session 的当前标签——不随标签一起消失。落定结论（`SettleNotes`）不转：
+   * 它说的是这个已经不存在的页面。
    */
   private gone(tab: BrowserTab): void {
     if (this.tabs.get(tab.tabId)?.tab !== tab) return;
@@ -708,8 +709,8 @@ export class BrowserHost implements BrowserSessionEvents {
   }
 
   /**
-   * 页面结果：页头、按请求的视图呈现的快照，以及「上次以来」——这里是它唯一的消费点（日志的 `digest` 与快照的比对
-   * 基准 `deliver` 都在这里推进）。`changes`（act 之后）只给与上次结果相比的增量，比不了或变化太多时给整页。
+   * 页面结果：页头、按请求的视图呈现的快照，以及「上次以来」——这里是它唯一的消费点（日志的 `digest`、落定结论
+   * `settleNotes.take` 与快照的比对基准 `deliver` 都在这里推进）。`changes`（act 之后）只给与上次结果相比的增量，比不了或变化太多时给整页。
    * 页面正文不推进比对基准：模型这次没看到 ref，下一次 act 仍与上一次交出去的大纲比。
    */
   private result(tab: BrowserTab, page: PageSnapshot | PageTextRead, signal: AbortSignal, view: SnapshotView & { changes?: boolean } = {}): PageResult {
@@ -718,11 +719,13 @@ export class BrowserHost implements BrowserSessionEvents {
     const shown = "outline" in page
       ? page.outline && { snapshot: this.snapshotText(tab, page.outline, view), frames: page.outline.frames }
       : page.text && { snapshot: pageTextView(page.text, view), frames: page.text.frames };
+    const digest = tab.log.digest();
     return {
       ...this.head(tab),
       snapshot: shown?.snapshot ?? "",
       frames: shown?.frames ?? 0,
-      ...tab.log.digest(),
+      ...digest,
+      notes: [...digest.notes, ...tab.settleNotes.take(tab.log)],
       otherTabs: this.siblingTabIds(tab),
       dialog: page.dialog,
     };

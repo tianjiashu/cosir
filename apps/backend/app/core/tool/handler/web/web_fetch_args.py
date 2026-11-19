@@ -1,7 +1,7 @@
 """web_fetch 工具的参数模型。
 
-``urls`` 的模型可见长度上限取自 ``Constant.Web.FETCH_URL_LIMIT_MAX``（导入期求值，属固定
-契约，不经环境变量覆盖）；handler 侧用同一常量做运行期二次校验，两处口径同源。
+``urls`` 的长度上限取自 ``Constant.Web.FETCH_URL_LIMIT_MAX``（导入期求值，属固定契约，不经环境变量
+覆盖），只在这里校验一次。
 """
 
 from typing import Literal

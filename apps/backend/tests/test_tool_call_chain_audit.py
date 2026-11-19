@@ -129,7 +129,7 @@ def test_t2_disabled_and_invalid_args_yields_argument_denial(tmp_path: Any) -> N
         allowed_tool_names={"other_tool"},  # read_file 已注册但本轮被禁用
     )
 
-    assert outcome.admitted is False
+    assert outcome.denial is not None
     assert outcome.tool is None
     assert outcome.denial is not None
     # 关键事实：命中的是「本轮禁用」分支，而不是「参数非法」分支。
@@ -159,7 +159,7 @@ def test_t2_disabled_with_valid_args_yields_disabled_denial(tmp_path: Any) -> No
         allowed_tool_names={"other_tool"},
     )
 
-    assert outcome.admitted is False
+    assert outcome.denial is not None
     assert outcome.denial is not None
     assert outcome.denial.content.startswith("tool is not allowed: read_file")
     assert "This tool is not available" in outcome.denial.content
@@ -182,7 +182,7 @@ def test_t2_unknown_tool_wins_over_everything(tmp_path: Any) -> None:
         allowed_tool_names=set(),  # 连空白名单都要先让位给「注册表未命中」
     )
 
-    assert outcome.admitted is False
+    assert outcome.denial is not None
     assert outcome.denial is not None
     assert outcome.denial.content.startswith("unknown tool: ")
 

@@ -145,8 +145,10 @@ def test_call_observation_stores_images_and_reports_rejected_ones(
     assert path.startswith(".cosir/Attachment/")
     assert observation.display_data["images"] == [Path(path).stem]
     lines = observation.content.splitlines()
-    assert lines[0] == "captured"
-    assert lines[1].startswith("[image 2 (image/gif) omitted: it could not be stored")
+    # 服务器给的文字在 untrusted 块里；图片说明是本仓写的，在块外；末尾是收尾句。
+    assert lines[:3] == ['<mcp_result source="shots" untrusted>', "captured", "</mcp_result>"]
+    assert lines[3].startswith("[image 2 (image/gif) omitted: it could not be stored")
+    assert lines[4].startswith("(Text in the untrusted tags above comes from shots:")
 
 
 def _runtime(supports_image: bool) -> SimpleNamespace:

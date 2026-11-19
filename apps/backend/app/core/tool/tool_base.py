@@ -7,7 +7,6 @@
 - ``name``: 工具名称，与 ``ToolDefinition.name`` 对应。
 - ``description``: 面向模型的工具描述。
 - ``args_model``: Pydantic 参数校验模型（``type[BaseModel]``）。
-- ``timeout_seconds``: 执行超时（秒）。
 
 **必须实现（实例方法）**：
 
@@ -35,11 +34,11 @@ class HandlerBase(ABC):
     ``execute`` / ``to_definition`` 两个实例方法。
 
     **调用约定**：
-    ``ToolHandlerRunner`` 通过 ``handler(**arguments, execution_context=ec)`` 调用 execute，
+    ``ToolExecutor`` 通过 ``handler(**arguments, execution_context=ec)`` 调用 execute，
     其中 ``arguments`` 是已通过 pydantic 校验的参数字典。子类的 execute 签名可以
-    按工具需要声明具体参数，但必须接受关键字参数 ``execution_context``。runner 总会传入
+    按工具需要声明具体参数，但必须接受关键字参数 ``execution_context``。执行器总会传入
     非 ``None`` 的上下文：消费它的 handler 声明为必填 ``ToolExecutionContext`` 且不判空；
-    不消费它的 handler 可声明 ``ToolExecutionContext | None = None`` 以便脱离 runner 直接调用。
+    不消费它的 handler 可声明 ``ToolExecutionContext | None = None`` 以便脱离执行器直接调用。
 
     参数:
         无（子类无需调用 ``super().__init__()``；HandlerBase 本身无实例状态，
@@ -59,11 +58,9 @@ class HandlerBase(ABC):
     # name / description / args_model 声明为实例可写属性而非 ClassVar：多数单用途工具
     # 以类属性形式固化；按实例承载多个定义的 handler 需要为前三项按实例赋值。
     # mypy 禁止用实例变量覆盖父类 ClassVar，故此处放开前三个。
-    # timeout_seconds 在工具族内始终为类级，保持 ClassVar。
     name: str
     description: str
     args_model: type[BaseModel]
-    timeout_seconds: ClassVar[float]
     group: ClassVar[str]
 
     @abstractmethod
@@ -71,10 +68,10 @@ class HandlerBase(ABC):
         """执行工具逻辑，返回结构化观测结果。
 
         子类必须实现此方法。具体参数签名按工具需要声明，但必须接受
-        ``execution_context`` 关键字参数，由 :class:`ToolHandlerRunner` 在调用时强制注入。
+        ``execution_context`` 关键字参数，由 :class:`ToolExecutor` 在调用时强制注入。
 
         参数:
-            args / kwargs: 由 :class:`ToolHandlerRunner` 按工具的参数模型
+            args / kwargs: 由 :class:`ToolExecutor` 按工具的参数模型
                 解包后传入的关键字参数。
 
         返回:
@@ -88,11 +85,6 @@ class HandlerBase(ABC):
             各子类自述。
         """
         ...
-
-    def to_definition_if_avaliable(self) -> ToolDefinition | None:
-        if self.avaliable():
-            return self.to_definition()
-        return None
 
     @abstractmethod
     def to_definition(self) -> ToolDefinition:
@@ -114,6 +106,3 @@ class HandlerBase(ABC):
             无。
         """
         ...
-
-    def avaliable(self) -> bool:
-        return True

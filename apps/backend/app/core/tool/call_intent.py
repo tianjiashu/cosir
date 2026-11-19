@@ -11,13 +11,9 @@ _INTENT_SCHEMA = {
     "type": "string",
     "minLength": 1,
     "maxLength": MAX_INTENT_LENGTH,
-    # 调用行标题直接展示这句，用户多半看不到参数；写法对照 Claude Code Bash 的 description 说明。
-    "description": (
-        "A short sentence in the user's language that says what this call does and why, in "
-        "plain words the user understands without seeing the arguments: do not echo command "
-        "text, flags or file paths, and keep it brief for simple calls. Do not claim progress, "
-        "success or a result."
-    ),
+    # 每个工具都带这个字段，完整写法只在系统提示词工具层写一次（``SystemPromptBuilder`` 的
+    # intent 规则）；这里只留一句指过去，否则同一段说明随每个工具重复发出几十遍。
+    "description": "What this call does and why, for the user; follow the intent rule in your instructions.",
 }
 
 

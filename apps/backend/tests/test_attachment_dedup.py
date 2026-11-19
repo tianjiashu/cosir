@@ -39,7 +39,7 @@ async def test_upload_uses_sha256_as_asset_id_and_deduplicates_bytes(tmp_path: P
     ).hexdigest()
     assert first.asset_id == second.asset_id == expected
     assert len(list((tmp_path / ".cosir" / "Attachment").glob("*.png"))) == 1
-    assert not list((tmp_path / ".cosir" / "Attachment" / ".uploading").glob("*"))
+    assert not list((tmp_path / ".cosir" / "Attachment").glob(".*.part"))
     assert len(first.asset_id) == 64
     assert first.asset_id == first.asset_id.lower()
 
@@ -59,7 +59,7 @@ async def test_upload_resizes_image_before_publishing_final_attachment(tmp_path:
     assert uploaded.width == 8_192
     assert uploaded.height == 4_096
     assert (tmp_path / ".cosir" / "Attachment" / f"{uploaded.asset_id}.jpeg").is_file()
-    assert not list((tmp_path / ".cosir" / "Attachment" / ".uploading").glob("*"))
+    assert not list((tmp_path / ".cosir" / "Attachment").glob(".*.part"))
 
 
 async def test_upload_rejects_gif_and_webp_inputs(tmp_path: Path) -> None:

@@ -31,7 +31,7 @@ let dropNextCancelledStream = false;
 let failNextAttach = false;
 /**
  * 交互终端模拟：sessionId -> 会话数组。每个会话持有 snapshot 条目、输出缓冲（seq 递增）与已 attach 的 WS。
- * 只模拟 terminal-v2 的最小闭环（attach 续传、input 回显与短租约、resize、exit），不模拟交接；
+ * 只模拟 terminal-v2 的最小闭环（attach 续传、input 回显与短租约、resize、exit）；
  * Agent 持有输入与 shell 退出经 `__test__/terminal/*` 直接改 snapshot 条目。
  */
 const terminalSessions = new Map();

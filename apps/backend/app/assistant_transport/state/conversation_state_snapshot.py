@@ -24,10 +24,6 @@ from app.assistant_transport.state.conversation_state_deliverable import (
     validate_deliverables,
     validate_session_deliverables,
 )
-from app.assistant_transport.state.conversation_state_handoff import (
-    ConversationHandoff,
-    validate_handoffs,
-)
 from app.assistant_transport.state.conversation_state_message import (
     ConversationQueuedMessage,
     ConversationStateMessage,
@@ -104,7 +100,6 @@ class ConversationStateSnapshot(TypedDict):
     ``background_tasks`` 的历史来自持久化占位，活状态来自后台结果登记表；
     ``foreground_waits``（可转到后台的前台等待）是进程内事实，
     二者见 ``refresh_background_results``。
-    ``handoffs``（进行中的交接）也是进程内事实，见 ``refresh_handoffs``。
     ``deliverables`` 是会话交付清单（侧栏「产出」卡），由工作副本的工具 part 派生，见
     ``project_session_deliverables``。
 
@@ -123,7 +118,6 @@ class ConversationStateSnapshot(TypedDict):
     terminal_sessions: list[ConversationTerminalSession]
     background_tasks: list[ConversationBackgroundTask]
     foreground_waits: list[str]
-    handoffs: list[ConversationHandoff]
     deliverables: list[ConversationDeliverable]
 
 
@@ -138,7 +132,6 @@ def empty_snapshot(title: str = "新会话") -> ConversationStateSnapshot:
         terminal_sessions=[],
         background_tasks=[],
         foreground_waits=[],
-        handoffs=[],
         deliverables=[],
         queued_messages=[],
     )
@@ -162,7 +155,6 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
     validate_terminal_sessions(snapshot["terminal_sessions"])
     validate_background_tasks(snapshot["background_tasks"])
     validate_foreground_waits(snapshot["foreground_waits"])
-    validate_handoffs(snapshot["handoffs"])
     validate_session_deliverables(snapshot["deliverables"])
 
 
@@ -173,7 +165,7 @@ def validate_mutated(
 
     - ``append-text`` 只加长一个已有字符串，不会改变形状，不校验（流式 token 与终端输出的热路径）；
     - 只改某条消息内部（路径深入到消息之下、且不是消息 id）：只校验这条消息；
-    - 与消息无关的顶层字段（标题、当前活动、终端会话、看板、前台等待、交接）：只校验该字段；
+    - 与消息无关的顶层字段（标题、当前活动、终端会话、看板、前台等待、交付清单）：只校验该字段；
     - 其余（整条消息替换或追加、消息 id、排队消息——它们与消息共用 id 唯一性）：整份校验。
 
     读取不再校验，所以这里是快照契约在运行期的唯一守卫。
@@ -248,6 +240,7 @@ def _validate_model_activity(value: object, run_status: str) -> None:
     activity = as_shape(value, ModelActivity, "snapshot model activity")
     require_non_empty_str(activity["stepId"], "snapshot model activity stepId")
     require_one_of(activity["phase"], _MODEL_ACTIVITY_PHASES, "snapshot model activity phase")
+    require_non_empty_str(activity["startedAt"], "snapshot model activity startedAt")
     if run_status != RunStatus.RUNNING.value:
         raise ValueError("snapshot model activity requires a running run")
 
@@ -416,6 +409,5 @@ _INDEPENDENT_FIELD_VALIDATORS: dict[str, Callable[[object], None]] = {
     "terminal_sessions": validate_terminal_sessions,
     "background_tasks": validate_background_tasks,
     "foreground_waits": validate_foreground_waits,
-    "handoffs": validate_handoffs,
     "deliverables": validate_session_deliverables,
 }

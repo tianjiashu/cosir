@@ -4,16 +4,15 @@
 
 1. ``ToolCallCancellationRegistry``：键规范（session + tool_call 二元组）、跨 Session 隔离、
    清理与并发不串扰；
-2. ``ToolHandlerRunner``：工具级信号命中即中止本次调用、不误伤同批的兄弟调用、
-   不写 Session 级注册表、不投影 Transport 终态、信号释放；
+2. ``ToolExecutor``：执行中到达的取消不推翻已完成的结果、不投影 Transport 终态、
+   执行结束释放工具级信号（工具级信号只由运行中的终端命令打，命令自己轮询它中途停下）；
 
 终态投影的时序属于「执行出口」契约，本文件只断言它**不发生在执行层**：终态必须晚于
-``ToolHandlerRunner`` 的强杀与输出排空（见 ``tool_batch_runner._execute_call`` 在
+``ToolExecutor`` 返回与输出排空（见 ``tools_node._execute_call`` 在
 ``executor.execute`` 返回后经 ``terminal_event`` 发出的终态）。投影内容本身见
 ``tests/test_tool_terminal_projection.py``。
 
-本文件只验证「工具级取消」这一新增能力，run 级取消的既有契约见
-``tests/test_tool_handler_runner_cancellation.py``。
+Session 级取消的执行层契约见 ``tests/test_tool_executor_handler_call.py``。
 """
 
 from __future__ import annotations
@@ -30,16 +29,14 @@ from pydantic import BaseModel
 from app.assistant_transport.projection.event_projection import plan_event
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.execute import tool_executor as tool_executor_module
-from app.core.tool.execute import tool_handler_runner, tool_terminal_projection
+from app.core.tool.execute import tool_terminal_projection
 from app.core.tool.execute.tool_executor import ToolExecutor
-from app.core.tool.execute.tool_handler_runner import ToolHandlerRunner
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
-from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.core.workflow.node_helper import tool_batch_runner
+from app.core.workflow.nodes import tools_node
 from app.models.message_metadata import ToolMessageMetadata
 from app.models.session_extra import SessionExtra
 from tests.runtime_context_stub import runtime_stub
@@ -62,7 +59,7 @@ class _NoArgs(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 模块级 handler（spawn 子进程要求可 pickle）
+# 模块级 handler
 # ---------------------------------------------------------------------------
 
 
@@ -85,7 +82,7 @@ def _handler_marks_own_call_signal(
     execution_context: object = None,
     **_kwargs: object,
 ) -> str:
-    """执行途中给自己标记工具级取消信号后正常返回；用于覆盖 thread 模式执行后边界。"""
+    """执行途中给自己标记工具级取消信号后正常返回；用于覆盖执行后边界。"""
 
     tool_call_cancellation_registry.mark_cancelled(session_id, call_id)
     return "handler-completed"
@@ -100,8 +97,6 @@ def _make_tool(
     handler: Any,
     *,
     name: str = "probe_tool",
-    execution_mode: str = "process",
-    timeout_seconds: float = 30.0,
 ) -> ToolDefinition:
     """构造测试用 ToolDefinition。"""
 
@@ -111,9 +106,13 @@ def _make_tool(
         description="probe tool",
         handler=handler,
         args_model=_NoArgs,
-        timeout_seconds=timeout_seconds,
-        execution_mode=execution_mode,
     )
+
+
+def _run_handler(tool: ToolDefinition, arguments: dict[str, Any], context: ToolExecutionContext) -> Any:
+    """只跑执行器里调用 handler 的那一段（准入与 running 由其他用例覆盖）。"""
+
+    return ToolExecutor(ToolRegistry([tool]))._run_handler(tool, arguments, context)
 
 
 def _make_context(
@@ -222,106 +221,27 @@ def test_registry_concurrent_access_does_not_crosstalk() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_tool_call_signal_cancels_only_the_named_call_in_parallel(tmp_path: Path) -> None:
-    """并行执行时只中止被点名的调用：兄弟调用必须跑到终点。
-
-    这是本需求的核心不变量——工具级取消只打断工具执行，不打断 Run 与同批其它调用。
-    """
-
-    cancelled_marker = tmp_path / "cancelled.txt"
-    sibling_marker = tmp_path / "sibling.txt"
-    tool = _make_tool(_handler_sleeps_then_writes, name="proc_parallel")
-    observations: dict[str, Any] = {}
-
-    def _execute(call_id: str, marker: Path, sleep_seconds: float) -> None:
-        observations[call_id] = ToolHandlerRunner().execute(
-            tool,
-            {"marker_path": str(marker), "sleep_seconds": sleep_seconds},
-            _make_context(_RUN_A, tool_call_id=call_id),
-        )
-
-    cancelled_thread = threading.Thread(
-        target=_execute, args=("call-cancelled", cancelled_marker, 5.0)
-    )
-    sibling_thread = threading.Thread(target=_execute, args=("call-sibling", sibling_marker, 1.0))
-    timer = threading.Timer(
-        0.3, tool_call_cancellation_registry.mark_cancelled, args=(_SESSION_ID, "call-cancelled")
-    )
-    started = time.monotonic()
-    try:
-        cancelled_thread.start()
-        sibling_thread.start()
-        timer.start()
-        cancelled_thread.join()
-        cancelled_elapsed = time.monotonic() - started
-        sibling_thread.join()
-    finally:
-        timer.cancel()
-
-    assert observations["call-cancelled"].status == "cancelled"
-    # 取消观察必须带面向模型的 reason（具体文案按取消来源决定，见 tool_cancelled）。
-    assert observations["call-cancelled"].content.startswith("cancelled: ")
-    assert cancelled_elapsed < 2.5, f"被点名调用耗时 {cancelled_elapsed:.2f}s，疑似未被强杀"
-    assert cancelled_marker.exists() is False
-
-    assert observations["call-sibling"].status == "success"
-    assert observations["call-sibling"].content == "completed"
-    assert sibling_marker.exists() is True
-
-
-def test_tool_call_signal_does_not_touch_run_level_registry() -> None:
-    """工具级取消不得写入 Session 级注册表，否则会把整个 agent 执行打断。"""
-
-    tool = _make_tool(_handler_sleeps_then_writes, name="proc_run_isolation")
-    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1")
-
-    observation = ToolHandlerRunner().execute(
-        tool,
-        {"marker_path": "unused.txt", "sleep_seconds": 5.0},
-        _make_context(_RUN_A, tool_call_id="call-1"),
-    )
-
-    assert observation.status == "cancelled"
-    assert cancellation_registry.is_cancelled(_SESSION_ID) is False
-
-
 def _capture_workflow_emits(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
-    """把工具批次的事件出口 ``tool_batch_runner.emit`` 替换为记录事件的替身。
+    """把工具批次的事件出口 ``tools_node.emit`` 替换为记录事件的替身。
 
-    ``ToolHandlerRunner`` 与 ``ToolExecutor`` 都不投影 Transport 状态，running / 终态只由
+    ``ToolExecutor`` 不投影 Transport 状态，running / 终态只由
     ``_execute_call`` 经 ``emit`` 发出。本替身用于断言「执行层不会触达事件出口」：若有人把
     执行期投影重新接回执行层，这个列表就会非空。
     """
 
     captured: list[Any] = []
-    monkeypatch.setattr(tool_batch_runner, "emit", captured.append)
+    monkeypatch.setattr(tools_node, "emit", captured.append)
     return captured
 
 
-def test_cancelled_execution_returns_cancelled_observation() -> None:
-    """工具级取消命中时返回取消观察，且不向上抛异常。"""
-
-    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1")
-    tool = _make_tool(_handler_sleeps_then_writes, name="proc_cancelled", execution_mode="thread")
-
-    observation = ToolHandlerRunner().execute(
-        tool,
-        {"marker_path": "unused.txt", "sleep_seconds": 0.0},
-        _make_context(_RUN_A, tool_call_id="call-1"),
-    )
-
-    assert observation.status == "cancelled"
-    assert observation.content.startswith("cancelled: ")
-
-
-def test_thread_mode_keeps_result_when_cancel_arrives_during_execution() -> None:
-    """thread 模式：handler 已完成就保留真实结果，执行期间到达的取消不推翻已发生的副作用。"""
+def test_result_is_kept_when_cancel_arrives_during_execution() -> None:
+    """handler 已完成就保留真实结果，执行期间到达的取消不推翻已发生的副作用。"""
 
     tool = _make_tool(
-        _handler_marks_own_call_signal, name="thread_post_boundary", execution_mode="thread"
+        _handler_marks_own_call_signal, name="thread_post_boundary"
     )
 
-    observation = ToolHandlerRunner().execute(
+    observation = _run_handler(
         tool,
         {"session_id": _SESSION_ID, "call_id": "call-post"},
         _make_context(_RUN_A, tool_call_id="call-post"),
@@ -335,26 +255,28 @@ def test_runner_cancellation_does_not_project_transport_state(
 ) -> None:
     """取消只产出观察与日志：执行层不得投影 Transport 终态。
 
-    终态必须晚于强杀与输出排空，因此取消路径在整个执行期内不得触达工作流事件出口。第二层
+    终态必须晚于执行收尾与输出排空，因此取消路径在整个执行期内不得触达工作流事件出口。第二层
     护栏断言旧的通知旁路与 tools 内的全局 projector 依赖本身已不存在，避免它们被重新
     引入而绕开该时序规则。
     """
 
     captured = _capture_workflow_emits(monkeypatch)
-    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1")
-    tool = _make_tool(_handler_sleeps_then_writes, name="proc_no_bypass", execution_mode="thread")
+    monkeypatch.setattr(tool_executor_module, "emit", captured.append)
+    cancellation_registry.request_cancel(_SESSION_ID)
+    tool = _make_tool(lambda execution_context=None, **_kwargs: "ran", name="no_bypass")
 
-    observation = ToolHandlerRunner().execute(
-        tool,
-        {"marker_path": "unused.txt", "sleep_seconds": 0.0},
+    observation = ToolExecutor(ToolRegistry([tool])).execute(
+        ToolCall(tool_name="no_bypass", arguments='{"intent": "检查"}', call_id="call-1"),
         _make_context(_RUN_A, tool_call_id="call-1"),
+        {"no_bypass"},
     )
 
     assert observation.status == "cancelled"
     assert observation.content.startswith("cancelled: ")
+    # 开始前取消连 running 都不发，终态留给调用方。
     assert captured == []
-    assert not hasattr(tool_handler_runner, "_notify_tool_cancelled")
-    assert not hasattr(tool_handler_runner, "get_conversation_event_projector")
+    assert not hasattr(tool_executor_module, "_notify_tool_cancelled")
+    assert not hasattr(tool_executor_module, "get_conversation_event_projector")
     assert not hasattr(tool_terminal_projection, "get_conversation_event_projector")
     assert not hasattr(tool_terminal_projection, "project_tool_terminal_state")
 
@@ -362,19 +284,19 @@ def test_runner_cancellation_does_not_project_transport_state(
 def test_terminal_projection_runs_only_after_pipeline_settles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """终态投影必须晚于执行管线收尾：进程强杀与输出排空完成前不得变更前端状态。
+    """终态投影必须晚于执行管线收尾：输出排空完成前不得变更前端状态。
 
-    ``ToolHandlerRunner.execute`` 只有在强杀（``_force_kill`` 的 terminate / kill 两轮 join）与
+    ``ToolExecutor._run_handler`` 只有在 handler 返回、
     输出排空（输出通道 ``finish``）都做完之后才返回，``_execute_call`` 又只在
-    ``executor.execute`` 返回后才发终态，因此「终态晚于 runner 返回」等价于「终态晚于进程
-    收尾」——这是取消语义的核心不变量。running 由执行器在交给 runner 之前发出。
+    ``executor.execute`` 返回后才发终态，因此「终态晚于 handler 返回」等价于「终态晚于执行
+    收尾」——这是取消语义的核心不变量。running 由执行器在调用 handler 之前发出。
     """
 
     order: list[str] = []
     cancelled = tool_cancelled("probe_tool", tool_call_id="call-1")
 
     def _fake_runner_execute(
-        _self: ToolHandlerRunner,
+        _self: ToolExecutor,
         _tool: ToolDefinition,
         _arguments: dict[str, Any],
         execution_context: ToolExecutionContext,
@@ -386,11 +308,11 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
     def _record_emit(event: Any) -> None:
         order.append(f"emit:{event.status}")
 
-    monkeypatch.setattr(ToolHandlerRunner, "execute", _fake_runner_execute)
-    monkeypatch.setattr(tool_batch_runner, "emit", _record_emit)
+    monkeypatch.setattr(ToolExecutor, "_run_handler", _fake_runner_execute)
+    monkeypatch.setattr(tools_node, "emit", _record_emit)
     monkeypatch.setattr(tool_executor_module, "emit", _record_emit)
     executor = ToolExecutor(
-        registry=ToolRegistry([_make_tool(_handler_sleeps_then_writes, execution_mode="thread")])
+        registry=ToolRegistry([_make_tool(_handler_sleeps_then_writes)])
     )
     rc = runtime_stub(
         run=SimpleNamespace(id=_RUN_A, session_id=_SESSION_ID),
@@ -398,11 +320,8 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
         tool_executor=executor,
         admitted_tools=frozenset({"probe_tool"}),
     )
-    batch = ToolBatch(
 
-    )
-
-    observation = tool_batch_runner._execute_call(
+    observation = tools_node._execute_call(
         rc,
         ToolCall(tool_name="probe_tool", arguments='{"intent": "验证工具行为"}', call_id="call-1"),
         "step-1",
@@ -415,21 +334,22 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
 
 
 def test_tool_call_signal_is_released_after_execution() -> None:
-    """单次执行结束后（任意结果）工具级信号必须被释放，Session 级信号不受影响。"""
+    """单次执行结束后（任意结果）工具级信号必须被释放，Session 级信号不受影响。
 
-    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1")
-    cancellation_registry.request_cancel(_SESSION_ID)
-    tool = _make_tool(_handler_sleeps_then_writes, name="proc_release", execution_mode="thread")
+    工具级信号只在运行中的终端命令上打（``command_results``），所以这里由 handler 自己在执行中打。
+    """
 
-    observation = ToolHandlerRunner().execute(
+    tool = _make_tool(_handler_marks_own_call_signal, name="thread_release")
+
+    observation = _run_handler(
         tool,
-        {"marker_path": "unused.txt", "sleep_seconds": 0.0},
+        {"session_id": _SESSION_ID, "call_id": "call-1"},
         _make_context(_RUN_A, tool_call_id="call-1"),
     )
 
-    assert observation.status == "cancelled"
+    assert observation.status == "success"
     assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-1") is False
-    assert cancellation_registry.is_cancelled(_SESSION_ID) is True
+    assert cancellation_registry.is_cancelled(_SESSION_ID) is False
 
 
 def test_late_tool_call_signal_survives_until_execution_cleanup() -> None:
@@ -442,27 +362,6 @@ def test_late_tool_call_signal_survives_until_execution_cleanup() -> None:
     tool_call_cancellation_registry.clear_session(_SESSION_ID)
 
     assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-already-finished") is False
-
-
-def test_cancel_check_watches_both_signal_sources() -> None:
-    """取消检查必须同时实时观察 Session 级与工具级信号。"""
-
-    context = _make_context(_RUN_A, tool_call_id="call-1")
-
-    def check() -> bool:
-        return ToolHandlerRunner._is_cancelled(context)
-
-    assert check() is False
-
-    tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-1")
-    assert check() is True
-    tool_call_cancellation_registry.clear(_SESSION_ID, "call-1")
-    assert check() is False
-
-    cancellation_registry.request_cancel(_SESSION_ID)
-    assert check() is True
-    cancellation_registry.consume(_SESSION_ID)
-    assert check() is False
 
 
 # ---------------------------------------------------------------------------

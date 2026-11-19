@@ -6,7 +6,7 @@ import { browserPageWebPreferences } from "./browser-partition";
 import { CdpSession } from "./cdp-session";
 import { browserError } from "./errors";
 import { runActions, type ActResult } from "./input/actions";
-import { box, element } from "./input/element";
+import { box, element, elementObject } from "./input/element";
 import { BrowserOperation, type FileChooser } from "./operation";
 import type { BrowserDialog, BrowserDialogAnswer, BrowserNavigation, BrowserTabCreator, BrowserTabSummary } from "../../shared/host-contract";
 import { BROWSER_PAGE_DIALOG_CHANNEL, type BrowserPageDialogRequest } from "../../shared/browser-page-bridge";
@@ -24,8 +24,9 @@ import { readSnapshot } from "./snapshot/read";
 import type { SnapshotDocument } from "./snapshot/document";
 import { buildPageText, type PageText } from "./snapshot/page-text";
 import { TabEmulation, type Applied, type Emulation, type EmulationRequest } from "./tab-emulation";
-import { BODY_LIMITS, CANCELED_FAILURE, endpointOf, TabLog, type ConsoleLevel } from "./tab-log";
+import { BODY_LIMITS, CANCELED_FAILURE, TabLog, type ConsoleEntry, type ConsoleLevel, type LogPage } from "./tab-log";
 import { isPageUrl } from "./page-url";
+import { SettleNotes } from "./settle-notes";
 import { abortable } from "./abortable";
 import { observeTabNetwork } from "./diagnostics/tab-network";
 
@@ -39,13 +40,14 @@ const STABLE_INTERVAL_MS = 300;
 /** 落定最多等多久：导航后页面要拉首屏数据，给得宽一些；每个动作之后的变化通常更小。 */
 const NAVIGATION_SETTLE_LIMIT_MS = 3_000;
 const ACTION_SETTLE_LIMIT_MS = 2_000;
+/** 执行 JS 时随结果交回的 console 条数：单条已截到 500 字，十条加上返回值仍在模型的输出预算内；更多的按游标读。 */
+const EVALUATE_CONSOLE_LIMIT = 10;
 /**
  * 操作结束、用户输入或页面跳转之后这么久内发起的请求，不当作「页面自己发起」：点击后延迟加载的内容（推荐区、懒加载）
  * 是上一个动作的后果，不能因此把它的接口记成后台流量；埋点与轮询会在宽限期之外照样出现，很快被认出。
  */
 const BACKGROUND_GRACE_MS = 3_000;
 /** 等不到时备注里列出几条仍在进行的请求；举例的变化行截到多长。 */
-const PENDING_LISTED = 3;
 const EXAMPLE_MAX_CHARS = 80;
 /** 用户最近一次输入后多久内 Agent 的动作被拒（设计稿决定记录：2 秒）。 */
 const USER_ACTIVE_WINDOW_MS = 2_000;
@@ -73,8 +75,11 @@ export type PageTextRead = { text: PageText | null; document: number; dialog: Br
 /** 上一次交给 Agent 的大纲，及它属于第几个文档：增量快照的比对基准（见 `BrowserTab.deliver`）。 */
 type Delivered = { document: number; outline: Outline };
 
-/** 执行 JS 的结果：值或脚本错误（见 `page-evaluate.ts`），或脚本弹出的弹窗（此时页面停住，值与错误都为空）。 */
-export type EvaluateOutcome = Evaluation & { dialog: BrowserDialog | null };
+/**
+ * 执行 JS 的结果：值或脚本错误（见 `page-evaluate.ts`），或脚本弹出的弹窗（此时页面停住，值与错误都为空）；
+ * 另带执行期间这个标签里出现的 console 条目（按标签日志的游标读，不推进「上次以来」）。
+ */
+export type EvaluateOutcome = Evaluation & { dialog: BrowserDialog | null; console: LogPage<ConsoleEntry> };
 
 export type TabEvents = {
   /** 页面要开新窗口：由 `BrowserHost` 决定拒绝，或收养成同 Session 的新标签（保留 opener）。 */
@@ -145,6 +150,8 @@ export class BrowserTab {
   readonly openerId: string | null;
   readonly downloadDir: string;
   readonly log = new TabLog();
+  /** 当前修改操作的落定结论（每个动作落定时记下），由页面结果取走（`BrowserHost.result`）。 */
+  readonly settleNotes = new SettleNotes();
   private readonly adopted: boolean;
   private readonly events: TabEvents;
   readonly session: CdpSession;
@@ -385,11 +392,17 @@ export class BrowserTab {
     if (this.operation && paused) throw paused;
     if (this.operation) throw browserError(this.operation.state === "unknown" ? "OPERATION_UNKNOWN" : "TAB_BUSY", "the previous operation has not settled");
     signal.throwIfAborted();
-    const operation = new BrowserOperation(this, signal);
+    const operation = this.beginOperation(signal);
     this.operation = operation;
     this.events.onChange();
     try { return await run(operation); }
     finally { await operation.finish(); }
+  }
+
+  /** 新的修改操作：上一次没交出去的落定结论不再成立，一并清空。 */
+  private beginOperation(signal: AbortSignal): BrowserOperation {
+    this.settleNotes.begin();
+    return new BrowserOperation(this, signal);
   }
 
   operationChanged(): void { this.events.onChange(); }
@@ -421,25 +434,35 @@ export class BrowserTab {
 
   /** 弹窗答复不占修改槽位，否则被弹窗停住的输入无法收尾。 */
   async actDialog(action: Extract<PageAction, { type: "dialog" }>, signal: AbortSignal): Promise<ActResult> {
-    const operation = new BrowserOperation(this, signal);
+    const operation = this.beginOperation(signal);
     try { return await runActions(operation, [action], signal); }
     finally { await operation.finish(); }
   }
 
   /**
-   * 执行 JS（见 `page-evaluate.ts`）。页面已经停着（本标签或同进程别的标签在等弹窗作答）时整次以 `DIALOG_OPEN`
-   * 失败；所以执行途中以 `DIALOG_OPEN` 结束、且本标签有弹窗时，弹窗必是这次执行期间弹出的，算脚本弹的。
+   * 执行 JS（见 `page-evaluate.ts`），给了 `ref` 时在那个元素上执行（元素所在会话，跨进程 iframe 也一样）。页面已经停着
+   * （本标签或同进程别的标签在等弹窗作答）时整次以 `DIALOG_OPEN` 失败；所以执行途中以 `DIALOG_OPEN` 结束、且本标签有弹窗时，
+   * 弹窗必是这次执行期间弹出的，算脚本弹的。
+   *
+   * console 条目取执行开始以来这个标签的全部输出（console 只有 `console-message` 一个入口，分不出是不是这段脚本打的，
+   * 页面轮询与 iframe 的输出也在内）；求值返回之后才异步打出的不在其中，由 `next` 游标接着读。
    */
-  async evaluate(expression: string, operation: BrowserOperation): Promise<EvaluateOutcome> {
+  async evaluate(expression: string, ref: string | undefined, operation: BrowserOperation): Promise<EvaluateOutcome> {
     const signal = operation.signal;
     this.assertAlive();
     const paused = this.events.pausedBy();
     if (paused) throw paused;
+    const consoleFrom = this.log.nextSeq;
+    // 解析 ref 是只读探测，在 effect 外做：ref 失效报 REF_STALE，不会被记成「可能已生效」。
+    const target = ref === undefined ? null : await elementObject(operation, ref);
+    const send = (method: string, params: Record<string, unknown>, options: Parameters<BrowserOperation["cdp"]>[2] = {}) =>
+      operation.cdp(method, params, { ...options, sessionId: target?.sessionId });
+    const consoleSince = () => this.log.read({ kind: "console", since: consoleFrom, limit: EVALUATE_CONSOLE_LIMIT });
     try {
-      return { ...await operation.effect(() => evaluateExpression(operation.cdp, expression, signal)), dialog: null };
+      return { ...await operation.effect(() => evaluateExpression(send, expression, signal, target?.objectId ?? null)), dialog: null, console: consoleSince() };
     } catch (error) {
       const dialog = this.dialogs.current;
-      if (dialog && (error as HostMethodError).code === "DIALOG_OPEN") return { value: null, truncated: false, error: null, dialog };
+      if (dialog && (error as HostMethodError).code === "DIALOG_OPEN") return { value: null, truncated: false, error: null, dialog, console: consoleSince() };
       throw error;
     }
   }
@@ -592,11 +615,11 @@ export class BrowserTab {
       this.log.note(`the page showed a ${type} dialog that could not be held for an answer; it was dismissed automatically`);
       logDesktopEvent("WARNING", "browser", "browser_native_dialog_dismissed", { tab_id: this.tabId, session_id: this.sessionId, type });
     });
-    type Request = { requestId: string; type?: string; timestamp: number; request: { method: string; url: string }; redirectResponse?: { status: number } };
+    type Request = { requestId: string; type?: string; timestamp: number; request: { method: string; url: string; postData?: string }; redirectResponse?: { status: number } };
     session.on("Network.requestWillBeSent", ({ requestId, type, timestamp, request, redirectResponse }: Request) => {
       // 重定向：同一 requestId 以新地址再发一次，上一跳带着它的状态码结束。
       if (redirectResponse) this.log.responseReceived(requestId, redirectResponse.status, timestamp, true);
-      this.log.requestStarted(requestId, { method: request.method, url: request.url, resourceType: type ?? "Other", timestamp }, this.pageInitiated());
+      this.log.requestStarted(requestId, { method: request.method, url: request.url, resourceType: type ?? "Other", timestamp, postData: request.postData }, this.pageInitiated());
     });
     session.on("Network.responseReceived", ({ requestId, timestamp, response }: { requestId: string; timestamp: number; response: { status: number; mimeType?: string } }) => {
       this.log.responseReceived(requestId, response.status, timestamp, false, response.mimeType ?? null);
@@ -644,9 +667,10 @@ export class BrowserTab {
 
   /**
    * 导航与每个动作之后的唯一落定点：页面在加载（点了链接、提交了表单）就等它结束（有时限、超时不报错），再按
-   * `untilPageSettled` 分层等页面落定——这一步之后发出、不属于后台流量的请求都回来，且大纲前后两次读取相同。到上限时
-   * 按没满足的那一层留一条备注随页面结果交给 Agent：它要知道快照缺东西是「数据没到」还是「页面一直在变」，以及
-   * 接下来怎么办。每次落定都写一条日志（哪一层收尾、等了多久、读了几次），据此调上限与判定规则。
+   * `untilPageSettled` 分层等页面落定——这一步之后发出、不属于后台流量的请求都回来，且大纲前后两次读取相同。结论
+   * （哪些请求没回来、页面是否还在变、按后台流量没等哪些请求）记进 `SettleNotes`，由页面结果对照当时的状态写成
+   * 备注：Agent 要知道快照缺东西是「数据没到」还是「页面一直在变」，以及接下来怎么办。
+   * 每次落定都写一条日志（哪一层收尾、等了多久、读了几次），据此调上限与判定规则。
    * 页面停住（弹窗）、调用取消或标签关闭时不再等：结果里报出弹窗，或由 `BrowserHost` 报关闭。
    */
   async settle(operation: BrowserOperation, timeoutMs = ACTION_SETTLE_LIMIT_MS): Promise<void> {
@@ -660,7 +684,7 @@ export class BrowserTab {
     const outcome = await untilPageSettled({
       pending: () => {
         const requests = this.log.pendingRequests(operation.requestsFrom);
-        ignored = Math.max(ignored, requests.ignored);
+        ignored = Math.max(ignored, requests.unwaited.length);
         return requests.waiting;
       },
       read: () => this.settleRead(),
@@ -672,18 +696,14 @@ export class BrowserTab {
       },
     }, { intervalMs: STABLE_INTERVAL_MS, timeoutMs, until });
     logDesktopEvent("INFO", "browser", "browser_page_settled", { tab_id: this.tabId, session_id: this.sessionId, by: outcome.by, waited_ms: outcome.waitedMs, reads: outcome.reads, background_ignored: ignored });
-    const next = "if something you expect is missing, use a wait_for action for text you expect, or read a fresh browser_snapshot shortly.";
-    const waited = `waited ${(outcome.waitedMs / 1000).toFixed(1)}s`;
-    if (outcome.by === "requests") {
-      const { pending } = outcome;
-      const listed = pending.slice(0, PENDING_LISTED).map((entry) => `${entry.method} ${endpointOf(entry.url)}`).join(", ");
-      const more = pending.length > PENDING_LISTED ? ` and ${pending.length - PENDING_LISTED} more` : "";
-      const one = pending.length === 1;
-      this.log.note(`${pending.length} request${one ? "" : "s"} that may carry page content ${one ? "was" : "were"} still running when this result was taken (${waited}): ${listed}${more}. Parts of the page may not have rendered yet: ${next}`);
-    } else if (outcome.by === "changing") {
-      const example = outcome.example ? `, e.g. ${outcome.example}` : "";
-      this.log.note(`the page was still changing when this result was taken (${waited}; ${outcome.changed} line${outcome.changed === 1 ? "" : "s"} differed between the last two reads${example}). It may be live content such as a timer, carousel or streaming text: ${next}`);
-    }
+    // 停住或取消（`aborted`）时调用方不再说明，也不记结论。
+    if (outcome.by === "aborted") return;
+    this.settleNotes.record({
+      waitedMs: outcome.waitedMs,
+      pending: outcome.by === "requests" ? outcome.pending : [],
+      changing: outcome.by === "changing" ? { count: outcome.changed, example: outcome.example } : null,
+      unwaited: this.log.pendingRequests(operation.requestsFrom).unwaited,
+    });
   }
 
   /**

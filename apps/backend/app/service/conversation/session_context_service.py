@@ -127,7 +127,7 @@ class SessionContextService:
         """把 ``tool_call_ids`` 里仍在等用户决定的占位推到 ``cancelled``，返回实际改写的行。
 
         :meth:`settle_placeholders` 不认这类行（``pending`` 的 HITL 占位）：它跨 Session 结算
-        「工作已经没了」的占位，重启时会把交接和挂起 Run 的提问一并打掉。这里按调用点名作废，
+        「工作已经没了」的占位，重启时会把挂起 Run 的提问一并打掉。这里按调用点名作废，
         哪些调用该作废由调用方按工具声明决定。等待条件与决定入口同一条（``awaits_user``），已
         结算的行不动，重复调用幂等。只改 metadata：占位仍是这次调用在模型协议上的结果。
         """
@@ -173,7 +173,7 @@ class SessionContextService:
         ``prepare_input`` 接收决定时在同一事务把它推到 ``running``，执行后由结算推到终态。所以
         「已决定、执行中」也不算等待，迟到的重复决定不会让原调用再重放一次。判定规则只在
         ``SessionContextRecord.awaits_user``（与侧栏「等你操作」同一条）。工具名与参数取自发起
-        这次调用的 assistant 消息，不依赖工具自己的业务事实（如交接登记）；参数供决定入口校验
+        这次调用的 assistant 消息，不依赖工具自己的业务事实；参数供决定入口校验
         带载荷的决定（所选项是否属于这次调用）。
         """
         records = [

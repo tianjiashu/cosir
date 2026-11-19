@@ -1,6 +1,6 @@
 """按需生成子 Agent 配置草稿的临时工具。"""
 
-from typing import Any, ClassVar
+from typing import Any
 
 from app.core.tool.multi_agent.args.propose_agent_configuration_args import (
     ProposeAgentConfigurationArgs,
@@ -31,7 +31,6 @@ class ProposeAgentConfigurationTool(HandlerBase):
         "records; the user will configure scope, tools, steps, and model in the editor."
     )
     args_model = ProposeAgentConfigurationArgs
-    timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_CONFIGURATION
 
     def execute(
@@ -46,7 +45,7 @@ class ProposeAgentConfigurationTool(HandlerBase):
 
         ``execution_context`` 用于定位当前 workspace 以校验 ``agent_id`` 唯一性（在
         当前 workspace 与 system 作用域内不可重复）。返回结果不产生持久化副作用；参数异常
-        由 ToolHandlerRunner 在调用前归一化。
+        由准入门禁在调用前校验。
         """
         candidate_agent_id = agent_id.strip()
         if execution_context is not None:
@@ -112,8 +111,6 @@ class ProposeAgentConfigurationTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            execution_mode="thread",
         )
 
 

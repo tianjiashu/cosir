@@ -89,7 +89,7 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
             pass
 
     monkeypatch.setattr(
-        lifespan_module, "install_logging_for_current_process", lambda **_kwargs: None
+        lifespan_module, "configure_logging", lambda **_kwargs: None
     )
     monkeypatch.setattr(lifespan_module, "shutdown_logging", lambda: None)
     monkeypatch.setattr(lifespan_module.Settings, "load", staticmethod(lambda: None))

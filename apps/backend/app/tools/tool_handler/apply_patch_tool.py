@@ -20,7 +20,6 @@ from app.core.workflow.cancel.run_cancellation_registry import cancellation_regi
 from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
-from app.tools.tool_handler.file_edit.syntax_check import SyntaxDiagnostic, check_source_syntax
 from app.tools.tool_handler.file_edit.patch_apply import (
     PatchApplyError,
     apply_all_with_diff,
@@ -29,6 +28,7 @@ from app.tools.tool_handler.file_edit.patch_apply import (
 from app.tools.tool_handler.file_edit.patch_parser import (
     parse_git_unified_diff_detailed,
 )
+from app.tools.tool_handler.file_edit.syntax_check import SyntaxDiagnostic, check_source_syntax
 from app.tools.tool_handler.file_observations import file_observations
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
@@ -56,7 +56,6 @@ class ApplyPatchTool(HandlerBase):
         "defines the accepted format. For a single local change, prefer edit_file."
     )
     args_model = ApplyPatchArgs
-    timeout_seconds = 30.0
     group = TOOL_GROUP_FILE_EDIT
 
     def execute(
@@ -100,9 +99,12 @@ class ApplyPatchTool(HandlerBase):
                     "Correct the issue above and submit only the raw diff; choose the "
                     "matching file tool if the requested operation is unsupported."
                 ),
+                status_hint="补丁格式错误",
             )
         operations = outcome.operations
-        resolver = PathResolver(execution_context.workspace_root, execution_context.writable_root)
+        resolver = PathResolver(
+            execution_context.workspace_root, execution_context.writable_root, execution_context.scratch_dir
+        )
         validation_errors = validate_all(operations, resolver)
         if validation_errors:
             return tool_error(
@@ -116,13 +118,15 @@ class ApplyPatchTool(HandlerBase):
                     "diff: pick another target, or use write_file / execute_terminal. This tool "
                     "cannot create, delete, or move files."
                 ),
+                status_hint="补丁校验失败",
             )
         if cancellation_registry.is_cancelled(execution_context.session_id):
             return tool_cancelled(tool_name=self.name)
         try:
             results = apply_all_with_diff(operations, resolver)
         except PatchApplyError as exc:
-            if exc.partial_applied:
+            if exc.applied:
+                # 已写入的文件是真实发生的改动：随错误一起交给界面，调用行与汇总的增删数都算上它。
                 return tool_error(
                     tool_name=self.name,
                     content=(
@@ -130,6 +134,8 @@ class ApplyPatchTool(HandlerBase):
                         "Inspect the changed files and generate a new unified diff from their "
                         "current contents; do not replay this diff unchanged."
                     ),
+                    status_hint="部分已写入",
+                    partial_display=build_file_change_display_data(exc.applied),
                 )
             return tool_error(
                 tool_name=self.name,
@@ -138,6 +144,7 @@ class ApplyPatchTool(HandlerBase):
                     "Re-read the affected files and generate a new unified diff for their current "
                     "contents before retrying."
                 ),
+                status_hint="补丁应用失败",
             )
 
         display_data = build_file_change_display_data(results)
@@ -247,8 +254,6 @@ class ApplyPatchTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("filesystem",),
         )
 
 
@@ -265,4 +270,4 @@ def build_apply_patch_definition() -> ToolDefinition:
         无。
     """
 
-    return ApplyPatchTool().to_definition_if_avaliable()
+    return ApplyPatchTool().to_definition()

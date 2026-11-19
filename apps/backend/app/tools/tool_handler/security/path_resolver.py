@@ -116,21 +116,31 @@ class PathResolver:
         "/dev",
     )
 
-    def __init__(self, workspace_root: str | Path, writable_root: str | Path | None = None) -> None:
-        """固化工作区根与可写根；不读文件系统。
+    def __init__(
+        self,
+        workspace_root: str | Path,
+        writable_root: str | Path | None = None,
+        scratch_dir: str | Path | None = None,
+    ) -> None:
+        """固化工作区根、可写根与本会话临时目录；不读文件系统。
 
-        ``writable_root`` 只有写入口用，读类工具不传；缺省即工作区根。
+        ``writable_root`` 与 ``scratch_dir`` 只有写入口用，读类工具不传：``writable_root`` 缺省即工作区根；
+        ``scratch_dir`` 是写入的第二个合法区域（本会话的临时目录，见 ``session_scratch_dir``），缺省没有。
         """
 
         self.workspace_root = Path(workspace_root)
         self.writable_root = self.workspace_root if writable_root is None else Path(writable_root)
+        self.scratch_dir = None if scratch_dir is None else Path(scratch_dir)
 
     def resolve_for_write(self, path: str) -> tuple[Path | None, str]:
-        """解析写入目标：相对路径按工作区根解析，目标须在可写根内，并拒绝保留区与受保护路径。
+        """解析写入目标：相对路径按工作区根解析，目标须在可写根内或本会话临时目录内，并拒绝保留区与受保护路径。
 
         返回 ``(resolved_path, "")`` 或 ``(None, error)``，``error`` 为面向模型的英文短句；不向上抛出。
         包含判定按文件身份（``RootDirectory``）：链接、``..`` 先解析，大小写与 firmlink 写法不影响结论，
         指向边界外的链接因此被拒。
+
+        两个合法写入区互不相干：临时目录在系统 ``.cosir`` 下、不在工作区里，命中它就只剩受保护路径一道
+        判定（``own_scratch`` 放行本会话、别的会话仍拒），工作区的可写根与保留区规则不适用。
         """
 
         input_error = self._validate_path(path)
@@ -140,6 +150,10 @@ class PathResolver:
             workspace = RootDirectory.at(self.workspace_root)
             raw = Path(path)
             resolved = (raw if raw.is_absolute() else workspace.path / raw).resolve()
+            if self._in_scratch(resolved):
+                if ProtectedPaths.current().denies_write(resolved, own_scratch=self.scratch_dir):
+                    return None, self._protected_denial(path, resolved, write=True)
+                return resolved, ""
             relative = workspace.relative(resolved)
             writable = (
                 workspace
@@ -165,6 +179,24 @@ class PathResolver:
         if ProtectedPaths.current().denies_write(resolved):
             return None, self._protected_denial(path, resolved, write=True)
         return resolved, ""
+
+    def write_containment(self, resolved: Path) -> Path:
+        """``resolve_for_write`` 放行的目标属于哪个写入区：原子写据它在建目录后、替换前复核包含关系。
+
+        写入区只有两个（可写根、本会话临时目录），归属判定只在这里，写工具不各自判断。
+        """
+
+        return self.scratch_dir if self.scratch_dir is not None and self._in_scratch(resolved) else self.writable_root
+
+    def _in_scratch(self, resolved: Path) -> bool:
+        """``resolved`` 是否落在本会话的临时目录里；没有临时目录或目录还不存在时为否。"""
+
+        if self.scratch_dir is None:
+            return False
+        try:
+            return RootDirectory.at(self.scratch_dir).contains(resolved)
+        except FileNotFoundError:
+            return False
 
     def _resolve_unbounded(self, path: str) -> tuple[Path | None, str]:
         """解析用户路径但不强制项目根 containment，是两个读入口的共同底座。

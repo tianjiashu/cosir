@@ -5,7 +5,6 @@
 observe 节点写进 context）以一条 user 消息交给模型——与用户上传、浏览器截图同一条路。
 """
 
-from typing import ClassVar
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -74,7 +73,6 @@ class ReadImageTool(HandlerBase):
         "instructions."
     )
     args_model = ReadImageArgs
-    timeout_seconds: ClassVar[float] = 60.0
     group = TOOL_GROUP_SEARCH
 
     def execute(
@@ -166,11 +164,6 @@ class ReadImageTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("filesystem",),
             # 发布附件要用进程内的 workspace service，只能在线程里执行。
-            execution_mode="thread",
             returns_images=True,
-            # 只读、彼此独立：模型一次发出的多个读取真正并发执行（见 tool_batch_runner）。
-            parallel_mode="parallel",
         )

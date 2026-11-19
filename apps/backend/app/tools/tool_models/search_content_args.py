@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.config.constant import Constant
+
 
 class SearchContentArgs(BaseModel):
     """在单文件或递归目录中搜索正则表达式。"""
@@ -19,7 +21,12 @@ class SearchContentArgs(BaseModel):
         default=None,
         description="Optional file-name filter for directory searches, for example '*.py'.",
     )
-    limit: int = Field(default=50, ge=1, description="Maximum matching output lines to return.")
+    limit: int = Field(
+        default=50,
+        ge=1,
+        le=Constant.Tools.LIST_RESULT_LIMIT_MAX,
+        description="Maximum matching output lines to return.",
+    )
     offset: int = Field(default=0, ge=0, description="Number of matching output lines to skip.")
     context: int = Field(
         default=0,

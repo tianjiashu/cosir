@@ -220,7 +220,9 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
         # 由此定下的取舍：模型的最终正文拦不住——它已经流给用户了。所以 Run 带着未答的提问完成时
         # （提问挂着时被后台结果唤醒、模型说完话就结束），不为「回到挂起」另做一套判定：正文照常显示，
         # 提问的去留由落定点按结局决定（见 ``SessionActor._expire_decisions``）。
-        final_answer = content_to_text(ai_message.get("content"))
+        # 最终回复可能不止这一条：同一回合里紧挨着的、只调用了回复本身那类工具的回复也算（规则见
+        # ``core/context/final_reply``）；``final_output`` 与事件里的序号都取这一组。
+        reply_sequences, final_answer = _message_context().final_reply(get_tool_registry().reply_tool_names())
         structured = rc.agent.structured_output is not None
         log.info(
             "model_node_final_response",
@@ -239,7 +241,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             RunTransition.COMPLETE,
             usage_stats=rc.usage_stats,
             final_output=final_answer,
-            response_sequence=response.sequence,
+            response_sequences=reply_sequences,
             end_reason=finish_reason,
         )
         return route_state(

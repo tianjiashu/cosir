@@ -3,27 +3,25 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.core.permission.writable_root import absolute as absolute_writable_root
+from app.utils.path.system_cosir import session_scratch_dir
 
 if TYPE_CHECKING:
     from app.core.agents.agent_runtime_config import AgentRuntimeConfig
     from app.core.events import EventSink
-    from app.core.workflow.message_queue.session_message import DecisionBody
 
 
 @dataclass(frozen=True)
 class ToolExecutionContext:
     """一次工具调用所处的运行时边界：会话、工作区根、Run / step 与调用身份。
 
-    由 ``run_tool_batch`` 的单次调用入口按调用构造，一次给齐 Run / step 事实与调用身份；
+    由 ``tools_node`` 的单次调用入口按调用构造，一次给齐 Run / step 事实与调用身份；
     ``ToolExecutor`` 准入后附加调用意图，下游直接消费。只承载 Run / step / 调用级事实；进程级单例（Agent registry、终端会话服务等）由 handler
-    直接取用，不经本对象转手。``agent`` / ``event_loop`` / ``event_sink`` 是父进程
-    执行期才有意义的 Run 级对象（不可 pickle 或不应跨进程），process 隔离工具启动子进程前
-    必须经 :meth:`for_process_execution` 清空它们。
+    直接取用，不经本对象转手。
 
     Attributes:
         agent: 本次 Run 的 Agent 运行时配置（准入门禁据它判断模型能力）。
@@ -32,9 +30,6 @@ class ToolExecutionContext:
         event_sink: 本次 Run 的执行事件回调；``execute_terminal`` 的实时输出经它投递。
         tool_call_id: 单次调用身份，构造时取自该调用；每个调用各一份上下文，
             同批调用不共享。
-        user_decision: ``ToolDefinition.user_decision == "execute"`` 的工具在用户决定后（批准或驳回）
-            再次执行时携带的用户决定；首次调用为 ``None``。handler 只有一个入口，按它区分「登记待决」与「按决定
-            执行」。
     """
 
     session_id: int
@@ -46,7 +41,6 @@ class ToolExecutionContext:
     event_loop: asyncio.AbstractEventLoop | None = None
     event_sink: EventSink | None = None
     tool_call_id: str = ""
-    user_decision: DecisionBody | None = None
     # 准入时从原始调用提取，模型漏写时为 None；仅供展示，绝不能用作执行/授权依据。
     call_intent: str | None = None
     # Session 的可写根事实（``SessionExtra.writable_root``）；消费方读 :attr:`writable_root`。
@@ -58,7 +52,11 @@ class ToolExecutionContext:
 
         return absolute_writable_root(self.workspace_root, self.writable_subpath)
 
-    def for_process_execution(self) -> ToolExecutionContext:
-        """返回可安全传入隔离子进程的副本：清空父进程专属的 Run 级对象，保留调用身份。"""
+    @property
+    def scratch_dir(self) -> Path:
+        """本会话的临时目录：写类文件工具的第二个合法写入区，终端经 ``COSIR_SCRATCH_DIR`` 拿到它。
 
-        return replace(self, agent=None, event_loop=None, event_sink=None)
+        只由会话 id 推导（``session_scratch_dir``），不随可写根收窄：收窄的子 Agent 照样需要放临时文件。
+        """
+
+        return session_scratch_dir(self.session_id)

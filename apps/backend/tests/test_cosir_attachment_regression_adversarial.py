@@ -140,22 +140,22 @@ def test_relative_path_returns_cosir_attachment_workspace_relative(tmp_path: Pat
 
 
 async def test_upload_publishes_final_attachment_and_cleans_staging(tmp_path: Path) -> None:
-    """``upload`` 应把最终图片发布到 Attachment/，只把 .uploading 作为临时目录。
+    """``upload`` 应把最终图片发布到 Attachment/，临时 ``.part`` 文件用完即删、不建暂存子目录。
 
-    潜在缺陷类型：staging 目录改为 workspace 记录基准后若拼错层级，会写到别处或新建额外目录。
+    潜在缺陷类型：临时文件路径若拼错层级，会写到别处或留下散落文件。
     """
 
     service = _service(tmp_path)
     data = _png_bytes()
     uploaded = await service.upload(7, _upload(data))
 
-    staging = tmp_path / ".cosir" / "Attachment" / ".uploading"
+    attachment = tmp_path / ".cosir" / "Attachment"
     published = tmp_path / ".cosir" / "Attachment" / f"{uploaded.asset_id}.png"
     assert published.is_file()
     assert published.read_bytes() == data
-    assert not list(staging.glob("*"))
-    # 不得在工作区根直接留下散落的 staging 目录。
-    assert not (tmp_path / ".uploading").exists()
+    assert not list(attachment.glob(".*.part"))
+    assert [path.name for path in attachment.iterdir()] == [published.name]
+    assert not list(tmp_path.glob(".*.part"))
 
 
 def test_relative_path_rejects_path_outside_attachment_dir(tmp_path: Path) -> None:
@@ -556,8 +556,8 @@ def test_dirs_rejects_attachment_dir_symlink(tmp_path: Path) -> None:
     assert error.value.code == "ATTACHMENT_STORAGE_UNAVAILABLE"
 
 
-def test_dirs_creates_cosir_attachment_and_staging(tmp_path: Path) -> None:
-    """``_dirs`` 首次调用须按需创建 ``.cosir`` / ``Attachment`` / ``.uploading``。"""
+def test_dirs_creates_cosir_and_attachment(tmp_path: Path) -> None:
+    """``_dirs`` 首次调用须按需创建 ``.cosir`` / ``Attachment``，不建暂存子目录。"""
 
     root = tmp_path / "ws"
     root.mkdir()
@@ -567,7 +567,7 @@ def test_dirs_creates_cosir_attachment_and_staging(tmp_path: Path) -> None:
 
     assert (root / ".cosir").is_dir()
     assert (root / ".cosir" / "Attachment").is_dir()
-    assert (root / ".cosir" / "Attachment" / ".uploading").is_dir()
+    assert list((root / ".cosir" / "Attachment").iterdir()) == []
 
 
 # --- H. resolve_content 回归（同属 7 个调用点） -------------------------

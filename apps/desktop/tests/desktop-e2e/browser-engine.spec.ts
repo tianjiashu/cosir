@@ -272,7 +272,7 @@ const WIRE_DEFAULTS: Record<string, Record<string, unknown>> = {
   "browser.snapshot": { tab: null, format: "outline", scope: "page", find: null, from_line: null },
   "browser.act": { tab: null },
   "browser.logs": { since: null, level: null, failed_only: false, pattern: null, limit: 50, body: null, tab: null },
-  "browser.evaluate": { tab: null },
+  "browser.evaluate": { ref: null, tab: null },
   "browser.screenshot": { tab: null, full_page: false, ref: null, region: null },
   "browser.tabs": { tab: null },
 };
@@ -1240,6 +1240,32 @@ test("reads and acts inside same-origin and cross-site iframes", async () => {
   fs.writeFileSync(file, "x");
   const attached = await act([{ type: "click", ref: refOf(snapshot, "button", "Attach") }, { type: "upload", paths: [file] }]);
   expect(attached).toMatchObject({ execution: { interruption: null }, title: "got file frame.txt" });
+});
+
+// 目的：脚本能拿快照里的元素执行，跨进程 iframe 里的也够得着，执行期间的 console 随结果交回；潜在缺陷：求值仍在主框架、
+// 读不到跨站框架，包装后的语法错误变成宿主故障，同步 console.log 在结果返回时还没进标签日志。
+test("evaluates on a ref inside iframes and returns the console of the call", async () => {
+  const snapshot = valueOf(await link("browser.navigate", 82, { url: `${origin}/frames` })).snapshot as string;
+  const evaluate = async (args: Record<string, unknown>) => valueOf(await link("browser.evaluate", 82, args));
+  expect((await evaluate({ expression: "el.textContent", ref: refOf(snapshot, "button", "In same") })).value).toBe('"In same"');
+  // 跨站框架在另一个进程：脚本在它自己的文档里执行，主机名是 localhost 而不是主框架的 127.0.0.1。
+  const cross = await evaluate({ expression: "[location.hostname, this.getAttribute('aria-label')]", ref: refOf(snapshot, "textbox", "Note") });
+  expect(cross.value).toBe('["localhost","Note"]');
+  const broken = await evaluate({ expression: "el.value )", ref: refOf(snapshot, "textbox", "Note") });
+  expect(broken).toMatchObject({ value: null, error: expect.stringContaining("SyntaxError") });
+  expect(await link("browser.evaluate", 82, { expression: "el", ref: "e99999" })).toMatchObject({ ok: false, code: "REF_STALE" });
+
+  const printed = await evaluate({ expression: "(console.log('from script', 1), console.error('bad'), 42)" });
+  expect(printed.value).toBe("42");
+  const logged = printed.console as { entries: { level: string; text: string }[]; next: number };
+  expect(logged.entries.map(({ level, text }) => [level, text])).toEqual(expect.arrayContaining([["info", "from script 1"], ["error", "bad"]]));
+  // 游标接得上 browser_logs：之后才打出的从这里读得到，之前的不再重复。
+  await evaluate({ expression: "setTimeout(() => console.log('later'), 0)" });
+  await expect.poll(async () => (valueOf(await link("browser.logs", 82, { kind: "console", since: logged.next })).entries as { text: string }[]).map(({ text }) => text))
+    .toContain("later");
+  await app.evaluate(() => {
+    (globalThis as unknown as { browserHarness: { host: { dropSessions(ids: number[]): void } } }).browserHarness.host.dropSessions([82]);
+  });
 });
 
 // 目的：长页面上只读屏幕上的部分或按关键词找；潜在缺陷：几何按 CSS 像素算（Retina 上差一倍）、忘了减滚动，列出的是

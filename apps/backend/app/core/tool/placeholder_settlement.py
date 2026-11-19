@@ -2,7 +2,7 @@
 
 占位行是卡片状态的事实源：后台占位以 ``pending`` 写入，结论并入时由 workflow 在 Run
 内推到 ``completed``（见 ``tool_observation_projection.settle_background_placeholder``）；HITL 等待占位
-接收决定时推到 ``running``，执行结果由 ``settle_decision_observation`` 结算。这里处理不在
+在决定并入时推到 ``completed``（见 ``prepare_input``）。这里处理不在
 Run 内发生的结算：写库后经 projector 投影，但只投影到已物化的 snapshot——重启收尾会扫过全部 Session，
 不能为每个 Session 物化 space 与 actor；未物化的 snapshot 下次重建自会读到占位行的新状态。投影失败只
 记录，理由相同。

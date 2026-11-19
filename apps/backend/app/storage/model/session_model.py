@@ -28,7 +28,7 @@ class SessionModel(StorageBase):
     parent_session_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("sessions.id"), nullable=True
     )
-    # 派生深度：用户新建与用户 fork 为 0，派生方按 ``core.tool.derivation.child_depth`` 写入；
+    # 派生深度：用户新建与用户 fork 为 0，派生方按 ``core.tool.multi_agent.derivation.child_depth`` 写入；
     # 创建后不变。
     derivation_depth: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0"), default=0

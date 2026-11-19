@@ -114,12 +114,21 @@ describe("wire samples", () => {
     expect(logsWire({ ...base, entry: gone, body: { ...gone.body, text: null, truncated: false, reason } })).toEqual(samples.response_body_unavailable);
   });
 
+  // 目的：执行期间的 console 随结果交回，游标总在；潜在缺陷：漏带 next 或 more_after，后端渲染时 KeyError。
   it("evaluate results", () => {
-    const ok: EvaluateResult = { ...head(200, defaultEmulation), value: "{\"user\":null,\"items\":3}", truncated: false, error: null, dialog: null };
-    const failed: EvaluateResult = { ...head(200, defaultEmulation), value: null, truncated: false, error: "ReferenceError: foo is not defined", dialog: null };
+    const noConsole = { entries: [], next: 12, moreBefore: false, moreAfter: false, droppedBefore: null };
+    const printed = {
+      entries: [
+        { seq: 12, level: "info" as const, text: "items loaded 3", source: "http://127.0.0.1:5173/src/app.ts:41", frame: null },
+        { seq: 14, level: "error" as const, text: "Blocked a frame with origin", source: null, frame: "https://pay.example.com/widget" },
+      ],
+      next: 15, moreBefore: false, moreAfter: true, droppedBefore: null,
+    };
+    const ok: EvaluateResult = { ...head(200, defaultEmulation), value: "{\"user\":null,\"items\":3}", truncated: false, error: null, dialog: null, console: printed };
+    const failed: EvaluateResult = { ...head(200, defaultEmulation), value: null, truncated: false, error: "ReferenceError: foo is not defined", dialog: null, console: noConsole };
     expect(evaluateWire(ok)).toEqual(samples.evaluate);
     expect(evaluateWire(failed)).toEqual(samples.evaluate_error);
-    const base = { ...head(200, defaultEmulation), error: null };
+    const base = { ...head(200, defaultEmulation), error: null, console: noConsole };
     expect(evaluateWire({ ...base, value: "undefined", truncated: false, dialog: null })).toEqual(samples.evaluate_undefined);
     expect(evaluateWire({ ...base, value: "[1,2,3", truncated: true, dialog: null })).toEqual(samples.evaluate_truncated);
     expect(evaluateWire({ ...base, value: null, truncated: false, dialog: { id: 4, type: "confirm", message: "Proceed?", defaultText: "" } }))
@@ -160,7 +169,7 @@ describe("argument keys the host reads", () => {
     ["browser_tabs", parseTabs, { tab: "t9", action: "close" }],
     ["browser_logs", parseLogs, { kind: "console", since: 41, level: "warning", failed_only: false, pattern: "needle", limit: 7, body: null, tab: "t9" }],
     ["browser_logs", parseLogs, { kind: "network", since: 41, level: null, failed_only: true, pattern: "needle", limit: 7, body: null, tab: "t9" }],
-    ["browser_evaluate", parseEvaluate, { tab: "t9", expression: "document.title" }],
+    ["browser_evaluate", parseEvaluate, { tab: "t9", expression: "el.value", ref: "e4" }],
   ];
   it.each(cases)("%s", (tool, parse, args) => {
     expect(Object.keys(args).sort()).toEqual(Object.keys(schemas[tool].properties).sort());

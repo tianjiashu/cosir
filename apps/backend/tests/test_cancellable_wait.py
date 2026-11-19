@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from app.core.tool.execute.thread_wait import ToolCallStopped, wait_for_call
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.tool_call_cancellation_registry import (
     tool_call_cancellation_registry,
 )
+from app.tools.cancellable_wait import ToolCallStopped, wait_for_call
 
 
 def _context() -> ToolExecutionContext:

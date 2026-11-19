@@ -101,9 +101,9 @@ def test_broken_registry_admits_invalid_id_through_gate(
         call_id="c1",
     )
 
-    outcome = gate.evaluate(call, ctx)
+    outcome = gate.evaluate(call, ctx, {"delegate_task"})
 
     # 记录实际行为：门禁放行（不崩），且参数原样透传给业务层。这不是缺陷本身，
     # 而是「授权后置」的边界事实。
-    assert outcome.admitted is True, "若此处为 False，说明门禁比预期更保守（更好）"
+    assert outcome.denial is None, "若此处被拒，说明门禁比预期更保守（更好）"
     assert outcome.arguments["child_agent_id"] == "fake-id"

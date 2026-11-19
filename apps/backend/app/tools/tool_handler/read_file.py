@@ -47,7 +47,6 @@ class ReadFileTool(HandlerBase):
 
     name = TOOL_READ_FILE
     args_model = ReadFileArgs
-    timeout_seconds = 10.0
     group = TOOL_GROUP_SEARCH
 
     binary_extensions: ClassVar[set[str]] = {
@@ -197,10 +196,6 @@ class ReadFileTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("filesystem",),
-            # 只读、彼此独立：模型一次发出的多个读取真正并发执行（见 tool_batch_runner）。
-            parallel_mode="parallel",
         )
 
     def _normalize_read_pagination(self, offset: int, limit: int) -> tuple[int, int]:
@@ -483,4 +478,4 @@ def build_read_file_definition() -> ToolDefinition:
         创建 ``ReadFileTool`` 实例和定义对象，不执行文件读取。
     """
 
-    return ReadFileTool().to_definition_if_avaliable()
+    return ReadFileTool().to_definition()

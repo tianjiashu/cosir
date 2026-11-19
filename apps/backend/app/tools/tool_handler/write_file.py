@@ -32,9 +32,9 @@ from app.core.workflow.cancel.run_cancellation_registry import cancellation_regi
 from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
-from app.tools.tool_handler.file_edit.syntax_check import check_source_syntax, format_syntax_reason
 from app.tools.tool_handler.file_edit.line_numbered import looks_like_line_numbered
 from app.tools.tool_handler.file_edit.patch_diff import FileDiffResult
+from app.tools.tool_handler.file_edit.syntax_check import check_source_syntax, format_syntax_reason
 from app.tools.tool_handler.file_observations import file_observations
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models.write_file_args import WriteFileArgs
@@ -67,7 +67,6 @@ class WriteFileTool(HandlerBase):
         "changes, use edit_file instead."
     )
     args_model = WriteFileArgs
-    timeout_seconds = 30.0
     group = TOOL_GROUP_FILE_EDIT
 
 
@@ -110,38 +109,38 @@ class WriteFileTool(HandlerBase):
         副作用:
             可能创建父目录并原子写入目标文件。
         """
-        resolver = PathResolver(execution_context.workspace_root, execution_context.writable_root)
+        resolver = PathResolver(
+            execution_context.workspace_root, execution_context.writable_root, execution_context.scratch_dir
+        )
         device_error = resolver.blocked_device_reason(path)
         if device_error:
-            return tool_error(
-                self.name,
-                device_error,
-            )
+            return tool_error(self.name, device_error, status_hint="路径不可写")
         resolved, error = resolver.resolve_for_write(path)
         if resolved is None:
             return tool_error(
                 self.name,
                 f"could not write the file: {error}. "
                 "Provide a file path inside the project workspace.",
+                status_hint="路径不可写",
             )
         device_error = resolver.blocked_device_reason(path, resolved)
         if device_error:
-            return tool_error(
-                self.name,
-                device_error,
-            )
+            return tool_error(self.name, device_error, status_hint="路径不可写")
         if looks_like_line_numbered(content):
             return tool_error(
                 self.name,
                 "content appears to be line-numbered read_file output. "
                 "Remove the 'N| ' display prefixes and provide the raw file content.",
+                status_hint="内容带行号",
             )
         existed = resolved.exists()
         original = ""
         if existed:
             refusal = file_observations.overwrite_refusal(execution_context.session_id, resolved)
             if refusal:
-                return tool_error(self.name, f"could not write the file: {refusal}.")
+                return tool_error(
+                    self.name, f"could not write the file: {refusal.reason}.", status_hint=refusal.status_hint
+                )
             try:
                 original = Path(resolved).read_text(encoding="utf-8", errors="replace")
             except OSError as exc:
@@ -149,6 +148,7 @@ class WriteFileTool(HandlerBase):
                     self.name,
                     f"{os_error_message(exc, 'read the file')}. "
                     "Make the existing file readable, then call write_file again.",
+                    status_hint="无法读取",
                 )
 
         try:
@@ -159,7 +159,7 @@ class WriteFileTool(HandlerBase):
             atomic_write_text(
                 resolved,
                 content,
-                containment_root=resolver.writable_root,
+                containment_root=resolver.write_containment(resolved),
             )
         except OSError as exc:
             return tool_error(
@@ -168,6 +168,7 @@ class WriteFileTool(HandlerBase):
                     f"{os_error_message(exc, 'write the file')}. "
                     "Make the target writable, then call write_file again."
                 ),
+                status_hint="无法写入",
             )
 
         file_observations.record(execution_context.session_id, resolved)
@@ -215,8 +216,6 @@ class WriteFileTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("filesystem",),
         )
 
 
@@ -236,4 +235,4 @@ def build_write_file_definition() -> ToolDefinition:
         创建 ``WriteFileTool`` 实例和定义对象，不执行文件写入。
     """
 
-    return WriteFileTool().to_definition_if_avaliable()
+    return WriteFileTool().to_definition()

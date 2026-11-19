@@ -162,14 +162,14 @@ async def test_websocket_accepts_user_input_after_agent_prefill(monkeypatch, tmp
 
 @pytest.mark.asyncio
 async def test_websocket_protocol_errors(monkeypatch, tmp_path: Path):
-    """交还交接走 HTTP 决定入口，WS 不再接受 ``handoff_done``，与未知帧一样按协议错误关闭。"""
+    """未知帧按协议错误关闭；会话不归本 Session 或不存在时各报对应的错误码。"""
     from app.api.terminal_stream_api import terminal_session_stream
 
     service, _ = make_service(monkeypatch)
     terminal_session_id = start(service, tmp_path)
     ws = FakeWebSocket()
     ws.push({"type": "attach", "after_seq": None})
-    ws.push({"type": "handoff_done"})
+    ws.push({"type": "bogus"})
     await asyncio.wait_for(terminal_session_stream(ws, 1, terminal_session_id, service), 2)
     assert ws.types()[-1] == "protocol_error" and ws.closed_with is not None
     assert ws.closed_with[0] == 1008

@@ -14,6 +14,7 @@
 ``<DATA_DIR>/.cosir/config/mcp_machine_state.json``（两个作用域 MCP 服务的本机测试记录与 OAuth 凭据）
 ``<DATA_DIR>/.cosir/config/skills.json``
 ``<DATA_DIR>/.cosir/skills/``（cosir 专属 Skill；共享的 ``.agents/skills`` 见 ``app.utils.path.shared_skills``）
+``<DATA_DIR>/.cosir/scratch/<session_id>/``（会话临时目录，见 ``app.service.session.session_scratch``）
 
 本模块只做路径推导，不创建目录、不读写文件。目录创建由桌面宿主、日志配置和存储初始化
 各自负责；``Settings.load`` 在加载系统 ``.env`` 后调用 ``reset``，使环境变量与固定路径重新对齐。
@@ -47,6 +48,7 @@ _RUNTIME_DIR_NAME: Final[str] = "runtime"
 _MCP_MACHINE_STATE_FILE_NAME: Final[str] = "mcp_machine_state.json"
 _MODEL_CONFIG_FILE_NAME: Final[str] = "models.json"
 _DATABASE_FILE_NAME: Final[str] = "app.sqlite3"
+_SCRATCH_DIR_NAME: Final[str] = "scratch"
 LOG_FILE_NAME: Final[str] = "backend.log"
 
 
@@ -196,6 +198,26 @@ def system_cosir_skills_dir() -> Path:
     return system_cosir_dir() / COSIR_SKILLS_DIR_NAME
 
 
+def system_scratch_dir() -> Path:
+    """返回全部会话临时目录的根（``<system_cosir_dir>/scratch``）。
+
+    Agent 文件工具对整个根只读、只对本会话的子目录可写（见 ``ProtectedPaths``）；目录的创建与回收归
+    ``app.service.session.session_scratch``。
+    """
+
+    return system_cosir_dir() / _SCRATCH_DIR_NAME
+
+
+def session_scratch_dir(session_id: int) -> Path:
+    """返回某个会话的临时目录：只由会话 id 推导，不入库。
+
+    Session 主键开了 ``sqlite_autoincrement``，id 不复用，新会话不会撞上旧会话没回收掉的目录。目录名
+    只用 id，路径尽量短（Windows 旧式 API 的 260 字符上限）。
+    """
+
+    return system_scratch_dir() / str(session_id)
+
+
 def system_skills_config_file() -> Path:
     """返回系统级 Skill 启用状态配置文件路径。"""
 
@@ -246,6 +268,8 @@ __all__ = [
     "system_model_config_file",
     "system_mcp_machine_state_file",
     "system_cosir_skills_dir",
+    "system_scratch_dir",
+    "session_scratch_dir",
     "system_skills_config_file",
     "system_agent_config_dir",
     "system_env_file",

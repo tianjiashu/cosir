@@ -7,7 +7,7 @@
 """
 import copy
 import json
-from typing import Any, ClassVar
+from typing import Any
 
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import (
@@ -46,45 +46,32 @@ class DelegateTaskTool(HandlerBase):
 
     name: str = TOOL_DELEGATE_TASK
     # HandlerBase 要求提供类级描述；描述与工具集、workspace 候选无关（子 Agent 目录由系统提示词
-    # 的工具能力目录层下发），进程级基础定义即为模型可见终稿。「何时用」一段对照 Claude Code 的
-    # Agent 工具改写：只说怎么用时，模型会把一两步就能查完的事也派出去，再照单全收子 Agent 的结论。
+    # 的工具能力目录层下发），进程级基础定义即为模型可见终稿。「何时用」对照 Claude Code 的 Agent
+    # 工具改写：只说怎么用时，模型会把一两步就能查完的事也派出去，再照单全收子 Agent 的结论。与分叉
+    # 共用的部分（代价、自己做还是交出去、汇报怎么来与怎么对待）在系统提示词工具层写一次
+    # （``SystemPromptBuilder._handoff_rules``），这里只留委派独有的。
     description: str = (
         "Delegate a focused subtask to a child agent in a new conversation. It runs its own loop "
         "with only your message as input — it cannot see this conversation — so the message must "
         "be a self-contained brief.\n"
         "\n"
         "When to use:\n"
-        "A child costs more than it looks. It knows only what your message says, and you get back "
-        "only its report: both handoffs drop detail, and neither side can tell what the other "
-        "missed. You cannot watch it work; you can only wait for its report, check session_status, "
-        "or send it more instructions. Its mistakes come back as confidently as its findings, and "
-        "a child handed your hypothesis tends to return it confirmed. Several at once spend tokens "
-        "the user did not ask for.\n"
+        "A child knows only what your message says: both handoffs drop detail, and neither side "
+        "can tell what the other missed. A child handed your hypothesis tends to return it "
+        "confirmed, and several at once spend tokens the user did not ask for. You can check on "
+        "it with session_status.\n"
         "- Delegate independent work that can run alongside yours, or an investigation that would "
         "mean reading across many files: you keep the conclusion, not the file dumps.\n"
-        "- Do the work yourself when it is a handful of tool calls or a lookup whose target you "
-        "already know.\n"
         "- Delegate a review only when you want a read that is not anchored on yours: give it the "
         "material, not your conclusion.\n"
-        "- For independent pieces in parallel, make the calls together in one response, and give "
-        "children that write files separate writable_root directories.\n"
-        "- When in doubt, do not delegate. Once you have delegated something, do not also do it "
-        "yourself.\n"
         "\n"
         "After the call:\n"
-        "- It returns as soon as the child conversation is created; the child then reports to you "
-        "automatically with an <agent_message report=...> each time it finishes a run. Wait for it "
-        "with wait_messages, or continue work that does not overlap. To give it more instructions "
-        "later, use send_message to its session.\n"
-        "- Never fabricate or predict a report that has not arrived. Treat a report as a lead, not "
-        "proof: check its key claims before relying on them. The user sees the report only "
-        "collapsed, so state what matters in your own reply.\n"
+        "- It returns as soon as the child conversation is created.\n"
         "- A failed delegation is terminal: adjust the brief or ask the user rather than retrying "
         "identical arguments. An oversized call is rejected as a tool error, so trim or split the "
         "task."
     )
     args_model: type[DelegateTaskArgs] = DelegateTaskArgs
-    timeout_seconds: ClassVar[float] = 300.0
     group = TOOL_GROUP_CHILD_AGENT
 
     def __init__(self) -> None:
@@ -298,16 +285,15 @@ class DelegateTaskTool(HandlerBase):
     def to_definition(self) -> ToolDefinition:
         """构建 delegate_task 工具的注册定义。
 
-        delegate_task 声明为工具级 ``parallel``：当模型在同一回复里发起多个
-        ``delegate_task`` 时，执行层把它们放进同一并行批次并发执行，使多个子 Agent
-        真正并行。并发度只受执行层线程池额度（``Constant.Tools.MAX_PARALLEL_CALLS``）
-        约束，工具层**不声明** child 并发上限——不存在的契约不得下发给模型。
+        调用只建 child Session、投递任务说明就当场完成，同一回复里的多个委派因此串行执行也不慢；子 Agent
+        各自由 child Session 的 actor 驱动，彼此并行运行。工具层**不声明** child 并发上限——不存在的契约
+        不得下发给模型。
 
         参数:
             无。
 
         返回:
-            使用进程内线程执行、同一回复内多个委派可工具级并行的 delegate_task 工具定义；
+            使用进程内线程执行的 delegate_task 工具定义；
             工具观察仅确认 child Session 已建好、任务说明已投递，不等待 child workflow 完成。
 
         异常:
@@ -324,25 +310,21 @@ class DelegateTaskTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            execution_mode="thread",
-            parallel_mode="parallel",
         )
 
 
-def build_delegate_task_definition() -> ToolDefinition | None:
+def build_delegate_task_definition() -> ToolDefinition:
     """构建供工具注册表登记的 delegate_task 基础定义。
 
     CHILD 候选不在工具定义里固化（既无 ``enum`` 也不列举 ID 清单）：合法候选由系统提示词的
     工具能力目录层下发，目标是否可委派由 ``DelegateTaskTool.execute`` 在执行期按 workspace
-    作用域解析内存 Registry 裁决。本函数经 `HandlerBase.to_definition_if_avaliable` 包装调用
-    `to_definition`。
+    作用域解析内存 Registry 裁决。
 
     参数:
         无。
 
     返回:
-        可直接注册到工具注册表的 delegate_task 工具定义；``avaliable`` 为假时返回 None。
+        可直接注册到工具注册表的 delegate_task 工具定义。
 
     异常:
         无。
@@ -352,4 +334,4 @@ def build_delegate_task_definition() -> ToolDefinition | None:
         `ToolDefinition`；不创建 child Session、不启动委派。
     """
 
-    return DelegateTaskTool().to_definition_if_avaliable()
+    return DelegateTaskTool().to_definition()

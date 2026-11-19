@@ -30,7 +30,6 @@ from app.utils.path.system_cosir import (
 from app.utils.path.workspace_cosir import (
     COSIR_AGENT_CONFIG_DIR_NAME,
     COSIR_ATTACHMENT_DIR_NAME,
-    COSIR_ATTACHMENT_STAGING_DIR_NAME,
     COSIR_DIR_NAME,
     COSIR_ENV_FILE_NAME,
     COSIR_INSTRUCTION_FILE_NAME,
@@ -38,7 +37,6 @@ from app.utils.path.workspace_cosir import (
     COSIR_TOOL_ARTIFACT_DIR_NAME,
     workspace_agent_config_dir,
     workspace_attachment_dir,
-    workspace_attachment_staging_dir,
     workspace_cosir_dir,
     workspace_tool_artifact_dir,
 )
@@ -46,7 +44,6 @@ from app.utils.path.workspace_cosir import (
 __all__ = [
     "COSIR_AGENT_CONFIG_DIR_NAME",
     "COSIR_ATTACHMENT_DIR_NAME",
-    "COSIR_ATTACHMENT_STAGING_DIR_NAME",
     "COSIR_DIR_NAME",
     "COSIR_ENV_FILE_NAME",
     "COSIR_INSTRUCTION_FILE_NAME",
@@ -73,7 +70,6 @@ __all__ = [
     "system_skills_config_file",
     "workspace_agent_config_dir",
     "workspace_attachment_dir",
-    "workspace_attachment_staging_dir",
     "workspace_cosir_dir",
     "workspace_tool_artifact_dir",
 ]

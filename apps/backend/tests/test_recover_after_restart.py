@@ -30,7 +30,13 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
         lambda: SimpleNamespace(
             list_session_ids_to_dispatch=lambda: dispatch,
             get_session=lambda session_id: SimpleNamespace(id=session_id, deriver_id=lambda: None),
+            existing_session_ids=lambda session_ids: session_ids,
         ),
+    )
+    monkeypatch.setattr(
+        recover_module,
+        "reclaim_orphan_scratch",
+        lambda existing: calls.append(("scratch", existing({7}))),
     )
     monkeypatch.setattr(
         recover_module,
@@ -58,7 +64,9 @@ def test_recover_after_restart_runs_steps_in_order(monkeypatch: pytest.MonkeyPat
     assert steps[0] == "runs"
     assert sorted(arg for name, arg in calls if name == "space") == [3, 5]
     # 被收敛的 Run 留下的提问在结算其余占位之前作废，标「已中断」；挂起的 Run（这里的 3、5）不动。
-    assert steps[-3:] == ["expire", "interrupt", "notify"]
+    assert steps[-4:] == ["expire", "interrupt", "notify", "scratch"]
+    # 临时目录对账放最后，用会话服务筛出仍存在的会话。
+    assert dict(calls)["scratch"] == {7}
     assert dict(calls)["expire"] == (1, "已中断")
     # 通知集合 = 被收敛的 Run 所属 Session ∪ 它们的派生方（这里没有）∪ 结算了占位的 Session；
     # 每条通知带上它结束的调用（作废的提问、推到已中断的占位）。

@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.config.settings import Settings
 from app.core.tool.handler.web.firecrawl_client import FirecrawlClient
 from app.utils import http_proxy as proxy_module
 from app.utils.http_proxy import resolve_httpx_proxy
@@ -119,7 +120,8 @@ def test_firecrawl_reuses_proxy_aware_client(
         proxy_module, "resolve_httpx_proxy", lambda: "http://127.0.0.1:7890"
     )
 
-    client = FirecrawlClient(api_key="dummy")
+    monkeypatch.setattr(Settings, "FIRECRAWL_API_KEY", "dummy")
+    client = FirecrawlClient()
     client._post("search", {"query": "q"})
     client._post("scrape", {"url": "https://example.com"})
 
@@ -136,7 +138,8 @@ def test_firecrawl_client_proxy_none_when_disabled(
     monkeypatch.setattr(proxy_module.httpx, "Client", _CaptureClient)
     monkeypatch.setattr(proxy_module, "resolve_httpx_proxy", lambda: None)
 
-    client = FirecrawlClient(api_key="dummy")
+    monkeypatch.setattr(Settings, "FIRECRAWL_API_KEY", "dummy")
+    client = FirecrawlClient()
     client._post("search", {"query": "q"})
 
     assert _CaptureClient.instances[0].kwargs.get("proxy") is None

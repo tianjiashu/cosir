@@ -19,7 +19,6 @@ from app.utils.path.system_cosir import (
 from app.utils.path.workspace_cosir import (
     is_in_workspace_cosir,
     workspace_attachment_dir,
-    workspace_attachment_staging_dir,
     workspace_cosir_dir,
     workspace_download_dir,
     workspace_tool_artifact_dir,
@@ -32,7 +31,6 @@ def test_workspace_paths_are_nested_under_cosir(tmp_path: Path) -> None:
     root = tmp_path / "ws"
     assert workspace_cosir_dir(root) == root / ".cosir"
     assert workspace_attachment_dir(root) == root / ".cosir" / "Attachment"
-    assert workspace_attachment_staging_dir(root) == root / ".cosir" / "Attachment" / ".uploading"
     assert workspace_tool_artifact_dir(root) == root / ".cosir" / "tool-artifacts"
     assert workspace_download_dir(root) == root / ".cosir" / "Download"
 

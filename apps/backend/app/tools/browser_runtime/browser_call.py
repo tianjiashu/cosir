@@ -1,11 +1,10 @@
-"""浏览器工具调用宿主 ``browser.*`` 方法的唯一入口：注入归属 Session、标签上下文与交接约束。"""
+"""浏览器工具调用宿主 ``browser.*`` 方法的唯一入口：注入归属 Session 与标签上下文。"""
 
 from __future__ import annotations
 
 from dataclasses import asdict
 from typing import Any
 
-from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.browser_runtime.deadlines import host_timeout
 from app.tools.browser_runtime.tab_context import BrowserTabContext
@@ -30,9 +29,6 @@ def call_browser(
         "session_id": execution_context.session_id,
         **asdict(BrowserTabContext.from_workspace(execution_context.workspace_root)),
         **params,
-        "handoff_tabs": [
-            lease.resource_id for lease in handoff_registry.leases(execution_context.session_id)
-        ],
     }
     return call_host(
         method, request, execution_context=execution_context, timeout_seconds=host_timeout(method)

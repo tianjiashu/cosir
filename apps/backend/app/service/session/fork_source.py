@@ -32,6 +32,7 @@ from app.models.session_extra import SessionFork, SessionForkLaunch
 from app.models.session_kind import SessionType
 from app.models.session_record import SessionRecord
 from app.storage.crud.session_context_crud import SessionContextCrud
+from app.utils.path.system_cosir import session_scratch_dir
 
 _NOT_INHERITED_CONTENT = (
     "The result of this tool call was not inherited in this branch. No tool output is available."
@@ -54,13 +55,17 @@ _WRITABLE_ROOT = (
     "area stated earlier. Do not change files outside it by other means; report what needs to "
     "change there instead."
 )
-# 手动分叉复制到了一条交接通知（「你是会话 B，结果汇报给 A」）时补的更正：交接通知说的是来源自己的身份与
-# 汇报关系，换了 Session 就不成立，而上下文只追加、不改写历史行。
+# 手动分叉的身份声明，每次都发：系统提示词是来源的（接缓存），里面的临时目录属于来源；复制来的历史里还可能有
+# 一条交接通知（「你是会话 B，结果汇报给 A」），换了 Session 就不成立，而上下文只追加、不改写历史行。措辞
+# 写成「如果有，就不再适用」，复制到没复制到交接通知都成立，再手动分叉一次也成立。
 _MANUAL_FORK_IDENTITY = (
-    "You are session {target_id}, a copy the user made of session {source_id}. An earlier notice "
-    "above names a different session as you and says your replies are reported to another session; "
-    "that no longer applies. You work for the user here, and nothing you do is reported automatically."
+    "You are session {target_id}, a copy the user made of session {source_id}. Any earlier notice "
+    "above that names a different session as you or says your replies are reported to another session "
+    "no longer applies. You work for the user here, and nothing you do is reported automatically."
 )
+# 临时目录按会话 id 推导，分叉沿用来源的系统提示词，里面写的是来源的目录（文件工具写不进去）；两种分叉都
+# 在身份声明里更正，与可写根同一种写法。
+_SCRATCH_DIR = " Your scratch directory is {scratch_dir}; it replaces any scratch directory stated earlier."
 
 
 @dataclass(frozen=True)
@@ -258,31 +263,25 @@ class ForkSource:
         }
         return frozenset(answered_outside | waiting)
 
-    def identity_notice(self, cut: ForkCut, target: SessionRecord) -> NoticeBody | None:
-        """分支的身份声明，由调用方在建分支的同一写事务里入队；没有要声明的为 ``None``。
+    def identity_notice(self, target: SessionRecord) -> NoticeBody | None:
+        """分支的身份声明，由调用方在建分支的同一写事务里入队；不是分叉时为 ``None``。
 
         「分支是谁、和来源什么关系」是分叉自己的事实（会话类型、派生调用、可写根都在建分支时定下），所以
         声明归这里，不归发起分叉的工具；与分支同一事务写入，分支存在就一定带着它，不会留下不知道自己是谁的
-        分支。Agent 分叉：交接通知（目标收窄了可写根时附上范围）；手动分叉：复制到了交接通知才补一条更正，
-        否则继承来的对话本来就是用户的，不必声明。
+        分支。分叉原样沿用来源的系统提示词，所以凡是按会话不同的事实（会话 id、临时目录、可写根）都只能在
+        这里更正。Agent 分叉：交接通知（收窄了可写根时附上范围）；手动分叉：身份更正。两种都写明自己的
+        临时目录。
         """
+        scratch = _SCRATCH_DIR.format(scratch_dir=session_scratch_dir(target.id))
         if target.session_type == SessionType.AGENT_FORK:
             content = _AGENT_FORK_HANDOVER.format(fork_id=target.id, source_id=self.session.id)
             if target.extra.writable_root is not None:
                 content += _WRITABLE_ROOT.format(writable_root=target.extra.writable_root)
-            return NoticeBody(content=content, notice_kind="fork_handover")
+            return NoticeBody(content=content + scratch, notice_kind="fork_handover")
         if target.session_type != SessionType.USER_FORK:
             return None
-        copied_handover = any(
-            notice.notice_kind == "fork_handover"
-            for r in self.rows
-            if r.retained and r.sequence < cut.before_sequence and isinstance(r.metadata, UserMessageMetadata)
-            for notice in r.metadata.notices
-        )
-        if not copied_handover:
-            return None
         return NoticeBody(
-            content=_MANUAL_FORK_IDENTITY.format(target_id=target.id, source_id=self.session.id),
+            content=_MANUAL_FORK_IDENTITY.format(target_id=target.id, source_id=self.session.id) + scratch,
             notice_kind="fork_handover",
         )
 

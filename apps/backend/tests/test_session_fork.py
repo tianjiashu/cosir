@@ -827,8 +827,8 @@ def test_question_expired_in_place_with_its_notice_after_the_cut_is_not_inherite
 
 
 def test_manual_fork_of_an_agent_fork_restates_identity(fork_store):
-    """交接通知说的是来源自己的身份与汇报关系（「你是 B，结果汇报给 A」），手动分叉复制到它时，分支要补
-    一条身份通知；没有复制到交接通知的手动分叉不补。"""
+    """交接通知说的是来源自己的身份与汇报关系（「你是 B，结果汇报给 A」），手动分叉复制到它时，分支的身份
+    通知要声明它不再适用。"""
     from app.models.message_metadata import NoticeEntry
     from app.service import depends
 
@@ -860,25 +860,33 @@ def test_manual_fork_of_an_agent_fork_restates_identity(fork_store):
     plain = s.runs.create(manual.id, status="completed")
     again = input_message(s, plain, "plain")
     append(s, plain, {"role": "assistant", "content": "plain reply"})
-    # 分支自己的历史里同样有那条交接通知（继承来的），再手动分叉照样补；只有压根没复制到时才不补。
+    # 分支自己的历史里同样有那条交接通知（继承来的），再手动分叉照样补（手动分叉现在每次都补）。
     assert depends.get_session_message_queue().pending_nowait(fork(s, again).id)
 
 
-def test_plain_manual_fork_gets_no_identity_notice(fork_store):
+def test_plain_manual_fork_is_told_its_own_id_and_scratch_dir(fork_store):
+    """分叉原样沿用来源的系统提示词，里面的临时目录是来源的、写不进去：手动分叉每次都发身份更正，写明自己的
+    会话 id 与临时目录；没复制到交接通知时措辞也成立。"""
     from app.service import depends
+    from app.utils.path.system_cosir import session_scratch_dir
 
     s = fork_store
     run = append_run(s, "completed")
 
     child = fork(s, run.input_id)
 
-    assert depends.get_session_message_queue().pending_nowait(child.id) == []
+    [message] = depends.get_session_message_queue().pending_nowait(child.id)
+    assert message.body.notice_kind == "fork_handover"
+    assert f"You are session {child.id}, a copy the user made of session {s.session.id}" in message.body.content
+    assert f"Your scratch directory is {session_scratch_dir(child.id)};" in message.body.content
+    assert str(session_scratch_dir(s.session.id)) + ";" not in message.body.content
 
 
 def test_agent_fork_is_written_with_its_handover_in_the_same_transaction(fork_store):
-    """Agent 分叉的身份声明归分叉层：分支一建好，队列里就有交接通知（身份、汇报对象），排在任务说明之前；
-    收窄了可写根时附上范围。与分支同一事务写入，不会留下不知道自己是谁的分支。"""
+    """Agent 分叉的身份声明归分叉层：分支一建好，队列里就有交接通知（身份、汇报对象、自己的临时目录），排在
+    任务说明之前；收窄了可写根时附上范围。与分支同一事务写入，不会留下不知道自己是谁的分支。"""
     from app.service import depends
+    from app.utils.path.system_cosir import session_scratch_dir
 
     s = fork_store
     run = append_run(s, "running")
@@ -890,6 +898,7 @@ def test_agent_fork_is_written_with_its_handover_in_the_same_transaction(fork_st
     assert message.body.notice_kind == "fork_handover"
     assert f"You are session {child.id}, a fork of session {s.session.id}" in message.body.content
     assert "writable root" not in message.body.content
+    assert f"Your scratch directory is {session_scratch_dir(child.id)};" in message.body.content
 
     call(s, run, "fork-narrowed")
     narrowed = s.service.fork_for_agent(

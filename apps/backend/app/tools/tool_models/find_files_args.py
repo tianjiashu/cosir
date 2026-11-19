@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.config.constant import Constant
+
 
 class FindFilesArgs(BaseModel):
     """在单文件或递归目录中按 glob 查找文件。"""
@@ -15,5 +17,7 @@ class FindFilesArgs(BaseModel):
             "entire workspace."
         )
     )
-    limit: int = Field(default=50, ge=1, description="Maximum files to return.")
+    limit: int = Field(
+        default=50, ge=1, le=Constant.Tools.LIST_RESULT_LIMIT_MAX, description="Maximum files to return."
+    )
     offset: int = Field(default=0, ge=0, description="Number of matching files to skip.")

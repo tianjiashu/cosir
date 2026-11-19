@@ -146,12 +146,14 @@ class ProcessTerminalWorker:
         raw_args: bool,
         cwd: str,
         on_event: WorkerEventCallback,
+        extra_env: Mapping[str, str] | None = None,
     ) -> None:
         """以执行模式启动 worker（一条一次性命令：管道、无 stdin）并等待握手。
 
         ``on_event`` 接收 ``output`` / ``error`` / ``exit`` / ``disconnected`` 事件；命令启动失败是
         ``exit{reason: start_failed}``（握手之后才启动命令，所以不会表现为 worker 起不来），``exit``
-        是最后一个事件。``raw_args`` 只在 Windows 上有意义：参数按原文拼进命令行。
+        是最后一个事件。``raw_args`` 只在 Windows 上有意义：参数按原文拼进命令行。``extra_env`` 叠加在用户
+        命令环境之上（如 ``COSIR_SCRATCH_DIR``），只作用于这一条命令。
         """
 
         self._launch(
@@ -165,6 +167,7 @@ class ProcessTerminalWorker:
             "exec",
             cwd,
             on_event,
+            extra_env,
         )
 
     def shutdown(self) -> None:
@@ -183,6 +186,7 @@ class ProcessTerminalWorker:
         mode: str,
         cwd: str,
         on_event: WorkerEventCallback,
+        extra_env: Mapping[str, str] | None = None,
     ) -> None:
         """无可见控制台窗口地启动 worker，发送首帧并等待 handshake。
 
@@ -214,7 +218,7 @@ class ProcessTerminalWorker:
                 stderr=subprocess.PIPE,
                 cwd=str(Path(cwd).anchor or cwd),
                 # worker 把自己的环境原样交给 shell，所以在这里就去掉本应用变量。
-                env=user_command_environment(),
+                env={**user_command_environment(), **(extra_env or {})},
                 bufsize=0,
                 creationflags=creationflags,
                 # 自成会话（POSIX）：宿主强杀后端时对后端整个进程组发 SIGKILL，worker 若同组会一起

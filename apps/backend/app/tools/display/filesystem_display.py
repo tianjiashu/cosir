@@ -41,23 +41,19 @@ def build_file_search_display_data(
     path: str,
     files: Iterable[str],
     offset: int,
-    limit: int,
     match_count: int,
 ) -> dict[str, Any]:
-    """构造 find_files 的有界文件列表展示数据。"""
+    """构造 find_files 的有界文件列表展示数据（条数受 ``limit`` 上限约束）。
 
-    has_more = match_count > offset + limit
+    ``page`` 只说这一页从哪开始、总共多少：卡片据此说明「第几到第几条 · 共多少」，下一页由模型翻。
+    """
+
     return {
         "kind": "file-list",
         "files": [{"path": item} for item in files],
         "pattern": pattern,
         "path": path,
-        "page": {
-            "offset": offset,
-            "limit": limit,
-            "has_more": has_more,
-            "next_offset": offset + limit if has_more else None,
-        },
+        "page": {"offset": offset, "total": match_count},
         "match_count": match_count,
     }
 
@@ -68,13 +64,13 @@ def build_content_search_display_data(
     path: str,
     matches: Iterable[Any],
     offset: int,
-    limit: int,
     total_rows: int,
     match_count: int,
-    scanned_files: int,
-    skipped_files: int,
 ) -> dict[str, Any]:
-    """构造 content-search-results 展示数据，不解析模型正文。"""
+    """构造 content-search-results 展示数据，不解析模型正文。
+
+    ``page.total`` 按输出行（含上下文行）计，与 ``offset`` 同一口径；``match_count`` 是命中数，给调用行用。
+    """
 
     rows = [
         {
@@ -85,22 +81,13 @@ def build_content_search_display_data(
         }
         for item in matches
     ]
-    has_more = total_rows > offset + limit
     return {
         "kind": "content-search-results",
         "pattern": pattern,
         "path": path,
         "matches": rows,
-        "page": {
-            "offset": offset,
-            "limit": limit,
-            "has_more": has_more,
-            "next_offset": offset + limit if has_more else None,
-        },
-        "total_rows": total_rows,
+        "page": {"offset": offset, "total": total_rows},
         "match_count": match_count,
-        "scanned_files": scanned_files,
-        "skipped_files": skipped_files,
     }
 
 

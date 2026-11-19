@@ -1,6 +1,5 @@
 """``terminal_write`` handler：把一行命令填进用户终端的空提示符，不执行、不等待。"""
 
-from typing import ClassVar
 
 from app.core.tool.schemas import (
     TOOL_TERMINAL_WRITE,
@@ -34,7 +33,6 @@ class TerminalWriteTool(HandlerBase):
         "first and fill in the command that runs it."
     )
     args_model = TerminalWriteArgs
-    timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_TERMINAL_SESSION
 
     def execute(
@@ -68,7 +66,4 @@ class TerminalWriteTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("shell",),
-            execution_mode="thread",
         )

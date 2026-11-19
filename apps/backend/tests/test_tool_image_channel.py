@@ -94,18 +94,17 @@ def _gate_outcome(supports_image: bool | None):
         session_id=1, workspace_id=1, workspace_root=Path("."), step_id="s", run_id=1, agent=agent
     )
     gate = ToolAccessGate(ToolRegistry([definition]))
-    return gate.evaluate(ToolCall("demo_capture", '{"intent":"检查图像"}', "call-1"), context)
+    return gate.evaluate(ToolCall("demo_capture", '{"intent":"检查图像"}', "call-1"), context, {"demo_capture"})
 
 
 # 目的：判定只在准入一处；潜在缺陷：不看图的模型拿到截图请求失败，或每个出图工具各写一遍判断。
 def test_gate_rejects_image_tools_for_text_only_models() -> None:
     denied = _gate_outcome(supports_image=False)
-    assert not denied.admitted
     assert denied.denial is not None
     assert denied.denial.display_data == {"status_hint": "模型不支持图片"}
-    assert _gate_outcome(supports_image=True).admitted
+    assert _gate_outcome(supports_image=True).denial is None
     # 不经 Run 的直接调用（没有 Agent 配置）不做模型判断。
-    assert _gate_outcome(supports_image=None).admitted
+    assert _gate_outcome(supports_image=None).denial is None
 
 
 # 目的：图片是调用结果、就地落库；潜在缺陷：经 mailbox 时同批有工具挂起，图片在并入前随执行丢弃。

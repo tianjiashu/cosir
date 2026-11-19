@@ -14,7 +14,6 @@
 
 from app.tools.tool_models.browser_args.act import BrowserActArgs
 from app.tools.tool_models.browser_args.evaluate import BrowserEvaluateArgs
-from app.tools.tool_models.browser_args.handoff import BrowserHandoffArgs
 from app.tools.tool_models.browser_args.logs import BrowserLogsArgs
 from app.tools.tool_models.browser_args.navigate import BrowserNavigateArgs
 from app.tools.tool_models.browser_args.screenshot import BrowserScreenshotArgs
@@ -24,7 +23,6 @@ from app.tools.tool_models.browser_args.tabs import BrowserTabsArgs
 __all__ = [
     "BrowserActArgs",
     "BrowserEvaluateArgs",
-    "BrowserHandoffArgs",
     "BrowserLogsArgs",
     "BrowserNavigateArgs",
     "BrowserScreenshotArgs",

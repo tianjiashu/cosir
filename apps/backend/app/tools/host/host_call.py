@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.tool.execute.thread_wait import ToolCallStopped, wait_for_call
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
 from app.service import depends as service_depends
+from app.tools.cancellable_wait import ToolCallStopped, wait_for_call
 from app.tools.host.errors import CANCELLED, TIMEOUT, UNAVAILABLE, HostCallError
 
 

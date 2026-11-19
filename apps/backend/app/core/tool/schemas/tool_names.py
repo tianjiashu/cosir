@@ -28,7 +28,6 @@ TOOL_BROWSER_SCREENSHOT: Final[str] = "browser_screenshot"
 TOOL_BROWSER_TABS: Final[str] = "browser_tabs"
 TOOL_BROWSER_LOGS: Final[str] = "browser_logs"
 TOOL_BROWSER_EVALUATE: Final[str] = "browser_evaluate"
-TOOL_BROWSER_HANDOFF: Final[str] = "browser_handoff"
 TOOL_DELEGATE_TASK: Final[str] = "delegate_task"
 TOOL_FORK_SESSION: Final[str] = "fork_session"
 TOOL_SEND_MESSAGE: Final[str] = "send_message"
@@ -63,7 +62,6 @@ ToolName: TypeAlias = Literal[
     "browser_tabs",
     "browser_logs",
     "browser_evaluate",
-    "browser_handoff",
     "delegate_task",
     "fork_session",
     "send_message",
@@ -99,7 +97,6 @@ ALL_TOOL_NAMES: Final[tuple[str, ...]] = (
     TOOL_BROWSER_TABS,
     TOOL_BROWSER_LOGS,
     TOOL_BROWSER_EVALUATE,
-    TOOL_BROWSER_HANDOFF,
     TOOL_DELEGATE_TASK,
     TOOL_FORK_SESSION,
     TOOL_SEND_MESSAGE,

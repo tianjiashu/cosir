@@ -23,7 +23,7 @@ from app.bootstate import (
     write_bootstate,
 )
 from app.config.constant import Constant
-from app.config.logging.configuration import install_logging_for_current_process
+from app.config.logging.configuration import configure_logging
 from app.config.settings import Settings
 from app.parent_watch import install_parent_watch_from_env
 from app.service.depends import initialize_service_dependencies
@@ -63,14 +63,14 @@ def main() -> None:
             write_bootstate(boot_state_file, Constant.Boot.BOOTING, step="start")
 
         # 先按固定路径安装最小日志管线，覆盖 Settings.load 和依赖初始化失败窗口。
-        install_logging_for_current_process(log_dir=paths.LOG_DIR)
+        configure_logging(log_dir=paths.LOG_DIR)
         # 必须早于 Settings.load 与一切子进程派生，原因见 login_environment 模块说明。
         if boot_state_file is not None:
             write_bootstate(boot_state_file, Constant.Boot.BOOTING, step="resolve_shell_env")
         apply_login_shell_environment()
         Settings.load()
         initialize_service_dependencies()
-        install_logging_for_current_process(
+        configure_logging(
             log_dir=paths.LOG_DIR,
             max_bytes=Constant.Logging.MAX_BYTES,
             backup_count=Constant.Logging.BACKUP_COUNT,

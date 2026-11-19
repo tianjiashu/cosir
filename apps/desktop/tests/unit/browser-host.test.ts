@@ -46,6 +46,7 @@ class FakeTab {
     undeliveredNotes: vi.fn((): string[] => []),
     digest: vi.fn(() => ({ notes: [], newLogs: { consoleErrors: 0, consoleWarnings: 0, failedRequests: 0 } })),
   };
+  readonly settleNotes = { take: vi.fn((): string[] => []) };
   status: number | null = null;
   url = "";
   title = "";

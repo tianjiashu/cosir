@@ -16,6 +16,7 @@ from app.tools.tool_handler.terminal import execute_terminal as terminal_module
 from app.tools.tool_handler.terminal.command_job import CommandJob
 from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
+from app.utils.path.system_cosir import session_scratch_dir
 from tests.live_cold_support import registered
 
 
@@ -28,9 +29,10 @@ class _Command:
         self.error: Exception | None = None
         self.timeout: float | None = None
 
-    def execute(self, command, cwd, timeout, output, **_kwargs) -> ExecutionResult:
+    def execute(self, command, cwd, timeout, output, **kwargs) -> ExecutionResult:
         self.cwd = cwd
         self.timeout = timeout
+        self.kwargs = kwargs
         self.thread = threading.current_thread()
         self.started.set()
         assert self.release.wait(5)
@@ -130,6 +132,16 @@ def test_foreground_returns_result_without_delivery(tmp_path, command, pool, del
     assert observation.status == "success" and observation.background is None
     assert observation.content == "[exit_code=0]\ncall-1\n"
     assert delivered == [] and not registered(command_results, 1, "call-1")
+
+
+def test_commands_get_the_session_scratch_dir_as_environment_variable(tmp_path, command, pool):
+    """提示词让模型在命令里用 COSIR_SCRATCH_DIR，不必抄绝对路径；值只给这一条命令。"""
+    result = pool.submit(_execute, tmp_path)
+    assert command.started.wait(2)
+    assert command.kwargs["extra_env"] == {"COSIR_SCRATCH_DIR": str(session_scratch_dir(1))}
+    command.release.set()
+    result.result(timeout=2)
+    command.join()
 
 
 def test_commands_start_in_the_writable_root_unless_a_workdir_is_given(tmp_path, command, pool):

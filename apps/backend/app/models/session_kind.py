@@ -1,10 +1,10 @@
 """Session 类型规则：每类 Session 是不是用户能操作的对话、允许哪几种派生。
 
 只是数据与纯规则，Session 一侧的唯一事实源。新建 Session 固化工具 schema 时，由
-``core.tool.session_tool_scope.tools_for_session`` 据本表过滤：不是用户能操作的对话，就去掉需要用户
+``core.tool.multi_agent.session_tool_scope.tools_for_session`` 据本表过滤：不是用户能操作的对话，就去掉需要用户
 界面的工具（工具在 ``ToolDefinition`` 上声明 ``needs_user_surface``，需要用户作答的
 ``user_decision`` 工具自动算）；不允许的派生方式，去掉对应的派生工具（派生方式、工具名与深度增量
-在 ``core.tool.derivation.DERIVATIONS``，本表不认识工具名）。分叉沿用源的 schema，派生限制改由
+在 ``core.tool.multi_agent.derivation.DERIVATIONS``，本表不认识工具名）。分叉沿用源的 schema，派生限制改由
 运行期准入执行（``session_tool_scope.banned_derivation_tools``）。
 
 扩展：新增一类 Session，在 :class:`SessionType` 和 :data:`SESSION_KINDS` 各加一项。新增派生方式，在
@@ -34,7 +34,7 @@ DerivationKind = Literal["delegate", "fork"]
 class SessionKind:
     """一类 Session：是不是侧栏里用户能操作的对话，以及允许的派生方式。
 
-    ``user_facing`` 为假的 Session（委派子 Agent）在前端只读：需要用户作答（审批、交接）或
+    ``user_facing`` 为假的 Session（委派子 Agent）在前端只读：需要用户作答（提问）或
     要在面板里操作（交互终端、配置草稿）的工具给了它也没人能用，调用后会永远等不到结果。
     """
 

@@ -14,7 +14,7 @@
 """
 
 import json
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 from app.config.logging.logger import log
 from app.core.permission.writable_root import WritableRootError, narrow
@@ -45,7 +45,9 @@ class ForkSessionTool(HandlerBase):
 
     name: str = TOOL_FORK_SESSION
     # 「何时用」对照 Claude Code 的 Agent 工具与派生会话规则改写，只取适用于分叉的部分：分叉带着上下文，
-    # 「它只知道你写的」不成立，反过来要强调本回合不可见、它与你同一套推理不能当独立核查。
+    # 「它只知道你写的」不成立，反过来要强调本回合不可见、它与你同一套推理不能当独立核查。与委派共用的
+    # 部分（代价、自己做还是交出去、汇报怎么来与怎么对待）在系统提示词工具层写一次
+    # （``SystemPromptBuilder._handoff_rules``），这里只留分叉独有的。
     description: str = (
         "Fork this conversation into a new sidebar conversation and hand it one part of the "
         "work. It inherits your identity, model, tools and the conversation up to your previous "
@@ -56,31 +58,16 @@ class ForkSessionTool(HandlerBase):
         "When to use:\n"
         "Use it to split a task into parts that each need this conversation's context; use "
         "delegate_task instead when a specialised child agent should do a self-contained piece, "
-        "or when the part needs little of a long conversation. A fork still costs more than it "
-        "looks: it carries this whole conversation into every request, you get back only its "
-        "report, you cannot watch it work, and its mistakes come back as confidently as its "
-        "findings. It also shares your reasoning so far, so it is no independent check: for a "
-        "review not anchored on yours, use delegate_task and give it the material, not your "
-        "conclusion.\n"
-        "- Do the work yourself when it is a handful of tool calls or a lookup whose target you "
-        "already know.\n"
-        "- For parts in parallel, make the calls together in one response, and give forks that "
-        "write files separate writable_root directories.\n"
-        "- When in doubt, do not fork. Once you have handed a part to a fork, do not also do it "
-        "yourself.\n"
+        "or when the part needs little of a long conversation. A fork carries this whole "
+        "conversation into every request, and it shares your reasoning so far, so it is no "
+        "independent check: for a review not anchored on yours, use delegate_task and give it the "
+        "material, not your conclusion.\n"
         "\n"
         "After the call:\n"
         "- It returns once the fork is created. The fork does not see anything said here after it "
-        "starts, and the user can open it and talk to it. Each time it finishes a run of your "
-        "assignment it reports to you with an <agent_message report=...>; wait for it with "
-        "wait_messages, or keep doing work that does not overlap. To give it more instructions, "
-        "use send_message.\n"
-        "- Never fabricate or predict a report that has not arrived. Treat a report as a lead, not "
-        "proof: check its key claims before relying on them. The user sees the report only "
-        "collapsed, so state what matters in your own reply."
+        "starts, and the user can open it and talk to it."
     )
     args_model: type[ForkSessionArgs] = ForkSessionArgs
-    timeout_seconds: ClassVar[float] = 300.0
     group = TOOL_GROUP_CHILD_AGENT
 
     def __init__(self) -> None:
@@ -201,12 +188,9 @@ class ForkSessionTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            execution_mode="thread",
-            parallel_mode="parallel",
         )
 
 
-def build_fork_session_definition() -> ToolDefinition | None:
+def build_fork_session_definition() -> ToolDefinition:
     """供工具注册表登记的 fork_session 定义。"""
-    return ForkSessionTool().to_definition_if_avaliable()
+    return ForkSessionTool().to_definition()

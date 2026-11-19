@@ -17,7 +17,6 @@ from pathlib import Path, PurePath
 
 COSIR_DIR_NAME: str = ".cosir"
 COSIR_ATTACHMENT_DIR_NAME: str = "Attachment"
-COSIR_ATTACHMENT_STAGING_DIR_NAME: str = ".uploading"
 COSIR_DOWNLOAD_DIR_NAME: str = "Download"
 COSIR_TOOL_ARTIFACT_DIR_NAME: str = "tool-artifacts"
 COSIR_AGENT_CONFIG_DIR_NAME: str = "agents"
@@ -65,12 +64,6 @@ def workspace_attachment_dir(workspace_root: str | Path) -> Path:
     """返回 workspace 附件目录路径（``<workspace>/.cosir/Attachment``）。"""
 
     return workspace_cosir_dir(workspace_root) / COSIR_ATTACHMENT_DIR_NAME
-
-
-def workspace_attachment_staging_dir(workspace_root: str | Path) -> Path:
-    """返回 workspace 附件上传暂存目录路径（``<workspace>/.cosir/Attachment/.uploading``）。"""
-
-    return workspace_attachment_dir(workspace_root) / COSIR_ATTACHMENT_STAGING_DIR_NAME
 
 
 def workspace_download_dir(workspace_root: str | Path) -> Path:
@@ -123,7 +116,6 @@ def workspace_mcp_servers_file(workspace_root: str | Path) -> Path:
 __all__ = [
     "COSIR_AGENT_CONFIG_DIR_NAME",
     "COSIR_ATTACHMENT_DIR_NAME",
-    "COSIR_ATTACHMENT_STAGING_DIR_NAME",
     "COSIR_CONFIG_DIR_NAME",
     "COSIR_DIR_NAME",
     "COSIR_DOWNLOAD_DIR_NAME",
@@ -137,7 +129,6 @@ __all__ = [
     "COSIR_TOOL_ARTIFACT_DIR_NAME",
     "workspace_agent_config_dir",
     "workspace_attachment_dir",
-    "workspace_attachment_staging_dir",
     "workspace_cosir_dir",
     "workspace_cosir_skills_dir",
     "workspace_download_dir",

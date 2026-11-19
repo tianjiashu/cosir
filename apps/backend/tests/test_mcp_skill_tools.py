@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import socket
 import sys
 from pathlib import Path
@@ -29,6 +30,13 @@ from app.tools.mcp.connection_pool import MCPConnectionPool
 from app.tools.tool_handler.mcp_tool import MCPTool
 from app.tools.tool_handler.skill_tool import SkillTool
 from app.utils.path import system_cosir
+
+_BLOCK = re.compile(r'<(mcp_result|mcp_tools) source="[^"]*" untrusted>\n(.*?)\n</\1>', re.DOTALL)
+
+
+def _blocks(content: str) -> list:
+    """MCP 结果里各 untrusted 块的 JSON 正文（目录每个服务一块，调用结果一块）。"""
+    return [json.loads(body) for _, body in _BLOCK.findall(content)]
 
 
 def _write_skill(directory, name: str, description: str, body: str = "说明正文"):
@@ -272,7 +280,7 @@ def test_mcp_tool_does_not_discover_or_call_an_untested_server(tmp_path, monkeyp
         action="call", server_name="one", tool_name="search", execution_context=_context(workspace)
     )
 
-    assert json.loads(listing.content) == []
+    assert listing.content == "no MCP servers are available"
     assert call.status == "error"
     assert "has not passed a connection test" in call.content
 
@@ -401,7 +409,7 @@ def test_system_server_gets_one_connection_per_workspace_it_is_used_in(tmp_path,
             execution_context=_context(workspace),
         )
         assert result.status == "success", result.content
-        return json.loads(result.content)
+        return _blocks(result.content)[0]
 
     try:
         cwds = [Path(whoami(first)["cwd"]).resolve(), Path(whoami(second)["cwd"]).resolve()]
@@ -488,7 +496,7 @@ def test_mcp_tool_keeps_same_named_workspace_servers_apart(tmp_path, monkeypatch
             execution_context=_context(workspace),
         )
         assert result.status == "success", result.content
-        return json.loads(result.content)
+        return _blocks(result.content)[0]
 
     try:
         listing = tool.execute(action="list", execution_context=_context(first))
@@ -497,11 +505,11 @@ def test_mcp_tool_keeps_same_named_workspace_servers_apart(tmp_path, monkeypatch
     finally:
         pool.close()
 
-    assert json.loads(listing.content)[0]["tools"][0]["name"] == "whoami"
+    assert _blocks(listing.content)[0]["tools"][0]["name"] == "whoami"
     # 目录只给名称与简短说明（schema 按需单独查），卡片的展示数据也一样。
-    assert set(json.loads(listing.content)[0]["tools"][0]) == {"name", "description"}
+    assert set(_blocks(listing.content)[0]["tools"][0]) == {"name", "description"}
     assert set(listing.display_data["servers"][0]["tools"][0]) == {"name", "description"}
-    assert json.loads(listing.content)[0]["scope"] == "workspace"
+    assert _blocks(listing.content)[0]["scope"] == "workspace"
     assert [item["marker"] for item in results] == ["first", "second", "first"]
     assert [Path(item["cwd"]).resolve() for item in results] == [
         first.resolve(),
@@ -579,9 +587,9 @@ def echo_tool(tmp_path, monkeypatch):
 
 # 潜在缺陷：服务多了以后一次给出全部 schema，超出工具输出上限被截断，模型看不到要用的工具。
 def test_listing_is_a_compact_catalog_with_keyword_filter_and_schema_on_request(echo_tool):
-    listing = json.loads(echo_tool(action="list").content)
-    filtered = json.loads(echo_tool(action="list", query="WORDS text").content)
-    detail = json.loads(echo_tool(action="list", server_name="echo", tool_name="echo").content)
+    listing = _blocks(echo_tool(action="list").content)
+    filtered = _blocks(echo_tool(action="list", query="WORDS text").content)
+    detail = _blocks(echo_tool(action="list", server_name="echo", tool_name="echo").content)
     unknown = echo_tool(action="list", server_name="echo", tool_name="missing")
 
     [echo, count] = listing[0]["tools"]
@@ -602,7 +610,7 @@ def test_arguments_are_checked_against_the_tool_schema_before_calling(echo_tool)
     assert rejected.status == "error"
     assert "was not sent" in rejected.content and '"required": ["value"]' in rejected.content
     # 被拒的那次没有到达服务：服务端只记到一次调用。
-    assert json.loads(accepted.content) == {"echo": "hi", "calls": 1}
+    assert _blocks(accepted.content) == [{"echo": "hi", "calls": 1}]
 
 
 def test_lookup_needs_the_server_name():

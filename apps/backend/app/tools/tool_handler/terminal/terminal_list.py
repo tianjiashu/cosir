@@ -1,6 +1,5 @@
 """``terminal_list``：本 Session 的终端——用户打开的会话与 Agent 自己运行中的命令。"""
 
-from typing import ClassVar
 
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
@@ -38,7 +37,6 @@ class TerminalListTool(HandlerBase):
         "reading a terminal, and when picking up work in a new run."
     )
     args_model = TerminalListArgs
-    timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_TERMINAL
 
     def execute(self, execution_context: ToolExecutionContext) -> ToolObservation:
@@ -56,7 +54,4 @@ class TerminalListTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("shell",),
-            execution_mode="thread",
         )

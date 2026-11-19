@@ -40,6 +40,20 @@ class MCPFailureKind(StrEnum):
     OTHER = "other"
 
 
+_STATUS_HINTS: dict[MCPFailureKind, str] = {
+    MCPFailureKind.MISSING_VARIABLES: "缺少变量",
+    MCPFailureKind.AUTHORIZATION_REQUIRED: "需要登录",
+    MCPFailureKind.AUTHORIZATION_DENIED: "授权未完成",
+    MCPFailureKind.AUTHORIZATION_TIMEOUT: "授权超时",
+    MCPFailureKind.CREDENTIALS_REJECTED: "认证被拒",
+    MCPFailureKind.NOT_FOUND: "服务地址无效",
+    MCPFailureKind.UNREACHABLE: "连接失败",
+    MCPFailureKind.COMMAND_NOT_FOUND: "找不到命令",
+    MCPFailureKind.TIMEOUT: "连接超时",
+    MCPFailureKind.OTHER: "调用失败",
+}
+
+
 @dataclass(frozen=True)
 class MCPFailure:
     """一次失败的归类结果。``detail`` 是给日志的原始说明；``variables`` 是与这次失败有关的变量名。"""
@@ -121,6 +135,11 @@ class MCPFailure:
                 return "连接超时"
             case MCPFailureKind.OTHER:
                 return self.detail
+
+    def status_hint(self) -> str:
+        """调用行的短提示（≤8 字）：与配置页同一份归类，只说原因的类别，细节在配置页与给模型的说法里。"""
+
+        return _STATUS_HINTS[self.kind]
 
     def for_model(self) -> str:
         """给模型的说法：说清原因，以及应不应该重试、要不要请用户处理。"""

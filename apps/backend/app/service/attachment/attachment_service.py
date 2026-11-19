@@ -27,7 +27,6 @@ from app.service.attachment.image_normalizer import (
 from app.utils.path.file_identity import RootDirectory
 from app.utils.path.workspace_cosir import (
     workspace_attachment_dir,
-    workspace_attachment_staging_dir,
     workspace_cosir_dir,
 )
 
@@ -139,18 +138,15 @@ class AttachmentService:
             ImageNormalizationError: 附件目录不可用（reparse point / 创建失败）。
 
         副作用:
-            可能按需创建 ``<root>/.cosir``、``<root>/.cosir/Attachment`` 与
-            ``<root>/.cosir/Attachment/.uploading``。
+            可能按需创建 ``<root>/.cosir`` 与 ``<root>/.cosir/Attachment``。
         """
 
         workspace = self._workspaces.get_workspace(workspace_id)
         root = Path(workspace.root_path).resolve()
         cosir = workspace_cosir_dir(root)
         directory = workspace_attachment_dir(root)
-        staging = workspace_attachment_staging_dir(root)
         _assert_real_directory(cosir, create=True)
         _assert_real_directory(directory, create=True)
-        _assert_real_directory(staging, create=True)
         try:
             attachment_root = RootDirectory.at(directory)
         except OSError as exc:
@@ -183,12 +179,8 @@ class AttachmentService:
     def _files(self, dirs: _WorkspaceAttachmentDirs, asset_id: str) -> list[Path]:
         self._safe_asset_id(asset_id)
         directory = dirs.attachment_dir
-        candidates = [
-            *directory.glob(f".uploading/{asset_id}.*"),
-            *directory.glob(f"{asset_id}.*"),
-        ]
         files: list[Path] = []
-        for path in candidates:
+        for path in directory.glob(f"{asset_id}.*"):
             if _is_reparse_point(path):
                 raise ImageNormalizationError(
                     "ATTACHMENT_STORAGE_UNAVAILABLE", "附件存储目录不可用"
@@ -200,7 +192,7 @@ class AttachmentService:
     async def upload(self, workspace_id: int, file: UploadFile) -> AttachmentDescriptor:
         """校验、规范化并幂等保存一张 workspace 级 JPEG/PNG 图片。
 
-        上传不要求 Session 或 Run 已存在，也不建立任何消息引用。原始流先写入 workspace 临时目录，
+        上传不要求 Session 或 Run 已存在，也不建立任何消息引用。原始流先写成附件目录里的临时文件，
         再交给与 :meth:`save_image` 共用的发布内核（:meth:`_publish`）。
 
         参数:
@@ -223,7 +215,7 @@ class AttachmentService:
 
         workspace_dirs = self._dirs(workspace_id)
         source_tmp = (
-            workspace_attachment_staging_dir(workspace_dirs.workspace_root)
+            workspace_dirs.attachment_dir
             / f".{uuid4().hex}.raw.part"
         )
         source_created = False
@@ -252,7 +244,8 @@ class AttachmentService:
     def save_image(self, workspace_id: int, data: bytes, name: str) -> SavedImage:
         """工具在内存里产出的图片（如浏览器截图）按与上传完全相同的规则规范化并幂等发布。
 
-        本机已有的图片文件走 :meth:`import_image`。与 :meth:`upload` 共用发布内核：同一套 EXIF 方向、最长边与大小策略，同一个附件目录。
+        本机已有的图片文件走 :meth:`import_image`。与 :meth:`upload` 共用发布内核：
+        同一套 EXIF 方向、最长边与大小策略，同一个附件目录。
         返回值另带 workspace 相对路径——模型请求里的图片定位符用它（见 ``vision_input``），
         不用 asset id。同步阻塞 IO，只在工具线程调用。
 
@@ -265,7 +258,7 @@ class AttachmentService:
             raise ImageNormalizationError("ATTACHMENT_FILE_TOO_LARGE", "附件文件过大")
         workspace_dirs = self._dirs(workspace_id)
         source_tmp = (
-            workspace_attachment_staging_dir(workspace_dirs.workspace_root)
+            workspace_dirs.attachment_dir
             / f".{uuid4().hex}.raw.part"
         )
         try:
@@ -284,7 +277,7 @@ class AttachmentService:
     def import_image(self, workspace_id: int, source: Path) -> SavedImage:
         """本机已有的图片文件（工作区内外均可，如 ``read_image`` 读到的路径）按上传规则规范化并幂等发布。
 
-        源文件只读、直接作为规范化输入，不先复制进暂存区；规范化产物仍写在本工作区的暂存目录里。
+        源文件只读、直接作为规范化输入，不先复制进暂存区；规范化产物仍以临时文件写在本工作区的附件目录里。
         同一份内容重复导入得到同一个 asset（SHA-256 去重），导入已发布的附件本身也是幂等的。
         同步阻塞 IO，只在工具线程调用。
 
@@ -324,12 +317,15 @@ class AttachmentService:
         """发布内核：规范化源文件，以规范化后字节的 SHA-256 为资源标识原子发布到附件目录。
 
         上传、工具内存图片与本机图片文件三个入口共用这里，图片规则只有这一份。``source`` 只读；
-        调用方负责清理自己建的暂存源文件，规范化产物由这里清理。返回描述与正式文件路径。
+        调用方负责清理自己建的临时源文件，规范化产物由这里清理。返回描述与正式文件路径。
+
+        临时文件直接放在附件目录里（``.<uuid>.*.part``）：硬链接发布要求与正式文件同一文件系统，
+        而点开头的 ``.part`` 名永远不匹配 ``ASSET_FILE``，不会被当成附件，也就不需要单独的暂存子目录。
         """
 
         directory = workspace_dirs.attachment_dir
         normalized_tmp = (
-            workspace_attachment_staging_dir(workspace_dirs.workspace_root)
+            workspace_dirs.attachment_dir
             / f".{uuid4().hex}.normalized.part"
         )
         try:
@@ -387,10 +383,7 @@ class AttachmentService:
 
         safe_asset_id = self._safe_asset_id(asset_id)
         dirs = self._dirs(workspace_id)
-        path = next(
-            (item for item in self._files(dirs, safe_asset_id) if ".uploading" not in item.parts),
-            None,
-        )
+        path = next(iter(self._files(dirs, safe_asset_id)), None)
         if path is None:
             raise ImageNormalizationError("ATTACHMENT_NOT_FOUND", "附件不存在")
         match = Constant.Attachment.ASSET_FILE.fullmatch(path.name)

@@ -6,7 +6,6 @@
 回合；点按钮就是替用户发出标签原文这条普通消息，后端不知道它来自按钮。
 """
 
-from typing import ClassVar
 
 from app.core.tool.handler.next_step.offer_next_step_args import (
     NEXT_STEP_ASK_MAX,
@@ -35,13 +34,13 @@ class OfferNextStepTool(HandlerBase):
         "nothing is pending, for short answers, and for plain conversation. Most replies need "
         "none.\n\n"
         "Clicking a button sends its label to you as the user's next message. This call does not "
-        "pause your work or wait for an answer. After it, write your closing message — your "
-        "answer in full — and do not repeat the question there.\n\n"
+        "pause your work or wait for an answer. Call it before you write your answer, in a "
+        "response with no other text; after it, write your full answer and do not repeat the "
+        "question there.\n\n"
         "If you cannot continue without the user's decision, use `ask_user` instead. Never "
         "repeat an offer the user passed over unless what it acts on has changed."
     )
     args_model: type[OfferNextStepArgs] = OfferNextStepArgs
-    timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_REPLY_PRESENTATION
 
     def execute(
@@ -67,7 +66,7 @@ class OfferNextStepTool(HandlerBase):
             )
         return tool_success(
             self.name,
-            "Offered. Now write your closing message; do not repeat the question in it.",
+            "Offered. Now write your full answer to the user; do not repeat the question in it.",
             display_data={"kind": "next-step", "ask": question, "replies": labels},
         )
 
@@ -78,11 +77,10 @@ class OfferNextStepTool(HandlerBase):
             name=self.name,
             group=self.group,
             needs_user_surface=True,
+            part_of_reply=True,
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            execution_mode="thread",
         )
 
 

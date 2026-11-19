@@ -16,8 +16,8 @@ class BrowserRegion(BaseModel):
     height: float = Field(gt=0, allow_inf_nan=False, description="Height in CSS pixels.")
 
 
-# 截哪里：视口（默认）、整页、单个元素（看清图标、按钮、验证码），或视口里的一块（ref 覆盖不到的画布、
-# 图表、表格局部）。后两种图更小、省上下文。
+# 截哪里：视口（默认）、整页、单个元素（看清图标、图片、按钮、验证码），或视口里的一块（元素内部的
+# 一部分：画布上画的图表、大表格的局部）。后两种图更小、省上下文。
 class BrowserScreenshotArgs(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
@@ -29,14 +29,15 @@ class BrowserScreenshotArgs(BaseModel):
         pattern=REF_PATTERN,
         description=(
             "Capture only this element (with a small margin; small ones are enlarged), e.g. an "
-            "icon, a button or a captcha. Null for the viewport, the whole page or a region."
+            "icon, an image, a button or a captcha. Null for the viewport, the whole page or a "
+            "region."
         ),
     )
     region: BrowserRegion | None = Field(
         default=None,
         description=(
             "Capture only this part of the viewport, e.g. a chart drawn on a canvas or part of a "
-            "table that has no ref; take its coordinates from a viewport screenshot. It must lie "
+            "large table; take its coordinates from a viewport screenshot. It must lie "
             "inside the viewport (scroll first); small regions are enlarged. Null otherwise."
         ),
     )

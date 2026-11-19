@@ -101,6 +101,7 @@ class LocalExecutionBackend:
         timeout: float | None,
         output: CommandOutput,
         shell: str = "auto",
+        extra_env: Mapping[str, str] | None = None,
     ) -> ExecutionResult:
         """在宿主机同步执行一条命令并把输出交给 ``output``。
 
@@ -112,6 +113,7 @@ class LocalExecutionBackend:
                 ``finish``，封存与「输出 → 实时通道 → 运行中命令」的收尾顺序都在调用方一处）。
             shell: shell 名称；``auto`` 使用宿主默认 shell，显式值直接启动对应 shell，避免嵌套
                 shell 的二次解析。
+            extra_env: 叠加在用户命令环境之上、只给这条命令的变量（如 ``COSIR_SCRATCH_DIR``）。
 
         返回:
             ``ExecutionResult``，结局见 ``CommandEnd``。启动前已被要求停止时不启动命令，直接返回
@@ -136,6 +138,7 @@ class LocalExecutionBackend:
                 raw_args=launch.raw_args,
                 cwd=cwd,
                 on_event=lambda event: _observe(event, output, outcome),
+                extra_env=extra_env,
             )
         except TerminalWorkerUnavailableError as exc:
             return _start_failed(str(exc))

@@ -117,7 +117,7 @@ _DEFAULT_MODEL_SETTINGS = ModelSettings(stream=True, reasoning_effort="high").to
 # 出厂配置。``description`` 面向主 Agent，出现在系统提示词的子 Agent 目录里，是「委派给谁」的依据：
 # 只写什么时候该选它，不写能力断言（「能读写」「不会再委派」之类）——同一 profile 的工具面随派生
 # 深度与 Session 类型规则变化。委派 / 父子通信工具都已声明，是否可用由执行方按场景过滤；可交互终端
-# 不给子 Agent，内置浏览器开放除交接（``browser_handoff``，需要用户在界面上交还）以外的工具。
+# 不给子 Agent。
 BUILTIN_CHILD_AGENTS: tuple[AgentConfiguration, ...] = (
     AgentConfiguration(
         agent_id="general-assistant",

@@ -48,13 +48,12 @@ MessageKind = Literal[
     "notice",
     "decision",
     "background_result",
-    "tool_result",
     "tool_image",
 ]
 """Session 消息队列的消息种类；并入 context 后记在 user 消息的 metadata 上，后端规则只读它。"""
 
 CALL_RESULT_KINDS: frozenset[MessageKind] = frozenset(
-    {"decision", "background_result", "tool_result", "tool_image"}
+    {"decision", "background_result", "tool_image"}
 )
 """回答某次工具调用的消息种类：可带 ``tool_call_id``，归属那次调用而不是它所在的那一轮。"""
 

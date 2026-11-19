@@ -78,7 +78,7 @@ class SessionService:
         参数:
             parent_session_id: 委派子 Session 的父 Session 标识。
             db: 传入时加入调用方事务。
-            derivation_depth: 派生深度（见 ``core.tool.derivation.child_depth``）。
+            derivation_depth: 派生深度（见 ``core.tool.multi_agent.derivation.child_depth``）。
         """
 
         frozen_schemas = [] if tool_schemas is None else tool_schemas
@@ -331,7 +331,7 @@ class SessionService:
                     derivation_depth=depth,
                 )
                 count = fork_source.copy_before(fork_cut, target, self._session_context_crud, db)
-                identity = fork_source.identity_notice(fork_cut, target)
+                identity = fork_source.identity_notice(target)
                 if identity is not None:
                     # 身份声明与分支同一事务写入；通知不推进 Session，随分支第一次驱动并入（Agent
                     # 分叉的任务说明随后入队时拉起 actor）。
@@ -585,7 +585,7 @@ class SessionService:
         return deleted
 
     def finalize_deleted_session_spaces(self, session_ids: frozenset[int]) -> None:
-        """数据库提交后回收 Session 级资源（终端、浏览器标签、后台结果、看板）与运行时空间；回滚路径
+        """数据库提交后回收 Session 级资源（终端、浏览器标签、临时目录、后台结果、看板）与运行时空间；回滚路径
         一概不碰。
 
         后台结果归 Session、比 Run 活得久，必须在这里撤销而不是指望删除前的停止：停止只在有执行者时
@@ -593,7 +593,7 @@ class SessionService:
         终止后台命令，但不等它们退出（执行后端限时收尾）：占位行已随删除消失，不结算，这里还持着
         workspace 闸门。
         """
-        from app.core.tool.handoff.handoff_registry import handoff_registry
+        from app.service.session.session_scratch import remove_session_scratch
         from app.tools.browser_runtime.tab_reclaim import drop_sessions as drop_browser_sessions
         from app.tools.tool_handler.file_observations import file_observations
         from app.tools.tool_handler.terminal.command_results import command_results
@@ -601,9 +601,10 @@ class SessionService:
         service_depends.get_terminal_session_service().delete_session_terminals(session_ids)
         # 浏览器标签页归宿主所有：发后即忘，丢了由链路连上时的对账补回收。
         drop_browser_sessions(session_ids)
+        # 临时目录同样发后即忘：后台线程删除，残留由启动对账补回收（见 ``session_scratch``）。
+        remove_session_scratch(session_ids)
         for session_id in session_ids:
             command_results.drop_session(session_id)
-            handoff_registry.drop_session(session_id)
             file_observations.drop_session(session_id)
         self._unload_deleted_session_spaces(set(session_ids))
 

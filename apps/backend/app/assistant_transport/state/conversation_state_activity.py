@@ -9,10 +9,15 @@ from app.models.run_usage import RunUsage
 
 
 class ModelActivity(TypedDict):
-    """当前模型步的瞬时输出阶段；不持久化、不参与调度。"""
+    """当前模型步的瞬时输出阶段；不持久化、不参与调度。
+
+    ``startedAt`` 是这一模型步第一个阶段事件的发生时刻（ISO 8601），同一步内换阶段不变：前端「思考中」的
+    计时只认它，与调用 part 的 ``startedAt`` 同源（事件时刻，投影器不读墙钟），运行中刷新也接得上。
+    """
 
     stepId: str
     phase: ModelActivityPhase
+    startedAt: str
 
 
 class ConversationStateLaunch(TypedDict):

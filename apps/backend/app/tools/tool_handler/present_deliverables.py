@@ -1,12 +1,16 @@
-"""``present_deliverables``：Agent 把成果（文件、目录或网址）声明为交付物，回复下方出现卡片。
+"""``present_deliverables``：Agent 把成果（文件、目录或网址）声明为交付物，回合里出现一张交付卡。
 
 「哪个是成果」是只有 Agent 知道的事实：文件操作记录回答「改了哪些」，这里回答「该打开哪个」，前端不从正文
 链接或文件操作里猜。工具在交付那一刻观察每一项（规范路径、是否在工作区内、文件类型与大小），结果作为
-交付记录随结果行持久化（``ToolObservation.deliverables`` → metadata），不写展示数据、不复制文件、不登记任何
-进程内状态。工作区内文件的现状由前端现读。
+交付记录随结果行持久化（``ToolObservation.deliverables`` → metadata），不复制文件、不登记任何进程内状态。
+工作区内文件的现状由前端现读。
+
+两份事实分两处放：交付记录后端也要读（侧栏产出清单），进 metadata；这批交付的说明（``note``）只给卡片看，
+进展示数据 ``{kind: "deliverables", note}``——与 ``offer_next_step`` 的按钮同一种做法。一次调用一张卡，
+卡片放在调用的位置，所以模型先交付、再写答案时它就在最终回复上方（排位规则在前端 ``turn-layout``）。
 """
 
-from typing import Any, ClassVar
+from typing import Any
 from urllib.request import url2pathname
 
 from pydantic import ValidationError
@@ -38,7 +42,7 @@ class PresentDeliverablesTool(HandlerBase):
 
     name = TOOL_PRESENT_DELIVERABLES
     description = (
-        "Show deliverables to the user as cards under your reply: files, directories, or web "
+        "Show deliverables to the user as cards above your reply: files, directories, or web "
         "addresses. Use this for anything the user would want to open — a report, a generated "
         "diagram, a document, a built site, a page you are serving locally — when you want it "
         "surfaced, not just mentioned.\n\n"
@@ -47,15 +51,20 @@ class PresentDeliverablesTool(HandlerBase):
         "you only read for research.\n\n"
         "Present something once it is complete. Present it again only if it has meaningfully "
         "changed. Files and directories must already exist.\n\n"
-        "After presenting, do not restate the contents in your reply. Give the key takeaways and "
-        "say what you could not verify."
+        "Present before you write your answer, in a response with no other text; the cards "
+        "appear right above your answer. Use `note` to say what the set is; after presenting, "
+        "do not restate the contents or the note in your reply. Give the key takeaways and say "
+        "what you could not verify."
     )
     args_model = PresentDeliverablesArgs
-    timeout_seconds: ClassVar[float] = 10.0
     group = TOOL_GROUP_REPLY_PRESENTATION
 
     def execute(
-        self, items: list[dict[str, Any]], *, execution_context: ToolExecutionContext
+        self,
+        items: list[dict[str, Any]],
+        note: str | None = None,
+        *,
+        execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         resolver = PathResolver(execution_context.workspace_root)
         workspace = RootDirectory.at(execution_context.workspace_root)
@@ -81,7 +90,13 @@ class PresentDeliverablesTool(HandlerBase):
         content = f"Presented {len(presented)} item(s) to the user."
         if failures:
             content += f"\nNot presented ({len(failures)}):\n" + "\n".join(failures)
-        return tool_success(self.name, content, deliverables=list(presented.values()))
+        # 说明只服务卡片：空白当作没有；整批失败时没有卡片，说明也就不写。
+        return tool_success(
+            self.name,
+            content,
+            display_data={"kind": "deliverables", "note": (note or "").strip() or None},
+            deliverables=list(presented.values()),
+        )
 
     @staticmethod
     def _observe(
@@ -139,17 +154,15 @@ class PresentDeliverablesTool(HandlerBase):
 
     def to_definition(self) -> ToolDefinition:
         return ToolDefinition(
-            # 卡片本身就是这次调用的呈现；调用行只在失败时出现。
+            # 交付卡本身就是这次调用的呈现；调用行只在失败时出现。
             conversation_presentation="quiet",
             name=self.name,
             group=self.group,
             needs_user_surface=True,
+            part_of_reply=True,
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("filesystem",),
-            execution_mode="thread",
         )
 
 

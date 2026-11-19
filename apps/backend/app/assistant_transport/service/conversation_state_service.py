@@ -20,10 +20,6 @@ from app.assistant_transport.state.conversation_state_background_task import (
 from app.assistant_transport.state.conversation_state_deliverable import (
     project_session_deliverables,
 )
-from app.assistant_transport.state.conversation_state_handoff import (
-    ConversationHandoff,
-    project_handoff,
-)
 from app.assistant_transport.state.conversation_state_message import ConversationQueuedMessage
 from app.assistant_transport.state.conversation_state_mutation import ConversationStateMutation
 from app.assistant_transport.state.conversation_state_snapshot import (
@@ -59,7 +55,7 @@ class ConversationStateService:
     （展示数据不是事实源，子 Session 状态由应用级会话状态推送承载，不回写委派卡片）。首次读取时读出
     Session、它的全部 Run 与 context 行，交给 ``rebuild_snapshot`` 装配，再整表填入不在 context 里的
     事实：外部队列的排队消息、终端会话（``TerminalSessionService``）、看板与前台等待（后台结果登记表
-    ``command_results``）以及进行中的交接（交接登记表）。之后复用这份工作副本，直到撤回重新发布、
+    ``command_results``）。之后复用这份工作副本，直到撤回重新发布、
     无人订阅时卸载或进程重置。
 
     契约守卫在写入侧：工作副本物化时整份校验一次，之后每次变更按触及范围校验（``validate_mutated``）；
@@ -156,11 +152,6 @@ class ConversationStateService:
             },
         )
 
-    def refresh_handoffs(self, session_id: int) -> None:
-        """交接变化入口：由交接登记表的通知线程调用。"""
-
-        self._refresh(session_id, {"handoffs": lambda _state: self._handoffs(session_id)})
-
     def _refresh(self, session_id: int, producers: Mapping[str, _FieldProducer]) -> None:
         """整表重读这几个顶层字段，有变化的各发一条 ``set`` mutation（同一帧）。
 
@@ -204,12 +195,6 @@ class ConversationStateService:
             for item in get_session_message_queue().pending_nowait(session_id)
             if item.project_to_transport and isinstance(item.body, UserInputBody)
         ]
-
-    @staticmethod
-    def _handoffs(session_id: int) -> list[ConversationHandoff]:
-        from app.core.tool.handoff.handoff_registry import handoff_registry
-
-        return [project_handoff(lease) for lease in handoff_registry.leases(session_id)]
 
     @staticmethod
     def _background_tasks(
@@ -427,12 +412,12 @@ class ConversationStateService:
                 self._run_source.list_by_session(session_id),
                 self._context_source.get(session_id, include_in_context=False),
                 presentation_catalog(get_tool_registry()),
+                reply_tools=get_tool_registry().reply_tool_names(),
             )
             state["queued_messages"] = self._queued_messages(session_id)
             state["terminal_sessions"] = self._terminal_sessions(session_id)
             state["background_tasks"] = self._background_tasks(session_id, state)
             state["foreground_waits"] = command_results.foreground_calls(session_id)
-            state["handoffs"] = self._handoffs(session_id)
             state["deliverables"] = project_session_deliverables(state["messages"])
         except Exception as exc:
             log.exception(

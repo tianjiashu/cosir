@@ -94,7 +94,7 @@ describe("panel store 订阅标签镜像", () => {
 });
 
 describe("revealBrowserTab", () => {
-  // 目的：工具卡片、交接、链接都用同一个动作把标签摆到面前；潜在缺陷：某处只选中不显示面板，或只显示面板不切标签。
+  // 目的：工具卡片、链接都用同一个动作把标签摆到面前；潜在缺陷：某处只选中不显示面板，或只显示面板不切标签。
   it("selects the tab in its session and shows the browser panel", () => {
     useDockStore.setState({ panel: null });
     revealBrowserTab(9, "t4");

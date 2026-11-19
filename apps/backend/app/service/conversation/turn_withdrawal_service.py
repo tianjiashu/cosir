@@ -6,7 +6,7 @@
 - 保留：更早发起的调用在这一回合才并入的结果（它们回答的是之前的调用）；
 - 重新投递：这一回合途中并入的 Session 级通知（排队投递、只投一次，见 ``NoticeKind``），只关于被撤回
   调用的除外；推导出的回合级与 Run 级通知不入队，撤回后由下一次驱动重新推导；
-- 撤销：这一回合发起、仍在进行的后台作业与交接；这一回合派生的 Session（委派、Agent fork，按
+- 撤销：这一回合发起、仍在进行的后台作业；这一回合派生的 Session（委派、Agent fork，按
   ``SessionExtra.deriving_call_id`` 找）以 ``parent`` 原因收回；
 - 删除：队列里只给这些调用送达结局的消息（结论、决定、作废与重启通知，见 ``answered_calls``），以及
   这一回合派生的 Session 已经交来、还没并入的汇报；
@@ -23,7 +23,6 @@ from typing import cast
 from sqlalchemy.orm import Session as DbSession
 
 from app.config.logging.logger import log
-from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, NoticeKind
 from app.core.workflow.message_queue.session_message import (
     AgentMessageBody,
@@ -55,7 +54,7 @@ class TurnWithdrawalService:
         顺序有讲究：
 
         1. 先在写事务之外撤销进程内与自带事务的副产物——后台作业（等这个 Session 的在途投递写完，见
-           ``command_results.withdraw_calls``）、交接、这一回合派生的 Session。它们必须在移出提交之前
+           ``command_results.withdraw_calls``）、这一回合派生的 Session。它们必须在移出提交之前
            完成（登记出队是投递的唯一门槛，被收回的 Session 不再汇报），又不能放进写事务：在途投递要写库。
         2. 再在一个 ``BEGIN IMMEDIATE`` 写事务里复查目标、移出行、删除队列里回答被撤回调用的行、
            重新投递 Session 级通知，同一事务提交。
@@ -72,7 +71,6 @@ class TurnWithdrawalService:
             self._crud.get(session_id, include_in_context=False), target.turn
         )
         command_results.withdraw_calls(session_id, plan.calls)
-        handoff_registry.drop(session_id, plan.calls)
         recalled = self._recall_derived(session_id, plan.calls)
         queue = service_depends.get_session_message_queue()
         with begin_immediate(main_db_factory()) as db:
@@ -97,7 +95,7 @@ class TurnWithdrawalService:
                     ),
                     db=db,
                 )
-        # 移出行不发工具事件：被撤回的等待占位（交接）要另外让 Session 状态推送重读一次。
+        # 移出行不发工具事件：被撤回的等待占位（提问）要另外让 Session 状态推送重读一次。
         service_depends.get_session_feed().publish_status(session_id)
         log.info(
             "turn_withdrawn",

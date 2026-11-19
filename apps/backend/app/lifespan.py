@@ -33,13 +33,12 @@ from app.config.configuration import (
     set_tool_registry,
 )
 from app.config.constant import Constant
-from app.config.logging.configuration import install_logging_for_current_process, shutdown_logging
+from app.config.logging.configuration import configure_logging, shutdown_logging
 from app.config.logging.logger import log
 from app.config.settings import Settings
 from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.events.event_sink import set_event_sink
 from app.core.tool.background_commands import set_background_commands
-from app.core.tool.handoff.handoff_registry import handoff_registry
 from app.service.configuration import file_store
 from app.service.depends import (
     close_service_dependencies,
@@ -159,13 +158,13 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     # 在服务器进程内（无论 uvicorn 以 fork 还是 spawn 拉起子进程）尽早配置日志。
     # reload 模式下子进程只执行 lifespan、不会执行 __main__.py；先按当前 paths.LOG_DIR 建立
     # 文件管线，确保 Settings.load 或依赖初始化失败也有固定 JSONL 现场。
-    install_logging_for_current_process(log_dir=paths.LOG_DIR)
+    configure_logging(log_dir=paths.LOG_DIR)
     Settings.load()
     initialize_service_dependencies()
     # 重建一次管线：Settings.load() 已把 .env 载入进程环境并调用 paths.reset()，此刻
     # paths.LOG_DIR 才是最终数据根（CODING_AGENT_DATA_DIR）下的日志目录。轮转参数与函数默认值
     # 同源（Constant.Logging，不经环境覆盖），这里显式传入只为固定意图。
-    install_logging_for_current_process(
+    configure_logging(
         log_dir=paths.LOG_DIR,
         max_bytes=Constant.Logging.MAX_BYTES,
         backup_count=Constant.Logging.BACKUP_COUNT,
@@ -189,10 +188,6 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     set_event_sink(get_conversation_event_projector().process)
     # 登记表变化：把看板与前台等待整表重投影进 Transport snapshot（通知线程、锁外）。
     command_results.set_listener(_on_background_changed)
-    # 进行中的交接随登记表变化整表重投影进 snapshot 顶层 ``handoffs``。
-    handoff_registry.set_listener(
-        lambda session_id: get_conversation_state_service().refresh_handoffs(session_id)
-    )
     get_recover_service().recover_after_restart()
     # 宿主随后端 ready 连上链路；每次连上对账一次，补回收丢了删除通知的 Session 的浏览器标签。
     get_host_link().set_on_connected(schedule_tab_reclaim)
@@ -207,9 +202,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             # （取消执行，不调度后续 Run），最后关闭服务依赖（终端服务随之关闭）。
             await asyncio.to_thread(command_results.close)
             command_results.set_listener(None)
-            handoff_registry.set_listener(None)
             get_host_link().set_on_connected(None)
-            handoff_registry.close()
             await session_runtime_spaces.aclose()
             await asyncio.to_thread(close_service_dependencies)
             # 模型 HTTP 连接由模型客户端管理，无需进程级显式释放。

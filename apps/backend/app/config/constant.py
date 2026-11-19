@@ -8,7 +8,7 @@
 设计约定：
 - 调用一律通过 ``Constant.<域>.<NAME>``（如 ``Constant.Terminal.MAX_ACTIVE_SESSIONS``），
   禁止在调用点再写一遍字面量或自建同名常量，避免多份事实源漂移。
-- 本模块为叶子模块，只依赖标准库（``re`` / ``ipaddress``），不得 import 任何 ``app`` 子模块，
+- 本模块为叶子模块，只依赖标准库（``re``），不得 import 任何 ``app`` 子模块，
   避免循环依赖；凡引用 ``app`` 枚举值之处一律展开为基础字面量（如 Run 状态 ``"completed"``）。
 - 常量全部为模块级不可变值（``int`` / ``str`` / ``frozenset`` / 编译后的正则），新增常量需带
   中文注释，说明语义、取值依据与影响范围。
@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 import re
 from collections.abc import Mapping
 from typing import ClassVar
@@ -249,21 +248,14 @@ class Constant:
             r"!\[([^\]]*)\]\(data:image/[A-Za-z0-9.+-]+;base64,[^)]*\)",
             re.IGNORECASE,
         )
-        # 单次 URL 拦截日志最多记录的解析地址数（防日志字段过长）。
-        MAX_LOGGED_ADDRESSES: int = 8
-        # 本地代理 fake-ip 占位网段（RFC2544 保留，永不公网路由），从内网拦截中豁免。
-        PROXY_FAKE_IP_NETWORK = ipaddress.ip_network("198.18.0.0/15")
-        # 响应 / URL 中疑似密钥的脱敏匹配正则。
+        # URL 里疑似密钥的匹配正则：命中即不把 URL 交给 Firecrawl。
         SECRET_VALUE_RE: re.Pattern[str] = re.compile(
             r"(?i)(sk-[a-z0-9_-]{8,}|xox[baprs]-[a-z0-9-]{8,}|gh[pousr]_[a-z0-9_]{12,}|"
             r"api[_-]?key[=:][^&\s]+|bearer\s+[a-z0-9._-]{12,})"
         )
-        # Web provider 单次 HTTP 请求超时（秒）：web_search / web_fetch 的工具级超时在此
-        # 之上派生（``+5`` / ``+10``），firecrawl provider 的直连请求也用它。
-        # 取值沿用迁移前 ``CODING_AGENT_WEB_REQUEST_TIMEOUT_SECONDS`` 的实际生效值（抓取较慢
-        # 时放宽），迁移后不再支持 env 覆盖——需要调整直接改本值。
+        # Firecrawl 单次 HTTP 请求超时（秒）；抓取较慢时放宽，不经环境变量覆盖。
         REQUEST_TIMEOUT_SECONDS: float = 45.0
-        # URL query 中需脱敏的敏感键集合。
+        # URL 里的凭据型查询参数名：命中即不把 URL 交给 Firecrawl。
         SENSITIVE_QUERY_KEYS: frozenset[str] = frozenset(
             {
                 "access_token",
@@ -292,10 +284,6 @@ class Constant:
         # 回传模型的 metadata 中无价值的体积型键（需剔除）。
         FIRECRAWL_METADATA_NOISE_KEYS: frozenset[str] = frozenset(
             {"rawHtml", "links", "screenshot"}
-        )
-        # 提取结果中已映射到专有字段、不应重复进 metadata 的键。
-        FIRECRAWL_FETCH_MAPPED_FIELDS: frozenset[str] = frozenset(
-            {"url", "markdown", "html", "rawHtml", "content", "links", "screenshot", "error"}
         )
 
     class Transport:
@@ -355,5 +343,9 @@ class Constant:
         )
         # 工具结果进入模型通道的 content 字符上限（超出由 ``ToolOutputBudget`` 截断）。
         MAX_OUTPUT_CHARS: int = 20_000
-        # 同一回复内工具调用的并行 worker 上限（并行批次按此收敛，超出的调用排队执行）。
-        MAX_PARALLEL_CALLS: int = 8
+        # 列表型结果（search_content 输出行、find_files 文件）单次最多返回几条：约等于 ``MAX_OUTPUT_CHARS``
+        # 能容下的行数，也是卡片列表的条数上限；更多结果靠 ``offset`` 翻页，不靠前端截断。
+        LIST_RESULT_LIMIT_MAX: int = 200
+        # 文件改动卡片里单个文件 patch 的字符上限：超过则 ``patch`` 下发为 null（只留增删行数），
+        # 大文件的 diff 不进快照、推送与渲染；完整内容在文件面板看。
+        DISPLAY_PATCH_MAX_CHARS: int = 100_000

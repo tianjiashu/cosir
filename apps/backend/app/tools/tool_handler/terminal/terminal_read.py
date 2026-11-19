@@ -1,6 +1,6 @@
 """``terminal_read`` handler：按绝对行号读取终端逻辑行，可先按条件等待。"""
 
-from typing import Any, ClassVar
+from typing import Any
 
 from app.core.tool.schemas import (
     TOOL_TERMINAL_READ,
@@ -39,7 +39,6 @@ class TerminalReadTool(HandlerBase):
         "ended."
     )
     args_model = TerminalReadArgs
-    timeout_seconds: ClassVar[float] = 40.0
     group = TOOL_GROUP_TERMINAL
 
     def execute(
@@ -77,7 +76,4 @@ class TerminalReadTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            timeout_seconds=self.timeout_seconds,
-            resource_keys=("shell",),
-            execution_mode="thread",
         )
