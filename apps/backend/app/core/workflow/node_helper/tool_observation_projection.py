@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
-
 from openai.types.chat import ChatCompletionToolMessageParam
 from sqlalchemy.orm import Session as DbSession
 
@@ -12,7 +10,7 @@ from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.execute.tool_terminal_projection import (
     terminal_event,
 )
-from app.core.tool.schemas import AwaitDecision, ToolObservation
+from app.core.tool.schemas import ToolObservation
 from app.core.workflow.decision_expiry import (
     ends_on_user_input,
     expire_decisions,
@@ -21,17 +19,15 @@ from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.session_message import (
     BackgroundResultBody,
     ToolImageBody,
-    ToolResultBody,
 )
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.models.message_metadata import ToolMessageMetadata
-from app.storage.store_engines import main_db_factory
 
 
 def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
     """按观察顺序写 canonical tool 消息并投影终态；所有调用结果都保留，不以呈现方式过滤事实。
 
-    这里的终态是持久化之后的权威终态。每个调用（含执行链内部异常收口的观察）已在 ``run_tool_batch``
+    这里的终态是持久化之后的权威终态。每个调用（含执行链内部异常收口的观察）已在 ``tools_node``
     里发过一次实时终态，两次都经 :func:`terminal_event` 由同一份观察构造，值必然相同，第二次在
     Transport 发布出口按空操作丢弃。tool 消息的 metadata 也取自同一个事件，持久化事实与实时投影因此同源。
     """
@@ -66,52 +62,6 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
         # 不另行告知模型——是它自己重新问的。
         if observation.awaiting_decision and ends_on_user_input(observation.tool_name):
             expire_decisions(step_id=step_id, keep=frozenset({call_id}))
-
-
-def settle_decision_observation(batch: ToolBatch, *, step_id: str) -> None:
-    """结算用户批准后 HITL 调用的执行结果：结果追加为一条 user 消息，等待占位只更新展示状态。
-
-    占位在模型协议上已是这次调用的结果（见 ``tool_awaiting_decision``），决定可能在占位之后的若干
-    模型步、甚至之后的 Run 才到，此时原调用早已不是最后一批，不能再写 tool 消息；改写历史行又会
-    让后续请求前缀分叉。所以模型从末尾追加的 ``<tool_result>`` 读到结果，卡片从占位行的 metadata
-    读到状态。批准后启动后台作业时，回执与后台占位同事务提交，之后才放行执行。
-    """
-    runtime = _runtime_context()
-    context = _message_context()
-    [executed] = batch.observations
-    # 重放的执行结果不再是等待占位；批准后启动的后台作业（``RunInBackground``）保留。
-    waiting = None if isinstance(executed.waiting, AwaitDecision) else executed.waiting
-    observation = dataclasses.replace(executed, waiting=waiting)
-    call_id = observation.tool_call_id
-    message, metadata = ToolResultBody(
-        tool_call_id=call_id,
-        tool_name=observation.tool_name,
-        status=observation.status,
-        content=str(to_tool_model_message(observation)["content"]),
-    ).render()
-    event = terminal_event(
-        observation,
-        session_id=runtime.run.session_id,
-        run_id=runtime.run.id,
-        step_id=step_id,
-        tool_call_id=call_id,
-    )
-    with main_db_factory().begin() as db:
-        context.add_message(message, metadata=metadata, project_to_transport=False, db=db)
-        written = context.update_tool_result_metadata(call_id, event.result, db=db)
-    log.info(
-        "tool_decision_result_persisted",
-        extra={
-            "msg": "用户决定后的工具结果已追加为消息，占位只更新展示状态",
-            "data": {
-                "run_id": runtime.run.id,
-                "tool_call_id": call_id,
-                "status": event.status,
-            },
-        },
-    )
-    # 卡片按实际写入的 metadata 渲染：结果没带展示数据时沿用了占位的。
-    emit(event.model_copy(update={"result": written}))
 
 
 def settle_background_placeholder(
