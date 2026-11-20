@@ -159,17 +159,14 @@ def test_only_the_main_agent_is_given_the_tool() -> None:
 
 
 def test_answer_is_checked_against_the_call_as_the_model_wrote_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    """原始调用参数带着 ``intent``：门禁与决定入口取到同一份业务参数，回答照常被接受。
-
-    决定入口曾直接拿原始参数核对回答，``intent`` 被提问的参数模型当成非法字段，所有回答都被拒。
-    """
+    """门禁与决定入口从同一份原始调用取到同一份业务参数，回答照常被接受。"""
     import json
 
     from app.core.tool.validation.call_arguments import resolve_call_arguments
     from app.service.conversation import tool_decision_service
 
     definition = build_ask_user_definition().normalized()
-    raw = json.dumps({"intent": "确认登录方案", **_ARGS}, ensure_ascii=False)
+    raw = json.dumps(_ARGS, ensure_ascii=False)
     monkeypatch.setattr(
         tool_decision_service,
         "get_tool_registry",
@@ -184,7 +181,6 @@ def test_answer_is_checked_against_the_call_as_the_model_wrote_it(monkeypatch: p
         "ask_user", raw, "approve", {"answers": {"Which store?": "Cookie"}}
     )
 
-    assert asked.intent == "确认登录方案"
     assert observation.display_data["questions"] == asked.arguments["questions"]
     assert payload == {"answers": {"Which store?": "Cookie"}, "annotations": {}}
     assert reply is not None and '"Which store?"="Cookie"' in reply

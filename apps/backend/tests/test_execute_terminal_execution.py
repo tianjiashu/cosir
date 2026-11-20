@@ -92,9 +92,8 @@ def delivered(monkeypatch):
 
 def _execute(tmp_path: Path, *, background=False, call_id="call-1", tool=None):
     return (tool or ExecuteTerminalTool()).execute(
-        command=call_id, background=background,
+        command=call_id, intent="test command", background=background,
         execution_context=ToolExecutionContext(
-        call_intent="test command",
             session_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
             step_id="step-1", tool_call_id=call_id,
         ),
@@ -358,8 +357,7 @@ def test_model_text_fits_the_channel_once_whatever_the_ending(
         terminal_module, "LocalExecutionBackend", lambda: _NoisyCommand(text, result)
     )
     monkeypatch.setattr(terminal_module.LiveOutputChannel, "open", lambda _: None)
-    context = ToolExecutionContext(
-        call_intent="noisy", session_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
+    context = ToolExecutionContext( session_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
         step_id="step-1", tool_call_id="call-1",
     )
     try:

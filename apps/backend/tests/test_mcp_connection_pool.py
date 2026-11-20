@@ -22,7 +22,7 @@ from app.service.configuration.mcp.machine_state import MCPMachineState
 from app.tools.mcp.call_result import MCPCallResult
 from app.tools.mcp.client import MCPToolNotFoundError, is_connection_failure
 from app.tools.mcp.connection_pool import MCPConnectionPool
-from app.tools.mcp.mcp_tool_call import call_mcp_tool
+from app.tools.mcp.mcp_tools import MCPExternalTools
 from app.utils.path import system_cosir
 
 _SERVER_CODE = """
@@ -172,7 +172,7 @@ def test_cancelled_tool_call_returns_promptly_and_keeps_connection(pool, tmp_pat
 
     started = time.monotonic()
     try:
-        observation = call_mcp_tool(
+        observation = MCPExternalTools()._call(
             "mcp__stateful__slow", server, "slow", {"seconds": 30}, context
         )
     finally:
@@ -191,7 +191,7 @@ def test_connect_timeout_is_reported_as_not_sent(pool, tmp_path, monkeypatch):
     _make_available(server, pool, tmp_path, monkeypatch)
     monkeypatch.setattr("app.tools.mcp.connection_pool.CONNECT_TIMEOUT_SECONDS", 0.5)
 
-    observation = call_mcp_tool(
+    observation = MCPExternalTools()._call(
         "mcp__stateful__bump", server, "bump", {}, _tool_context("call-connect")
     )
 

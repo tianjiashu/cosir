@@ -13,7 +13,7 @@ from starlette.responses import PlainTextResponse
 
 from app.core.tool.handler.tool_search import ToolSearchTool
 from app.core.tool.schemas import ToolExecutionContext
-from app.models.deferred_tool import DeferredToolDefinition
+from app.models.external_tool import ExternalToolDefinition
 from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.mcp.configuration import (
     MCPConfiguration,
@@ -29,7 +29,7 @@ from app.service.configuration.skills.configuration import SkillConfiguration
 from app.tools.mcp.call_result import MCPCallResult
 from app.tools.mcp.client import _stdio_parameters, list_server_tools
 from app.tools.mcp.connection_pool import MCPConnectionPool
-from app.tools.mcp.deferred_catalog import MCPDeferredTools
+from app.tools.mcp.mcp_tools import MCPExternalTools
 from app.tools.tool_handler.skill_tool import SkillTool
 from app.utils.path import system_cosir
 
@@ -87,12 +87,12 @@ def _pass(server: ScopedMCPServer) -> None:
     MCPMachineState.record_pass(server, asyncio.run(list_server_tools(server)))
 
 
-def _definition(workspace: Path, name: str) -> DeferredToolDefinition:
-    return next(d for d in MCPDeferredTools().catalog(str(workspace)) if d.name == name)
+def _definition(workspace: Path, name: str) -> ExternalToolDefinition:
+    return next(d for d in MCPExternalTools().catalog(str(workspace)) if d.name == name)
 
 
 def _call(workspace: Path, name: str, arguments: dict) -> dict:
-    result = MCPDeferredTools().execute(_definition(workspace, name), arguments, _context(workspace))
+    result = MCPExternalTools().execute(_definition(workspace, name), arguments, _context(workspace))
     assert result.status == "success", result.content
     return _blocks(result.content)[0]
 
@@ -290,13 +290,12 @@ def test_untested_server_is_neither_listed_nor_called(tmp_path, monkeypatch):
         "app.service.depends.get_mcp_connection_pool",
         lambda: pytest.fail("untested MCP server must not be discovered or called"),
     )
-    source = MCPDeferredTools()
+    source = MCPExternalTools()
     # 加载过、后来测试记录被撤销的工具：快照还在上下文里，调用时按当前配置拒绝。
-    stale = DeferredToolDefinition(
+    stale = ExternalToolDefinition(
         name="mcp__one__search",
         description="",
         parameters={"type": "object"},
-        source="mcp",
         reference={"scope": ExtensionScope.workspace(workspace).key, "server": "one", "tool": "search"},
     )
 
@@ -582,7 +581,7 @@ def test_catalog_comes_from_the_test_record_with_server_prefix_and_full_schema(e
         "app.service.depends.get_mcp_connection_pool",
         lambda: pytest.fail("the catalog must not connect to the server"),
     )
-    [count, echo] = MCPDeferredTools().catalog(str(echo_tool))
+    [count, echo] = MCPExternalTools().catalog(str(echo_tool))
 
     assert (count.name, echo.name) == ("mcp__echo__count_words", "mcp__echo__echo")
     assert count.description == "[MCP server echo] Count words in a text"
@@ -596,7 +595,7 @@ def test_catalog_comes_from_the_test_record_with_server_prefix_and_full_schema(e
 
 # 潜在缺陷：服务运行期改了 schema，按旧快照校验通过的参数仍会发给服务。
 def test_arguments_are_checked_against_the_live_schema_before_calling(echo_tool):
-    source = MCPDeferredTools()
+    source = MCPExternalTools()
     definition = _definition(echo_tool, "mcp__echo__echo")
     rejected = source.execute(definition, {}, _context(echo_tool))
     accepted = source.execute(definition, {"value": "hi"}, _context(echo_tool))

@@ -14,7 +14,6 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.request_tools import RequestTools
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -34,6 +33,7 @@ from app.core.events import (
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
 )
+from app.core.tool.request_tools import RequestTools
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.schemas import (
     ToolCall,

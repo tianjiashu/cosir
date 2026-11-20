@@ -31,7 +31,7 @@ def _turn_of(previous: list, metadata: object) -> int:
 @pytest.fixture
 def session(isolated_storage, tmp_path):
     workspace = WorkspaceCrud().create("withdraw", str(tmp_path))
-    session = SessionCrud().create(workspace.id, "withdraw", tool_schemas=[])
+    session = SessionCrud().create(workspace.id, "withdraw")
     run = RunCrud().create(session.id, status="completed")
     store = ContextStore()
     rows = [

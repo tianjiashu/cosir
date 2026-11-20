@@ -415,7 +415,6 @@ def test_get_schema_returns_static_schema_and_none_for_unknown() -> None:
     )
 
     assert registry.get_schema("static_tool")["properties"]["static"] == schema["properties"]["static"]
-    assert registry.get_schema("static_tool")["required"] == ["intent"]
     assert registry.get_schema("ghost_tool") is None
 
 
@@ -477,9 +476,9 @@ def test_unknown_tool_alongside_known_serial_tool_keeps_order_and_count(
 
     async def scenario() -> list[ToolObservation]:
         result = await run_batch(operations, [
-                _call("known_tool", "call-1", {"intent": "检查", "message": "hi"}),
+                _call("known_tool", "call-1", {"message": "hi"}),
                 _call("ghost_tool", "call-2"),
-                _call("known_tool", "call-3", {"intent": "再检查", "message": "again"}),
+                _call("known_tool", "call-3", {"message": "again"}),
             ])
         return result
 

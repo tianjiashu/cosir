@@ -72,7 +72,7 @@ def history(isolated_storage, tmp_path):
     并入。
     """
     workspace = WorkspaceCrud().create("withdraw", str(tmp_path))
-    session = SessionCrud().create(workspace.id, "withdraw", tool_schemas=[])
+    session = SessionCrud().create(workspace.id, "withdraw")
     run = RunCrud().create(session.id, status="completed")
     notice_message, notice_metadata = notices_to_context(
         [

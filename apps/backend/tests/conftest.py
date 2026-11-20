@@ -190,9 +190,9 @@ def reopen_background_registry() -> Iterator[None]:
 
     from app.core.events.event_sink import set_event_sink
     from app.core.tool.background_commands import set_background_commands
-    from app.core.tool.deferred.deferred_tools import set_deferred_tools
+    from app.core.tool.external_tools import set_external_tools
     from app.service import depends
-    from app.tools.mcp.deferred_catalog import MCPDeferredTools
+    from app.tools.mcp.mcp_tools import MCPExternalTools
     from app.tools.tool_handler.terminal.command_results import command_results
 
     # 先关再开：清掉上一个用例残留的活条目（同一 session_id 会被反复使用）。
@@ -201,7 +201,7 @@ def reopen_background_registry() -> Iterator[None]:
     # 不经 lifespan 的用例也会走到 core 的后台命令端口（静止判定、wait_messages、收回）。
     set_background_commands(command_results)
     # 系统提示词的延迟工具目录与准入门禁都经这个端口；配置目录已隔离到用例临时目录，目录为空。
-    set_deferred_tools(MCPDeferredTools())
+    set_external_tools(MCPExternalTools())
     # 不经 lifespan 的用例同样经事件出口交出事件：每次按名取投影器，用例替换
     # ``depends.get_conversation_event_projector`` 即可换掉消费方。
     set_event_sink(lambda event: depends.get_conversation_event_projector().process(event))

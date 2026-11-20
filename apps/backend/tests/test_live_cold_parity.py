@@ -14,7 +14,7 @@ from app.session_runtime.session_runtime_space_registry import session_runtime_s
 from tests.live_cold_support import LiveColdEnv, tool_call, tool_parts
 from tests.sdk_fixtures import sdk_events
 
-_READ = {"intent": "看文件", "path": "a.txt"}
+_READ = {"path": "a.txt"}
 # 准入拒绝的来源与投影无关：用派生规则禁掉 read_file，代表任一 Session 级禁用。
 _BAN_READ = frozenset({"read_file"})
 
@@ -31,21 +31,14 @@ _SCENARIOS = {
     ),
     "invalid_json_args": (
         [
-            ([{"tool_calls": [tool_call("c1", "read_file", '{"intent":"x","path":')]}], "tool_calls"),
-            ([{"content": "结论"}], "stop"),
-        ],
-        None,
-    ),
-    "missing_intent": (
-        [
-            ([{"tool_calls": [tool_call("c1", "read_file", {"path": "a.txt"})]}], "tool_calls"),
+            ([{"tool_calls": [tool_call("c1", "read_file", '{"path":')]}], "tool_calls"),
             ([{"content": "结论"}], "stop"),
         ],
         None,
     ),
     "bad_business_args": (
         [
-            ([{"tool_calls": [tool_call("c1", "read_file", {"intent": "看", "nope": 1})]}], "tool_calls"),
+            ([{"tool_calls": [tool_call("c1", "read_file", {"nope": 1})]}], "tool_calls"),
             ([{"content": "结论"}], "stop"),
         ],
         None,
@@ -75,7 +68,7 @@ _SCENARIOS = {
 async def test_a_deliverable_card_is_the_same_live_and_after_rebuild(backend_env, tmp_path, monkeypatch):
     """交付记录经观察 → 事件 → 结算 → part 投影，实时与冷重建得到同一张卡。"""
     (tmp_path / "a.txt").write_text("x")
-    present = {"intent": "交付", "items": [{"target": "a.txt", "caption": "结果"}]}
+    present = {"items": [{"target": "a.txt", "caption": "结果"}]}
     steps = [
         ([{"tool_calls": [tool_call("c1", "present_deliverables", present)]}], "tool_calls"),
         ([{"content": "完成"}], "stop"),
@@ -96,8 +89,8 @@ async def test_session_deliverables_list_is_the_same_live_and_after_rebuild(back
     """顶层交付清单随带记录的事件重算：同一文件再交付一次只留一条、排到最前，实时与冷重建一致。"""
     for name in ("a.txt", "b.txt"):
         (tmp_path / name).write_text(name)
-    first = {"intent": "交付", "items": [{"target": "a.txt"}]}
-    second = {"intent": "交付", "items": [{"target": "b.txt"}, {"target": "a.txt"}]}
+    first = {"items": [{"target": "a.txt"}]}
+    second = {"items": [{"target": "b.txt"}, {"target": "a.txt"}]}
     steps = [
         ([{"tool_calls": [tool_call("c1", "present_deliverables", first)]}], "tool_calls"),
         ([{"tool_calls": [tool_call("c2", "present_deliverables", second)]}], "tool_calls"),
@@ -236,7 +229,7 @@ async def test_a_cancelled_run_ends_its_pending_decision(backend_env, tmp_path, 
     env = LiveColdEnv(
         tmp_path,
         monkeypatch,
-        [([{"tool_calls": [tool_call("h1", "probe_hitl", {"intent": "批准"})]}], "tool_calls")],
+        [([{"tool_calls": [tool_call("h1", "probe_hitl", {})]}], "tool_calls")],
     )
     try:
         env.send()
@@ -278,7 +271,7 @@ async def test_resuming_a_cancelled_run_keeps_live_and_cold_in_step(backend_env,
         tmp_path,
         monkeypatch,
         [
-            ([{"tool_calls": [tool_call("h1", "probe_hitl", {"intent": "批准"})]}], "tool_calls"),
+            ([{"tool_calls": [tool_call("h1", "probe_hitl", {})]}], "tool_calls"),
             ([{"content": "恢复后"}], "stop"),
         ],
     )
@@ -307,7 +300,7 @@ async def test_inputs_merged_together_each_keep_their_reply(backend_env, tmp_pat
         tmp_path,
         monkeypatch,
         [
-            ([{"tool_calls": [tool_call("h1", "probe_hitl", {"intent": "批准"})]}], "tool_calls"),
+            ([{"tool_calls": [tool_call("h1", "probe_hitl", {})]}], "tool_calls"),
             ([{"content": "结论"}], "stop"),
         ],
     )

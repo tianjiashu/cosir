@@ -17,8 +17,8 @@ from typing import Any
 import pytest
 
 from app.config import configuration
-from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.tool.request_tools import RequestTools
+from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.run_usage_stats import (
     RunUsageStats,
@@ -136,7 +136,7 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
         run_state=run_state_stub(),
         message_queue=SimpleNamespace(ack=lambda _session, ids: set(ids)),
         mailbox=RunMailbox(),
-        session_space=SimpleNamespace(session_tool_schemas=()),
+        session_space=SimpleNamespace(session_tool_schemas=(), session_deferred_schemas=()),
         event_sink=lambda _event: None,
         model=None,
         thinking_channel="",

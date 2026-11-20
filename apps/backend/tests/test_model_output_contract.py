@@ -382,14 +382,14 @@ def test_model_phase_tracks_output_channels_and_clears_after_failure(monkeypatch
 
 @pytest.mark.parametrize(
     "raw,expected",
-    [('{"intent":"核对配置","path":"a"}', "核对配置"), ('{"intent":"核对配置",', None)],
+    [('{"path":"a"}', {"path": "a"}), ('{"path":', {"raw_arguments": '{"path":'})],
 )
 @pytest.mark.parametrize("cancelled", [False, True])
-def test_intent_survives_model_stream_failure_or_cancellation(
+def test_arguments_survive_model_stream_failure_or_cancellation(
     monkeypatch, raw, expected, cancelled
 ):
-    """真实 model_node finally 在中断时发布原参数意图，不把草稿变成有效执行输入。"""
-    from app.core.events import ToolCallIntentEvent
+    """真实 model_node finally 在中断时发布原参数（展示用解码），不把草稿变成有效执行输入。"""
+    from app.core.events import ToolCallArgumentsEvent
     from app.core.workflow.node_helper.common import RunStopped
 
     response = sdk_completion(
@@ -427,7 +427,7 @@ def test_intent_survives_model_stream_failure_or_cancellation(
     harness.runtime_config.model.stream = interrupted
     with pytest.raises(RunStopped if cancelled else RuntimeError):
         asyncio.run(model_module._model_node(_state()))
-    intents = [event for event in harness.events if isinstance(event, ToolCallIntentEvent)]
-    assert len(intents) == 1 and intents[0].intent == expected
+    published = [event for event in harness.events if isinstance(event, ToolCallArgumentsEvent)]
+    assert len(published) == 1 and published[0].args == expected
     assert harness.saved_responses[-1][0].choices[0].message.tool_calls[0].function.arguments == raw
     assert not harness.saved_responses[-1][1]

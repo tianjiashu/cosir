@@ -12,7 +12,7 @@ import pytest
 
 from app.config.configuration import get_tool_registry
 from app.core.tool.schemas.tool_names import ALL_TOOL_NAMES
-from app.tools.mcp.tool_naming import PREFIX
+from app.tools.mcp.mcp_tools import PREFIX
 
 _CONTRACT = Path("app/core/tool/tool_ui_display_contract.md")
 MCP_TOOL_PREFIX = PREFIX

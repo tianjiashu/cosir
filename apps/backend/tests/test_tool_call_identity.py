@@ -8,7 +8,7 @@ import asyncio
 
 import pytest
 
-from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_schemas
+from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_surface
 from app.models.errors.session_command_errors import SessionCommandConflictError
 from app.service import depends
 from app.service.conversation.tool_decision_service import ToolDecisionService
@@ -16,8 +16,8 @@ from app.tools.tool_handler.terminal.command_results import command_results
 from tests.live_cold_support import GatedCommands, LiveColdEnv, tool_call, tool_parts
 
 
-def _read(path: str, intent: str = "读") -> dict[str, str]:
-    return {"intent": intent, "path": path}
+def _read(path: str) -> dict[str, str]:
+    return {"path": path}
 
 
 def _command(name: str) -> dict[str, object]:
@@ -27,7 +27,7 @@ def _command(name: str) -> dict[str, object]:
 async def test_same_response_duplicates_both_run_and_the_session_stays_usable(
     backend_env, tmp_path, monkeypatch
 ):
-    write = {"intent": "写", "content": "x"}
+    write = {"content": "x"}
     env = LiveColdEnv(
         tmp_path,
         monkeypatch,
@@ -66,16 +66,16 @@ async def test_later_response_reusing_an_id_keeps_both_cards(backend_env, tmp_pa
         tmp_path,
         monkeypatch,
         [
-            ([{"tool_calls": [tool_call("call_0", "read_file", _read("a.txt", "读a"))]}], "tool_calls"),
-            ([{"tool_calls": [tool_call("call_0", "read_file", _read("b.txt", "读b"))]}], "tool_calls"),
+            ([{"tool_calls": [tool_call("call_0", "read_file", _read("a.txt"))]}], "tool_calls"),
+            ([{"tool_calls": [tool_call("call_0", "read_file", _read("b.txt"))]}], "tool_calls"),
             ([{"content": "结论"}], "stop"),
         ],
     )
     try:
         env.send()
         await env.until("completed")
-        cards = [(part["toolCallId"], part["intent"]) for part in tool_parts(env.live())]
-        assert cards == [("call_0", "读a"), ("call_0_2", "读b")]
+        cards = [(part["toolCallId"], part["args"]["path"]) for part in tool_parts(env.live())]
+        assert cards == [("call_0", "a.txt"), ("call_0_2", "b.txt")]
         env.assert_parity()
         # 模型下一轮看到的是规范 id，工具结果与调用一一配对。
         ids = [c["id"] for m in env.model.requests[-1] for c in m.get("tool_calls") or []]
@@ -95,7 +95,7 @@ async def test_a_reused_id_cannot_steal_the_result_of_running_background_work(
         [
             ([{"tool_calls": [tool_call("c", "execute_terminal", _command("A"))]}], "tool_calls"),
             ([{"tool_calls": [tool_call("c", "read_file", _read("a.txt"))]}], "tool_calls"),
-            ([{"tool_calls": [tool_call("w", "wait_messages", {"intent": "等"})]}], "tool_calls"),
+            ([{"tool_calls": [tool_call("w", "wait_messages", {})]}], "tool_calls"),
             ([{"content": "收到结论"}], "stop"),
         ],
     )
@@ -113,7 +113,7 @@ async def test_a_reused_id_cannot_steal_the_result_of_running_background_work(
 async def test_a_reused_vendor_id_is_rewritten_and_addressed_separately(
     backend_env, tmp_path, monkeypatch
 ):
-    hitl = {"intent": "批准"}
+    hitl: dict[str, str] = {}
     env = LiveColdEnv(
         tmp_path,
         monkeypatch,
@@ -150,7 +150,7 @@ async def test_a_provider_repeating_the_id_on_every_chunk_gets_one_card(
 
     resent = {"index": 0, "id": "call_0", "function": {"arguments": '"path":"a.txt"}'}}
     deltas = [
-        {"tool_calls": [tool_call("call_0", "read_file", '{"intent":"读",')]},
+        {"tool_calls": [tool_call("call_0", "read_file", '{"path":')]},
         {"tool_calls": [resent]},
     ]
     env = LiveColdEnv(
@@ -174,9 +174,9 @@ async def test_same_id_in_two_sessions_runs_independently(backend_env, tmp_path,
         monkeypatch,
         [
             ([{"tool_calls": [call["A"]]}], "tool_calls"),
-            ([{"tool_calls": [tool_call("w", "wait_messages", {"intent": "等"})]}], "tool_calls"),
+            ([{"tool_calls": [tool_call("w", "wait_messages", {})]}], "tool_calls"),
             ([{"tool_calls": [call["B"]]}], "tool_calls"),
-            ([{"tool_calls": [tool_call("w", "wait_messages", {"intent": "等"})]}], "tool_calls"),
+            ([{"tool_calls": [tool_call("w", "wait_messages", {})]}], "tool_calls"),
             ([{"content": "x"}], "stop"),
             ([{"content": "y"}], "stop"),
         ],
@@ -185,7 +185,7 @@ async def test_same_id_in_two_sessions_runs_independently(backend_env, tmp_path,
         env.send()
         await env.parked()
         other = depends.get_session_service().create_session(
-            env.workspace.id, "other", tool_schemas=main_agent_tool_schemas()
+            env.workspace.id, "other", tool_surface=main_agent_tool_surface()
         )
         env.send("另一个", session_id=other.id)
         await asyncio.sleep(0.1)

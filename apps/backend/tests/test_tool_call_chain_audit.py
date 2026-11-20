@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.request_tools import RequestTools
 from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
     rebuild_snapshot,
@@ -18,6 +17,7 @@ from app.assistant_transport.projection.snapshot_rebuild import (
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.events import ToolCallCreatedEvent, ToolCallStatusChangedEvent
 from app.core.tool.execute.tool_access_gate import ToolAccessGate
+from app.core.tool.request_tools import RequestTools
 from app.core.tool.schemas import (
     ToolCall,
     ToolExecutionContext,
@@ -123,7 +123,7 @@ def test_t2_disabled_and_invalid_args_yields_argument_denial(tmp_path: Any) -> N
     outcome = gate.evaluate(
         ToolCall(
             tool_name="read_file",
-            arguments='{"intent": "验证工具行为", "nonexistent_field": 1}',
+            arguments='{"nonexistent_field": 1}',
             call_id="call-disabled",
         ),
         execution_context=_execution_context(tmp_path),
@@ -153,7 +153,7 @@ def test_t2_disabled_with_valid_args_yields_disabled_denial(tmp_path: Any) -> No
     outcome = gate.evaluate(
         ToolCall(
             tool_name="read_file",
-            arguments='{"intent": "验证工具行为", "path": "a.txt"}',
+            arguments='{"path": "a.txt"}',
             call_id="call-disabled-2",
         ),
         execution_context=_execution_context(tmp_path),
@@ -177,7 +177,7 @@ def test_t2_unknown_tool_wins_over_everything(tmp_path: Any) -> None:
     gate = ToolAccessGate(registry)
     outcome = gate.evaluate(
         ToolCall(
-            tool_name="ghost_tool", arguments='{"intent": "验证工具行为"}', call_id="call-ghost"
+            tool_name="ghost_tool", arguments='{}', call_id="call-ghost"
         ),
         execution_context=_execution_context(tmp_path),
         request_tools=RequestTools(schemas=(), admitted=frozenset(set())),  # 连空白名单都要先让位给「注册表未命中」

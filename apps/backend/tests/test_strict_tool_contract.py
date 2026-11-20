@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.config.configuration import get_tool_registry
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
+from app.models.session_tool_surface import SessionToolSurface
 from app.session_runtime.session_runtime_space import SessionRuntimeSpace
 from app.tools.tool_models import TerminalWriteArgs
 from app.tools.tool_models.read_file_args import ReadFileArgs
@@ -189,7 +190,7 @@ def test_session_schema_boundary_rejects_old_snapshot_without_rewriting_it(stric
     if strict is not None:
         function["strict"] = strict
     original = json.loads(json.dumps(function))
-    space.current_task = SimpleNamespace(tool_schemas=[function])
+    space.current_task = SimpleNamespace(tool_surface=SessionToolSurface(schemas=[function]))
     if strict is True:
         assert space.session_tool_schemas == (original,)
         assert space.session_tool_schemas[0] is not function

@@ -401,7 +401,7 @@ def test_agent_fork_keeps_the_source_tools_at_any_depth(fork_store, monkeypatch,
     tools = [{"name": "read_file"}, {"name": "fork_session"}, {"name": "delegate_task"}]
     with s.factory() as db:
         db.execute(
-            update(SessionModel).where(SessionModel.id == s.session.id).values(tool_schemas=tools)
+            update(SessionModel).where(SessionModel.id == s.session.id).values(tool_surface={"schemas": tools, "deferred": ["fork_session"]})
         )
         db.commit()
     monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
@@ -410,7 +410,8 @@ def test_agent_fork_keeps_the_source_tools_at_any_depth(fork_store, monkeypatch,
     child = s.service.fork_for_agent(
         s.session.id, run_id=run.id, tool_call_id="fork-call", title="Child", derivation_depth=depth
     )
-    assert child.tool_schemas == tools
+    assert child.tool_surface.schemas == tools
+    assert child.tool_surface.deferred == ["fork_session"]
 
 
 def test_manual_fork_cuts_after_the_whole_reply_a_letter_arrived_in(fork_store):

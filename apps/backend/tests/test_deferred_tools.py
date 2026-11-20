@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -15,30 +16,31 @@ import pytest
 from app.core.context.context_entry import ContextEntry
 from app.core.context.prompt_sources.source import ItemDiff, SourceContext
 from app.core.context.prompt_sources.sources.deferred_tools import DeferredToolsSource
-from app.core.tool.deferred import deferred_tools as port
+from app.core.tool import external_tools as port
 from app.core.tool.deferred.catalog_search import search_catalog
-from app.core.tool.deferred.deferred_tools import DeferredCatalogUnavailable
-from app.core.tool.deferred.model_function import model_function
+from app.core.tool.deferred.deferred_catalog import DeferredCatalog
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.execute.tool_executor import ToolExecutor
+from app.core.tool.external_tools import ExternalCatalogUnavailable
+from app.core.tool.handler.tool_search import _LOADED_NOTE as LOADED_NOTE
 from app.core.tool.handler.tool_search import NO_MATCH, ToolSearchTool
 from app.core.tool.request_tools import RequestTools
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import TOOL_SEARCH, ToolCall, ToolExecutionContext
 from app.core.tool.tool_registry import ToolRegistry
-from app.models.deferred_tool import DeferredToolDefinition
+from app.models.external_tool import ExternalToolDefinition
 from app.models.message_metadata import ToolMessageMetadata, parse_message_metadata
+from app.models.tool_result_facts import ToolResultFacts
 from tests.test_runtime_message_context_manager import _ContextStore, _manager
 
 
-def _tool(name: str, description: str = "", parameters: dict[str, object] | None = None) -> DeferredToolDefinition:
-    return DeferredToolDefinition(
+def _tool(name: str, description: str = "", parameters: dict[str, object] | None = None) -> ExternalToolDefinition:
+    return ExternalToolDefinition(
         name=name,
         description=description,
         parameters=parameters
         if parameters is not None
         else {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
-        source="fake",
         reference={"id": name},
     )
 
@@ -50,27 +52,27 @@ CATALOG = (GITHUB_ISSUE, SLACK_LIST, SLACK_SEND)
 
 
 class _FakeSource:
-    def __init__(self, catalog: tuple[DeferredToolDefinition, ...] = CATALOG) -> None:
+    def __init__(self, catalog: tuple[ExternalToolDefinition, ...] = CATALOG) -> None:
         self.catalog_value = catalog
         self.unavailable: str | None = None
-        self.calls: list[tuple[str, dict[str, Any], str]] = []
+        self.calls: list[tuple[str, dict[str, Any]]] = []
 
-    def catalog(self, workspace_root: str) -> tuple[DeferredToolDefinition, ...]:
+    def catalog(self, workspace_root: str) -> tuple[ExternalToolDefinition, ...]:
         if self.unavailable is not None:
-            raise DeferredCatalogUnavailable(self.unavailable)
+            raise ExternalCatalogUnavailable(self.unavailable)
         return self.catalog_value
 
     def execute(self, definition, arguments, execution_context):
-        self.calls.append((definition.name, arguments, execution_context.call_intent))
+        self.calls.append((definition.name, arguments))
         return tool_success(definition.name, "sent", tool_call_id=execution_context.tool_call_id)
 
 
 @pytest.fixture
 def source() -> Any:
     fake = _FakeSource()
-    port.set_deferred_tools(fake)
+    port.set_external_tools(fake)
     yield fake
-    port.set_deferred_tools(None)
+    port.set_external_tools(None)
 
 
 @pytest.fixture(autouse=True)
@@ -120,17 +122,36 @@ def test_tool_search_returns_functions_block_and_records_loaded_tools(source, tm
         query="select:mcp__slack__send_message", max_results=5, execution_context=_context(tmp_path)
     )
     assert observation.status == "success"
-    line = json.dumps(model_function(SLACK_SEND), ensure_ascii=False)
-    assert observation.content == f"<functions>\n<function>{line}</function>\n</functions>"
+    line = json.dumps(DeferredCatalog._external_function(SLACK_SEND), ensure_ascii=False)
+    assert observation.content == f"<functions>\n<function>{line}</function>\n</functions>\n{LOADED_NOTE}"
     assert list(json.loads(line)) == ["description", "name", "parameters"]
-    assert observation.loaded_tools == (SLACK_SEND,)
+    assert observation.facts == ToolResultFacts(loaded_external_tools=(SLACK_SEND,))
+
+
+def test_reloading_an_external_tool_returns_it_only_when_its_definition_changed(source, tmp_path) -> None:
+    def search(loaded: tuple[ExternalToolDefinition, ...]) -> Any:
+        context = replace(
+            _context(tmp_path),
+            request_tools=RequestTools.derive((), frozenset(), loaded_external=loaded),
+        )
+        return ToolSearchTool().execute(
+            query="select:mcp__slack__send_message", max_results=5, execution_context=context
+        )
+
+    unchanged = search((SLACK_SEND,))
+    assert "<functions>" not in unchanged.content and "Already loaded" in unchanged.content
+    assert unchanged.facts is None
+    # 服务改了定义（目录通知让模型重新加载）：照常给新版本、记一次加载。
+    changed = search((_tool(SLACK_SEND.name, "old description"),))
+    assert changed.content.startswith("<functions>")
+    assert changed.facts == ToolResultFacts(loaded_external_tools=(SLACK_SEND,))
 
 
 def test_tool_search_without_match_is_success_not_error(source, tmp_path) -> None:
     observation = ToolSearchTool().execute(query="jupyter", max_results=5, execution_context=_context(tmp_path))
     assert observation.status == "success"
     assert observation.content == NO_MATCH
-    assert observation.loaded_tools is None
+    assert observation.facts is None
 
 
 def test_tool_search_reports_unreadable_catalog(source, tmp_path) -> None:
@@ -144,10 +165,10 @@ def test_tool_search_reports_unreadable_catalog(source, tmp_path) -> None:
 
 
 def test_loaded_tools_survive_persistence_and_metadata_merges() -> None:
-    metadata = ToolMessageMetadata(status="completed", loaded_tools=(SLACK_SEND,))
+    metadata = ToolMessageMetadata(status="completed", facts=ToolResultFacts(loaded_external_tools=(SLACK_SEND,)))
     assert parse_message_metadata("tool", json.loads(metadata.model_dump_json())) == metadata
     # 后来的更新（如 Run 外的结算）不带它时保留：否则已加载的工具会被静默卸掉。
-    assert ToolMessageMetadata(status="cancelled").merged_onto(metadata).loaded_tools == (SLACK_SEND,)
+    assert ToolMessageMetadata(status="cancelled").merged_onto(metadata).facts.loaded_external_tools == (SLACK_SEND,)
 
 
 def test_context_lists_loaded_tools_in_order_including_inherited_rows() -> None:
@@ -157,7 +178,9 @@ def test_context_lists_loaded_tools_in_order_including_inherited_rows() -> None:
             {"role": "tool", "tool_call_id": "a", "content": "x"},
             None,  # 分叉继承的行
             1,
-            metadata=ToolMessageMetadata(status="completed", loaded_tools=(SLACK_SEND,)),
+            metadata=ToolMessageMetadata(
+                status="completed", facts=ToolResultFacts(loaded_external_tools=(SLACK_SEND,))
+            ),
             turn=1,
         ),
         ContextEntry(
@@ -171,63 +194,60 @@ def test_context_lists_loaded_tools_in_order_including_inherited_rows() -> None:
             {"role": "tool", "tool_call_id": "c", "content": "z"},
             2,
             3,
-            metadata=ToolMessageMetadata(status="completed", loaded_tools=(GITHUB_ISSUE,)),
+            metadata=ToolMessageMetadata(
+                status="completed", facts=ToolResultFacts(loaded_external_tools=(GITHUB_ISSUE,))
+            ),
             turn=2,
         ),
     ]
-    assert manager.loaded_deferred_tools() == [SLACK_SEND, GITHUB_ISSUE]
+    assert manager.loaded_external_tools() == [SLACK_SEND, GITHUB_ISSUE]
 
 
-def test_request_tools_append_loaded_definitions_non_strict_with_intent() -> None:
+def test_loaded_external_tools_are_admitted_without_touching_the_tool_list() -> None:
     base = ({"name": "read_file", "strict": True, "parameters": {}}, {"name": TOOL_SEARCH, "parameters": {}})
     newer = _tool(SLACK_SEND.name, "v2")
     tools = RequestTools.derive(
-        base, frozenset(), [SLACK_SEND, GITHUB_ISSUE, newer, _tool("read_file", "shadow")]
+        base,
+        frozenset(),
+        loaded_external=[SLACK_SEND, GITHUB_ISSUE, newer, _tool("read_file", "shadow")],
     )
-    names = [schema["name"] for schema in tools.schemas]
-    # 位置取第一次加载、定义取最后一次；与基础工具同名的不覆盖。
-    assert names == ["read_file", TOOL_SEARCH, SLACK_SEND.name, GITHUB_ISSUE.name]
-    assert tools.schemas[2]["description"] == "v2"
-    assert "strict" not in tools.schemas[2]
-    assert tools.schemas[2]["parameters"]["required"] == ["intent", "text"]
+    # 工具列表不变（请求前缀不变、缓存不断）；定义取最后一次加载，与基础工具同名的不覆盖。
+    assert tools.schemas == base
+    assert tools.external[SLACK_SEND.name] == newer
     assert tools.admitted == {"read_file", TOOL_SEARCH, SLACK_SEND.name, GITHUB_ISSUE.name}
-    assert set(tools.deferred) == {SLACK_SEND.name, GITHUB_ISSUE.name}
-    banned = RequestTools.derive(base, frozenset({GITHUB_ISSUE.name}), [GITHUB_ISSUE])
-    assert GITHUB_ISSUE.name in [s["name"] for s in banned.schemas] and not banned.deferred
-
-
-def test_schema_that_owns_intent_is_exported_as_is() -> None:
-    owns = _tool("mcp__x__y", parameters={"type": "object", "properties": {"intent": {"type": "string"}}})
-    assert model_function(owns)["parameters"] == owns.parameters
+    assert set(tools.external) == {SLACK_SEND.name, GITHUB_ISSUE.name}
+    banned = RequestTools.derive(base, frozenset({GITHUB_ISSUE.name}), loaded_external=[GITHUB_ISSUE])
+    assert GITHUB_ISSUE.name not in banned.admitted and not banned.external
 
 
 # —— 准入与执行 ——
 
 
 def _execute(tmp_path: Path, name: str, arguments: str, loaded=(SLACK_SEND,), base=(TOOL_SEARCH,)):
-    tools = RequestTools.derive(tuple({"name": n} for n in base), frozenset(), list(loaded))
+    tools = RequestTools.derive(tuple({"name": n} for n in base), frozenset(), loaded_external=list(loaded))
     return ToolExecutor(ToolRegistry([])).execute(
         ToolCall(tool_name=name, arguments=arguments, call_id="c1"), _context(tmp_path), tools
     )
 
 
 def test_loaded_deferred_call_goes_to_source_with_whole_arguments(source, tmp_path) -> None:
-    observation = _execute(tmp_path, SLACK_SEND.name, '{"intent": "通知团队", "text": "hi"}')
+    observation = _execute(tmp_path, SLACK_SEND.name, '{"text": "hi"}')
     assert observation.status == "success" and observation.content == "sent"
-    assert source.calls == [(SLACK_SEND.name, {"text": "hi"}, "通知团队")]
+    assert source.calls == [(SLACK_SEND.name, {"text": "hi"})]
 
 
 def test_deferred_arguments_are_checked_against_the_source_schema(source, tmp_path) -> None:
-    observation = _execute(tmp_path, SLACK_SEND.name, '{"intent": "通知团队", "text": 3}')
+    observation = _execute(tmp_path, SLACK_SEND.name, '{"text": 3}')
     assert observation.status == "error" and "invalid tool arguments" in observation.content
     assert source.calls == []
 
 
-def test_business_intent_is_not_taken_as_call_intent(source, tmp_path) -> None:
+def test_an_external_intent_parameter_is_an_ordinary_argument(source, tmp_path) -> None:
     owns = _tool("mcp__x__classify", parameters={"type": "object", "properties": {"intent": {"type": "string"}}})
+    assert DeferredCatalog._external_function(owns)["parameters"] == owns.parameters
     observation = _execute(tmp_path, owns.name, '{"intent": "refund"}', loaded=(owns,))
     assert observation.status == "success"
-    assert source.calls == [(owns.name, {"intent": "refund"}, None)]
+    assert source.calls == [(owns.name, {"intent": "refund"})]
 
 
 def test_unloaded_catalog_tool_is_told_to_load_first(source, tmp_path) -> None:
@@ -248,7 +268,7 @@ def test_source_exception_becomes_error_observation(source, tmp_path, monkeypatc
         raise RuntimeError("server crashed")
 
     monkeypatch.setattr(source, "execute", boom)
-    observation = _execute(tmp_path, SLACK_SEND.name, '{"intent": "通知", "text": "hi"}')
+    observation = _execute(tmp_path, SLACK_SEND.name, '{"text": "hi"}')
     assert observation.status == "error" and "server crashed" in observation.content
 
 

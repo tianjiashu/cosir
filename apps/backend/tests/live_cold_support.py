@@ -18,8 +18,9 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import update
 
 from app.config.configuration import get_tool_registry
-from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_schemas
+from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_surface
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
+from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolDefinition
 from app.core.tool.schemas.tool_execution_context import ToolExecutionContext
 from app.core.workflow import workflow
@@ -94,8 +95,12 @@ def _hitl(*, execution_context: ToolExecutionContext) -> Any:
     return tool_awaiting_decision("probe_hitl", execution_context.tool_call_id, {"kind": "probe"})
 
 
+def _deferred_probe(*, execution_context: ToolExecutionContext) -> Any:
+    return tool_success("probe_deferred", "probed", tool_call_id=execution_context.tool_call_id)
+
+
 def _install_probe_tools(session: SessionRecord) -> None:
-    """注册一个需要用户决定的探针工具，并把它固化进 Session 的模型 schema。"""
+    """注册两个探针工具并固化进 Session 的工具面：需要用户决定的 ``probe_hitl``，延迟加载的 ``probe_deferred``。"""
     registry = get_tool_registry()
     if registry.get_tool_definition("probe_hitl") is None:
         registry.register(
@@ -108,12 +113,28 @@ def _install_probe_tools(session: SessionRecord) -> None:
                 user_decision=True,
             )
         )
-    definition = registry.get_tool_definition("probe_hitl")
-    assert definition is not None
-    schemas = [*session.tool_schemas, definition.to_model_tool_definition()]
+    if registry.get_tool_definition("probe_deferred") is None:
+        registry.register(
+            ToolDefinition(
+                name="probe_deferred",
+                group="probe",
+                description="Probe a deferred built-in tool",
+                handler=_deferred_probe,
+                args_model=_NoArgs,
+                deferred=True,
+            )
+        )
+    surface = session.tool_surface.model_copy(deep=True)
+    for name in ("probe_hitl", "probe_deferred"):
+        definition = registry.get_tool_definition(name)
+        assert definition is not None
+        surface.schemas.append(definition.to_model_tool_definition())
+    surface.deferred.append("probe_deferred")
     with main_db_factory().begin() as db:
         db.execute(
-            update(SessionModel).where(SessionModel.id == session.id).values(tool_schemas=schemas)
+            update(SessionModel)
+            .where(SessionModel.id == session.id)
+            .values(tool_surface=surface.model_dump(mode="json"))
         )
 
 
@@ -174,7 +195,7 @@ class LiveColdEnv:
         )
         self.workspace = depends.get_workspace_service().create_workspace("ws", str(tmp_path))
         self.session = depends.get_session_service().create_session(
-            self.workspace.id, "parent", tool_schemas=main_agent_tool_schemas()
+            self.workspace.id, "parent", tool_surface=main_agent_tool_surface()
         )
         _install_probe_tools(self.session)
         monkeypatch.setattr(

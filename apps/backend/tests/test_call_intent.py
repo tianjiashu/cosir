@@ -1,4 +1,4 @@
-"""统一意图契约：模型出口、执行边界及独立实时/冷重建投影。"""
+"""调用意图契约：只由参数难读的工具自己声明，是普通业务参数；实时与冷重建都按原样参数投影。"""
 
 import json
 from types import SimpleNamespace
@@ -6,22 +6,30 @@ from types import SimpleNamespace
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from app.assistant_transport.projection.snapshot_rebuild import (
-    pair_tool_parts,
-)
-from app.assistant_transport.projection.tool_call_event_projection import plan_tool_call_intent
+from app.assistant_transport.projection.snapshot_rebuild import pair_tool_parts
+from app.assistant_transport.projection.tool_call_event_projection import plan_tool_call_arguments
 from app.config.configuration import get_tool_registry
-from app.core.events import ToolCallIntentEvent, ToolCallStatusChangedEvent
-from app.core.tool.call_intent import display_call_arguments, model_parameters_with_intent
+from app.core.events import ToolCallArgumentsEvent, ToolCallStatusChangedEvent
+from app.core.tool.call_intent import INTENT_FIELD, intent_field
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.request_tools import RequestTools
-from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext, ToolObservation
+from app.core.tool.schemas import (
+    TOOL_BROWSER_EVALUATE,
+    TOOL_EXECUTE_TERMINAL,
+    ToolCall,
+    ToolDefinition,
+    ToolExecutionContext,
+    ToolObservation,
+)
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.node_helper import model_stream_state_machine as stream
+
+_INTENT_TOOLS = {TOOL_EXECUTE_TERMINAL, TOOL_BROWSER_EVALUATE}
 
 
 class Args(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+    intent: str = intent_field()
     value: int
 
 
@@ -32,131 +40,85 @@ def context(tmp_path):
 
 
 @pytest.mark.usefixtures("backend_env")
-def test_all_registered_model_schemas_inject_once_without_changing_business_schema():
+def test_only_tools_with_hard_to_read_arguments_declare_intent():
     registry = get_tool_registry()
+    declaring = set()
     for name in registry.get_all_tool_names():
-        definition = registry.get_tool_definition(name)
-        before = json.dumps(dict(definition.parameters_schema), sort_keys=True)
-        schema = definition.to_model_tool_definition()["parameters"]
-        assert next(iter(schema["properties"])) == "intent", name
-        assert schema["required"].count("intent") == 1
-        assert "intent" not in definition.args_model.model_fields
-        assert json.dumps(dict(definition.parameters_schema), sort_keys=True) == before
-        schema["properties"].pop("intent")
-        schema["required"].remove("intent")
-        assert schema == definition.parameters_schema
+        schema = registry.get_tool_definition(name).to_model_tool_definition()["parameters"]
+        if INTENT_FIELD in schema["properties"]:
+            declaring.add(name)
+            # 对模型是必填字符串（strict 全量 required），不是可空字段。
+            assert schema["properties"][INTENT_FIELD]["type"] == "string", name
+            assert INTENT_FIELD in schema["required"], name
+    assert declaring == _INTENT_TOOLS
 
 
-def test_reserved_conflict_and_deep_copy():
-    schema = {
-        "type": "object",
-        "properties": {"x": {"$ref": "#/$defs/X"}},
-        "required": ["x"],
-        "$defs": {"X": {"type": "string"}},
-        "additionalProperties": False,
-    }
-    result = model_parameters_with_intent(schema)
-    result["$defs"]["X"]["type"] = "number"
-    assert schema["$defs"]["X"]["type"] == "string"
-    with pytest.raises(ValueError, match="reserved"):
-        model_parameters_with_intent({"properties": {"intent": {}}})
-
-
-@pytest.mark.parametrize("intent", ["absent", None, "", "  ", 5, "x" * 161])
-def test_missing_or_invalid_intent_still_executes_without_intent(tmp_path, monkeypatch, intent):
-    """intent 只服务展示：缺失或非法不拒绝调用，handler 照常执行，运行上下文里的意图为 None。"""
+@pytest.mark.parametrize("arguments", [{"value": 1}, {"intent": "", "value": 1}])
+def test_missing_intent_still_executes(tmp_path, monkeypatch, arguments):
+    """意图只服务展示：漏写不拒绝调用，handler 收到空串。"""
     seen = []
 
-    def handler(value, *, execution_context):
-        seen.append((value, execution_context.call_intent))
+    def handler(intent, value, *, execution_context):
+        seen.append((intent, value))
         return ToolObservation(tool_name="probe", status="success", content="ok")
 
     registry = ToolRegistry(
-        [
-            ToolDefinition(
-                name="probe", group="test", description="probe", args_model=Args, handler=handler
-            )
-        ]
+        [ToolDefinition(name="probe", group="test", description="probe", args_model=Args, handler=handler)]
     )
     monkeypatch.setattr("app.core.tool.execute.tool_executor.emit", lambda event: None)
-    arguments = {"value": 1} if intent == "absent" else {"intent": intent, "value": 1}
     call = ToolCall(tool_name="probe", call_id="c", arguments=json.dumps(arguments))
-    result = ToolExecutor(registry).execute(call, context(tmp_path), RequestTools(schemas=(), admitted=frozenset({"probe"})))
+    result = ToolExecutor(registry).execute(
+        call, context(tmp_path), RequestTools(schemas=(), admitted=frozenset({"probe"}))
+    )
     assert result.status == "success"
-    assert seen == [(1, None)]
+    assert seen == [("", 1)]
 
 
-def test_handler_only_receives_business_args_context_keeps_original_intent(
-    tmp_path, monkeypatch
-):
-    seen = []
+def test_tools_without_the_field_reject_an_intent_argument(tmp_path, monkeypatch):
+    """不声明意图的工具不认这个名字：它不是平台字段，写了就是多余参数。"""
 
-    def handler(value, *, execution_context):
-        seen.append(
-            (
-                value,
-                execution_context.call_intent,
-            )
-        )
-        return ToolObservation(tool_name="probe", status="success", content="ok")
+    class Plain(BaseModel):
+        model_config = ConfigDict(extra="forbid", strict=True)
+        value: int
 
     registry = ToolRegistry(
         [
             ToolDefinition(
-                name="probe", group="test", description="probe", args_model=Args, handler=handler
+                name="probe", group="test", description="probe", args_model=Plain,
+                handler=lambda value, *, execution_context: pytest.fail("must not run"),
             )
         ]
     )
-
     monkeypatch.setattr("app.core.tool.execute.tool_executor.emit", lambda event: None)
-    call = ToolCall(
-        tool_name="probe", call_id="c", arguments='{"intent":"  检查数据  ","value":"1"}'
+    call = ToolCall(tool_name="probe", call_id="c", arguments='{"intent":"x","value":1}')
+    result = ToolExecutor(registry).execute(
+        call, context(tmp_path), RequestTools(schemas=(), admitted=frozenset({"probe"}))
     )
-    assert ToolExecutor(registry).execute(call, context(tmp_path), RequestTools(schemas=(), admitted=frozenset({"probe"}))).status == "success"
-    # ``intent`` 是调用意图，不进业务参数：收紧空白后只留在运行上下文里。
-    assert seen == [(1, "检查数据")]
+    assert result.status == "error"
 
 
-@pytest.mark.parametrize(
-    "raw,expected",
-    [
-        ('{"intent":"检查配置","bad":true}', "检查配置"),
-        ('{"intent":"检查配置",', None),
-        ('{"intent":42}', None),
-    ],
-)
+@pytest.mark.parametrize("raw", ['{"intent":"检查配置","command":"ls"}', '{"intent":"检查配置",'])
 @pytest.mark.parametrize("ending", ["finish", "cancel"])
-def test_stream_close_intent_matches_cold_projection_even_without_execution(
-    monkeypatch, raw, expected, ending
-):
+def test_stream_close_arguments_match_cold_projection_even_without_execution(monkeypatch, raw, ending):
     events = []
     monkeypatch.setattr(stream, "emit", events.append)
     monkeypatch.setattr(
         stream, "_message_context", lambda: SimpleNamespace(add_message=lambda *a, **kw: None)
     )
     machine = stream.ModelStreamStateMachine(1, 2, "s")
-    call = SimpleNamespace(id="c", function=SimpleNamespace(name="read_file", arguments=raw))
+    call = SimpleNamespace(id="c", function=SimpleNamespace(name="execute_terminal", arguments=raw))
     machine.tool_call([call])
     getattr(machine, ending)()
     machine.finish()
-    intent_events = [e for e in events if isinstance(e, ToolCallIntentEvent)]
-    assert len(intent_events) == 1
-    assert intent_events[0].intent == expected
-    assert not any(
-        isinstance(e, ToolCallStatusChangedEvent) and e.status == "running" for e in events
-    )
-    assert display_call_arguments(raw)[0] == expected
-    # Cold rebuild consumes the same persisted function.arguments, including invalid business args.
+    argument_events = [e for e in events if isinstance(e, ToolCallArgumentsEvent)]
+    assert len(argument_events) == 1
+    assert not any(isinstance(e, ToolCallStatusChangedEvent) and e.status == "running" for e in events)
     rows = [
         SimpleNamespace(
             message={
                 "role": "assistant",
                 "tool_calls": [
-                    {
-                        "id": "c",
-                        "type": "function",
-                        "function": {"name": "read_file", "arguments": raw},
-                    }
+                    {"id": "c", "type": "function", "function": {"name": "execute_terminal", "arguments": raw}}
                 ],
             },
             metadata=None,
@@ -164,37 +126,10 @@ def test_stream_close_intent_matches_cold_projection_even_without_execution(
         )
     ]
     parts = pair_tool_parts(rows, {})
-    assert parts["c"]["intent"] == expected
-    assert "intent" not in parts["c"]["args"]
+    # 意图留在参数里，part 没有单独的意图字段；前端工具目录从 ``args.intent`` 取标题。
+    assert "intent" not in parts["c"]
+    assert parts["c"]["args"] == argument_events[0].args
     state = {"messages": [{"parts": [parts["c"]]}]}
-    mutation = plan_tool_call_intent(intent_events[0], state)[0]
-    assert mutation.path[-1] == "intent"
-    assert mutation.value == expected
-
-
-def intent_probe(value, *, execution_context):
-    """若意图作为业务 kwarg 泄漏，调用直接失败。"""
-    return ToolObservation(
-        tool_name="probe", status="success", content=f"{value}:{execution_context.call_intent}"
-    )
-
-
-def test_intent_reaches_actual_handler_context(tmp_path, monkeypatch):
-    registry = ToolRegistry(
-        [
-            ToolDefinition(
-                name="probe",
-                group="test",
-                description="probe",
-                args_model=Args,
-                handler=intent_probe,
-            )
-        ]
-    )
-    monkeypatch.setattr("app.core.tool.execute.tool_executor.emit", lambda _: None)
-    result = ToolExecutor(registry).execute(
-        ToolCall(tool_name="probe", call_id="c", arguments='{"intent":"读取样例","value":3}'),
-        context(tmp_path),
-        RequestTools(schemas=(), admitted=frozenset({"probe"})),
-    )
-    assert result.status == "success" and result.content == "3:读取样例"
+    [mutation] = plan_tool_call_arguments(argument_events[0], state)
+    assert mutation.path[-1] == "args"
+    assert mutation.value == parts["c"]["args"]

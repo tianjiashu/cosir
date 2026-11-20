@@ -131,6 +131,7 @@ def test_platform_args_descriptions_are_english_complete_and_non_redundant(
     properties = model.model_json_schema()["properties"]
 
     assert set(properties) == {
+        "intent",
         "command",
         "shell",
         "timeout",

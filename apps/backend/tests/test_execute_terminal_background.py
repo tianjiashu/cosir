@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import threading
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +47,6 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
 
 def _context(tmp_path: Path, tool_call_id: str) -> ToolExecutionContext:
     return ToolExecutionContext(
-        call_intent="test",
         step_id="step-1",
         session_id=_SESSION_ID,
         workspace_id=1,
@@ -78,6 +76,7 @@ def test_foreground_command_returns_its_result_without_registering(tmp_path, del
 def test_background_command_returns_a_placeholder_then_delivers(tmp_path, delivered) -> None:
     observation = ExecuteTerminalTool().execute(
         command="sleep 0.2; echo done",
+        intent="test",
         background=True,
         execution_context=_context(tmp_path, "call-bg"),
     )
@@ -107,7 +106,7 @@ def test_background_label_falls_back_to_first_command_line_without_intent(
     tmp_path, delivered
 ) -> None:
     """模型漏写 intent 时命令照常进后台，看板标签退回命令首个非空行。"""
-    context = replace(_context(tmp_path, "call-bg-no-intent"), call_intent=None)
+    context = _context(tmp_path, "call-bg-no-intent")
     observation = ExecuteTerminalTool().execute(
         command="\n  sleep 0.1; echo done  \necho more", background=True, execution_context=context
     )

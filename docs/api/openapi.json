@@ -4528,17 +4528,6 @@
             "type": "object",
             "title": "Args"
           },
-          "intent": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Intent"
-          },
           "error": {
             "anyOf": [
               {

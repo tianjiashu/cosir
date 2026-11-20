@@ -29,9 +29,9 @@ class _Args(BaseModel):
 def harness(monkeypatch: pytest.MonkeyPatch):
     enqueued: list[tuple[int, SessionMessage]] = []
     queued: list[SessionMessage] = []
-    # 原始调用参数：与模型写下的一样带着 ``intent``，不是工具的业务参数。
+    # 原始调用参数：与模型写下的一样是 JSON 文本，要经 ``resolve_call_arguments`` 才是业务参数。
     awaiting: dict[str, tuple[str, str]] = {
-        _CALL_ID: ("some_hitl_tool", '{"intent": "确认目标", "goal": "ship"}')
+        _CALL_ID: ("some_hitl_tool", '{"goal": "ship"}')
     }
     definitions: dict[str, Any] = {}
     monkeypatch.setattr(
@@ -154,7 +154,7 @@ def _declare_payload(harness) -> None:
 
 
 async def test_payload_is_validated_against_the_original_call_and_rendered(harness) -> None:
-    """载荷对照的是原调用的业务参数：原始参数里的 ``intent`` 已拆掉，不会被当成非法字段。"""
+    """载荷对照的是原调用的业务参数。"""
     _declare_payload(harness)
 
     await _decide(harness, decision="approve", data={"choice": "ship"})
@@ -203,7 +203,7 @@ async def test_answer_sees_the_same_arguments_the_handler_got(harness) -> None:
         args_model=_Flagged, user_decision="reply", decision_model=_Echo,
     ).normalized()
     harness.definitions["some_hitl_tool"] = definition
-    raw = '{"intent": "确认目标", "goal": "ship", "urgent": "true"}'
+    raw = '{"goal": "ship", "urgent": "true"}'
     harness.awaiting[_CALL_ID] = ("some_hitl_tool", raw)
 
     await _decide(harness, decision="approve", data={})
@@ -215,7 +215,7 @@ async def test_answer_sees_the_same_arguments_the_handler_got(harness) -> None:
 async def test_call_that_no_longer_fits_the_tool_is_rejected_not_waved_through(harness) -> None:
     """工具的参数声明在提问挂着期间变了：没法核对回答，拒绝并留痕，不放行。"""
     _declare_payload(harness)
-    harness.awaiting[_CALL_ID] = ("some_hitl_tool", '{"intent": "确认目标", "target": "ship"}')
+    harness.awaiting[_CALL_ID] = ("some_hitl_tool", '{"target": "ship"}')
 
     with pytest.raises(UserInputRejectedError) as caught:
         await _decide(harness, decision="approve", data={"choice": "ship"})

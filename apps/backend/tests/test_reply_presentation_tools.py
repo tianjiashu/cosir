@@ -13,6 +13,7 @@ from app.core.agents.define_agents import main_agent
 from app.core.tool.handler.offer_next_step import OfferNextStepTool
 from app.models.deliverable import DeliveredDirectory, DeliveredFile, DeliveredUrl
 from app.models.message_metadata import ToolMessageMetadata
+from app.models.tool_result_facts import ToolResultFacts
 from app.tools.tool_handler import present_deliverables as present_module
 from app.tools.tool_handler.present_deliverables import PresentDeliverablesTool
 from app.utils.path.file_identity import UnsupportedFileSystemError, canonical_path
@@ -57,7 +58,7 @@ def test_observes_files_directories_and_web_addresses(workspace: Path, tmp_path:
 
     assert observation.status == "success"
     assert observation.display_data == {"kind": "deliverables", "note": None}
-    assert observation.deliverables == (
+    assert observation.facts.deliverables == (
         DeliveredFile(
             workspace_path="docs/report.md",
             absolute_path=str(canonical_path(workspace / "docs" / "report.md")),
@@ -115,7 +116,7 @@ def test_failures_are_listed_per_item_and_do_not_block_the_rest(
     )
 
     assert observation.status == "success"
-    assert [item.workspace_path for item in observation.deliverables] == ["docs/report.md"]
+    assert [item.workspace_path for item in observation.facts.deliverables] == ["docs/report.md"]
     for target in ("missing.md", "/dev/null", "https://", "denied.txt", "nfs.txt"):
         assert f"- {target}:" in observation.content
 
@@ -144,7 +145,7 @@ def test_a_malformed_address_fails_only_that_item(workspace: Path) -> None:
     observation = _present(workspace, ("docs/report.md", None), *((target, None) for target in bad))
 
     assert observation.status == "success"
-    assert [item.workspace_path for item in observation.deliverables] == ["docs/report.md"]
+    assert [item.workspace_path for item in observation.facts.deliverables] == ["docs/report.md"]
     for target in bad:
         assert f"- {target}:" in observation.content
     assert "remove the user name or password" in observation.content
@@ -161,7 +162,7 @@ def test_file_addresses_are_delivered_as_local_files(workspace: Path) -> None:
         ("file://other-host/share/a.md", None),
     )
 
-    assert [item.workspace_path for item in observation.deliverables] == ["docs/report.md"]
+    assert [item.workspace_path for item in observation.facts.deliverables] == ["docs/report.md"]
     assert (
         "- file://other-host/share/a.md: file:// addresses must point to this machine"
         in observation.content
@@ -182,7 +183,7 @@ def test_images_record_their_upright_size_for_layout(workspace: Path) -> None:
 
     observation = _present(workspace, ("photo.jpg", None), ("logo.svg", None), ("broken.png", None))
 
-    assert [(item.kind, item.width, item.height) for item in observation.deliverables] == [
+    assert [(item.kind, item.width, item.height) for item in observation.facts.deliverables] == [
         ("image", 20, 40),
         ("svg", None, None),
         ("image", None, None),
@@ -194,7 +195,7 @@ def test_nothing_presentable_is_an_error_with_a_neutral_hint(workspace: Path) ->
     observation = _present(workspace, ("missing.md", None), ("/dev/null", None))
 
     assert observation.status == "error"
-    assert observation.deliverables is None
+    assert observation.facts is None
     assert "nothing could be presented" in observation.content
     assert (observation.display_data or {}).get("status_hint") == "无法呈现"
 
@@ -217,7 +218,7 @@ def test_same_target_is_kept_once_at_its_last_position(workspace: Path) -> None:
         ("hard.md", None),
     )
 
-    items = observation.deliverables
+    items = observation.facts.deliverables
     assert [item.type for item in items] == ["file", "directory", "url", "file"]
     assert items[2].caption == "首页"
     assert items[0].key != items[3].key
@@ -243,7 +244,7 @@ def test_part_projection_carries_the_record_in_wire_shape() -> None:
     )
     fields = project_tool_result(
         ToolMessageMetadata(
-            status="completed", deliverables=(record, DeliveredUrl(url="http://h", caption="c"))
+            status="completed", facts=ToolResultFacts(deliverables=(record, DeliveredUrl(url="http://h", caption="c")))
         )
     )
     assert fields["deliverables"] == [
@@ -310,7 +311,7 @@ def test_note_goes_to_the_card_display_only(workspace: Path) -> None:
 
     noted = _present(workspace, ("docs/report.md", None), note="  报告与原始数据，表已按点赞排序  ")
     assert noted.display_data == {"kind": "deliverables", "note": "报告与原始数据，表已按点赞排序"}
-    assert noted.deliverables is not None
+    assert noted.facts.deliverables is not None
     assert _present(workspace, ("docs/report.md", None), note="   ").display_data == {
         "kind": "deliverables",
         "note": None,

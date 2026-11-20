@@ -42,7 +42,7 @@ def loop(monkeypatch):
             save_execution=lambda _run_id, value: progress.append(value),
             transition=lambda _run_id, transition, **k: calls.append(transition.name.lower()),
         ),
-        session_space=SimpleNamespace(session_tool_schemas=(), get_context_manager=lambda **k: context),
+        session_space=SimpleNamespace(session_tool_schemas=(), session_deferred_schemas=(), get_context_manager=lambda **k: context),
     )
     async def prepare_input(state):
         """message_queue 并入节点替身：不触碰真实 message_queue，只记录经过并流向 model。"""

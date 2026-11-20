@@ -57,7 +57,6 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
 
 def _context(tmp_path: Path, tool_call_id: str, session_id: int = _SESSION_ID) -> ToolExecutionContext:
     return ToolExecutionContext(
-        call_intent="test",
         step_id="step-1",
         session_id=session_id,
         workspace_id=1,

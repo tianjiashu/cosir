@@ -358,10 +358,11 @@ def test_schema_does_not_widen_model_contract(monkeypatch: pytest.MonkeyPatch) -
 def test_all_field_descriptions_are_nonempty_english_and_stop_with_period(
     model: type[BaseModel],
 ) -> None:
-    """四字段描述必须非空、英文、无 CJK、无首尾空白、以句号结尾。"""
+    """全部字段描述必须非空、英文、无 CJK、无首尾空白、以句号结尾。"""
 
     properties = model.model_json_schema()["properties"]
     assert set(properties) == {
+        "intent",
         "shell",
         "command",
         "timeout",
@@ -608,6 +609,7 @@ def test_resolver_result_is_usable_as_args_model_directly() -> None:
     resolved = resolve_execute_terminal_args_model("Windows")
     inst = resolved.model_validate({"command": "dir"})
     assert inst.model_dump() == {
+        "intent": "",
         "shell": "auto",
         "command": "dir",
         "timeout": None,

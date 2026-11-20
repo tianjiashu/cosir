@@ -15,11 +15,11 @@ from pathlib import Path
 
 import pytest
 
-from app.core.tool.request_tools import RequestTools
 from app.config import configuration
 from app.core.tool.execute.tool_access_gate import ToolAccessGate
 from app.core.tool.multi_agent import delegate_task
 from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
+from app.core.tool.request_tools import RequestTools
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.tool_call import ToolCall
 from app.core.tool.tool_registry import ToolRegistry
@@ -98,7 +98,7 @@ def test_broken_registry_admits_invalid_id_through_gate(
     ctx = ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=Path.cwd(), run_id=1)
     call = ToolCall(
         tool_name="delegate_task",
-        arguments='{"intent": "验证工具行为", "child_agent_id": "fake-id", "agent_name": "t", "message": "p"}',
+        arguments='{"child_agent_id": "fake-id", "agent_name": "t", "message": "p"}',
         call_id="c1",
     )
 

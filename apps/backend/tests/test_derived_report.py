@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
-from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_schemas
+from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_surface
 from app.core.workflow import workflow
 from app.core.workflow.branch import session_title
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
@@ -82,7 +82,6 @@ class _Model:
                 "call-delegate",
                 "delegate_task",
                 {
-                    "intent": "review",
                     "child_agent_id": "general-purpose",
                     "agent_name": "review",
                     "message": ASSIGNMENT,
@@ -92,7 +91,7 @@ class _Model:
         if self.parent_waits and len(tools_done) == 1 and not reports:
             # 子 Session 的 Run 开起来之后才有可等的东西。
             await self.child_started.wait()
-            call = _call("call-wait", "wait_messages", {"intent": "wait for review"})
+            call = _call("call-wait", "wait_messages", {})
             return sdk_events([{"tool_calls": [call]}], finish_reason="tool_calls")
         self.parent_reports = reports
         self.parent_notices = [text for text in inputs if "<system_notice" in text]
@@ -131,7 +130,7 @@ async def derived(backend_env, tmp_path, monkeypatch):
     )
     workspace = depends.get_workspace_service().create_workspace("ws", str(tmp_path))
     parent = depends.get_session_service().create_session(
-        workspace.id, "parent", tool_schemas=main_agent_tool_schemas()
+        workspace.id, "parent", tool_surface=main_agent_tool_surface()
     )
     state = SimpleNamespace(model=None, parent=parent, model_config=model_config)
 

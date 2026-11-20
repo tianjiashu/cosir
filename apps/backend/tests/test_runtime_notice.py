@@ -32,6 +32,7 @@ def _space(mailbox: RunMailbox) -> SimpleNamespace:
     return SimpleNamespace(
         session_tool_names=("read_file", "write_file"),
         session_tool_schemas=({"name": "read_file"}, {"name": "write_file"}),
+        session_deferred_schemas=(),
         session_id=1,
         current_task=SimpleNamespace(id=1, session_type=SessionType.USER, derivation_depth=0),
         current_workspace=SimpleNamespace(id=13, root_path="/workspace"),
@@ -123,7 +124,7 @@ def test_for_run_computes_admission_without_notifying(monkeypatch, banned) -> No
     rc = _for_run(monkeypatch, _space(mailbox), banned)
 
     assert rc.mailbox is mailbox
-    assert rc.request_tools(SimpleNamespace(loaded_deferred_tools=list)).admitted == {"read_file", "write_file"} - set(banned)
+    assert rc.request_tools(SimpleNamespace(loaded_external_tools=list, loaded_builtin_tools=set)).admitted == {"read_file", "write_file"} - set(banned)
     assert rc.banned_tools == frozenset(banned)
     assert mailbox.take_notices() == []
 

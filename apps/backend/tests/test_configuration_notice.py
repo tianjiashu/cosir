@@ -223,7 +223,7 @@ def test_catalog_readable_again_but_empty_says_so() -> None:
     deferred = DEFERRED_TOOLS.describe(ItemDiff.between(previous, {}), {}, previous)
     skills = SKILLS.describe(ItemDiff.between(previous, {}), {}, previous)
 
-    assert "readable again; no deferred tools are available." in deferred
+    assert "readable again; no new deferred tools are available." in deferred
     assert "readable again; no Skills are available." in skills
 
 

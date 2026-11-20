@@ -207,7 +207,6 @@ def test_execute_terminal_normalizes_model_output_and_keeps_raw_display(
     observation = ExecuteTerminalTool().execute(
         command="echo output",
         execution_context=ToolExecutionContext(
-            call_intent="test",
             step_id="step-1",
             session_id=7,
             workspace_id=1,
@@ -290,7 +289,6 @@ async def test_output_channel_batches_thread_output_and_flushes_in_sequence() ->
 
     channel = LiveOutputChannel.open(
         ToolExecutionContext(
-            call_intent="test",
             step_id="step-1",
             session_id=7,
             workspace_id=1,
@@ -392,7 +390,6 @@ async def test_terminal_output_channel_is_built_from_worker_thread(tmp_path: Pat
 
     loop = asyncio.get_running_loop()
     context = ToolExecutionContext(
-        call_intent="test",
         step_id="step-1",
         session_id=7,
         workspace_id=2,
@@ -788,7 +785,6 @@ async def test_output_channel_publishes_started_display_before_any_output() -> N
     events: list[ToolCallRuntimeUpdateEvent] = []
     channel = LiveOutputChannel.open(
         ToolExecutionContext(
-            call_intent="test",
             step_id="step-1",
             session_id=7,
             workspace_id=1,

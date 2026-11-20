@@ -40,12 +40,12 @@ _SERVER_CODE = (
 
 
 def _search(call_id: str) -> tuple[list[dict[str, Any]], str]:
-    args = {"intent": "加载回显工具", "query": f"select:{ECHO}", "max_results": 5}
+    args = {"query": f"select:{ECHO}", "max_results": 5}
     return [{"tool_calls": [tool_call(call_id, "tool_search", args)]}], "tool_calls"
 
 
 def _echo(call_id: str, value: str = "hi") -> tuple[list[dict[str, Any]], str]:
-    return [{"tool_calls": [tool_call(call_id, ECHO, {"intent": "回显", "value": value})]}], "tool_calls"
+    return [{"tool_calls": [tool_call(call_id, ECHO, {"value": value})]}], "tool_calls"
 
 
 def _done(text: str = "完成") -> tuple[list[dict[str, Any]], str]:
@@ -145,10 +145,10 @@ async def test_search_loads_the_tool_for_the_next_request_and_calls_the_real_ser
         run = await env.parked()
 
         assert run.status == "completed"
-        # 首个请求只有名字目录（在系统提示词里），没有定义；检索之后的请求才带上它。
+        # 名字目录在系统提示词里；定义只在检索结果里，工具列表每次都一样（请求前缀不变）。
         assert ECHO not in env.model.tool_names[0] and "tool_search" in env.model.tool_names[0]
         assert ECHO in env.model.requests[0][0]["content"]
-        assert env.model.tool_names[1][-1] == ECHO
+        assert all(names == env.model.tool_names[0] for names in env.model.tool_names)
         assert _tool_message(env, "c1").startswith("<functions>\n<function>{")
         assert '"echo": "hi"' in _tool_message(env, "c2")
         echo = _part(env, "c2")
@@ -167,8 +167,8 @@ async def test_calling_in_the_same_batch_as_the_search_is_rejected_then_works(
         [
             {
                 "tool_calls": [
-                    tool_call("c1", "tool_search", {"intent": "加载", "query": f"select:{ECHO}", "max_results": 5}),
-                    tool_call("c2", ECHO, {"intent": "回显", "value": "early"}, index=1),
+                    tool_call("c1", "tool_search", {"query": f"select:{ECHO}", "max_results": 5}),
+                    tool_call("c2", ECHO, {"value": "early"}, index=1),
                 ]
             }
         ],
@@ -204,7 +204,7 @@ async def test_loaded_tools_survive_a_restart_and_reconnect(
         run = await _next_run(env, first.id)
 
         assert run.status == "completed"
-        assert ECHO in env.model.tool_names[2]
+        assert ECHO not in env.model.tool_names[2]
         assert '"echo": "after"' in _tool_message(env, "c2")
     finally:
         await env.close()
@@ -224,7 +224,7 @@ async def test_a_manual_fork_inherits_the_loaded_tools(
         run = await env.parked(fork.id)
 
         assert run.status == "completed"
-        assert ECHO in env.model.tool_names[2]
+        assert ECHO not in env.model.tool_names[2]
         assert '"echo": "fork"' in _tool_message(env, "c2")
         assert _part(env, "c2", fork.id)["status"] == "completed"
     finally:
@@ -270,8 +270,7 @@ async def test_a_server_going_away_is_announced_and_its_loaded_tool_refuses_call
         second_turn = env.model.requests[2]
         notices = [m["content"] for m in second_turn if m["role"] == "user" and "<system_notice" in str(m["content"])]
         assert any("no longer available. Do not search for them" in str(n) and ECHO in str(n) for n in notices)
-        # 加载过的定义仍在请求里（不改请求前缀），调用时按当前配置拒绝。
-        assert ECHO in env.model.tool_names[2]
+        # 加载过的工具仍按上下文放行准入，执行时按当前配置拒绝。
         assert "no longer available" in _tool_message(env, "c2")
         assert _part(env, "c2")["status"] == "failed"
         env.assert_parity()

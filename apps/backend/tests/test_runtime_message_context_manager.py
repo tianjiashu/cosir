@@ -17,6 +17,7 @@ from app.models.message_metadata import (
     ToolMessageMetadata,
     UserMessageMetadata,
 )
+from app.models.tool_result_facts import ToolResultFacts
 from tests.sdk_fixtures import sdk_completion
 
 
@@ -157,13 +158,13 @@ def test_merging_tool_result_metadata_keeps_the_deliverables_record():
             {"role": "tool", "tool_call_id": "c", "content": "presented"},
             2,
             2,
-            metadata=ToolMessageMetadata(status="completed", deliverables=record),
+            metadata=ToolMessageMetadata(status="completed", facts=ToolResultFacts(deliverables=record)),
             turn=1,
         )
     ]
     written = manager.update_tool_result_metadata("c", ToolMessageMetadata(status="completed"))
-    assert written.deliverables == record
-    assert store.appended[0][2].metadata.deliverables == record
+    assert written.facts.deliverables == record
+    assert store.appended[0][2].metadata.facts.deliverables == record
 
 
 def test_runtime_message_context_manager_owns_next_sequence_after_run_restart() -> None:

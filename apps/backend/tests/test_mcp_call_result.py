@@ -20,7 +20,7 @@ from app.service.attachment.attachment_service import AttachmentService
 from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.mcp.configuration import MCPServerConfig, ScopedMCPServer
 from app.tools.mcp.call_result import MCPCallResult, MCPImage
-from app.tools.mcp.mcp_tool_call import _success
+from app.tools.mcp.mcp_tools import MCPExternalTools
 
 
 def _png() -> bytes:
@@ -138,7 +138,7 @@ def test_call_observation_stores_images_and_reports_rejected_ones(
         images=(MCPImage(_png(), "image/png"), MCPImage(b"GIF89a", "image/gif")),
     )
 
-    observation = _success("mcp__shots__capture", server, "capture", result, context)
+    observation = MCPExternalTools._success("mcp__shots__capture", server, "capture", result, context)
 
     assert observation.status == "success"
     assert observation.tool_name == "mcp__shots__capture"

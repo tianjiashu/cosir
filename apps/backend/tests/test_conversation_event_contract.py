@@ -21,8 +21,8 @@ from app.core.events import (
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
     SessionQueueChangedEvent,
+    ToolCallArgumentsEvent,
     ToolCallCreatedEvent,
-    ToolCallIntentEvent,
     ToolCallStatusChangedEvent,
     WorkflowEvent,
     WorkflowEventEnvelope,
@@ -115,14 +115,13 @@ _EVENT_PAYLOADS: list[tuple[dict[str, object], type[BaseModel]]] = [
     ),
     (
         {
-            "type": "tool_call_intent",
+            "type": "tool_call_arguments",
             "session_id": 1,
             "run_id": 1,
             "tool_call_id": "1:step-2:0",
-            "intent": "核对配置",
             "args": {},
         },
-        ToolCallIntentEvent,
+        ToolCallArgumentsEvent,
     ),
     (
         {

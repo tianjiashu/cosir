@@ -155,16 +155,10 @@ def test_tool_layer_omits_shell_guidance_without_execute_terminal():
     assert "parallel tool calls" in out
 
 
-def test_tool_layer_states_intent_rule_once_and_only_with_tools():
-    """intent 是每个工具都有的字段：有任何工具就写一次完整规则，字段说明只指过来；没有工具时整层为空。
+def test_tool_layer_has_no_public_intent_rule():
+    """意图只由终端与页面脚本自己的参数说明（``call_intent.intent_field``），工具层不再写公共规则。"""
 
-    只有 execute_terminal（无文件工具、无只读工具）时，除 intent 规则外没有别的公共声明。
-    """
-
-    only_terminal = _tool_layer(["execute_terminal"])
-    assert only_terminal.count("Every tool call takes an `intent`") == 1
-    assert only_terminal.count("\n- ") == 1  # 只有这一条声明
-    assert _tool_layer(["read_file", "browser_act", "delegate_task"]).count("takes an `intent`") == 1
+    assert "intent" not in _tool_layer(["execute_terminal", "read_file", "browser_evaluate"])
     assert _tool_layer([]) == ""
 
 
