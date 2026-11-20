@@ -5,7 +5,7 @@
 下一步该做什么」归成少数几类，各给一句中文（配置页）和一句英文（模型）；原始异常照旧只进日志
 （``client.describe_exception``）。
 
-不负责调用层面的结局：调用超时（请求已放弃、服务可能已执行）、参数不合格、工具不存在由 ``mcp_tool``
+不负责调用层面的结局：调用超时（请求已放弃、服务可能已执行）、参数不合格、工具不存在由 ``mcp_tools``
 各自说明，它们不是连接或授权的问题。
 """
 
@@ -80,7 +80,7 @@ class MCPFailure:
     def from_exception(cls, exc: BaseException, server: ScopedMCPServer) -> MCPFailure:
         """按「下一步该做什么」从异常（含异常组里的每个叶子）归类；认不出的归为 ``OTHER``。"""
 
-        leaves = list(_leaves(exc))
+        leaves = list(cls._leaves(exc))
         detail = describe_exception(exc)
 
         def first(kind: type[BaseException]) -> BaseException | None:
@@ -107,7 +107,7 @@ class MCPFailure:
                     server,
                     detail,
                     status_code=code,
-                    variables=_header_variables(server),
+                    variables=cls._header_variables(server),
                 )
             kind = MCPFailureKind.NOT_FOUND if code == 404 else MCPFailureKind.OTHER
             return cls(kind, server, detail, status_code=code)
@@ -199,7 +199,7 @@ class MCPFailure:
                     f"{self.server.config.command!r} was not found. Ask the user to install it."
                 )
             case MCPFailureKind.TIMEOUT:
-                # 只来自建连或列目录（调用本身的时限由 ``mcp_tool`` 另行说明），两者都没有副作用。
+                # 只来自建连或列目录（调用本身的时限由 ``mcp_tools`` 另行说明），两者都没有副作用。
                 return (
                     f"MCP server {name} did not respond in time (a stdio server may still be "
                     "starting); the request was not completed. Retry once."
@@ -210,21 +210,22 @@ class MCPFailure:
                     "Check whether the server is running, then retry once."
                 )
 
+    @classmethod
+    def _leaves(cls, exc: BaseException) -> Iterator[BaseException]:
+        if isinstance(exc, BaseExceptionGroup):
+            for inner in exc.exceptions:
+                yield from cls._leaves(inner)
+        else:
+            yield exc
 
-def _leaves(exc: BaseException) -> Iterator[BaseException]:
-    if isinstance(exc, BaseExceptionGroup):
-        for inner in exc.exceptions:
-            yield from _leaves(inner)
-    else:
-        yield exc
 
+    @staticmethod
+    def _header_variables(server: ScopedMCPServer) -> tuple[str, ...]:
+        """凭据被拒时值得检查的变量：请求头里引用的那些（静态 token 一般写成 ``Bearer ${TOKEN}``）。"""
 
-def _header_variables(server: ScopedMCPServer) -> tuple[str, ...]:
-    """凭据被拒时值得检查的变量：请求头里引用的那些（静态 token 一般写成 ``Bearer ${TOKEN}``）。"""
-
-    names = [
-        reference.name
-        for value in server.config.headers.values()
-        for reference in find_references(value)
-    ]
-    return tuple(dict.fromkeys(names))
+        names = [
+            reference.name
+            for value in server.config.headers.values()
+            for reference in find_references(value)
+        ]
+        return tuple(dict.fromkeys(names))

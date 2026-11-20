@@ -23,6 +23,7 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 from pydantic import FileUrl
 
 from app.service.configuration.mcp.configuration import MCPServerConfig, ScopedMCPServer
+from app.service.configuration.mcp.machine_state import MCPToolEntry
 from app.tools.mcp.oauth.provider import (
     AuthorizationInteraction,
     oauth_auth,
@@ -30,8 +31,6 @@ from app.tools.mcp.oauth.provider import (
 
 # 异常说明进入模型上下文与日志，只保留足够定位的长度。
 _MAX_ERROR_CHARS = 300
-# 目录里每个工具说明的长度上限：够判断用途，上百个工具也放得进一次工具输出。
-_SUMMARY_DESCRIPTION_CHARS = 200
 
 
 class MCPToolArgumentsError(ValueError):
@@ -117,35 +116,20 @@ async def open_client_session(
 
 async def list_server_tools(
     server: ScopedMCPServer, interaction: AuthorizationInteraction | None = None
-) -> list[dict[str, Any]]:
+) -> list[MCPToolEntry]:
     """短连接到一个 MCP 服务并返回工具目录；只供配置界面的连接测试使用（可交互授权）。"""
 
     async with open_client_session(server, interaction=interaction) as client:
         result = await client.list_tools()
-    return [tool_detail(tool) for tool in result.tools]
+    return [tool_entry(tool) for tool in result.tools]
 
 
-def tool_summary(tool: types.Tool) -> dict[str, Any]:
-    """给模型浏览的目录条目：名称与截短的说明，不带输入 schema。
+def tool_entry(tool: types.Tool) -> MCPToolEntry:
+    """SDK 的工具描述 → 本机记录里的目录条目（配置页测试结果与 Agent 的延迟工具目录都读它）。"""
 
-    服务多了以后全部 schema 一次给模型会超出工具输出上限、被截断；模型按名称再查单个工具的完整
-    schema（:func:`tool_detail`），或直接调用、参数不合格时由报错带回 schema。
-    """
-
-    description = " ".join((tool.description or "").split())
-    if len(description) > _SUMMARY_DESCRIPTION_CHARS:
-        description = description[: _SUMMARY_DESCRIPTION_CHARS - 1] + "…"
-    return {"name": tool.name, "description": description}
-
-
-def tool_detail(tool: types.Tool) -> dict[str, Any]:
-    """一个工具的完整条目（含输入 schema）：模型按名称查询与配置页连接测试使用。"""
-
-    return {
-        "name": tool.name,
-        "description": tool.description or "",
-        "input_schema": tool.inputSchema,
-    }
+    return MCPToolEntry(
+        name=tool.name, description=tool.description or "", input_schema=dict(tool.inputSchema)
+    )
 
 
 def is_connection_failure(exc: BaseException) -> bool:

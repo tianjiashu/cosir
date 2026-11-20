@@ -6,7 +6,7 @@
 为什么在独立事件循环线程上：SDK 会话基于 anyio task group，进入与退出必须在同一个 task，
 所以每个服务由一个常驻 owner task 持有会话；外部服务卡住或刷屏也不该拖慢主循环上的
 HTTP / SSE / 停止请求。工具 handler 在工作线程里经 :meth:`MCPConnectionPool.submit` 把协程投到
-池的循环上，自行轮询取消与超时（见 ``mcp_tool``）。
+池的循环上，自行轮询取消与超时（见 ``mcp_tools``）。
 
 事实源与失效规则：
 - 服务配置文件是唯一事实源，池不接收配置变更通知：每次取连接都比对连接指纹，不一致即关闭
@@ -16,7 +16,8 @@ HTTP / SSE / 停止请求。工具 handler 在工作线程里经 :meth:`MCPConne
 - owner task 先结束时，在途请求带着它结束的原因立刻失败（:meth:`_Connection.request`）。会话的请求在别的 task
   里等响应，传输层出错（长连接中途授权失效、服务端回 500）时 SDK 以取消的方式拆掉会话，给在途请求回
   「连接已关闭」的那一步也一并被取消，不在这里收口，调用会一直挂到工具时限，原因也丢了。
-- 工具目录随连接缓存，收到 ``tools/list_changed`` 通知或调用了目录里没有的工具时刷新。
+- 工具目录随连接缓存，收到 ``tools/list_changed`` 通知或调用了目录里没有的工具时刷新；每次列到的目录与本机
+  记录不同就回写（``MCPMachineState.record_catalog``），Agent 的延迟工具目录只读那份记录、不连接服务。
 
 线程模型：``_connections`` 等状态只在池的事件循环线程上读写；``_lock`` 只保护循环线程的
 启动与关闭。
@@ -40,12 +41,14 @@ from mcp import ClientSession, types
 from app.config.logging.logger import log
 from app.core.tool.validation.arguments import validate_tool_arguments
 from app.service.configuration.mcp.configuration import ScopedMCPServer
+from app.service.configuration.mcp.machine_state import MCPMachineState
 from app.tools.mcp.client import (
     MCPToolArgumentsError,
     MCPToolNotFoundError,
     describe_exception,
     is_connection_failure,
     open_client_session,
+    tool_entry,
 )
 from app.utils.path import system_cosir
 
@@ -389,6 +392,10 @@ class _Connection:
     async def tools(self) -> list[types.Tool]:
         if self._tools is None:
             self._tools = (await self.request(lambda session: session.list_tools())).tools
+            # 读写本机记录是文件 IO，离开池的事件循环做，不拖住其他连接。
+            await asyncio.to_thread(
+                MCPMachineState.record_catalog, self.server, [tool_entry(t) for t in self._tools]
+            )
         return self._tools
 
     async def find_tool(self, tool_name: str) -> types.Tool | None:
@@ -400,7 +407,7 @@ class _Connection:
         return next((tool for tool in await self.tools() if tool.name == tool_name), None)
 
     async def _own(self) -> None:
-        errlog = _open_stderr_log(self.server) if self.server.config.transport == "stdio" else None
+        errlog = self._open_stderr_log(self.server) if self.server.config.transport == "stdio" else None
         try:
             async with open_client_session(
                 self.server,
@@ -449,33 +456,33 @@ class _Connection:
                 },
             )
 
+    @staticmethod
+    def _open_stderr_log(server: ScopedMCPServer) -> TextIO | None:
+        """打开该 stdio 服务的 stderr 日志，超限先轮转一次。
 
-def _open_stderr_log(server: ScopedMCPServer) -> TextIO | None:
-    """打开该 stdio 服务的 stderr 日志，超限先轮转一次。
+        一条连接一个文件：不在工作区里用的系统级服务写 ``<LOG_DIR>/mcp/<server>.stderr.log``；在工作区里用的
+        （无论定义在哪）文件名再带上「定义作用域 + 使用的工作区」的短哈希，同名服务的不同连接不写进同一个
+        文件。日志是诊断旁路：打不开时记录并返回 ``None``（退回后端 stderr），不阻断建连。
+        """
 
-    一条连接一个文件：不在工作区里用的系统级服务写 ``<LOG_DIR>/mcp/<server>.stderr.log``；在工作区里用的
-    （无论定义在哪）文件名再带上「定义作用域 + 使用的工作区」的短哈希，同名服务的不同连接不写进同一个
-    文件。日志是诊断旁路：打不开时记录并返回 ``None``（退回后端 stderr），不阻断建连。
-    """
-
-    directory: Path = system_cosir.LOG_DIR / "mcp"
-    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", server.name)
-    if server.used_in is not None:
-        scope_key, used_key, _ = server.pool_key
-        connection_hash = hashlib.sha256(f"{scope_key}|{used_key}".encode()).hexdigest()[:8]
-        safe_name = f"{safe_name}.{connection_hash}"
-    path = directory / f"{safe_name}.stderr.log"
-    try:
-        directory.mkdir(parents=True, exist_ok=True)
-        if path.exists() and path.stat().st_size > _STDERR_LOG_MAX_BYTES:
-            path.replace(directory / f"{safe_name}.stderr.1.log")
-        return path.open("a", encoding="utf-8")
-    except OSError as exc:
-        log.warning(
-            "mcp_stderr_log_unavailable",
-            extra={
-                "msg": "MCP 服务 stderr 日志无法打开，退回后端 stderr",
-                "data": {"server_name": server.name, "error": describe_exception(exc)},
-            },
-        )
-        return None
+        directory: Path = system_cosir.LOG_DIR / "mcp"
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", server.name)
+        if server.used_in is not None:
+            scope_key, used_key, _ = server.pool_key
+            connection_hash = hashlib.sha256(f"{scope_key}|{used_key}".encode()).hexdigest()[:8]
+            safe_name = f"{safe_name}.{connection_hash}"
+        path = directory / f"{safe_name}.stderr.log"
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            if path.exists() and path.stat().st_size > _STDERR_LOG_MAX_BYTES:
+                path.replace(directory / f"{safe_name}.stderr.1.log")
+            return path.open("a", encoding="utf-8")
+        except OSError as exc:
+            log.warning(
+                "mcp_stderr_log_unavailable",
+                extra={
+                    "msg": "MCP 服务 stderr 日志无法打开，退回后端 stderr",
+                    "data": {"server_name": server.name, "error": describe_exception(exc)},
+                },
+            )
+            return None
