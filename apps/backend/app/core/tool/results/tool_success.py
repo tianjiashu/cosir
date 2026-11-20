@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.core.tool.schemas import ToolObservation, Waiting
-from app.models.deliverable import Deliverable
+from app.models.tool_result_facts import ToolResultFacts
 
 
 def tool_success(
@@ -22,7 +22,7 @@ def tool_success(
     display_data: Mapping[str, Any] | None = None,
     waiting: Waiting | None = None,
     images: Sequence[str] = (),
-    deliverables: Sequence[Deliverable] | None = None,
+    facts: ToolResultFacts | None = None,
 ) -> ToolObservation:
     """构造成功的工具观察结果（纯工厂函数）。
 
@@ -35,7 +35,7 @@ def tool_success(
         display_data: 仅供客户端展示消费的结构化数据；会写入
             ``ToolObservation.display_data``，不会回传给模型。
         waiting: 调用之后还要等什么（等决定、后台、等消息），见 ``ToolObservation.waiting``。
-        deliverables: 交付记录（只有 ``present_deliverables``），持久化为结果行 metadata。
+        facts: 交给运行时、不给模型的结构化结果（见 ``app.models.tool_result_facts``），持久化为结果行 metadata。
         images: 给模型看的图片（``AttachmentService.save_image`` 返回的相对路径）；工具定义须声明
             ``returns_images``，模型不支持图片时准入门禁会先拒绝。
 
@@ -67,7 +67,7 @@ def tool_success(
         tool_call_id=tool_call_id,
         waiting=waiting,
         images=tuple(images),
-        deliverables=tuple(deliverables) if deliverables is not None else None,
+        facts=facts,
     )
     observation.display_data = copy.deepcopy(dict(display_data or {}))
     return observation
