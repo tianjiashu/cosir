@@ -800,13 +800,12 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
     )
     completion = sdk_completion(tool_calls=_ai_message("preview")["tool_calls"])
     manager.save_model_response(
-        completion, include_in_context=False, registered_tool_names={"read_file"}
+        completion, include_in_context=False
     )
     events: list[object] = []
     monkeypatch.setattr(machine_module, "_message_context", lambda: manager)
     runtime = SimpleNamespace(
         tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
-        admitted_tools=frozenset({"read_file"}),
     )
     install_runtime_singletons(runtime)
     monkeypatch.setattr(machine_module, "emit", events.append)

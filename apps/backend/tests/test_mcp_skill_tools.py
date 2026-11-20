@@ -11,7 +11,9 @@ from mcp.server.fastmcp import FastMCP
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import PlainTextResponse
 
+from app.core.tool.handler.tool_search import ToolSearchTool
 from app.core.tool.schemas import ToolExecutionContext
+from app.models.deferred_tool import DeferredToolDefinition
 from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.mcp.configuration import (
     MCPConfiguration,
@@ -27,7 +29,7 @@ from app.service.configuration.skills.configuration import SkillConfiguration
 from app.tools.mcp.call_result import MCPCallResult
 from app.tools.mcp.client import _stdio_parameters, list_server_tools
 from app.tools.mcp.connection_pool import MCPConnectionPool
-from app.tools.tool_handler.mcp_tool import MCPTool
+from app.tools.mcp.deferred_catalog import MCPDeferredTools
 from app.tools.tool_handler.skill_tool import SkillTool
 from app.utils.path import system_cosir
 
@@ -80,8 +82,23 @@ def _context(workspace_root: Path) -> ToolExecutionContext:
     )
 
 
+def _pass(server: ScopedMCPServer) -> None:
+    """像配置页的连接测试那样连一次：记下测试通过与它列到的工具目录。"""
+    MCPMachineState.record_pass(server, asyncio.run(list_server_tools(server)))
+
+
+def _definition(workspace: Path, name: str) -> DeferredToolDefinition:
+    return next(d for d in MCPDeferredTools().catalog(str(workspace)) if d.name == name)
+
+
+def _call(workspace: Path, name: str, arguments: dict) -> dict:
+    result = MCPDeferredTools().execute(_definition(workspace, name), arguments, _context(workspace))
+    assert result.status == "success", result.content
+    return _blocks(result.content)[0]
+
+
 def test_agent_facing_tool_and_argument_descriptions_are_english():
-    for tool in (MCPTool(), SkillTool()):
+    for tool in (ToolSearchTool(), SkillTool()):
         descriptions = [tool.description]
         descriptions.extend(
             field["description"]
@@ -199,8 +216,8 @@ def test_mcp_available_servers_require_enabled_and_local_test_record(tmp_path):
     untested = MCPServerConfig(name="untested", command="python")
     _write_mcp_servers(workspace / ".cosir", tested, disabled, untested)
     scope = ExtensionScope.workspace(workspace)
-    MCPMachineState.record_pass(ScopedMCPServer(scope, tested))
-    MCPMachineState.record_pass(ScopedMCPServer(scope, disabled))
+    MCPMachineState.record_pass(ScopedMCPServer(scope, tested), [])
+    MCPMachineState.record_pass(ScopedMCPServer(scope, disabled), [])
 
     assert [server.name for server in available_servers(workspace)] == ["tested"]
     # 同一服务在另一个工作区没有测试记录。
@@ -235,9 +252,9 @@ def test_mcp_test_record_keeps_saved_config_when_a_draft_is_tested(tmp_path):
     scope = ExtensionScope.workspace(_workspace(tmp_path))
     saved = ScopedMCPServer(scope, MCPServerConfig(name="one", command="python"))
     draft = ScopedMCPServer(scope, MCPServerConfig(name="one", command="node"))
-    MCPMachineState.record_pass(saved)
+    MCPMachineState.record_pass(saved, [])
 
-    MCPMachineState.record_pass(draft)
+    MCPMachineState.record_pass(draft, [])
     assert MCPMachineState.read().passed(saved)
     assert MCPMachineState.revoke(draft) is True
     assert MCPMachineState.read().passed(saved)
@@ -253,7 +270,7 @@ def test_mcp_test_record_is_pruned_on_save_and_dropped_with_the_workspace(tmp_pa
     removed = ScopedMCPServer(scope, MCPServerConfig(name="removed", command="python"))
     stale_draft = ScopedMCPServer(scope, MCPServerConfig(name="kept", command="node"))
     for server in (kept, removed, stale_draft):
-        MCPMachineState.record_pass(server)
+        MCPMachineState.record_pass(server, [])
 
     MCPMachineState.keep_only(scope, [kept])
     record = MCPMachineState.read()
@@ -266,21 +283,26 @@ def test_mcp_test_record_is_pruned_on_save_and_dropped_with_the_workspace(tmp_pa
     assert scope.key not in MCPMachineState.read().scopes
 
 
-def test_mcp_tool_does_not_discover_or_call_an_untested_server(tmp_path, monkeypatch):
+def test_untested_server_is_neither_listed_nor_called(tmp_path, monkeypatch):
     workspace = _workspace(tmp_path)
     _write_mcp_servers(workspace / ".cosir", MCPServerConfig(name="one", command="python"))
     monkeypatch.setattr(
         "app.service.depends.get_mcp_connection_pool",
         lambda: pytest.fail("untested MCP server must not be discovered or called"),
     )
-
-    tool = MCPTool()
-    listing = tool.execute(action="list", execution_context=_context(workspace))
-    call = tool.execute(
-        action="call", server_name="one", tool_name="search", execution_context=_context(workspace)
+    source = MCPDeferredTools()
+    # 加载过、后来测试记录被撤销的工具：快照还在上下文里，调用时按当前配置拒绝。
+    stale = DeferredToolDefinition(
+        name="mcp__one__search",
+        description="",
+        parameters={"type": "object"},
+        source="mcp",
+        reference={"scope": ExtensionScope.workspace(workspace).key, "server": "one", "tool": "search"},
     )
 
-    assert listing.content == "no MCP servers are available"
+    call = source.execute(stale, {}, _context(workspace))
+
+    assert source.catalog(str(workspace)) == ()
     assert call.status == "error"
     assert "has not passed a connection test" in call.content
 
@@ -353,7 +375,7 @@ def test_mcp_http_transports_list_and_call_tools(transport, path):
             server.should_exit = True
             await server_task
 
-        assert [tool["name"] for tool in tools] == ["echo"]
+        assert [tool.name for tool in tools] == ["echo"]
         assert json.loads(MCPCallResult.from_sdk(result).text) == {"echo": "ok"}
 
     asyncio.run(exercise_transport())
@@ -394,25 +416,16 @@ def test_system_server_gets_one_connection_per_workspace_it_is_used_in(tmp_path,
     first, second = _workspace(tmp_path, "first"), _workspace(tmp_path, "second")
     config = _cwd_server("system")
     _write_mcp_servers(tmp_path / "system-cosir", config)
-    MCPMachineState.record_pass(ScopedMCPServer(ExtensionScope.system(), config))
     monkeypatch.setattr(system_cosir, "LOG_DIR", tmp_path / "logs")
+    _pass(ScopedMCPServer(ExtensionScope.system(), config))
     pool = MCPConnectionPool()
     monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
-    tool = MCPTool()
-
-    def whoami(workspace: Path) -> dict:
-        result = tool.execute(
-            action="call",
-            server_name="test-server",
-            tool_name="whoami",
-            arguments={},
-            execution_context=_context(workspace),
-        )
-        assert result.status == "success", result.content
-        return _blocks(result.content)[0]
 
     try:
-        cwds = [Path(whoami(first)["cwd"]).resolve(), Path(whoami(second)["cwd"]).resolve()]
+        cwds = [
+            Path(_call(workspace, "mcp__test-server__whoami", {})["cwd"]).resolve()
+            for workspace in (first, second)
+        ]
         connection_count = len(pool._connections)
     finally:
         pool.close()
@@ -478,38 +491,22 @@ def test_mcp_tool_keeps_same_named_workspace_servers_apart(tmp_path, monkeypatch
     """两个工作区的同名服务各自连接、各在自己的工作区运行，互不顶替。"""
 
     first, second = _workspace(tmp_path, "first"), _workspace(tmp_path, "second")
+    monkeypatch.setattr(system_cosir, "LOG_DIR", tmp_path / "logs")
     for workspace, marker in ((first, "first"), (second, "second")):
         config = _cwd_server(marker)
         _write_mcp_servers(workspace / ".cosir", config)
-        MCPMachineState.record_pass(ScopedMCPServer(ExtensionScope.workspace(workspace), config))
-    monkeypatch.setattr(system_cosir, "LOG_DIR", tmp_path / "logs")
+        _pass(ScopedMCPServer(ExtensionScope.workspace(workspace), config))
     pool = MCPConnectionPool()
     monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
-    tool = MCPTool()
-
-    def call(workspace: Path) -> dict:
-        result = tool.execute(
-            action="call",
-            server_name="test-server",
-            tool_name="whoami",
-            arguments={},
-            execution_context=_context(workspace),
-        )
-        assert result.status == "success", result.content
-        return _blocks(result.content)[0]
+    name = "mcp__test-server__whoami"
 
     try:
-        listing = tool.execute(action="list", execution_context=_context(first))
-        results = [call(first), call(second), call(first)]
+        results = [_call(first, name, {}), _call(second, name, {}), _call(first, name, {})]
         connection_count = len(pool._connections)
     finally:
         pool.close()
 
-    assert _blocks(listing.content)[0]["tools"][0]["name"] == "whoami"
-    # 目录只给名称与简短说明（schema 按需单独查），卡片的展示数据也一样。
-    assert set(_blocks(listing.content)[0]["tools"][0]) == {"name", "description"}
-    assert set(listing.display_data["servers"][0]["tools"][0]) == {"name", "description"}
-    assert _blocks(listing.content)[0]["scope"] == "workspace"
+    assert _definition(first, name).reference["scope"] == ExtensionScope.workspace(first).key
     assert [item["marker"] for item in results] == ["first", "second", "first"]
     assert [Path(item["cwd"]).resolve() for item in results] == [
         first.resolve(),
@@ -567,55 +564,52 @@ _ECHO_SERVER_CODE = (
 
 @pytest.fixture
 def echo_tool(tmp_path, monkeypatch):
-    """一个已测试通过的工作区 stdio 服务（echo 与 count_words 两个工具）与指向它的 MCP 工具。"""
+    """一个已测试通过的工作区 stdio 服务（echo 与 count_words 两个工具）与它的延迟工具目录。"""
 
     workspace = _workspace(tmp_path)
     config = MCPServerConfig(name="echo", command=sys.executable, args=["-c", _ECHO_SERVER_CODE])
     _write_mcp_servers(workspace / ".cosir", config)
-    MCPMachineState.record_pass(ScopedMCPServer(ExtensionScope.workspace(workspace), config))
     monkeypatch.setattr(system_cosir, "LOG_DIR", tmp_path / "logs")
+    _pass(ScopedMCPServer(ExtensionScope.workspace(workspace), config))
     pool = MCPConnectionPool()
     monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
-    tool = MCPTool()
-
-    def run(**kwargs):
-        return tool.execute(execution_context=_context(workspace), **kwargs)
-
-    yield run
+    yield workspace
     pool.close()
 
 
-# 潜在缺陷：服务多了以后一次给出全部 schema，超出工具输出上限被截断，模型看不到要用的工具。
-def test_listing_is_a_compact_catalog_with_keyword_filter_and_schema_on_request(echo_tool):
-    listing = _blocks(echo_tool(action="list").content)
-    filtered = _blocks(echo_tool(action="list", query="WORDS text").content)
-    detail = _blocks(echo_tool(action="list", server_name="echo", tool_name="echo").content)
-    unknown = echo_tool(action="list", server_name="echo", tool_name="missing")
+def test_catalog_comes_from_the_test_record_with_server_prefix_and_full_schema(echo_tool, monkeypatch):
+    monkeypatch.setattr(
+        "app.service.depends.get_mcp_connection_pool",
+        lambda: pytest.fail("the catalog must not connect to the server"),
+    )
+    [count, echo] = MCPDeferredTools().catalog(str(echo_tool))
 
-    [echo, count] = listing[0]["tools"]
-    assert set(echo) == {"name", "description"}
-    assert len(echo["description"]) == 200 and echo["description"].endswith("…")
-    assert count == {"name": "count_words", "description": "Count words in a text"}
-    assert [item["name"] for item in filtered[0]["tools"]] == ["count_words"]
-    [echo_detail] = detail[0]["tools"]
-    assert echo_detail["input_schema"]["required"] == ["value"]
-    assert unknown.status == "error" and "no tool named missing" in unknown.content
+    assert (count.name, echo.name) == ("mcp__echo__count_words", "mcp__echo__echo")
+    assert count.description == "[MCP server echo] Count words in a text"
+    assert echo.parameters["required"] == ["value"]
+    assert echo.reference == {
+        "scope": ExtensionScope.workspace(echo_tool).key,
+        "server": "echo",
+        "tool": "echo",
+    }
 
 
-# 潜在缺陷：参数错了要等服务端报错才知道，且报错质量参差不齐。
-def test_arguments_are_checked_against_the_tool_schema_before_calling(echo_tool):
-    rejected = echo_tool(action="call", server_name="echo", tool_name="echo", arguments={})
-    accepted = echo_tool(action="call", server_name="echo", tool_name="echo", arguments={"value": "hi"})
+# 潜在缺陷：服务运行期改了 schema，按旧快照校验通过的参数仍会发给服务。
+def test_arguments_are_checked_against_the_live_schema_before_calling(echo_tool):
+    source = MCPDeferredTools()
+    definition = _definition(echo_tool, "mcp__echo__echo")
+    rejected = source.execute(definition, {}, _context(echo_tool))
+    accepted = source.execute(definition, {"value": "hi"}, _context(echo_tool))
 
     assert rejected.status == "error"
     assert "was not sent" in rejected.content and '"required": ["value"]' in rejected.content
     # 被拒的那次没有到达服务：服务端只记到一次调用。
     assert _blocks(accepted.content) == [{"echo": "hi", "calls": 1}]
-
-
-def test_lookup_needs_the_server_name():
-    result = MCPTool().execute(
-        action="list", tool_name="echo", execution_context=_context(Path("."))
-    )
-
-    assert result.status == "error" and "server_name is required" in result.content
+    assert accepted.tool_name == "mcp__echo__echo"
+    assert accepted.display_data == {
+        "kind": "mcp-tool-result",
+        "server_name": "echo",
+        "tool_name": "echo",
+        "scope": "workspace",
+        "images": [],
+    }

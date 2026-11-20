@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from app.core.tool.request_tools import RequestTools
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -42,7 +43,7 @@ from app.core.workflow.nodes import tools_node
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import ToolMessageMetadata
 from app.models.session_extra import SessionExtra
-from tests.runtime_context_stub import runtime_stub
+from tests.runtime_context_stub import admitting, runtime_stub
 from tests.transport_fixtures import consumed
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
@@ -98,7 +99,7 @@ def _batch_runtime(
         workspace=SimpleNamespace(id=1, root_path=str(workspace_root)),
         event_sink=event_sink or (lambda _event: None),
         tool_executor=executor,
-        admitted_tools=frozenset({_STREAMING_TOOL_NAME}),
+        request_tools=admitting(frozenset({_STREAMING_TOOL_NAME})),
     )
 
 
@@ -179,6 +180,7 @@ def _project_cancelled_via_real_path(
         ToolCall(tool_name="execute_terminal", arguments="{}", call_id=call_id),
         "step-1",
         None,
+        RequestTools(schemas=(), admitted=frozenset({"execute_terminal"})),
     )
     assert len(captured) == 1
     return captured[0]

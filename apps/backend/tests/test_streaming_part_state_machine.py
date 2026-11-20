@@ -255,7 +255,7 @@ def _tool_call(call_id: str, tool_name: str) -> ParsedFunctionToolCall:
 
 
 def test_cancel_settles_all_registered_previews(monkeypatch) -> None:
-    """取消收口正文及所有已登记注册调用；本轮禁用调用也保留取消事实，未知身份不投影。"""
+    """取消收口正文及所有已登记调用；禁用与不认识的工具名同样保留取消事实（它们都随响应进上下文）。"""
 
     harness = _Harness(min_chars=1_000, max_interval=1_000.0)
     written: list[Any] = []
@@ -264,7 +264,6 @@ def test_cancel_settles_all_registered_previews(monkeypatch) -> None:
             "read_file": SimpleNamespace(name="read_file", display=None),
             "write_file": SimpleNamespace(name="write_file", display=None),
         },
-        admitted_tools=frozenset({"read_file"}),
     )
     install_runtime_singletons(runtime)
     monkeypatch.setattr(
@@ -281,13 +280,14 @@ def test_cancel_settles_all_registered_previews(monkeypatch) -> None:
 
     assert harness.event_kinds() == ["delta:text", "closed:text"]
     created = [event for event in harness.events if isinstance(event, ToolCallCreatedEvent)]
-    assert [event.tool_call_id for event in created] == ["c1", "c2"]
+    assert [event.tool_call_id for event in created] == ["c1", "c2", "c3"]
     cancelled = [event for event in harness.events if isinstance(event, ToolCallStatusChangedEvent)]
     assert [(event.tool_call_id, event.status) for event in cancelled] == [
         ("c1", "cancelled"),
         ("c2", "cancelled"),
+        ("c3", "cancelled"),
     ]
-    assert [message["tool_call_id"] for message in written] == ["c1", "c2"]
+    assert [message["tool_call_id"] for message in written] == ["c1", "c2", "c3"]
 
 
 def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monkeypatch) -> None:
@@ -296,7 +296,6 @@ def test_repeated_frames_project_each_call_once_and_reset_starts_new_scope(monke
     written: list[Any] = []
     runtime = SimpleNamespace(
         tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
-        admitted_tools=frozenset({"read_file"}),
     )
     install_runtime_singletons(runtime)
     monkeypatch.setattr(

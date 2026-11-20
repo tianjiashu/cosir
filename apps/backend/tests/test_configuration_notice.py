@@ -16,11 +16,11 @@ import pytest
 from app.core.agents.define_agents import main_agent
 from app.core.context.context_entry import ContextEntry
 from app.core.context.prompt_sources.cache import ProjectionCache
-from app.core.context.prompt_sources.registry import MCP_SERVERS, SKILLS
+from app.core.context.prompt_sources.registry import DEFERRED_TOOLS, SKILLS
 from app.core.context.prompt_sources.source import ItemDiff, SourceItem, text_change
-from app.core.context.prompt_sources.sources.mcp_servers import UNAVAILABLE_KEY
+from app.core.context.prompt_sources.sources.deferred_tools import UNAVAILABLE_KEY
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
-from app.core.tool.schemas.tool_names import TOOL_MCP
+from app.core.tool.schemas.tool_names import TOOL_SEARCH
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, notices_to_context
 from app.models.message_metadata import (
     PromptSourceBaseline,
@@ -177,12 +177,12 @@ def test_agents_md_location_is_fixed_within_a_drive(workspace: Path) -> None:
 
 
 def test_sources_outside_the_session_are_not_compared(workspace: Path) -> None:
-    """没有 mcp 工具的 Session 不比较 MCP 目录：基准里的旧条目也不会被说成「已删除」。"""
+    """没有 tool_search 的 Session 不比较延迟工具目录：基准里的旧条目也不会被说成「已删除」。"""
 
     baseline = _baseline_now(workspace)
     stale = {
         **baseline,
-        "mcp_servers": {"old-server": PromptSourceEntry(fingerprint="fp", text="old-server")},
+        "deferred_tools": {"mcp__old__x": PromptSourceEntry(fingerprint="fp", text="mcp__old__x")},
     }
 
     assert configuration_change_notice(workspace, stale) is None
@@ -200,18 +200,19 @@ def test_a_source_missing_from_the_baseline_is_told_once(workspace: Path) -> Non
     assert "language setting changed" in notice.content
 
 
-def test_mcp_catalog_change_lists_only_what_changed(workspace: Path) -> None:
-    baseline = _baseline_now(workspace, (TOOL_MCP,))
+def test_deferred_catalog_change_lists_only_what_changed(workspace: Path) -> None:
+    baseline = _baseline_now(workspace, (TOOL_SEARCH,))
     announced = {
         **baseline,
-        "mcp_servers": {"retired": PromptSourceEntry(fingerprint="fp", text="retired")},
+        "deferred_tools": {"mcp__old__x": PromptSourceEntry(fingerprint="fp", text="mcp__old__x")},
     }
 
-    notice = configuration_change_notice(workspace, announced, (TOOL_MCP,))
+    notice = configuration_change_notice(workspace, announced, (TOOL_SEARCH,))
 
     assert notice is not None
-    assert 'No longer available: ["retired"]' in notice.content
-    assert "Current list" not in notice.content
+    assert "no longer available. Do not search for them" in notice.content
+    assert notice.content.endswith("mcp__old__x")
+    assert "now available" not in notice.content
 
 
 def test_catalog_readable_again_but_empty_says_so() -> None:
@@ -219,10 +220,10 @@ def test_catalog_readable_again_but_empty_says_so() -> None:
 
     previous = {UNAVAILABLE_KEY: PromptSourceEntry(fingerprint="x", text="unavailable")}
 
-    mcp = MCP_SERVERS.describe(ItemDiff.between(previous, {}), {}, previous)
+    deferred = DEFERRED_TOOLS.describe(ItemDiff.between(previous, {}), {}, previous)
     skills = SKILLS.describe(ItemDiff.between(previous, {}), {}, previous)
 
-    assert "readable again; available: []" in mcp
+    assert "readable again; no deferred tools are available." in deferred
     assert "readable again; no Skills are available." in skills
 
 

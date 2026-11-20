@@ -13,12 +13,11 @@ from app.assistant_transport.projection.tool_call_event_projection import plan_t
 from app.config.configuration import get_tool_registry
 from app.core.events import ToolCallIntentEvent, ToolCallStatusChangedEvent
 from app.core.tool.call_intent import display_call_arguments, model_parameters_with_intent
-from app.core.tool.execute.tool_access_gate import ToolAccessGate
 from app.core.tool.execute.tool_executor import ToolExecutor
+from app.core.tool.request_tools import RequestTools
 from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext, ToolObservation
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.node_helper import model_stream_state_machine as stream
-from app.tools.tool_models.mcp_args import MCPArgs
 
 
 class Args(BaseModel):
@@ -82,7 +81,7 @@ def test_missing_or_invalid_intent_still_executes_without_intent(tmp_path, monke
     monkeypatch.setattr("app.core.tool.execute.tool_executor.emit", lambda event: None)
     arguments = {"value": 1} if intent == "absent" else {"intent": intent, "value": 1}
     call = ToolCall(tool_name="probe", call_id="c", arguments=json.dumps(arguments))
-    result = ToolExecutor(registry).execute(call, context(tmp_path), {"probe"})
+    result = ToolExecutor(registry).execute(call, context(tmp_path), RequestTools(schemas=(), admitted=frozenset({"probe"})))
     assert result.status == "success"
     assert seen == [(1, None)]
 
@@ -113,40 +112,9 @@ def test_handler_only_receives_business_args_context_keeps_original_intent(
     call = ToolCall(
         tool_name="probe", call_id="c", arguments='{"intent":"  检查数据  ","value":"1"}'
     )
-    assert ToolExecutor(registry).execute(call, context(tmp_path), {"probe"}).status == "success"
+    assert ToolExecutor(registry).execute(call, context(tmp_path), RequestTools(schemas=(), admitted=frozenset({"probe"}))).status == "success"
     # ``intent`` 是调用意图，不进业务参数：收紧空白后只留在运行上下文里。
     assert seen == [(1, "检查数据")]
-
-
-def test_mcp_json_normalization_is_not_revalidated(tmp_path):
-    registry = ToolRegistry(
-        [
-            ToolDefinition(
-                name="mcp",
-                group="test",
-                description="probe",
-                args_model=MCPArgs,
-                handler=lambda **kwargs: None,
-            )
-        ]
-    )
-    call = ToolCall(
-        tool_name="mcp",
-        call_id="c",
-        arguments=json.dumps(
-            {
-                "intent": "查询服务",
-                "action": "call",
-                "server_name": "test",
-                "tool_name": "lookup",
-                "arguments": '{"query":"x"}',
-            }
-        ),
-    )
-    result = ToolAccessGate(registry).evaluate(call, context(tmp_path), {"mcp"})
-    assert result.denial is None
-    assert result.arguments["arguments"] == {"query": "x"}
-    assert "intent" not in result.arguments
 
 
 @pytest.mark.parametrize(
@@ -163,9 +131,6 @@ def test_stream_close_intent_matches_cold_projection_even_without_execution(
 ):
     events = []
     monkeypatch.setattr(stream, "emit", events.append)
-    monkeypatch.setattr(
-        stream, "get_tool_registry", lambda: SimpleNamespace(get_tool_definition=lambda _: object())
-    )
     monkeypatch.setattr(
         stream, "_message_context", lambda: SimpleNamespace(add_message=lambda *a, **kw: None)
     )
@@ -230,6 +195,6 @@ def test_intent_reaches_actual_handler_context(tmp_path, monkeypatch):
     result = ToolExecutor(registry).execute(
         ToolCall(tool_name="probe", call_id="c", arguments='{"intent":"读取样例","value":3}'),
         context(tmp_path),
-        {"probe"},
+        RequestTools(schemas=(), admitted=frozenset({"probe"})),
     )
     assert result.status == "success" and result.content == "3:读取样例"

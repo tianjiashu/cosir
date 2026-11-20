@@ -60,7 +60,7 @@ from app.core.workflow.nodes import tools_node
 from app.models.message_metadata import ToolMessageMetadata
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.tool_handler.read_file import ReadFileTool
-from tests.runtime_context_stub import runtime_stub
+from tests.runtime_context_stub import admitting, runtime_stub
 from tests.tool_executor_fakes import emit_running
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
@@ -152,7 +152,7 @@ def _runtime(
     rc = runtime_stub(
         tool_executor=executor,
         workspace=SimpleNamespace(id=1, root_path=str(tmp_path)),
-        admitted_tools=allows,
+        request_tools=admitting(allows),
         **overrides,
     )
     batch = ToolBatch()
@@ -505,7 +505,7 @@ def test_success_emits_running_then_completed(
         ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-ok"),
         "step-1",
 
-        _NO_LOOP,
+        _NO_LOOP, rc.request_tools(None),
     )
 
     assert observation.status == "success"
@@ -547,7 +547,11 @@ def test_running_is_emitted_only_after_admission(
     )
 
     tools_node._execute_call(
-        rc, ToolCall(tool_name="probe", arguments='{"intent": "验证工具行为"}', call_id="call-probe"), "s",  _NO_LOOP
+        rc,
+        ToolCall(tool_name="probe", arguments='{"intent": "验证工具行为"}', call_id="call-probe"),
+        "s",
+        _NO_LOOP,
+        rc.request_tools(None),
     )
 
     assert seen_during_handler == [["running"]]
@@ -569,7 +573,7 @@ def test_unknown_tool_emits_failed_without_running(
         ToolCall(tool_name="no_such_tool", arguments='{"intent": "验证工具行为"}', call_id="call-unknown"),
         "s",
 
-        _NO_LOOP,
+        _NO_LOOP, rc.request_tools(None),
     )
 
     assert observation.status == "error"
@@ -596,7 +600,7 @@ def test_profile_denied_tool_emits_failed_without_running(
         ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-denied"),
         "s",
 
-        _NO_LOOP,
+        _NO_LOOP, rc.request_tools(None),
     )
 
     assert observation.status == "error"
@@ -619,7 +623,7 @@ def test_invalid_arguments_emit_failed_without_running(
         ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "nonexistent": 1}', call_id="call-bad"),
         "s",
 
-        _NO_LOOP,
+        _NO_LOOP, rc.request_tools(None),
     )
 
     assert observation.status == "error"
@@ -646,7 +650,7 @@ def test_denied_calls_emit_failure_without_running(
             ToolCall(tool_name=tool_name, arguments=arguments, call_id=call_id),
             "s",
 
-            _NO_LOOP,
+            _NO_LOOP, rc.request_tools(None),
         )
 
     assert [(e.tool_call_id, e.status) for e in recorder.events] == [("call-unregistered", "failed"), ("call-banned", "failed")]
@@ -679,7 +683,11 @@ def test_execute_call_specializes_context_per_call(
     )
 
     tools_node._execute_call(
-        rc, ToolCall(tool_name="probe", arguments='{"intent": "验证工具行为"}', call_id="call-a"), "s",  _NO_LOOP
+        rc,
+        ToolCall(tool_name="probe", arguments='{"intent": "验证工具行为"}', call_id="call-a"),
+        "s",
+        _NO_LOOP,
+        rc.request_tools(None),
     )
 
     assert received == ["call-a"]
@@ -719,7 +727,7 @@ def test_malformed_display_data_still_emits_failed_terminal(
         ToolCall(tool_name="bad_display", arguments='{"intent": "验证工具行为"}', call_id="call-bad-display"),
         "s",
 
-        _NO_LOOP,
+        _NO_LOOP, rc.request_tools(None),
     )
 
     assert observation.status == "error"
@@ -749,7 +757,7 @@ def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
             ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "sample.txt"}', call_id="call-ok"),
             "s",
 
-            _NO_LOOP,
+            _NO_LOOP, rc.request_tools(None),
         )
 
     assert observation.status == "success"
@@ -769,7 +777,7 @@ class _RaisingExecutor:
         self._exc = exc
         self._start_first = start_first
 
-    def execute(self, call, execution_context, allowed_tool_names):
+    def execute(self, call, execution_context, request_tools):
         if self._start_first:
             emit_running(call, execution_context)
         raise self._exc
@@ -797,7 +805,7 @@ def test_executor_exception_becomes_error_observation_and_failed_terminal(
             ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为"}', call_id="call-boom"),
             "s",
 
-            _NO_LOOP,
+            _NO_LOOP, rc.request_tools(None),
         )
 
     assert observation.status == "error"
@@ -830,7 +838,7 @@ def test_executor_exception_after_start_closes_running_card(
         ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为"}', call_id="call-late"),
         "s",
 
-        _NO_LOOP,
+        _NO_LOOP, rc.request_tools(None),
     )
 
     assert observation.content.startswith(
@@ -852,7 +860,7 @@ def test_executor_exception_emits_failure(
         ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为"}', call_id="call-hidden"),
         "s",
 
-        _NO_LOOP,
+        _NO_LOOP, rc.request_tools(None),
     )
 
     assert observation.status == "error"
@@ -904,7 +912,7 @@ def test_suspending_tool_still_closes_its_call_in_the_same_step(
         ToolCall(tool_name="suspend_probe", arguments='{"intent": "验证工具行为"}', call_id="call-suspend"),
         "s",
 
-        _NO_LOOP,
+        _NO_LOOP, rc.request_tools(None),
     )
 
     assert observation.status == "success"
@@ -1021,7 +1029,7 @@ def test_concurrent_calls_project_each_call_independently(
             ToolCall(tool_name="read_file", arguments=json.dumps({"intent": "读取测试文件", "path": name}), call_id=call_id),
             "s",
 
-            _NO_LOOP,
+            _NO_LOOP, rc.request_tools(None),
         )
 
     threads = [threading.Thread(target=run, args=(i,)) for i in range(4)]
@@ -1057,14 +1065,14 @@ def test_mixed_batch_distinct_statuses_do_not_cross_talk(
         ToolCall(tool_name="read_file", arguments='{"intent": "验证工具行为", "path": "good.txt"}', call_id="call-good"),
         "s",
 
-        _NO_LOOP,
+        _NO_LOOP, rc.request_tools(None),
     )
     tools_node._execute_call(
         rc,
         ToolCall(tool_name="no_such_tool", arguments='{"intent": "验证工具行为"}', call_id="call-bad"),
         "s",
 
-        _NO_LOOP,
+        _NO_LOOP, rc.request_tools(None),
     )
 
     assert recorder.statuses("call-good") == ["running", "completed"]

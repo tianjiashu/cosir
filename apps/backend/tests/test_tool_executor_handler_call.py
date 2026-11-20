@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from app.core.tool.request_tools import RequestTools
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext, ToolObservation
@@ -46,7 +47,8 @@ def _execute(handler, *, call_id: str = "call-1") -> ToolObservation:
         tool_call_id=call_id,
     )
     return ToolExecutor(ToolRegistry([_make_tool(handler)])).execute(
-        ToolCall(tool_name="probe", arguments='{"intent": "检查"}', call_id=call_id), context, {"probe"}
+        ToolCall(tool_name="probe", arguments='{"intent": "检查"}', call_id=call_id), context,
+        RequestTools(schemas=(), admitted=frozenset({"probe"})),
     )
 
 

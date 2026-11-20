@@ -184,7 +184,7 @@ def test_tool_layer_defines_untrusted_tags_once_for_any_external_content_tool():
     """浏览器、网页抓取与搜索、MCP 的结果都用 untrusted 块：任一类在场就写一次定义，都不在就不写。"""
 
     rule = "tags marked `untrusted`"
-    for tools in (["browser_snapshot"], ["web_fetch"], ["web_search"], ["mcp"], ["web_fetch", "mcp"]):
+    for tools in (["browser_snapshot"], ["web_fetch"], ["web_search"], ["tool_search"], ["web_fetch", "tool_search"]):
         assert _tool_layer(tools).count(rule) == 1
     assert rule not in _tool_layer(["read_file", "execute_terminal"])
 

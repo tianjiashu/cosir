@@ -63,9 +63,12 @@ class ScriptedModel:
     def __init__(self, steps: Sequence[Any]) -> None:
         self.steps = list(steps)
         self.requests: list[list[dict[str, Any]]] = []
+        # 每次请求带的工具名，按请求先后。
+        self.tool_names: list[list[str]] = []
 
-    async def stream(self, messages: Sequence[dict[str, Any]]) -> AsyncIterator[Any]:
+    async def stream(self, messages: Sequence[dict[str, Any]], *, tools: Any) -> AsyncIterator[Any]:
         self.requests.append(copy.deepcopy(list(messages)))
+        self.tool_names.append([tool["name"] for tool in tools])
         step = self.steps.pop(0)
         if isinstance(step, Exception):
             raise step

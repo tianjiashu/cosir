@@ -118,7 +118,7 @@ def test_sdk_response_projection_preserves_raw_tool_arguments(monkeypatch) -> No
             {"id": "call", "type": "function", "function": {"name": "read_file", "arguments": "{"}}
         ],
     )
-    projected = assistant_message(response.choices[0].message, {"read_file"})
+    projected = assistant_message(response.choices[0].message)
     assert projected["content"] == "answer"
     assert projected["reasoning_content"] == "think"
     assert projected["tool_calls"][0]["function"]["arguments"] == "{"

@@ -46,7 +46,7 @@ from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal.live_output_channel import LiveOutputChannel
-from tests.runtime_context_stub import run_batch, runtime_stub
+from tests.runtime_context_stub import admitting, run_batch, runtime_stub
 from tests.tool_output_support import truncated_artifact_path
 from tests.transport_fixtures import consumed
 
@@ -339,10 +339,10 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
             self,
             call: Any,
             execution_context: Any,
-            allowed_tool_names: Any,
+            request_tools: Any,
         ) -> ToolObservation:
             assert threading.get_ident() != loop_thread
-            assert allowed_tool_names == {"execute_terminal"}
+            assert request_tools.admitted == {"execute_terminal"}
             received.append(execution_context)
             return ToolObservation(
                 tool_name=call.tool_name,
@@ -355,7 +355,7 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
     agent = SimpleNamespace()
     rc = runtime_stub(
         tool_executor=Executor(),
-        admitted_tools=frozenset({"execute_terminal"}),
+        request_tools=admitting(frozenset({"execute_terminal"})),
         tool_definitions={
             "execute_terminal": SimpleNamespace(user_decision=False)
         },

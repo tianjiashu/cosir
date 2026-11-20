@@ -185,7 +185,7 @@ class _Executor:
     def __init__(self) -> None:
         self.contexts: list[Any] = []
 
-    def execute(self, call, *, execution_context, allowed_tool_names):
+    def execute(self, call, *, execution_context, request_tools):
         self.contexts.append(execution_context)
         return tool_success(call.tool_name, "done", tool_call_id=call.call_id)
 

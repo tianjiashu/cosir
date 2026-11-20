@@ -48,7 +48,7 @@ from app.core.tool.schemas import (
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.nodes import tools_node
 from app.models.session_extra import SessionExtra
-from tests.runtime_context_stub import run_batch, runtime_stub
+from tests.runtime_context_stub import admitting, run_batch, runtime_stub
 from tests.tool_executor_fakes import emit_running
 
 
@@ -114,9 +114,9 @@ class _SleepingExecutor:
         self,
         call: ToolCall,
         execution_context: object,
-        allowed_tool_names: object,
+        request_tools: object,
     ) -> ToolObservation:
-        del allowed_tool_names
+        del request_tools
         emit_running(call, execution_context)
         with self._lock:
             self.call_order.append(call.call_id)
@@ -155,7 +155,7 @@ def _operations_with_executor(
         tool_executor=executor,
         execution_context=execution_context
         or ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=Path("."), run_id=0),
-        admitted_tools=frozenset(allowed or ()),
+        request_tools=admitting(frozenset(allowed or ())),
         tool_definitions={name: SimpleNamespace(user_decision=False) for name in tool_names},
         session=SimpleNamespace(id=1, extra=SessionExtra()),
     )
@@ -560,9 +560,9 @@ def test_internal_error_observation_when_executor_raises() -> None:
             self,
             call: ToolCall,
             execution_context: object,
-            allowed_tool_names: object,
+            request_tools: object,
         ) -> ToolObservation:
-            del call, execution_context, allowed_tool_names
+            del call, execution_context, request_tools
             raise RuntimeError("pipeline exploded")
 
     operations = _operations_with_executor(_RaisingExecutor())

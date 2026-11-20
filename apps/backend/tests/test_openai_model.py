@@ -12,8 +12,8 @@ from app.core.llm_provider.openai_model import OpenAIChatModel, usage_from_respo
 from tests.sdk_fixtures import sdk_completion, sdk_events
 
 
-def test_assistant_message_filters_unregistered_calls() -> None:
-    """缺失 id 或未注册的工具名不进入模型正文。"""
+def test_assistant_message_drops_only_incomplete_identities() -> None:
+    """只丢缺 id 的残片；不认识的工具名保留，交给准入门禁给出错误观察。"""
 
     completed = sdk_completion(
         content="说明",
@@ -28,9 +28,9 @@ def test_assistant_message_filters_unregistered_calls() -> None:
         ],
     )
 
-    message = assistant_message(completed.choices[0].message, {"read_file"})
+    message = assistant_message(completed.choices[0].message)
 
-    assert [call["id"] for call in message["tool_calls"]] == ["ok"]
+    assert [call["id"] for call in message["tool_calls"]] == ["ok", "ghost"]
 
 
 @pytest.mark.asyncio
@@ -83,17 +83,19 @@ async def test_complete_preserves_bound_tools_without_changing_stream_requests()
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         ),
         {"model": "test"},
-        tools=schemas,
     )
     messages = [{"role": "user", "content": "go"}]
     try:
-        assert [event async for event in model.stream(messages)]
-        response = await model.complete(messages, response_format={"type": "json_object"})
-        assert [event async for event in model.stream(messages)]
+        assert [event async for event in model.stream(messages, tools=schemas)]
+        response = await model.complete(messages, tools=schemas, response_format={"type": "json_object"})
+        assert [event async for event in model.stream(messages, tools=schemas)]
+        assert [event async for event in model.stream(messages, tools=schemas[:1])]
         assert isinstance(response, ChatCompletion)
         assert response.model_dump(exclude_unset=True) == completion
         expected_tools = [{"type": "function", "function": schema} for schema in schemas]
-        assert all(request["tools"] == expected_tools for request in requests)
+        assert all(request["tools"] == expected_tools for request in requests[:3])
+        # 工具集按请求传入：下一次请求可以带不同的工具，模型对象不留旧定义。
+        assert requests[3]["tools"] == expected_tools[:1]
         assert all(request["messages"] == messages for request in requests)
         assert requests[0] == requests[2]
         assert requests[0]["stream"] is True
@@ -186,21 +188,22 @@ async def test_sdk_stream_preserves_reasoning_tools_usage_and_request(monkeypatc
             },
         }
     ]
-    model = OpenAIChatModel(client, {"model": "test"}, tools=schemas)
-    async for chunk in model.stream([{"role": "user", "content": "go"}]):
+    model = OpenAIChatModel(client, {"model": "test"})
+    async for chunk in model.stream([{"role": "user", "content": "go"}], tools=schemas):
         snapshots.append(chunk.snapshot)
         result = chunk.snapshot.model_copy(deep=True)
     second = None
     async for chunk in model.stream(
         [
             {"role": "user", "content": "go"},
-            assistant_message(result.choices[0].message, {"read_file"}),
+            assistant_message(result.choices[0].message),
             {
                 "role": "tool",
                 "content": "read",
                 "tool_call_id": result.choices[0].message.tool_calls[0].id,
             },
-        ]
+        ],
+        tools=schemas,
     ):
         second = chunk.snapshot.model_copy(deep=True)
     await model.close()
@@ -329,7 +332,7 @@ async def test_sdk_malformed_usage_details_do_not_fail_completed_response(detail
     model = OpenAIChatModel(client, {"model": "test"})
     try:
         result = await model.complete(
-            [{"role": "user", "content": "go"}], response_format={"type": "text"}
+            [{"role": "user", "content": "go"}], tools=(), response_format={"type": "text"}
         )
         stats = RunUsageStats()
         stats.add_usage_metadata(usage_from_response(result.usage))

@@ -67,7 +67,7 @@ async def test_empty_first_frame_and_multiple_choices_reach_consumer():
     )
     model = _model(body)
     try:
-        events = [event async for event in model.stream([])]
+        events = [event async for event in model.stream([], tools=())]
         assert body.closed
         assert len(events) == 2
         assert events[0].chunk.choices == events[0].snapshot.choices == []
@@ -106,10 +106,10 @@ async def test_tool_id_deltas_are_not_rewritten_or_suppressed(monkeypatch, ids, 
     body = ResponseBody(frames)
     model = _model(body)
     try:
-        events = [event async for event in model.stream([])]
+        events = [event async for event in model.stream([], tools=())]
         assert body.closed
         assert [event.chunk.choices[0].delta.tool_calls[0].id for event in events] == ids
-        message = assistant_message(events[-1].snapshot.choices[0].message, {"read_file"})
+        message = assistant_message(events[-1].snapshot.choices[0].message)
         if expected:
             assert message["tool_calls"][0]["id"] == expected
             assert message["tool_calls"][0]["function"]["arguments"] == "{}"

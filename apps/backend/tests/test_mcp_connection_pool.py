@@ -22,7 +22,7 @@ from app.service.configuration.mcp.machine_state import MCPMachineState
 from app.tools.mcp.call_result import MCPCallResult
 from app.tools.mcp.client import MCPToolNotFoundError, is_connection_failure
 from app.tools.mcp.connection_pool import MCPConnectionPool
-from app.tools.tool_handler.mcp_tool import MCPTool
+from app.tools.mcp.mcp_tool_call import call_mcp_tool
 from app.utils.path import system_cosir
 
 _SERVER_CODE = """
@@ -136,7 +136,7 @@ def _make_available(server: ScopedMCPServer, pool: MCPConnectionPool, tmp_path, 
     config_path.write_text(
         json.dumps({"servers": [server.config.model_dump(mode="json")]}), encoding="utf-8"
     )
-    MCPMachineState.record_pass(server)
+    MCPMachineState.record_pass(server, [])
     monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
 
 
@@ -172,12 +172,8 @@ def test_cancelled_tool_call_returns_promptly_and_keeps_connection(pool, tmp_pat
 
     started = time.monotonic()
     try:
-        observation = MCPTool().execute(
-            action="call",
-            server_name=server.name,
-            tool_name="slow",
-            arguments={"seconds": 30},
-            execution_context=context,
+        observation = call_mcp_tool(
+            "mcp__stateful__slow", server, "slow", {"seconds": 30}, context
         )
     finally:
         tool_call_cancellation_registry.clear(9001, "call-slow")
@@ -195,12 +191,8 @@ def test_connect_timeout_is_reported_as_not_sent(pool, tmp_path, monkeypatch):
     _make_available(server, pool, tmp_path, monkeypatch)
     monkeypatch.setattr("app.tools.mcp.connection_pool.CONNECT_TIMEOUT_SECONDS", 0.5)
 
-    observation = MCPTool().execute(
-        action="call",
-        server_name=server.name,
-        tool_name="bump",
-        arguments={},
-        execution_context=_tool_context("call-connect"),
+    observation = call_mcp_tool(
+        "mcp__stateful__bump", server, "bump", {}, _tool_context("call-connect")
     )
 
     assert observation.status == "error"
@@ -215,14 +207,11 @@ def test_slow_starting_server_can_still_be_listed(pool, tmp_path, monkeypatch):
     _make_available(server, pool, tmp_path, monkeypatch)
     monkeypatch.setattr("app.tools.mcp.connection_pool.LIST_TOOLS_TIMEOUT_SECONDS", 0.5)
 
-    observation = MCPTool().execute(
-        action="list", execution_context=_tool_context("call-list")
-    )
+    tools = pool.submit(pool.list_tools(server)).result(timeout=30)
 
-    assert observation.status == "success"
-    [entry] = observation.display_data["servers"]
-    assert "error" not in entry
-    assert {tool["name"] for tool in entry["tools"]} >= {"bump", "slow"}
+    assert {tool.name for tool in tools} >= {"bump", "slow"}
+    # 连接池列到的目录回写本机记录：Agent 的延迟工具目录只读那份记录。
+    assert {entry.name for entry in MCPMachineState.read().catalog(server)} >= {"bump", "slow"}
 
 
 def test_same_name_in_another_scope_gets_its_own_connection(pool, tmp_path):

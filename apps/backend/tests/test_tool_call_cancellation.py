@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from app.core.tool.request_tools import RequestTools
 from app.assistant_transport.projection.event_projection import plan_event
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.execute import tool_executor as tool_executor_module
@@ -39,7 +40,7 @@ from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_c
 from app.core.workflow.nodes import tools_node
 from app.models.message_metadata import ToolMessageMetadata
 from app.models.session_extra import SessionExtra
-from tests.runtime_context_stub import runtime_stub
+from tests.runtime_context_stub import admitting, runtime_stub
 
 # 同步用例没有运行中的事件循环；只有进程工具的实时输出与子 Run 调度会用到它。
 _NO_LOOP: Any = None
@@ -112,7 +113,9 @@ def _make_tool(
 def _run_handler(tool: ToolDefinition, arguments: dict[str, Any], context: ToolExecutionContext) -> Any:
     """只跑执行器里调用 handler 的那一段（准入与 running 由其他用例覆盖）。"""
 
-    return ToolExecutor(ToolRegistry([tool]))._run_handler(tool, arguments, context)
+    return ToolExecutor(ToolRegistry([tool]))._run_handler(
+        tool.name, lambda: tool.handler(**arguments, execution_context=context), context
+    )
 
 
 def _make_context(
@@ -268,7 +271,7 @@ def test_runner_cancellation_does_not_project_transport_state(
     observation = ToolExecutor(ToolRegistry([tool])).execute(
         ToolCall(tool_name="no_bypass", arguments='{"intent": "检查"}', call_id="call-1"),
         _make_context(_RUN_A, tool_call_id="call-1"),
-        {"no_bypass"},
+        RequestTools(schemas=(), admitted=frozenset({"no_bypass"})),
     )
 
     assert observation.status == "cancelled"
@@ -297,8 +300,8 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
 
     def _fake_runner_execute(
         _self: ToolExecutor,
-        _tool: ToolDefinition,
-        _arguments: dict[str, Any],
+        _tool_name: str,
+        _invoke: Any,
         execution_context: ToolExecutionContext,
     ) -> Any:
         assert execution_context.tool_call_id == "call-1"
@@ -318,7 +321,7 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
         run=SimpleNamespace(id=_RUN_A, session_id=_SESSION_ID),
         session=SimpleNamespace(id=_SESSION_ID, extra=SessionExtra()),
         tool_executor=executor,
-        admitted_tools=frozenset({"probe_tool"}),
+        request_tools=admitting(frozenset({"probe_tool"})),
     )
 
     observation = tools_node._execute_call(
@@ -326,7 +329,7 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
         ToolCall(tool_name="probe_tool", arguments='{"intent": "验证工具行为"}', call_id="call-1"),
         "step-1",
 
-        _NO_LOOP,
+        _NO_LOOP, rc.request_tools(None),
     )
 
     assert observation.status == "cancelled"

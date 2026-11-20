@@ -12,8 +12,11 @@ import pytest
 
 from app.config.configuration import get_tool_registry
 from app.core.tool.schemas.tool_names import ALL_TOOL_NAMES
+from app.tools.mcp.tool_naming import PREFIX
 
 _CONTRACT = Path("app/core/tool/tool_ui_display_contract.md")
+MCP_TOOL_PREFIX = PREFIX
+MCP_FAMILY_ROW = f"{PREFIX}<服务>__<工具>"
 _FRONTEND_CATALOG = Path("../desktop/lib/assistant/tools/tool-catalog.ts")
 _DISPLAY_MODULES = [
     *Path("app/tools/display").glob("*.py"),
@@ -30,7 +33,8 @@ def _contract_table() -> dict[str, set[str]]:
         if len(cells) < 3 or not cells[0].startswith("`"):
             continue
         tool = cells[0].strip("`")
-        if tool not in ALL_TOOL_NAMES:
+        # 延迟工具（如 MCP）不在封闭集合里，按名字族登记一行。
+        if tool not in ALL_TOOL_NAMES and not tool.startswith(MCP_TOOL_PREFIX):
             continue
         rows[tool] = set(re.findall(r"`([a-z-]+)`", cells[1]))
     return rows
@@ -76,7 +80,7 @@ def test_frontend_catalog_matches_tool_names() -> None:
 
 def test_contract_document_lists_every_tool_and_every_display_kind() -> None:
     table = _contract_table()
-    assert set(table) == set(ALL_TOOL_NAMES), "契约文档第 3 节表格须列全全部工具"
+    assert set(table) - {MCP_FAMILY_ROW} == set(ALL_TOOL_NAMES), "契约文档第 3 节表格须列全全部工具"
     documented = set().union(*table.values())
     for kind in _kinds_in_source():
         assert kind in documented, f"展示 kind `{kind}` 未在契约文档登记"

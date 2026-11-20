@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from app.core.tool.request_tools import RequestTools
 from app.config import configuration
 from app.core.tool.execute.tool_access_gate import ToolAccessGate
 from app.core.tool.multi_agent import delegate_task
@@ -101,7 +102,7 @@ def test_broken_registry_admits_invalid_id_through_gate(
         call_id="c1",
     )
 
-    outcome = gate.evaluate(call, ctx, {"delegate_task"})
+    outcome = gate.evaluate(call, ctx, RequestTools(schemas=(), admitted=frozenset({"delegate_task"})))
 
     # 记录实际行为：门禁放行（不崩），且参数原样透传给业务层。这不是缺陷本身，
     # 而是「授权后置」的边界事实。

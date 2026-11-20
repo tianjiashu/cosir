@@ -44,7 +44,7 @@ class _Model:
         self.content = content
         self.requests: list[list[Any]] = []
 
-    async def complete(self, messages, *, response_format):
+    async def complete(self, messages, *, tools, response_format):
         self.requests.append(list(messages))
         if isinstance(self.content, Exception):
             raise self.content

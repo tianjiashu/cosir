@@ -15,7 +15,7 @@ from app.core.workflow.execution_state.react_execution_state import ReactExecuti
 from app.core.workflow.nodes import model_node as model_module
 from app.models.enums.react_route import ReactRoute
 from app.models.enums.run_status import RunTransition
-from tests.runtime_context_stub import run_state_stub, runtime_stub
+from tests.runtime_context_stub import admitting, run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion, sdk_event
 
 
@@ -57,7 +57,7 @@ class _ModelHarness:
             return object()
 
         self.runtime_config = runtime_stub(
-            admitted_tools=frozenset({"read_file"}),
+            request_tools=admitting(frozenset({"read_file"})),
             tool_definitions={"read_file": SimpleNamespace(name="read_file", display=None)},
             run_state=run_state_stub(
                 transition=lambda _run_id, transition, **kw: transition_run(transition, **kw)
@@ -73,11 +73,11 @@ class _ModelHarness:
         def add_message(message: Any, **_kwargs: Any) -> None:
             self.messages.append(message)
 
-        def save_model_response(snapshot, *, include_in_context, registered_tool_names):
+        def save_model_response(snapshot, *, include_in_context):
             self.saved_responses.append((snapshot, include_in_context))
             if include_in_context:
                 self.messages.append(
-                    assistant_message(snapshot.choices[0].message, registered_tool_names)
+                    assistant_message(snapshot.choices[0].message)
                 )
 
             return SimpleNamespace(sequence=1, turn=1)
@@ -127,7 +127,7 @@ def test_empty_model_stream_fails_loudly_without_finalizing(monkeypatch: Any) ->
         ([("", "read_file")], []),
         ([("   ", "read_file")], []),
         ([("call", "")], []),
-        ([("call", "unknown_tool")], []),
+        ([("call", "unknown_tool")], ["call"]),
         ([("call", "read_file"), ("", "write_file")], ["call"]),
         ([("call", "read_file"), ("call", "write_file")], ["call", "call"]),
     ],
@@ -135,7 +135,7 @@ def test_empty_model_stream_fails_loudly_without_finalizing(monkeypatch: Any) ->
 def test_model_filters_unusable_calls_without_rejecting_batch(
     monkeypatch, identities, expected_ids
 ):
-    """缺失身份或未注册的调用不进入 context；其余调用由后续执行层处理。"""
+    """缺失身份的残片不进入 context；工具名（含不认识的）由后续执行层裁决。"""
     response = sdk_completion(
         "说明",
         finish_reason="tool_calls",
@@ -160,7 +160,8 @@ def test_model_filters_unusable_calls_without_rejecting_batch(
     assert [included for _, included in harness.saved_responses] == [False, True]
 
 
-def test_filtered_calls_do_not_prevent_retry_without_finish_reason(monkeypatch):
+def test_unknown_tool_call_goes_to_tools_even_without_finish_reason(monkeypatch):
+    """只调了一个不认识的工具：不能当成没有调用（续写或落定），由准入门禁回一条错误观察让模型改正。"""
     response = sdk_completion(
         "",
         finish_reason=None,
@@ -175,8 +176,8 @@ def test_filtered_calls_do_not_prevent_retry_without_finish_reason(monkeypatch):
 
     result = asyncio.run(model_module._model_node(_state()))
 
-    assert result["next_node"] is ReactRoute.PREPARE_INPUT
-    assert [included for _, included in harness.saved_responses] == [False]
+    assert result["next_node"] is ReactRoute.TOOLS
+    assert [included for _, included in harness.saved_responses] == [False, True]
 
 
 def test_finish_reason_completes_final_response(monkeypatch: Any) -> None:
@@ -317,6 +318,7 @@ def test_invalid_tool_arguments_reach_executor_unparsed(monkeypatch, arguments):
     monkeypatch.setattr(tools_module, "_execute_call", run_call)
     harness.runtime_config.tool_definitions["read_file"].user_decision = False
     monkeypatch.setattr(tools_module, "_runtime_context", lambda: harness.runtime_config)
+    monkeypatch.setattr(tools_module, "_message_context", lambda: harness.runtime_context)
     asyncio.run(tools_module._tools_node(_state().model_copy(update=patch)))
     call = run_call.call_args.args[1]
     assert call.call_id == "call"
@@ -367,7 +369,7 @@ def test_model_phase_tracks_output_channels_and_clears_after_failure(monkeypatch
     assert all(e.part == "text" for e in harness.events if isinstance(e, AssistantTextDeltaEvent))
     assert harness.saved_responses[-1][0].choices[0].message.reasoning_content == "推理"
 
-    async def fail(_messages):
+    async def fail(_messages, *, tools):
         raise RuntimeError("stream failed")
         yield  # make this an async generator
 

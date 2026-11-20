@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from app.core.tool.request_tools import RequestTools
 from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
     rebuild_snapshot,
@@ -126,7 +127,7 @@ def test_t2_disabled_and_invalid_args_yields_argument_denial(tmp_path: Any) -> N
             call_id="call-disabled",
         ),
         execution_context=_execution_context(tmp_path),
-        allowed_tool_names={"other_tool"},  # read_file 已注册但本轮被禁用
+        request_tools=RequestTools(schemas=(), admitted=frozenset({"other_tool"})),  # read_file 已注册但本轮被禁用
     )
 
     assert outcome.denial is not None
@@ -156,7 +157,7 @@ def test_t2_disabled_with_valid_args_yields_disabled_denial(tmp_path: Any) -> No
             call_id="call-disabled-2",
         ),
         execution_context=_execution_context(tmp_path),
-        allowed_tool_names={"other_tool"},
+        request_tools=RequestTools(schemas=(), admitted=frozenset({"other_tool"})),
     )
 
     assert outcome.denial is not None
@@ -179,7 +180,7 @@ def test_t2_unknown_tool_wins_over_everything(tmp_path: Any) -> None:
             tool_name="ghost_tool", arguments='{"intent": "验证工具行为"}', call_id="call-ghost"
         ),
         execution_context=_execution_context(tmp_path),
-        allowed_tool_names=set(),  # 连空白名单都要先让位给「注册表未命中」
+        request_tools=RequestTools(schemas=(), admitted=frozenset(set())),  # 连空白名单都要先让位给「注册表未命中」
     )
 
     assert outcome.denial is not None

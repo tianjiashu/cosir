@@ -11,7 +11,7 @@ from app.core.workflow.execution_state.react_execution_state import ReactExecuti
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.models.enums.react_route import ReactRoute
 from app.models.enums.run_status import RunTransition
-from tests.runtime_context_stub import run_state_stub, runtime_stub
+from tests.runtime_context_stub import admitting, run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion
 
 
@@ -37,7 +37,7 @@ def loop(monkeypatch):
         run=run,
         session=SimpleNamespace(id=run.session_id),
         agent=SimpleNamespace(max_steps=10, structured_output=None, model=None),
-        admitted_tools=frozenset({"review"}),
+        request_tools=admitting(frozenset({"review"})),
         run_state=run_state_stub(
             save_execution=lambda _run_id, value: progress.append(value),
             transition=lambda _run_id, transition, **k: calls.append(transition.name.lower()),

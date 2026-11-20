@@ -51,13 +51,12 @@ def _model_config() -> ModelConfigRecord:
 def test_run_reasoning_effort_overrides_agent_profile(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def _build_chat_model(model_settings: ResolvedModel, *, tools):
+    def _build_chat_model(model_settings: ResolvedModel):
         captured.update(
             {
                 "model_name": model_settings.model_name,
                 "reasoning_effort": model_settings.reasoning_effort,
                 "temperature": model_settings.temperature,
-                "tools": tools,
             }
         )
         return object()
@@ -69,16 +68,12 @@ def test_run_reasoning_effort_overrides_agent_profile(monkeypatch) -> None:
     )
 
     agent = AgentRuntimeConfig.resolve(_profile(), _model_config(), reasoning_effort="low")
-    resolved = model_factory.resolve_chat_model(
-        model=agent.model,
-        tools=[{"name": "read_file"}],
-    )
+    resolved = model_factory.resolve_chat_model(model=agent.model)
 
     assert captured == {
         "model_name": "profile-model",
         "reasoning_effort": "low",
         "temperature": 0.2,
-        "tools": [{"name": "read_file"}],
     }
     assert resolved.model_name == "profile-model"
     assert resolved.context_window_k == 64

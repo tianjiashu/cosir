@@ -20,7 +20,7 @@ from app.core.agents.define_agents import main_agent
 from app.core.context import system_prompt_builder as spb
 from app.core.context.prompt_sources.source import SourceContext
 from app.core.context.prompt_sources.view import PromptSourceView
-from app.core.tool.schemas.tool_names import TOOL_MCP, TOOL_SKILL
+from app.core.tool.schemas.tool_names import TOOL_SEARCH, TOOL_SKILL
 from app.service.configuration.mcp import configuration as mcp_configuration
 from app.utils.path import system_cosir as paths
 from tests.static_agent_source import registry_with
@@ -164,7 +164,7 @@ def test_tool_layer_injects_workspace_visible_mcp_and_skill_catalogs(tmp_path) -
     """只向声明了对应工具的 Agent 注入本工作区可用的服务和 Skill 元数据（系统级与工作区合并）。"""
 
     from app.service.configuration.extension_scope import ExtensionScope
-    from app.service.configuration.mcp.machine_state import MCPMachineState
+    from app.service.configuration.mcp.machine_state import MCPMachineState, MCPToolEntry
 
     system_cosir = tmp_path / "system-cosir"
     workspace = tmp_path / "ws"
@@ -187,12 +187,13 @@ def test_tool_layer_injects_workspace_visible_mcp_and_skill_catalogs(tmp_path) -
             json.dumps({"servers": [item.model_dump(mode="json") for item in configs]}),
             encoding="utf-8",
         )
+    tools = [MCPToolEntry(name="search", description="d", input_schema={"type": "object"})]
     MCPMachineState.record_pass(
-        mcp_configuration.ScopedMCPServer(ExtensionScope.system(), servers[system_cosir][0])
+        mcp_configuration.ScopedMCPServer(ExtensionScope.system(), servers[system_cosir][0]), tools
     )
     for config in servers[workspace / ".cosir"]:
         MCPMachineState.record_pass(
-            mcp_configuration.ScopedMCPServer(ExtensionScope.workspace(workspace), config)
+            mcp_configuration.ScopedMCPServer(ExtensionScope.workspace(workspace), config), tools
         )
     for root, name, description in (
         (tmp_path / "home" / ".agents" / "skills", "review", "Review code changes."),
@@ -207,12 +208,13 @@ def test_tool_layer_injects_workspace_visible_mcp_and_skill_catalogs(tmp_path) -
         '{"disabled_skills":["disabled"]}', encoding="utf-8"
     )
 
-    layer = _tool_layer(str(workspace), (TOOL_MCP, TOOL_SKILL))
+    layer = _tool_layer(str(workspace), (TOOL_SEARCH, TOOL_SKILL))
 
-    assert '"system-tools"' in layer
-    assert '"workspace-tools"' in layer
-    assert '"not-tested"' not in layer
-    assert '"disabled-server"' not in layer
+    # 只列名字：可用 = 启用且本机测试通过，目录取自测试时记下的工具。
+    assert "\nmcp__system-tools__search\n" in layer
+    assert "\nmcp__workspace-tools__search\n" in layer
+    assert "not-tested" not in layer
+    assert "disabled-server" not in layer
     assert "- review: Review code changes." in layer
     assert "- disabled:" not in layer
     assert "\\u003c/tool_layer\\u003e" in layer

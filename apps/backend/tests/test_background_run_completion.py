@@ -64,7 +64,7 @@ async def test_background_results_reopen_the_session_after_its_run_answered(back
                 gates[self.command].set()
 
     class Model:
-        async def stream(self, messages):
+        async def stream(self, messages, *, tools):
             inputs = [str(m.get("content")) for m in messages if m["role"] == "user"]
             results = [text for text in inputs if "<background_result time=" in text]
             parent_inputs.append(results)

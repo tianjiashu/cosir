@@ -51,7 +51,7 @@ class _Model:
         self.parent_notices: list[str] = []
         self.child_started = asyncio.Event()
 
-    async def stream(self, messages):
+    async def stream(self, messages, *, tools):
         inputs = [str(m.get("content")) for m in messages if m["role"] == "user"]
         tools_done = [m for m in messages if m["role"] == "tool"]
         if any('from="parent"' in text and ASSIGNMENT in text for text in inputs):

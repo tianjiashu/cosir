@@ -276,7 +276,7 @@ def test_saving_drops_test_records_and_credentials_of_removed_servers_together()
     """测试记录与授权是同一份本机记录：删掉服务时一处清理，不会只清掉一半。"""
 
     server = _server("http://127.0.0.1:1")
-    MCPMachineState.record_pass(server)
+    MCPMachineState.record_pass(server, [])
     MCPMachineState.update_oauth(server, "http://127.0.0.1:1/mcp", tokens={"access_token": "x"})
 
     MCPConfigurationService().update([])

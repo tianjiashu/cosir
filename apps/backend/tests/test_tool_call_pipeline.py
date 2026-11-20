@@ -47,7 +47,7 @@ def _state(batch: ToolBatch | None = None) -> ReactExecutionState:
     )
 
 
-def test_assistant_message_filters_identity_and_registry_only() -> None:
+def test_assistant_message_filters_identity_only() -> None:
     calls = [
         _raw("valid"),
         _raw(""),
@@ -55,15 +55,14 @@ def test_assistant_message_filters_identity_and_registry_only() -> None:
         _raw("valid", '{"path":'),
     ]
     message = sdk_completion(tool_calls=calls).choices[0].message
-    projected = assistant_message(message, {"read_file"})
-    assert [call["id"] for call in projected["tool_calls"]] == ["valid", "valid"]
-    assert projected["tool_calls"][1]["function"]["arguments"] == '{"path":'
+    projected = assistant_message(message)
+    assert [call["id"] for call in projected["tool_calls"]] == ["valid", "ghost", "valid"]
+    assert projected["tool_calls"][2]["function"]["arguments"] == '{"path":'
 
 
 def test_streaming_preview_includes_denied_registered_tool(monkeypatch) -> None:
     events = []
     runtime = SimpleNamespace(
-        admitted_tools={"read_file"},
         tool_definitions={
             "read_file": SimpleNamespace(name="read_file", display=None),
             "write_file": SimpleNamespace(name="write_file", display=None),
@@ -89,7 +88,7 @@ def test_streaming_preview_includes_denied_registered_tool(monkeypatch) -> None:
 def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -> None:
     received = []
 
-    def run_call(_rc, call, _step_id, _loop):
+    def run_call(_rc, call, _step_id, _loop, _admitted):
         received.append(call)
         return ToolObservation(
             tool_name="read_file", status="success", tool_call_id="call-1", content="ok"
@@ -104,6 +103,7 @@ def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -
         calls=[_raw(arguments='{"path":"a.py"}')],
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(tools_node, "_message_context", lambda: None)
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
     patch = asyncio.run(tools_node._tools_node(_state(batch)))
@@ -122,7 +122,7 @@ def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
     """tools 节点把注册调用交给执行器，由门禁拒绝本轮禁用工具。"""
     received = []
 
-    def run_call(_rc, call, _step_id, _loop):
+    def run_call(_rc, call, _step_id, _loop, _admitted):
         received.append(call)
         return ToolObservation(tool_name=call.tool_name, status="success", tool_call_id=call.call_id)
 
@@ -139,6 +139,7 @@ def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
         calls=[_raw("visible"), banned],
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(tools_node, "_message_context", lambda: None)
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
 
@@ -154,7 +155,7 @@ class _StartingExecutor:
         self.order = order
         self.calls: list[ToolCall] = []
 
-    def execute(self, call, execution_context, allowed_tool_names):
+    def execute(self, call, execution_context, request_tools):
         self.calls.append(call)
         emit_running(call, execution_context)
         self.order.append(f"handler:{call.call_id}")
@@ -233,7 +234,7 @@ def test_tools_node_projects_only_terminal_when_executor_never_starts(monkeypatc
     monkeypatch.setattr(tools_node, "emit", events.append)
 
     class _Executor:
-        def execute(self, call, execution_context, allowed_tool_names):
+        def execute(self, call, execution_context, request_tools):
             if call.call_id == "denied":
                 return ToolObservation(
                     tool_name=call.tool_name,
@@ -259,7 +260,7 @@ def test_tools_node_projects_only_terminal_when_executor_never_starts(monkeypatc
 def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
     """挂起由工具声明：同批其它调用照常执行与闭合，任一观察带 suspend 即整批挂起。"""
 
-    def run_call(_rc, call, _step_id, _loop):
+    def run_call(_rc, call, _step_id, _loop, _admitted):
         waiting = AwaitMessages() if call.call_id == "call-2" else None
         return ToolObservation(
             tool_name="read_file", status="success", tool_call_id=call.call_id, waiting=waiting
@@ -270,6 +271,7 @@ def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
         run=SimpleNamespace(id=4, session_id=3),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(tools_node, "_message_context", lambda: None)
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
 
@@ -446,7 +448,7 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
     """tools 节点不解析参数：残缺 JSON 原样交给执行器，由准入门禁形成错误观察。"""
     called = []
 
-    def run_call(_rc, call, _step_id, _loop):
+    def run_call(_rc, call, _step_id, _loop, _admitted):
         called.append(call)
         return ToolObservation(tool_name=call.tool_name, status="success", tool_call_id=call.call_id)
 
@@ -459,6 +461,7 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
         calls=[_raw(arguments='{"path":')],
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(tools_node, "_message_context", lambda: None)
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
 

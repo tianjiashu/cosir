@@ -1,25 +1,18 @@
 """所有工具统一 strict，且模型输入仍能走到原有执行与等待边界。"""
 
-import asyncio
 import json
 import re
-from concurrent.futures import Future
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
-from mcp import types
 from pydantic import BaseModel, Field
 
 from app.config.configuration import get_tool_registry
-from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
 from app.session_runtime.session_runtime_space import SessionRuntimeSpace
-from app.tools.tool_handler.mcp_tool import MCPTool
 from app.tools.tool_models import TerminalWriteArgs
-from app.tools.tool_models.mcp_args import MCPArgs
 from app.tools.tool_models.read_file_args import ReadFileArgs
 
 
@@ -110,7 +103,7 @@ def test_registered_tool_prompts_are_english_and_documented():
 @pytest.mark.usefixtures("backend_env")
 def test_registered_tools_are_strict_and_survive_session_json_snapshot():
     definitions = get_tool_registry().get_all_definitions()
-    assert {"mcp", "ask_user", "terminal_write", "execute_terminal"} <= {
+    assert {"tool_search", "ask_user", "terminal_write", "execute_terminal"} <= {
         tool.name for tool in definitions
     }
     for tool in definitions:
@@ -173,60 +166,6 @@ def test_default_fields_are_required_in_model_request_without_changing_local_def
     assert result.ok
     assert result.arguments == arguments
     assert ReadFileArgs(path="file.py").offset == 1
-
-
-def test_mcp_json_string_is_decoded_once_at_tool_argument_boundary(monkeypatch):
-    value = {"nested": {"arbitrary-key": [None, True, 3, "汉字"]}}
-    raw = {
-        "action": "call",
-        "server_name": "server",
-        "tool_name": "remote",
-        "query": None,
-        "arguments": json.dumps(value),
-    }
-    schema = strict_parameters_schema(MCPArgs)
-    Draft202012Validator(schema).validate(raw)
-    result = validate_tool_arguments(raw, schema, MCPArgs)
-    assert result.ok
-    assert result.arguments["arguments"] == value
-    received = []
-
-    class _Pool:
-        async def call_tool(self, server, name, arguments):
-            received.append((server.name, name, arguments))
-            return types.CallToolResult(content=[types.TextContent(type="text", text="done")])
-
-        def submit(self, coroutine):
-            future = Future()
-            future.set_result(asyncio.run(coroutine))
-            return future
-
-    monkeypatch.setattr(
-        "app.tools.tool_handler.mcp_tool.available_servers",
-        lambda _: [SimpleNamespace(name="server", scope=SimpleNamespace(kind="system"))],
-    )
-    monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", _Pool)
-    context = ToolExecutionContext(
-        session_id=1, workspace_id=1, workspace_root=Path("."), step_id="step", run_id=1
-    )
-    observation = MCPTool().execute(**result.arguments, execution_context=context)
-    assert observation.status == "success"
-    assert received == [("server", "remote", value)]
-    # 校验不得改写上下文中持久化的原始模型参数。
-    assert raw["arguments"] == json.dumps(value)
-
-
-@pytest.mark.parametrize(
-    "arguments",
-    [{"old": "shape"}, "[]", "null", '{"unfinished":', '{"n": NaN}', '{"n": Infinity}'],
-)
-def test_mcp_rejects_old_object_shape_and_non_object_json(arguments):
-    result = validate_tool_arguments(
-        {"action": "call", "server_name": "s", "tool_name": "t", "arguments": arguments},
-        strict_parameters_schema(MCPArgs),
-        MCPArgs,
-    )
-    assert not result.ok
 
 
 @pytest.mark.parametrize(

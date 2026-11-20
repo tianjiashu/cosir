@@ -17,9 +17,10 @@ from fastapi.testclient import TestClient
 from app.api.configuration import extensions
 from app.app import app
 from app.service.configuration.mcp import configuration_service as mcp_configuration_service
+from app.service.configuration.mcp.machine_state import MCPToolEntry
 from app.service.configuration.skills.configuration import SkillConfiguration
 
-_SEARCH_TOOLS = [{"name": "search", "description": "Search", "input_schema": {"type": "object"}}]
+_SEARCH_TOOLS = [MCPToolEntry(name="search", description="Search", input_schema={"type": "object"})]
 
 
 
@@ -132,7 +133,7 @@ def test_mcp_draft_test_counts_once_the_same_config_is_saved(client, tools_ok) -
     assert draft_test.json() == {
         "status": "completed",
         "success": True,
-        "tools": _SEARCH_TOOLS,
+        "tools": [tool.model_dump() for tool in _SEARCH_TOOLS],
         "error": None,
         "failure_kind": None,
         "needs_sign_in": False,

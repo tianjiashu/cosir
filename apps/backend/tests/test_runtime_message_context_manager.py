@@ -245,7 +245,7 @@ def test_save_model_response_writes_once_and_controls_context_membership(include
     manager.current_run_id = 2
     response = sdk_completion(content="最后收到的内容")
     manager.save_model_response(
-        response, include_in_context=include_in_context, registered_tool_names=set()
+        response, include_in_context=include_in_context
     )
     assert len(context_store.appended) == 1
     assert context_store.appended[0][2]["content"] == "最后收到的内容"
@@ -260,13 +260,11 @@ def test_stream_snapshots_replace_one_identity_until_context_admission():
     entry = manager.save_model_response(
         sdk_completion(content="part"),
         include_in_context=False,
-        registered_tool_names=set(),
     )
     identity = entry.message_id
     entry = manager.save_model_response(
         sdk_completion(content="part tail"),
         include_in_context=False,
-        registered_tool_names=set(),
     )
     assert manager._message_sequence == 6
     assert manager._entries == []
@@ -278,7 +276,6 @@ def test_stream_snapshots_replace_one_identity_until_context_admission():
     manager.save_model_response(
         sdk_completion(content="part tail"),
         include_in_context=True,
-        registered_tool_names=set(),
     )
     assert context_store.appended[-1][2].include_in_context
     assert manager._entries == [entry]
@@ -287,7 +284,7 @@ def test_stream_snapshots_replace_one_identity_until_context_admission():
     assert manager._draft_response is None
 
 
-def test_model_response_filters_unknown_calls_before_persistence():
+def test_model_response_keeps_unknown_calls_for_the_gate():
     context_store = _ContextStore(max_sequence=0)
     manager = _manager(context_store, next_sequence=1)
     manager.current_run_id = 2
@@ -303,10 +300,11 @@ def test_model_response_filters_unknown_calls_before_persistence():
     )
 
     entry = manager.save_model_response(
-        response, include_in_context=True, registered_tool_names={"read_file"}
+        response, include_in_context=True
     )
 
-    assert [call["id"] for call in entry.message["tool_calls"]] == ["known"]
+    # 不认识的工具名不在这里过滤：随响应进上下文，由准入门禁给出错误观察。
+    assert [call["id"] for call in entry.message["tool_calls"]] == ["known", "unknown"]
     assert entry.message["tool_calls"][0]["function"]["arguments"] == "{"
 
 

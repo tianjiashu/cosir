@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from app.core.tool.request_tools import RequestTools
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
@@ -92,7 +93,7 @@ def _execute(
     return executor.execute(
         call,
         execution_context=replace(execution_context, tool_call_id=call.call_id),
-        allowed_tool_names=allowed_tool_names,
+        request_tools=RequestTools(schemas=(), admitted=frozenset(allowed_tool_names)),
     )
 
 
@@ -278,7 +279,7 @@ def test_gate_evaluate_unknown_tool(tmp_path: Path) -> None:
     outcome = gate.evaluate(
         ToolCall(tool_name="ghost", arguments='{"intent": "验证工具行为"}', call_id="call-8"),
         _make_context(tmp_path),
-        {"read_file"},
+        RequestTools(schemas=(), admitted=frozenset({"read_file"})),
     )
 
     assert outcome.tool is None

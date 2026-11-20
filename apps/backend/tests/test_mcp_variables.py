@@ -99,7 +99,7 @@ def test_test_record_follows_the_definition_and_the_pool_follows_the_values(
     config = MCPServerConfig(name="one", command="srv", env={"KEY": "${TOKEN}"})
     server = ScopedMCPServer(scope, config)
     monkeypatch.setenv("TOKEN", "first")
-    MCPMachineState.record_pass(server)
+    MCPMachineState.record_pass(server, [])
     first_connection = server.connection_fingerprint()
 
     monkeypatch.setenv("TOKEN", "rotated")
@@ -228,9 +228,9 @@ def test_each_server_gets_one_main_status_in_priority_order(tmp_path: Path, monk
     needs_sign_in = server("sign-in", **remote)
     untested = server("untested", command="srv", env={"A": "${FROM_ENV_FILE}"})
     available = server("available", command="srv")
-    MCPMachineState.record_pass(needs_sign_in)
+    MCPMachineState.record_pass(needs_sign_in, [])
     MCPMachineState.update_oauth(needs_sign_in, "https://example.com/mcp", needs_authorization=True)
-    MCPMachineState.record_pass(available)
+    MCPMachineState.record_pass(available, [])
 
     entries = MCPServerEntry.for_servers([disabled, missing, needs_sign_in, untested, available])
 
