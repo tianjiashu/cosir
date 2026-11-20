@@ -1,7 +1,7 @@
 import { StreamdownTextPrimitive } from "@assistant-ui/react-streamdown";
 
 import { MARKDOWN_LINK_COMPONENTS } from "@/components/links/markdown-links";
-import { markdownPlugins, markdownRehypePlugins, markdownShikiTheme, useMermaidOptions } from "@/components/markdown/markdown-rendering-config";
+import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/components/markdown/markdown-rendering-config";
 
 /**
  * 流式正文逐字淡入。必须按字切：默认按空白切词，一整句中文会被当成一个单位。模块级常量是因为 Streamdown
@@ -23,7 +23,6 @@ export function MarkdownText() {
       defer
       plugins={markdownPlugins}
       rehypePlugins={markdownRehypePlugins}
-      shikiTheme={markdownShikiTheme}
       animated={STREAM_REVEAL}
       mermaid={mermaidOptions}
       components={MARKDOWN_LINK_COMPONENTS}

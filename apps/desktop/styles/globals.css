@@ -7,7 +7,6 @@
 @import "./markdown.css";
 
 @source "../node_modules/streamdown/dist/*.js";
-@source "../node_modules/@streamdown/code/dist/*.js";
 @source "../node_modules/@streamdown/math/dist/*.js";
 @source "../node_modules/@streamdown/mermaid/dist/*.js";
 @source "../node_modules/@streamdown/cjk/dist/*.js";
@@ -156,27 +155,6 @@
   /* 代码阅读字号：文件阅读器、配置编辑器与 Markdown 代码块共用；终端与 diff 是紧凑面，仍用 12px。 */
   --text-code: 0.8125rem;
   --text-code--line-height: 1.25rem;
-  /*
-   * 语法配色的调色板（GitHub 配色），唯一事实源：CodeMirror 的高亮类（lib/syntax/syntax-highlighter.ts）与
-   * Shiki 的代码块主题（lib/syntax/shiki-theme.ts）都只读这组变量，名字是 Shiki `createCssVariablesTheme` 的约定
-   * （前缀 --syntax-）。哪类语法元素用哪个颜色的原则写在 shiki-theme.ts，两边的映射按它对齐。
-   */
-  --syntax-foreground: var(--foreground);
-  --syntax-background: var(--background);
-  --syntax-token-keyword: #cf222e;
-  --syntax-token-string: #0a3069;
-  --syntax-token-string-expression: #0a3069;
-  --syntax-token-comment: #6e7781;
-  --syntax-token-constant: #0550ae;
-  --syntax-token-function: #8250df;
-  --syntax-token-tag: #116329;
-  --syntax-token-parameter: var(--foreground);
-  --syntax-token-punctuation: var(--foreground);
-  --syntax-token-link: #0a3069;
-  /* diff 的增、删、改（Markdown 的 ```diff 代码块与 CodeMirror 的 diff 语法）：跟随语义色，深浅色自然切换。 */
-  --syntax-token-inserted: var(--success);
-  --syntax-token-deleted: var(--destructive);
-  --syntax-token-changed: var(--warning);
 }
 
 .dark {
@@ -219,13 +197,6 @@
   --skill-foreground: oklch(0.84 0.08 295);
   --skill-background: oklch(0.29 0.04 295);
   --skill-border: oklch(0.46 0.07 295);
-  --syntax-token-keyword: #ff7b72;
-  --syntax-token-string: #a5d6ff;
-  --syntax-token-string-expression: #a5d6ff;
-  --syntax-token-comment: #8b949e;
-  --syntax-token-constant: #79c0ff;
-  --syntax-token-function: #d2a8ff;
-  --syntax-token-tag: #7ee787;
 }
 
 /*
@@ -590,22 +561,24 @@ body > :not(#root) > * {
   color: var(--muted-foreground);
 }
 
-/* 语法高亮类：类名由 lib/syntax/syntax-highlighter.ts 给出（CodeMirror 与 diff 共用），颜色只取 --syntax-*。 */
-.syntax-keyword { color: var(--syntax-token-keyword); }
-.syntax-string { color: var(--syntax-token-string); }
-.syntax-string-expression { color: var(--syntax-token-string-expression); }
-.syntax-comment { color: var(--syntax-token-comment); }
-.syntax-constant { color: var(--syntax-token-constant); }
-.syntax-function { color: var(--syntax-token-function); }
-.syntax-tag { color: var(--syntax-token-tag); }
-.syntax-heading { color: var(--syntax-token-constant); font-weight: 600; }
-.syntax-strong { font-weight: 600; }
-.syntax-emphasis { font-style: italic; }
-.syntax-strikethrough { text-decoration: line-through; }
-.syntax-link { color: var(--syntax-token-link); text-decoration: underline; }
-.syntax-deleted { color: var(--syntax-token-deleted); }
-.syntax-inserted { color: var(--syntax-token-inserted); }
-.syntax-changed { color: var(--syntax-token-changed); }
+/*
+ * 着色服务（lib/syntax/highlighter.ts，Shiki）给每个词元同时写了浅色与深色：颜色是 color 与 --shiki-dark，字形
+ * （标题加粗、强调倾斜、删除线）只以 --shiki-light-* / --shiki-dark-* 变量给出，深浅色只在这里切换、不重算。
+ * 编辑器与 diff 的词元带 .shiki-token；Markdown 代码块的颜色由 Streamdown 自己切换，字形也在这里接上。
+ */
+.shiki-token,
+[data-streamdown="code-block-body"] code span {
+  font-style: var(--shiki-light-font-style, inherit);
+  font-weight: var(--shiki-light-font-weight, inherit);
+  text-decoration: var(--shiki-light-text-decoration, inherit);
+}
+.dark .shiki-token { color: var(--shiki-dark) !important; }
+.dark .shiki-token,
+.dark [data-streamdown="code-block-body"] code span {
+  font-style: var(--shiki-dark-font-style, inherit);
+  font-weight: var(--shiki-dark-font-weight, inherit);
+  text-decoration: var(--shiki-dark-text-decoration, inherit);
+}
 
 /* 终端工作台里 Agent 填入行的来源标记：xterm 装饰元素占首个单元格，画左侧色条；只在 Agent 把一行命令填进提示符时出现。 */
 .terminal-agent-input-mark {

@@ -22,7 +22,7 @@ type NewConversationProps = {
   /** 所选工作区未开始的会话（目录里已有时直接转过去，不再请求）。 */
   unstartedSession: WorkspaceSession | null;
   onWorkspaceChange: (workspaceId: number) => void;
-  /** 从文件夹添加工作区（与侧栏共用 `useWorkspaceActions.addWorkspaceFromFolder`）。 */
+  /** 从文件夹添加工作区（`useWorkspaceActions.addWorkspaceFromFolder`）。 */
   onAddWorkspace: () => Promise<boolean>;
   addingWorkspace: boolean;
 };

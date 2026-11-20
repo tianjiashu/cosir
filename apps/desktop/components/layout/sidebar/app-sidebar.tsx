@@ -1,8 +1,6 @@
 import type { ReactNode } from "react";
 import {
   ActivityIcon,
-  FolderPlusIcon,
-  Loader2Icon,
   PinIcon,
   PinOffIcon,
   PlusIcon,
@@ -20,7 +18,6 @@ import { SESSION_MARKER_GAP, SESSION_MARKER_WIDTH } from "@/components/session-t
 import { WorkspaceTree } from "@/components/session-tree/workspace-tree";
 import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
-import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import type { WorkspaceSession } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { usePinnedSessionsStore } from "@/lib/pinned-sessions-store";
@@ -44,16 +41,13 @@ type AppSidebarProps = {
   onOpenObserver: () => void;
   /** 顶部的搜索：打开命令面板（它按会话标题与工作区名搜索），侧栏不另做一套搜索。 */
   onOpenSearch: () => void;
-  /** 「工作区」区头的添加工作区（`useWorkspaceActions.addWorkspaceFromFolder`）。 */
-  onAddWorkspace: () => void;
-  addingWorkspace: boolean;
   onRequestDelete: (target: DeleteTarget) => void;
   /** 头部一行的控件（侧栏开关），由 AppLayout 提供；放在这一行拖动区里，左侧让出红绿灯。 */
   headerControls: ReactNode;
 };
 
 /**
- * 应用侧栏：顶部的全局入口（新会话、搜索，常显快捷键）、「工作区」区头（添加工作区）、工作区 / 会话树、
+ * 应用侧栏：顶部的全局入口（新会话、搜索，常显快捷键）、「工作区」区头、工作区 / 会话树、
  * 底部的系统配置与会话观测入口。
  *
  * 铺在窗口底色（canvas）上，不画边线：与主区的分隔靠两者明度差，底部入口靠 mt-auto 的留白。
@@ -73,8 +67,6 @@ export function AppSidebar({
   onOpenWorkspaceConfiguration,
   onOpenObserver,
   onOpenSearch,
-  onAddWorkspace,
-  addingWorkspace,
   onRequestDelete,
   headerControls,
 }: AppSidebarProps) {
@@ -96,16 +88,11 @@ export function AppSidebar({
         <SidebarLink active={false} icon={<SearchIcon className="size-4" />} label="搜索会话" shortcut="commandPalette" onClick={onOpenSearch} />
       </div>
       <nav className="flex min-h-0 flex-1 flex-col px-2 pb-4" aria-label="工作区会话列表">
-        <div className="flex h-7 shrink-0 items-center gap-0.5 pr-1 pl-2">
-          <h2 className="text-muted-foreground min-w-0 flex-1 truncate text-xs">工作区</h2>
-          <TooltipIconButton tooltip="添加工作区" aria-label="添加工作区" className="sidebar-icon-button text-muted-foreground size-6" disabled={addingWorkspace} onClick={onAddWorkspace}>
-            {addingWorkspace ? <Loader2Icon className="animate-spin" /> : <FolderPlusIcon />}
-          </TooltipIconButton>
-        </div>
+        <h2 className="text-muted-foreground flex h-7 shrink-0 items-center truncate px-2 text-xs">工作区</h2>
         {/* 目录随推送在后台重读：已有内容时照常显示、不插入加载行（插入会把树往下推，悬停与焦点随之丢失）。 */}
         {status === "loading" && workspaces.length === 0 && <LoadingState size="compact" label="正在加载工作区…" className="px-2" />}
         {status === "error" && <ErrorState className="mx-2 text-xs" message={error} onRetry={() => void load()} />}
-        {status === "ready" && workspaces.length === 0 && <EmptyState size="compact" title="暂无工作区" description="点击上方的添加按钮，选择一个本机目录作为工作区。" className="px-2" />}
+        {status === "ready" && workspaces.length === 0 && <EmptyState size="compact" title="暂无工作区" description="点击上方的「新会话」，在工作区选择器里新建工作区。" className="px-2" />}
         {workspaces.length > 0 && (
           <div className="min-h-0 flex-1">
             <WorkspaceTree

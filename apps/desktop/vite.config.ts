@@ -56,7 +56,8 @@ function isMarkdownPackage(packageName: string): boolean {
 
 function getVendorChunk(packageName: string): string | undefined {
   if (packageName.startsWith("@codemirror/lang-") && packageName !== "@codemirror/lang-markdown") return undefined;
-  if (packageName === "@codemirror/language-data") return undefined;
+  // 按需加载的语言（CodeMirror 的语言数据、Shiki 的语法）各自成块：收进 vendor 包就会随首屏一起预加载。
+  if (packageName === "@codemirror/language-data" || packageName === "@shikijs/langs") return undefined;
   if (["react", "react-dom", "scheduler", "use-sync-external-store"].includes(packageName)) {
     return "vendor-react";
   }

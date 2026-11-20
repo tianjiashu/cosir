@@ -18,7 +18,7 @@ import { editorKeymap } from "./editor-keymap";
  * - 键位：`basicSetup` 自带的键表不经快捷键登记表，提示会写错、平台规则管不到；这里全部来自 `editorKeymap`。
  * - 查找与替换：用应用的查找条（`findHighlights` 是它的高亮层，`search()` 只提供替换用的查询状态，不装
  *   CodeMirror 的搜索面板）。
- * - 语法配色：在 `editorTheme`，不装 `basicSetup` 的默认配色兜底。
+ * - 语法着色：不装 `basicSetup` 的 Lezer 配色，由使用方装 `editorHighlighting`（Shiki，与代码块、diff 同源）。
  */
 export const editorSetup = [
   lineNumbers(),

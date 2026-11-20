@@ -3,7 +3,7 @@ import { Streamdown, type StreamdownProps } from "streamdown";
 
 import { MARKDOWN_LINK_COMPONENTS } from "@/components/links/markdown-links";
 
-import { markdownPlugins, markdownRehypePlugins, markdownShikiTheme, useMermaidOptions } from "@/components/markdown/markdown-rendering-config";
+import { markdownPlugins, markdownRehypePlugins, useMermaidOptions } from "@/components/markdown/markdown-rendering-config";
 import { rehypeSourceLines } from "@/lib/markdown-outline";
 
 // 模块级单例：插件数组每次渲染都新建会让 Streamdown 重新解析整篇文档。
@@ -31,7 +31,6 @@ export function StaticMarkdown({ children, components, className }: {
       mode="static"
       plugins={markdownPlugins}
       rehypePlugins={staticRehypePlugins}
-      shikiTheme={markdownShikiTheme}
       mermaid={mermaidOptions}
       components={elements}
       className={className}

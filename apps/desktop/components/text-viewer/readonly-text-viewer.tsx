@@ -3,7 +3,10 @@ import { useEffect, useImperativeHandle, useMemo, useRef, type Ref } from "react
 import { Compartment, EditorState, EditorSelection } from "@codemirror/state";
 import { gotoLine } from "@codemirror/search";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { languageFor } from "@/lib/syntax/code-language";
+import { highlightLanguageOf, languageFor } from "@/lib/syntax/code-language";
+import { editorHighlighting } from "@/components/code-editor/editor-highlighting";
+import { minimalChange } from "@/components/code-editor/minimal-change";
+import { languageHighlighter } from "@/lib/syntax/highlighter";
 import { editorTheme } from "@/components/code-editor/code-editor-theme";
 import { editorSetup } from "@/components/code-editor/editor-setup";
 import type { LineRange } from "@/lib/links/resolve-link";
@@ -61,7 +64,7 @@ export function ReadonlyTextViewer({
   onRevealed?: () => void;
   ref?: Ref<TextViewerHandle>;
 }) {
-  const highlight = useMemo(
+  const parseSyntax = useMemo(
     () => text.split("\n").every((line) => line.length < 50_000),
     [text],
   );
@@ -91,6 +94,8 @@ export function ReadonlyTextViewer({
     if (!host.current) return;
     let disposed = false;
     const language = new Compartment();
+    // 着色归 Shiki（与代码块、diff 同源），语言包只管折叠、缩进等结构；两者各自加载，谁先好谁先装上。
+    const highlighting = new Compartment();
     const instance = new EditorView({
       parent: host.current,
       // 交给 CodeMirror 在测量之后再滚过去：建好就写像素会落在估算行高的布局上，测量后锚点修正把位置挪走。
@@ -144,6 +149,7 @@ export function ReadonlyTextViewer({
             "aria-label": ariaLabel,
           }),
           language.of([]),
+          highlighting.of([]),
           ...(wrap ? [EditorView.lineWrapping] : []),
           EditorView.domEventHandlers({
             scroll: (_event, editor) => latest.current.onAnchorChange?.(anchorOf(editor)),
@@ -152,8 +158,15 @@ export function ReadonlyTextViewer({
       }),
     });
     view.current = instance;
-    // 超长单行仅关闭语法解析，保留阅读与查找，避免解析器占满主线程。
-    if (highlight) {
+    // 有 5 万字符以上的行时关掉结构解析（Lezer 会占满主线程），保留阅读与查找。着色不受它限制：着色服务把 5 千字符
+    // 以上的行整行按原文显示（`highlighter.ts`），其余行照常着色。
+    const lang = highlightLanguageOf(name);
+    if (lang)
+      void languageHighlighter(lang).then((highlighter) => {
+        if (!disposed && highlighter)
+          instance.dispatch({ effects: highlighting.reconfigure(editorHighlighting(highlighter)) });
+      });
+    if (parseSyntax) {
       const description = languageFor(name);
       void description
         ?.load()
@@ -165,7 +178,7 @@ export function ReadonlyTextViewer({
           void frontendLog(
             "WARNING",
             "text_language_load_failed",
-            "语言高亮加载失败，保留纯文本阅读",
+            "语言结构加载失败，保留纯文本阅读",
             { data: { name }, error },
           );
         });
@@ -175,13 +188,13 @@ export function ReadonlyTextViewer({
       instance.destroy();
       view.current = null;
     };
-  }, [name, wrap, highlight, firstLine, ariaLabel, selectLines]);
+  }, [name, wrap, parseSyntax, firstLine, ariaLabel, selectLines]);
   useEffect(() => {
     const instance = view.current;
-    if (!instance || instance.state.doc.toString() === text) return;
-    // 文件被改：整段替换后按行号回到原来那段，而不是同一个像素（内容变了，像素指向别处）。
+    const changes = instance ? minimalChange(instance.state, text) : null;
+    if (!instance || !changes) return;
+    // 文件被改：只替换变了的那段（没变的部分保留着色），再按行号回到原来那段，而不是同一个像素（内容变了，像素指向别处）。
     const kept = anchorOf(instance);
-    const changes = { from: 0, to: instance.state.doc.length, insert: text };
     instance.dispatch({ changes, effects: scrollToAnchor(instance.state.update({ changes }).state, kept) });
   }, [text]);
   // 排在建 view 的 effect 之后：首次挂载时先恢复阅读位置，再由这里覆盖为目标行。

@@ -6,7 +6,8 @@ import { API_ORIGIN, REAL_BACKEND_ORIGIN, REAL_BACKEND_PORT } from "./e2e-env";
 
 /**
  * 文件面板 E2E 用的真实后端夹具（`apps/backend/tests/fixtures/workspace_files_server.py`）：内存测试服务没有
- * 文件接口，文件请求改写到这里。集成用例与视觉回归共用；同一次运行里只拉起一个，端口随 `COSIR_E2E_SLOT` 错开。
+ * 文件接口，文件请求改写到这里。集成用例与视觉回归共用；每个用到它的文件在 beforeAll 各拉起一个，端口按 worker 错开
+ * （`e2e-env.ts`），同一 worker 里的文件串行，前一个文件的 afterAll 停掉后下一个才用这个端口。
  *
  * 工作区 id 由夹具的 SQLite 自增分配，与内存测试服务的固定 id 无关，`start` 从夹具 health 读出，
  * `route` 改写请求时据它映射。`<img>` 等资源请求同样经 `page.route`，所以直连资源地址也会被改写。

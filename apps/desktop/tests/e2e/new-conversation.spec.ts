@@ -299,6 +299,10 @@ test("不可恢复时继续运行被同步拒绝，提示错误并复位按钮",
   await expect(page.getByRole("button", { name: "继续运行" })).toBeEnabled();
 
   // 同样的原因再被拒一次：每次拒绝各自提示，按钮照样复位。
+  // 报错 toast 在右下角，入场后盖住输入框的按钮；按用户的做法先关掉它再点，否则能否点到取决于入场动画的时机。
+  const rejectToast = page.locator("[data-sonner-toast]").filter({ hasText: "当前运行不可恢复" });
+  await rejectToast.locator("[data-close-button]").click();
+  await expect(rejectToast).toHaveCount(0);
   await page.getByRole("button", { name: "继续运行" }).click();
   await expect(page.getByRole("button", { name: "正在继续运行" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "继续运行" })).toBeEnabled();

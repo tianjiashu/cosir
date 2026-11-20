@@ -1,12 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { markEdits, pickRanges, tokenize } from "react-diff-view";
 import { parseDiff } from "react-diff-view";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import { FileDiff, maxLineNumber } from "@/components/conversation/tools/file-diff";
 import { readFileChanges } from "@/lib/assistant/tools/file-changes";
-import { languageFor } from "@/lib/syntax/code-language";
 import { diffSyntaxRanges, diffTokens } from "@/lib/syntax/diff-tokens";
+import { initHighlighting, languageHighlighter } from "@/lib/syntax/highlighter";
+
+// 着色引擎是 WASM，应用在 `src/main.tsx` 渲染前初始化，单测在这里做同一件事。
+beforeAll(initHighlighting);
 
 const PATCH = `diff --git a/a.ts b/a.ts
 --- a/a.ts
@@ -25,20 +28,20 @@ const PATCH = `diff --git a/a.ts b/a.ts
 
 const hunks = () => parseDiff(PATCH)[0].hunks;
 
-// 目的：高亮区间用文件里的真实行号与本行列号，跨行语法元素逐行切开；潜在缺陷：用段内序号当行号、跨行区间画到下一行开头之外。
+// 目的：着色区间用文件里的真实行号与本行列号，块注释跨行时下一行接着按注释着色；颜色来自着色服务（GitHub 主题）。
+// 潜在缺陷：用段内序号当行号、跨行状态断掉、与代码块不是同一套颜色。
 describe("diff syntax ranges", () => {
-  it("maps highlight spans to real line numbers on each side", async () => {
-    const support = await languageFor("a.ts")!.load();
-    const [oldRanges, newRanges] = diffSyntaxRanges(hunks(), support.language.parser);
-    const at = (ranges: typeof oldRanges, lineNumber: number, className: string) =>
-      ranges.filter((range) => range.lineNumber === lineNumber && range.properties.className === className).map(({ start, length }) => [start, length]);
+  it("maps colored tokens to real line numbers on each side", async () => {
+    const highlighter = (await languageHighlighter("typescript"))!;
+    const [oldRanges, newRanges] = diffSyntaxRanges(hunks(), highlighter);
+    const colorAt = (ranges: typeof oldRanges, lineNumber: number, start: number) =>
+      ranges.find((range) => range.lineNumber === lineNumber && range.start === start)?.properties.style;
 
-    expect(at(oldRanges, 10, "syntax-keyword")).toEqual([[0, 5]]);
-    expect(at(oldRanges, 11, "syntax-string")).toEqual([[8, 3]]);
-    expect(at(newRanges, 11, "syntax-comment")).toEqual([[0, 6]]);
-    expect(at(newRanges, 12, "syntax-comment")).toEqual([[0, 6]]);
-    expect(at(newRanges, 12, "syntax-keyword")).toEqual([[7, 3]]);
-    expect(at(newRanges, 13, "syntax-function")).toEqual([[0, 4]]);
+    expect(colorAt(oldRanges, 10, 0)).toMatchObject({ color: "#CF222E", "--shiki-dark": "#FF7B72" });
+    expect(colorAt(oldRanges, 11, 8)?.color).toBe("#0A3069");
+    expect(colorAt(newRanges, 11, 0)?.color).toBe("#6E7781");
+    expect(colorAt(newRanges, 12, 0)?.color).toBe("#6E7781");
+    expect(colorAt(newRanges, 13, 0)?.color).toBe("#8250DF");
     expect(newRanges.every((range) => range.length > 0)).toBe(true);
   });
 });
@@ -54,21 +57,12 @@ describe("file diff hunk gap", () => {
   });
 });
 
-// 目的：语言只按文件名认；潜在缺陷：diff 传的是带目录的路径，Dockerfile 这类按名字认的文件不高亮。
-describe("language by file", () => {
-  it("recognizes name-matched files under directories", () => {
-    expect(languageFor("docker/Dockerfile")?.name).toBe("Dockerfile");
-    expect(languageFor("Dockerfile")?.name).toBe("Dockerfile");
-    expect(languageFor("src/app/main.ts")?.name).toBe("TypeScript");
-  });
-});
-
 // 目的：diff 高亮的计算量跟着改动走、不跟着行号走，且结果与整份计算一致；潜在缺陷：改动在大文件末尾时展开卡顿。
 describe("diff tokens", () => {
   it("matches whole-file tokenize, line by line", async () => {
-    const parser = (await languageFor("a.ts")!.load()).language.parser;
-    const whole = tokenize(hunks(), { enhancers: [pickRanges(...diffSyntaxRanges(hunks(), parser)), markEdits(hunks(), { type: "block" })] });
-    const byHunk = diffTokens(hunks(), parser);
+    const highlighter = (await languageHighlighter("typescript"))!;
+    const whole = tokenize(hunks(), { enhancers: [pickRanges(...diffSyntaxRanges(hunks(), highlighter)), markEdits(hunks(), { type: "block" })] });
+    const byHunk = diffTokens(hunks(), highlighter);
     // 区间节点带着计算时的行号（按段算时是平移后的），渲染不用它，比对时去掉。
     const rendered = (value: unknown) => JSON.parse(JSON.stringify(value, (key, field) => (key === "lineNumber" ? undefined : field)));
     for (const side of ["old", "new"] as const) {

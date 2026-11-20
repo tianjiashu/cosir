@@ -1,13 +1,10 @@
 import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
-import { syntaxHighlighting } from "@codemirror/language";
-
-import { syntaxHighlighter } from "@/lib/syntax/syntax-highlighter";
 
 /**
  * 配置编辑器与文件阅读器共用的应用主题；不包含业务快捷键。
  *
- * 字号、行高与全部颜色都取应用的 CSS 变量，所以不声明 `dark`：CodeMirror 的基础主题按浅色生效，
+ * 字号、行高与界面颜色都取应用的 CSS 变量（语法颜色归着色服务，见 `editor-highlighting.ts`），所以不声明 `dark`：CodeMirror 的基础主题按浅色生效，
  * 它按深浅色区分的几处（选区、光标、面板、浮层、特殊字符）在这里改写成变量。新开基础主题里的部件时，
  * 要在深色下看一眼是否还带着浅色默认值。
  */
@@ -116,7 +113,6 @@ export const editorTheme = [
       outline: "none",
     },
   }),
-  syntaxHighlighting(syntaxHighlighter),
   // CodeMirror 自带的跳转到行对话框的文案（查找用应用的查找条，不装它的搜索面板）。
   EditorState.phrases.of({
     "Go to line": "跳转到行",

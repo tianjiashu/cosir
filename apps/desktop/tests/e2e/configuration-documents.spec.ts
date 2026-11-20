@@ -201,3 +201,17 @@ test("Markdown 编辑器的格式快捷键优先于同键的全局快捷键", as
   await page.keyboard.press("ControlOrMeta+k");
   await expect(page.getByRole("dialog", { name: "命令面板" })).toBeVisible();
 });
+
+// 目的：Markdown 编辑器按着色服务的字形显示标题与强调，深色下照样；潜在缺陷：字形只以 CSS 变量给出却没人接，标题不再加粗。
+test("Markdown 编辑器：标题加粗、强调倾斜，深色下保持", async ({ page }) => {
+  await routeDocument(page, "/configuration/main-agent-prompt", { ...mainAgentPrompt, content: "# 主 Agent 协议\n*强调*" });
+  await page.goto("/configuration/main-agent");
+  const editor = page.getByRole("textbox", { name: "Markdown 源码编辑器" });
+  const heading = editor.locator(".shiki-token", { hasText: "主 Agent 协议" });
+  const emphasis = editor.locator(".shiki-token", { hasText: "强调" });
+  await expect(heading).toHaveCSS("font-weight", "700");
+  await expect(emphasis).toHaveCSS("font-style", "italic");
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await expect(heading).toHaveCSS("font-weight", "700");
+  await expect(emphasis).toHaveCSS("font-style", "italic");
+});

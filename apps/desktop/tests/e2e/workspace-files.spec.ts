@@ -780,3 +780,51 @@ test("工作区晚于第一帧到达：消息里的链接就绪后可点并在�
   const surface = page.getByTestId("workspace-files-surface");
   await expect(surface.getByRole("tab", { name: "main.py", exact: true })).toHaveAttribute("aria-selected", "true");
 });
+
+// 目的：文件阅读器的颜色来自与代码块同一个着色服务（Shiki），深色只靠 CSS 切换；大文件分段着色、不卡界面。
+// 潜在缺陷：编辑器另有一套配色；大文件一次着色几秒卡死主线程；滚到末尾颜色永远不出现。
+test("源码按 Shiki 着色，深色切换；万行文件分段着色不卡界面", async ({ page }) => {
+  await mockFiles(page);
+  const unit = Array.from({ length: 40 }, (_, index) => `export function step${index}(value: number): string {\n  const label = "第 ${index} 步";\n  return \`\${label}:\${value * ${index}}\`; // note\n}\n`).join("\n");
+  const big = Array.from({ length: 50 }, () => unit).join("\n");
+  await page.route("**/workspaces/*/files/text?*", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("path") !== "main.py") return route.fallback();
+    return route.fulfill({ json: { text: big, offset: 0, next_offset: null, size: big.length, version: "v1", encoding: "utf-8" } });
+  });
+  await page.route("**/workspaces/*/files/info?*", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("path") !== "main.py") return route.fallback();
+    // 路径不变（文本请求按它取），名字换成 .ts：语言按文件名认。
+    return route.fulfill({ json: { path: "main.py", name: "main.ts", root_path: "/workspace/demo", size: big.length, modified_ns: 1, version: "v1", kind: "text", mime: "text/plain", encoding: "utf-8" } });
+  });
+  // 主线程卡顿探针：每 10ms 一跳，记下两跳之间最长的间隔（无头浏览器不上报 longtask，这里直接量）。
+  await page.addInitScript(() => {
+    const probe = { last: performance.now(), worst: 0 };
+    (window as unknown as { jank: typeof probe }).jank = probe;
+    setInterval(() => {
+      const now = performance.now();
+      probe.worst = Math.max(probe.worst, now - probe.last);
+      probe.last = now;
+    }, 10);
+  });
+  await page.goto("/");
+  await page.getByRole("treeitem", { name: "demo", exact: true }).hover();
+  await page.getByRole("button", { name: "在 demo 中新建会话" }).click();
+  await page.getByRole("button", { name: "浏览工作区文件" }).click();
+  const surface = page.getByTestId("workspace-files-surface");
+  await surface.getByRole("treeitem", { name: "main.py", exact: true }).click();
+  const keyword = surface.locator(".cm-content .shiki-token").filter({ hasText: /^export$/ }).first();
+  await expect(keyword).toBeVisible();
+  const light = await keyword.evaluate((element) => getComputedStyle(element).color);
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await expect.poll(() => keyword.evaluate((element) => getComputedStyle(element).color)).not.toBe(light);
+
+  // 滚到末尾：之前的段在后台陆续算完，可视区里最后一个函数的颜色最终出现；期间没有长时间卡住主线程的任务。
+  // 只认可视区里的那一行：光标所在的第 1 行始终渲染、也带着颜色，不能拿它当「末尾着色了」。
+  await page.evaluate(() => { const probe = (window as unknown as { jank: { last: number; worst: number } }).jank; probe.worst = 0; probe.last = performance.now(); });
+  await surface.locator(".cm-scroller").evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  const lastFunction = surface.locator(".cm-line").filter({ hasText: "export function step39" }).last();
+  await expect(lastFunction).toBeInViewport();
+  await expect(lastFunction.locator(".shiki-token").filter({ hasText: /^export$/ })).toBeVisible({ timeout: 15_000 });
+  const longest = await page.evaluate(() => (window as unknown as { jank: { worst: number } }).jank.worst);
+  expect(longest).toBeLessThan(200);
+});

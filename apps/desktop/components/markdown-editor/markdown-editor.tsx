@@ -5,6 +5,9 @@ import { markdown } from "@codemirror/lang-markdown";
 
 import { editorTheme } from "@/components/code-editor/code-editor-theme";
 import { editorSetup } from "@/components/code-editor/editor-setup";
+import { editorHighlighting } from "@/components/code-editor/editor-highlighting";
+import { minimalChange } from "@/components/code-editor/minimal-change";
+import { markdownHighlighter } from "@/lib/syntax/highlighter";
 import { findInEditor, refreshFindInEditor, replaceInEditor } from "@/components/code-editor/editor-find";
 import { EditorFindScope } from "@/components/code-editor/editor-find-scope";
 import type { FindDirection, FindResult } from "@/lib/find/next-match";
@@ -54,11 +57,13 @@ function SourceEditor({ value, onChange, placeholder, ariaLabel, ref }: {
   }, [onChange]);
 
   useEffect(() => {
+    const highlighter = markdownHighlighter();
     const state = EditorState.create({
       doc: value,
       extensions: [
         editorSetup,
         markdown(),
+        ...(highlighter ? [editorHighlighting(highlighter)] : []),
         editorTheme,
         toggleClearance,
         EditorView.lineWrapping,
@@ -86,11 +91,10 @@ function SourceEditor({ value, onChange, placeholder, ariaLabel, ref }: {
 
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || view.state.doc.toString() === value) return;
+    const changes = view ? minimalChange(view.state, value) : null;
+    if (!view || !changes) return;
     suppressChangeRef.current = true;
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: value },
-    });
+    view.dispatch({ changes });
     suppressChangeRef.current = false;
   }, [value]);
 

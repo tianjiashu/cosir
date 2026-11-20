@@ -1,25 +1,20 @@
-import { code } from "@streamdown/code";
 import { cjk } from "@streamdown/cjk";
 import { math } from "@streamdown/math";
 import { mermaid } from "@streamdown/mermaid";
 import { defaultRehypePlugins, type MermaidOptions, type StreamdownProps } from "streamdown";
 import "katex/dist/katex.min.css";
 
-import { syntaxTheme } from "@/lib/syntax/shiki-theme";
-
 import { useThemeState, type ThemeState } from "@/lib/theme/theme-preference";
-
-/** 代码块的 Shiki 主题（`lib/syntax/shiki-theme.ts`）；浅色、深色两格是同一个，颜色随 `.dark` 切换。 */
-export const markdownShikiTheme: NonNullable<StreamdownProps["shikiTheme"]> = [syntaxTheme, syntaxTheme];
+import { codeHighlightPlugin } from "./code-highlight-plugin";
 
 /**
  * 所有 Markdown 渲染面共用的 Streamdown 插件配置（流式的 `MarkdownText` 与整篇渲染的 `StaticMarkdown`）。
  *
  * 该配置只声明解析与展示能力，不负责消息状态、流式传输或持久化。模块级单例保证消息 token 更新时
- * 不会重新创建插件对象。
+ * 不会重新创建插件对象。代码块着色用全应用唯一的着色服务（`code-highlight-plugin.ts`）。
  */
 export const markdownPlugins = {
-  code,
+  code: codeHighlightPlugin,
   math,
   mermaid,
   cjk,

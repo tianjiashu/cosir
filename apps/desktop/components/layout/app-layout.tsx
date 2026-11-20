@@ -265,8 +265,6 @@ export function AppLayout() {
       onOpenWorkspaceConfiguration={(workspaceId) => navigate(configurationPath(workspaceId))}
       onOpenObserver={() => navigate(focusedSessionId ? `/session-observer?session_id=${focusedSessionId}` : "/session-observer", { state: { returnTo: focusedSessionId ? `/sessions/${focusedSessionId}` : undefined } })}
       onOpenSearch={() => setPaletteOpen(true)}
-      onAddWorkspace={() => void actions.addWorkspaceFromFolder()}
-      addingWorkspace={actions.addingWorkspace}
       onRequestDelete={(target) => void actions.requestDelete(target)}
     />
   );

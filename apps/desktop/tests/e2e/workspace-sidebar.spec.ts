@@ -109,9 +109,9 @@ for (const theme of ["light", "dark"]) {
     // 侧栏开关的 aria-expanded 表示侧栏展开，不是菜单展开：平时不带底色。
     await expect(page.getByRole("button", { name: "切换侧栏" })).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     // 侧栏里的图标按钮悬停同样看得见。
-    const addWorkspace = page.getByRole("button", { name: "添加工作区", exact: true });
-    await addWorkspace.hover();
-    await expect.poll(() => addWorkspace.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(hoverColor);
+    const toggle = page.getByRole("button", { name: "切换侧栏" });
+    await toggle.hover();
+    await expect.poll(() => toggle.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(hoverColor);
 
     await selected.hover();
     const menuButton = selected.getByRole("button", { name: `更多操作：${longTitle}`, exact: true });
@@ -403,7 +403,7 @@ test("有事等你操作的会话留在可见范围内，即使它的 Run 早已
   await expect(row(page, "批量会话 0")).toHaveCount(0);
 });
 
-test("区头：搜索打开命令面板，添加工作区后在新工作区开始新会话", async ({ page, request }) => {
+test("搜索打开命令面板；在新会话页的工作区选择器里新建工作区后在新工作区开始新会话", async ({ page, request }) => {
   await installFakeDesktopHost(page, { directory: "/Users/me/projects/新项目" });
   await seedSidebar(page, request, "light");
   const at = new Date().toISOString();
@@ -427,7 +427,9 @@ test("区头：搜索打开命令面板，添加工作区后在新工作区开�
   await expect(page.getByRole("dialog", { name: "命令面板" })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  await page.getByRole("button", { name: "添加工作区", exact: true }).click();
+  await page.getByRole("button", { name: "新会话", exact: true }).click();
+  await page.getByRole("button", { name: `选择工作区，当前 ${workspaceName}` }).click();
+  await page.getByRole("button", { name: "新建工作区", exact: true }).click();
   await expect(row(page, "新项目")).toBeVisible();
   expect(created).toEqual([{ name: "新项目", root_path: "/Users/me/projects/新项目" }]);
   await expect(page).toHaveURL(`${WEB_ORIGIN}/`);

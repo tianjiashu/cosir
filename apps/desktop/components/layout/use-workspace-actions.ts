@@ -49,9 +49,9 @@ export function useWorkspaceActions(catalog: WorkspaceCatalog, focusedSessionId:
   const { selectWorkspace, selectedWorkspaceId, workspaces } = catalog;
 
   /**
-   * 从文件夹添加工作区（侧栏区头与新会话页选择器共用）：系统目录选择 → 创建 → 选中新工作区并来到
+   * 从文件夹添加工作区（新会话页工作区选择器的「新建工作区」）：系统目录选择 → 创建 → 选中新工作区并来到
    * 新会话页（它随推送进入目录）。用户取消目录选择不算失败；返回是否真的添加了一个。
-   * 进行中的再次调用直接忽略，两处入口据 `addingWorkspace` 显示忙碌。
+   * 进行中的再次调用直接忽略，选择器据 `addingWorkspace` 显示忙碌。
    */
   const addWorkspaceFromFolder = useCallback(async (): Promise<boolean> => {
     if (addPending.current) return false;

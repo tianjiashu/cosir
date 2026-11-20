@@ -5,6 +5,7 @@ import { RootErrorBoundary } from "@/components/render-isolation/root-error-boun
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { installGlobalFrontendErrorHandlers } from "@/lib/logging/global-error-handlers";
 import { titlebarMode } from "@/lib/platform";
+import { initHighlighting } from "@/lib/syntax/highlighter";
 import { installThemePreferenceSync } from "@/lib/theme/theme-preference";
 import { App } from "./App";
 
@@ -24,10 +25,14 @@ const root = ReactDOM.createRoot(document.getElementById("root")!, {
   },
 });
 
-root.render(
-  <React.StrictMode>
-    <RootErrorBoundary>
-      <App />
-    </RootErrorBoundary>
-  </React.StrictMode>,
-);
+// 着色引擎（WASM）先就绪，之后着色全部同步，Markdown 编辑器挂载即着色；初始化失败只记日志，全应用按原文显示
+// （见 `lib/syntax/highlighter.ts`）。
+void initHighlighting()
+  .catch((error: unknown) => frontendLog("ERROR", "highlight_engine_init_failed", "代码着色引擎初始化失败", { error }))
+  .finally(() => root.render(
+    <React.StrictMode>
+      <RootErrorBoundary>
+        <App />
+      </RootErrorBoundary>
+    </React.StrictMode>,
+  ));

@@ -17,6 +17,11 @@ const markdown = [
   "print(1)",
   "```",
   "",
+  "```md",
+  "# 标题",
+  "*强调*",
+  "```",
+  "",
   "```mermaid",
   "sequenceDiagram",
   "    participant P as 规划(planner)",
@@ -133,3 +138,27 @@ for (const scheme of ["light", "dark"] as const) {
     await expect(page).toHaveURL(/\/sessions\/100$/);
   });
 }
+
+// 目的：代码块用全应用唯一的着色服务（GitHub 浅色 / 深色），深色只靠 CSS 切换；潜在缺陷：换插件后不着色或深色不生效。
+test("代码块按 GitHub 主题着色，深色模式切到深色配色", async ({ page }) => {
+  const token = page.locator('.aui-md [data-streamdown="code-block-body"] span').filter({ hasText: /^print$/ }).first();
+  await expect(token).toBeVisible();
+  const light = await token.evaluate((element) => getComputedStyle(element).color);
+  const darkVar = await token.evaluate((element) => element.style.getPropertyValue("--shiki-dark"));
+  expect(light).not.toBe(await page.locator(".aui-md p").first().evaluate((element) => getComputedStyle(element).color));
+  expect(darkVar).toMatch(/^#/);
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await expect.poll(() => token.evaluate((element) => getComputedStyle(element).color)).not.toBe(light);
+});
+
+// 目的：代码块里的标题加粗、强调倾斜，与编辑器一致；潜在缺陷：字形只以 CSS 变量给出，代码块里没人接。
+test("代码块显示语法的字形，深色下保持", async ({ page }) => {
+  const body = page.locator('.aui-md [data-streamdown="code-block-body"]');
+  const heading = body.locator("span[style]").filter({ hasText: /^# 标题$/ });
+  const emphasis = body.locator("span[style]").filter({ hasText: /^\*强调\*$/ });
+  await expect(heading).toHaveCSS("font-weight", "700");
+  await expect(emphasis).toHaveCSS("font-style", "italic");
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await expect(heading).toHaveCSS("font-weight", "700");
+  await expect(emphasis).toHaveCSS("font-style", "italic");
+});
