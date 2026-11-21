@@ -2,14 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 
-import { backendBaseUrl, launchDesktop, openNewConversation, unstartedSession } from "./desktop-app";
+import { backendBaseUrl, launchDesktop, openNewConversation, unstartedSession, waitForAppShell } from "./desktop-app";
 import { attachFirstFrame } from "./attach-first-frame";
 
 test("starts the host, reaches the workspace shell and isolates its data under the given home", async () => {
   const { app, page, home } = await launchDesktop();
   try {
     await expect(page).toHaveTitle("Cosir");
-    await expect(page.getByRole("navigation", { name: "工作区会话列表" })).toBeVisible({ timeout: 120_000 });
+    await waitForAppShell(page);
     await expect(page.getByText("无法连接本机后端")).toHaveCount(0);
     expect(await backendBaseUrl(page)).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(fs.existsSync(path.join(home, ".cosir", "storage"))).toBe(true);
@@ -39,7 +39,7 @@ function backendLogEvents(home: string): string[] {
 test("the host connects its tool link to the backend", async () => {
   const { app, page, home } = await launchDesktop();
   try {
-    await expect(page.getByRole("navigation", { name: "工作区会话列表" })).toBeVisible({ timeout: 120_000 });
+    await waitForAppShell(page);
     await expect.poll(() => backendLogEvents(home).includes("host_link_connected"), { timeout: 15_000 }).toBe(true);
     expect(backendLogEvents(home)).not.toContain("host_link_rejected");
   } finally {
@@ -50,7 +50,7 @@ test("the host connects its tool link to the backend", async () => {
 test("closing the main window only hides it; the backend keeps running", async () => {
   const { app, page } = await launchDesktop();
   try {
-    await expect(page.getByRole("navigation", { name: "工作区会话列表" })).toBeVisible({ timeout: 120_000 });
+    await waitForAppShell(page);
     const baseUrl = await backendBaseUrl(page);
 
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
@@ -64,7 +64,7 @@ test("closing the main window only hides it; the backend keeps running", async (
 
 test("quitting stops the backend process tree", async () => {
   const { app, page } = await launchDesktop();
-  await expect(page.getByRole("navigation", { name: "工作区会话列表" })).toBeVisible({ timeout: 120_000 });
+  await waitForAppShell(page);
   const baseUrl = await backendBaseUrl(page);
 
   await app.evaluate(({ app: electronApp }) => electronApp.quit());
@@ -83,7 +83,7 @@ test("quitting stops the backend process tree", async () => {
 test("opens and reloads a conversation through the real attach first frame", async () => {
   const { app, page, home } = await launchDesktop();
   try {
-    await expect(page.getByRole("navigation", { name: "工作区会话列表" })).toBeVisible({ timeout: 120_000 });
+    await waitForAppShell(page);
     const base = await backendBaseUrl(page);
     const workspacePath = path.join(home, "workspace");
     fs.mkdirSync(workspacePath);

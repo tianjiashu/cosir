@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import uuid
 from pathlib import Path
@@ -165,6 +166,7 @@ def test_default_shell_outside_the_catalog_keeps_one_kind(monkeypatch) -> None:
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="账户数据库（pwd）只在 POSIX 上有；Windows 不调用它")
 def test_user_default_shell_falls_back_to_the_account_login_shell(monkeypatch) -> None:
     """``$SHELL`` 未设置时取账户数据库里的登录 shell（交互终端 auto 与登录环境解析共用）。"""
     import pwd

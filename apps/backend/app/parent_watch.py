@@ -1,9 +1,9 @@
 """宿主存活检测：桌面宿主消失时后端自行退出。
 
 桌面宿主（Electron main 进程）以一条管道作为后端的 stdin，从不写入，并注入
-``CODING_AGENT_PARENT_PIPE=stdin``。宿主主动停止后端时关闭这条管道；宿主崩溃或被强杀时由操作系统
-关闭它。这里读到 EOF 即发起退出——两种情况走同一条路径，同时覆盖 macOS 与 Windows，后端不会被遗留成
-占着端口与 SQLite 的孤儿。
+``CODING_AGENT_PARENT_PIPE=stdin``。宿主主动停止后端时关闭这条管道；POSIX 上宿主崩溃或被强杀时由操作系统
+关闭它。这里读到 EOF 即发起退出——两种情况走同一条路径，后端不会被遗留成占着端口与 SQLite 的孤儿。Windows
+上宿主崩溃走不到这里：Node 把后端放进随宿主结束的 Job Object，系统直接结束后端及其子进程。
 
 退出走 uvicorn 自己的信号处理（SIGINT 在两个平台都触发优雅关闭，lifespan 照常收尾）；若优雅关闭
 在 ``_HARD_EXIT_AFTER_SECONDS`` 内没有完成，最后强制结束进程，保证宿主消失后后端一定会退出。

@@ -360,7 +360,10 @@ def test_windows_ctrl_c_is_delivered_and_isolated_per_conpty_session(
         _raw(first, b"\x03")
         assert wait_for_prompt_after(
             first_events, first_output_offset, prompt, 5
-        ), "Ctrl+C did not return the first shell to its prompt"
+        ), (
+            "Ctrl+C did not return the first shell to its prompt; output after Ctrl+C: "
+            f"{output_bytes(first_events)[first_output_offset:][-1500:]!r}"
+        )
         _line(first, first_recovered)
         assert wait_for_output(first_events, first_recovered_marker, 5), (
             "Ctrl+C did not return the first shell to a usable prompt: "
@@ -435,10 +438,11 @@ async def test_session_shell_state_survives_run_completion_and_cancellation(
     monkeypatch.setattr(
         service_depends, "get_terminal_session_service", singleton_getter(lambda: terminal)
     )
+    # 要等 shell 集成就绪，Windows 上只有 PowerShell 有集成（cmd 没有）。
     runtime = terminal.start(
         session_id=1,
         cwd=str(tmp_path),
-        shell="cmd" if os.name == "nt" else "bash",
+        shell="powershell" if os.name == "nt" else "bash",
     )
     wait_for_integration(runtime)
     terminal_session_id = runtime.terminal_session_id
@@ -459,7 +463,7 @@ async def test_session_shell_state_survives_run_completion_and_cancellation(
 
     try:
         set_command = (
-            "set COSIR_TERMINAL_STATE=kept"
+            "$env:COSIR_TERMINAL_STATE = 'kept'"
             if os.name == "nt"
             else "export COSIR_TERMINAL_STATE=kept"
         )
@@ -473,7 +477,7 @@ async def test_session_shell_state_survives_run_completion_and_cancellation(
         assert session_line.startswith(f"session {terminal_session_id}")
         assert " · running" in session_line
         command = (
-            "echo STATE:%COSIR_TERMINAL_STATE%"
+            "Write-Output ('STATE:' + $env:COSIR_TERMINAL_STATE)"
             if os.name == "nt"
             else 'printf "STATE:%s\\n" "$COSIR_TERMINAL_STATE"'
         )
@@ -484,3 +488,139 @@ async def test_session_shell_state_survives_run_completion_and_cancellation(
         cancellation_registry.consume(1)
         terminal.shutdown()
     assert active_session_ids(terminal) == []
+
+
+# —— Windows：会话模式的 Job Object 清理（POSIX 的同类行为见上面三条按会话号清理的用例） ——
+
+# PowerShell 起一个 60 秒的 ping 并报出它的 PID；不用双引号，免得经过命令行转义。
+_WINDOWS_GRANDCHILD = (
+    "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','60','127.0.0.1' "
+    "-WindowStyle Hidden -PassThru; Write-Output ('JOB_PIDS:' + $p.Id)"
+)
+
+
+def _windows_powershell_spec(script: str) -> ShellSpec:
+    executable = shutil.which("powershell.exe") or "powershell.exe"
+    return ShellSpec(
+        "powershell",
+        executable,
+        (executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script),
+        integration="off",
+    )
+
+
+def _windows_survivors(pids: list[int], timeout: float) -> list[int]:
+    from tests.process_tree_support import kill, survivors
+
+    left = survivors(pids, timeout=timeout)
+    for pid in left:
+        kill(pid)
+    return left
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object cleanup")
+@requires_terminal_worker
+def test_windows_close_kills_processes_started_in_the_session(tmp_path: Path) -> None:
+    """目的：关闭会话时结束 shell 起的全部进程（作业清理），不只是 shell。"""
+
+    events: list[dict[str, object]] = []
+    worker = ProcessTerminalWorker("windows-job-close-test")
+    try:
+        worker.start(
+            _windows_powershell_spec(f"{_WINDOWS_GRANDCHILD}; Start-Sleep -Seconds 60"),
+            str(tmp_path),
+            events.append,
+        )
+        pids = _wait_reported_pids(events, "JOB_PIDS:")
+    finally:
+        worker.close()
+
+    assert _windows_survivors(pids, timeout=5) == [], "process started in the session survived"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object cleanup")
+@requires_terminal_worker
+def test_windows_processes_left_by_a_shell_that_exits_by_itself_are_cleaned(tmp_path: Path) -> None:
+    """目的：shell 自己退出后，它起的进程仍随作业清理。
+    潜在缺陷：只在关闭会话时结束作业，shell 自然退出的路径漏掉清理。"""
+
+    events: list[dict[str, object]] = []
+    exited = threading.Event()
+
+    def on_event(event: dict[str, object]) -> None:
+        events.append(event)
+        if event.get("type") == "exit":
+            exited.set()
+
+    worker = ProcessTerminalWorker("windows-job-shell-exit-test")
+    try:
+        worker.start(_windows_powershell_spec(_WINDOWS_GRANDCHILD), str(tmp_path), on_event)
+        pids = _wait_reported_pids(events, "JOB_PIDS:")
+        assert exited.wait(15), f"worker did not report shell exit: {events!r}"
+        left = _windows_survivors(pids, timeout=5)
+    finally:
+        worker.close()
+
+    assert left == [], "process left by the exited shell survived"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object cleanup")
+@requires_terminal_worker
+def test_windows_worker_cleans_up_when_the_backend_is_killed(tmp_path: Path) -> None:
+    """目的：后端被强杀时 worker 读到 stdin EOF，结束作业后自己退出。"""
+
+    from tests.process_tree_support import alive, kill
+
+    pid_file = tmp_path / "job.pid"
+    command = (
+        "$p = Start-Process -FilePath ping.exe -ArgumentList '-n','60','127.0.0.1' "
+        f"-WindowStyle Hidden -PassThru; Set-Content -Path '{pid_file}' -Value $p.Id; Start-Sleep -Seconds 60"
+    )
+    script = f"""
+import threading, time
+from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker, ShellSpec
+
+handshake = threading.Event()
+worker_pid = []
+def on_event(event):
+    if event.get("type") == "handshake":
+        worker_pid.append(event["pid"])
+        handshake.set()
+executable = {shutil.which("powershell.exe") or "powershell.exe"!r}
+spec = ShellSpec(
+    "powershell", executable,
+    (executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", {command!r}),
+    integration="off",
+)
+ProcessTerminalWorker("windows-backend-kill-test").start(spec, {str(tmp_path)!r}, on_event)
+handshake.wait(10)
+print(f"WORKER_PID:{{worker_pid[0]}}", flush=True)
+time.sleep(60)
+"""
+    backend = subprocess.Popen(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert backend.stdout is not None
+        line = backend.stdout.readline()
+        assert line.startswith("WORKER_PID:"), line
+        worker_pid = int(line.split(":", 1)[1])
+        deadline = time.monotonic() + 30
+        while not (pid_file.exists() and pid_file.read_text(encoding="utf-8-sig").strip()):
+            assert time.monotonic() < deadline, "job pid was not written"
+            time.sleep(0.1)
+        job_pid = int(pid_file.read_text(encoding="utf-8-sig").strip())
+        assert alive(worker_pid) and alive(job_pid)
+
+        kill(backend.pid)
+        backend.wait(10)
+
+        assert _windows_survivors([job_pid], timeout=10) == [], "session job survived the backend"
+        assert _windows_survivors([worker_pid], timeout=10) == [], "worker survived the backend"
+    finally:
+        if backend.poll() is None:
+            backend.kill()

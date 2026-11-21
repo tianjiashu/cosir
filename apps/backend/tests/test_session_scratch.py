@@ -129,6 +129,29 @@ def test_deleted_sessions_lose_their_scratch_including_read_only_files(
     assert paths.session_scratch_dir(2).exists()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows 才会因文件被占用而删不掉")
+def test_a_locked_scratch_is_left_logged_and_reclaimed_at_next_startup(
+    home: Path, synchronous_removal: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """目的：文件被进程占用时删除失败只记日志、不抛到会话删除里；占用解除后启动对账补删。
+    潜在缺陷：删除异常冒出后台线程或被静默吞掉，目录永远留在 ``.cosir/scratch``。"""
+
+    warnings: list[str] = []
+    monkeypatch.setattr(session_scratch.log, "warning", lambda event, **_kwargs: warnings.append(event))
+    locked = paths.session_scratch_dir(1) / "build.log"
+    # Python 在 Windows 上打开文件不带 FILE_SHARE_DELETE：握着句柄时删不掉，模拟编译器或杀毒软件占着文件。
+    with locked.open("w", encoding="utf-8") as handle:
+        handle.write("in use")
+        session_scratch.remove_session_scratch({1})
+        assert warnings == ["session_scratch_remove_failed"]
+        assert paths.session_scratch_dir(1).exists()
+
+    session_scratch.reclaim_orphan_scratch(lambda ids: ids & {2})
+
+    assert not paths.session_scratch_dir(1).exists()
+    assert paths.session_scratch_dir(2).exists()
+
+
 def test_startup_reconciliation_removes_only_orphans(home: Path, synchronous_removal: None) -> None:
     root = paths.system_scratch_dir()
     (root / "notes").mkdir()  # 名字不是会话 id 的条目不归它管

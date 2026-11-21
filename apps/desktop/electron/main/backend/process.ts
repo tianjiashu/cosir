@@ -18,8 +18,9 @@ export type BackendLaunch = {
  * 拉起后端进程。后端始终是宿主的直接子进程。
  *
  * 宿主存活契约：stdin 是一条宿主从不写入的管道，并注入 `CODING_AGENT_PARENT_PIPE=stdin`；后端读到 EOF
- * 即优雅退出。宿主主动停止时关闭它（见 `stopProcessTree`），宿主崩溃或被强杀时由操作系统关闭它，两种情况
- * 走同一条退出路径，同时覆盖 macOS 与 Windows。
+ * 即优雅退出。宿主主动停止时关闭它（见 `stopProcessTree`），POSIX 上宿主崩溃或被强杀时由操作系统关闭它，两种
+ * 情况走同一条退出路径。Windows 上不 `detached` 的子进程被 Node（libuv）放进随宿主结束的 Job Object：宿主崩溃
+ * 时后端连同它的子进程被系统直接结束，不走优雅关闭，但同样不留孤儿（启动冒烟 `scripts/verify-desktop-launch.mjs`）。
  *
  * POSIX 上 `detached` 让后端成为进程组长，强杀兜底时可以对整组发信号（含后端拉起的工具子进程）。
  * stdout / stderr 逐行写入 `backend-console` 日志，用于排查后端在结构化日志可用之前的启动与崩溃问题。

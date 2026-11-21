@@ -313,6 +313,24 @@ def test_read_command_returned_waits_for_running_command(monkeypatch, tmp_path: 
     assert "exit 2" in box["result"].text
 
 
+@pytest.mark.parametrize(("success", "phrase"), [(True, "succeeded"), (False, "failed")])
+def test_a_result_without_exit_code_is_reported_as_success_or_failure(
+    monkeypatch, tmp_path: Path, success: bool, phrase: str
+) -> None:
+    """目的：只报成败的 shell（PowerShell 的 ``$?``，没有退出码）照实写成败。
+    潜在缺陷：按退出码拼文案，Agent 读到 ``returned exit None``，分不清命令成没成。"""
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
+    terminal_session_id = start(service, tmp_path)
+    workers[0].shell("command_started", command="Get-Item missing")
+    thread, box = run_in_thread(lambda: read(
+        service, terminal_session_id, wait=TerminalWait(until="command_returned", timeout_ms=5000)))
+    time.sleep(0.05)
+    workers[0].shell("command_returned", result={"success": success, "code": None, "code_kind": None})
+    thread.join(1)
+    assert f"`Get-Item missing` returned {phrase}" in box["result"].text
+    assert "exit None" not in box["result"].text
+
+
 @pytest.mark.parametrize("ending", ["session_exit", "prompt_back"])
 def test_command_returned_only_counts_commands_that_really_ended(
     monkeypatch, tmp_path: Path, ending: str

@@ -186,7 +186,7 @@ Electron 桌面应用
 - 宿主显示窗口后在后台启动后端；窗口显示与后端 readiness 解耦。React 通过 boot gate 呈现 `starting`、`ready`、`failed`，不得假定页面出现时后端已经可用。
 - 后端绑定 `127.0.0.1`，桌面模式由宿主动态分配端口。前端只从宿主的后端快照（`window.cosirHost.backend`，带 `generation`，过期快照丢弃）取地址，订阅推送、不轮询，不得硬编码生产端口；开发或测试 fallback 端口不是桌面生产契约。
 - 宿主负责等待 bootstate 与 `/health`、报告失败、有限重试以及退出时清理后端进程树（先关闭后端 stdin 请求优雅退出，宽限期后强杀进程树）。`/health` 仅表示 liveness，不代表数据库和模型已全部可用。
-- 宿主存活契约：后端的 stdin 是宿主持有、从不写入的管道（`CODING_AGENT_PARENT_PIPE=stdin`），后端读到 EOF 即经 uvicorn 优雅关闭自行退出（`app/parent_watch.py`）。宿主主动停止时关闭这条管道，宿主崩溃或被强杀时由操作系统关闭它，两者是同一条退出路径，后端不会被遗留成孤儿进程。
+- 宿主存活契约：后端的 stdin 是宿主持有、从不写入的管道（`CODING_AGENT_PARENT_PIPE=stdin`），后端读到 EOF 即经 uvicorn 优雅关闭自行退出（`app/parent_watch.py`）。宿主主动停止时关闭这条管道，POSIX 上宿主崩溃或被强杀时由操作系统关闭它，两者是同一条退出路径；Windows 上 Node 把后端放进随宿主结束的 Job Object，宿主崩溃时后端连同子进程被系统直接结束、不走优雅关闭。两个平台都不留孤儿进程（`.github/workflows/desktop-host.yml` 的启动冒烟守着）。
 - 关闭主窗口只隐藏到托盘；真正退出只有一条路径：托盘「退出并停止运行」、Cmd+Q、应用菜单与 Dock 退出都经 `before-quit` → 退出确认（有运行中终端会话时提醒）→ `will-quit` 停止后端。应用单实例，二次启动只唤起已有窗口。
 - 后端 lifespan 负责初始化和关闭数据库、各 Session 的调度 actor（经 `session_runtime_spaces`）与 Run 执行、运行期依赖与观测组件。工具在后端进程的线程内执行，需要中途停下的工具自己轮询取消信号；终端命令进程（`execute_terminal` 与交互终端）只由 Terminal Worker 启动与清理，worker 自成会话，后端被强杀时读到 stdin EOF 自行收尾。
 - MCP 服务连接归进程级 `MCPConnectionPool`（`app/tools/mcp/`）所有：在独立事件循环线程上按「定义作用域 + 使用的工作区 + 服务名」一条长连接（系统级服务在每个工作区各一条；stdio 服务即常驻子进程，以使用的工作区根为 cwd 并作为 roots 告诉服务，stderr 落 `.cosir/logs/mcp/`），首次调用时建立、连接指纹（变量已展开）变化或断线后重建、空闲回收，后端退出时经 `close_service_dependencies` 关闭；失败的调用不在池内重放。配置文件是唯一事实源（值可写 `${VAR}`，规则只在 `mcp/variable_references.py`），池不接收变更通知；配置界面的连接测试走一次性短连接、从不交互（需要授权只得出「需要登录授权」）；只有配置页的「登录授权」会打开浏览器（两段式流程在 `service/configuration/mcp/oauth_flows.py`，建连用的 provider 与回调监听在 `tools/mcp/oauth/`），Agent 调用授权失效即报错；失败原因只在 `tools/mcp/failure.py` 归类，配置页服务的主状态只在 `mcp/configuration_view.py` 推导。Skill 与 MCP 都分系统级与 workspace 级（布局相同，`service/configuration/extension_scope.py`），Agent 看到两层合并、workspace 同名覆盖；Skill 每层两种身份（`skills/skill_root.py`）：cosir 专属 `.cosir/skills`（导入落这里）与共享 `.agents/skills`（Codex 等也读，系统级在用户主目录），对 Agent 平等，同名先按指纹去重、真冲突时 workspace 压过系统、专属压过共享；「测试通过」（认原样定义，换 Key 不用重测）、测试时拿到的服务目录（工具与服务说明；延迟工具目录与提示词里的服务说明只读它，连接池拿到新目录时回写）与 OAuth 令牌是同一份本机记录，只在系统级 `mcp_machine_state.json`（`mcp/machine_state.py`），workspace 配置随仓库共享也带不进来。
@@ -348,15 +348,10 @@ Agent 派生（委派、fork）目前只按派生深度限制层数，以下上�
 - [ ] **宽度上限**：同一个根下同时活动的派生 Session 数量；计数须与创建同事务，`send_message` 激活的 Session 也要算进去。
 - [ ] **调用次数上限**：单个 Run 内的派生调用次数。
 
-Electron 桌面宿主目前只在 macOS 上验证过，以下 Windows 行为尚未实测（逐项验证后勾掉；方案与已验证范围见 `docs/plan/electron-host-migration-design.md` 第 12、14 节）：
+桌面宿主的进程、Worker、临时目录、窗口外框与启动入口由 CI（`.github/workflows/desktop-host.yml`，Windows Server / macOS / Linux 跑机）守着；以下 Windows 行为 CI 覆盖不到或尚未通过：
 
-- [ ] **后端进程树清理**：退出时关闭 stdin 后后端优雅退出并清掉 Terminal Worker 与 MCP stdio 服务；宽限期后 `taskkill /T /F` 兜底。
-- [ ] **Terminal Worker 进程清理**：会话与执行两种模式的 Job Object（挂入前的启动竞态已接受），执行模式下 cmd 的原文传参（`raw_args`）与 `CREATE_NO_WINDOW`（`apps/terminal-worker/src/containment.rs`、`exec.rs`）。
-- [ ] **宿主存活契约**：宿主被强杀后，后端经 stdin EOF（`app/parent_watch.py`，Windows 分支用 `raise_signal`）自行优雅退出，不留孤儿进程。
-- [ ] **会话临时目录回收**：删除会话与启动对账能删掉 `.cosir\scratch\<id>`，含只读文件（先清只读属性再删）；文件被进程、杀毒或索引占用时删除失败只记日志，下次启动对账补删（`service/session/session_scratch.py`）。
-- [ ] **窗口外框**：`titleBarOverlay` 透明底色、窗口按钮颜色随外观偏好切换、右上角安全区让位（`lib/platform.ts` / `globals.css`）。
-- [ ] **启动与测试入口**：`scripts/start-desktop.ps1`、`npm run electron:dev`、`npm run test:e2e:desktop` 在 Windows 上可用。
-- [ ] **终端交互**：PSReadLine / cmd 的多行粘贴确认、Ctrl+方向键按词移动、ConPTY 下的重排（Windows 10 需宿主上报构建号，尚未做）、`C:\` 路径链接、复制输出的换行（清单见 `docs/plan/terminal-gap-assessment.md` §7.4）。Agent 填入的 bracketed paste 包裹在 PSReadLine / ConPTY 下未验证。
+- [ ] **终端交互**：用户多行粘贴的确认（前端 xterm）、ConPTY 下的重排（Windows 10 需宿主上报构建号，尚未做，跑机不是 Win10）、`C:\` 路径链接、复制输出的换行。Agent 填入（括号粘贴）与 Ctrl+方向键按词移动已由 CI 验证。
+- [ ] **内置浏览器引擎**：未摆上面板的标签 `Page.captureScreenshot` 无响应，iframe 内点击与 body 滚动结果与 macOS 不同（`browser-engine.spec.ts`，CI 上 Windows 这一步 `continue-on-error`，查清后去掉）。
 
 内置浏览器工具（`app/tools/tool_handler/browser/`）以下行为暂不处理，待真实任务出现需求或失败案例后再定：
 

@@ -86,20 +86,27 @@ class _Terminal:
         return self.read(tail=400)
 
 
+_WINDOWS = os.name == "nt"
+
+
 def test_integration_ready_and_command_output_range(terminal: _Terminal) -> None:
+    """PowerShell 的集成只报成败（``$?``）、不报退出码，所以 Windows 上看 ``succeeded`` / ``failed``。"""
     assert "shell integration" not in terminal.runtime.snapshot().summary
-    result = terminal.run_user("printf 'alpha\\nbeta\\n'")
+    two_lines = "Write-Output alpha; Write-Output beta" if _WINDOWS else "printf 'alpha\\nbeta\\n'"
+    result = terminal.run_user(two_lines)
     header = next(line for line in result.text.splitlines() if "output lines" in line)
-    assert "exit 0" in header, result.text
+    assert ("succeeded" if _WINDOWS else "exit 0") in header, result.text
     start, end = (int(n) for n in header.split("output lines ")[1].split(" ")[0].split("-"))
     ranged = terminal.read(start_line=start, limit=end - start + 1)
     assert [line.split("│", 1)[1] for line in ranged.text.splitlines()[-2:]] == ["alpha", "beta"]
-    failed = terminal.run_user("false")
-    assert "exit 1" in failed.text and "no output" in failed.text
+    # 原生程序非零退出、不输出：PowerShell 的 $? 为假。
+    failed = terminal.run_user("cmd /c exit 1" if _WINDOWS else "false")
+    assert ("failed" if _WINDOWS else "exit 1") in failed.text and "no output" in failed.text, failed.text
 
 
 def test_line_numbers_survive_scroll_and_clear(terminal: _Terminal) -> None:
-    numbered = terminal.run_user("for i in $(seq 1 60); do echo row$i; done")
+    rows = "1..60 | ForEach-Object { 'row' + $_ }" if _WINDOWS else "for i in $(seq 1 60); do echo row$i; done"
+    numbered = terminal.run_user(rows)
     row1 = next(line for line in numbered.text.splitlines() if line.endswith("│row1"))
     number = int(row1.split("│")[0])
     terminal.run_user("clear")
@@ -143,8 +150,7 @@ def test_full_screen_app_screen_view_and_stable_line_numbers(terminal: _Terminal
 
 def test_prefill_fills_the_prompt_without_running_it(terminal: _Terminal) -> None:
     """填入只把命令写进行里：屏幕上出现文本，但没有出现命令输出；用户回车后才执行。"""
-    if os.name == "nt":
-        pytest.skip("prefill output check is POSIX-only")
+    # Windows 上验证的是 PSReadLine 经 ConPTY 收到括号粘贴：整段进编辑行、不执行、不弹多行粘贴确认。
     wait_until(lambda: terminal.runtime._observation.phase == "editing")
     terminal.prefill("echo PREFILLED")
     time.sleep(1)
@@ -163,8 +169,10 @@ def test_prefill_fills_the_prompt_without_running_it(terminal: _Terminal) -> Non
 
 def test_match_reports_running_command(terminal: _Terminal) -> None:
     terminal.user("sleep 0.3; echo READY-NOW; sleep 30")
+    # 锚定整行：只认命令输出的那一行。不加 ^ 时，命令行回显到一半（``…; echo READY-NOW`` 还没接上
+    # ``; sleep 30``）就会被匹配到，此时命令还没开始，commandRunning 仍是 False（各 shell 都会偶发）。
     started = terminal.read(
-        wait=TerminalWait(until="match", pattern="READY-NOW$", timeout_ms=10000)
+        wait=TerminalWait(until="match", pattern="^READY-NOW$", timeout_ms=10000)
     )
     assert started.wait_result["end_reason"] == "matched", started.text
     # 命令执行中投影 commandRunning，前端据此决定关闭时是否确认。
@@ -213,3 +221,16 @@ def test_quiet_wait_without_command_return(terminal: _Terminal) -> None:
         and command.status != "executing",
         timeout=10,
     )
+
+
+def test_ctrl_left_moves_by_word_in_psreadline(terminal: _Terminal) -> None:
+    """目的：xterm 的 Ctrl+← 序列经 ConPTY 变成带 Ctrl 的按键，PSReadLine 按词后退。
+    潜在缺陷：ConPTY 把 ``ESC[1;5D`` 当成普通 ←，只退一个字符，插入点落在 ``de|f``。"""
+    if not _WINDOWS:
+        pytest.skip("PSReadLine word movement is Windows-only")
+    wait_until(lambda: terminal.runtime._observation.phase == "editing")
+    terminal.user_bytes(b"Write-Output abc def")
+    terminal.user_bytes(b"\x1b[1;5D")  # Ctrl+←：退到 def 的开头
+    terminal.user_bytes(b"X\r")
+    result = terminal.read(wait=TerminalWait(until="match", pattern="^Xdef$", timeout_ms=5000))
+    assert result.wait_result["end_reason"] == "matched", result.text
