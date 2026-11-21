@@ -3,11 +3,14 @@
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.tools.tool_models.browser_args._shared import REF_PATTERN, tab_field
+from app.tools.tool_models.call_intent import intent_field
 
 
 class BrowserEvaluateArgs(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
+    # 脚本和终端命令一样难一眼读懂，所以与终端一起带意图（见 ``call_intent``）；只服务展示，不发给宿主。
+    intent: str = intent_field()
     expression: str = Field(
         min_length=1,
         max_length=20_000,

@@ -2,7 +2,7 @@
 
 「哪个是成果」是只有 Agent 知道的事实：文件操作记录回答「改了哪些」，这里回答「该打开哪个」，前端不从正文
 链接或文件操作里猜。工具在交付那一刻观察每一项（规范路径、是否在工作区内、文件类型与大小），结果作为
-交付记录随结果行持久化（``ToolObservation.deliverables`` → metadata），不复制文件、不登记任何进程内状态。
+交付记录随结果行持久化（``ToolObservation.facts`` → metadata），不复制文件、不登记任何进程内状态。
 工作区内文件的现状由前端现读。
 
 两份事实分两处放：交付记录后端也要读（侧栏产出清单），进 metadata；这批交付的说明（``note``）只给卡片看，
@@ -24,8 +24,9 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_REPLY_PRESENTATION
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_REPLY_PRESENTATION
 from app.models.deliverable import Deliverable, DeliveredDirectory, DeliveredFile, DeliveredUrl
+from app.models.tool_result_facts import ToolResultFacts
 from app.service.workspace_files.content.file_content import inspect_file
 from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models import PresentDeliverablesArgs
@@ -95,7 +96,7 @@ class PresentDeliverablesTool(HandlerBase):
             self.name,
             content,
             display_data={"kind": "deliverables", "note": (note or "").strip() or None},
-            deliverables=list(presented.values()),
+            facts=ToolResultFacts(deliverables=tuple(presented.values())),
         )
 
     @staticmethod

@@ -9,7 +9,7 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_TERMINAL
 from app.core.workflow.cancel.tool_call_cancellation_registry import should_stop_call
 from app.tools.terminal_runtime.observation.wait import TerminalWait
 from app.tools.tool_handler.terminal.session_terminals import find_terminal

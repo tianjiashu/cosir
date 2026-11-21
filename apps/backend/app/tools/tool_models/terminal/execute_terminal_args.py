@@ -26,6 +26,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.tools.shell.host_shells import PosixShell, WindowsShell
+from app.tools.tool_models.call_intent import intent_field
 from app.utils.host_platform import is_windows
 
 # shell 取值由 shell 目录按平台声明，这里只在前面加上本工具语义的 auto（/bin/sh 或 COMSPEC）。
@@ -49,6 +50,12 @@ _BACKGROUND_DESCRIPTION = (
     "Use wait_messages only for background work that will finish on its own."
 )
 
+# 命令一眼看不懂是终端独有的问题，所以意图的这句补充只写在这里。
+_INTENT_GUIDANCE = (
+    "When the command is hard to read at a glance (pipes, unusual flags, an inline script), say "
+    "what the whole command achieves, not just its first step."
+)
+
 # 只写语义与取值范围；「长会话调大并转后台」是选用决策，在工具描述里说一次。
 _TIMEOUT_DESCRIPTION = (
     "Seconds before the command and every process it started are stopped and the call fails. "
@@ -63,6 +70,7 @@ class WindowsExecuteTerminalArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
+    intent: str = intent_field(_INTENT_GUIDANCE)
     shell: WindowsExecuteTerminalShell = Field(
         default="auto",
         description=(
@@ -95,6 +103,7 @@ class MacExecuteTerminalArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
+    intent: str = intent_field(_INTENT_GUIDANCE)
     shell: MacExecuteTerminalShell = Field(
         default="auto",
         description=(

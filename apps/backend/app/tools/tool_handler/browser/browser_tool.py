@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 
 from app.core.tool.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_BROWSER
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_BROWSER
 from app.tools.browser_runtime.browser_call import call_browser
 from app.tools.host.errors import HostCallError
 from app.tools.tool_handler.browser.errors import browser_error_observation
@@ -22,7 +22,6 @@ from app.tools.tool_handler.browser.errors import browser_error_observation
 class BrowserTool(HandlerBase):
     method: ClassVar[str]
     group: ClassVar[str] = TOOL_GROUP_BROWSER
-    returns_images: ClassVar[bool] = False
 
     def call(
         self,
@@ -44,5 +43,7 @@ class BrowserTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
-            returns_images=self.returns_images,
+            # 浏览器一族只在网页任务里用、定义合计最大（约占全部内置工具定义的四成），延迟加载；总是成组用，
+            # 模型一次 ``select:`` 就能取齐。
+            deferred=True,
         )

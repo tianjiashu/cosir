@@ -23,7 +23,6 @@ from typing import Literal, cast
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.tool.call_intent import MAX_INTENT_LENGTH
 from app.core.tool.execute.tool_output_budget import fit_head_tail
 from app.core.tool.placeholder_settlement import USER_CANCELLED_HINT
 from app.core.tool.results.tool_cancelled import tool_cancelled
@@ -38,7 +37,7 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_TERMINAL
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.models.message_metadata import BackgroundWork
 from app.tools.display.terminal_display import (
@@ -56,6 +55,7 @@ from app.tools.terminal_runtime.command.running_command_registry import running_
 from app.tools.tool_handler.terminal.command_job import CommandConclusion, CommandJob
 from app.tools.tool_handler.terminal.command_results import command_results
 from app.tools.tool_handler.terminal.live_output_channel import LiveOutputChannel
+from app.tools.tool_models.call_intent import MAX_INTENT_LENGTH
 from app.tools.tool_models.terminal.execute_terminal_args import (
     DEFAULT_COMMAND_TIMEOUT_S,
     MAX_COMMAND_TIMEOUT_S,
@@ -83,8 +83,6 @@ from app.utils.path.file_identity import RootDirectory
 # - 没有 stdin、也没有终端：要输入的程序会读到输入结束、通常直接失败，要终端的程序（密码提示、
 #   全屏程序、git rebase -i / git add -i 这类交互参数）跑不起来。带上 --yes 之类的非交互参数。
 # - 用户在调用卡片上只看到输出的最后一段；要紧的结果写进回复。
-# - 命令一眼看不懂时（管道、少见参数、内联脚本），intent 要说清整条命令达成什么，不只说第一步。
-#   写在这里而不是公共的 intent 说明里：只有终端命令有这个问题，放进公共说明会让每个工具都多带一句。
 # - 移动、删除文件在这里做（mv / rm，PowerShell 用 Move-Item / Remove-Item）：先看清目标，移动不要
 #   覆盖已有文件。没有单独的移动、删除工具。
 # - 前台调用会一直占着这一步，直到命令退出或超时。可能跑两分钟以上的（构建、测试套件）设
@@ -109,8 +107,6 @@ _DESCRIPTION = (
     "flags such as --yes.\n"
     "- The user sees only the tail of the output on the call card; state the results that "
     "matter in your reply.\n"
-    "- When the command is hard to read at a glance (pipes, unusual flags, an inline script), "
-    "make intent say what it achieves, not just its first step.\n"
     "- Move and delete files here (mv / rm, or Move-Item / Remove-Item in PowerShell): look at "
     "the target first, and never let a move overwrite an existing file.\n"
     "- A foreground call holds this step until the command exits or times out. For anything "
@@ -297,6 +293,7 @@ class ExecuteTerminalTool(HandlerBase):
     def execute(
         self,
         command: str,
+        intent: str = "",
         shell: ExecuteTerminalShell = "auto",
         timeout: float | None = None,
         workdir: str | None = None,
@@ -308,6 +305,7 @@ class ExecuteTerminalTool(HandlerBase):
 
         参数:
             command: 待执行命令。
+            intent: 模型写的调用意图，只用作后台看板与等待提示的标签。
             shell: shell 选择；``auto`` 保持宿主默认 shell，也可显式选择本机可用的
                 cmd、PowerShell 或 POSIX shell。该值已由当前平台的参数模型
                 （``WindowsExecuteTerminalArgs`` / ``MacExecuteTerminalArgs``）校验，此处
@@ -365,12 +363,12 @@ class ExecuteTerminalTool(HandlerBase):
             else min(timeout or DEFAULT_COMMAND_TIMEOUT_S, MAX_COMMAND_TIMEOUT_S)
         )
         return self._execute_command(
-            command, cwd, shell=shell, timeout_s=effective_timeout,
+            command, cwd, intent=intent, shell=shell, timeout_s=effective_timeout,
             background=bool(background), execution_context=execution_context,
         )
 
     def _execute_command(
-        self, command: str, cwd: Path, *, shell: ExecuteTerminalShell, timeout_s: float | None,
+        self, command: str, cwd: Path, *, intent: str, shell: ExecuteTerminalShell, timeout_s: float | None,
         background: bool, execution_context: ToolExecutionContext,
     ) -> ToolObservation:
         """启动命令并返回前台结果或后台占位；等待与结果路由均按调用创建，不存入工具实例。
@@ -453,7 +451,7 @@ class ExecuteTerminalTool(HandlerBase):
         detached = None if background else threading.Event()
         registered = command_results.register(
             tool_call_id, session_id=execution_context.session_id, run_id=execution_context.run_id,
-            label=self._background_label(execution_context.call_intent, command), job=job, detached=detached,
+            label=self._background_label(intent, command), job=job, detached=detached,
         )
         if registered is None:
             # 拒收（Session 正被收回或后端关闭）：作业已停下，按它的取消结论返回，不留后台占位。
@@ -490,13 +488,13 @@ class ExecuteTerminalTool(HandlerBase):
         return self._result_observation(conclusion)
 
     @staticmethod
-    def _background_label(intent: str | None, command: str) -> str:
+    def _background_label(intent: str, command: str) -> str:
         """看板与 ``wait_messages`` 提示的标签：优先模型写的意图，漏写时退回命令首个非空行。
 
         截到意图的长度上限，免得多行脚本整段进入给模型的等待提示；侧栏另有截断。
         """
-        if intent is not None:
-            return intent
+        if intent.strip():
+            return intent.strip()
         first_line = next((line.strip() for line in command.splitlines() if line.strip()), "")
         return first_line[:MAX_INTENT_LENGTH]
 

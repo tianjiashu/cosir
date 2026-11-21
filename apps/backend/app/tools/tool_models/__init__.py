@@ -12,7 +12,6 @@ from app.tools.tool_models.browser_args import (
 )
 from app.tools.tool_models.edit_file_args import EditFileArgs
 from app.tools.tool_models.find_files_args import FindFilesArgs
-from app.tools.tool_models.mcp_args import MCPArgs
 from app.tools.tool_models.present_deliverables_args import PresentDeliverablesArgs
 from app.tools.tool_models.read_file_args import ReadFileArgs
 from app.tools.tool_models.read_image_args import ReadImageArgs
@@ -42,7 +41,6 @@ __all__ = [
     "EditFileArgs",
     "ExecuteTerminalShell",
     "FindFilesArgs",
-    "MCPArgs",
     "MacExecuteTerminalArgs",
     "PresentDeliverablesArgs",
     "ReadFileArgs",

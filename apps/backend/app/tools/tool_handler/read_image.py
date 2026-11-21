@@ -17,7 +17,7 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_SEARCH
 from app.service.attachment.attachment_service import AttachmentService, SavedImage
 from app.service.attachment.image_normalizer import ImageNormalizationError
 from app.tools.display.image_display import (
@@ -165,5 +165,4 @@ class ReadImageTool(HandlerBase):
             handler=self.execute,
             args_model=self.args_model,
             # 发布附件要用进程内的 workspace service，只能在线程里执行。
-            returns_images=True,
         )

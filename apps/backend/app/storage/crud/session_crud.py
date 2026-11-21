@@ -10,7 +10,7 @@
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
-from typing import Any, cast
+from typing import cast
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session as DbSession
@@ -19,6 +19,7 @@ from app.models import SessionRecord
 from app.models.session_extra import SessionExtra, SessionFork
 from app.models.session_kind import FORK_SESSION_TYPES, USER_FACING_SESSION_TYPES, SessionType
 from app.models.session_status import SessionStatus
+from app.models.session_tool_surface import SessionToolSurface
 from app.storage.crud.session_context_crud import SessionContextCrud
 from app.storage.model.run_model import RunModel
 from app.storage.model.session_context_model import SessionContextModel
@@ -74,7 +75,7 @@ class SessionCrud:
             parent_session_id: int | None = None,
             db: DbSession | None = None,
             extra: SessionExtra | None = None,
-            tool_schemas: list[dict[str, Any]] | None = None,
+            tool_surface: SessionToolSurface | None = None,
             derivation_depth: int = 0,
     ) -> SessionRecord:
         """新建一条 session 记录并落库。
@@ -92,7 +93,7 @@ class SessionCrud:
             db: 可选的外部 SQLAlchemy 会话。传入时在本方法内复用该事务（调用方负责提交）；
                 为 None 时由本方法自开事务并自动提交。
             extra: Session 扩展 JSON（如 fork 来源、派生调用）。
-            tool_schemas: 创建时固化的模型工具 schema。
+            tool_surface: 创建时固化的工具面。
             derivation_depth: 派生深度；由派生方按 ``core.tool.multi_agent.derivation.child_depth`` 算出，用户新建
                 与用户 fork 为 0。
 
@@ -115,7 +116,7 @@ class SessionCrud:
                     session_type,
                     parent_session_id,
                     extra,
-                    tool_schemas,
+                    tool_surface,
                     derivation_depth,
                 )
         return self._build_and_flush(
@@ -125,7 +126,7 @@ class SessionCrud:
             session_type,
             parent_session_id,
             extra,
-            tool_schemas,
+            tool_surface,
             derivation_depth,
         )
 
@@ -137,7 +138,7 @@ class SessionCrud:
             session_type: SessionType,
             parent_session_id: int | None,
             extra: SessionExtra | None,
-            tool_schemas: list[dict[str, Any]] | None = None,
+            tool_surface: SessionToolSurface | None = None,
             derivation_depth: int = 0,
     ) -> SessionRecord:
         """在给定会话中构造并 flush 一条 session 记录。
@@ -164,7 +165,7 @@ class SessionCrud:
             session_type=session_type,
             parent_session_id=parent_session_id,
             extra=(extra or SessionExtra()).model_dump(mode="json"),
-            tool_schemas=tool_schemas or [],
+            tool_surface=(tool_surface or SessionToolSurface()).model_dump(mode="json"),
             current_run_id=None,
             derivation_depth=derivation_depth,
         )

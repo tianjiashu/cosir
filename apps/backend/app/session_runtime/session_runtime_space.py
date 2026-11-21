@@ -101,34 +101,42 @@ class SessionRuntimeSpace:
 
     @property
     def session_tool_schemas(self) -> tuple[FunctionDefinition, ...]:
-        """返回 Session 创建时固化的模型工具 schema 快照。
+        """每次模型请求都带的基础工具定义：固化工具面里不延迟加载的那些，顺序沿用工具面。
 
-        返回:
-            不可替换且与 SessionRecord 脱离的 schema 元组；嵌套 JSON 值已经深拷贝，调用方可以
-            将其传给模型绑定逻辑而不修改 SessionRecord 工作副本。
+        返回与 SessionRecord 脱离的深拷贝，调用方可以放进模型请求。已加载的延迟工具由
+        ``RuntimeContext.request_tools`` 接在后面。
 
         异常:
-            ValueError: Session 记录中的 SDK schema 不合法、工具名为空或不是 strict 契约。
-                旧快照不自动补标记；调用方需新建 Session，不能原地改变固定模型前缀。
-
-        副作用:
-            无；该属性只读当前 Session 记录，不读取数据库，也不修改运行时状态。
+            ValueError: 工具面里的定义不合法、工具名为空或不是 strict 契约。旧快照不自动补标记；
+                调用方需新建 Session，不能原地改变固定模型前缀。
         """
-        schemas = _tool_schemas_adapter.validate_python(self.current_task.tool_schemas, strict=True)
+        deferred = set(self.current_task.tool_surface.deferred)
+        return tuple(s for s in self._surface_schemas() if s["name"] not in deferred)
+
+    @property
+    def session_deferred_schemas(self) -> tuple[FunctionDefinition, ...]:
+        """Session 能延迟加载的内置工具定义（``ToolDefinition.deferred``）：加载时原样交给模型与请求。"""
+        deferred = set(self.current_task.tool_surface.deferred)
+        return tuple(s for s in self._surface_schemas() if s["name"] in deferred)
+
+    @property
+    def session_tool_names(self) -> tuple[str, ...]:
+        """Session 工具面的唯一出口：全部工具名（含延迟加载的），顺序沿用工具面。
+
+        系统提示词的工具目录与工作方式层按它判断「这个 Session 能用什么」——延迟工具也能用，只是要先
+        加载；Agent 配置之后再改不影响它。每次模型请求的工具集见 ``RuntimeContext.request_tools``。
+        """
+        return tuple(schema["name"] for schema in self._surface_schemas())
+
+    def _surface_schemas(self) -> list[FunctionDefinition]:
+        schemas = _tool_schemas_adapter.validate_python(
+            self.current_task.tool_surface.schemas, strict=True
+        )
         if any(not schema["name"].strip() for schema in schemas):
             raise ValueError("Session 工具 schema 的 name 不得为空")
         if any(schema.get("strict") is not True for schema in schemas):
             raise ValueError("Session 工具 schema 必须为 strict 契约，请新建 Session")
-        return tuple(copy.deepcopy(schemas))
-
-    @property
-    def session_tool_names(self) -> tuple[str, ...]:
-        """Session 工具面的唯一出口：固化 schema 里的工具名，顺序沿用 schema。
-
-        系统提示词的工具目录与工作方式层按它判断「这个 Session 能用什么」；Agent
-        配置之后再改不影响它。本 Run 准入（再减去派生限制）见 ``RuntimeContext.admitted_tools``。
-        """
-        return tuple(schema["name"] for schema in self.session_tool_schemas)
+        return copy.deepcopy(schemas)
 
     def __post_init__(self) -> None:
         """初始化统一执行闸门与 context manager 槽位锁。"""
@@ -323,6 +331,7 @@ class SessionRuntimeSpace:
                     current_session_id=self.current_task.id,
                     agent=self.agent,
                     tool_names=self.session_tool_names,
+                    deferred_tools=self.session_deferred_schemas,
                     workspace=self.current_workspace,
                     writable_root=self.current_task.extra.writable_root,
                     context_store=ContextStore(),

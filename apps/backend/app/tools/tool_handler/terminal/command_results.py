@@ -131,7 +131,7 @@ class CommandResultRegistry:
         写后台占位（没有人会结算它），调用方据 ``None`` 按取消返回。
         """
         mode: BackgroundMode = "background" if detached is None else "foreground"
-        work = BackgroundWork(kind="terminal_command", label=label, started_at=_now(), run_id=run_id)
+        work = BackgroundWork(label=label, started_at=_now(), run_id=run_id)
         data = {"session_id": session_id, "run_id": run_id, "tool_call_id": tool_call_id, "mode": mode}
         with self._lock:
             if (session_id, tool_call_id) in self._entries:

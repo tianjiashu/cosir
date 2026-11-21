@@ -6,6 +6,7 @@
 
 from app.core.tool.handler.ask_user import build_ask_user_definition
 from app.core.tool.handler.offer_next_step import build_offer_next_step_definition
+from app.core.tool.handler.tool_search import build_tool_search_definition
 from app.core.tool.handler.wait_messages import build_wait_messages_definition
 from app.core.tool.handler.web_fetch import build_web_fetch_definition
 from app.core.tool.handler.web_search import build_web_search_definition
@@ -25,7 +26,6 @@ from app.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
 from app.tools.tool_handler.browser import build_browser_definitions
 from app.tools.tool_handler.edit_file import build_edit_file_definition
 from app.tools.tool_handler.find_files import build_find_files_definition
-from app.tools.tool_handler.mcp_tool import build_mcp_definition
 from app.tools.tool_handler.present_deliverables import build_present_deliverables_definition
 from app.tools.tool_handler.read_file import build_read_file_definition
 from app.tools.tool_handler.read_image import ReadImageTool
@@ -67,6 +67,6 @@ def build_tool_registry() -> ToolRegistry:
     registry.register(build_ask_user_definition())
     registry.register(build_present_deliverables_definition())
     registry.register(build_offer_next_step_definition())
-    registry.register(build_mcp_definition())
     registry.register(build_skill_definition())
+    registry.register(build_tool_search_definition())
     return registry

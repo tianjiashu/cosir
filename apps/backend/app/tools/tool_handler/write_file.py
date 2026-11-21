@@ -27,7 +27,7 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_FILE_EDIT
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_FILE_EDIT
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.display.file_change_display import (
     build_file_change_display_data,

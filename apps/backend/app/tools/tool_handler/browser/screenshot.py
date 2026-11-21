@@ -24,7 +24,7 @@ from app.tools.tool_models import BrowserScreenshotArgs
 class BrowserScreenshotTool(BrowserTool):
     """截图存进工作区附件目录（与用户上传同一套规则），以 ``images`` 交给工具图片通道。
 
-    模型看不了图片时由准入门禁按 ``returns_images`` 统一拒绝，这里不再判断。
+    模型看不了图片时由 observe 节点把图片换成说明（``withhold_unviewable_images``），这里不判断。
     """
 
     name = TOOL_BROWSER_SCREENSHOT
@@ -41,7 +41,6 @@ class BrowserScreenshotTool(BrowserTool):
     )
     args_model = BrowserScreenshotArgs
     method = "browser.screenshot"
-    returns_images = True
 
     def execute(
         self,

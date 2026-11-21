@@ -44,9 +44,11 @@ class BrowserEvaluateTool(BrowserTool):
         expression: str,
         ref: str | None,
         tab: str | None,
+        intent: str = "",
         *,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
+        del intent  # 只服务展示，不发给宿主（宿主 schema 也没有它）
         return self.call(
             execution_context,
             lambda result: tool_success(

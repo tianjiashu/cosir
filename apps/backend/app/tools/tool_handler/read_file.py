@@ -27,7 +27,7 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_SEARCH
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_SEARCH
 from app.tools.display.filesystem_display import (
     build_read_file_display_data,
 )
