@@ -22,8 +22,8 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_USER_QUESTION
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_USER_QUESTION
 
 
 class AskUserTool(HandlerBase):
