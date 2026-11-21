@@ -21,6 +21,7 @@ if str(BACKEND_ROOT) not in sys.path:
 # 先装载 app.models：直接从 app.core.tool.schemas 进入会撞上存量的循环导入
 # （schemas → tool_observation → app.models → … → tool_batch → schemas）。
 import app.models  # noqa: E402, F401
+from app.core.tool.call_intent import INTENT_FIELD  # noqa: E402
 from app.tools.tool_handler.browser import (  # noqa: E402
     BrowserActTool,
     BrowserEvaluateTool,
@@ -60,11 +61,19 @@ def _wire_shape(schema: Any) -> Any:
     return schema
 
 
+def _host_params(schema: dict[str, Any]) -> dict[str, Any]:
+    """去掉调用意图：它只服务展示，工具不把它发给宿主。"""
+
+    schema["properties"].pop(INTENT_FIELD, None)
+    return schema
+
+
 def render_schema() -> str:
     """导出文件的完整文本；键排序、保留非 ASCII，生成结果稳定，守卫测试按文本比较。"""
 
     schemas = {
-        tool.name: _wire_shape(tool.args_model.model_json_schema()) for tool in HOST_VALIDATED_TOOLS
+        tool.name: _wire_shape(_host_params(tool.args_model.model_json_schema()))
+        for tool in HOST_VALIDATED_TOOLS
     }
     return json.dumps(schemas, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
