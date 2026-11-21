@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
 
-import { launchDesktop } from "./desktop-app";
+import { launchDesktop, waitForAppShell } from "./desktop-app";
 
 /**
  * Windows 窗口外框：隐藏标题栏后系统窗口按钮叠在右上角（`titleBarOverlay`），页面按安全区让位。
@@ -14,7 +14,7 @@ test.skip(process.platform !== "win32", "Windows titleBarOverlay only");
 test("leaves room for the system window buttons and captures them in light and dark", async () => {
   const { app, page } = await launchDesktop();
   try {
-    await expect(page.getByRole("navigation", { name: "工作区会话列表" })).toBeVisible({ timeout: 120_000 });
+    await waitForAppShell(page);
 
     const frame = await page.evaluate(() => ({
       titlebar: document.documentElement.dataset.titlebar,
@@ -29,7 +29,7 @@ test("leaves room for the system window buttons and captures them in light and d
         localStorage.setItem("cosir:theme", JSON.stringify({ state: { preference }, version: 0 }));
       }, theme);
       await page.reload();
-      await expect(page.getByRole("navigation", { name: "工作区会话列表" })).toBeVisible({ timeout: 60_000 });
+      await waitForAppShell(page, 60_000);
       await expect.poll(() => page.evaluate(() => document.documentElement.classList.contains("dark"))).toBe(theme === "dark");
       await expect.poll(() => app.evaluate(({ nativeTheme }) => nativeTheme.shouldUseDarkColors)).toBe(theme === "dark");
       const bounds = await app.evaluate(({ BrowserWindow }) => {

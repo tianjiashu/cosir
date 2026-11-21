@@ -29,6 +29,14 @@ export async function launchDesktop(): Promise<{ app: ElectronApplication; page:
   return { app, page, home };
 }
 
+/**
+ * 等应用外壳出现（启动门之后、后端可用）。认页头的「当前位置」导航而不是侧栏：屏幕窄于 1024 时侧栏收成抽屉
+ * （`app-layout.tsx` 的 NARROW_VIEWPORT_QUERY），CI 跑机的屏幕常常就这么小，侧栏不在不代表宿主没起来。
+ */
+export async function waitForAppShell(page: Page, timeout = 120_000): Promise<void> {
+  await expect(page.getByRole("navigation", { name: "当前位置" })).toBeVisible({ timeout });
+}
+
 export async function backendBaseUrl(page: Page): Promise<string> {
   const snapshot = await page.evaluate(() => window.cosirHost!.backend.snapshot());
   expect(snapshot.status).toEqual({ state: "ready" });
