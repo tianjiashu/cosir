@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fileMatchesAccept } from "@assistant-ui/core/internal";
+import type { PendingAttachment } from "@assistant-ui/core";
 
 import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attachment-adapter";
+import { uploadAttachment } from "@/lib/assistant/attachments/attachment-upload";
+
+vi.mock("@/lib/assistant/attachments/attachment-upload", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/assistant/attachments/attachment-upload")>()),
+  uploadAttachment: vi.fn(),
+}));
 
 describe("assistant attachment adapter", () => {
   it("接受图片恢复契约与空 MIME 的图片文件", () => {
@@ -46,5 +53,21 @@ describe("assistant attachment adapter", () => {
   it("普通文件不能重新进入图片附件集合", async () => {
     await expect(createAttachmentAdapter(7).add({ file: new File([], "notes.md", { type: "text/plain" }) }))
       .rejects.toThrow("JPEG 和 PNG");
+  });
+
+  it("相同文件可有两个独立的 UI 身份；上传去重后仍保持各自 id，资源身份只进入 content", async () => {
+    const assetId = "b".repeat(64);
+    const locator = `cosir-attachment://${assetId}`;
+    vi.mocked(uploadAttachment).mockResolvedValue({ id: assetId, name: "same.png", contentType: "image/png", byteSize: 5, width: 1, height: 1, locator, status: "ready" });
+    const adapter = createAttachmentAdapter(1901);
+    const file = new File(["identical-image"], "same.png", { type: "image/png" });
+    const first = await adapter.add({ file }) as PendingAttachment;
+    const second = await adapter.add({ file }) as PendingAttachment;
+    expect(first.id).not.toBe(second.id);
+
+    const [sentFirst, sentSecond] = await Promise.all([adapter.send(first), adapter.send(second)]);
+    expect(sentFirst).toMatchObject({ id: first.id, content: [{ type: "image", image: locator }] });
+    expect(sentSecond).toMatchObject({ id: second.id, content: [{ type: "image", image: locator }] });
+    expect(uploadAttachment).toHaveBeenCalledTimes(1);
   });
 });

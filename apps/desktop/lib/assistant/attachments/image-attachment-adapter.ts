@@ -86,7 +86,8 @@ async function resolveAttachment(
   }
   const uploaded = await upload;
   return {
-    id: uploaded.id,
+    // UI 身份贯穿加入、移除与发送；资源身份只在 content 的定位中。AUI 按同一 id 排除上传中被移除的图。
+    id: attachment.id,
     type: "image",
     name: uploaded.name,
     contentType: uploaded.contentType,

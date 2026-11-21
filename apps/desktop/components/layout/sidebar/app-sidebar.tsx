@@ -92,7 +92,7 @@ export function AppSidebar({
         {/* 目录随推送在后台重读：已有内容时照常显示、不插入加载行（插入会把树往下推，悬停与焦点随之丢失）。 */}
         {status === "loading" && workspaces.length === 0 && <LoadingState size="compact" label="正在加载工作区…" className="px-2" />}
         {status === "error" && <ErrorState className="mx-2 text-xs" message={error} onRetry={() => void load()} />}
-        {status === "ready" && workspaces.length === 0 && <EmptyState size="compact" title="暂无工作区" description="点击上方的「新会话」，在工作区选择器里新建工作区。" className="px-2" />}
+        {status === "ready" && workspaces.length === 0 && <EmptyState size="compact" title="暂无工作区" className="px-2" />}
         {workspaces.length > 0 && (
           <div className="min-h-0 flex-1">
             <WorkspaceTree

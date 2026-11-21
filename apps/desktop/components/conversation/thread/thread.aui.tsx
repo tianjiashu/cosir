@@ -48,10 +48,10 @@ import { UserMessageBubble } from "@/components/conversation/thread/user-message
 import { REVEAL_ON_MESSAGE_HOVER } from "@/components/ui/reveal-on-hover";
 import {
   ComposerSendButton,
-  ComposerAttachments,
   InlineComposerInput,
   useComposerImageSink,
-} from "@/components/conversation/thread/attachment.aui";
+} from "@/components/composer/assistant-composer";
+import { ComposerImageAttachments } from "@/components/composer/composer-image-attachments";
 import { COMPOSER_EDITOR_CLASS_NAME, COMPOSER_PLACEHOLDER } from "@/components/composer/composer-editor";
 import { COMPOSER_SURFACE_CLASS_NAME } from "@/components/composer/composer-surface";
 import { ComposerInsertionProvider } from "@/components/composer/composer-insertion-context";
@@ -201,7 +201,7 @@ const Composer = memo(function Composer() {
       <ComposerFeedbackProvider>
         <ComposerPrimitive.Root className={COMPOSER_SURFACE_CLASS_NAME}>
           <div className="min-h-0 min-w-0 w-full">
-            <ComposerAttachments />
+            <ComposerImageAttachments />
             <InlineComposerInput
               persistSessionDraft
               placeholder={COMPOSER_PLACEHOLDER}

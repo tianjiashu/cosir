@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AssistantRuntimeProvider, useAuiState, type AssistantRuntime } from "@assistant-ui/react";
+import { AssistantRuntimeProvider, useAuiState, type AssistantRuntime, type CompleteAttachment } from "@assistant-ui/react";
 
 import type { TransportState } from "@/lib/assistant/contract";
 import { SessionTransportConnection } from "@/lib/assistant/transport/session-transport-connection";
@@ -47,6 +47,39 @@ describe("session assistant transport runtime", () => {
     expect(html).toContain("contextWindowTotal");
     expect(html).toContain("128000");
     expect(html).not.toContain(">null<");
+  });
+
+  it("上传中移除最后一张图后不提交空消息，之后仍可正常输入", async () => {
+    let runtime!: AssistantRuntime;
+    let finishUpload!: (attachment: CompleteAttachment) => void;
+    let started!: () => void;
+    const uploading = new Promise<void>((resolve) => { started = resolve; });
+    const submitMessage = vi.fn();
+    const onError = vi.fn();
+    function Harness() {
+      runtime = useSessionAssistantTransportRuntime(connection(), new TransportFrameStore(INITIAL_STATE), {
+        submitMessage, onError,
+        adapters: { attachments: {
+          accept: "image/*",
+          add: async ({ file }) => ({ id: "pending", type: "image", name: file.name, file, contentType: file.type, status: { type: "requires-action", reason: "composer-send" } }),
+          send: () => new Promise<CompleteAttachment>((resolve) => { finishUpload = resolve; started(); }),
+          remove: async () => {},
+        } },
+      }).runtime;
+      return null;
+    }
+    renderToStaticMarkup(createElement(Harness));
+    await runtime.thread.composer.addAttachment(new File(["x"], "a.png", { type: "image/png" }));
+    runtime.thread.composer.send();
+    await uploading;
+    await runtime.thread.composer.getAttachmentByIndex(0).remove();
+    finishUpload({ id: "pending", type: "image", name: "a.png", contentType: "image/png", status: { type: "complete" }, content: [{ type: "image", image: `cosir-attachment://${"a".repeat(64)}` }] });
+    await vi.waitFor(() => expect(runtime.thread.composer.getState().attachments).toHaveLength(0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(submitMessage).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    runtime.thread.composer.setText("继续提问");
+    expect(runtime.thread.composer.getState().canSend).toBe(true);
   });
 });
 

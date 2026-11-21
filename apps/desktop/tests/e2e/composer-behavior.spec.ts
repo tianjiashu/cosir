@@ -116,7 +116,7 @@ test(`图片粘贴和拖放各接纳一次，普通文件与不支持的图片�
 // 目的：超量图片在添加入口拦下；潜在缺陷：选了超量图片，发送时逐张上传完才被后端整条拒绝。
 test(`图片超过单条消息上限时只接纳前 20 张并在入口反馈`, async ({ page }) => {
   const { input } = await openComposer(page);
-  const thumbnails = page.locator('[data-slot="image-attachment-strip"] [data-slot="image-tile"]');
+  const thumbnails = page.locator('[data-slot="composer-image-card"]');
   await pasteImages(input, Array.from({ length: 18 }, (_, index) => `first-${index}.png`));
   await expect(thumbnails).toHaveCount(18);
   await pasteImages(input, ["a.png", "b.png", "c.png", "d.png"]);
@@ -257,7 +257,7 @@ test("Session 图片上传成功但消息提交失败后，正文与完整图片
   } }));
   await page.route(`${api}/workspaces/7/attachments/${assetId}*`, route => route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9X8AAAAASUVORK5CYII=", "base64") }));
   await transfer(input, "paste", "uploaded.png", "image/png", "图片失败恢复");
-  await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-tile"]')).toHaveCount(1);
+  await expect(page.locator('[data-slot="composer-image-card"]')).toHaveCount(1);
   const request = page.waitForRequest(req => req.url() === `${api}/sessions/100/messages` && req.method() === "POST");
   await page.route(`${api}/sessions/100/messages`, route => route.fulfill({ status: 400, json: { detail: { error: { code: "INVALID_MESSAGE", message: "图片消息回归拒绝", retryable: true } } } }));
   await send.click();
@@ -266,6 +266,6 @@ test("Session 图片上传成功但消息提交失败后，正文与完整图片
   await expect(page.getByRole("dialog")).toContainText("图片消息回归拒绝");
   await page.getByRole("dialog").getByRole("button", { name: "知道了" }).click();
   await expect(input).toHaveText("图片失败恢复");
-  await expect(page.locator('[data-slot="image-attachment-strip"] [data-slot="image-tile"]')).toHaveCount(1);
+  await expect(page.locator('[data-slot="composer-image-card"]')).toHaveCount(1);
   await expect(send).toBeEnabled();
 });
