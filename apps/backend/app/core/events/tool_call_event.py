@@ -17,7 +17,7 @@ class ToolCallCreatedEvent(WorkflowEventEnvelope):
     """模型已请求一次工具调用。
 
     事实语义：模型产出了一个工具调用身份。参数可能仍在模型流中累积，由流收口时的
-    ``ToolCallIntentEvent`` 写入。本事件在进入审批或执行**之前**发出，使消费方能在
+    ``ToolCallArgumentsEvent`` 写入。本事件在进入审批或执行**之前**发出，使消费方能在
     工具真正跑起来之前就看到「模型打算做什么」。
 
     Attributes:
@@ -35,15 +35,14 @@ class ToolCallCreatedEvent(WorkflowEventEnvelope):
     turn: int
 
 
-class ToolCallIntentEvent(WorkflowEventEnvelope):
-    """模型流收口后的调用意图与参数；不代表准入或执行，不改变调用状态。
+class ToolCallArgumentsEvent(WorkflowEventEnvelope):
+    """模型流收口后的调用参数（展示用解码）；不代表准入或执行，不改变调用状态。
 
     只来自模型输出，与冷重建同源：被拒绝的调用不会有 running，Hook 改写的业务参数也不是调用事实。
     """
 
-    type: Literal["tool_call_intent"] = "tool_call_intent"
+    type: Literal["tool_call_arguments"] = "tool_call_arguments"
     tool_call_id: str = Field(min_length=1)
-    intent: str | None
     args: dict[str, object]
 
 

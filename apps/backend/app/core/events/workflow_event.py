@@ -18,8 +18,8 @@ from app.core.events.run_event import (
 )
 from app.core.events.session_event import SessionQueueChangedEvent, SessionTitleUpdatedEvent
 from app.core.events.tool_call_event import (
+    ToolCallArgumentsEvent,
     ToolCallCreatedEvent,
-    ToolCallIntentEvent,
     ToolCallStatusChangedEvent,
 )
 from app.core.events.tool_runtime_event import ToolCallRuntimeUpdateEvent
@@ -35,7 +35,7 @@ WorkflowEvent = Annotated[
     | AssistantTextDeltaEvent
     | AssistantPartClosedEvent
     | ToolCallCreatedEvent
-    | ToolCallIntentEvent
+    | ToolCallArgumentsEvent
     | ToolCallStatusChangedEvent
     | ToolCallRuntimeUpdateEvent
     | SessionTitleUpdatedEvent

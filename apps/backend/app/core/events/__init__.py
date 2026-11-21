@@ -23,8 +23,8 @@ from app.core.events.run_event import (
 )
 from app.core.events.session_event import SessionQueueChangedEvent, SessionTitleUpdatedEvent
 from app.core.events.tool_call_event import (
+    ToolCallArgumentsEvent,
     ToolCallCreatedEvent,
-    ToolCallIntentEvent,
     ToolCallStatusChangedEvent,
 )
 from app.core.events.tool_runtime_event import (
@@ -48,8 +48,8 @@ __all__ = [
     "SessionTitleUpdatedEvent",
     "TerminalCommandStartedData",
     "TerminalOutputDeltaData",
+    "ToolCallArgumentsEvent",
     "ToolCallCreatedEvent",
-    "ToolCallIntentEvent",
     "ToolCallRuntimeUpdateEvent",
     "ToolCallStatusChangedEvent",
     "WorkflowEvent",
