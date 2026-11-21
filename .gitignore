@@ -50,6 +50,7 @@ apps/backend/build/
 apps/backend/dist/
 /apps/desktop/artifacts/
 /apps/desktop/test-results/
+/apps/desktop/test-results-browser/
 
 # 临时调试脚本（环境可能重建为空文件，避免误提交）
 apps/backend/tests/_tmp_*.py

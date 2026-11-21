@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import locale
+
 from app.tools.terminal_runtime.command.output_decoder import IncrementalOutputDecoder
 
 
@@ -34,5 +36,8 @@ def test_gbk_split_across_chunks_still_decodes() -> None:
     assert "".join(_decode([data[:1], data[1:5], data[5:]])) == "错误：找不到文件\n"
 
 
-def test_an_unfinished_character_at_the_end_of_the_stream_is_replaced() -> None:
-    assert _decode([b"abc\xe4"]) == ["abc", "�"]
+def test_an_unfinished_character_at_the_end_of_the_stream_is_replaced(monkeypatch) -> None:
+    # 宿主机编码是第三个候选：西文 Windows 的 cp1252 能把单个 0xE4 解成「ä」。这里要测的是三种都解不开时
+    # 的回退，所以把宿主机编码固定为 UTF-8。
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda _do_setlocale=True: "utf-8")
+    assert _decode([b"abc\xe4"]) == ["abc", "\ufffd"]

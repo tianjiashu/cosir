@@ -36,8 +36,8 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
-from app.core.tool.tool_base import HandlerBase
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_TERMINAL
+from app.core.tool.tool_base import HandlerBase
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.models.message_metadata import BackgroundWork
 from app.tools.display.terminal_display import (

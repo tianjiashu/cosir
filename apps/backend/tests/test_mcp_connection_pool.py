@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import threading
 import time
@@ -236,3 +237,67 @@ def test_closed_pool_rejects_new_work(pool):
 
     with pytest.raises(RuntimeError, match="closed"):
         pool.submit(pool.reap_idle())
+
+
+def test_closing_the_pool_ends_the_stdio_server_process(pool):
+    """目的：后端退出时关闭连接池（``close_service_dependencies``），stdio 服务子进程随之结束。
+    潜在缺陷：Windows 上只关管道不结束进程，服务子进程留在后台占着资源。"""
+
+    from tests.process_tree_support import kill, survivors
+
+    pid = _bump(pool, _server())["pid"]
+
+    pool.close()
+
+    left = survivors([pid], timeout=10)
+    for survivor in left:
+        kill(survivor)
+    assert left == [], "stdio MCP server survived the pool"
+
+
+def test_stdio_server_exits_when_the_backend_holding_it_is_killed(tmp_path):
+    """目的：持有连接池的后端被强杀（没机会关闭连接池）时，stdio 服务读到 stdin EOF 自行退出。"""
+
+    from tests.process_tree_support import kill, survivors
+
+    script = f"""
+import json, sys, time
+sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r})
+from app.service.configuration.extension_scope import ExtensionScope
+from app.service.configuration.mcp.configuration import MCPServerConfig, ScopedMCPServer
+from app.tools.mcp.call_result import MCPCallResult
+from app.tools.mcp.connection_pool import MCPConnectionPool
+from app.utils.path import system_cosir
+from pathlib import Path
+system_cosir.LOG_DIR = Path({str(tmp_path / "logs")!r})
+server = ScopedMCPServer(
+    ExtensionScope.system(),
+    MCPServerConfig(name="stateful", command=sys.executable, args=["-c", {_SERVER_CODE!r}]),
+)
+pool = MCPConnectionPool()
+result = pool.submit(pool.call_tool(server, "bump", {{}})).result(timeout=30)
+print("SERVER_PID:" + str(json.loads(MCPCallResult.from_sdk(result).text)["pid"]), flush=True)
+time.sleep(60)
+"""
+    backend = subprocess.Popen(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[1],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert backend.stdout is not None
+        line = backend.stdout.readline()
+        assert line.startswith("SERVER_PID:"), line
+        pid = int(line.split(":", 1)[1])
+
+        kill(backend.pid)
+        backend.wait(10)
+
+        left = survivors([pid], timeout=10)
+        for survivor in left:
+            kill(survivor)
+        assert left == [], "stdio MCP server survived the killed backend"
+    finally:
+        if backend.poll() is None:
+            backend.kill()

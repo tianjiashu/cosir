@@ -8,8 +8,8 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.tool_base import HandlerBase
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_TERMINAL
+from app.core.tool.tool_base import HandlerBase
 from app.tools.display.terminal_display import (
     build_terminal_list_display_data,
 )

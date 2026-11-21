@@ -213,6 +213,17 @@ def terminal_state_parts(facts: TerminalFacts, observation: TerminalObservation)
     return parts
 
 
+def _result_phrase(result: dict[str, object]) -> str:
+    """命令返回结果的说法：有退出码写退出码；只知成败的 shell（PowerShell 的 ``$?``）写成败，不写 ``exit None``。"""
+    code = result.get("code")
+    if code is not None:
+        return f" exit {code}"
+    success = result.get("success")
+    if success is None:
+        return ""
+    return " succeeded" if success else " failed"
+
+
 def latest_command_phrase(observation: TerminalObservation) -> str | None:
     """最近一条已结束命令的结果与输出行区间；仍在执行（已体现在状态里）或没有命令时为 None。"""
     latest = observation.latest_command
@@ -220,7 +231,7 @@ def latest_command_phrase(observation: TerminalObservation) -> str | None:
         return None
     text = f"cmd {latest.number} `{latest.command}` {latest.status}"
     if latest.status == "returned" and latest.result is not None:
-        text += f" exit {latest.result.get('code')}"
+        text += _result_phrase(latest.result)
     output = latest.output_lines
     return text + (f" · output lines {output[0]}-{output[1]}" if output else " · no output")
 
