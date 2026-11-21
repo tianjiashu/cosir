@@ -10,19 +10,18 @@ from collections.abc import Callable
 
 from openai.types.chat import ParsedFunctionToolCall
 
-from app.config.configuration import get_tool_registry
 from app.config.constant import Constant
 from app.core.context.tool_call_closure import build_placeholder_tool_message
 from app.core.events import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
     ModelActivityEvent,
+    ToolCallArgumentsEvent,
     ToolCallCreatedEvent,
-    ToolCallIntentEvent,
     ToolCallStatusChangedEvent,
 )
 from app.core.events.model_activity_event import ModelActivityPhase
-from app.core.tool.call_intent import display_call_arguments
+from app.core.llm_provider.message_codec import display_arguments
 from app.core.workflow.node_helper.common import _message_context, emit
 from app.models.message_metadata import ToolMessageMetadata
 
@@ -97,7 +96,11 @@ class ModelStreamStateMachine:
             self._flush_pending()
 
     def tool_call(self, raw_tool_calls: list[ParsedFunctionToolCall]) -> None:
-        """登记累计快照中新出现的已注册调用；最终快照也走此入口，但不改变模型阶段。"""
+        """登记累计快照中新出现的调用；最终快照也走此入口，但不改变模型阶段。
+
+        与 ``assistant_message`` 同一过滤口径（只认 id 与名字齐全），不认识的工具名也建卡片：它随响应进
+        上下文、由准入门禁给出错误观察，卡片才能落到失败终态而不是凭空消失。
+        """
         for call in raw_tool_calls:
             # SDK 草稿用 model_construct 构造，字段可能尚未齐全；这是第三方输入边界。
             call_id = getattr(call, "id", None)
@@ -108,8 +111,6 @@ class ModelStreamStateMachine:
                 or not isinstance(name, str)
                 or not name.strip()
             ):
-                continue
-            if get_tool_registry().get_tool_definition(name) is None:
                 continue
             self._arguments[call_id] = getattr(call.function, "arguments", None) or ""
             if call_id in self._calls:
@@ -128,14 +129,13 @@ class ModelStreamStateMachine:
             )
 
     def finish(self) -> None:
-        """流的任何出口都收口正文并补发调用意图；重复调用不发事件。不清除模型阶段，见 :meth:`exit`。"""
+        """流的任何出口都收口正文并补发调用参数；重复调用不发事件。不清除模型阶段，见 :meth:`exit`。"""
         self._close()
         arguments, self._arguments = self._arguments, {}
         for call_id, raw in arguments.items():
-            intent, args = display_call_arguments(raw)
-            self._emit(ToolCallIntentEvent(
+            self._emit(ToolCallArgumentsEvent(
                 session_id=self._session_id, run_id=self._run_id, step_id=self._step_id,
-                tool_call_id=call_id, intent=intent, args=args,
+                tool_call_id=call_id, args=display_arguments(raw),
             ))
 
     def exit(self) -> None:

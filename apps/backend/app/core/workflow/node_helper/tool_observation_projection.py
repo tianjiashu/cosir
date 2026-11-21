@@ -12,7 +12,6 @@ from app.core.tool.execute.tool_terminal_projection import (
 )
 from app.core.tool.schemas import ToolObservation
 from app.core.workflow.decision_expiry import (
-    ends_on_user_input,
     expire_decisions,
 )
 from app.core.workflow.execution_state.tool_batch import ToolBatch
@@ -60,7 +59,7 @@ def settle_observations(batch: ToolBatch, *, step_id: str) -> None:
         emit(event)
         # 模型又问了一次（典型是停止后恢复）：同一 Session 至多一个等用户回应的等待，旧的作废。
         # 不另行告知模型——是它自己重新问的。
-        if observation.awaiting_decision and ends_on_user_input(observation.tool_name):
+        if observation.awaiting_decision:
             expire_decisions(step_id=step_id, keep=frozenset({call_id}))
 
 
@@ -110,8 +109,8 @@ def to_tool_model_message(observation: ToolObservation) -> ChatCompletionToolMes
 def withhold_unviewable_images(batch: ToolBatch) -> None:
     """本次 Run 的模型看不了图时，把观察带的图片换成正文里的一句说明。
 
-    「图片只进能看图的模型」在这里一处守住。专门看图的工具（声明 ``returns_images``）已在准入门禁被
-    拒，不会走到这里；这里兜住的是只是有时带图的工具（如 MCP）。必须在写 tool 消息之前调用：说明
+    「图片只进能看图的模型」只在这里一处守住，所有工具一样：专门看图的（``read_image``、截图）与只是
+    有时带图的（MCP）都照常执行，结果里有图再按本次 Run 的模型改写，工具不做判断。必须在写 tool 消息之前调用：说明
     要进 tool 消息正文，之后 ``write_tool_images`` 也就没有图可写。图片文件已存进附件目录，卡片照常显示。
     """
     with_images = [o for o in batch.observations if o.status == "success" and o.images]
@@ -120,7 +119,8 @@ def withhold_unviewable_images(batch: ToolBatch) -> None:
     for observation in with_images:
         note = (
             f"[{len(observation.images)} image(s) returned by this tool are not shown: "
-            "the current model cannot read images]"
+            "the current model cannot read images. Do not call tools just to look at images; "
+            "use a text-only alternative instead]"
         )
         observation.content = f"{observation.content}\n{note}" if observation.content else note
         observation.images = ()
