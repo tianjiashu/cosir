@@ -44,7 +44,7 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.assistant_transport.state.message_identity import reply_id, user_message_id
 from app.core.context.final_reply import CommittedResponse, final_reply_sequences
-from app.core.tool.call_intent import display_call_arguments
+from app.core.llm_provider.message_codec import display_arguments
 from app.core.tool.presentation import ToolPresentation
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.enums.run_status import (
@@ -122,14 +122,12 @@ def pair_tool_parts(
                 # 中断输出可能只有部分调用身份；尚未建立的工具预览不重建为 part。
                 if not call["id"] or not call["function"]["name"]:
                     continue
-                intent, arguments = display_call_arguments(call["function"]["arguments"])
                 parts[call["id"]] = ConversationStateToolCallPart(
                     type="tool-call",
                     toolCallId=call["id"],
                     toolName=call["function"]["name"],
                     presentation=tool_presentation(call["function"]["name"], presentations),
-                    args=arguments,
-                    intent=intent,
+                    args=display_arguments(call["function"]["arguments"]),
                     status="cancelled",
                     awaitingUser=False,
                     # 冷重建没有运行中的调用，运行起点恒为空（与实时投影离开 running 后同形）。

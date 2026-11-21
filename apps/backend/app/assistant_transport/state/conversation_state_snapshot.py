@@ -384,8 +384,6 @@ def _validate_tool_call_part(part: object) -> None:
     # 其余字段都是 NotRequired：只有出现时才校验。
     if "error" in tool_part:
         require_str(tool_part["error"], "snapshot tool error", nullable=True)
-    if "intent" in tool_part:
-        require_str(tool_part["intent"], "snapshot tool intent", nullable=True)
     if "args" in tool_part:
         require_mapping(tool_part["args"], "snapshot tool args", nullable=True)
     if "display_data" in tool_part:

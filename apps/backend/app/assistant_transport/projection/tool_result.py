@@ -41,6 +41,6 @@ def project_tool_result(metadata: ToolMessageMetadata) -> ToolResultFields:
     # 只在有记录时写入：不带记录的事件不能把 part 上已有的记录清掉。
     if metadata.background is not None:
         fields["background"] = project_background_work(metadata.background)
-    if metadata.deliverables is not None:
-        fields["deliverables"] = project_deliverables(metadata.deliverables)
+    if metadata.facts is not None and metadata.facts.deliverables is not None:
+        fields["deliverables"] = project_deliverables(metadata.facts.deliverables)
     return fields

@@ -60,9 +60,8 @@ class ConversationStateToolCallPart(TypedDict):
     # 行级规则（``awaits_user``：继承副本与撤回移出的调用不能决定）纠正一次。失败与否看 ``status``。
     awaitingUser: bool
     args: NotRequired[dict[str, object]]
-    intent: NotRequired[str | None]
     error: NotRequired[str | None]
-    # 图标、动词与调用行标题都由前端按 ``intent`` / ``toolName`` / ``args`` 查工具目录表得出，
+    # 图标、动词与调用行标题都由前端按 ``toolName`` / ``args`` 查工具目录表得出，
     # part 不带展示外壳。
     display_data: NotRequired[dict[str, object] | None]
     # 后台占位的工作记录：存在即后台占位，``pending`` 即「后台执行中」；投影自占位行 metadata。

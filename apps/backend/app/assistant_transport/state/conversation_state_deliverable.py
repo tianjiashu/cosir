@@ -1,6 +1,6 @@
 """交付记录的 wire 投影与写入侧校验：工具 part 上的 ``deliverables`` 字段，以及 snapshot 顶层的会话清单。
 
-事实源是结果行 metadata 的 ``deliverables``（``app.models.deliverable``）；这里只把它转成驼峰的 wire 形状，
+事实源是结果行 metadata 的 ``facts.deliverables``（``app.models.deliverable``）；这里只把它转成驼峰的 wire 形状，
 并在快照写入侧精确校验，前端严格校验是同一份契约。顶层清单是工作副本里全部 part 上记录的纯函数（侧栏「产出」卡读它），
 条目与 part 上的同一形状。
 """

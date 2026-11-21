@@ -15,8 +15,8 @@ from app.assistant_transport.state.conversation_state_part import ConversationSt
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.config.logging.logger import log
 from app.core.events import (
+    ToolCallArgumentsEvent,
     ToolCallCreatedEvent,
-    ToolCallIntentEvent,
     ToolCallStatusChangedEvent,
 )
 from app.core.tool.presentation import ToolPresentation
@@ -73,21 +73,20 @@ def plan_tool_call_created(
     ]
 
 
-def plan_tool_call_intent(
-    event: ToolCallIntentEvent,
+def plan_tool_call_arguments(
+    event: ToolCallArgumentsEvent,
     state: ConversationStateSnapshot,
 ) -> Sequence[ConversationStateMutation]:
-    """意图与参数来自模型输出本身，拒绝、取消、HITL 都不依赖 running 事件，且与冷重建同源。"""
+    """参数来自模型输出本身，拒绝、取消、HITL 都不依赖 running 事件，且与冷重建同源。"""
     found = find_tool(state, event.tool_call_id)
     if found is None:
-        log.warning("tool_call_part_missing_for_intent", extra={
-            "msg": "工具调用 part 缺失，跳过意图投影",
+        log.warning("tool_call_part_missing_for_arguments", extra={
+            "msg": "工具调用 part 缺失，跳过参数投影",
             "data": {"run_id": event.run_id, "tool_call_id": event.tool_call_id},
         })
         return []
     base, _ = found
     return [
-        ConversationStateMutation("set", (*base, "intent"), event.intent),
         ConversationStateMutation("set", (*base, "args"), copy.deepcopy(event.args)),
     ]
 
