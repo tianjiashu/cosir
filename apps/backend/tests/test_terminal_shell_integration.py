@@ -169,8 +169,10 @@ def test_prefill_fills_the_prompt_without_running_it(terminal: _Terminal) -> Non
 
 def test_match_reports_running_command(terminal: _Terminal) -> None:
     terminal.user("sleep 0.3; echo READY-NOW; sleep 30")
+    # 锚定整行：只认命令输出的那一行。不加 ^ 时，命令行回显到一半（``…; echo READY-NOW`` 还没接上
+    # ``; sleep 30``）就会被匹配到，此时命令还没开始，commandRunning 仍是 False（各 shell 都会偶发）。
     started = terminal.read(
-        wait=TerminalWait(until="match", pattern="READY-NOW$", timeout_ms=10000)
+        wait=TerminalWait(until="match", pattern="^READY-NOW$", timeout_ms=10000)
     )
     assert started.wait_result["end_reason"] == "matched", started.text
     # 命令执行中投影 commandRunning，前端据此决定关闭时是否确认。
