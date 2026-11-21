@@ -11,6 +11,7 @@ from app.core.context.prompt_sources.sources.child_agents import ChildAgentsSour
 from app.core.context.prompt_sources.sources.deferred_tools import DeferredToolsSource
 from app.core.context.prompt_sources.sources.global_instructions import GlobalInstructionsSource
 from app.core.context.prompt_sources.sources.reply_language import ReplyLanguageSource
+from app.core.context.prompt_sources.sources.server_instructions import ServerInstructionsSource
 from app.core.context.prompt_sources.sources.skills import SkillsSource
 from app.core.context.prompt_sources.sources.workspace_instructions import (
     WorkspaceInstructionsSource,
@@ -19,6 +20,7 @@ from app.core.context.prompt_sources.sources.workspace_instructions import (
 AGENT_PRESET = AgentPresetSource()
 CHILD_AGENTS = ChildAgentsSource()
 DEFERRED_TOOLS = DeferredToolsSource()
+SERVER_INSTRUCTIONS = ServerInstructionsSource()
 SKILLS = SkillsSource()
 GLOBAL_INSTRUCTIONS = GlobalInstructionsSource()
 WORKSPACE_INSTRUCTIONS = WorkspaceInstructionsSource()
@@ -28,6 +30,7 @@ PROMPT_SOURCES: tuple[PromptSource, ...] = (
     AGENT_PRESET,
     CHILD_AGENTS,
     DEFERRED_TOOLS,
+    SERVER_INSTRUCTIONS,
     SKILLS,
     GLOBAL_INSTRUCTIONS,
     WORKSPACE_INSTRUCTIONS,

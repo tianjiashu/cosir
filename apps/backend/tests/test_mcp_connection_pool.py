@@ -18,7 +18,7 @@ from app.core.tool.schemas import ToolExecutionContext
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.mcp.configuration import MCPServerConfig, ScopedMCPServer
-from app.service.configuration.mcp.machine_state import MCPMachineState
+from app.service.configuration.mcp.machine_state import MCPMachineState, MCPServerCatalog
 from app.tools.mcp.call_result import MCPCallResult
 from app.tools.mcp.client import MCPToolNotFoundError, is_connection_failure
 from app.tools.mcp.connection_pool import MCPConnectionPool
@@ -136,7 +136,7 @@ def _make_available(server: ScopedMCPServer, pool: MCPConnectionPool, tmp_path, 
     config_path.write_text(
         json.dumps({"servers": [server.config.model_dump(mode="json")]}), encoding="utf-8"
     )
-    MCPMachineState.record_pass(server, [])
+    MCPMachineState.record_pass(server, MCPServerCatalog())
     monkeypatch.setattr("app.service.depends.get_mcp_connection_pool", lambda: pool)
 
 
@@ -211,7 +211,7 @@ def test_slow_starting_server_can_still_be_listed(pool, tmp_path, monkeypatch):
 
     assert {tool.name for tool in tools} >= {"bump", "slow"}
     # 连接池列到的目录回写本机记录：Agent 的延迟工具目录只读那份记录。
-    assert {entry.name for entry in MCPMachineState.read().catalog(server)} >= {"bump", "slow"}
+    assert {entry.name for entry in MCPMachineState.read().catalog(server).tools} >= {"bump", "slow"}
 
 
 def test_same_name_in_another_scope_gets_its_own_connection(pool, tmp_path):

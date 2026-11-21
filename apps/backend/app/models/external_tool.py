@@ -20,3 +20,12 @@ class ExternalToolDefinition(BaseModel):
     description: str
     parameters: dict[str, object]
     reference: dict[str, str]
+
+
+class ExternalInstructions(BaseModel):
+    """一个外部服务写给模型的使用说明（MCP initialize 的 ``instructions``）：``source`` 是用户认得的服务名
+    （目录里唯一），``text`` 是已按长度上限裁过的原文。是外部内容，进提示词时由来源包进 untrusted 块。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    source: str
+    text: str

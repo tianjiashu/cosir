@@ -1,8 +1,8 @@
 """MCP 工具：外部工具的实现（core 端口 ``external_tools``），目录取自本机记录，调用经连接池。
 
 目录 = 本工作区可用的服务（系统级与 workspace 级合并、启用、本机测试通过，见 ``available_servers``）各自
-在测试通过时列到的工具（``MCPMachineState.catalog``）。每次模型请求前的配置对账都会读它，所以只读本机文件、
-不连接服务，并按这几个文件的签名缓存：签名没变只做几次 stat。
+在测试通过时拿到的工具与服务说明（``MCPMachineState.catalog``）。每次模型请求前的配置对账都会读它，所以只读
+本机文件、不连接服务，并按这几个文件的签名缓存：签名没变只做几次 stat。工具与说明同一次读出、同一份缓存。
 
 给模型的名字是 ``mcp__<服务>__<工具>``（前缀 :data:`PREFIX` 也是前端工具目录认 MCP 一族的依据）：模型 API 的
 函数名只允许 ``[A-Za-z0-9_-]``、最长 64 个字符，服务名与工具名都是外部写的，所以要换字符、可能要截断；截断或
@@ -35,7 +35,7 @@ from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
-from app.models.external_tool import ExternalToolDefinition
+from app.models.external_tool import ExternalInstructions, ExternalToolDefinition
 from app.service import depends as service_depends
 from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.mcp.configuration import (
@@ -66,18 +66,29 @@ _INVALID = re.compile(r"[^A-Za-z0-9_-]")
 
 # 单次调用（含必要的建连）的时限；执行器不做硬超时，由这里自己守。
 CALL_TIMEOUT_SECONDS = 90.0
-# 单个工具描述的上限：够说明用法，又不让一个服务的长文档撑大每次请求。
+# 单个工具描述与单个服务说明的上限：够说明用法，又不让一个服务的长文档撑大每次请求。
 _MAX_DESCRIPTION_CHARS = 2000
+_MAX_INSTRUCTIONS_CHARS = 2000
+
+
+# 一次读出的目录：工具定义与服务说明（服务名唯一：两层同名时 workspace 覆盖系统级）。
+_Loaded = tuple[tuple[ExternalToolDefinition, ...], tuple[ExternalInstructions, ...]]
 
 
 class MCPExternalTools:
     """进程级单例，lifespan 注入 core。缓存按工作区键，多线程读取由锁保护。"""
 
     def __init__(self) -> None:
-        self._cache: dict[str, tuple[FileSignature, tuple[ExternalToolDefinition, ...]]] = {}
+        self._cache: dict[str, tuple[FileSignature, _Loaded]] = {}
         self._lock = threading.Lock()
 
     def catalog(self, workspace_root: str) -> tuple[ExternalToolDefinition, ...]:
+        return self._cached(workspace_root)[0]
+
+    def instructions(self, workspace_root: str) -> tuple[ExternalInstructions, ...]:
+        return self._cached(workspace_root)[1]
+
+    def _cached(self, workspace_root: str) -> _Loaded:
         key = normalize_scope_path(workspace_root)
         # 签名在读盘之前取：读盘期间文件又变了，下一次签名对不上会再读一次。
         signature = stat_signature(self._catalog_files(workspace_root))
@@ -85,9 +96,9 @@ class MCPExternalTools:
             cached = self._cache.get(key)
             if cached is not None and cached[0] == signature:
                 return cached[1]
-            definitions = self._load(workspace_root)
-            self._cache[key] = (signature, definitions)
-            return definitions
+            loaded = self._load(workspace_root)
+            self._cache[key] = (signature, loaded)
+            return loaded
 
     def execute(
         self,
@@ -270,7 +281,7 @@ class MCPExternalTools:
     # --- 目录 ---
 
     @classmethod
-    def _load(cls, workspace_root: str) -> tuple[ExternalToolDefinition, ...]:
+    def _load(cls, workspace_root: str) -> _Loaded:
         try:
             servers = available_servers(workspace_root)
         except MCPConfigurationError as exc:
@@ -283,18 +294,31 @@ class MCPExternalTools:
                 "read. Tell the user to fix it in the MCP settings."
             ) from exc
         machine = MCPMachineState.read()
-        entries = [(server, entry) for server in servers for entry in machine.catalog(server)]
+        catalogs = [(server, machine.catalog(server)) for server in servers]
+        entries = [(server, entry) for server, catalog in catalogs for entry in catalog.tools]
         names = cls._model_tool_names((server.name, entry.name) for server, entry in entries)
         definitions = [
             cls._definition(names[(server.name, entry.name)], server, entry) for server, entry in entries
         ]
-        return tuple(sorted(definitions, key=lambda d: d.name))
+        instructions = [
+            ExternalInstructions(source=server.name, text=text)
+            for server, catalog in catalogs
+            if (text := cls._clip(catalog.instructions.strip(), _MAX_INSTRUCTIONS_CHARS))
+        ]
+        return (
+            tuple(sorted(definitions, key=lambda d: d.name)),
+            tuple(sorted(instructions, key=lambda i: i.source)),
+        )
 
     @staticmethod
-    def _definition(name: str, server: ScopedMCPServer, entry: MCPToolEntry) -> ExternalToolDefinition:
-        description = " ".join(entry.description.split())
-        if len(description) > _MAX_DESCRIPTION_CHARS:
-            description = description[: _MAX_DESCRIPTION_CHARS - 1] + "…"
+    def _clip(text: str, limit: int) -> str:
+        return text if len(text) <= limit else text[: limit - 1] + "…"
+
+    @classmethod
+    def _definition(
+        cls, name: str, server: ScopedMCPServer, entry: MCPToolEntry
+    ) -> ExternalToolDefinition:
+        description = cls._clip(" ".join(entry.description.split()), _MAX_DESCRIPTION_CHARS)
         return ExternalToolDefinition(
             name=name,
             description=f"[MCP server {server.name}] {description}".rstrip(),

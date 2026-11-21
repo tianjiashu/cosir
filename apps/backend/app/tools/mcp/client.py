@@ -1,7 +1,7 @@
 """按服务配置建立 MCP 客户端会话，并给出工具目录与连接失败的判定。
 
 长连接与短连接共用这里的会话建立：Agent 调用经 ``connection_pool`` 持有长连接；配置界面的连接
-测试测的是尚未保存的配置，走 :func:`list_server_tools` 的一次性短连接，不进连接池。
+测试测的是尚未保存的配置，走 :func:`list_server_catalog` 的一次性短连接，不进连接池。
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 from pydantic import FileUrl
 
 from app.service.configuration.mcp.configuration import MCPServerConfig, ScopedMCPServer
-from app.service.configuration.mcp.machine_state import MCPToolEntry
+from app.service.configuration.mcp.machine_state import MCPServerCatalog, MCPToolEntry
 from app.tools.mcp.oauth.provider import (
     AuthorizationInteraction,
     oauth_auth,
@@ -55,8 +55,10 @@ async def open_client_session(
     errlog: TextIO | None = None,
     message_handler: MessageHandlerFnT | None = None,
     interaction: AuthorizationInteraction | None = None,
-) -> AsyncIterator[ClientSession]:
+) -> AsyncIterator[tuple[ClientSession, types.InitializeResult]]:
     """按作用域内的服务配置建立并初始化 MCP 会话，退出时释放传输资源（stdio 会结束服务子进程）。
+
+    同时交出 initialize 的结果：服务说明（``instructions``）只在握手时给一次，SDK 会话不保存它。
 
     SDK 的会话与传输基于 anyio task group：进入与退出必须发生在同一个 asyncio task 内，
     长连接因此由连接池里每个服务一个的 owner task 持有本上下文。
@@ -86,8 +88,7 @@ async def open_client_session(
                 read, write, message_handler=message_handler, list_roots_callback=roots
             ) as client,
         ):
-            await client.initialize()
-            yield client
+            yield client, await client.initialize()
         return
 
     auth = oauth_auth(server, config, interaction)
@@ -98,8 +99,7 @@ async def open_client_session(
                 read, write, message_handler=message_handler, list_roots_callback=roots
             ) as client,
         ):
-            await client.initialize()
-            yield client
+            yield client, await client.initialize()
         return
 
     http_client = create_mcp_http_client(headers=config.headers, auth=auth)
@@ -110,18 +110,25 @@ async def open_client_session(
             read, write, message_handler=message_handler, list_roots_callback=roots
         ) as client,
     ):
-        await client.initialize()
-        yield client
+        yield client, await client.initialize()
 
 
-async def list_server_tools(
+async def list_server_catalog(
     server: ScopedMCPServer, interaction: AuthorizationInteraction | None = None
-) -> list[MCPToolEntry]:
-    """短连接到一个 MCP 服务并返回工具目录；只供配置界面的连接测试使用（可交互授权）。"""
+) -> MCPServerCatalog:
+    """短连接到一个 MCP 服务并返回它的说明与工具目录；只供配置界面的连接测试使用（可交互授权）。"""
 
-    async with open_client_session(server, interaction=interaction) as client:
+    async with open_client_session(server, interaction=interaction) as (client, initialized):
         result = await client.list_tools()
-    return [tool_entry(tool) for tool in result.tools]
+    return server_catalog(initialized, result.tools)
+
+
+def server_catalog(initialized: types.InitializeResult, tools: list[types.Tool]) -> MCPServerCatalog:
+    """SDK 的握手结果与工具描述 → 本机记录里的服务目录（测试与连接池回写共用）。"""
+
+    return MCPServerCatalog(
+        instructions=initialized.instructions or "", tools=[tool_entry(tool) for tool in tools]
+    )
 
 
 def tool_entry(tool: types.Tool) -> MCPToolEntry:

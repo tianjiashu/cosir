@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from app.api.configuration import extensions
 from app.app import app
 from app.service.configuration.mcp import configuration_service as mcp_configuration_service
-from app.service.configuration.mcp.machine_state import MCPToolEntry
+from app.service.configuration.mcp.machine_state import MCPServerCatalog, MCPToolEntry
 from app.service.configuration.skills.configuration import SkillConfiguration
 
 _SEARCH_TOOLS = [MCPToolEntry(name="search", description="Search", input_schema={"type": "object"})]
@@ -76,9 +76,9 @@ def tools_ok(monkeypatch) -> dict[str, bool]:
     async def list_tools(server, interaction=None):
         if state["fail"]:
             raise RuntimeError("server stopped")
-        return _SEARCH_TOOLS
+        return MCPServerCatalog(tools=_SEARCH_TOOLS)
 
-    monkeypatch.setattr(mcp_configuration_service, "list_server_tools", list_tools)
+    monkeypatch.setattr(mcp_configuration_service, "list_server_catalog", list_tools)
     return state
 
 
@@ -205,14 +205,14 @@ def test_a_transient_test_failure_keeps_the_server_available(client, monkeypatch
     client.put("/configuration/mcp-servers", json={"servers": [config]})
 
     async def reachable(server, interaction=None):
-        return _SEARCH_TOOLS
+        return MCPServerCatalog(tools=_SEARCH_TOOLS)
 
     async def unreachable(server, interaction=None):
         raise ConnectionError("connection refused")
 
-    monkeypatch.setattr(mcp_configuration_service, "list_server_tools", reachable)
+    monkeypatch.setattr(mcp_configuration_service, "list_server_catalog", reachable)
     client.post("/configuration/mcp-servers/test", json=config)
-    monkeypatch.setattr(mcp_configuration_service, "list_server_tools", unreachable)
+    monkeypatch.setattr(mcp_configuration_service, "list_server_catalog", unreachable)
     failed = client.post("/configuration/mcp-servers/test", json=config).json()
 
     assert (failed["success"], failed["failure_kind"]) == (False, "unreachable")
@@ -235,10 +235,10 @@ def test_an_invalid_expanded_url_only_marks_that_server(client, monkeypatch) -> 
 def test_mcp_test_returns_timeout_result(client, monkeypatch) -> None:
     async def list_tools(server, interaction=None):
         await asyncio.sleep(0.02)
-        return []
+        return MCPServerCatalog()
 
     monkeypatch.setattr(mcp_configuration_service, "MCP_TEST_TIMEOUT_SECONDS", 0.001)
-    monkeypatch.setattr(mcp_configuration_service, "list_server_tools", list_tools)
+    monkeypatch.setattr(mcp_configuration_service, "list_server_catalog", list_tools)
 
     response = client.post("/configuration/mcp-servers/test", json=_server())
 

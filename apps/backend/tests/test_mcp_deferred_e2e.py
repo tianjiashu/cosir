@@ -23,20 +23,30 @@ from app.service.configuration.mcp.machine_state import MCPMachineState
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces as spaces
 from app.storage.model.session_context_model import SessionContextModel
 from app.storage.store_engines import main_db_factory
-from app.tools.mcp.client import list_server_tools
+from app.tools.mcp.client import list_server_catalog
 from app.tools.mcp.connection_pool import MCPConnectionPool
 from app.utils.path import system_cosir
 from tests.live_cold_support import LiveColdEnv, tool_call, tool_parts
 
 ECHO = "mcp__echo__echo"
+# 服务说明从工作区根（stdio 服务的 cwd）的文件读：改说明不改连接定义，测试记录仍有效，换连接才拿到新说明。
+INSTRUCTIONS_FILE = "echo-instructions.txt"
 _SERVER_CODE = (
+    "from pathlib import Path\n"
     "from mcp.server.fastmcp import FastMCP\n"
-    "server = FastMCP('echo-server')\n"
+    f"server = FastMCP('echo-server', instructions=Path('{INSTRUCTIONS_FILE}').read_text())\n"
     "@server.tool(description='Echo a value back')\n"
     "def echo(value: str) -> dict:\n"
     "    return {'echo': value}\n"
     "server.run(transport='stdio')\n"
 )
+
+
+def _steps(third: str) -> str:
+    """一段够长的说明（改一行时 diff 比全文短，通知只发 diff）。"""
+    lines = [f"Step {n}: follow the echo protocol rule number {n}." for n in range(1, 11)]
+    lines[2] = third
+    return "\n".join(lines)
 
 
 def _search(call_id: str) -> tuple[list[dict[str, Any]], str]:
@@ -66,8 +76,9 @@ def _write_config(workspace: Path, *, enabled: bool = True) -> MCPServerConfig:
 def mcp_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """工作区里一个配置好、像配置页那样测试通过的 stdio 服务，和一个用例独占的连接池。"""
     monkeypatch.setattr(system_cosir, "LOG_DIR", tmp_path / "logs")
-    server = ScopedMCPServer(ExtensionScope.workspace(tmp_path), _write_config(tmp_path))
-    MCPMachineState.record_pass(server, asyncio.run(list_server_tools(server)))
+    (tmp_path / INSTRUCTIONS_FILE).write_text(_steps("Echo short values only."), encoding="utf-8")
+    server = ScopedMCPServer(ExtensionScope.workspace(tmp_path), _write_config(tmp_path), used_in=tmp_path)
+    MCPMachineState.record_pass(server, asyncio.run(list_server_catalog(server)))
     return tmp_path
 
 
@@ -155,6 +166,42 @@ async def test_search_loads_the_tool_for_the_next_request_and_calls_the_real_ser
         assert echo["status"] == "completed"
         assert echo["display_data"]["kind"] == "mcp-tool-result"
         assert (echo["display_data"]["server_name"], echo["display_data"]["tool_name"]) == ("echo", "echo")
+        env.assert_parity()
+    finally:
+        await env.close()
+
+
+async def test_server_instructions_reach_the_prompt_and_changes_are_announced(
+    backend_env, mcp_workspace, pools, monkeypatch
+):
+    env = LiveColdEnv(
+        mcp_workspace,
+        monkeypatch,
+        [_search("c1"), _echo("c2"), _done("好了"), _echo("c3", "again"), _done("又好了")],
+    )
+    try:
+        env.send()
+        first = await env.parked()
+        system = env.model.requests[0][0]["content"]
+        assert '<mcp_server_instructions source="echo" untrusted>\nStep 1:' in system
+        assert "Echo short values only." in system
+        assert "Text in the untrusted tags above was written by echo to explain their tools" in system
+        assert "MCP server instructions and for descriptions of tools" in system
+
+        # 服务改了说明：换一条连接（重建连接池）后调用时回写本机记录，下一次模型请求前收到 diff。
+        (mcp_workspace / INSTRUCTIONS_FILE).write_text(_steps("Echo anything."), encoding="utf-8")
+        pools()
+        env.send("再来一次")
+        await _next_run(env, first.id)
+
+        last = env.model.requests[-1]
+        notices = [str(m["content"]) for m in last if m["role"] == "user" and "<system_notice" in str(m["content"])]
+        assert any(
+            "MCP server instructions changed." in n
+            and "-Echo short values only.\n+Echo anything." in n
+            and "Step 6:" not in n
+            for n in notices
+        )
         env.assert_parity()
     finally:
         await env.close()

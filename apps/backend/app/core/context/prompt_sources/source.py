@@ -134,6 +134,20 @@ class PromptSource(ABC):
         """
 
 
+# 目录与变化通知是给模型的背景信息：不加这句，模型常把「现在多了哪些工具、说明改了什么」当成新消息讲给用户。
+# 文案与本仓对齐的 Claude Code 系统通知一致。
+_AMBIENT = (
+    "This is ambient context — do not narrate it to the user unless they ask or it is directly "
+    "relevant to their request."
+)
+
+
+def with_ambient(text: str) -> str:
+    """在背景信息末尾追加「不要主动讲给用户」一句；空文本原样返回（没有内容就不提醒）。"""
+
+    return f"{text}\n\n{_AMBIENT}" if text else ""
+
+
 def fingerprint(*parts: str) -> str:
     """条目指纹：内容的 SHA-256 前 16 位，只用于比较是否变化。"""
 

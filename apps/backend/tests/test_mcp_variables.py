@@ -16,7 +16,7 @@ from app.service.configuration.environment_configuration_service import (
 )
 from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.mcp.configuration import MCPServerConfig, ScopedMCPServer
-from app.service.configuration.mcp.machine_state import MCPMachineState
+from app.service.configuration.mcp.machine_state import MCPMachineState, MCPServerCatalog
 from app.service.configuration.mcp.variable_references import MissingVariablesError
 
 _ENVIRON = {"TOKEN": "secret", "HOST": "api.example.com"}
@@ -99,7 +99,7 @@ def test_test_record_follows_the_definition_and_the_pool_follows_the_values(
     config = MCPServerConfig(name="one", command="srv", env={"KEY": "${TOKEN}"})
     server = ScopedMCPServer(scope, config)
     monkeypatch.setenv("TOKEN", "first")
-    MCPMachineState.record_pass(server, [])
+    MCPMachineState.record_pass(server, MCPServerCatalog())
     first_connection = server.connection_fingerprint()
 
     monkeypatch.setenv("TOKEN", "rotated")
@@ -212,7 +212,7 @@ def test_each_server_gets_one_main_status_in_priority_order(tmp_path: Path, monk
 
     from app.config.settings import Settings
     from app.service.configuration.mcp.configuration_view import MCPServerEntry
-    from app.service.configuration.mcp.machine_state import MCPMachineState
+    from app.service.configuration.mcp.machine_state import MCPMachineState, MCPServerCatalog
 
     scope = ExtensionScope.workspace(tmp_path)
     monkeypatch.delenv("MISSING_TOKEN", raising=False)
@@ -228,9 +228,9 @@ def test_each_server_gets_one_main_status_in_priority_order(tmp_path: Path, monk
     needs_sign_in = server("sign-in", **remote)
     untested = server("untested", command="srv", env={"A": "${FROM_ENV_FILE}"})
     available = server("available", command="srv")
-    MCPMachineState.record_pass(needs_sign_in, [])
+    MCPMachineState.record_pass(needs_sign_in, MCPServerCatalog())
     MCPMachineState.update_oauth(needs_sign_in, "https://example.com/mcp", needs_authorization=True)
-    MCPMachineState.record_pass(available, [])
+    MCPMachineState.record_pass(available, MCPServerCatalog())
 
     entries = MCPServerEntry.for_servers([disabled, missing, needs_sign_in, untested, available])
 

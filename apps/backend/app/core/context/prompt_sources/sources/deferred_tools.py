@@ -22,6 +22,7 @@ from app.core.context.prompt_sources.source import (
     SourceItem,
     SourceItems,
     fingerprint,
+    with_ambient,
 )
 from app.core.tool.handler.deferred.deferred_catalog import DeferredCatalog
 from app.core.tool.schemas.tool_names import TOOL_SEARCH
@@ -29,11 +30,6 @@ from app.models.message_metadata import PromptSourceEntry
 
 # 外部目录读不出来时的唯一条目键：空串，工具名至少一个字符，不会撞上。
 UNAVAILABLE_KEY = ""
-# 目录与变化通知都是给模型的背景信息：不加这句，模型常把「现在多了哪些工具」当成新消息讲给用户。
-_AMBIENT = (
-    "This is ambient context — do not narrate it to the user unless they ask or it is directly "
-    "relevant to their request."
-)
 
 
 class DeferredToolsSource(PromptSource):
@@ -63,12 +59,12 @@ class DeferredToolsSource(PromptSource):
         blocks = [self._available(names)] if names else []
         if UNAVAILABLE_KEY in items:
             blocks.append(items[UNAVAILABLE_KEY].text)
-        return self._with_ambient("\n\n".join(blocks))
+        return with_ambient("\n\n".join(blocks))
 
     def describe(
         self, diff: ItemDiff, items: SourceItems, previous: Mapping[str, PromptSourceEntry]
     ) -> str:
-        return self._with_ambient(self._changes(diff, items, previous))
+        return with_ambient(self._changes(diff, items, previous))
 
     @classmethod
     def _changes(
@@ -97,10 +93,6 @@ class DeferredToolsSource(PromptSource):
                 f"{TOOL_SEARCH} will return no match:\n" + "\n".join(diff.removed)
             )
         return "\n\n".join(blocks)
-
-    @staticmethod
-    def _with_ambient(text: str) -> str:
-        return f"{text}\n\n{_AMBIENT}" if text else ""
 
 
     @staticmethod

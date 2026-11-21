@@ -11,10 +11,12 @@
   不是同一条被覆盖；与测试记录用集合同理，测一份改了地址的草稿也不会抹掉已保存地址的登录。保存配置时
   裁到当前地址。手填 ``client_id`` 的服务不存客户端信息（配置就是事实源）。令牌带绝对过期时间，供重启后
   用刷新令牌静默续期（见 ``tools/mcp/oauth/provider``）。
-- **工具目录**：测试通过（或登录授权成功）那次连接列到的工具，按定义指纹记，与测试记录同生同灭。Agent 的
-  外部工具目录（``tools/mcp/external_tools``）只读它：每次模型请求前都要对账目录，不能为此连接服务。连接池
-  之后列到的目录与记录不同时回写（:meth:`MCPMachineState.record_catalog`），服务运行期增删工具因此要等下一次
-  列目录（新连接、``tools/list_changed`` 通知后的调用）才进目录。
+- **服务目录**：测试通过（或登录授权成功）那次连接拿到的服务说明（initialize 的 ``instructions``）与工具，
+  按定义指纹记，与测试记录同生同灭。两者是同一次连接里服务对自己的声明，所以存成一个值对象
+  （:class:`MCPServerCatalog`），不分两份字典手工同步。Agent 的外部工具目录与服务说明（``tools/mcp/mcp_tools``）
+  只读它：每次模型请求前都要对账，不能为此连接服务。连接池之后拿到的目录与记录不同时回写
+  （:meth:`MCPMachineState.record_catalog`），服务运行期增删工具因此要等下一次列目录（新连接、
+  ``tools/list_changed`` 通知后的调用）才进目录；说明只在建连时给出，换了连接才可能变。
 
 只存在系统级 ``<DATA>/.cosir/config/mcp_machine_state.json``（受保护路径，Agent 的文件工具读不到）：
 workspace 的 ``mcp_servers.json`` 可能随仓库共享，这些若写在那里，仓库作者就能预先写好「已测试」，令牌
@@ -63,14 +65,26 @@ class MCPToolEntry(BaseModel):
     input_schema: dict[str, object]
 
 
+class MCPServerCatalog(BaseModel):
+    """一次连接里服务对自己的声明：说明（initialize 的 ``instructions``，没给为空串）与工具，都是原样内容。
+
+    原样保存、不裁剪：长度上限是给模型的投影规则（``tools/mcp/mcp_tools``），配置页仍能看到全文。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    instructions: str = ""
+    tools: list[MCPToolEntry] = Field(default_factory=list)
+
+
 class ServerMachineState(BaseModel):
-    """一个服务在本机的全部事实：测试通过的定义指纹、各定义列到的工具目录与授权记录。"""
+    """一个服务在本机的全部事实：测试通过的定义指纹、各定义拿到的服务目录与授权记录。"""
 
     model_config = ConfigDict(extra="forbid")
 
     tested: list[str] = Field(default_factory=list)
-    # 定义指纹 → 工具目录；只为 ``tested`` 里的指纹保存。
-    catalogs: dict[str, list[MCPToolEntry]] = Field(default_factory=dict)
+    # 定义指纹 → 服务目录；只为 ``tested`` 里的指纹保存。
+    catalogs: dict[str, MCPServerCatalog] = Field(default_factory=dict)
     # 服务地址（变量已展开）→ 授权记录。
     oauth: dict[str, OAuthRecord] = Field(default_factory=dict)
 
@@ -129,10 +143,10 @@ class MCPMachineState(BaseModel):
 
         return server.definition_fingerprint in self.server(server).tested
 
-    def catalog(self, server: ScopedMCPServer) -> list[MCPToolEntry]:
-        """这个服务当前连接定义测试通过时列到的工具；没测过或没记下目录时为空。"""
+    def catalog(self, server: ScopedMCPServer) -> MCPServerCatalog:
+        """这个服务当前连接定义测试通过时拿到的目录；没测过或没记下目录时为空目录。"""
 
-        return self.server(server).catalogs.get(server.definition_fingerprint, [])
+        return self.server(server).catalogs.get(server.definition_fingerprint, MCPServerCatalog())
 
     def oauth(self, server: ScopedMCPServer, server_url: str) -> OAuthRecord | None:
         """这个服务在这个地址上的授权记录。"""
@@ -142,8 +156,8 @@ class MCPMachineState(BaseModel):
     # --- 写入（整份文件在锁内读改写） ---
 
     @classmethod
-    def record_pass(cls, server: ScopedMCPServer, tools: list[MCPToolEntry]) -> None:
-        """记下一次成功连接（测试或登录授权）与它列到的工具；同名服务其他定义的记录保留（测草稿不影响已保存配置）。
+    def record_pass(cls, server: ScopedMCPServer, catalog: MCPServerCatalog) -> None:
+        """记下一次成功连接（测试或登录授权）与它拿到的目录；同名服务其他定义的记录保留（测草稿不影响已保存配置）。
 
         连上了就说明这个地址眼下不需要用户登录，一并清掉它的「需要登录」标记：改用静态 token、服务不再要求
         认证、令牌已被别处续上，都不会经过「拿到新令牌」，只清那一处会让标记一直挂着。成功的连接一定能展开
@@ -155,7 +169,7 @@ class MCPMachineState(BaseModel):
         def change(state: ServerMachineState) -> None:
             if server.definition_fingerprint not in state.tested:
                 state.tested.append(server.definition_fingerprint)
-            state.catalogs[server.definition_fingerprint] = list(tools)
+            state.catalogs[server.definition_fingerprint] = catalog
             record = state.oauth.get(url) if url is not None else None
             if record is not None and record.needs_authorization:
                 state.oauth[url] = record.model_copy(update={"needs_authorization": False})
@@ -163,15 +177,15 @@ class MCPMachineState(BaseModel):
         cls._change_server(server, change)
 
     @classmethod
-    def record_catalog(cls, server: ScopedMCPServer, tools: list[MCPToolEntry]) -> None:
-        """连接池列到的目录与记录不同时回写；只认测试通过的定义（没测过的服务不该因连接池而进 Agent 的目录）。"""
+    def record_catalog(cls, server: ScopedMCPServer, catalog: MCPServerCatalog) -> None:
+        """连接池拿到的目录与记录不同时回写；只认测试通过的定义（没测过的服务不该因连接池而进 Agent 的目录）。"""
 
-        if MCPMachineState.read().catalog(server) == tools:
+        if MCPMachineState.read().catalog(server) == catalog:
             return
 
         def change(state: ServerMachineState) -> None:
             if server.definition_fingerprint in state.tested:
-                state.catalogs[server.definition_fingerprint] = list(tools)
+                state.catalogs[server.definition_fingerprint] = catalog
 
         cls._change_server(server, change)
 
@@ -208,7 +222,7 @@ class MCPMachineState(BaseModel):
     def keep_only(cls, scope: ExtensionScope, saved: Iterable[ScopedMCPServer]) -> None:
         """保存配置后调用：本作用域只留「仍存在的服务」的事实。
 
-        测试记录与工具目录裁到各服务的当前定义（删掉的服务、改掉的旧参数、没保存的草稿都要重测；保存的正是
+        测试记录与服务目录裁到各服务的当前定义（删掉的服务、改掉的旧参数、没保存的草稿都要重测；保存的正是
         测过的草稿时立即可用）；授权记录裁到当前地址（草稿地址上的登录随之丢掉，保存前先登录的那份就是当前地址，
         保留）；删掉的服务连同授权一起丢掉（同名服务再加回来要重新授权）。
         """

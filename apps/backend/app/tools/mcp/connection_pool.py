@@ -16,8 +16,9 @@ HTTP / SSE / 停止请求。工具 handler 在工作线程里经 :meth:`MCPConne
 - owner task 先结束时，在途请求带着它结束的原因立刻失败（:meth:`_Connection.request`）。会话的请求在别的 task
   里等响应，传输层出错（长连接中途授权失效、服务端回 500）时 SDK 以取消的方式拆掉会话，给在途请求回
   「连接已关闭」的那一步也一并被取消，不在这里收口，调用会一直挂到工具时限，原因也丢了。
-- 工具目录随连接缓存，收到 ``tools/list_changed`` 通知或调用了目录里没有的工具时刷新；每次列到的目录与本机
-  记录不同就回写（``MCPMachineState.record_catalog``），Agent 的延迟工具目录只读那份记录、不连接服务。
+- 工具目录随连接缓存，收到 ``tools/list_changed`` 通知或调用了目录里没有的工具时刷新；每次列到的目录（连同
+  握手时的服务说明）与本机记录不同就回写（``MCPMachineState.record_catalog``），Agent 的延迟工具目录与服务
+  说明只读那份记录、不连接服务。
 
 线程模型：``_connections`` 等状态只在池的事件循环线程上读写；``_lock`` 只保护循环线程的
 启动与关闭。
@@ -48,7 +49,7 @@ from app.tools.mcp.client import (
     describe_exception,
     is_connection_failure,
     open_client_session,
-    tool_entry,
+    server_catalog,
 )
 from app.utils.path import system_cosir
 
@@ -308,6 +309,8 @@ class _Connection:
         self.closing = False
         self._session: ClientSession | None = None
         self._tools: list[types.Tool] | None = None
+        # 握手结果：服务说明只在这里给一次，回写本机记录时与工具目录一起写。
+        self._initialized: types.InitializeResult | None = None
         self._ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self._close_requested = asyncio.Event()
         self._owner: asyncio.Task[None] | None = None
@@ -393,8 +396,11 @@ class _Connection:
         if self._tools is None:
             self._tools = (await self.request(lambda session: session.list_tools())).tools
             # 读写本机记录是文件 IO，离开池的事件循环做，不拖住其他连接。
+            assert self._initialized is not None
             await asyncio.to_thread(
-                MCPMachineState.record_catalog, self.server, [tool_entry(t) for t in self._tools]
+                MCPMachineState.record_catalog,
+                self.server,
+                server_catalog(self._initialized, self._tools),
             )
         return self._tools
 
@@ -413,8 +419,8 @@ class _Connection:
                 self.server,
                 errlog=errlog,
                 message_handler=self._on_message,
-            ) as session:
-                self._session = session
+            ) as (session, initialized):
+                self._session, self._initialized = session, initialized
                 self._ready.set_result(None)
                 await self._close_requested.wait()
         except Exception as exc:

@@ -17,13 +17,13 @@ from app.service.configuration.mcp.configuration import (
     visible_servers,
 )
 from app.service.configuration.mcp.configuration_view import MCPServerEntry
-from app.service.configuration.mcp.machine_state import MCPMachineState, MCPToolEntry
+from app.service.configuration.mcp.machine_state import MCPMachineState, MCPServerCatalog
 from app.service.configuration.mcp.oauth_flows import (
     AUTHORIZATION_TIMEOUT_SECONDS,
     MCPAuthorizationFlows,
     PendingAuthorization,
 )
-from app.tools.mcp.client import list_server_tools
+from app.tools.mcp.client import list_server_catalog
 from app.tools.mcp.failure import MCPFailure
 from app.tools.mcp.oauth.provider import AuthorizationInteraction
 
@@ -107,10 +107,10 @@ class MCPConfigurationService:
         server = self._server(config)
         try:
             async with asyncio.timeout(MCP_TEST_TIMEOUT_SECONDS):
-                tools = await list_server_tools(server)
+                catalog = await list_server_catalog(server)
         except Exception as exc:
             return self._failed(server, MCPFailure.from_exception(exc, server))
-        return self._passed(server, tools)
+        return self._passed(server, catalog)
 
     async def authorize(self, config: MCPServerConfig) -> MCPServerTestResult | PendingAuthorization:
         """用户点了「登录授权」：开回调监听并连接服务，拿到授权地址就交给前端打开（两段式）。
@@ -171,23 +171,23 @@ class MCPConfigurationService:
 
         try:
             async with asyncio.timeout(AUTHORIZATION_TIMEOUT_SECONDS + MCP_TEST_TIMEOUT_SECONDS):
-                tools = await list_server_tools(server, interaction)
+                catalog = await list_server_catalog(server, interaction)
         except Exception as exc:
             return self._failed(server, MCPFailure.from_exception(exc, server))
-        return self._passed(server, tools)
+        return self._passed(server, catalog)
 
-    def _passed(self, server: ScopedMCPServer, tools: list[MCPToolEntry]) -> MCPServerTestResult:
-        MCPMachineState.record_pass(server, tools)
+    def _passed(self, server: ScopedMCPServer, catalog: MCPServerCatalog) -> MCPServerTestResult:
+        MCPMachineState.record_pass(server, catalog)
         log.info(
             "configuration_mcp_server_test_passed",
             extra={
                 "msg": "MCP 服务连接测试通过",
-                "data": {"scope": self.scope.key, "server_name": server.name, "tool_count": len(tools)},
+                "data": {"scope": self.scope.key, "server_name": server.name, "tool_count": len(catalog.tools)},
             },
         )
         return MCPServerTestResult(
             success=True,
-            tools=[tool.model_dump() for tool in tools],
+            tools=[tool.model_dump() for tool in catalog.tools],
             agent_available=self._is_saved(server),
         )
 

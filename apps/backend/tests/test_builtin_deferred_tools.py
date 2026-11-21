@@ -93,6 +93,9 @@ class _NoExternal:
             raise ExternalCatalogUnavailable(self.unavailable)
         return ()
 
+    def instructions(self, workspace_root: str) -> tuple:
+        return self.catalog(workspace_root)
+
     def execute(self, *_args: Any) -> Any:
         raise AssertionError("no external tools here")
 

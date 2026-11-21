@@ -23,11 +23,11 @@ from app.service.configuration.mcp.configuration import (
     available_servers,
     visible_servers,
 )
-from app.service.configuration.mcp.machine_state import MCPMachineState
+from app.service.configuration.mcp.machine_state import MCPMachineState, MCPServerCatalog
 from app.service.configuration.skills.catalog import SkillCatalog, SkillLoadError
 from app.service.configuration.skills.configuration import SkillConfiguration
 from app.tools.mcp.call_result import MCPCallResult
-from app.tools.mcp.client import _stdio_parameters, list_server_tools
+from app.tools.mcp.client import _stdio_parameters, list_server_catalog
 from app.tools.mcp.connection_pool import MCPConnectionPool
 from app.tools.mcp.mcp_tools import MCPExternalTools
 from app.tools.tool_handler.skill_tool import SkillTool
@@ -84,7 +84,7 @@ def _context(workspace_root: Path) -> ToolExecutionContext:
 
 def _pass(server: ScopedMCPServer) -> None:
     """像配置页的连接测试那样连一次：记下测试通过与它列到的工具目录。"""
-    MCPMachineState.record_pass(server, asyncio.run(list_server_tools(server)))
+    MCPMachineState.record_pass(server, asyncio.run(list_server_catalog(server)))
 
 
 def _definition(workspace: Path, name: str) -> ExternalToolDefinition:
@@ -216,8 +216,8 @@ def test_mcp_available_servers_require_enabled_and_local_test_record(tmp_path):
     untested = MCPServerConfig(name="untested", command="python")
     _write_mcp_servers(workspace / ".cosir", tested, disabled, untested)
     scope = ExtensionScope.workspace(workspace)
-    MCPMachineState.record_pass(ScopedMCPServer(scope, tested), [])
-    MCPMachineState.record_pass(ScopedMCPServer(scope, disabled), [])
+    MCPMachineState.record_pass(ScopedMCPServer(scope, tested), MCPServerCatalog())
+    MCPMachineState.record_pass(ScopedMCPServer(scope, disabled), MCPServerCatalog())
 
     assert [server.name for server in available_servers(workspace)] == ["tested"]
     # 同一服务在另一个工作区没有测试记录。
@@ -252,9 +252,9 @@ def test_mcp_test_record_keeps_saved_config_when_a_draft_is_tested(tmp_path):
     scope = ExtensionScope.workspace(_workspace(tmp_path))
     saved = ScopedMCPServer(scope, MCPServerConfig(name="one", command="python"))
     draft = ScopedMCPServer(scope, MCPServerConfig(name="one", command="node"))
-    MCPMachineState.record_pass(saved, [])
+    MCPMachineState.record_pass(saved, MCPServerCatalog())
 
-    MCPMachineState.record_pass(draft, [])
+    MCPMachineState.record_pass(draft, MCPServerCatalog())
     assert MCPMachineState.read().passed(saved)
     assert MCPMachineState.revoke(draft) is True
     assert MCPMachineState.read().passed(saved)
@@ -270,7 +270,7 @@ def test_mcp_test_record_is_pruned_on_save_and_dropped_with_the_workspace(tmp_pa
     removed = ScopedMCPServer(scope, MCPServerConfig(name="removed", command="python"))
     stale_draft = ScopedMCPServer(scope, MCPServerConfig(name="kept", command="node"))
     for server in (kept, removed, stale_draft):
-        MCPMachineState.record_pass(server, [])
+        MCPMachineState.record_pass(server, MCPServerCatalog())
 
     MCPMachineState.keep_only(scope, [kept])
     record = MCPMachineState.read()
@@ -362,7 +362,7 @@ def test_mcp_http_transports_list_and_call_tools(transport, path):
                     headers={"x-mcp-test": "present"},
                 ),
             )
-            tools = await list_server_tools(config)
+            tools = (await list_server_catalog(config)).tools
             pool = MCPConnectionPool()
             try:
                 result = await asyncio.wrap_future(
