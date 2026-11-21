@@ -32,7 +32,7 @@ type ToolCatalogEntry = {
   target?: (args: ToolArgs) => string | null;
   /** 目标就是 `args.path`（单个工作区路径）。 */
   pathTarget?: true;
-  /** 工具参数里有 `intent`（后端 `call_intent.intent_field`）：写了就用作标题。 */
+  /** 工具参数里有 `intent`（后端 `tools/tool_models/call_intent.intent_field`）：写了就用作标题。 */
   intent?: true;
   /**
    * 没写意图时补上的目标：标题退回动词后一串行会长得一样（十条都叫「执行命令」），用它区分是哪一次；

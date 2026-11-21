@@ -127,7 +127,7 @@ test("A10 a call awaiting the user stays visible in place, then folds with the p
 test("A10 a focused control unmounting with its tool never blocks automatic folding", async ({ page, request }) => {
   const display = { kind: "terminal-result", command: "sleep 1", workdir: "/w", output: "" };
   const run = (status: "running" | "completed") => toolCallPart("term", "execute_terminal", { status, args: { command: "sleep 1" }, display_data: status === "completed" ? { ...display, end: "exited", exit_code: 0 } : display });
-  const wait = { toolCallId: "term", kind: "terminal_command", label: "sleep", status: "running", startedAt: "2026-01-01T00:00:00Z", endedAt: null };
+  const wait = { toolCallId: "term", label: "sleep", status: "running", startedAt: "2026-01-01T00:00:00Z", endedAt: null };
   await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { sessionId: 42, entries: [], foregroundWaits: [wait] } });
   await seedState(request, 42, state([text("进展"), run("running")]));
   await page.goto("/sessions/42");

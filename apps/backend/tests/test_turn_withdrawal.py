@@ -52,7 +52,7 @@ def _placeholder(call_id: str) -> tuple[dict, ToolMessageMetadata]:
         ToolMessageMetadata(
             status="pending",
             background=BackgroundWork(
-                run_id=1, kind="terminal_command", label="t",
+                run_id=1, label="t",
                 started_at="2026-01-01T00:00:00+00:00",
             ),
         ),

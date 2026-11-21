@@ -17,7 +17,7 @@ from app.assistant_transport.projection.snapshot_rebuild import (
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.events import ToolCallCreatedEvent, ToolCallStatusChangedEvent
 from app.core.tool.execute.tool_access_gate import ToolAccessGate
-from app.core.tool.request_tools import RequestTools
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.schemas import (
     ToolCall,
     ToolExecutionContext,

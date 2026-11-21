@@ -31,12 +31,11 @@ import { createQueryClient } from "@/lib/query/query-client";
 
 import { transportState, indexedState } from "./transport-fixtures";
 
-const WORK = { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } satisfies TransportBackgroundWork;
+const WORK = { label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } satisfies TransportBackgroundWork;
 
 function entry(toolCallId: string, overrides: Partial<BackgroundTaskEntry> = {}): BackgroundTaskEntry {
   return {
     toolCallId,
-    kind: "terminal_command",
     label: `terminal_command:${toolCallId}`,
     status: "running",
     startedAt: "2026-10-28T08:00:00+00:00",
@@ -98,7 +97,8 @@ describe("snapshot background_tasks 与工具 part background", () => {
     expect(parseTransportState(ok)).toBe(ok);
     expect(() => parseTransportState(withPart(true))).toThrow(/background/);
     expect(() => parseTransportState(withPart({ ...WORK, endedAt: undefined }))).toThrow(/background/);
-    expect(() => parseTransportState(withPart({ ...WORK, kind: "unknown" }))).toThrow(/background\.kind/);
+    // 字段集合精确：多出的字段（如已删除的 kind）同样拒收。
+    expect(() => parseTransportState(withPart({ ...WORK, kind: "terminal_command" }))).toThrow(/background/);
   });
 
   it("foreground_waits 是必填的唯一 id 数组", () => {

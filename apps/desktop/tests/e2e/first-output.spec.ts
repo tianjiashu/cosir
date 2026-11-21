@@ -51,10 +51,10 @@ test("dark quiet waiting and reduced motion preserve status without a tool card"
   await seedState(request, 42, transportState({
     messages: [userMessage("u", 1), assistantMessage("a", 1, [
       toolCallPart("wait", "wait_messages", { presentation: "quiet", status: "completed" }),
-      toolCallPart("bg", "execute_terminal", { status: "pending", background: { kind: "terminal_command", label: "验证", startedAt: new Date().toISOString(), endedAt: null } }),
+      toolCallPart("bg", "execute_terminal", { status: "pending", background: { label: "验证", startedAt: new Date().toISOString(), endedAt: null } }),
     ])], activity: activity(1, "suspended"),
   }));
-  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { sessionId: 42, entries: [{ toolCallId: "bg", kind: "terminal_command", label: "验证", status: "running", startedAt: new Date().toISOString(), endedAt: null }] } });
+  await request.post(`${API_ORIGIN}/__test__/seed-background-tasks`, { data: { sessionId: 42, entries: [{ toolCallId: "bg", label: "验证", status: "running", startedAt: new Date().toISOString(), endedAt: null }] } });
   await page.goto("/sessions/42");
   const status = page.locator('[data-slot="current-activity"]');
   await expect(status).toHaveText("后台执行：验证");

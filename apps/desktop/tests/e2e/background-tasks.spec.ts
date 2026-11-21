@@ -10,7 +10,6 @@ const SESSION_ID = 61;
 function entry(toolCallId: string, overrides: Partial<BackgroundTaskEntry> = {}): BackgroundTaskEntry {
   return {
     toolCallId,
-    kind: "terminal_command",
     label: `wait ${toolCallId}`,
     status: "running",
     startedAt: new Date(Date.now() - 40_000).toISOString(),
@@ -26,7 +25,7 @@ test.beforeEach(async ({ request }) => {
     1,
     { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] },
     [
-      {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "execute_terminal", args: {}, status: "pending", background: { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
+      {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "execute_terminal", args: {}, status: "pending", background: { label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
       {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "call-fg", toolName: "execute_terminal", args: { command: "npm test" }, status: "running", startedAt: new Date(Date.now() - 12_000).toISOString(), display_data: { kind: "terminal-result", command: "npm test", workdir: "/work" } },
     ],
   ));

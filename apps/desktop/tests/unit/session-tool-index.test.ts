@@ -4,7 +4,7 @@ import { beginCommand, forgetCommands, reconcileCommands, stopTarget, useCommand
 import { useBackgroundTasksStore } from "@/lib/background-tasks/background-tasks-store";
 import { activity, assistantMessage, toolCallPart, transportState } from "./transport-fixtures";
 
-const entry = { toolCallId: "c0", kind: "terminal_command" as const, status: "running" as const, label: "会话", startedAt: "2026-11-07T00:00:00Z", endedAt: null };
+const entry = { toolCallId: "c0", status: "running" as const, label: "会话", startedAt: "2026-11-07T00:00:00Z", endedAt: null };
 afterEach(() => { forgetCommands([6]); useBackgroundTasksStore.getState().forget([6]); vi.unstubAllGlobals(); });
 
 describe("shared loaded-window tool index", () => {

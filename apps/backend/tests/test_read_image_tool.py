@@ -142,7 +142,6 @@ def test_import_is_idempotent_and_leaves_the_source_untouched(tmp_path: Path) ->
 
 def test_definition_schema_and_agent_exposure() -> None:
     definition = ReadImageTool().to_definition()
-    assert definition.returns_images is True
     schema = strict_parameters_schema(ReadImageArgs)
     assert schema["properties"]["paths"]["maxItems"] == 10
     assert not validate_tool_arguments(

@@ -6,8 +6,8 @@ from openai.types import CompletionUsage
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.deliverable import Deliverable
 from app.models.enums.tool_call_status import ToolCallEventStatus
+from app.models.tool_result_facts import ToolResultFacts
 
 
 class EmptyMessageMetadata(BaseModel):
@@ -137,11 +137,11 @@ class AssistantMessageMetadata(BaseModel):
     usage: CompletionUsage | None = None
 
 
-BackgroundKind = Literal["terminal_command"]
-
-
 class BackgroundWork(BaseModel):
     """一次后台工作的持久化记录，挂在这次调用的后台占位行上，看板与卡片都从它重建。
+
+后台工作目前只有终端命令（``execute_terminal`` 转后台或直接后台运行），所以不记种类；出现第二种时
+再加，不预留。
 
     为什么不单独建表：后台工作就是对话里的一次工具调用，占位行已经随对话 fork、撤回、Session
     删除；记录挂在它上面，看板就是对话的一个投影，没有第二个事实源要手工同步。工作是否还在跑
@@ -151,10 +151,9 @@ class BackgroundWork(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    kind: BackgroundKind
     # 启动工作的 Run（只是来历：工作属于 Session，生命周期不看它）。
     run_id: int | None
-    # 启动时的调用意图快照；UI 动词、图标与本地化仍归前端。
+    # 看板与等待提示的标签，登记时由工具从事实里取（命令的意图、子 Agent 名）；UI 动词、图标与本地化仍归前端。
     label: str
     # 登记后台结果的时刻（转到后台的调用是它开始前台等待的时刻）。
     started_at: str
@@ -173,9 +172,9 @@ class ToolMessageMetadata(BaseModel):
     # 后台结果的后台占位（见 ``ToolObservation.background``）：存在即后台占位，卡片状态与看板条目
     # 的持久化事实源。
     background: BackgroundWork | None = None
-    # 交付记录（见 ``app.models.deliverable``）：只有 ``present_deliverables`` 的结果行有；卡片与产出清单的
-    # 持久化事实源。与 ``background`` 一样「有才写」：投影不会因为某次事件没带它而清掉 part 上已有的。
-    deliverables: tuple[Deliverable, ...] | None = None
+    # 工具交给运行时的结构化结果（见 ``app.models.tool_result_facts``）。与 ``background`` 一样「有才写」：
+    # 投影不会因为某次事件没带它而清掉 part 上已有的。
+    facts: ToolResultFacts | None = None
 
     @property
     def awaiting_decision(self) -> bool:
@@ -183,18 +182,18 @@ class ToolMessageMetadata(BaseModel):
         return self.status == "pending" and self.background is None
 
     def merged_onto(self, previous: "ToolMessageMetadata") -> "ToolMessageMetadata":
-        """结果行 metadata 的更新规则，全仓只此一处：状态与错误取新值，展示数据、后台记录与交付记录
-        「有才写」——新值为空时沿用旧值。
+        """结果行 metadata 的更新规则，全仓只此一处：状态与错误取新值，展示数据、后台记录与结果事实「有才写」
+        ——新值为空时沿用旧值。
 
         更新方（决定重放、后台结论并入、Run 外的占位结算）常常只知道新的状态，不知道也不该覆盖卡片的
-        展示数据与后台记录；所以空值表示「不变」，而不是「清空」。目前没有需要清空这三项的场景。
+        展示数据与后台记录；所以空值表示「不变」，而不是「清空」。目前没有需要清空这几项的场景。
         """
         return ToolMessageMetadata(
             status=self.status,
             error=self.error,
             display_data=self.display_data or previous.display_data,
             background=self.background or previous.background,
-            deliverables=self.deliverables or previous.deliverables,
+            facts=self.facts or previous.facts,
         )
 
 

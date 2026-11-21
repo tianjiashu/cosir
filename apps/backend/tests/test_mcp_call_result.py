@@ -156,7 +156,7 @@ def _runtime(supports_image: bool) -> SimpleNamespace:
     return SimpleNamespace(agent=SimpleNamespace(model=SimpleNamespace(supports_image=supports_image)))
 
 
-# 潜在缺陷：只是有时带图的工具（MCP）把图片发给看不了图的模型，请求直接失败。
+# 潜在缺陷：工具把图片发给看不了图的模型，请求直接失败。所有工具（专门看图的与只是有时带图的）都走这里。
 def test_images_are_withheld_from_text_only_models(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(projection, "_runtime_context", lambda: _runtime(False))
     with_images = tool_success("mcp", "captured", images=["a.png", "b.png"])
@@ -168,7 +168,7 @@ def test_images_are_withheld_from_text_only_models(monkeypatch: pytest.MonkeyPat
     assert with_images.images == () and only_images.images == ()
     assert with_images.content == (
         "captured\n[2 image(s) returned by this tool are not shown: the current model cannot "
-        "read images]"
+        "read images. Do not call tools just to look at images; use a text-only alternative instead]"
     )
     assert only_images.content.startswith("[1 image(s)")
 

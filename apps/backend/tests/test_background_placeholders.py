@@ -23,7 +23,7 @@ from app.tools.tool_handler.terminal.command_job import CommandConclusion
 from tests.command_job_fakes import FakeCommandJob
 
 _WORK = BackgroundWork(
-    run_id=1, kind="terminal_command", label="make", started_at="2026-01-01T00:00:00+00:00"
+    run_id=1, label="make", started_at="2026-01-01T00:00:00+00:00"
 )
 _ENDED_AT = "2026-01-01T00:01:00+00:00"
 _FINISHED_WORK = _WORK.model_copy(update={"ended_at": _ENDED_AT})
@@ -136,7 +136,6 @@ def test_background_placeholder_projects_a_valid_part_field() -> None:
     fields = project_tool_result(ToolMessageMetadata(status="pending", background=_WORK))
 
     assert fields.get("background") == {
-        "kind": _WORK.kind,
         "label": _WORK.label,
         "startedAt": _WORK.started_at,
         "endedAt": None,

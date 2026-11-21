@@ -1,7 +1,7 @@
 """MCP 服务配置的数据契约、读取规则与 Agent 可用视图。
 
 只描述「连哪些服务、怎么连、哪些对 Agent 可用」；建立连接与会话由 ``app/tools/mcp/`` 负责。
-放在 service 层是因为 ``core/context`` 构建系统提示词目录也要读它，而 core 不得导入 ``app.tools``。
+放在 service 层：配置页（``configuration_service``）与 Agent 侧（``tools/mcp`` 的连接池与外部工具目录）都读它。
 
 两个作用域（系统级、workspace 级）各有一份 ``mcp_servers.json``，只放连接定义；「本机测试通过」
 不在这里，而在系统级的本机记录（``mcp/machine_state``）里，workspace 文件随仓库共享也带不进来。

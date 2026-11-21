@@ -1,6 +1,6 @@
 import { commandPending, stopTarget, useCommandRequest } from "@/lib/assistant/command-request-store";
 import { useEffect, useRef } from "react";
-import { CircleMinusIcon, SquareIcon, SquareTerminalIcon, XCircleIcon, type LucideIcon } from "lucide-react";
+import { CircleMinusIcon, SquareIcon, SquareTerminalIcon, XCircleIcon } from "lucide-react";
 
 import { useConversationAsideStore } from "@/lib/conversation-aside/conversation-aside-store";
 import { resolveCallView } from "@/components/conversation/tools/call-view-registry";
@@ -19,18 +19,14 @@ import { useBackgroundTaskPart } from "@/lib/background-tasks/background-tasks-s
 import { useElapsedSince } from "@/hooks/use-elapsed-since";
 import { formatDuration } from "@/lib/format/duration";
 
-/** 新增后台结果种类时补一项（种类的事实源是后端 `BackgroundKind`）。 */
-const KIND_ICONS: Record<BackgroundTaskEntry["kind"], LucideIcon> = {
-  terminal_command: SquareTerminalIcon,
-};
-
 /**
- * 看板的一行：所有种类共用的外壳（种类图标、标题、耗时、停止），展开后是这次调用的详情。
+ * 看板的一行：外壳（终端图标、标题、耗时、停止），展开后是这次调用的详情。后台工作目前只有终端命令，
+ * 所以不分种类。
  *
  * 外壳只读 snapshot `background_tasks`；详情读同一个 snapshot 工具 part（按 `toolCallId` 镜像，见
- * `useBackgroundTaskPart`），由 kind 视图注册表按 `display_data.kind` 决定长什么样，这里不按种类分支。
+ * `useBackgroundTaskPart`），由 kind 视图注册表按 `display_data.kind` 决定长什么样。
  * 不再套一条调用行：标题已在外壳上。视图以只读方式解析，同一调用只留外壳上这一个停止入口
- * （`cancelToolCall`，对所有种类语义一致）。
+ * （`cancelToolCall`）。
  * 对应 part 已不在对话里（如那一回合被撤回）时只剩外壳。条目默认收起，开合与调用行共用 `call:` 键：
  * 时间线的后台行没有展开体，这个键只归看板，运行中转到已结束的列表重挂载也不丢。收尾中（工作已结束、
  * 对话里的占位还没落定）不计时、不能停止，只标「收尾中」，等 snapshot 回推完成或取消。
@@ -42,7 +38,7 @@ export function BackgroundTaskRow({ sessionId, entry }: { sessionId: number; ent
   const part = useBackgroundTaskPart(sessionId, entry.toolCallId);
   const running = entry.status === "running";
   const [expanded, setExpanded] = useDisclosure(sessionId, callKey(entry.toolCallId), false);
-  const Icon = KIND_ICONS[entry.kind];
+
   const requested = useConversationAsideStore((state) => state.revealCall);
   const ref = useRef<HTMLLIElement>(null);
   useEffect(() => {
@@ -62,7 +58,7 @@ export function BackgroundTaskRow({ sessionId, entry }: { sessionId: number; ent
   return (
     <li ref={ref} className="flex flex-col" data-background-task={entry.toolCallId}>
       <div className="group/disclosure hover:bg-muted/60 flex h-8 items-center gap-2 rounded-md px-1">
-        <Icon className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+        <SquareTerminalIcon className="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
         {view?.detail ? (
           <button
             type="button"

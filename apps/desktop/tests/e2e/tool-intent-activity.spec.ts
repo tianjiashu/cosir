@@ -56,8 +56,8 @@ for (const colorScheme of ["light", "dark"] as const) test(`I6–I9 ${colorSchem
 });
 
 test("I5/I7/I8 background settling disables stop and updates the rail reader", async ({ page, request }) => {
-  const job = { toolCallId: "cmd", kind: "terminal_command" as const, label: "检查导出", status: "running" as const, startedAt: "2026-01-01", endedAt: null };
-  const command = toolCallPart("cmd", "execute_terminal", { status: "pending", args: { intent: "检查导出", command: "knip" }, background: { kind: "terminal_command", label: "检查导出", startedAt: "2026-01-01", endedAt: null }, display_data: { kind: "terminal-result", command: "knip", output: "first\n" } });
+  const job = { toolCallId: "cmd", label: "检查导出", status: "running" as const, startedAt: "2026-01-01", endedAt: null };
+  const command = toolCallPart("cmd", "execute_terminal", { status: "pending", args: { intent: "检查导出", command: "knip" }, background: { label: "检查导出", startedAt: "2026-01-01", endedAt: null }, display_data: { kind: "terminal-result", command: "knip", output: "first\n" } });
   const state = model([command], "reasoning"); state.background_tasks = [job];
   await seed(request, state); await page.goto("/sessions/42");
   const head = page.locator('[data-slot="activity-head"]'); await head.click();

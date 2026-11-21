@@ -82,9 +82,7 @@ def test_background_command_returns_a_placeholder_then_delivers(tmp_path, delive
     )
     # Agent 主动选后台：先做别的，不挂起。
     assert observation.background and not observation.suspend
-    assert (observation.background.kind, observation.background.label) == (
-        "terminal_command", "test",
-    )
+    assert observation.background.label == "test"
     assert observation.background.ended_at is None
     assert observation.display_data == {
         "kind": "terminal-result",

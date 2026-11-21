@@ -67,7 +67,7 @@ def test_error_uses_short_tool_default_and_rejects_long_ui_text() -> None:
         (AwaitMessages(), True, False, False),
         (
             RunInBackground(
-                BackgroundWork(run_id=1, kind="terminal_command", label="build", started_at="t0")
+                BackgroundWork(run_id=1, label="build", started_at="t0")
             ),
             False,
             False,

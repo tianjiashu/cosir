@@ -209,7 +209,7 @@ def test_final_tool_metadata_uses_authoritative_terminal_output():
 # 目的：结果行的更新规则全仓只此一处；潜在缺陷：只知道新状态的更新方（结算、作废）把卡片的展示数据与
 # 后台记录一并清掉，或者沿用了旧的状态与错误。
 def test_merged_onto_takes_new_status_and_keeps_previous_payload() -> None:
-    work = BackgroundWork(run_id=1, kind="terminal_command", label="build", started_at="t0")
+    work = BackgroundWork(run_id=1, label="build", started_at="t0")
     previous = ToolMessageMetadata(
         status="pending", error=None, display_data={"kind": "terminal-result"}, background=work
     )

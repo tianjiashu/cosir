@@ -1,6 +1,6 @@
 """交付记录：Agent 用 ``present_deliverables`` 声明的一项成果（文件、目录或网址）。
 
-挂在工具结果行的 metadata 上（``ToolMessageMetadata.deliverables``），是后端持久化事实，随 fork、撤回、
+挂在工具结果行的 metadata 上（``ToolResultFacts.deliverables``），是后端持久化事实，随 fork、撤回、
 删除跟随；工具 part 上的 ``deliverables`` 与 snapshot 顶层清单都是它的投影。展示数据（``display_data``）
 按契约只给前端，后端要读的事实不放那里。
 

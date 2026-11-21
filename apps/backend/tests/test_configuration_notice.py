@@ -211,7 +211,7 @@ def test_deferred_catalog_change_lists_only_what_changed(workspace: Path) -> Non
 
     assert notice is not None
     assert "no longer available. Do not search for them" in notice.content
-    assert notice.content.endswith("mcp__old__x")
+    assert "mcp__old__x\n\nThis is ambient context" in notice.content
     assert "now available" not in notice.content
 
 

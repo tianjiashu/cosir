@@ -28,7 +28,10 @@ describe("terminal query replies", () => {
 
     await write(terminal, "\x1b[6n");
 
-    expect(replies.join("")).toMatch(/\x1b\[\d+;\d+R/);
+    // 光标位置回报：ESC 开头，其后是 [行;列R（ESC 单独比，正则里不放控制字符）。
+    const reply = replies.join("");
+    expect(reply[0]).toBe("\x1b");
+    expect(reply.slice(1)).toMatch(/^\[\d+;\d+R$/);
     terminal.dispose();
   });
 

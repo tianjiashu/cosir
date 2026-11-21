@@ -14,7 +14,7 @@ async function seedEndedWork(request: APIRequestContext, sessionId: number) {
   await request.post(`${origin}/__test__/seed-background-tasks`, {
     data: {
       sessionId,
-      entries: [{ toolCallId: `call-done-${sessionId}`, kind: "terminal_command", label: "npm run lint", status: "completed", startedAt: new Date(Date.now() - 90_000).toISOString(), endedAt: new Date(Date.now() - 60_000).toISOString() }],
+      entries: [{ toolCallId: `call-done-${sessionId}`, label: "npm run lint", status: "completed", startedAt: new Date(Date.now() - 90_000).toISOString(), endedAt: new Date(Date.now() - 60_000).toISOString() }],
       foregroundWaits: [],
     },
   });
@@ -24,12 +24,12 @@ test.beforeEach(async ({ page, request }) => {
   await request.post(`${origin}/__test__/reset`);
   await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: SESSION_ID, title: "会话侧栏" } });
   await seedState(request, SESSION_ID, completedState(1, { id: "user-1", parts: [{ type: "text", text: "跑一下构建" }] }, [
-    {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "execute_terminal", args: { command: "make watch" }, status: "pending", background: { kind: "terminal_command", label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
+    {presentation: "activity",  type: "tool-call", awaitingUser: false, toolCallId: "call-bg", toolName: "execute_terminal", args: { command: "make watch" }, status: "pending", background: { label: "make watch", startedAt: "2026-10-28T08:00:00+00:00", endedAt: null } },
   ]));
   await request.post(`${origin}/__test__/seed-background-tasks`, {
     data: {
       sessionId: SESSION_ID,
-      entries: [{ toolCallId: "call-bg", kind: "terminal_command", label: "cd /work && make", status: "running", startedAt: new Date(Date.now() - 40_000).toISOString(), endedAt: null }],
+      entries: [{ toolCallId: "call-bg", label: "cd /work && make", status: "running", startedAt: new Date(Date.now() - 40_000).toISOString(), endedAt: null }],
       foregroundWaits: [],
     },
   });

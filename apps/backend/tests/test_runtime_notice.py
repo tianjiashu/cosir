@@ -124,7 +124,8 @@ def test_for_run_computes_admission_without_notifying(monkeypatch, banned) -> No
     rc = _for_run(monkeypatch, _space(mailbox), banned)
 
     assert rc.mailbox is mailbox
-    assert rc.request_tools(SimpleNamespace(loaded_external_tools=list, loaded_builtin_tools=set)).admitted == {"read_file", "write_file"} - set(banned)
+    context = SimpleNamespace(loaded_external_tools=list, loaded_builtin_tools=set)
+    assert rc.request_tools(context).admitted == {"read_file", "write_file"} - set(banned)
     assert rc.banned_tools == frozenset(banned)
     assert mailbox.take_notices() == []
 
@@ -275,21 +276,15 @@ def test_open_items_is_said_once_per_run_until_the_list_changes(monkeypatch, ope
 
 def test_decisions_this_drive_is_about_to_settle_are_not_open(monkeypatch, open_sources) -> None:
     """回答已在 mailbox 里的提问不算在等：否则模型先读到「还在等」再读到回答。"""
-    from app.core.workflow import drive_notices as module
 
-    # 第二个等待占位来自已不在注册表里的工具（旧会话残留）：不随用户输入作废。
-    registry = SimpleNamespace(
-        get_tool_definition=lambda name: SimpleNamespace(user_decision=True) if name == "ask_user" else None
-    )
-    monkeypatch.setattr("app.core.workflow.decision_expiry.get_tool_registry", lambda: registry)
-    awaiting = (("call-ask", "ask_user"), ("call-gone", "gone_tool"))
+    awaiting = (("call-ask", "ask_user"), ("call-other", "ask_user"))
 
     answered = RunMailbox()
     answered.post(_answer("call-ask", 3))
     [notice] = _open(monkeypatch, _context(awaiting=awaiting), answered)
-    assert notice.open_items == ["decision:call-gone"]
+    assert notice.open_items == ["decision:call-other"]
 
-    # 用户发了新消息会让提问作废（另有「提问未被回答」的通知），残留占位不动。
+    # 用户发了新消息会让全部提问作废（另有「提问未被回答」的通知），不再列为在等。
     new_turn = RunMailbox()
     new_turn.post(
         SessionMessage.of(
@@ -301,9 +296,7 @@ def test_decisions_this_drive_is_about_to_settle_are_not_open(monkeypatch, open_
             message_id=4,
         )
     )
-    [notice] = _open(monkeypatch, _context(awaiting=awaiting), new_turn)
-    assert notice.open_items == ["decision:call-gone"]
-    assert module._OPEN_ITEMS_PREFIX in notice.content
+    assert _open(monkeypatch, _context(awaiting=awaiting), new_turn) == []
 
     # 别的 Agent 发来的消息与用户答不答无关：提问照常在等，提醒里仍列着它。
     from_agent = RunMailbox()
@@ -318,7 +311,7 @@ def test_decisions_this_drive_is_about_to_settle_are_not_open(monkeypatch, open_
         )
     )
     [notice] = _open(monkeypatch, _context(awaiting=awaiting), from_agent)
-    assert notice.open_items == ["decision:call-ask", "decision:call-gone"]
+    assert notice.open_items == ["decision:call-ask", "decision:call-other"]
 
 
 def test_tool_availability_notice_rules() -> None:

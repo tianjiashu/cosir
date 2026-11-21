@@ -1,7 +1,7 @@
 """工具产出图片的通用通道：存图、准入、就地写入 context、渲染与请求时解析。
 
 用一个测试替身工具验证，不依赖浏览器：任何工具只要「拿到字节 → ``save_image`` →
-``tool_success(images=...)``」并声明 ``returns_images``，图片就能进模型。
+``tool_success(images=...)``」，图片就能进模型；看不了图的模型由 observe 一处换成说明。
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict
 import app.core.context.vision_input as vision_input
 import app.core.workflow.node_helper.tool_observation_projection as projection
 from app.core.tool.execute.tool_access_gate import ToolAccessGate
-from app.core.tool.request_tools import RequestTools
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext
@@ -77,35 +77,26 @@ class _NoArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-def _gate_outcome(supports_image: bool | None):
+def test_gate_does_not_judge_image_capability() -> None:
+    """看不看得了图只在 observe 一处处理（``withhold_unviewable_images``）：门禁不按模型能力拒绝出图工具。"""
     definition = ToolDefinition(
         name="demo_capture",
         group="测试",
         description="capture",
         handler=lambda **_: None,
         args_model=_NoArgs,
-        returns_images=True,
     )
-    agent = (
-        None
-        if supports_image is None
-        else SimpleNamespace(model=SimpleNamespace(supports_image=supports_image))
-    )
+    agent = SimpleNamespace(model=SimpleNamespace(supports_image=False))
     context = ToolExecutionContext(
         session_id=1, workspace_id=1, workspace_root=Path("."), step_id="s", run_id=1, agent=agent
     )
     gate = ToolAccessGate(ToolRegistry([definition]))
-    return gate.evaluate(ToolCall("demo_capture", '{}', "call-1"), context, RequestTools(schemas=(), admitted=frozenset({"demo_capture"})))
-
-
-# 目的：判定只在准入一处；潜在缺陷：不看图的模型拿到截图请求失败，或每个出图工具各写一遍判断。
-def test_gate_rejects_image_tools_for_text_only_models() -> None:
-    denied = _gate_outcome(supports_image=False)
-    assert denied.denial is not None
-    assert denied.denial.display_data == {"status_hint": "模型不支持图片"}
-    assert _gate_outcome(supports_image=True).denial is None
-    # 不经 Run 的直接调用（没有 Agent 配置）不做模型判断。
-    assert _gate_outcome(supports_image=None).denial is None
+    outcome = gate.evaluate(
+        ToolCall("demo_capture", "{}", "call-1"),
+        context,
+        RequestTools(schemas=(), admitted=frozenset({"demo_capture"})),
+    )
+    assert outcome.denial is None
 
 
 # 目的：图片是调用结果、就地落库；潜在缺陷：经 mailbox 时同批有工具挂起，图片在并入前随执行丢弃。

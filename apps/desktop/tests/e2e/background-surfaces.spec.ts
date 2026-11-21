@@ -5,7 +5,7 @@ import { completedState, seedState } from "./transport-fixtures";
 const SESSION = 42;
 const started = new Date(Date.now() - 40_000).toISOString();
 const user = { id: "user-1", parts: [{ type: "text" as const, text: "跑一下" }] };
-const running = { toolCallId: "bg", kind: "terminal_command", label: "make watch", status: "running", startedAt: started, endedAt: null };
+const running = { toolCallId: "bg", label: "make watch", status: "running", startedAt: started, endedAt: null };
 
 test.beforeEach(async ({ page, request }) => {
   await request.post(`${origin}/__test__/reset`);
@@ -17,7 +17,7 @@ async function seedCommand(request: APIRequestContext) {
   await seedState(request, SESSION, completedState(1, user, [{
     presentation: "activity", type: "tool-call", awaitingUser: false, toolCallId: "bg", toolName: "execute_terminal",
     args: { command: "make watch" }, status: "pending",
-    background: { kind: "terminal_command", label: "make watch", startedAt: started, endedAt: null },
+    background: { label: "make watch", startedAt: started, endedAt: null },
     display_data: { kind: "terminal-result", command: "make watch", output: "line 1\nline 2\n" },
   }]));
   await request.post(`${origin}/__test__/seed-background-tasks`, { data: { sessionId: SESSION, entries: [running], foregroundWaits: [] } });

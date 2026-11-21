@@ -156,7 +156,7 @@ def test_tool_layer_omits_shell_guidance_without_execute_terminal():
 
 
 def test_tool_layer_has_no_public_intent_rule():
-    """意图只由终端与页面脚本自己的参数说明（``call_intent.intent_field``），工具层不再写公共规则。"""
+    """意图只由终端与页面脚本自己的参数说明（``tools/tool_models/call_intent.intent_field``），工具层不再写公共规则。"""
 
     assert "intent" not in _tool_layer(["execute_terminal", "read_file", "browser_evaluate"])
     assert _tool_layer([]) == ""

@@ -17,16 +17,16 @@ from app.core.context.context_entry import ContextEntry
 from app.core.context.prompt_sources.source import ItemDiff, SourceContext
 from app.core.context.prompt_sources.sources.deferred_tools import DeferredToolsSource
 from app.core.tool import external_tools as port
-from app.core.tool.deferred.catalog_search import search_catalog
-from app.core.tool.deferred.deferred_catalog import DeferredCatalog
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.external_tools import ExternalCatalogUnavailable
+from app.core.tool.handler.deferred.catalog_search import search_catalog
+from app.core.tool.handler.deferred.deferred_catalog import DeferredCatalog
 from app.core.tool.handler.tool_search import _LOADED_NOTE as LOADED_NOTE
 from app.core.tool.handler.tool_search import NO_MATCH, ToolSearchTool
-from app.core.tool.request_tools import RequestTools
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import TOOL_SEARCH, ToolCall, ToolExecutionContext
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.tool_registry import ToolRegistry
 from app.models.external_tool import ExternalToolDefinition
 from app.models.message_metadata import ToolMessageMetadata, parse_message_metadata
@@ -283,7 +283,9 @@ def _items(source: _FakeSource) -> dict[str, Any]:
 def test_catalog_renders_names_with_load_instruction(source) -> None:
     text = DeferredToolsSource().render(_items(source))
     assert text.startswith("The following deferred tools are now available via tool_search.")
-    assert text.endswith("\n".join(d.name for d in CATALOG))
+    # 目录是背景信息：结尾提醒模型不要主动讲给用户听。
+    assert text.endswith("unless they ask or it is directly relevant to their request.")
+    assert "\n".join(d.name for d in CATALOG) + "\n\nThis is ambient context" in text
 
 
 def test_catalog_changes_use_available_changed_and_removed_wording(source) -> None:
@@ -295,8 +297,9 @@ def test_catalog_changes_use_available_changed_and_removed_wording(source) -> No
     assert "now available via tool_search" in text and "mcp__db__query" in text
     assert "changed their definitions" in text and GITHUB_ISSUE.name in text
     assert "no longer available. Do not search for them" in text and SLACK_LIST.name in text
+    assert text.endswith("unless they ask or it is directly relevant to their request.")
 
 
 def test_unreadable_catalog_projects_one_unavailable_item(source) -> None:
     source.unavailable = "catalog is unavailable"
-    assert DeferredToolsSource().render(_items(source)) == "catalog is unavailable"
+    assert DeferredToolsSource().render(_items(source)).startswith("catalog is unavailable\n\nThis is ambient context")

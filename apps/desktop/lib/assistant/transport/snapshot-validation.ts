@@ -278,7 +278,6 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   requireString(session.createdAt, `${path}.createdAt`);
 }
 
-const BACKGROUND_TASK_KINDS = ["terminal_command"] as const;
 const BACKGROUND_TASK_STATUSES = ["running", "settling", "completed", "cancelled"] as const;
 
 const DELIVERABLE_FIELDS: Record<string, string[]> = {
@@ -315,8 +314,7 @@ function validateDeliverables(value: unknown, path: string): void {
 
 function validateBackgroundWork(value: unknown, path: string): void {
   const work = requireRecord(value, path);
-  requireExactKeys(work, ["kind", "label", "startedAt", "endedAt"], path);
-  if (!(BACKGROUND_TASK_KINDS as readonly unknown[]).includes(work.kind)) throw new TransportSnapshotValidationError(`${path}.kind`, "受支持的后台工作种类");
+  requireExactKeys(work, ["label", "startedAt", "endedAt"], path);
   requireString(work.label, `${path}.label`);
   requireString(work.startedAt, `${path}.startedAt`);
   if (work.endedAt !== null) requireString(work.endedAt, `${path}.endedAt`);
@@ -324,11 +322,10 @@ function validateBackgroundWork(value: unknown, path: string): void {
 
 function validateBackgroundTask(value: unknown, path: string, seenIds: Set<string>): void {
   const entry = requireRecord(value, path);
-  requireExactKeys(entry, ["toolCallId", "kind", "label", "status", "startedAt", "endedAt"], path);
+  requireExactKeys(entry, ["toolCallId", "label", "status", "startedAt", "endedAt"], path);
   const toolCallId = requireString(entry.toolCallId, `${path}.toolCallId`);
   if (toolCallId === "" || seenIds.has(toolCallId)) throw new TransportSnapshotValidationError(`${path}.toolCallId`, "非空且在 Session 内唯一");
   seenIds.add(toolCallId);
-  if (!(BACKGROUND_TASK_KINDS as readonly unknown[]).includes(entry.kind)) throw new TransportSnapshotValidationError(`${path}.kind`, "受支持的后台工作种类");
   if (!(BACKGROUND_TASK_STATUSES as readonly unknown[]).includes(entry.status)) throw new TransportSnapshotValidationError(`${path}.status`, "受支持的后台工作状态");
   requireString(entry.label, `${path}.label`);
   requireString(entry.startedAt, `${path}.startedAt`);

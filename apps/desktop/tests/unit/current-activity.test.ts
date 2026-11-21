@@ -6,7 +6,7 @@ import type { TransportMessagePart } from "@/lib/assistant/contract";
 import { activity, toolCallPart } from "./transport-fixtures";
 
 const T0 = "2026-11-18T04:00:00.000Z";
-const job = { toolCallId: "bg", kind: "terminal_command" as const, label: "检查导出", status: "running" as const, startedAt: "2026-01-01", endedAt: null };
+const job = { toolCallId: "bg", label: "检查导出", status: "running" as const, startedAt: "2026-01-01", endedAt: null };
 const none = new Set<string>();
 const segments = (layout: TurnLayout) => layout.blocks.filter((block): block is ActivityGroup => block.kind === "activity");
 const text = (value: string): TransportMessagePart => ({ type: "text", text: value });

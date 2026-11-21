@@ -17,7 +17,7 @@ from app.service.configuration.mcp.configuration import (
     visible_servers,
 )
 from app.service.configuration.mcp.configuration_view import MCPServerEntry
-from app.service.configuration.mcp.machine_state import MCPMachineState
+from app.service.configuration.mcp.machine_state import MCPMachineState, MCPToolEntry
 from app.service.configuration.mcp.oauth_flows import (
     AUTHORIZATION_TIMEOUT_SECONDS,
     MCPAuthorizationFlows,
@@ -176,8 +176,8 @@ class MCPConfigurationService:
             return self._failed(server, MCPFailure.from_exception(exc, server))
         return self._passed(server, tools)
 
-    def _passed(self, server: ScopedMCPServer, tools: list[dict[str, object]]) -> MCPServerTestResult:
-        MCPMachineState.record_pass(server)
+    def _passed(self, server: ScopedMCPServer, tools: list[MCPToolEntry]) -> MCPServerTestResult:
+        MCPMachineState.record_pass(server, tools)
         log.info(
             "configuration_mcp_server_test_passed",
             extra={
@@ -185,7 +185,11 @@ class MCPConfigurationService:
                 "data": {"scope": self.scope.key, "server_name": server.name, "tool_count": len(tools)},
             },
         )
-        return MCPServerTestResult(success=True, tools=tools, agent_available=self._is_saved(server))
+        return MCPServerTestResult(
+            success=True,
+            tools=[tool.model_dump() for tool in tools],
+            agent_available=self._is_saved(server),
+        )
 
     def _failed(self, server: ScopedMCPServer, failure: MCPFailure) -> MCPServerTestResult:
         if failure.invalidates_test:

@@ -39,6 +39,7 @@ from app.config.settings import Settings
 from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.events.event_sink import set_event_sink
 from app.core.tool.background_commands import set_background_commands
+from app.core.tool.external_tools import set_external_tools
 from app.service.configuration import file_store
 from app.service.depends import (
     close_service_dependencies,
@@ -50,6 +51,7 @@ from app.service.depends import (
 )
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.browser_runtime.tab_reclaim import schedule_tab_reclaim
+from app.tools.mcp.mcp_tools import MCPExternalTools
 from app.tools.tool_handler.terminal.command_results import command_results
 from app.tools.tool_registration import build_tool_registry
 from app.utils.json_utils import JsonFileError, read_json_object
@@ -184,6 +186,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     command_results.open()
     # core 经端口问后台命令（静止判定、wait_messages、收回）；core 不导入工具层。
     set_background_commands(command_results)
+    # core 经端口问延迟工具的目录与执行；目前唯一的来源是 MCP。
+    set_external_tools(MCPExternalTools())
     # core 交出的执行事件由 Transport 投影；core 不导入 ``assistant_transport``。
     set_event_sink(get_conversation_event_projector().process)
     # 登记表变化：把看板与前台等待整表重投影进 Transport snapshot（通知线程、锁外）。

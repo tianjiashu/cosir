@@ -90,7 +90,7 @@ def test_awaiting_user_counts_only_local_hitl_placeholders_still_in_context(stor
     run = store.runs.create(session.id, status="completed")
     store.sessions.set_current_run_id(session.id, run.id)
     background = BackgroundWork(
-        kind="terminal_command", run_id=run.id, label="build", started_at="2026-11-12T00:00:00Z"
+        run_id=run.id, label="build", started_at="2026-11-12T00:00:00Z"
     )
     rows = [
         _tool_row(session.id, 1, ToolMessageMetadata(status="pending"), run_id=run.id),

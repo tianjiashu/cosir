@@ -66,5 +66,5 @@ def test_background_registration_delivers_an_already_finished_job(monkeypatch) -
     )
     assert job.wait(2) is not None
     work = command_results.register("call-1", session_id=1, run_id=2, label="child", job=job)
-    assert (work.kind, work.label, work.run_id) == ("terminal_command", "child", 2)
+    assert (work.label, work.run_id) == ("child", 2)
     assert calls == [(1, "call-1", {"value": 3})]

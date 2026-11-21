@@ -167,9 +167,7 @@ def test_commands_start_in_the_writable_root_unless_a_workdir_is_given(tmp_path,
 def test_background_returns_placeholder_and_delivers_later(tmp_path, command, delivered):
     observation = _execute(tmp_path, background=True)
     assert observation.background is not None and not observation.suspend
-    assert (observation.background.kind, observation.background.label) == (
-        "terminal_command", "test command",
-    )
+    assert observation.background.label == "test command"
     assert command_results.live_background(1) == {"call-1": observation.background}
     command.release.set()
     command.join()

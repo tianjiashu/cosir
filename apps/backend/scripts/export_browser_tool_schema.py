@@ -21,7 +21,6 @@ if str(BACKEND_ROOT) not in sys.path:
 # 先装载 app.models：直接从 app.core.tool.schemas 进入会撞上存量的循环导入
 # （schemas → tool_observation → app.models → … → tool_batch → schemas）。
 import app.models  # noqa: E402, F401
-from app.core.tool.call_intent import INTENT_FIELD  # noqa: E402
 from app.tools.tool_handler.browser import (  # noqa: E402
     BrowserActTool,
     BrowserEvaluateTool,
@@ -31,6 +30,7 @@ from app.tools.tool_handler.browser import (  # noqa: E402
     BrowserSnapshotTool,
     BrowserTabsTool,
 )
+from app.tools.tool_models.call_intent import INTENT_FIELD  # noqa: E402
 
 SCHEMA_PATH = (
     BACKEND_ROOT.parent / "desktop" / "electron" / "main" / "browser" / "contract"

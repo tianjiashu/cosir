@@ -8,7 +8,6 @@
 
 import asyncio
 from collections.abc import Callable
-from copy import deepcopy
 from typing import TypeVar, cast
 
 from sqlalchemy.orm.session import Session as DbSession
@@ -22,6 +21,7 @@ from app.models.errors.deletion_errors import DeletionBusyError
 from app.models.errors.session_fork_errors import SessionForkConflictError
 from app.models.session_extra import SessionExtra, SessionFork
 from app.models.session_kind import FORK_SESSION_TYPES, USER_FACING_SESSION_TYPES, SessionType
+from app.models.session_tool_surface import SessionToolSurface
 from app.service import depends as service_depends
 from app.service.session.fork_source import ForkCut, ForkSource
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
@@ -66,14 +66,14 @@ class SessionService:
         parent_session_id: int | None = None,
         db: DbSession | None = None,
         extra: SessionExtra | None = None,
-        tool_schemas: list[dict[str, object]] | None = None,
+        tool_surface: SessionToolSurface | None = None,
         derivation_depth: int = 0,
     ) -> SessionRecord:
-        """创建 Session 并固化它的工具 schema。
+        """创建 Session 并固化它的工具面。
 
-        schema 由调用方筛选后传入、本方法不自行推导：主 Agent Session 的由
-        ``session_tool_scope.main_agent_tool_schemas`` 解析，委派由调用方筛选。传入
-        ``None`` 持久化为空列表，即该 Session 运行期没有可调用工具。
+        工具面由调用方固化后传入、本方法不自行推导：主 Agent Session 的由
+        ``session_tool_scope.main_agent_tool_surface`` 解析，委派由调用方选定后经 ``freeze_tool_surface``
+        固化。传入 ``None`` 持久化为空工具面，即该 Session 运行期没有可调用工具。
 
         参数:
             parent_session_id: 委派子 Session 的父 Session 标识。
@@ -81,14 +81,14 @@ class SessionService:
             derivation_depth: 派生深度（见 ``core.tool.multi_agent.derivation.child_depth``）。
         """
 
-        frozen_schemas = [] if tool_schemas is None else tool_schemas
+        frozen = tool_surface or SessionToolSurface()
         session = self._session.create(
             workspace_id=workspace_id,
             title=title,
             session_type=session_type,
             parent_session_id=parent_session_id,
             extra=extra,
-            tool_schemas=frozen_schemas,
+            tool_surface=frozen,
             db=db,
             derivation_depth=derivation_depth,
         )
@@ -100,7 +100,8 @@ class SessionService:
                     "session_id": session.id,
                     "session_type": session_type,
                     "derivation_depth": derivation_depth,
-                    "tool_count": len(frozen_schemas),
+                    "tool_count": len(frozen.schemas),
+                    "deferred_tools": frozen.deferred,
                 },
             },
         )
@@ -326,7 +327,7 @@ class SessionService:
                         # 可写根随上下文一起继承：上下文里写明了范围，事实要与它一致。
                         writable_root=narrowed_root or source.extra.writable_root),
                     # 工具列表是请求前缀的一部分，改了就接不上源的缓存；派生限制由运行期准入执行。
-                    tool_schemas=deepcopy(source.tool_schemas),
+                    tool_surface=source.tool_surface.model_copy(deep=True),
                     db=db,
                     derivation_depth=depth,
                 )

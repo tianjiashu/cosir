@@ -27,7 +27,7 @@ from app.core.tool.multi_agent.session_tool_scope import (
     main_agent_tool_surface,
     tools_for_session,
 )
-from app.core.tool.request_tools import RequestTools
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_BROWSER_NAVIGATE,

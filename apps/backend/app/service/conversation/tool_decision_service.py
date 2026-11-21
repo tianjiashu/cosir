@@ -90,12 +90,7 @@ class ToolDecisionService:
 
         同步读库，异步调用方放进工作线程。
         """
-        calls = service_depends.get_session_context_service().awaiting_decision_calls(session_id)
-        definitions = (get_tool_registry().get_tool_definition(name) for name, _ in calls.values())
-        return any(
-            definition is not None and definition.user_decision
-            for definition in definitions
-        )
+        return bool(service_depends.get_session_context_service().awaiting_decision_calls(session_id))
 
 
 def _validated_payload(
@@ -107,8 +102,8 @@ def _validated_payload(
     """按工具声明校验载荷，返回「入队的载荷、给模型的回执」；工具没声明载荷时两者都是 ``None``。
 
     原调用的业务参数作为校验上下文交给载荷模型：所选项是否属于这次调用，只有它知道。业务参数经
-    ``resolve_call_arguments`` 取得，与当初 handler 收到的是同一份（原始参数里还夹着 ``intent``，
-    类型也可能没归一，不能直接用）。原调用当初过了门禁，这里解析不了只可能是工具的参数声明在提问
+    ``resolve_call_arguments`` 取得，与当初 handler 收到的是同一份（原始参数的类型
+    可能没归一，不能直接用）。原调用当初过了门禁，这里解析不了只可能是工具的参数声明在提问
     挂着期间变了：记日志并拒绝，不放行一份没法核对的回答。驳回不带载荷，回执用工具声明的固定文案。
     """
     definition = get_tool_registry().get_tool_definition(tool_name)

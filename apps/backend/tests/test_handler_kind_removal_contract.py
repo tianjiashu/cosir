@@ -282,12 +282,12 @@ def test_normalized_returns_self_when_parameters_schema_supplied() -> None:
 def test_normalized_preserves_every_carried_contract_field() -> None:
     """normalized() 生成的副本必须逐字段保留调度/展示契约（防新副本漏字段）。"""
 
-    definition = _make_definition(conversation_presentation="standalone", returns_images=True)
+    definition = _make_definition(conversation_presentation="standalone", deferred=True)
 
     normalized = definition.normalized()
 
     assert normalized.conversation_presentation == "standalone"
-    assert normalized.returns_images is True
+    assert normalized.deferred is True
     assert normalized.args_model is _ProbeArgs
     assert normalized.handler is definition.handler
     # 参数 schema 被派生，故二者不相等；派生后应幂等。

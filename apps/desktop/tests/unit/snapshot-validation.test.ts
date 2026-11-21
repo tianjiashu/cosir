@@ -310,7 +310,7 @@ describe("model activity boundary", () => {
     expect(parseTransportState(snapshot)).toBe(snapshot);
     expect(() => parseTransportState(transportState({ activity: activity(1, "cancelled", { modelActivity }) }))).toThrow();
     expect(() => parseTransportState(transportState({ activity: activity(1, "running", { modelActivity: { ...modelActivity, text: "private" } as never }) }))).toThrow();
-    const { startedAt: _, ...withoutStart } = modelActivity;
+    const withoutStart = { stepId: modelActivity.stepId, phase: modelActivity.phase };
     expect(() => parseTransportState(transportState({ activity: activity(1, "running", { modelActivity: withoutStart as never }) }))).toThrow();
     expect(() => parseTransportState(transportState({ messages: [assistantMessage("a", 1, [{ type: "reasoning", text: "private" } as never])] }))).toThrow();
   });

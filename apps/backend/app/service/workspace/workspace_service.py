@@ -16,7 +16,7 @@ from pathlib import Path
 from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.core.context.prompt_sources.cache import projection_cache
-from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_schemas
+from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_surface
 from app.models import SessionRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.service import depends as service_depends
@@ -279,7 +279,7 @@ class WorkspaceService:
                     if existing.unstarted:
                         return existing
                 session = self._session_service.create_session(
-                    workspace_id, "", tool_schemas=main_agent_tool_schemas()
+                    workspace_id, "", tool_surface=main_agent_tool_surface()
                 )
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc

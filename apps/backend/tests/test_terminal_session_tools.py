@@ -14,7 +14,7 @@ from terminal_test_support import ReadyWorker, make_service, wait_until
 from app.config.constant import Constant
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
-from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL, TOOL_GROUP_TERMINAL_SESSION
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_TERMINAL, TOOL_GROUP_TERMINAL_SESSION
 from app.service import depends
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.terminal_runtime.command.running_command_registry import running_commands

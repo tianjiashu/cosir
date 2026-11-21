@@ -17,7 +17,7 @@ import pytest
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.execute.tool_executor import ToolExecutor
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
-from app.core.tool.request_tools import RequestTools
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.schemas import (
     ToolCall,
     ToolExecutionContext,

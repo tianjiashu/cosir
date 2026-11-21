@@ -125,7 +125,6 @@ def test_background_completion_updates_work_and_preserves_existing_card():
     manager = _manager(store)
     work = BackgroundWork(
         run_id=1,
-        kind="terminal_command",
         label="research",
         started_at="2026-01-01T00:00:00+00:00",
     )

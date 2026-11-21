@@ -9,10 +9,11 @@ Session 容器自身状态。
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, cast
+from typing import cast
 
 from app.models.session_extra import SessionExtra, SessionFork
 from app.models.session_kind import SessionType
+from app.models.session_tool_surface import SessionToolSurface
 from app.storage.model.session_model import SessionModel
 from app.utils.datetime_utils import from_text, to_text
 
@@ -27,7 +28,7 @@ class SessionRecord:
     created_at: datetime
     updated_at: datetime
     extra: SessionExtra = field(default_factory=SessionExtra)
-    tool_schemas: list[dict[str, Any]] = field(default_factory=list)
+    tool_surface: SessionToolSurface = field(default_factory=SessionToolSurface)
     session_type: SessionType = SessionType.USER
     parent_session_id: int | None = None
     current_run_id: int | None = None
@@ -114,7 +115,7 @@ class SessionRecord:
             workspace_id=row.workspace_id,
             title=row.title,
             extra=extra,
-            tool_schemas=row.tool_schemas or [],
+            tool_surface=SessionToolSurface.model_validate(row.tool_surface or {}),
             created_at=from_text(row.created_at),
             updated_at=from_text(row.updated_at),
             session_type=session_type,
@@ -130,7 +131,7 @@ class SessionRecord:
             "workspace_id": self.workspace_id,
             "title": self.title,
             "extra": self.extra.model_dump(mode="json"),
-            "tool_schemas": self.tool_schemas or [],
+            "tool_surface": self.tool_surface.model_dump(mode="json"),
             "session_type": self.session_type,
             "parent_session_id": self.parent_session_id,
             "current_run_id": self.current_run_id,

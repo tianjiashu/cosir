@@ -29,7 +29,7 @@ _START = "2026-01-01T00:00:00+00:00"
 
 def _work(label: str, *, started_at: str = _START, ended_at: str | None = None) -> BackgroundWork:
     return BackgroundWork(
-        run_id=1, kind="terminal_command", label=label, started_at=started_at, ended_at=ended_at
+        run_id=1, label=label, started_at=started_at, ended_at=ended_at
     )
 
 
@@ -42,7 +42,6 @@ def _part(call_id: str, status: str, work: BackgroundWork | None = None) -> dict
     }
     if work is not None:
         part["background"] = {
-            "kind": work.kind,
             "label": work.label,
             "startedAt": work.started_at,
             "endedAt": work.ended_at,
@@ -84,7 +83,6 @@ def test_live_work_shows_before_its_placeholder_is_written():
     assert entries == [
         {
             "toolCallId": "call-bg",
-            "kind": "terminal_command",
             "label": "build",
             "status": "running",
             "startedAt": _START,

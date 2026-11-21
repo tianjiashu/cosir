@@ -31,7 +31,7 @@ from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.execute import tool_terminal_projection
 from app.core.tool.execute.tool_executor import ToolExecutor
-from app.core.tool.request_tools import RequestTools
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext
 from app.core.tool.tool_registry import ToolRegistry

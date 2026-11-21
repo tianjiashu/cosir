@@ -12,7 +12,7 @@ from app.config.configuration import get_tool_registry
 from app.config.settings import Settings
 from app.core.tool.multi_agent.derivation import DERIVATIONS
 from app.core.tool.multi_agent.session_tool_scope import banned_derivation_tools, tools_for_session
-from app.core.tool.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
 from app.models.session_kind import SESSION_KINDS, USER_FACING_SESSION_TYPES, SessionType
 
 pytestmark = pytest.mark.usefixtures("backend_env")

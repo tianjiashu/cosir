@@ -889,7 +889,6 @@ def test_screenshot_is_stored_as_attachment_and_handed_to_the_model(
     # 没有网站给的文字时不进块，也就没有收尾句。
     assert "untrusted" not in observation.content
     assert "screenshot: the viewport (the image follows)" in observation.content
-    assert BrowserScreenshotTool().to_definition().returns_images is True
 
     # 元素截图：只截那个元素，正文说明截的是哪个（图上的像素与视口坐标对不上）。
     element = BrowserScreenshotTool().execute(

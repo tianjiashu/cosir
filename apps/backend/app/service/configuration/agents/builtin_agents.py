@@ -35,6 +35,7 @@ from app.core.tool.schemas.tool_names import (
     TOOL_FIND_FILES,
     TOOL_READ_FILE,
     TOOL_READ_IMAGE,
+    TOOL_SEARCH,
     TOOL_SEARCH_CONTENT,
     TOOL_SEND_MESSAGE,
     TOOL_SESSION_STATUS,
@@ -174,6 +175,8 @@ _READ_ONLY_TOOLS = (
     TOOL_SEND_MESSAGE,
     TOOL_SESSION_STATUS,
     TOOL_WAIT_MESSAGES,
+    # 外部工具（MCP）的入口：子 Agent 也能用 MCP。
+    TOOL_SEARCH,
 )
 
 _DEFAULT_MODEL_SETTINGS = ModelSettings(stream=True, reasoning_effort="high").to_dict()
@@ -218,6 +221,7 @@ BUILTIN_CHILD_AGENTS: tuple[AgentConfiguration, ...] = (
             TOOL_SEND_MESSAGE,
             TOOL_SESSION_STATUS,
             TOOL_WAIT_MESSAGES,
+            TOOL_SEARCH,
         ],
         max_steps=300,
         model_settings=dict(_DEFAULT_MODEL_SETTINGS),

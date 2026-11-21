@@ -284,7 +284,6 @@ export type TransportDeliverable =
 
 /** 工具 part 上的后台工作记录（后端 `BackgroundWork`）。 */
 export type TransportBackgroundWork = {
-  kind: "terminal_command";
   label: string;
   startedAt: string;
   /** 结论到达、被撤销或被重启中断的时刻；还在等结论时为 null。 */
@@ -301,7 +300,6 @@ export type TransportBackgroundWork = {
  */
 export type BackgroundTaskEntry = {
   toolCallId: string;
-  kind: TransportBackgroundWork["kind"];
   label: string;
   status: "running" | "settling" | "completed" | "cancelled";
   startedAt: string;

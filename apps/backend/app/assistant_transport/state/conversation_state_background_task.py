@@ -24,7 +24,7 @@ from app.assistant_transport.state.wire_shape import (
     require_one_of,
     require_str,
 )
-from app.models.message_metadata import BackgroundKind, BackgroundWork
+from app.models.message_metadata import BackgroundWork
 
 # ``settling``：工作已不在登记表里，但占位行还没落定——结论已到、等下一个模型步并入，或撤销已出队、
 # 结算还没写完（收回早于占位写入时，actor 在驱动释放后结算）。两者都会落到 ``completed`` /
@@ -36,14 +36,12 @@ class ConversationBackgroundTask(TypedDict):
     """一条后台工作；进行中（运行、收尾）的在前，按开始先后；之后是最近结束的若干条。"""
 
     toolCallId: str
-    kind: BackgroundKind
     label: str
     status: BackgroundTaskStatus
     startedAt: str
     endedAt: str | None
 
 
-_KINDS = frozenset(get_args(BackgroundKind))
 _STATUSES = frozenset(get_args(BackgroundTaskStatus))
 # 仍在进行的状态：这些条目的 ``endedAt`` 恒为空，并排在看板最前。
 _ACTIVE = frozenset({"running", "settling"})
@@ -56,7 +54,6 @@ def project_background_work(work: BackgroundWork) -> ConversationBackgroundWork:
     """后台工作记录的 wire 形状（camelCase）；工具 part 与看板活条目共用。"""
 
     return ConversationBackgroundWork(
-        kind=work.kind,
         label=work.label,
         startedAt=work.started_at,
         endedAt=work.ended_at,
@@ -99,7 +96,6 @@ def project_background_tasks(
             entries.append(
                 ConversationBackgroundTask(
                     toolCallId=tool_call_id,
-                    kind=work["kind"],
                     label=work["label"],
                     status=status,
                     startedAt=work["startedAt"],
@@ -121,7 +117,6 @@ def validate_background_work(value: object) -> None:
     """
 
     work = as_shape(value, ConversationBackgroundWork, "snapshot tool background record")
-    require_one_of(work["kind"], _KINDS, "snapshot tool background kind")
     require_str(work["label"], "snapshot tool background label")
     require_str(work["startedAt"], "snapshot tool background startedAt")
     require_str(work["endedAt"], "snapshot tool background endedAt", nullable=True)
@@ -147,7 +142,6 @@ def validate_background_tasks(value: object) -> None:
         require_str(session["label"], "background result label")
         require_str(session["startedAt"], "background result startedAt")
         require_str(session["endedAt"], "background result endedAt", nullable=True)
-        require_one_of(session["kind"], _KINDS, "background result kind")
         require_one_of(session["status"], _STATUSES, "background result status")
 
 
