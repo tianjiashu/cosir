@@ -52,17 +52,24 @@ try {
     return bootstatePhase() === "ready";
   });
   const electronMain = electronMainProcess(launcher.pid);
-  const backend = backendProcess(electronMain);
-  console.log(`[launch-smoke] backend ready (pid ${backend}); killing only the Electron main process ${electronMain}`);
+  // 杀之前记下宿主之下的整棵树（后端、Python 启动器、Worker 等），之后逐一报它们什么时候退出。
+  const tree = descendantsOf(electronMain);
+  const backend = [...tree].find(([, name]) => /python|cosir-backend/i.test(name));
+  if (!backend) throw new Error(`no backend process under the Electron main process ${electronMain}: ${JSON.stringify([...tree])}`);
+  console.log(`[launch-smoke] backend ready; host tree ${JSON.stringify([...tree])}; killing only the Electron main process ${electronMain}`);
   const killedAt = Date.now();
   killOne(electronMain);
   try {
     await waitFor("backend stopped after the host was killed", STOP_TIMEOUT_MS, () => bootstatePhase() === "stopped");
   } finally {
-    // 无论成败都报出后端什么时候退出的：没写 stopped 时，用来区分「优雅关闭卡住、15 秒后被强制退出」与「一直没退」。
-    await waitFor("backend process exit", STOP_TIMEOUT_MS, () => !isAlive(backend)).catch(() => {});
-    const exited = isAlive(backend) ? "still alive" : `exited within ${Math.round((Date.now() - killedAt) / 1000)}s`;
-    console.log(`[launch-smoke] backend ${backend} ${exited}; bootstate ${bootstatePhase() ?? "missing"}`);
+    // 无论成败都报出宿主之下的进程什么时候退出：没写 stopped 时，用来区分「优雅关闭卡住、被强制退出」与「一直没退」。
+    const exitedAt = new Map();
+    await waitFor("host tree exit", STOP_TIMEOUT_MS, () => {
+      for (const [pid] of tree) if (!exitedAt.has(pid) && !isAlive(pid)) exitedAt.set(pid, Math.round((Date.now() - killedAt) / 1000));
+      return exitedAt.size === tree.size;
+    }).catch(() => {});
+    const report = [...tree].map(([pid, name]) => `${name}#${pid}: ${exitedAt.has(pid) ? `exited by ${exitedAt.get(pid)}s` : "still alive"}`);
+    console.log(`[launch-smoke] after the host was killed: ${report.join(", ")}; bootstate ${bootstatePhase() ?? "missing"}`);
   }
   console.log("[launch-smoke] backend shut down gracefully after the host disappeared");
 } catch (error) {
@@ -111,11 +118,21 @@ function electronMainProcess(rootPid) {
   return main.pid;
 }
 
-/** Electron 主进程的子进程里的后端（开发期是 Python 解释器，发布版是 cosir-backend）。 */
-function backendProcess(electronMain) {
-  const backend = processTable().find((item) => item.ppid === electronMain && /python|cosir-backend/i.test(item.name));
-  if (!backend) throw new Error(`no backend process under the Electron main process ${electronMain}`);
-  return backend.pid;
+/** 某进程之下的全部后代：PID → 可执行文件名（Electron 的辅助进程除外）。 */
+function descendantsOf(rootPid) {
+  const processes = processTable();
+  const found = new Map();
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const item of processes) {
+      if (!found.has(item.pid) && (item.ppid === rootPid || found.has(item.ppid)) && !/electron|helper/i.test(item.name)) {
+        found.set(item.pid, item.name);
+        grew = true;
+      }
+    }
+  }
+  return found;
 }
 
 function isAlive(pid) {
