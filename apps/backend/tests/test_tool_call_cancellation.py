@@ -28,12 +28,13 @@ from pydantic import BaseModel
 
 from app.assistant_transport.projection.event_projection import plan_event
 from app.core.events import ToolCallStatusChangedEvent
+from app.core.file_access.knowledge import FileKnowledge
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.execute import tool_terminal_projection
 from app.core.tool.execute.tool_executor import ToolExecutor
-from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
@@ -329,7 +330,7 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
         ToolCall(tool_name="probe_tool", arguments='{}', call_id="call-1"),
         "step-1",
 
-        _NO_LOOP, rc.request_tools(None),
+        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
     )
 
     assert observation.status == "cancelled"

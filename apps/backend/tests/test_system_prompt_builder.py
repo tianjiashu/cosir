@@ -141,7 +141,8 @@ def test_tool_layer_lists_only_the_file_tools_the_agent_has():
     assert "read_file to read." in out
     assert "search_content" not in out
     assert "find_files" not in out
-    assert "Use execute_terminal for builds, tests, git and running programs" in out
+    assert "You can also read or edit through execute_terminal." in out
+    assert "Read the current file in an earlier model step" in out
     assert "parallel tool calls in one response" in out
 
 

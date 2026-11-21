@@ -21,6 +21,7 @@ import pytest
 
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.tools.tool_handler.file_edit.syntax_check import SyntaxDiagnostic
+from tests.file_knowledge_support import with_workspace_reads
 
 
 def _diagnostic(
@@ -213,7 +214,7 @@ def test_success_with_broken_python_reports_english_syntax_content(tmp_path: Pat
     )
     context = ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1)
 
-    observation = ApplyPatchTool().execute(context, patch=patch)
+    observation = ApplyPatchTool().execute(with_workspace_reads(context), patch=patch)
 
     assert observation.status == "success"
     assert observation.content is not None
@@ -247,7 +248,7 @@ def test_cancelled_run_returns_cancelled_without_writing(tmp_path: Path) -> None
     )
     cancellation_registry.request_cancel(context.session_id)
     try:
-        observation = ApplyPatchTool().execute(context, patch=patch)
+        observation = ApplyPatchTool().execute(with_workspace_reads(context), patch=patch)
     finally:
         cancellation_registry.consume(context.session_id)
 

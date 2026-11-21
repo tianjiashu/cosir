@@ -10,6 +10,7 @@ from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.tools.tool_handler.edit_file import EditFileTool
 from app.tools.tool_handler.file_edit.text_match import TextMatchError, replace_exact
+from tests.file_knowledge_support import with_workspace_reads
 
 
 def _ctx(root: Path) -> ToolExecutionContext:
@@ -19,7 +20,7 @@ def _ctx(root: Path) -> ToolExecutionContext:
 
 
 def _edit(root: Path, **kwargs):
-    return EditFileTool().execute(execution_context=_ctx(root), **kwargs)
+    return EditFileTool().execute(execution_context=with_workspace_reads(_ctx(root)), **kwargs)
 
 
 def test_replace_exact_requires_a_unique_verbatim_match() -> None:
@@ -80,7 +81,7 @@ def test_apply_patch_hunk_with_drifted_context_is_not_applied(tmp_path: Path) ->
         "@@ -1,2 +1,2 @@\n alpha\n-beta\n+gamma\n"
     )
 
-    observation = ApplyPatchTool().execute(_ctx(tmp_path), patch=patch)
+    observation = ApplyPatchTool().execute(with_workspace_reads(_ctx(tmp_path)), patch=patch)
 
     assert observation.status == "error"
     assert "hunk 1 not found" in (observation.content or "")

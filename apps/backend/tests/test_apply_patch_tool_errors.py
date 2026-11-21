@@ -6,6 +6,7 @@ from app.core.tool.schemas import ToolExecutionContext
 from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.tools.tool_handler.file_edit.patch_apply import PatchApplyError
 from app.tools.tool_handler.file_edit.patch_diff import FileDiffResult
+from tests.file_knowledge_support import with_workspace_reads
 
 
 def _context(tmp_path: Path) -> ToolExecutionContext:
@@ -26,7 +27,7 @@ def _valid_patch() -> str:
 
 
 def test_invalid_diff_reports_tool_specific_guidance(tmp_path: Path) -> None:
-    observation = ApplyPatchTool().execute(_context(tmp_path), patch="not a diff")
+    observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch="not a diff")
 
     assert observation.status == "error"
     assert "Git unified diff" in observation.content
@@ -39,12 +40,12 @@ def test_invalid_diff_reports_tool_specific_guidance(tmp_path: Path) -> None:
 def test_success_returns_success_without_repeating_the_patch(monkeypatch, tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("new\n", encoding="utf-8")
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.validate_all",
-        lambda _operations, _resolver: [],
+        "app.tools.tool_handler.apply_patch_tool.prepare_patch",
+        lambda _operations, _resolver: ({}, []),
     )
     monkeypatch.setattr(
         "app.tools.tool_handler.apply_patch_tool.apply_all_with_diff",
-        lambda _operations, _resolver: [],
+        lambda _operations, _resolver, _targets: [],
     )
     monkeypatch.setattr(
         "app.tools.tool_handler.apply_patch_tool.check_source_syntax",
@@ -54,7 +55,7 @@ def test_success_returns_success_without_repeating_the_patch(monkeypatch, tmp_pa
         "app.tools.tool_handler.apply_patch_tool.build_file_change_display_data",
         lambda _results: {"kind": "file-changes"},
     )
-    observation = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
+    observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=_valid_patch())
 
     assert observation.status == "success"
     assert observation.content is None
@@ -66,13 +67,13 @@ def test_apply_failure_guides_regenerating_the_diff(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.validate_all",
-        lambda _operations, _resolver: [],
+        "app.tools.tool_handler.apply_patch_tool.prepare_patch",
+        lambda _operations, _resolver: ({}, []),
     )
 
     transient_cause = OSError(errno.EAGAIN, "file is locked")
 
-    def fail_apply(_operations, _resolver):
+    def fail_apply(_operations, _resolver, _targets):
         try:
             raise transient_cause
         except OSError as cause:
@@ -81,7 +82,7 @@ def test_apply_failure_guides_regenerating_the_diff(
     monkeypatch.setattr(
         "app.tools.tool_handler.apply_patch_tool.apply_all_with_diff", fail_apply
     )
-    observation = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
+    observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=_valid_patch())
 
     assert observation.content.startswith("unified diff apply failed: file is locked. ")
     assert "new unified diff" in observation.content
@@ -89,11 +90,11 @@ def test_apply_failure_guides_regenerating_the_diff(
 
 def test_partial_apply_failure_forbids_replaying_the_diff(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.validate_all",
-        lambda _operations, _resolver: [],
+        "app.tools.tool_handler.apply_patch_tool.prepare_patch",
+        lambda _operations, _resolver: ({}, []),
     )
 
-    def fail_after_partial_apply(_operations, _resolver):
+    def fail_after_partial_apply(_operations, _resolver, _targets):
         try:
             raise OSError(0, "file is locked", None, 32)
         except OSError as cause:
@@ -106,7 +107,7 @@ def test_partial_apply_failure_forbids_replaying_the_diff(monkeypatch, tmp_path:
         "app.tools.tool_handler.apply_patch_tool.apply_all_with_diff",
         fail_after_partial_apply,
     )
-    observation = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
+    observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=_valid_patch())
 
     assert observation.content.startswith("unified diff application stopped after partial changes. ")
     assert "do not replay this diff unchanged" in observation.content
@@ -121,7 +122,7 @@ def test_partial_apply_failure_forbids_replaying_the_diff(monkeypatch, tmp_path:
 def test_hunk_validation_failure_does_not_write_any_file(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("current\n", encoding="utf-8")
-    observation = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
+    observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=_valid_patch())
 
     assert observation.status == "error"
     assert "no files were modified" in observation.content
@@ -149,7 +150,7 @@ def test_hunk_count_mismatch_is_repaired_and_names_the_bad_header(tmp_path: Path
         )
     )
 
-    observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)
+    observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=patch)
 
     assert observation.status == "success"
     assert observation.content is not None
@@ -166,11 +167,11 @@ def test_hunk_count_mismatch_is_repaired_and_names_the_bad_header(tmp_path: Path
 
 # 目的：每类失败都给出可分辨的调用行短提示（≤8 字），不再一律「补丁失败」；潜在缺陷：原因只有模型看得到。
 def test_apply_patch_failures_carry_distinct_status_hints(monkeypatch, tmp_path: Path) -> None:
-    bad = ApplyPatchTool().execute(_context(tmp_path), patch="not a diff")
+    bad = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch="not a diff")
     assert bad.display_data == {"status_hint": "补丁格式错误"}
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.validate_all",
-        lambda _operations, _resolver: ["a.txt: context does not match"],
+        "app.tools.tool_handler.apply_patch_tool.prepare_patch",
+        lambda _operations, _resolver: ({}, ["a.txt: context does not match"]),
     )
-    invalid = ApplyPatchTool().execute(_context(tmp_path), patch=_valid_patch())
+    invalid = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=_valid_patch())
     assert invalid.display_data == {"status_hint": "补丁校验失败"}

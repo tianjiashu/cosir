@@ -36,6 +36,7 @@ from app.tools.tool_handler.file_edit import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
+from tests.file_knowledge_support import with_workspace_reads
 
 # 2026-09-21 契约 B：计数不符不再产生拒绝诊断。把旧拒绝文案固化为常量，任何位置一旦重新出现
 # 即视为「回退到拒绝语义」的回归信号（原有「不得误拒」的守卫由此改为显式的反拒绝断言）。
@@ -613,7 +614,7 @@ def test_miscounted_patch_is_applied_with_a_complete_note(tmp_path: Path) -> Non
     target.write_text("a\nb\nd\n", encoding="utf-8")
     patch = _section("@@ -1,2 +1,2 @@", " a", "-b", "+c", " d")
 
-    observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)
+    observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=patch)
 
     assert observation.status == "success"
     assert observation.content is not None
@@ -640,7 +641,7 @@ def test_one_miscounted_section_still_writes_every_file(tmp_path: Path) -> None:
         )
     )
 
-    observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)
+    observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=patch)
 
     assert observation.status == "success"
     assert first.read_text(encoding="utf-8") == "a\nc\n"
@@ -658,7 +659,7 @@ def test_model_visible_note_guides_the_recomputation(tmp_path: Path) -> None:
     (tmp_path / "mod.txt").write_text("a\nb\nd\n", encoding="utf-8")
     patch = _section("@@ -1,2 +1,2 @@", " a", "-b", "+c", " d")
 
-    observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)
+    observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=patch)
 
     assert observation.status == "success"
     assert observation.content is not None

@@ -80,7 +80,8 @@ def test_output_just_over_the_budget_keeps_its_ending_for_the_model(tmp_path: Pa
     assert summary.overflowed is True
     assert raw.endswith(summary.model_tail)
     assert len(summary.model_tail) > budget // 2
-    content = ExecuteTerminalTool._render_content(ExecutionResult(end="exited", exit_code=1), summary)
+    output_text, _ = ExecuteTerminalTool._bounded_output(summary, audit=False)
+    content = ExecuteTerminalTool._render_content(ExecutionResult(end="exited", exit_code=1), output_text)
     assert "=== 3 failed, 897 passed ===" in content
     assert len(content) <= Constant.Tools.MAX_OUTPUT_CHARS
 

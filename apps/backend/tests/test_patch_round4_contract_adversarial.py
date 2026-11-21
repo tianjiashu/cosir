@@ -36,6 +36,7 @@ from app.tools.tool_handler.file_edit import (
     parse_git_unified_diff_detailed,
 )
 from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
+from tests.file_knowledge_support import with_workspace_reads
 
 PARAM_DESCRIPTION = ApplyPatchArgs.model_fields["patch"].description or ""
 # 最小样例已从描述正文迁到字段 ``examples``（随 strict schema 一并导出给模型）。
@@ -62,7 +63,7 @@ def _context(root: pathlib.Path, run_id: int = 4001) -> ToolExecutionContext:
 
 
 def _execute(root: pathlib.Path, patch: str, run_id: int = 4001):
-    return ApplyPatchTool().execute(_context(root, run_id), patch=patch)
+    return ApplyPatchTool().execute(with_workspace_reads(_context(root, run_id)), patch=patch)
 
 
 # ---------------------------------------------------------------------------
@@ -673,13 +674,9 @@ def test_syntax_stage_resolution_failure_is_skipped_not_raised(
     (tmp_path / "m.py").write_bytes(b"def f():\n    return 1\n")
     patch = _section("m.py", "@@ -2,1 +2,1 @@", "-    return 1", "+    return 2") + "\n"
     real_resolve = PathResolver.resolve_for_write
-    calls = {"count": 0}
-
-    # 写前校验/应用各用一次解析；写后 syntax 阶段是最后一次解析——让它失败，
-    # 验证该结果被安全跳过而不是中断整次调用。
+    # 只让实际写入后的解析失败，避免把前置校验的次数当成契约。
     def flaky_resolve(self, path):
-        calls["count"] += 1
-        if calls["count"] >= 4:
+        if (tmp_path / "m.py").read_bytes() == b"def f():\n    return 2\n":
             return None, "simulated post-write resolution failure"
         return real_resolve(self, path)
 

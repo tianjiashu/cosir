@@ -176,25 +176,24 @@ def test_background_returns_placeholder_and_delivers_later(tmp_path, command, de
 
 
 @pytest.mark.parametrize("background", [False, True])
-def test_result_before_registration_is_not_lost(
+def test_fast_command_starts_after_registration_and_delivers(
     tmp_path, command, monkeypatch, delivered, background,
 ):
-    # 让真实作业线程先结束，再把作业交给工具登记，确定性覆盖提前完成。
-    start = CommandJob.start_in_thread
+    register = command_results.register
 
-    def already_finished(*args, **kwargs):
-        job = start(*args, **kwargs)
-        command.join()
-        return job
+    def before_spawn(*args, **kwargs):
+        assert not command.started.is_set()
+        return register(*args, **kwargs)
 
+    monkeypatch.setattr(command_results, "register", before_spawn)
     command.release.set()
-    monkeypatch.setattr(CommandJob, "start_in_thread", already_finished)
     observation = _execute(tmp_path, background=background)
+    command.join()
     assert bool(observation.background) is background
     if background:
         assert len(delivered) == 1 and delivered[0][1]["end_reason"] == "exited"
     else:
-        assert observation.content == "[exit_code=0]\ncall-1\n" and delivered == []
+        assert observation.status == "success" and delivered == []
 
 
 def test_detach_keeps_running_and_delivers_once(tmp_path, command, pool, delivered):
@@ -247,9 +246,9 @@ def test_execution_exception_finishes_the_call(tmp_path, command, delivered, bac
     command.join()
     if background:
         assert observation.background is not None
-        assert delivered == [("call-1", {"end_reason": "failed", "error": "worker offline"})]
+        assert delivered[0][1]["end_reason"] == "worker_failed"
     else:
-        assert observation.status == "error" and "worker offline" in observation.content
+        assert observation.status == "error" and "[outcome_unknown]" in observation.content
         assert delivered == []
 
 
@@ -336,8 +335,8 @@ def _lines_totalling(chars: int) -> str:
 @pytest.mark.parametrize(
     "output_chars",
     [
-        ExecuteTerminalTool.model_output_budget() - 40,  # 刚好不溢出
-        ExecuteTerminalTool.model_output_budget() + 40,  # 刚好溢出
+        ExecuteTerminalTool.model_output_budget(audit=True) - 40,  # 刚好不溢出
+        ExecuteTerminalTool.model_output_budget(audit=True) + 40,  # 刚好溢出
         200_000,  # 远超预算
     ],
 )
@@ -377,7 +376,7 @@ def test_model_text_fits_the_channel_once_whatever_the_ending(
     assert len(content) <= Constant.Tools.MAX_OUTPUT_CHARS
     assert content.startswith(result.end_marker())
     artifacts = tmp_path / ".cosir" / "tool-artifacts"
-    overflowed = output_chars > ExecuteTerminalTool.model_output_budget()
+    overflowed = output_chars > ExecuteTerminalTool.model_output_budget(audit=True)
     if overflowed:
         [log] = list(artifacts.iterdir())  # 只有命令自己的完整日志，没有兜底写的副本
         assert log.read_text(encoding="utf-8") == text

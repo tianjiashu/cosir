@@ -10,6 +10,7 @@ from openai.lib.streaming.chat import ChunkEvent
 from openai.types.chat import ChatCompletion
 
 import app.core.workflow.node_helper.model_stream_state_machine as streaming_module
+from app.core.file_access.knowledge import FileKnowledge
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.nodes import model_node as model_module
@@ -84,6 +85,7 @@ class _ModelHarness:
 
         self.runtime_context = SimpleNamespace(
             load_message=lambda: [],
+            file_knowledge=FileKnowledge,
             add_message=add_message,
             save_model_response=save_model_response,
             abandon_model_response=lambda: None,

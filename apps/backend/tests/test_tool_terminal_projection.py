@@ -37,6 +37,7 @@ from app.core.events import (
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
 )
+from app.core.file_access.knowledge import FileKnowledge
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.execute import tool_terminal_projection as projection_module
 from app.core.tool.execute.tool_executor import ToolExecutor
@@ -505,7 +506,7 @@ def test_success_emits_running_then_completed(
         ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"),
         "step-1",
 
-        _NO_LOOP, rc.request_tools(None),
+        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
     )
 
     assert observation.status == "success"
@@ -551,7 +552,7 @@ def test_running_is_emitted_only_after_admission(
         ToolCall(tool_name="probe", arguments='{}', call_id="call-probe"),
         "s",
         _NO_LOOP,
-        rc.request_tools(None),
+        rc.request_tools(None), FileKnowledge(),
     )
 
     assert seen_during_handler == [["running"]]
@@ -573,7 +574,7 @@ def test_unknown_tool_emits_failed_without_running(
         ToolCall(tool_name="no_such_tool", arguments='{}', call_id="call-unknown"),
         "s",
 
-        _NO_LOOP, rc.request_tools(None),
+        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
     )
 
     assert observation.status == "error"
@@ -600,7 +601,7 @@ def test_profile_denied_tool_emits_failed_without_running(
         ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-denied"),
         "s",
 
-        _NO_LOOP, rc.request_tools(None),
+        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
     )
 
     assert observation.status == "error"
@@ -623,7 +624,7 @@ def test_invalid_arguments_emit_failed_without_running(
         ToolCall(tool_name="read_file", arguments='{"nonexistent": 1}', call_id="call-bad"),
         "s",
 
-        _NO_LOOP, rc.request_tools(None),
+        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
     )
 
     assert observation.status == "error"
@@ -650,7 +651,7 @@ def test_denied_calls_emit_failure_without_running(
             ToolCall(tool_name=tool_name, arguments=arguments, call_id=call_id),
             "s",
 
-            _NO_LOOP, rc.request_tools(None),
+            _NO_LOOP, rc.request_tools(None), FileKnowledge(),
         )
 
     assert [(e.tool_call_id, e.status) for e in recorder.events] == [("call-unregistered", "failed"), ("call-banned", "failed")]
@@ -687,7 +688,7 @@ def test_execute_call_specializes_context_per_call(
         ToolCall(tool_name="probe", arguments='{}', call_id="call-a"),
         "s",
         _NO_LOOP,
-        rc.request_tools(None),
+        rc.request_tools(None), FileKnowledge(),
     )
 
     assert received == ["call-a"]
@@ -727,7 +728,7 @@ def test_malformed_display_data_still_emits_failed_terminal(
         ToolCall(tool_name="bad_display", arguments='{}', call_id="call-bad-display"),
         "s",
 
-        _NO_LOOP, rc.request_tools(None),
+        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
     )
 
     assert observation.status == "error"
@@ -757,7 +758,7 @@ def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
             ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"),
             "s",
 
-            _NO_LOOP, rc.request_tools(None),
+            _NO_LOOP, rc.request_tools(None), FileKnowledge(),
         )
 
     assert observation.status == "success"
@@ -805,7 +806,7 @@ def test_executor_exception_becomes_error_observation_and_failed_terminal(
             ToolCall(tool_name="read_file", arguments='{}', call_id="call-boom"),
             "s",
 
-            _NO_LOOP, rc.request_tools(None),
+            _NO_LOOP, rc.request_tools(None), FileKnowledge(),
         )
 
     assert observation.status == "error"
@@ -838,7 +839,7 @@ def test_executor_exception_after_start_closes_running_card(
         ToolCall(tool_name="read_file", arguments='{}', call_id="call-late"),
         "s",
 
-        _NO_LOOP, rc.request_tools(None),
+        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
     )
 
     assert observation.content.startswith(
@@ -860,7 +861,7 @@ def test_executor_exception_emits_failure(
         ToolCall(tool_name="read_file", arguments='{}', call_id="call-hidden"),
         "s",
 
-        _NO_LOOP, rc.request_tools(None),
+        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
     )
 
     assert observation.status == "error"
@@ -912,7 +913,7 @@ def test_suspending_tool_still_closes_its_call_in_the_same_step(
         ToolCall(tool_name="suspend_probe", arguments='{}', call_id="call-suspend"),
         "s",
 
-        _NO_LOOP, rc.request_tools(None),
+        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
     )
 
     assert observation.status == "success"
@@ -1029,7 +1030,7 @@ def test_concurrent_calls_project_each_call_independently(
             ToolCall(tool_name="read_file", arguments=json.dumps({"path": name}), call_id=call_id),
             "s",
 
-            _NO_LOOP, rc.request_tools(None),
+            _NO_LOOP, rc.request_tools(None), FileKnowledge(),
         )
 
     threads = [threading.Thread(target=run, args=(i,)) for i in range(4)]
@@ -1065,14 +1066,14 @@ def test_mixed_batch_distinct_statuses_do_not_cross_talk(
         ToolCall(tool_name="read_file", arguments='{"path": "good.txt"}', call_id="call-good"),
         "s",
 
-        _NO_LOOP, rc.request_tools(None),
+        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
     )
     tools_node._execute_call(
         rc,
         ToolCall(tool_name="no_such_tool", arguments='{}', call_id="call-bad"),
         "s",
 
-        _NO_LOOP, rc.request_tools(None),
+        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
     )
 
     assert recorder.statuses("call-good") == ["running", "completed"]

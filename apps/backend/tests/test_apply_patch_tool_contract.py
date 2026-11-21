@@ -8,6 +8,7 @@ from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
 from app.tools.tool_handler.file_edit import parse_git_unified_diff
 from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
 from app.tools.tool_registration import build_tool_registry
+from tests.file_knowledge_support import with_workspace_reads
 
 # 工具描述的事实源已从模块级常量 ``APPLY_PATCH_DESCRIPTION`` 迁移为类属性
 # ``ApplyPatchTool.description``（模块不再导出该名字）。这里只做「测试内别名」，把下文的
@@ -100,7 +101,7 @@ def test_apply_patch_modifies_existing_file_and_emits_file_changes(tmp_path: Pat
     target = tmp_path / "existing.txt"
     target.write_text("before\n", encoding="utf-8")
 
-    observation = ApplyPatchTool().execute(_context(tmp_path), patch=_patch())
+    observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=_patch())
 
     assert observation.status == "success"
     assert target.read_text(encoding="utf-8") == "after\n"
@@ -119,7 +120,7 @@ def test_apply_patch_applies_two_files_separated_by_a_blank_line(tmp_path: Path)
     second.write_text("before\n", encoding="utf-8")
     patch = "\n\n".join((_patch("first.txt"), _patch("second.txt")))
 
-    observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)
+    observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=patch)
 
     assert observation.status == "success"
     assert first.read_text(encoding="utf-8") == "after\n"
@@ -187,7 +188,7 @@ def test_apply_patch_supports_git_quoted_paths_with_spaces(tmp_path: Path) -> No
         )
     )
 
-    observation = ApplyPatchTool().execute(_context(tmp_path), patch=patch)
+    observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=patch)
 
     assert observation.status == "success"
     assert target.read_text(encoding="utf-8") == "after\n"
@@ -219,7 +220,7 @@ def test_apply_patch_rejects_legacy_patch_markers_and_prevalidates_all_files(
     )
 
     marker_operations, marker_error = parse_git_unified_diff(legacy_marker)
-    rejected = ApplyPatchTool().execute(_context(tmp_path), patch=multi_file_patch)
+    rejected = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=multi_file_patch)
 
     assert marker_operations == []
     assert marker_error

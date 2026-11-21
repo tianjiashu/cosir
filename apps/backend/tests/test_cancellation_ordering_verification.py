@@ -33,11 +33,12 @@ from app.core.events import (
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
 )
-from app.core.tool.schemas.request_tools import RequestTools
+from app.core.file_access.knowledge import FileKnowledge
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.schemas import (
     ToolCall,
 )
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.nodes import tools_node
 from app.models.conversation_input import UserInputPresentation
@@ -180,7 +181,7 @@ def _project_cancelled_via_real_path(
         ToolCall(tool_name="execute_terminal", arguments="{}", call_id=call_id),
         "step-1",
         None,
-        RequestTools(schemas=(), admitted=frozenset({"execute_terminal"})),
+        RequestTools(schemas=(), admitted=frozenset({"execute_terminal"})), FileKnowledge(),
     )
     assert len(captured) == 1
     return captured[0]

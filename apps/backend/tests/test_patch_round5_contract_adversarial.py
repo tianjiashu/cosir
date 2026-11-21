@@ -41,6 +41,7 @@ from app.tools.tool_handler.file_edit import (
 )
 from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
 from app.utils import atomic_write
+from tests.file_knowledge_support import with_workspace_reads
 
 PARAM_DESCRIPTION = ApplyPatchArgs.model_fields["patch"].description or ""
 
@@ -72,7 +73,7 @@ def _context(root: pathlib.Path, run_id: int = 5001) -> ToolExecutionContext:
 
 
 def _execute(root: pathlib.Path, patch: str, run_id: int = 5001):
-    return ApplyPatchTool().execute(_context(root, run_id), patch=patch)
+    return ApplyPatchTool().execute(with_workspace_reads(_context(root, run_id)), patch=patch)
 
 
 def _tool_bytes(
