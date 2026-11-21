@@ -52,9 +52,18 @@ try {
     return bootstatePhase() === "ready";
   });
   const electronMain = electronMainProcess(launcher.pid);
-  console.log(`[launch-smoke] backend ready; killing only the Electron main process ${electronMain}`);
+  const backend = backendProcess(electronMain);
+  console.log(`[launch-smoke] backend ready (pid ${backend}); killing only the Electron main process ${electronMain}`);
+  const killedAt = Date.now();
   killOne(electronMain);
-  await waitFor("backend stopped after the host was killed", STOP_TIMEOUT_MS, () => bootstatePhase() === "stopped");
+  try {
+    await waitFor("backend stopped after the host was killed", STOP_TIMEOUT_MS, () => bootstatePhase() === "stopped");
+  } finally {
+    // 无论成败都报出后端什么时候退出的：没写 stopped 时，用来区分「优雅关闭卡住、15 秒后被强制退出」与「一直没退」。
+    await waitFor("backend process exit", STOP_TIMEOUT_MS, () => !isAlive(backend)).catch(() => {});
+    const exited = isAlive(backend) ? "still alive" : `exited within ${Math.round((Date.now() - killedAt) / 1000)}s`;
+    console.log(`[launch-smoke] backend ${backend} ${exited}; bootstate ${bootstatePhase() ?? "missing"}`);
+  }
   console.log("[launch-smoke] backend shut down gracefully after the host disappeared");
 } catch (error) {
   console.error(`[launch-smoke] ${error.message}`);
@@ -102,6 +111,22 @@ function electronMainProcess(rootPid) {
   return main.pid;
 }
 
+/** Electron 主进程的子进程里的后端（开发期是 Python 解释器，发布版是 cosir-backend）。 */
+function backendProcess(electronMain) {
+  const backend = processTable().find((item) => item.ppid === electronMain && /python|cosir-backend/i.test(item.name));
+  if (!backend) throw new Error(`no backend process under the Electron main process ${electronMain}`);
+  return backend.pid;
+}
+
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function processTable() {
   if (isWindows) {
     const json = execFileSync(
@@ -138,6 +163,6 @@ function printLogs() {
   for (const name of fs.readdirSync(logDir)) {
     if (!name.endsWith(".log")) continue;
     const lines = fs.readFileSync(path.join(logDir, name), "utf8").trim().split("\n");
-    console.error(`----- ${name} (last 40 lines) -----\n${lines.slice(-40).join("\n")}`);
+    console.error(`----- ${name} (last 120 lines) -----\n${lines.slice(-120).join("\n")}`);
   }
 }

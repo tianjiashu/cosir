@@ -23,7 +23,14 @@ test("leaves room for the system window buttons and captures them in light and d
     expect(frame).toEqual({ titlebar: "windows-overlay", insetRight: "138px" });
 
     for (const theme of ["light", "dark"] as const) {
-      await page.evaluate((source) => window.cosirHost!.window.setThemeSource(source), theme);
+      // 像用户在外观设置里选一样改偏好（`lib/theme/theme-preference.ts` 的 persist 存储），页面与原生外观由应用一起同步；
+      // 直接调宿主的 setThemeSource 会被「跟随系统」的页面改回去，两边对不上。
+      await page.evaluate((preference) => {
+        localStorage.setItem("cosir:theme", JSON.stringify({ state: { preference }, version: 0 }));
+      }, theme);
+      await page.reload();
+      await expect(page.getByRole("navigation", { name: "工作区会话列表" })).toBeVisible({ timeout: 60_000 });
+      await expect.poll(() => page.evaluate(() => document.documentElement.classList.contains("dark"))).toBe(theme === "dark");
       await expect.poll(() => app.evaluate(({ nativeTheme }) => nativeTheme.shouldUseDarkColors)).toBe(theme === "dark");
       const bounds = await app.evaluate(({ BrowserWindow }) => {
         const window = BrowserWindow.getAllWindows()[0];
