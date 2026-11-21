@@ -119,10 +119,11 @@ def test_command_runs_without_a_console_window(tmp_path: Path) -> None:
     """目的：命令以 ``CREATE_NO_WINDOW`` 启动：有控制台但没有窗口，用户不会看到 cmd 窗口一闪。
     潜在缺陷：去掉这个标志后，每条命令都会弹出（或闪一下）控制台窗口；这里 GetConsoleWindow 会返回非 0。"""
 
+    # C# 的字符串字面量要双引号：用 [char]34 拼出来，命令行上就不必转义引号。
     probe = (
-        "Add-Type -Namespace Probe -Name Console -MemberDefinition "
-        "'[System.Runtime.InteropServices.DllImport(''kernel32.dll'')] "
-        "public static extern System.IntPtr GetConsoleWindow();'; "
+        "$q = [char]34; Add-Type -Namespace Probe -Name Console -MemberDefinition "
+        "('[System.Runtime.InteropServices.DllImport(' + $q + 'kernel32.dll' + $q + ')] "
+        "public static extern System.IntPtr GetConsoleWindow();'); "
         "Write-Output ('CONSOLE_WINDOW ' + [Probe.Console]::GetConsoleWindow())"
     )
 
