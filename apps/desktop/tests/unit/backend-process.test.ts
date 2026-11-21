@@ -41,3 +41,44 @@ describe("stop process tree", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 });
+
+describe("force-killing the process tree", () => {
+  function isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // 目的：后端不理会 stdin 关闭（卡在收尾里）时，宽限期后强杀整棵进程树，后端拉起的子进程一起结束。
+  // 潜在缺陷：Windows 上只结束后端本身（少了 `/T`），或用不带 `/F` 的 taskkill 结束不了无窗口的控制台进程。
+  it("kills the child and its descendants after the grace period", async () => {
+    const grandchild = "setInterval(() => {}, 1000);";
+    const script = `
+      const { spawn } = require("node:child_process");
+      const child = spawn(process.execPath, ["-e", ${JSON.stringify(grandchild)}], { stdio: "ignore" });
+      process.stdout.write("GRANDCHILD " + child.pid + "\\n");
+      process.stdin.resume();
+      setInterval(() => {}, 1000);
+    `;
+    // 与 spawnBackend 一致：POSIX 上成为进程组长，强杀才能打到整组。
+    const child = spawn(process.execPath, ["-e", script], {
+      stdio: ["pipe", "pipe", "ignore"],
+      detached: process.platform !== "win32",
+      windowsHide: true,
+    });
+    const grandchildPid = await new Promise<number>((resolve) => {
+      child.stdout!.on("data", (chunk: Buffer) => {
+        const match = /GRANDCHILD (\d+)/.exec(chunk.toString());
+        if (match) resolve(Number(match[1]));
+      });
+    });
+
+    await stopProcessTree(child);
+
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    await expect.poll(() => isAlive(grandchildPid), { timeout: 5_000 }).toBe(false);
+  }, 30_000);
+});

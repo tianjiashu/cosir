@@ -61,6 +61,8 @@ impl PtyRuntime {
         for (key, value) in env {
             command.env(key, value);
         }
+        #[cfg(windows)]
+        Self::stop_ignoring_ctrl_c();
         let mut child = pair.slave.spawn_command(command)?;
         let Some(_pid) = child.process_id() else {
             let _ = child.kill();
@@ -87,6 +89,17 @@ impl PtyRuntime {
             containment: Mutex::new(containment),
         });
         Ok(SpawnedPty { runtime, reader })
+    }
+
+    /// Windows：清掉从上游继承来的「忽略 Ctrl+C」，shell 才收得到用户在 ConPTY 里按的 Ctrl+C。
+    ///
+    /// 这个属性随 `CreateProcess` 一路继承：以 `CREATE_NEW_PROCESS_GROUP` 启动、或调过
+    /// `SetConsoleCtrlHandler(NULL, TRUE)` 的祖先进程（CI 的执行器、部分启动器与 IDE）会让后端、本 worker 直到
+    /// shell 全都忽略 Ctrl+C，前台命令打不断。属性是进程级的，在派生 shell 之前清一次即可；worker 自己的控制台
+    /// 没人发 Ctrl+C，不受影响。失败只意味着保持继承来的状态，没有别的补救，忽略返回值。
+    #[cfg(windows)]
+    fn stop_ignoring_ctrl_c() {
+        unsafe { windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 0) };
     }
 
     /// 按序交给写线程，不阻塞调用方；字节真正写进 PTY 的时机取决于前台程序何时读输入。

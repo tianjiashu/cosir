@@ -205,6 +205,8 @@ mod tests {
         assert!(source < rc.find("builtin trap").unwrap());
     }
 
+    // zsh 只在 POSIX 上提供；它的引导要读 HOME / ZDOTDIR，Windows 上没有 HOME。
+    #[cfg(unix)]
     #[test]
     fn zsh_bootstrap_is_login_on_macos_and_wraps_zprofile() {
         let launch = ShellLaunch::prepare(vec!["/bin/zsh".into()], "zsh", "auto");
