@@ -186,15 +186,15 @@ def test_tool_layer_defines_untrusted_tags_once_for_any_external_content_tool():
 def test_tool_layer_states_handoff_rules_once_naming_only_present_tools():
     """委派与分叉共用的规则有任一工具时写一次，只点名 Session 真有的工具；两个工具的描述不再各写一遍。"""
 
-    main = _tool_layer(["delegate_task", "fork_session", "wait_messages", "send_message"])
+    main = _tool_layer(["delegate_task", "fork_session", "wait_messages", "session_send"])
     assert main.count("Handing work to another session (delegate_task / fork_session)") == 1
     assert main.count("Never fabricate or predict a report") == 1
-    assert "wait for it with wait_messages" in main and "with send_message" in main
+    assert "wait for it with wait_messages" in main and "with session_send" in main
 
     child = _tool_layer(["delegate_task"])
     assert "Handing work to another session (delegate_task)" in child
     assert "fork_session" not in child
-    assert "wait_messages" not in child and "send_message" not in child
+    assert "wait_messages" not in child and "session_send" not in child
 
     assert "Handing work to another session" not in _tool_layer(["read_file"])
     for tool in (DelegateTaskTool, ForkSessionTool):

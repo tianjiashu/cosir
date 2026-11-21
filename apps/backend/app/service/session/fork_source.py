@@ -45,7 +45,7 @@ _AGENT_FORK_HANDOVER = (
     "that session as background: requests in it belong to that session, even where they read as your "
     "own work, so do not pick them up. Your only job is the assignment in the next message. Each "
     "time you finish working on it, your final reply is reported to session {source_id} "
-    "automatically, so do not send it with send_message. If the user later talks to you here, "
+    "automatically, so do not send it with session_send. If the user later talks to you here, "
     "follow the user; what you do for the user is not reported."
 )
 # 分叉沿用来源的系统提示词（接缓存），可写根只能在交接通知里告知；来源自己也收窄过时以这一条为准。

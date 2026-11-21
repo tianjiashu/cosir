@@ -131,6 +131,31 @@ class SessionContextCrud:
             rows = db.scalars(statement).all()
         return [SessionContextRecord._from_model(row) for row in rows]
 
+    def list_recent_run_rows(self, session_id: int, limit: int) -> list[SessionContextRecord]:
+        """读取最近 ``limit`` 条本 Session 自己运行产生的行，按 ``sequence`` 升序返回。
+
+        给派生 Session 的进度摘要用（``core.tool.session_management.progress``），只取尾部、不读整段历史。
+        「自己运行产生」= ``run_id`` 不为空：Agent fork 继承来的行 ``run_id`` 为空，不是它做的事。
+        撤回移出的行（两个标记都为假，见 :meth:`exclude_rows`）不算；流式中或被中断的输出不进上下文但仍投影，
+        保留，摘要据此判断「正在输出」。
+        """
+        statement = (
+            select(SessionContextModel)
+            .where(
+                SessionContextModel.session_id == session_id,
+                SessionContextModel.run_id.is_not(None),
+                or_(
+                    SessionContextModel.include_in_context.is_(True),
+                    SessionContextModel.project_to_transport.is_(True),
+                ),
+            )
+            .order_by(SessionContextModel.sequence.desc())
+            .limit(limit)
+        )
+        with self._db_factory.begin() as db:
+            rows = db.scalars(statement).all()
+        return [SessionContextRecord._from_model(row) for row in reversed(rows)]
+
     def get_by_session_sequence(
         self,
         session_id: int,

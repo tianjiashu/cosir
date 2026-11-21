@@ -30,15 +30,15 @@ from app.core.tool.handler.wait_messages import (
     WaitMessagesTool,
     build_wait_messages_definition,
 )
-from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
-from app.core.tool.multi_agent.args.session_status_args import SessionStatusArgs
-from app.core.tool.multi_agent.send_message import (
-    SendMessageTool,
-    build_send_message_definition,
+from app.core.tool.session_management.args.session_send_args import SessionSendArgs
+from app.core.tool.session_management.args.session_read_args import SessionReadArgs
+from app.core.tool.session_management.session_send import (
+    SessionSendTool,
+    build_session_send_definition,
 )
-from app.core.tool.multi_agent.session_status import (
-    SessionStatusTool,
-    build_session_status_definition,
+from app.core.tool.session_management.session_read import (
+    SessionReadTool,
+    build_session_read_definition,
 )
 from app.core.tool.schemas import ALL_TOOL_NAMES, ToolName
 from app.service.depends import close_service_dependencies
@@ -59,16 +59,16 @@ _APP_DIR = Path(__file__).resolve().parents[1] / "app"
 # 三个仍存在的 child 工具的描述符：(工具名, 工具类, 参数模型, 工厂函数, 工具级超时)。
 _CHILD_TOOL_SPECS = [
     (
-        "send_message",
-        SendMessageTool,
-        SendMessageArgs,
-        build_send_message_definition,
+        "session_send",
+        SessionSendTool,
+        SessionSendArgs,
+        build_session_send_definition,
     ),
     (
-        "session_status",
-        SessionStatusTool,
-        SessionStatusArgs,
-        build_session_status_definition,
+        "session_read",
+        SessionReadTool,
+        SessionReadArgs,
+        build_session_read_definition,
     ),
     (
         "wait_messages",
@@ -262,7 +262,7 @@ def test_registry_exposes_three_remaining_child_tools(storage: None) -> None:
     """
 
     names = set(build_tool_registry().get_all_tool_names())
-    assert {"send_message", "session_status", "wait_messages"} <= names
+    assert {"session_send", "session_read", "wait_messages"} <= names
     assert "delegate_task" in names
 
 
@@ -376,37 +376,40 @@ def test_child_tool_definitions_match_registry_definitions(storage: None) -> Non
 
 
 def test_child_send_args_model_boundaries() -> None:
-    """目的：send_message 参数模型边界（id>0、message 1..8000）未被破坏。
+    """目的：session_send 参数模型边界（id>0、message 1..8000）未被破坏。
 
     潜在缺陷类型：删除改动误改参数约束，放宽/收紧合法输入区间。
     """
 
-    ok = SendMessageArgs(session_id=1, message="x")
+    ok = SessionSendArgs(session_id=1, message="x")
     assert ok.session_id == 1
     assert ok.message == "x"
 
     for bad_id in (0, -1):
         with pytest.raises(ValidationError):
-            SendMessageArgs(session_id=bad_id, message="x")
+            SessionSendArgs(session_id=bad_id, message="x")
 
     with pytest.raises(ValidationError):
-        SendMessageArgs(session_id=1, message="")
+        SessionSendArgs(session_id=1, message="")
     with pytest.raises(ValidationError):
-        SendMessageArgs(session_id=1, message="x" * 8001)
+        SessionSendArgs(session_id=1, message="x" * 8001)
 
-    assert SendMessageArgs(session_id=1, message="x" * 8000).message == "x" * 8000
+    assert SessionSendArgs(session_id=1, message="x" * 8000).message == "x" * 8000
 
 
 def test_child_status_args_model_boundaries() -> None:
-    """目的：session_status 参数模型边界（id>0）未被破坏。
+    """目的：session_read 参数模型边界（id>0、steps 0-30）未被破坏。
 
     潜在缺陷类型：边界约束丢失（允许 0/负数 id）。
     """
 
-    assert SessionStatusArgs(session_id=5).session_id == 5
+    assert SessionReadArgs(session_id=5).steps == 8
     for bad_id in (0, -1):
         with pytest.raises(ValidationError):
-            SessionStatusArgs(session_id=bad_id)
+            SessionReadArgs(session_id=bad_id)
+    for bad_steps in (-1, 31):
+        with pytest.raises(ValidationError):
+            SessionReadArgs(session_id=5, steps=bad_steps)
 
 
 def test_wait_messages_takes_no_arguments() -> None:

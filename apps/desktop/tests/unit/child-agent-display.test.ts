@@ -2,15 +2,19 @@ import { describe, expect, it } from "vitest";
 import { readAgentSessionResultDisplay } from "@/components/conversation/tools/child-agent-display";
 
 describe("agent session display projections", () => {
-  it("reads send/status payloads without exposing unknown fields", () => {
+  it("reads send/read/stop payloads without exposing unknown fields", () => {
     expect(readAgentSessionResultDisplay({
       kind: "agent-session-result",
-      operation: "status",
+      operation: "read",
       session_id: 2,
       agent_name: "Review",
       final_output: "done",
       end_reason: null,
-    })).toMatchObject({ operation: "status", sessionId: 2, finalOutput: "done" });
+    })).toMatchObject({ operation: "read", sessionId: 2, finalOutput: "done" });
+    expect(readAgentSessionResultDisplay({
+      kind: "agent-session-result", operation: "stop", session_id: 2, agent_name: "Review",
+    })).toMatchObject({ operation: "stop", sessionId: 2 });
+    expect(readAgentSessionResultDisplay({ kind: "agent-session-result", operation: "status", session_id: 2 })).toBeNull();
     expect(readAgentSessionResultDisplay({
       kind: "agent-session-result",
       operation: "send",

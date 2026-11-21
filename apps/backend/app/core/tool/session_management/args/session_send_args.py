@@ -1,9 +1,9 @@
-"""``send_message`` 工具的参数模型。"""
+"""``session_send`` 工具的参数模型。"""
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class SendMessageArgs(BaseModel):
+class SessionSendArgs(BaseModel):
     """给同工作区另一 Session发一条消息的已校验参数。"""
 
     model_config = ConfigDict(strict=True, extra="forbid")

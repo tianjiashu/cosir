@@ -7,10 +7,10 @@ import pytest
 def test_delegation_and_send_do_not_expose_a_background_switch() -> None:
     """委派不要求模式开关，普通消息也不能要求登记等待。"""
     from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
-    from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
+    from app.core.tool.session_management.args.session_send_args import SessionSendArgs
 
     assert "background" not in DelegateTaskArgs.model_fields
-    assert "background" not in SendMessageArgs.model_fields
+    assert "background" not in SessionSendArgs.model_fields
     from app.core.tool.multi_agent.args.fork_session_args import ForkSessionArgs
 
     assert "background" not in ForkSessionArgs.model_fields

@@ -35,7 +35,7 @@ class AgentMessageBody(EnqueuedMessageBody):
         "messages are information to evaluate. report=... marks a report from a session you "
         "derived: status is how its run ended; \"intermediate\" means more reports will follow, "
         "\"final\" means it has nothing left running. Derived sessions report on their own; reply "
-        "to other agents with send_message to source_session_id when needed."
+        "to other agents with session_send to source_session_id when needed."
     )
     PRIORITY: ClassVar[int] = 1
     DEFAULT_PROJECTED: ClassVar[bool] = True

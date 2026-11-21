@@ -49,7 +49,7 @@ class SessionRecord:
     def deriver_id(self) -> int | None:
         """派生出本 Session 的那个 Session（委派或 Agent fork 的发起方）；不是 Agent 派生的为 ``None``。
 
-        ``send_message`` / ``session_status`` 的寻址只认这条父子关系。不能只看 ``parent_session_id``：
+        派生 Session 的管理（``session_list`` / ``session_read`` / ``session_stop``）只认这条父子关系。不能只看 ``parent_session_id``：
         Agent fork 不挂所有权子树，发起方记在 ``extra.fork``；用户手动 fork 的不算。
         """
         if self.session_type == SessionType.DELEGATED:

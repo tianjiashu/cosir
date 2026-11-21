@@ -2,7 +2,7 @@
 
 委派是多 Agent 编排，不是后台执行的工具：调用在建好子 Session、投递完任务说明时就完成了，之后的进展
 属于子 Session 自己。它的每个 Run 落定时由编排把结论以 Agent 消息汇报给本 Session
-（``core.tool.multi_agent.derived_report``）；父侧用 ``wait_messages`` 挂起等待，或 ``session_status``
+（``core.tool.multi_agent.derived_report``）；父侧用 ``wait_messages`` 挂起等待，或 ``session_read``
 查询。参数校验与准入门禁归 ``ToolAccessGate``。
 """
 import json
@@ -58,7 +58,7 @@ class DelegateTaskTool(HandlerBase):
         "A child knows only what your message says: both handoffs drop detail, and neither side "
         "can tell what the other missed. A child handed your hypothesis tends to return it "
         "confirmed, and several at once spend tokens the user did not ask for. You can check on "
-        "it with session_status.\n"
+        "it with session_read and stop it with session_stop.\n"
         "- Delegate independent work that can run alongside yours, or an investigation that would "
         "mean reading across many files: you keep the conclusion, not the file dumps.\n"
         "- Delegate a review only when you want a read that is not anchored on yours: give it the "

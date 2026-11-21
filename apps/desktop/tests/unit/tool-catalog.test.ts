@@ -52,7 +52,7 @@ describe("toolHeading", () => {
     expect(toolHeading("mcp__fs__read_file", { path: "a" })).toMatchObject({ title: "调用 MCP", target: "fs/read_file" });
     expect(toolHeading("mcp__classify__run", { intent: "refund" }).title).toBe("调用 MCP");
     expect(toolHeading("skill", { action: "load", skill_name: "pdf", resource_path: "ref.md" }).target).toBe("pdf/ref.md");
-    expect(toolHeading("send_message", { session_id: 12 }).target).toBe("#12");
+    expect(toolHeading("session_send", { session_id: 12 }).target).toBe("#12");
   });
 
   it("目录里没有的工具退回工具名，没有图标", () => {

@@ -1,4 +1,7 @@
-"""send_message 只负责向同工作区的另一 Session 投递 Agent 消息；调度由收件方的 actor 决定。"""
+"""session_send：向同工作区的另一 Session 投递 Agent 消息；调度由收件方的 actor 决定。
+
+消息体的构造（``prepare_agent_message``）与委派、派生汇报共用，留在 ``core.tool.multi_agent``。
+"""
 
 import json
 from typing import cast
@@ -6,11 +9,12 @@ from typing import cast
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileConfigError, AgentProfileType
 from app.core.tool.multi_agent.agent_message import prepare_agent_message
-from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
+from app.core.tool.session_management.addressing import find_recipient
+from app.core.tool.session_management.args.session_send_args import SessionSendArgs
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
-    TOOL_SEND_MESSAGE,
+    TOOL_SESSION_SEND,
     ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
@@ -21,6 +25,7 @@ from app.core.workflow.message_queue.dispatch_policy import next_input
 from app.core.workflow.message_queue.session_message import LaunchInputBody, RunLaunch
 from app.models import RunRecord, SessionRecord
 from app.models.conversation_input import MessageSource
+from app.models.enums.run_status import RunStatus
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.session_kind import SessionType
 from app.service.depends import (
@@ -31,28 +36,29 @@ from app.service.depends import (
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
 
-class SendMessageTool(HandlerBase):
+class SessionSendTool(HandlerBase):
     """投递成功只表示消息入队；回信须另发一条消息。"""
 
-    name: str = TOOL_SEND_MESSAGE
+    name: str = TOOL_SESSION_SEND
     # 对照 Claude Code 的 SendMessage 补了三点：收件方看不到你的对话；别追问「做完没」；别让别的会话
     # 替你做自己被拒的事——可写根收窄后，另一个会话的可写区可能更大，转托就绕过了限制。
     description: str = (
         "Send a message to another session in this workspace using its session_id. The message is "
         "delivered once and sending does not wait; delivery means it reached that session, not "
-        "that it was read or agreed to.\n"
+        "that it was read or agreed to. The result says what the message does there: read before "
+        "its next step if it is running, wake it if it is paused, or start a new run if it is idle.\n"
         "- The recipient does not see your conversation, and your plain replies never reach it: "
         "make the message self-contained, and point at files by path instead of pasting them.\n"
         "- A session you derived (a delegated child agent or a fork) reports back to you "
         "automatically when it finishes the run your message starts; other sessions do not, so "
-        "reply explicitly with send_message to the source_session_id of an <agent_message> that "
+        "reply explicitly with session_send to the source_session_id of an <agent_message> that "
         "is not a report.\n"
         "- Do not send 'are you done?' messages: wait for the report with wait_messages, or check "
-        "a session you derived with session_status.\n"
+        "a session you derived with session_read.\n"
         "- Never ask another session to do what your own tools refused, such as writing outside "
         "your writable root; tell the user instead."
     )
-    args_model: type[SendMessageArgs] = SendMessageArgs
+    args_model: type[SessionSendArgs] = SessionSendArgs
     group = TOOL_GROUP_CHILD_AGENT
 
     def __init__(self) -> None:
@@ -65,14 +71,22 @@ class SendMessageTool(HandlerBase):
         message: str,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-        """投递一条 immediate 消息，运行中、挂起与空闲的去向统一由收件方决定。"""
+        """投递一条 immediate 消息，运行中、挂起与空闲的去向统一由收件方决定；结果按投递那一刻的 Run 状态
+        告诉发送方消息的去向（对照 Claude Code 的 delivered / queued：只说「送达」时，发送方分不清对方是
+        顺手看到、被唤醒还是为它开了新 Run）。
+
+        去向在 Session 闸门内判定、与入队同一时刻：之后对方怎么推进归它的 actor（``dispatch_policy``）。
+        少见的例外不在这里兜：对方正在被停止时，消息会在停止落定后开新 Run；发起配置的模型已被删时，消息
+        留在队列里等用户换模型（见 ``SessionActor``）。
+        """
+        target = find_recipient(self.name, session_id, execution_context)
+        if isinstance(target, ToolObservation):
+            return target
         sender = self._session_service.get_session(execution_context.session_id)
         try:
-            target = self._session_service.get_session(session_id)
-            if target.id == sender.id or target.workspace_id != sender.workspace_id:
-                return tool_error(self.name, "Choose another session in this workspace.")
             with session_runtime_spaces.get_or_create(session_id).operation():
-                launch = self._target_launch(target, execution_context)
+                current = self._session_service.require_current_run(target.id)
+                launch = self._target_launch(target, current, execution_context)
                 if isinstance(launch, ToolObservation):
                     return launch
                 session_runtime_spaces.enqueue(
@@ -90,12 +104,16 @@ class SendMessageTool(HandlerBase):
                     ),
                 )
         except KeyError:
+            # 寻址之后、闸门之内对方被删除。
             return tool_error(self.name, f"Target session {session_id} is unavailable.")
         except UserInputRejectedError as exc:
             return tool_error(self.name, exc.message)
         return tool_success(
             tool_name=self.name,
-            content=json.dumps({"session_id": session_id, "status": "delivered"}, separators=(",", ":")),
+            content=json.dumps(
+                {"session_id": session_id, "status": "delivered", **self._effect(current)},
+                separators=(",", ":"),
+            ),
             display_data={
                 "kind": "agent-session-result",
                 "operation": "send",
@@ -104,11 +122,22 @@ class SendMessageTool(HandlerBase):
             },
         )
 
+    @staticmethod
+    def _effect(current: RunRecord | None) -> dict[str, str]:
+        """消息在收件方那里的去向：immediate 的 Agent 消息并入运行中的驱动、唤醒挂起的 Run，空闲时开新 Run。"""
+        if current is not None and current.status == RunStatus.RUNNING.value:
+            return {"recipient": "running", "effect": "it reads your message before its next step"}
+        if current is not None and current.status == RunStatus.SUSPENDED.value:
+            return {"recipient": "paused", "effect": "your message wakes it"}
+        return {"recipient": "idle", "effect": "your message starts a new run"}
+
     def _target_launch(
-        self, target: SessionRecord, execution_context: ToolExecutionContext
+        self,
+        target: SessionRecord,
+        current: RunRecord | None,
+        execution_context: ToolExecutionContext,
     ) -> RunLaunch | ToolObservation:
         """只读收件方配置。首 Run 尚未建立时，继承 actor 将选中的启动输入。"""
-        current = self._session_service.require_current_run(target.id)
         if current is None:
             first = next_input(get_session_message_queue().pending_nowait(target.id))
             if first is not None:
@@ -141,7 +170,7 @@ class SendMessageTool(HandlerBase):
             )
         except (AgentProfileConfigError, KeyError, RuntimeError) as exc:
             log.warning(
-                "send_message_profile_unavailable",
+                "session_send_profile_unavailable",
                 extra={
                     "msg": "workspace 子 Agent 配置无效，拒绝创建 follow-up Run",
                     "data": {
@@ -185,6 +214,6 @@ class SendMessageTool(HandlerBase):
         )
 
 
-def build_send_message_definition() -> ToolDefinition:
-    """供工具注册表登记的 send_message 定义。"""
-    return SendMessageTool().to_definition()
+def build_session_send_definition() -> ToolDefinition:
+    """供工具注册表登记的 session_send 定义。"""
+    return SessionSendTool().to_definition()

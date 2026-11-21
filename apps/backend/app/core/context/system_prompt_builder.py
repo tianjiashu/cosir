@@ -64,7 +64,7 @@ from app.core.tool.schemas.tool_names import (
     TOOL_READ_IMAGE,
     TOOL_SEARCH,
     TOOL_SEARCH_CONTENT,
-    TOOL_SEND_MESSAGE,
+    TOOL_SESSION_SEND,
     TOOL_SKILL,
     TOOL_WAIT_MESSAGES,
     TOOL_WEB_FETCH,
@@ -457,8 +457,8 @@ class SystemPromptBuilder:
         if TOOL_WAIT_MESSAGES in tools:
             follow_up += f": wait for it with {TOOL_WAIT_MESSAGES}, or keep doing work that does not overlap"
         follow_up += "."
-        if TOOL_SEND_MESSAGE in tools:
-            follow_up += f" Give it more instructions with {TOOL_SEND_MESSAGE}."
+        if TOOL_SESSION_SEND in tools:
+            follow_up += f" Give it more instructions with {TOOL_SESSION_SEND}."
         return [
             (
                 f"- Handing work to another session ({' / '.join(handoff)}) costs more than it looks: "

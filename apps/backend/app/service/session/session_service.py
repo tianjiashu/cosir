@@ -140,6 +140,36 @@ class SessionService:
         ]
         return [*self._session.list_by_parent_session(session_id), *forks]
 
+    def list_derivation_tree(self, session_id: int) -> list[SessionRecord]:
+        """返回该 Session 派生树里的全部 Session（不含自己），先序：每个 Session 紧跟在它的派生方之后，
+        同一派生方的按 id（创建先后）。
+
+        派生关系只朝上（``deriver_id()``），树不会成环；层数受派生深度上限约束，逐层查询的代价可以接受。
+
+        异常:
+            KeyError: Session 不存在。
+        """
+        tree: list[SessionRecord] = []
+        for derived in sorted(self.list_derived_sessions(session_id), key=lambda s: s.id):
+            tree.append(derived)
+            tree.extend(self.list_derivation_tree(derived.id))
+        return tree
+
+    def derives_from(self, session: SessionRecord, ancestor_id: int) -> bool:
+        """``session`` 是否在 ``ancestor_id`` 的派生树里：沿派生方一路往上，能走到它。
+
+        Agent fork 的来源可能已被删除（fork 不随源删除），链在那里断开：断开处之上不再算祖先。
+        """
+        deriver_id = session.deriver_id()
+        while deriver_id is not None:
+            if deriver_id == ancestor_id:
+                return True
+            try:
+                deriver_id = self._session.get(deriver_id).deriver_id()
+            except KeyError:
+                return False
+        return False
+
     def require_current_run(self, session_id: int) -> RunRecord | None:
         """返回存在的会话的当前 Run（Session 的 ``current_run_id`` 指针）；会话尚无 Run 时返回 ``None``。
 

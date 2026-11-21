@@ -260,7 +260,7 @@ describe("CallRow kind 视图", () => {
     sessionStatuses.set(41, "running");
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <CallRow sessionId={9} toolCallId="call-send" toolName="send_message"
+        <CallRow sessionId={9} toolCallId="call-send" toolName="session_send"
           args={{ session_id: 41, message: "进展" }}
           artifact={artifact({ display_data: {
             kind: "agent-session-result", operation: "send", session_id: 41, agent_name: "前端部分",
@@ -272,13 +272,13 @@ describe("CallRow kind 视图", () => {
     expect(html).not.toContain("停止会话");
   });
 
-  it("状态查询行保留停止：子会话被消息唤醒后这里是单独停止它的入口", () => {
+  it("进度读取行保留停止：子会话被消息唤醒后这里是单独停止它的入口", () => {
     sessionStatuses.set(41, "running");
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <CallRow sessionId={9} toolCallId="call-status" toolName="session_status"
+        <CallRow sessionId={9} toolCallId="call-read" toolName="session_read"
           args={{ session_id: 41 }}
-          artifact={artifact({ display_data: { kind: "agent-session-result", operation: "status", session_id: 41, agent_name: "前端部分" } })}
+          artifact={artifact({ display_data: { kind: "agent-session-result", operation: "read", session_id: 41, agent_name: "前端部分" } })}
         />
       </MemoryRouter>,
     );

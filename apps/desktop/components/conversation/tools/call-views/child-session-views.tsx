@@ -123,16 +123,16 @@ function AgentSessionActions({ display, context }: { display: AgentSessionResult
   return (
     <>
       <CallOpenButton label={`打开会话：${title}`} onClick={() => void openSession(display.sessionId, title)} />
-      {display.operation === "status" && <ChildStopAction childSessionId={display.sessionId} title={title} context={context} />}
+      {display.operation === "read" && <ChildStopAction childSessionId={display.sessionId} title={title} context={context} />}
     </>
   );
 }
 
-/** `agent-session-result`（`send_message` / `session_status`）：展开体是对方返回的结论正文（状态查询时才有）。 */
+/** `agent-session-result`（`session_send` / `session_read` / `session_stop`）：展开体是对方落定后的最终输出（读取进度时才有）。 */
 export const agentSessionResultView: CallView = (data, context) => {
   const result = readAgentSessionResultDisplay(data);
   if (!result) return null;
-  const live = result.operation === "status" && !context.inherited;
+  const live = result.operation === "read" && !context.inherited;
   return {
     meta: live ? undefined : result.agentName,
     status: live ? <ChildSessionProblem childSessionId={result.sessionId} /> : undefined,

@@ -12,9 +12,9 @@ export type DelegationDisplay = {
   writableRoot?: string;
 };
 
-/** `agent-session-result`：`send_message`与 `session_status`。 */
+/** `agent-session-result`：`session_send`、`session_read` 与 `session_stop`。 */
 export type AgentSessionResultDisplay = {
-  operation: "send" | "status";
+  operation: "send" | "read" | "stop";
   sessionId: number;
   agentName?: string;
   finalOutput?: string;
@@ -82,7 +82,7 @@ export function readForkDisplay(value: unknown): ForkDisplay | null {
 export function readAgentSessionResultDisplay(value: unknown): AgentSessionResultDisplay | null {
   const data = record(value);
   if (!data || data.kind !== "agent-session-result") return null;
-  if (data.operation !== "send" && data.operation !== "status") return null;
+  if (data.operation !== "send" && data.operation !== "read" && data.operation !== "stop") return null;
   const sessionId = positiveId(data.session_id);
   if (sessionId === undefined) return null;
   if (data.agent_name !== null && data.agent_name !== undefined && readText(data.agent_name) === undefined) return null;

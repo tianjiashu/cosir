@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,11 +11,17 @@ from typing import Any
 
 import pytest
 
-from app.core.tool.multi_agent import send_message
+from app.core.tool.session_management import addressing, session_send
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.session_record import SessionRecord
 from app.tools.tool_handler.terminal.command_results import command_results
 from tests.session_extra_fixtures import fork_extra
+
+
+@pytest.fixture(autouse=True)
+def _addressing_uses_the_patched_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    """寻址规则在 ``addressing``：让它跟着用例给 ``session_send`` 换上的假服务走。"""
+    monkeypatch.setattr(addressing, "get_session_service", lambda: session_send.get_session_service())
 
 _PARENT = 7
 _CHILD = 11
@@ -48,26 +55,27 @@ def _clean_entries():
 
 @pytest.fixture
 def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
-    state = SimpleNamespace(prepared=[], enqueued=[], delivered=[])
+    # 收件方当前 Run 的状态，用例可改：决定 session_send 报告的去向。
+    state = SimpleNamespace(prepared=[], enqueued=[], delivered=[], run_status={})
     def current(session_id):
         if _SESSIONS[session_id].current_run_id is None:
             return None
         return SimpleNamespace(agent_id="main_agent", model_config_id="test/m3",
-                               reasoning_effort="high")
-    monkeypatch.setattr(send_message, "get_session_service", lambda: SimpleNamespace(
+                               reasoning_effort="high", status=state.run_status.get(session_id, "running"))
+    monkeypatch.setattr(session_send, "get_session_service", lambda: SimpleNamespace(
         get_session=_SESSIONS.__getitem__, require_current_run=current,
     ))
-    monkeypatch.setattr(send_message.session_runtime_spaces, "get_or_create",
+    monkeypatch.setattr(session_send.session_runtime_spaces, "get_or_create",
                         lambda _: SimpleNamespace(operation=nullcontext))
-    monkeypatch.setattr(send_message, "get_workspace_service", lambda: None)
-    monkeypatch.setattr(send_message.SendMessageTool, "_child_profile_launch",
-                        lambda self, target, run, ctx: send_message.RunLaunch.from_run(run))
+    monkeypatch.setattr(session_send, "get_workspace_service", lambda: None)
+    monkeypatch.setattr(session_send.SessionSendTool, "_child_profile_launch",
+                        lambda self, target, run, ctx: session_send.RunLaunch.from_run(run))
 
     def prepare(text: str, **kwargs: Any) -> str:
         state.prepared.append({"text": text, **kwargs})
         return f"agent-message:{text}"
 
-    monkeypatch.setattr(send_message, "prepare_agent_message", prepare)
+    monkeypatch.setattr(session_send, "prepare_agent_message", prepare)
 
     def enqueue(session_id: int, message: Any) -> None:
         # 登记表交付回复也经这里入队（background_result），按消息类型分开记。
@@ -76,7 +84,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         else:
             state.delivered.append((session_id, message.body))
 
-    monkeypatch.setattr(send_message.session_runtime_spaces, "enqueue", enqueue)
+    monkeypatch.setattr(session_send.session_runtime_spaces, "enqueue", enqueue)
     return state
 
 
@@ -93,7 +101,7 @@ def _context(session_id: int, tool_call_id: str, tmp_path: Path) -> ToolExecutio
 
 
 def _send(session_id: int, to: int, text: str, tmp_path: Path, **kwargs: Any):
-    return send_message.SendMessageTool().execute(
+    return session_send.SessionSendTool().execute(
         to, text, execution_context=_context(session_id, f"call-{session_id}-{text}", tmp_path), **kwargs
     )
 
@@ -111,6 +119,20 @@ def test_child_tells_its_parent_without_waiting(env, tmp_path) -> None:
     assert prepared["source"].session_id == _CHILD
     assert (prepared["agent_id"], prepared["model_config_id"]) == ("main_agent", "test/m3")
     assert not command_results.live_background(_CHILD)
+
+
+def test_result_says_what_the_message_does_at_the_recipient(env, tmp_path) -> None:
+    """对照 Claude Code 的 delivered / queued：按投递时收件方的 Run 状态说清去向。"""
+    expected = {
+        "running": ("running", "it reads your message before its next step"),
+        "suspended": ("paused", "your message wakes it"),
+        "completed": ("idle", "your message starts a new run"),
+        "cancelled": ("idle", "your message starts a new run"),
+    }
+    for status, (recipient, effect) in expected.items():
+        env.run_status[_PARENT] = status
+        content = json.loads(_send(_CHILD, _PARENT, f"news-{status}", tmp_path).content)
+        assert content == {"session_id": _PARENT, "status": "delivered", "recipient": recipient, "effect": effect}
 
 
 def test_question_and_explicit_reply_are_two_ordinary_messages(env, tmp_path) -> None:
@@ -144,7 +166,7 @@ def test_target_without_first_run_inherits_its_queued_launch(env, tmp_path, monk
     target = _session(30, current_run_id=None)
     monkeypatch.setitem(_SESSIONS, target.id, target)
     pending = []
-    monkeypatch.setattr(send_message, "get_session_message_queue",
+    monkeypatch.setattr(session_send, "get_session_message_queue",
                         lambda: SimpleNamespace(pending_nowait=lambda _: pending))
     assert _send(_PARENT, target.id, "hi", tmp_path).status == "error"
     assert not env.enqueued
@@ -173,7 +195,7 @@ def test_new_manual_fork_uses_frozen_launch_without_source_session(env, tmp_path
     target = _session(51, session_type="user_fork", current_run_id=None,
                    extra=fork_extra(987654, model_config_id="test/m8"))
     monkeypatch.setitem(_SESSIONS, 51, target)
-    monkeypatch.setattr(send_message, "get_session_message_queue",
+    monkeypatch.setattr(session_send, "get_session_message_queue",
                         lambda: SimpleNamespace(pending_nowait=lambda _: []))
     assert _send(_PARENT, 51, "continue the branch", tmp_path).status == "success"
     assert env.prepared[-1]["model_config_id"] == "test/m8"
@@ -181,7 +203,7 @@ def test_new_manual_fork_uses_frozen_launch_without_source_session(env, tmp_path
 
 
 def test_deleted_fork_model_is_rejected_before_enqueue(env, isolated_storage, tmp_path, monkeypatch):
-    """Real model deletion + send_message preparation: a frozen ID never bypasses admission."""
+    """Real model deletion + session_send preparation: a frozen ID never bypasses admission."""
     from app.core.tool.multi_agent.agent_message import prepare_agent_message
     from app.models.session_kind import SessionType
     from app.service.depends import get_model_config_service
@@ -196,10 +218,10 @@ def test_deleted_fork_model_is_rejected_before_enqueue(env, isolated_storage, tm
     target = SessionCrud().create(workspace.id, "branch", session_type=SessionType.USER_FORK,
                                extra=fork_extra(_PARENT, model_config_id=model.id))
     monkeypatch.setitem(_SESSIONS, target.id, target)
-    monkeypatch.setattr(send_message, "get_session_message_queue",
+    monkeypatch.setattr(session_send, "get_session_message_queue",
                         lambda: SimpleNamespace(pending_nowait=lambda _: []))
     # Keep the real preparation and its single model-validation boundary.
-    monkeypatch.setattr(send_message, "prepare_agent_message", prepare_agent_message)
+    monkeypatch.setattr(session_send, "prepare_agent_message", prepare_agent_message)
     get_model_config_service().delete_connection(model.connection.id)
     result = _send(_PARENT, target.id, "continue", tmp_path)
     assert result.status == "error"

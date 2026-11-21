@@ -45,7 +45,7 @@ def test_depth_limit_is_configurable_with_bounds() -> None:
 
 
 def test_only_sessions_this_agent_derived_answer_to_it() -> None:
-    """``send_message`` / ``status`` 只能寻址自己委派或 Agent fork 出的 Session。
+    """``session_send`` / ``status`` 只能寻址自己委派或 Agent fork 出的 Session。
 
     不能寻址用户手动 fork 的对话。
     """

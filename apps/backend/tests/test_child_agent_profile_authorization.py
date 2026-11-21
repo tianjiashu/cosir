@@ -1,4 +1,4 @@
-"""send_message 的发起配置来源：委派子 Agent 按 profile 授权重算，Agent 分叉沿用自己的 Run。"""
+"""session_send 的发起配置来源：委派子 Agent 按 profile 授权重算，Agent 分叉沿用自己的 Run。"""
 
 from contextlib import nullcontext
 from pathlib import Path
@@ -8,18 +8,24 @@ import pytest
 
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfileType
-from app.core.tool.multi_agent import send_message
+from app.core.tool.session_management import addressing, session_send
 from app.core.tool.schemas import ToolExecutionContext
 
 
+
+@pytest.fixture(autouse=True)
+def _addressing_uses_the_patched_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    """寻址规则在 ``addressing``：让它跟着用例给 ``session_send`` 换上的假服务走。"""
+    monkeypatch.setattr(addressing, "get_session_service", lambda: session_send.get_session_service())
+
 @pytest.fixture(autouse=True)
 def target_space(monkeypatch):
-    monkeypatch.setattr(send_message.session_runtime_spaces, "get_or_create",
+    monkeypatch.setattr(session_send.session_runtime_spaces, "get_or_create",
                         lambda _: SimpleNamespace(operation=nullcontext))
 
 
 @pytest.mark.asyncio
-async def test_send_message_rejects_main_profile_before_creating_run(
+async def test_session_send_rejects_main_profile_before_creating_run(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -49,18 +55,18 @@ async def test_send_message_rejects_main_profile_before_creating_run(
 
     session_service = _SessionService()
     run_service = _RunService()
-    monkeypatch.setattr(send_message, "get_session_service", lambda: session_service)
-    monkeypatch.setattr(send_message, "get_workspace_service", _WorkspaceService)
+    monkeypatch.setattr(session_send, "get_session_service", lambda: session_service)
+    monkeypatch.setattr(session_send, "get_workspace_service", _WorkspaceService)
     session_service.require_current_run = run_service.require_current_run
     # 非 CHILD profile 在开 Run 之前就被拒绝，调度入口不得被触达。
     monkeypatch.setattr(
-        send_message.session_runtime_spaces, "enqueue", lambda *_a, **_k: pytest.fail("enqueued")
+        session_send.session_runtime_spaces, "enqueue", lambda *_a, **_k: pytest.fail("enqueued")
     )
     base_registry = configuration.build_agent_registry()
     assert base_registry.resolve("system", "main_agent").agent_type is AgentProfileType.MAIN
     monkeypatch.setattr(configuration, "get_agent_registry", lambda: base_registry)
 
-    tool = send_message.SendMessageTool()
+    tool = session_send.SessionSendTool()
     context = ToolExecutionContext(
         step_id="step-1",
         session_id=7,
@@ -76,7 +82,7 @@ async def test_send_message_rejects_main_profile_before_creating_run(
     assert "no longer available" in result.content
 
 
-def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
+def test_session_send_to_a_fork_reuses_its_own_launch_without_profiles(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -92,14 +98,14 @@ def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
     )
     parent_session = SimpleNamespace(id=7, title="主对话", session_type="user", workspace_id=3)
     monkeypatch.setattr(
-        send_message,
+        session_send,
         "get_session_service",
         lambda: SimpleNamespace(
             get_session=lambda session_id: fork_session if session_id == 41 else parent_session,
             require_current_run=lambda _: run,
         ),
     )
-    monkeypatch.setattr(send_message, "get_workspace_service", lambda: None)
+    monkeypatch.setattr(session_send, "get_workspace_service", lambda: None)
     run = SimpleNamespace(id=11, status="completed", agent_id="main_agent", model_config_id="test/m3",
                           reasoning_effort="high")
     monkeypatch.setattr(
@@ -107,13 +113,13 @@ def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
     )
     prepared: list[dict] = []
     monkeypatch.setattr(
-        send_message,
+        session_send,
         "prepare_agent_message",
         lambda text, **kwargs: prepared.append(kwargs) or "agent-message",
     )
     enqueued: list[tuple[int, str]] = []
     monkeypatch.setattr(
-        send_message.session_runtime_spaces,
+        session_send.session_runtime_spaces,
         "enqueue",
         lambda session_id, message: enqueued.append((session_id, message)),
     )
@@ -127,7 +133,7 @@ def test_send_message_to_a_fork_reuses_its_own_launch_without_profiles(
         event_loop=SimpleNamespace(is_closed=lambda: False),  # type: ignore[arg-type]
     )
 
-    result = send_message.SendMessageTool().execute(
+    result = session_send.SessionSendTool().execute(
         41, "再补个测试", execution_context=context
     )
 

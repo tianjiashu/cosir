@@ -46,8 +46,10 @@
 | `wait_messages` | 无 | 结构化结果见第 4 节 |
 | `delegate_task` | `delegation-result` | 结构化结果见第 4 节 |
 | `fork_session` | `fork-session-result` | 结构化结果见第 4 节 |
-| `send_message` | `agent-session-result` | 结构化结果见第 4 节 |
-| `session_status` | `agent-session-result` | 结构化结果见第 4 节 |
+| `session_send` | `agent-session-result` | 结构化结果见第 4 节 |
+| `session_list` | 无 | 纯行：结果不指向单个 Session |
+| `session_read` | `agent-session-result` | 结构化结果见第 4 节 |
+| `session_stop` | `agent-session-result` | 结构化结果见第 4 节 |
 | `propose_agent_configuration` | `agent-configuration-draft` | 结构化结果见第 4 节 |
 | `ask_user` | `user-question` | 结构化结果见第 4 节 |
 | `present_deliverables` | `deliverables` | 展示数据只带这批交付的说明；交付记录是结果行 metadata 的 `facts.deliverables`（持久化事实），投影为工具 part 的 `deliverables` 字段（`type`、`key`、`caption`，文件另有 `workspacePath`、`absolutePath`、`kind`、`size`、`width`、`height`，目录有前两者，网址有 `url`），交付卡与产出清单读它 |
@@ -74,7 +76,7 @@
 | browser-page | tab_id/url/title；可含 screenshot（asset ID）、steps[{action,target,status,hint}]；步骤 status 为 done/failed/skipped/unknown；done 只表示输入执行完成，unknown 表示可能生效、须观察后决定，skipped 不算执行失败 |
 | delegation-result | title、child_agent_id；可含 role/delegation_id/child_session_id/writable_root（子会话被收窄时的可写根，相对工作区根） |
 | fork-session-result | title、child_session_id；可含 writable_root（同上） |
-| agent-session-result | send: operation/session_id/agent_name；status 另带 final_output/end_reason；当前 Session 状态由既有 Session 读取路径提供 |
+| agent-session-result | send / stop: operation/session_id/agent_name；read 另带 final_output/end_reason（过程只给模型，不进展示数据）；当前 Session 状态由既有 Session 读取路径提供 |
 | agent-configuration-draft | status=draft、agent_id、role、description、system_prompt；保存和编辑属于 Workbench，遵守调用方只读限制 |
 | user-question | questions[{question,header,options[{label,description,preview?}],multi_select}]（参数原样）；作答后补 decision（approve / reject）、answers{问题原文: label 或自由文字，多选为列表}、annotations{问题原文: {notes}}；全部跳过只有 decision=reject；作废（未作答）不补字段，状态为 cancelled |
 | deliverables | note（这批交付的说明，去空白后为空即 null，长度上限在参数模型）：卡片顶部的一两句话，按纯文本显示；一次调用一张卡，交付项读 part 上的交付记录，不在这里 |

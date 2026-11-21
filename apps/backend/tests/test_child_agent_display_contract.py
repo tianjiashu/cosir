@@ -10,7 +10,8 @@ from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
 )
 from app.core.tool.multi_agent.delegate_task import DelegateTaskTool
-from app.core.tool.multi_agent.session_status import SessionStatusTool
+from app.core.tool.session_management.progress import SessionProgress
+from app.core.tool.session_management.session_read import SessionReadTool
 from app.models.message_metadata import ToolMessageMetadata
 from app.models.run_record import RunRecord
 from app.models.session_context import SessionContextRecord
@@ -37,15 +38,23 @@ def _run(
 
 
 def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> None:
-    result = SessionStatusTool._agent_session_display_data(
+    progress = SessionProgress(
         session_id=2,
-        agent_name="Review",
+        name="Review",
+        kind="delegated child agent",
+        status="completed",
+        elapsed="took 3s",
+        now="idle (run ended)",
+        steps=("said \"secret step text\"",),
+        queued=0,
         final_output="summary",
         end_reason=None,
     )
+    result = SessionReadTool._display_data(progress)
+    # 最近几步只给模型：展示数据不带过程正文。
     assert result == {
         "kind": "agent-session-result",
-        "operation": "status",
+        "operation": "read",
         "session_id": 2,
         "agent_name": "Review",
         "final_output": "summary",

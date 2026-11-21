@@ -17,8 +17,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.core.tool.handler.wait.wait_messages_args import WaitMessagesArgs
 from app.core.tool.handler.web.web_fetch_args import WebFetchArgs
 from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
-from app.core.tool.multi_agent.args.send_message_args import SendMessageArgs
-from app.core.tool.multi_agent.args.session_status_args import SessionStatusArgs
+from app.core.tool.session_management.args.session_send_args import SessionSendArgs
+from app.core.tool.session_management.args.session_list_args import SessionListArgs
+from app.core.tool.session_management.args.session_read_args import SessionReadArgs
+from app.core.tool.session_management.args.session_stop_args import SessionStopArgs
 from app.core.tool.validation.argument_coercion import coerce_tool_arguments
 from app.core.tool.validation.arguments import validate_tool_arguments
 from app.tools.tool_models import EditFileArgs, ReadImageArgs, TerminalReadArgs
@@ -295,7 +297,7 @@ class TestChildSessionStrictAlignment:
 
     @pytest.mark.parametrize(
         "model",
-        [DelegateTaskArgs, SendMessageArgs, SessionStatusArgs, WaitMessagesArgs],
+        [DelegateTaskArgs, SessionSendArgs, SessionListArgs, SessionReadArgs, SessionStopArgs, WaitMessagesArgs],
     )
     def test_child_session_models_keep_strict_config(self, model: type[BaseModel]) -> None:
         """潜在缺陷：漏配 strict 会让该工具退化为宽松校验，与其它工具口径分叉。"""
@@ -306,7 +308,7 @@ class TestChildSessionStrictAlignment:
     def test_string_id_is_coerced_then_strictly_accepted(self) -> None:
         """对齐 strict 后，字符串 id 仍可经入口归一被接受（宽容在入口、严格在契约）。"""
 
-        result = validate_tool_arguments({"session_id": "4"}, {}, SessionStatusArgs)
+        result = validate_tool_arguments({"session_id": "4"}, {}, SessionStopArgs)
         assert result.ok is True
         assert result.arguments["session_id"] == 4
         assert [item.field for item in result.coercions] == ["session_id"]

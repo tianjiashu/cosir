@@ -15,12 +15,12 @@ from app.core.tool.multi_agent.fork_session import build_fork_session_definition
 from app.core.tool.multi_agent.propose_agent_configuration import (
     build_propose_agent_configuration_definition,
 )
-from app.core.tool.multi_agent.send_message import (
-    build_send_message_definition,
+from app.core.tool.session_management.session_send import (
+    build_session_send_definition,
 )
-from app.core.tool.multi_agent.session_status import (
-    build_session_status_definition,
-)
+from app.core.tool.session_management.session_list import build_session_list_definition
+from app.core.tool.session_management.session_read import build_session_read_definition
+from app.core.tool.session_management.session_stop import build_session_stop_definition
 from app.core.tool.tool_registry import ToolRegistry
 from app.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
 from app.tools.tool_handler.browser import build_browser_definitions
@@ -60,8 +60,10 @@ def build_tool_registry() -> ToolRegistry:
         registry.register(definition)
     registry.register(build_delegate_task_definition())
     registry.register(build_fork_session_definition())
-    registry.register(build_send_message_definition())
-    registry.register(build_session_status_definition())
+    registry.register(build_session_send_definition())
+    registry.register(build_session_list_definition())
+    registry.register(build_session_read_definition())
+    registry.register(build_session_stop_definition())
     registry.register(build_wait_messages_definition())
     registry.register(build_propose_agent_configuration_definition())
     registry.register(build_ask_user_definition())

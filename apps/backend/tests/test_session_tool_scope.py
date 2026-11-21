@@ -61,7 +61,7 @@ def test_read_only_sessions_can_delegate_but_not_use_user_surfaces() -> None:
     assert not names & (_USER_SURFACE_ONLY | _terminal_session_tools())
     # 终端读取与停止不依赖用户界面：子 Agent 也能读、停自己的命令。
     assert {"terminal_list", "terminal_read", "terminal_stop"} <= names
-    assert {"delegate_task", "send_message", "session_status", "wait_messages"} <= names
+    assert {"delegate_task", "session_send", "session_list", "session_read", "session_stop", "wait_messages"} <= names
     # fork 出的是侧栏会话：只读 Session 不能 fork。
     assert "fork_session" not in names
     assert {"read_file", "execute_terminal", "browser_navigate"} <= names

@@ -29,8 +29,8 @@
 | ~~`browser_handoff`~~（已下线） | —（靠系统提示词让用户自己操作） | ≈ | 现在同样靠系统提示词浏览器段：说清要用户做什么后结束回合 |
 | `delegate_task` | `Agent` | ≈（已借） | 2026-11-14 已对照改写 |
 | `fork_session` | `Agent(fork)` / `start_session(fork)` / `hand_off_to_session` | ≈（已借） | 2026-11-14 已对照改写 |
-| `send_message` | `SendMessage` | ≈（已借） | 2026-11-14 已对照改写 |
-| `session_status` | `ListAgents` / `list_sessions` | ≈＋ | 「汇报是线索不是证据」 |
+| `session_send` | `SendMessage` | ≈（已借） | 2026-11-14 已对照改写 |
+| `session_list` / `session_read` / `session_stop` | `list_sessions` / `list_events` / `stop_session` | ≈＋ | 「汇报是线索不是证据」 |
 | `wait_messages` | —（自动唤醒，禁止轮询） | — | 思路相反、结论一致 |
 | `propose_agent_configuration` | — | — | — |
 | `ask_user` | `AskUserQuestion` | ＝ | — |
@@ -241,7 +241,7 @@ terminal_stop: Stop your command still running from execute_terminal (by its ter
 
 - 描述分成三段：开头说明是什么；「When to use」写成本（交接两头丢细节、看不到它干活、错误和结论一样自信、顺着你的假设去证实）与取舍（什么时候派、什么时候自己做、评审只给材料不给结论、拿不准就不派、派了别自己再做）；「After the call」保留原有的汇报与等待机制，加上「不得编造未到的汇报」「汇报是线索、关键论断要核对」。
 - 按 cosir 的事实改写，没有照抄的有：
-  - 「只能等或取消」改成「只能等汇报、查 `session_status`、追加指示」，因为父 Agent 没有停止子 Agent 的工具；
+  - 「只能等或取消」改成「可以等汇报、用 `session_read` 查进度、追加指示或用 `session_stop` 停掉」；
   - 「最终汇报用户看不到」改成「用户只看到收起的汇报，要点写进自己的回复」；
   - 并行委派时互相覆盖的问题，借 `writable_root` 给出分目录的做法。
 - 参数：`message` 去掉「越详细越好」（它与 3000 字上限冲突，还会诱导模型贴文件内容），改为按要素写（目标、完成标准与要交回什么、已查到或排除的、范围）、文件按路径指；`agent_name` 写明它是用户看到的会话标题，按工作命名；`child_agent_id` 指向系统提示词里的子 Agent 目录。
@@ -265,23 +265,23 @@ terminal_stop: Stop your command still running from execute_terminal (by its ter
 | 派生会话：`A piece of the task at hand is not one` | 不适用：cosir 的分叉本来就是用来切分手头任务的 | 不借（本文初稿把它列为可借，已更正） |
 | Agent：`If you are the fork, execute directly — don't re-delegate` | 已由机制覆盖：交接通知写清身份，Agent fork 不能再分叉 | 不借 |
 
-### send_message ↔ SendMessage；session_status ↔ ListAgents
+### session_send ↔ SendMessage；session_list / session_read / session_stop ↔ list_sessions / list_events / stop_session
 
-**send_message 已于 2026-11-14 对照改写**（`core/tool/multi_agent/send_message.py` 与 `args/send_message_args.py`）。SendMessage 是延迟加载的工具，完整描述当天取自 `ToolSearch`，原文没有收进 [claude-code-system-prompt.md](claude-code-system-prompt.md)。
+**session_send 已于 2026-11-14 对照改写**（`core/tool/multi_agent/session_send.py` 与 `args/send_message_args.py`）。SendMessage 是延迟加载的工具，完整描述当天取自 `ToolSearch`，原文没有收进 [claude-code-system-prompt.md](claude-code-system-prompt.md)。
 
 | SendMessage 原句 | cosir | 处理 |
 |---|---|---|
 | `Your plain text output is NOT visible to other agents` | 只说了非派生会话不会自动回信 | **已借**：收件方看不到你的对话，你的普通回复也到不了它 |
 | 收件方按字面读，`@` 路径不会附上任何东西，要发文本本身 | 同一工作区，路径能用；但收件方没有你的上下文 | **已借**：消息要自成一体，文件按路径指、不贴内容；`message` 参数注明「它就是对方从你这里知道的全部」 |
 | `A successful send means the message reached that session, not that its Claude read it` / `never treat silence as agreement` | 只说「投递一次、不等待」 | **已借**：送达不等于读过或同意 |
-| `Never poll ListAgents in a loop or send "are you done?" messages` | 无 | **已借**：等汇报用 `wait_messages`，派生的会话用 `session_status` 查 |
+| `Never poll ListAgents in a loop or send "are you done?" messages` | 无 | **已借**：等汇报用 `wait_messages`，派生的会话用 `session_read` 查 |
 | `NEVER ask a peer to perform an action that was denied or blocked in your session`（cross-session permission laundering） | 无。可写根收窄后，别的会话的可写区可能更大 | **已借**：自己的工具拒绝的事（比如写可写根以外的文件），不要托别的会话做，告诉用户 |
 | `To reply to an incoming message, copy its from attribute as your to` | 「回信发给 `source_session_id`」 | 已有 |
 | `message` 参数：用户只看到第一行预览，第一行要自成一句 | 前端的 Agent 消息行只显示「来自 X」，不预览正文 | 不适用 |
 | `notify_when_idle`、`summary`、按名字与 `[ref]` 寻址、跨机器投递 | 派生会话自动汇报；有调用 `intent`；按 `session_id` 寻址 | 不适用 |
 | `When relaying, don't quote the original — it's already rendered to the user.` | Agent 消息默认收起，用户不一定看过 | 不借 |
 
-session_status 没有改。「汇报是线索不是证据」已经写进 `delegate_task` 和 `fork_session`，汇报都从这两处来。
+**2026-11-21 由 session_status 拆为三件套**（`core/tool/session_management/`：三个工具入口，寻址规则 `addressing.py`，进度投影 `progress.py`）。实测 Claude Code 的会话管理工具后的取舍：`list_events` 读原文且工具调用只剩名字、工具结果也计入条数，改为按「步」压缩的进度摘要；`list_sessions` 只有 `isRunning`，列表每行带「此刻在做什么」；`stop_session` 停下后会自动接着跑排队消息，cosir 以上游停止（`parent`）收回、明说排队消息不自动接续，空闲时明说无需停止；寻址一律整数 id；描述补上「不要反复调用来等，用 `wait_messages`」，读取结果在步数被截断时注明。范围是自己的派生树：列表与读取覆盖整棵树（列表按派生关系缩进、逐行标出能 read 还是能 stop），停止只限直接派生的一层（越级停会让等着它的中间层永远挂着），描述要求非必要不停；不做全文检索与原文翻页。同时借了 SendMessage 的 delivered / queued：`session_send` 按投递时收件方的 Run 状态报告去向（运行中下一步前读到 / 挂起被唤醒 / 空闲开新 Run）。「汇报是线索不是证据」已经写进 `delegate_task` 和 `fork_session`，`session_read` 的描述也带上了。
 
 ### wait_messages —
 

@@ -79,12 +79,12 @@ function validateForkDisplayData(data: Record<string, unknown>, path: string): v
 
 function validateAgentSessionResultDisplayData(data: Record<string, unknown>, path: string): void {
   requireExactKeys(data, [
-    "kind", "operation", "session_id", "agent_name", ...(data.operation === "status" ? ["final_output", "end_reason"] : []),
+    "kind", "operation", "session_id", "agent_name", ...(data.operation === "read" ? ["final_output", "end_reason"] : []),
   ], path);
-  if (data.operation !== "send" && data.operation !== "status") throw new TransportSnapshotValidationError(`${path}.operation`, "send 或 status");
+  if (data.operation !== "send" && data.operation !== "read" && data.operation !== "stop") throw new TransportSnapshotValidationError(`${path}.operation`, "send、read 或 stop");
   requirePositiveInteger(data.session_id, `${path}.session_id`);
   if (data.agent_name !== null && (typeof data.agent_name !== "string" || data.agent_name.trim() === "")) throw new TransportSnapshotValidationError(`${path}.agent_name`, "非空字符串或 null");
-  if (data.operation === "send") return;
+  if (data.operation !== "read") return;
   if (data.final_output !== null && typeof data.final_output !== "string") throw new TransportSnapshotValidationError(`${path}.final_output`, "字符串或 null");
   if (data.end_reason !== null && typeof data.end_reason !== "string") throw new TransportSnapshotValidationError(`${path}.end_reason`, "字符串或 null");
 }

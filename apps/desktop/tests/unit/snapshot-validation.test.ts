@@ -189,17 +189,23 @@ describe("Transport snapshot validation", () => {
     expect(parseTransportState(snapshot)).toBe(snapshot);
   });
 
-  it("accepts the send_message / session_status result contract", () => {
+  it("accepts the session_send / session_read / session_stop result contract", () => {
     const part = (display_data: Record<string, unknown>) => withToolPart({presentation: "activity",
-      type: "tool-call", awaitingUser: false, toolCallId: "status-1", toolName: "session_status", status: "completed", args: {}, display_data,
+      type: "tool-call", awaitingUser: false, toolCallId: "read-1", toolName: "session_read", status: "completed", args: {}, display_data,
     });
     const snapshot = part({
-      kind: "agent-session-result", operation: "status", session_id: 501,
+      kind: "agent-session-result", operation: "read", session_id: 501,
       agent_name: "审查代码", final_output: "已完成审查。", end_reason: null,
     });
     expect(parseTransportState(snapshot)).toBe(snapshot);
     const sent = part({ kind: "agent-session-result", operation: "send", session_id: 501, agent_name: "收件方" });
     expect(parseTransportState(sent)).toBe(sent);
+    const stopped = part({ kind: "agent-session-result", operation: "stop", session_id: 501, agent_name: "子会话" });
+    expect(parseTransportState(stopped)).toBe(stopped);
+    // 停止结果只定位对方，不带最终输出。
+    expect(() => parseTransportState(part({
+      kind: "agent-session-result", operation: "stop", session_id: 501, agent_name: "子会话", final_output: null, end_reason: null,
+    }))).toThrow("固定字段");
     // 对方 Run 的状态读会话状态推送，不在展示数据里。
     expect(() => parseTransportState(part({
       kind: "agent-session-result", operation: "send", session_id: 501,

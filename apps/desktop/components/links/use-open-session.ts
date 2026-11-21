@@ -11,7 +11,7 @@ const SIDEBAR_SESSION_TYPES = new Set(["user", "user_fork", "agent_fork"]);
 
 /**
  * 打开另一个 Session：侧栏会话按路由跳转，子 Agent 在工作台打开。Agent 消息的发送方、
- * `send_message` 卡片的对方都经这里。
+ * `session_send` 卡片的对方都经这里。
  *
  * 对方是哪种 Session 在点击时向后端读一次，不随快照下发：快照只带 Session id 与显示名，会话类型留在它
  * 唯一的事实源里。
