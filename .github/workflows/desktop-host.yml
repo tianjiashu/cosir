@@ -1,12 +1,15 @@
-name: windows-host
+name: desktop-host
 
-# Windows 宿主行为的门禁：AGENTS.md「Electron 桌面宿主 Windows 待验证」清单里能在 CI 上自动验证的部分。
+# 桌面宿主在各平台上的进程与终端行为：宿主存活契约、进程树清理、Terminal Worker、交互终端、会话临时目录、
+# stdio MCP 服务，以及真实宿主的 E2E 与启动入口。同一份用例跑三个平台，平台专属的用例各自按平台 skip。
 #
-# 跑机是 Windows Server（不是 Windows 10/11 桌面版），有 Defender、没有真人：Windows 10 的 ConPTY 重排、
-# 剪贴板与窗口外观仍要真机看；窗口外框只产出截图（artifact），对不对由人判断。
+# - Windows、macOS：全套。Windows 的跑机是 Windows Server（不是 10/11 桌面版），有 Defender、没有真人：
+#   Windows 10 的 ConPTY 重排、剪贴板与窗口外观仍要真机看；窗口外框只产出截图（artifact），由人判断。
+# - Linux：只跑 Worker 与后端。Linux 不是发布平台，跑它是为了 Worker 里 Linux 专有的进程查找（读 /proc）与
+#   POSIX 路径；桌面 E2E 要 xvfb、标题栏也是另一条原生路径，收益抵不上成本。
 #
-# 只跑 Windows 相关的范围，不跑后端全量：全量里大量默认 Unix 的写法（zsh、信号、路径）会一次报出一大片，
-# 淹没真正的回归。扩大范围时把新测试加进对应 job，并先在 Windows 上清到绿。
+# 不跑后端全量：Windows 全量里大量默认 Unix 的写法会一次报出一大片，淹没真正的回归。扩大范围时把新测试加进
+# 对应 job，并先在各平台清到绿。
 
 on:
   push:
@@ -23,12 +26,20 @@ on:
       - "apps/backend/app/tools/terminal_runtime/**"
       - "apps/backend/app/tools/tool_handler/terminal/**"
       - "apps/backend/app/tools/shell/**"
+      - "apps/backend/app/tools/tool_models/terminal/**"
+      - "apps/backend/app/tools/display/terminal_display.py"
+      - "apps/backend/app/core/tool/execute/tool_terminal_projection.py"
+      - "apps/backend/app/assistant_transport/state/conversation_state_terminal_session.py"
+      - "apps/backend/app/api/terminal_sessions_api.py"
+      - "apps/backend/app/api/terminal_stream_api.py"
+      - "apps/backend/app/service/terminal/**"
       - "apps/backend/app/tools/mcp/**"
       - "apps/backend/tests/test_parent_watch.py"
       - "apps/backend/tests/test_session_scratch.py"
       - "apps/backend/tests/test_terminal_*.py"
       - "apps/backend/tests/test_execute_terminal_*.py"
       - "apps/backend/tests/test_local_backend_*.py"
+      - "apps/backend/tests/test_tool_terminal_*.py"
       - "apps/backend/tests/test_backend_host_exit.py"
       - "apps/backend/tests/test_mcp_connection_pool.py"
       - "apps/backend/tests/terminal_test_support.py"
@@ -40,7 +51,8 @@ on:
       - "apps/desktop/tests/desktop-e2e/**"
       - "apps/desktop/tests/unit/backend-*.test.ts"
       - "scripts/start-desktop.ps1"
-      - ".github/workflows/windows-host.yml"
+      - "scripts/start-desktop.sh"
+      - ".github/workflows/desktop-host.yml"
   pull_request:
     branches:
       - "main"
@@ -55,12 +67,20 @@ on:
       - "apps/backend/app/tools/terminal_runtime/**"
       - "apps/backend/app/tools/tool_handler/terminal/**"
       - "apps/backend/app/tools/shell/**"
+      - "apps/backend/app/tools/tool_models/terminal/**"
+      - "apps/backend/app/tools/display/terminal_display.py"
+      - "apps/backend/app/core/tool/execute/tool_terminal_projection.py"
+      - "apps/backend/app/assistant_transport/state/conversation_state_terminal_session.py"
+      - "apps/backend/app/api/terminal_sessions_api.py"
+      - "apps/backend/app/api/terminal_stream_api.py"
+      - "apps/backend/app/service/terminal/**"
       - "apps/backend/app/tools/mcp/**"
       - "apps/backend/tests/test_parent_watch.py"
       - "apps/backend/tests/test_session_scratch.py"
       - "apps/backend/tests/test_terminal_*.py"
       - "apps/backend/tests/test_execute_terminal_*.py"
       - "apps/backend/tests/test_local_backend_*.py"
+      - "apps/backend/tests/test_tool_terminal_*.py"
       - "apps/backend/tests/test_backend_host_exit.py"
       - "apps/backend/tests/test_mcp_connection_pool.py"
       - "apps/backend/tests/terminal_test_support.py"
@@ -72,27 +92,36 @@ on:
       - "apps/desktop/tests/desktop-e2e/**"
       - "apps/desktop/tests/unit/backend-*.test.ts"
       - "scripts/start-desktop.ps1"
-      - ".github/workflows/windows-host.yml"
+      - "scripts/start-desktop.sh"
+      - ".github/workflows/desktop-host.yml"
   workflow_dispatch:
 
 jobs:
   worker:
-    name: terminal worker (cargo test)
-    runs-on: windows-latest
+    name: terminal worker (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # 进程归属（Job Object）、执行模式的原文传参与无窗口启动都在 Windows 专属用例里。
+      # 进程归属（Windows Job Object / POSIX 进程组与会话）各平台各有实现，都要在自己的平台上跑。
       - name: Cargo test
         run: cargo test --package cosir-terminal-worker
 
   backend:
-    name: backend (process lifecycle, terminal, scratch)
-    runs-on: windows-latest
+    name: backend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v5
 
@@ -106,6 +135,20 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # zsh 用例要求装了 zsh。Ubuntu 的 /etc/zsh/zshrc 会跑 compinit：跑机镜像里有组/他人可写的补全目录时它会停在
+      # 「忽略不安全目录？」的提问上，集成脚本永远发不出 ready。按 compaudit（compinit 用的同一判定）收回写权限，
+      # 修不干净就在这一步失败，而不是变成用例超时。macOS 自带 zsh。
+      - name: Install zsh
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
+          audit() { zsh -fc 'autoload -U compaudit; compaudit' 2>/dev/null || true; }
+          insecure=$(audit)
+          echo "compaudit 不安全目录：${insecure:-无}"
+          [ -z "$insecure" ] || echo "$insecure" | xargs sudo chmod g-w,o-w
+          remaining=$(audit)
+          [ -z "$remaining" ] || { echo "compaudit 仍报告不安全目录：$remaining"; exit 1; }
+
       # 真进程用例回落到 target/debug 的 worker。
       - name: Build Terminal Worker
         run: cargo build --package cosir-terminal-worker
@@ -114,8 +157,9 @@ jobs:
         working-directory: apps/backend
         run: uv sync --frozen
 
-      # bash：pytest 不展开通配符，Windows 默认的 pwsh 也不展开。
-      - name: Pytest (Windows host scope)
+      # bash：pytest 不展开通配符，Windows 默认的 pwsh 也不展开。Linux 不在后端的默认数据根平台里，直跑后端须显式
+      # 注入数据根；其余平台一样注入，免得写进跑机用户的主目录。
+      - name: Pytest (desktop host scope)
         working-directory: apps/backend
         shell: bash
         env:
@@ -132,9 +176,19 @@ jobs:
             tests/test_tool_terminal_*.py
 
   desktop:
-    name: desktop (unit, desktop E2E, launch entries)
-    runs-on: windows-latest
+    name: desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            npm: npm.cmd
+            start_script: powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File ../../scripts/start-desktop.ps1 -NoElevation
+          - os: macos-latest
+            npm: npm
+            start_script: bash ../../scripts/start-desktop.sh
     steps:
       - uses: actions/checkout@v5
 
@@ -163,9 +217,10 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
-      # 跑机默认 1024×768：窗口被压到 1024 宽以内，应用按窄屏把侧栏收成抽屉（`app-layout.tsx` 的
+      # Windows 跑机默认 1024×768：窗口被压到 1024 宽以内，应用按窄屏把侧栏收成抽屉（`app-layout.tsx` 的
       # NARROW_VIEWPORT_QUERY），用例找不到侧栏；用户的屏幕不会这么小。
       - name: Set display resolution
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
@@ -175,17 +230,17 @@ jobs:
         working-directory: apps/desktop
         run: npx vitest run tests/unit/backend-process.test.ts tests/unit/backend-supervisor.test.ts tests/unit/backend-transitions.test.ts
 
-      # 宿主的进程与窗口行为（含窗口外框截图）：这是本门禁覆盖的范围。以下各步互不依赖，前一步失败也照跑。
+      # 宿主的进程与窗口行为（窗口外框截图只在 Windows）：这是本门禁覆盖的范围。以下各步互不依赖，前一步失败也照跑。
       - name: Desktop E2E (host)
         if: success() || failure()
         working-directory: apps/desktop
         run: npm run build && npx playwright test -c playwright.desktop.config.ts desktop-smoke window-frame
 
       # 内置浏览器引擎在 Windows 上仍有未查清的失败（未摆上面板的标签 Page.captureScreenshot 无响应、iframe 点击与
-      # body 滚动结果不同），不在本门禁的待办范围内：照跑并保留产物，但不挡合并，查清后去掉 continue-on-error。
-      - name: Desktop E2E (browser engine, known Windows failures)
+      # body 滚动结果不同），不在本门禁的待办范围内：Windows 上照跑并保留产物、但不挡合并，查清后去掉 continue-on-error。
+      - name: Desktop E2E (browser engine)
         if: success() || failure()
-        continue-on-error: true
+        continue-on-error: ${{ runner.os == 'Windows' }}
         working-directory: apps/desktop
         run: npx playwright test -c playwright.desktop.config.ts browser-engine --output test-results-browser
 
@@ -194,18 +249,18 @@ jobs:
       - name: Launch smoke (npm run electron:dev)
         if: success() || failure()
         working-directory: apps/desktop
-        run: node scripts/verify-desktop-launch.mjs npm.cmd run electron:dev
+        run: node scripts/verify-desktop-launch.mjs ${{ matrix.npm }} run electron:dev
 
-      - name: Launch smoke (scripts/start-desktop.ps1)
+      - name: Launch smoke (start-desktop script)
         if: success() || failure()
         working-directory: apps/desktop
-        run: node scripts/verify-desktop-launch.mjs powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File ../../scripts/start-desktop.ps1 -NoElevation
+        run: node scripts/verify-desktop-launch.mjs ${{ matrix.start_script }}
 
       - name: Upload desktop artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-desktop-artifacts
+          name: desktop-artifacts-${{ matrix.os }}
           path: |
             apps/desktop/test-results
             apps/desktop/test-results-browser
