@@ -9,11 +9,11 @@ from types import SimpleNamespace
 # 与生产装配顺序一致，避免隔离收集时的旧导入环。
 import app.tools  # noqa: F401
 from app.core.context.context_store import ContextStore
+from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.session_management import addressing, session_list, session_stop
 from app.core.tool.session_management.progress import SessionProgress
 from app.core.tool.session_management.session_list import SessionListTool
 from app.core.tool.session_management.session_stop import SessionStopTool
-from app.core.tool.schemas import ToolExecutionContext
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
 from app.models.run_record import RunRecord
@@ -123,7 +123,10 @@ def test_interrupted_output_of_a_stopped_run_is_not_live() -> None:
 
 def test_suspended_says_what_it_waits_for() -> None:
     work = BackgroundWork(run_id=3, label="dev server", started_at=_START.isoformat())
-    rows = [_row(1, _assistant("", ("c1", "execute_terminal", {"intent": "dev server"}))), _row(2, *_tool("c1", "pending", work))]
+    rows = [
+        _row(1, _assistant("", ("c1", "execute_terminal", {"intent": "dev server"}))),
+        _row(2, *_tool("c1", "pending", work)),
+    ]
     progress = _project(_run("suspended"), rows, waiting_on=["background command: dev server"], queued=2)
 
     assert progress.now == "paused, waiting for background command: dev server"
@@ -162,6 +165,51 @@ def test_render_says_when_older_steps_are_hidden() -> None:
     ).render()
     # 窗口读满时更早的行没读出来，即使显示的步数没超过 steps 也要说明。
     assert "older ones not shown" in _project(_run("running"), rows, window_full=True).render()
+
+
+def test_marks_a_run_the_user_opened() -> None:
+    progress = _project(_run("running"), [], user_driven=True)
+
+    assert progress.summary_line().endswith("; the user is talking to it directly")
+    assert "user: the user is working in it directly; this run is theirs" in progress.render()
+    assert "user:" not in _project(_run("running"), []).render()
+
+
+def test_read_points_to_wait_messages_only_while_a_report_is_still_coming() -> None:
+    hint = "next: it reports back to you when this run ends"
+    assert hint in _project(_run("running"), []).render()
+    assert hint in _project(_run("suspended"), [], waiting_on=["derived session: 子任务"]).render()
+    assert hint in _project(None, []).render()
+    assert hint not in _project(_run("completed"), []).render()
+    # 用户的 Run 不汇报：不能叫派生方去等，改说别等。
+    user_run = _project(_run("running"), [], user_driven=True).render()
+    assert hint not in user_run
+    assert "so do not wait for it" in user_run
+
+
+def test_run_opened_by_user_skips_notices_and_ignores_agent_input(isolated_storage, tmp_path) -> None:
+    workspace = WorkspaceCrud().create("opened", str(tmp_path))
+    session = SessionCrud().create(workspace.id, "opened")
+    by_user = RunCrud().create(session.id, status="running")
+    by_agent = RunCrud().create(session.id, status="running")
+    store = ContextStore()
+    notice = UserMessageMetadata(kind="notice")
+    store.append(session.id, by_user.id, {"role": "user", "content": "handover"}, 1, metadata=notice, turn=1)
+    store.append(
+        session.id, by_user.id, {"role": "user", "content": "帮我看看"}, 2,
+        metadata=UserMessageMetadata(kind="user_input", presentation=UserInputPresentation(text="帮我看看")), turn=1,
+    )
+    store.append(
+        session.id, by_agent.id, {"role": "user", "content": "继续"}, 3,
+        metadata=UserMessageMetadata(
+            kind="agent_message", presentation=UserInputPresentation(text="继续"),
+            source=MessageSource(session_id=1, name="主会话"),
+        ),
+        turn=2,
+    )
+
+    assert store.run_opened_by_user(session.id, by_user.id)
+    assert not store.run_opened_by_user(session.id, by_agent.id)
 
 
 def test_not_started_session() -> None:
@@ -217,7 +265,11 @@ class _SessionCrud:
         return self.sessions[session_id]
 
     def list_by_parent_session(self, session_id: int) -> list[SessionRecord]:
-        return [s for s in self.sessions.values() if s.session_type == SessionType.DELEGATED and s.parent_session_id == session_id]
+        return [
+            s
+            for s in self.sessions.values()
+            if s.session_type == SessionType.DELEGATED and s.parent_session_id == session_id
+        ]
 
     def list_by_workspace_and_type(self, _workspace_id: int, session_type: SessionType) -> list[SessionRecord]:
         return [s for s in self.sessions.values() if s.session_type == session_type]
@@ -319,7 +371,9 @@ def test_list_indents_the_tree_and_marks_what_you_may_do(monkeypatch) -> None:
         classmethod(lambda cls, session, *, steps: _project(_run("running"), [])),
     )
     # 投影用同一个假 Session；这里只看树形、派生方与标注。
-    monkeypatch.setattr(SessionProgress, "summary_line", lambda self, *, derived_by=None: f"line(derived_by={derived_by})")
+    monkeypatch.setattr(
+        SessionProgress, "summary_line", lambda self, *, derived_by=None: f"line(derived_by={derived_by})"
+    )
 
     lines = SessionListTool().execute(execution_context=_context()).content.splitlines()
 
