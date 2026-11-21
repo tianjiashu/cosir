@@ -1,0 +1,192 @@
+name: windows-host
+
+# Windows 宿主行为的门禁：AGENTS.md「Electron 桌面宿主 Windows 待验证」清单里能在 CI 上自动验证的部分。
+#
+# 跑机是 Windows Server（不是 Windows 10/11 桌面版），有 Defender、没有真人：Windows 10 的 ConPTY 重排、
+# 剪贴板与窗口外观仍要真机看；窗口外框只产出截图（artifact），对不对由人判断。
+#
+# 只跑 Windows 相关的范围，不跑后端全量：全量里大量默认 Unix 的写法（zsh、信号、路径）会一次报出一大片，
+# 淹没真正的回归。扩大范围时把新测试加进对应 job，并先在 Windows 上清到绿。
+
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+      - "apps/terminal-worker/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/backend/app/parent_watch.py"
+      - "apps/backend/app/__main__.py"
+      - "apps/backend/app/lifespan.py"
+      - "apps/backend/app/service/session/session_scratch.py"
+      - "apps/backend/app/tools/terminal_runtime/**"
+      - "apps/backend/app/tools/tool_handler/terminal/**"
+      - "apps/backend/app/tools/shell/**"
+      - "apps/backend/app/tools/mcp/**"
+      - "apps/backend/tests/test_parent_watch.py"
+      - "apps/backend/tests/test_session_scratch.py"
+      - "apps/backend/tests/test_terminal_*.py"
+      - "apps/backend/tests/test_execute_terminal_*.py"
+      - "apps/backend/tests/test_local_backend_*.py"
+      - "apps/backend/tests/test_backend_host_exit.py"
+      - "apps/backend/tests/test_mcp_connection_pool.py"
+      - "apps/backend/tests/terminal_test_support.py"
+      - "apps/backend/tests/process_tree_support.py"
+      - "apps/desktop/electron/**"
+      - "apps/desktop/lib/platform.ts"
+      - "apps/desktop/styles/globals.css"
+      - "apps/desktop/scripts/**"
+      - "apps/desktop/tests/desktop-e2e/**"
+      - "apps/desktop/tests/unit/backend-*.test.ts"
+      - "scripts/start-desktop.ps1"
+      - ".github/workflows/windows-host.yml"
+  pull_request:
+    branches:
+      - "main"
+    paths:
+      - "apps/terminal-worker/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/backend/app/parent_watch.py"
+      - "apps/backend/app/__main__.py"
+      - "apps/backend/app/lifespan.py"
+      - "apps/backend/app/service/session/session_scratch.py"
+      - "apps/backend/app/tools/terminal_runtime/**"
+      - "apps/backend/app/tools/tool_handler/terminal/**"
+      - "apps/backend/app/tools/shell/**"
+      - "apps/backend/app/tools/mcp/**"
+      - "apps/backend/tests/test_parent_watch.py"
+      - "apps/backend/tests/test_session_scratch.py"
+      - "apps/backend/tests/test_terminal_*.py"
+      - "apps/backend/tests/test_execute_terminal_*.py"
+      - "apps/backend/tests/test_local_backend_*.py"
+      - "apps/backend/tests/test_backend_host_exit.py"
+      - "apps/backend/tests/test_mcp_connection_pool.py"
+      - "apps/backend/tests/terminal_test_support.py"
+      - "apps/backend/tests/process_tree_support.py"
+      - "apps/desktop/electron/**"
+      - "apps/desktop/lib/platform.ts"
+      - "apps/desktop/styles/globals.css"
+      - "apps/desktop/scripts/**"
+      - "apps/desktop/tests/desktop-e2e/**"
+      - "apps/desktop/tests/unit/backend-*.test.ts"
+      - "scripts/start-desktop.ps1"
+      - ".github/workflows/windows-host.yml"
+  workflow_dispatch:
+
+jobs:
+  worker:
+    name: terminal worker (cargo test)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 进程归属（Job Object）、执行模式的原文传参与无窗口启动都在 Windows 专属用例里。
+      - name: Cargo test
+        run: cargo test --package cosir-terminal-worker
+
+  backend:
+    name: backend (process lifecycle, terminal, scratch)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 真进程用例回落到 target/debug 的 worker。
+      - name: Build Terminal Worker
+        run: cargo build --package cosir-terminal-worker
+
+      - name: Install backend dependencies
+        working-directory: apps/backend
+        run: uv sync --frozen
+
+      # bash：pytest 不展开通配符，Windows 默认的 pwsh 也不展开。
+      - name: Pytest (Windows host scope)
+        working-directory: apps/backend
+        shell: bash
+        env:
+          CODING_AGENT_DATA_DIR: ${{ runner.temp }}/cosir-data
+        run: |
+          uv run pytest -q -rs \
+            tests/test_parent_watch.py \
+            tests/test_backend_host_exit.py \
+            tests/test_session_scratch.py \
+            tests/test_mcp_connection_pool.py \
+            tests/test_terminal_*.py \
+            tests/test_execute_terminal_*.py \
+            tests/test_local_backend_*.py \
+            tests/test_tool_terminal_*.py
+
+  desktop:
+    name: desktop (unit, desktop E2E, launch entries)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 桌面 E2E 与启动入口拉起真实后端：用它的虚拟环境，宿主不必在全新缓存里再同步一次。
+      - name: Install backend dependencies
+        working-directory: apps/backend
+        run: uv sync --frozen
+
+      - name: Install desktop dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Unit tests (host process rules)
+        working-directory: apps/desktop
+        run: npx vitest run tests/unit/backend-process.test.ts tests/unit/backend-supervisor.test.ts tests/unit/backend-transitions.test.ts
+
+      - name: Desktop E2E
+        working-directory: apps/desktop
+        run: npm run test:e2e:desktop
+
+      # 开发入口与一键启动脚本：等到后端 ready，再只强杀 Electron 主进程（模拟宿主崩溃），后端须经宿主存活
+      # 契约自行优雅退出（bootstate 落到 stopped）。
+      - name: Launch smoke (npm run electron:dev)
+        working-directory: apps/desktop
+        run: node scripts/verify-desktop-launch.mjs npm.cmd run electron:dev
+
+      - name: Launch smoke (scripts/start-desktop.ps1)
+        working-directory: apps/desktop
+        run: node scripts/verify-desktop-launch.mjs powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File ../../scripts/start-desktop.ps1 -NoElevation
+
+      - name: Upload desktop artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-desktop-artifacts
+          path: |
+            apps/desktop/test-results
+            apps/desktop/playwright-report
+          if-no-files-found: ignore
