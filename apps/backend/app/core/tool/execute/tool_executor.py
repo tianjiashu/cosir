@@ -12,7 +12,7 @@ running 由这里在真正调用 handler 之前经 workflow ``emit`` 发出，�
 
 import json
 import traceback
-from collections.abc import Collection, Mapping
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -20,10 +20,12 @@ from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.execute.tool_access_gate import ToolAccessGate
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
+from app.core.tool.external_tools import external_tools
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
-from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext, ToolObservation
+from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
@@ -49,30 +51,42 @@ class ToolExecutor:
         self,
         call: ToolCall,
         execution_context: ToolExecutionContext,
-        allowed_tool_names: Collection[str],
+        request_tools: RequestTools,
     ) -> ToolObservation:
         """执行单次工具调用并返回归一化观察，``content`` 一律经过输出预算，``display_data`` 不截断。
 
-        ``execution_context`` 由调用方按 ``call`` 构造（含 ``tool_call_id``），这里只在准入后附加调用意图。
+        ``execution_context`` 由调用方按 ``call`` 构造（含 ``tool_call_id``）。
         门禁拒绝与开始前的取消都不发 running：只有真正调用 handler 的调用才算开始运行，卡片不会先闪一下
         「运行中」。handler 抛的异常收口为 error 观察；执行链自身的异常原样上抛，由调用方收口。
+
+        内置工具调 handler（参数展开成关键字参数）；已加载的外部工具交给端口（``external_tools().execute``，
+        参数整包传入）。两者之后的取消检查、running、异常收口与预算完全相同。
         """
 
-        gate_outcome = self._gate.evaluate(call, execution_context, allowed_tool_names)
+        gate_outcome = self._gate.evaluate(call, execution_context, request_tools)
         if gate_outcome.denial is not None:
             return self._budget.apply(gate_outcome.denial, execution_context)
-        tool = gate_outcome.tool
-        execution_context = replace(execution_context, call_intent=gate_outcome.intent)
+        arguments = gate_outcome.arguments
+        invoke: Callable[[], Any]
+        if gate_outcome.external is not None:
+            external = gate_outcome.external
+            tool_name = external.name
+            invoke = lambda: external_tools().execute(external, arguments, execution_context)  # noqa: E731
+        else:
+            tool = gate_outcome.tool
+            assert tool is not None  # 通过准入时两者恰有一个
+            tool_name = tool.name
+            invoke = lambda: tool.handler(**arguments, execution_context=execution_context)  # noqa: E731
         if cancellation_registry.is_cancelled(execution_context.session_id):
             log.info(
                 "tool_execution_cancelled",
                 extra={
                     "msg": "Session 已停止，工具调用在开始前中止",
-                    "data": {"tool_name": tool.name, "tool_call_id": execution_context.tool_call_id},
+                    "data": {"tool_name": tool_name, "tool_call_id": execution_context.tool_call_id},
                 },
             )
             observation = tool_cancelled(
-                tool.name, tool_call_id=execution_context.tool_call_id, reason=_NOT_STARTED_REASON
+                tool_name, tool_call_id=execution_context.tool_call_id, reason=_NOT_STARTED_REASON
             )
             return self._budget.apply(observation, execution_context)
 
@@ -85,13 +99,13 @@ class ToolExecutor:
                 result=ToolMessageMetadata(status="running"),
             )
         )
-        observation = self._run_handler(tool, gate_outcome.arguments, execution_context)
+        observation = self._run_handler(tool_name, invoke, execution_context)
         return self._budget.apply(observation, execution_context)
 
     def _run_handler(
-        self, tool: ToolDefinition, arguments: Mapping[str, Any], execution_context: ToolExecutionContext
+        self, tool_name: str, invoke: Callable[[], Any], execution_context: ToolExecutionContext
     ) -> ToolObservation:
-        """调用 handler；退出前释放本次调用的工具级取消信号（只有运行中的终端命令会打它）。
+        """调用 handler（或延迟工具的来源）；退出前释放本次调用的工具级取消信号（只有运行中的终端命令会打它）。
 
         handler 跑完就保留真实结果，即使执行期间用户停止了 Session：副作用已经发生，改判为取消会让模型
         误以为操作没执行；Run 级停止交给 workflow 的下一个检查点收敛。
@@ -99,7 +113,7 @@ class ToolExecutor:
 
         tool_call_id = execution_context.tool_call_id
         try:
-            result = tool.handler(**arguments, execution_context=execution_context)
+            result = invoke()
         except Exception as exc:
             log.error(
                 "tool_handler_failed",
@@ -107,23 +121,23 @@ class ToolExecutor:
                     "msg": "工具 handler 执行抛异常",
                     "data": {
                         "error_kind": ErrorKind.RUNTIME_FAILED.value,
-                        "tool_name": tool.name,
+                        "tool_name": tool_name,
                         "traceback": traceback.format_exc(),
                     },
                 },
             )
             return tool_error(
-                tool.name,
+                tool_name,
                 f"the tool handler raised an exception: {exc}. Inspect the underlying tool failure "
                 "and change the plan before calling the tool again.",
                 tool_call_id=tool_call_id,
             )
         finally:
             tool_call_cancellation_registry.clear(execution_context.session_id, tool_call_id)
-        return self._normalize_result(tool, result, tool_call_id)
+        return self._normalize_result(tool_name, result, tool_call_id)
 
     @staticmethod
-    def _normalize_result(tool: ToolDefinition, payload: Any, tool_call_id: str) -> ToolObservation:
+    def _normalize_result(tool_name: str, payload: Any, tool_call_id: str) -> ToolObservation:
         """观察透传（缺 ``tool_call_id`` 时注入），dict/list 经 ``json.dumps``，其余经 ``str()`` 包成成功观察。"""
 
         if isinstance(payload, ToolObservation):
@@ -134,4 +148,4 @@ class ToolExecutor:
             content = json.dumps(payload, ensure_ascii=False, default=str)
         else:
             content = str(payload)
-        return tool_success(tool.name, content, tool_call_id=tool_call_id)
+        return tool_success(tool_name, content, tool_call_id=tool_call_id)

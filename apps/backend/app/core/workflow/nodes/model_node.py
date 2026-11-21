@@ -43,7 +43,8 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     流结束到响应提交（``include_in_context=True``）之间预览过的调用不在上下文里，RunDriver 的失败
     收尾看不到，这段内的失败由本节点收敛为 cancelled；提交之后的失败归 RunDriver 按上下文补结果。
     调用 Run 独占的 SDK 模型，逐帧替换持久化响应，结束后纳入上下文；部分输出留作展示，
-    不进入模型上下文或工具执行。工具调用只按 id 与注册名过滤，参数交 tools；无保留调用时，
+    不进入模型上下文或工具执行。工具调用只丢弃缺 id 或名字的残片，工具名与参数都交 tools 节点由准入
+    门禁裁决（不认识的名字得到一条错误观察，模型据此改正，而不是静默丢掉后误判为最终回复）；无调用时，
     有完成原因时落定 Run（后台工作属于 Session，不等它们：结论稍后到达时唤醒或开出新 Run）；缺少完成原因时，
     输出仅供展示并重新请求模型。"""
 
@@ -60,7 +61,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
     messages: list[ChatCompletionMessageParam] = await asyncio.to_thread(
         _message_context().load_message
     )
-    registered_tool_names = frozenset(get_tool_registry().get_all_tool_names())
+    tools = rc.request_tools(_message_context())
 
     log.info(
         "model_node_started",
@@ -91,15 +92,13 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
                 if rc.is_cancelled():
                     raise RunStopped()
                 parts.start()
-                async with aclosing(model.stream(messages)) as chunks:
+                async with aclosing(model.stream(messages, tools=tools.schemas)) as chunks:
                     async for event in chunks:
                         if rc.is_cancelled():
                             raise RunStopped()
                         aggregated_message = event.snapshot
                         response = _message_context().save_model_response(
-                            aggregated_message,
-                            include_in_context=False,
-                            registered_tool_names=registered_tool_names,
+                            aggregated_message, include_in_context=False
                         )
 
                         delta = event.chunk.choices[0].delta if event.chunk.choices else None
@@ -155,9 +154,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             choice = aggregated_message.choices[0]
             # SDK 快照的静态类型只列完整原因，流被截断时运行时仍可能为 None。
             finish_reason = cast(str | None, choice.finish_reason)
-            ai_message: ChatCompletionAssistantMessageParam = assistant_message(
-                choice.message, registered_tool_names
-            )
+            ai_message: ChatCompletionAssistantMessageParam = assistant_message(choice.message)
             calls = [
                 cast(ChatCompletionMessageFunctionToolCallParam, call)
                 for call in ai_message.get("tool_calls") or []
@@ -189,9 +186,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             )
 
             response = _message_context().save_model_response(
-                aggregated_message,
-                include_in_context=True,
-                registered_tool_names=registered_tool_names,
+                aggregated_message, include_in_context=True
             )
         except RunStopped:
             raise
@@ -200,7 +195,7 @@ async def _model_node(state: ReactExecutionState) -> dict[str, object]:
             raise
 
         if calls:
-            # 有任意有效工具调用都进 tools 节点；参数是否合法由执行边界决定，失败由 observe 结算；
+            # 有任意调用都进 tools 节点；工具名与参数是否合法由执行边界决定，失败由 observe 结算；
             # 工具结果是否回流 model 也由 observe 决定。
             batch.calls = calls
             return {**route_state(step_count, ReactRoute.TOOLS), "batch": batch}

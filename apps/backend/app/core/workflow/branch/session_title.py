@@ -32,7 +32,7 @@ from app.config.logging.logger import log
 from app.core.capsules import capsule_grammar
 from app.core.events import SessionTitleUpdatedEvent
 from app.core.llm_provider.openai_model import usage_from_response
-from app.core.workflow.node_helper.common import emit
+from app.core.workflow.node_helper.common import _message_context, emit
 from app.models.session_kind import USER_FACING_SESSION_TYPES
 from app.service import depends as service_depends
 from app.utils.datetime_utils import SESSION_TITLE_LIMIT, preview
@@ -116,7 +116,9 @@ async def _generate(rc: RuntimeContext, messages: list[ChatCompletionMessagePara
         messages.append(ChatCompletionUserMessageParam(role="user", content=_instruction(current)))
         response = await asyncio.wait_for(
             rc.model.complete(  # type: ignore[union-attr]  # 驱动期已补齐
-                messages, response_format=ResponseFormatJSONObject(type="json_object")
+                messages,
+                tools=rc.request_tools(_message_context()).schemas,
+                response_format=ResponseFormatJSONObject(type="json_object"),
             ),
             timeout=Constant.Workflow.SESSION_TITLE_TIMEOUT_SECONDS,
         )

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Collection
 from typing import Any, cast
 
 from openai.types.chat import (
@@ -33,14 +32,12 @@ def validate_message(value: Any) -> ChatCompletionMessageParam:
     return cast(ChatCompletionMessageParam, value)
 
 
-def assistant_message(
-    message: ParsedChatCompletionMessage[object],
-    registered_tool_names: Collection[str],
-) -> ChatCompletionAssistantMessageParam:
-    """只保留有 id 且工具名已注册的 function 调用；参数原样交给执行层解析。
+def assistant_message(message: ParsedChatCompletionMessage[object]) -> ChatCompletionAssistantMessageParam:
+    """只丢弃缺 id 或工具名的残片；工具名与参数原样交给执行层裁决。
 
-    SDK 流式快照可能尚缺 id/name，过滤规则对草稿和最终提交相同。未知工具不进入
-    模型上下文；已注册但本 Run 禁用的工具仍保留，由执行层给出拒绝观察。
+    SDK 流式快照可能尚缺 id/name，过滤规则对草稿和最终提交相同。不按注册表或本次请求的工具集过滤：
+    不认识的名字由准入门禁给出错误观察、调用照常闭合，模型据此改正——静默丢掉会让「只调了一个不存在
+    的工具」的回复被当成最终回复落定 Run。
     """
     result: ChatCompletionAssistantMessageParam = ChatCompletionAssistantMessageParam(
         role="assistant",
@@ -52,7 +49,7 @@ def assistant_message(
         call_id = call.id or ""
         function = getattr(call, "function", None)
         tool_name = getattr(function, "name", None) or ""
-        if not call_id.strip() or tool_name not in registered_tool_names:
+        if not call_id.strip() or not tool_name.strip():
             continue
         calls.append(
             ChatCompletionMessageFunctionToolCallParam(

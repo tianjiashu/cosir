@@ -36,8 +36,8 @@ def tool_success(
             ``ToolObservation.display_data``，不会回传给模型。
         waiting: 调用之后还要等什么（等决定、后台、等消息），见 ``ToolObservation.waiting``。
         facts: 交给运行时、不给模型的结构化结果（见 ``app.models.tool_result_facts``），持久化为结果行 metadata。
-        images: 给模型看的图片（``AttachmentService.save_image`` 返回的相对路径）；工具定义须声明
-            ``returns_images``，模型不支持图片时准入门禁会先拒绝。
+        images: 给模型看的图片（``AttachmentService.save_image`` 返回的相对路径）；模型不支持图片时由
+            observe 节点换成说明（``withhold_unviewable_images``），工具不必判断。
 
     返回:
         :class:`ToolObservation`：``status="success"``。

@@ -8,8 +8,8 @@ from __future__ import annotations
 from app.core.context.prompt_sources.source import PromptSource
 from app.core.context.prompt_sources.sources.agent_preset import AgentPresetSource
 from app.core.context.prompt_sources.sources.child_agents import ChildAgentsSource
+from app.core.context.prompt_sources.sources.deferred_tools import DeferredToolsSource
 from app.core.context.prompt_sources.sources.global_instructions import GlobalInstructionsSource
-from app.core.context.prompt_sources.sources.mcp_servers import MCPServersSource
 from app.core.context.prompt_sources.sources.reply_language import ReplyLanguageSource
 from app.core.context.prompt_sources.sources.skills import SkillsSource
 from app.core.context.prompt_sources.sources.workspace_instructions import (
@@ -18,7 +18,7 @@ from app.core.context.prompt_sources.sources.workspace_instructions import (
 
 AGENT_PRESET = AgentPresetSource()
 CHILD_AGENTS = ChildAgentsSource()
-MCP_SERVERS = MCPServersSource()
+DEFERRED_TOOLS = DeferredToolsSource()
 SKILLS = SkillsSource()
 GLOBAL_INSTRUCTIONS = GlobalInstructionsSource()
 WORKSPACE_INSTRUCTIONS = WorkspaceInstructionsSource()
@@ -27,7 +27,7 @@ REPLY_LANGUAGE = ReplyLanguageSource()
 PROMPT_SOURCES: tuple[PromptSource, ...] = (
     AGENT_PRESET,
     CHILD_AGENTS,
-    MCP_SERVERS,
+    DEFERRED_TOOLS,
     SKILLS,
     GLOBAL_INSTRUCTIONS,
     WORKSPACE_INSTRUCTIONS,

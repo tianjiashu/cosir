@@ -2,29 +2,41 @@
 
 这是工具执行管线（``ToolExecutor.execute``）的第一阶段：把「模型请求的一次工具调用」
 翻译为「可以安全交给隔离执行器的工具定义 + 已校验参数」，或一条归一化的拒绝观察。
-三段检查（注册表命中 / Agent profile 权限 / 参数 schema）同属「准入决策」这一职责，故收口
+三段检查（工具定义命中 / 本次请求的准入名单 / 参数 schema）同属「准入决策」这一职责，故收口
 在本模块，不在管线门面里平铺。
 
+工具定义有两个来源：进程级注册表（内置工具）与本次请求工具集里已加载的外部工具（``RequestTools.external``，
+服务给的 JSON Schema）。两者走同一套准入顺序，只是参数校验依据不同；还没加载就调用的外部工具在这里拦下，
+告诉模型先用 ``tool_search`` 加载。
+
 职责边界：
-- 负责：解析工具定义、按 ``allowed_tool_names`` 做 Agent 级门禁、参数解码与校验（规则在
+- 负责：解析工具定义、按本次请求的准入名单（``RequestTools.admitted``）门禁、参数解码与校验（规则在
   ``validation.call_arguments``，与其他需要业务参数的地方同源），并把各类拒绝的原因文案归一为
   面向模型的富文本观察。
 - 不负责：handler 执行、输出预算（以上归 ``ToolExecutor`` / ``ToolOutputBudget``）。
 """
 
-from collections.abc import Collection
 from dataclasses import dataclass, field
 
 from app.config.logging.logger import log
+from app.core.tool.external_tools import ExternalCatalogUnavailable, external_tools
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.schemas import (
+    TOOL_SEARCH,
     ToolCall,
     ToolDefinition,
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.tool_registry import ToolRegistry
-from app.core.tool.validation.call_arguments import CallArgumentsError, resolve_call_arguments
+from app.core.tool.validation.call_arguments import (
+    CallArguments,
+    CallArgumentsError,
+    resolve_call_arguments,
+    resolve_external_arguments,
+)
+from app.models.external_tool import ExternalToolDefinition
 
 
 @dataclass(frozen=True)
@@ -32,17 +44,17 @@ class ToolGateOutcome:
     """一次工具调用准入门禁的判定结果。
 
     字段:
-        tool: 通过全部检查的工具定义；被拒时为 ``None``，此时 ``denial`` 非空。
+        tool: 通过全部检查的内置工具定义；延迟工具或被拒时为 ``None``。
+        external: 通过全部检查的外部工具定义快照；内置工具或被拒时为 ``None``。通过时两者恰有一个非空。
         arguments: 准入后的最终参数字典（已过 schema 校验）；被拒时为空字典。
         denial: 被拒时的归一化 error 观察；通过时为 ``None``。该观察**尚未**过输出
             预算，由 ``ToolExecutor`` 统一应用，保证所有返回路径预算口径一致。
-        intent: 从原始调用提取的调用意图，模型漏写时为 ``None``。
     """
 
     tool: ToolDefinition | None = None
+    external: ExternalToolDefinition | None = None
     arguments: dict[str, object] = field(default_factory=dict)
     denial: ToolObservation | None = None
-    intent: str | None = None
 
 
 class ToolAccessGate:
@@ -70,19 +82,18 @@ class ToolAccessGate:
         self,
         call: ToolCall,
         execution_context: ToolExecutionContext,
-        allowed_tool_names: Collection[str],
+        request_tools: RequestTools,
     ) -> ToolGateOutcome:
         """按顺序执行三段准入检查并返回判定结果。
 
-        检查顺序：注册表命中 → Agent profile 权限门禁 → 图片能力（``returns_images`` 的工具要求本次
-        Run 的模型支持图片）→ 参数解码与校验。
+        检查顺序：工具定义命中（注册表，其次已加载的延迟工具）→ 本次请求准入 → 参数解码与校验。
         任一环节拒绝即短路返回 ``denial``，不继续后续检查、不执行工具。全部通过时返回
         ``admitted=True`` 的判定结果。
 
         参数:
             call: 模型请求的工具调用，含工具名、原始参数串与调用 id。
             execution_context: 本次执行的运行时边界（会话 / 工作区 / 根路径）。
-            allowed_tool_names: 本次 Run 准入的工具名；不在其中的已注册工具被拒绝。
+            request_tools: 发出这次请求时的工具集；不在 ``admitted`` 里的工具被拒绝。
 
         返回:
             :class:`ToolGateOutcome`：通过时 ``admitted=True`` 且携带工具定义与最终
@@ -97,16 +108,14 @@ class ToolAccessGate:
 
         tool = self._registry.get_tool_definition(call.tool_name)
         if tool is None:
-            return ToolGateOutcome(
-                denial=tool_error(
-                    call.tool_name,
-                    f"unknown tool: {call.tool_name}. "
-                    "This tool is not registered; call only the tools you were given.",
-                    tool_call_id=call.call_id,
-                )
-            )
+            external = request_tools.external.get(call.tool_name)
+            if external is None:
+                return ToolGateOutcome(denial=self._unknown(call, execution_context, request_tools))
+            return self._admit_external(call, external)
 
-        if tool.name not in allowed_tool_names:
+        if tool.name in request_tools.unloaded:
+            return ToolGateOutcome(denial=self._not_loaded(call))
+        if tool.name not in request_tools.admitted:
             return ToolGateOutcome(
                 denial=tool_error(
                     tool.name,
@@ -119,33 +128,64 @@ class ToolAccessGate:
                 )
             )
 
-        agent = execution_context.agent
-        if tool.returns_images and agent is not None and not agent.model.supports_image:
-            return ToolGateOutcome(
-                denial=tool_error(
-                    tool.name,
-                    f"{tool.name} returns images, but the current model cannot read images. "
-                    "Use a text-only alternative instead of calling it again.",
-                    tool_call_id=call.call_id,
-                    status_hint="模型不支持图片",
-                )
-            )
-
         try:
             resolved = resolve_call_arguments(tool, call.arguments)
         except CallArgumentsError as exc:
             return ToolGateOutcome(denial=tool_error(tool.name, str(exc), tool_call_id=call.call_id))
+        ToolAccessGate._log_resolution(tool.name, call.call_id, resolved)
+        return ToolGateOutcome(tool=tool, arguments=resolved.arguments)
 
-        if resolved.intent is None:
-            # schema 要求必填但执行不拒绝（见 ``parse_call_intent``）；记下来观察哪些模型、哪些工具会漏写。
-            log.warning(
-                "tool_call_intent_missing",
-                extra={
-                    "msg": "工具调用缺少合法 intent，照常执行，展示退回工具动词",
-                    "data": {"tool": tool.name, "tool_call_id": call.call_id},
-                },
-            )
+    @staticmethod
+    def _admit_external(call: ToolCall, external: ExternalToolDefinition) -> ToolGateOutcome:
+        """已加载的外部工具：能出现在 ``RequestTools.external`` 里就已通过准入名单（禁用的不在里面），只剩参数校验。"""
+        try:
+            resolved = resolve_external_arguments(external, call.arguments)
+        except CallArgumentsError as exc:
+            return ToolGateOutcome(denial=tool_error(external.name, str(exc), tool_call_id=call.call_id))
+        ToolAccessGate._log_resolution(external.name, call.call_id, resolved)
+        return ToolGateOutcome(external=external, arguments=resolved.arguments)
 
+    @staticmethod
+    def _not_loaded(call: ToolCall) -> ToolObservation:
+        """延迟工具还没加载（内置与外部同一句）：教模型先用 ``tool_search`` 取定义。"""
+        name = call.tool_name
+        return tool_error(
+            name,
+            f"{name} is a deferred tool and its schema is not loaded, so it cannot be called yet. "
+            f'Load it with {TOOL_SEARCH} using query "select:{name}", then call it again.',
+            tool_call_id=call.call_id,
+            status_hint="工具未加载",
+        )
+
+    @staticmethod
+    def _unknown(
+        call: ToolCall, execution_context: ToolExecutionContext, request_tools: RequestTools
+    ) -> ToolObservation:
+        """不认识的名字：是还没加载的外部工具就教模型怎么加载，否则说它不存在。
+
+        只有本次请求带着 ``tool_search`` 时才问目录：没有检索工具的 Session 里不存在「先加载」这条路，
+        端口也可能根本没装配。
+        """
+        name = call.tool_name
+        if TOOL_SEARCH in request_tools.admitted and ToolAccessGate._in_catalog(name, execution_context):
+            return ToolAccessGate._not_loaded(call)
+        return tool_error(
+            name,
+            f"unknown tool: {name}. This tool is not registered; call only the tools you were given.",
+            tool_call_id=call.call_id,
+        )
+
+    @staticmethod
+    def _in_catalog(name: str, execution_context: ToolExecutionContext) -> bool:
+        try:
+            catalog = external_tools().catalog(str(execution_context.workspace_root))
+        except ExternalCatalogUnavailable:
+            return False
+        return any(definition.name == name for definition in catalog)
+
+
+    @staticmethod
+    def _log_resolution(tool_name: str, call_id: str, resolved: CallArguments) -> None:
         if resolved.coercions:
             # 输入适配只还原无损形态（如 "30"→30），是模型未按声明类型传值的信号；
             # 只记字段与类型，不记参数值，避免命令/路径正文进入日志。
@@ -154,18 +194,12 @@ class ToolAccessGate:
                 extra={
                     "msg": "工具参数发生宽容归一（模型未按声明类型传值）",
                     "data": {
-                        "tool": tool.name,
-                        "tool_call_id": call.call_id,
+                        "tool": tool_name,
+                        "tool_call_id": call_id,
                         "coercions": [
-                            {
-                                "field": item.field,
-                                "from_type": item.from_type,
-                                "to_type": item.to_type,
-                            }
+                            {"field": item.field, "from_type": item.from_type, "to_type": item.to_type}
                             for item in resolved.coercions
                         ],
                     },
                 },
             )
-
-        return ToolGateOutcome(tool=tool, arguments=resolved.arguments, intent=resolved.intent)

@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
@@ -18,6 +17,7 @@ from openai.types.chat import (
     ChatCompletionMessageParam,
     ParsedFunctionToolCall,
 )
+from openai.types.shared_params import FunctionDefinition
 from sqlalchemy.orm import Session as DbSession
 
 from app.config.logging.logger import log
@@ -44,6 +44,7 @@ from app.models import (
     RunRecord,
     WorkspaceRecord,
 )
+from app.models.external_tool import ExternalToolDefinition
 from app.models.message_metadata import (
     TURN_INPUT_KINDS,
     AssistantMessageMetadata,
@@ -58,6 +59,7 @@ from app.models.message_metadata import (
 from app.models.session_context import (
     SessionContextRecord,
 )
+from app.models.tool_result_facts import ToolResultFacts
 from app.utils.message_content import content_to_text
 from app.utils.path.system_cosir import session_scratch_dir
 from app.utils.workspace_instruction import find_workspace_instruction_file
@@ -104,6 +106,8 @@ class RuntimeMessageContextManager:
     workspace: WorkspaceRecord
     # Session 的可写根事实，只在首次生成系统提示词时用。
     writable_root: str | None = None
+    # Session 能延迟加载的内置工具定义（``SessionRuntimeSpace.session_deferred_schemas``），进延迟工具目录。
+    deferred_tools: tuple[FunctionDefinition, ...] = ()
     current_run_id: int | None = None
     # 固定持久化的 Session system prompt，不参与压缩；每次模型调用均位于消息前缀。
     _system_entry: ContextEntry | None = field(default=None, init=False)
@@ -139,6 +143,7 @@ class RuntimeMessageContextManager:
                 self.tool_names,
                 self.writable_root,
                 session_scratch_dir(self.current_session_id),
+                deferred_tools=self.deferred_tools,
             )
             self._system_entry = store.create_system_prompt(
                 self.current_session_id,
@@ -407,6 +412,7 @@ class RuntimeMessageContextManager:
                 frozenset(self.tool_names),
                 agent,
                 self._workspace_instruction,
+                self.deferred_tools,
             )
         )
         content = view.describe_changes(self.prompt_source_baseline)
@@ -429,6 +435,29 @@ class RuntimeMessageContextManager:
                     if notice.notice_kind == notice_kind:
                         return entry.run_id, notice
         return None
+
+    def loaded_external_tools(self) -> list[ExternalToolDefinition]:
+        """上下文里 ``tool_search`` 加载过的外部工具定义，按写入顺序（同一工具可出现多次，取舍见 ``RequestTools``）。
+
+        含继承行（分叉复制来的结果行 ``run_id`` 为空）：分支沿用来源的工具面，也沿用来源已加载的工具。
+        撤回移出的行不在内存列表里，加载随之失效。内置工具见 :meth:`loaded_builtin_tools`，规则相同。
+        """
+        return [
+            definition
+            for facts in self._tool_facts()
+            for definition in facts.loaded_external_tools or ()
+        ]
+
+    def loaded_builtin_tools(self) -> set[str]:
+        """上下文里 ``tool_search`` 加载过的内置延迟工具名；定义取 Session 工具面固化的那一份。"""
+        return {name for facts in self._tool_facts() for name in facts.loaded_builtin_tools or ()}
+
+    def _tool_facts(self) -> list[ToolResultFacts]:
+        return [
+            entry.metadata.facts
+            for entry in self._entries
+            if isinstance(entry.metadata, ToolMessageMetadata) and entry.metadata.facts is not None
+        ]
 
     def find_tool_call(
         self, tool_call_id: str
@@ -528,19 +557,18 @@ class RuntimeMessageContextManager:
         snapshot: ParsedChatCompletionSnapshot,
         *,
         include_in_context: bool,
-        registered_tool_names: Collection[str],
     ) -> ContextEntry:
         """直接保存 SDK 快照；同一次调用内持续替换同一行，不重新聚合 chunk。
 
         行身份由本层持有，调用方不再传递。流式写入（``include_in_context=False``）只保留身份
-        供下一帧替换，不进入 working copy；响应结束并完成工具名过滤后，仅一次以
+        供下一帧替换，不进入 working copy；响应结束后仅一次以
         ``include_in_context=True`` 提交，提交即清空草稿，下一次调用自然新起一行。中断行继续
         留库供展示，后续模型上下文不会加载它——它所在的模型调用要么已提交、要么终结了 Run，
         因此不会出现「下一次调用沿用中断行身份」的情况。
         """
         choice = snapshot.choices[0]
         self._freeze_tool_call_ids(choice.message.tool_calls or [])
-        message = assistant_message(choice.message, registered_tool_names)
+        message = assistant_message(choice.message)
         metadata = AssistantMessageMetadata(
             completion_id=snapshot.id,
             model=snapshot.model,

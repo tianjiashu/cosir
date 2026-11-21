@@ -5,7 +5,6 @@
 （``core.tool.multi_agent.derived_report``）；父侧用 ``wait_messages`` 挂起等待，或 ``session_status``
 查询。参数校验与准入门禁归 ``ToolAccessGate``。
 """
-import copy
 import json
 from typing import Any
 
@@ -18,7 +17,7 @@ from app.core.permission.writable_root import WritableRootError, narrow
 from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
 from app.core.tool.multi_agent.derivation import child_depth
-from app.core.tool.multi_agent.session_tool_scope import tools_for_session
+from app.core.tool.multi_agent.session_tool_scope import freeze_tool_surface, tools_for_session
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
@@ -28,8 +27,8 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.models.conversation_input import MessageSource
 from app.models.session_extra import SessionExtra
@@ -186,10 +185,7 @@ class DelegateTaskTool(HandlerBase):
                     deriving_call_id=execution_context.tool_call_id,
                     writable_root=child_writable_root,
                 ),
-                tool_schemas=[
-                    copy.deepcopy(definition.to_model_tool_definition())
-                    for definition in child_final_session_tools
-                ],
+                tool_surface=freeze_tool_surface(child_final_session_tools),
                 derivation_depth=depth,
             )
 

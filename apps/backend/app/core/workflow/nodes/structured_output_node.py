@@ -152,7 +152,9 @@ async def _structured_output_node(state: ReactExecutionState) -> dict:
                 )
             )
             response = await runtime.model.complete(
-                context_messages, response_format=ResponseFormatJSONObject(type="json_object")
+                context_messages,
+                tools=runtime.request_tools(_message_context()).schemas,
+                response_format=ResponseFormatJSONObject(type="json_object"),
             )
             runtime.usage_stats.add_usage_metadata(usage_from_response(response.usage))
             choice = response.choices[0]

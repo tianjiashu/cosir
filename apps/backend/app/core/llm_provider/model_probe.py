@@ -140,7 +140,7 @@ async def probe_chat_model(
     try:
         model = build_chat_model(settings)
         async with asyncio.timeout(timeout_seconds):
-            stream = model.stream([ChatCompletionUserMessageParam(content="ping", role="user")])
+            stream = model.stream([ChatCompletionUserMessageParam(content="ping", role="user")], tools=())
             try:
                 async for _chunk in stream:
                     # 首个生成 chunk 即证明端点、模型与流式通道可用；不等待整段生成。

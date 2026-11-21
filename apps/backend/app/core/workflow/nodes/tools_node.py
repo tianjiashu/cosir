@@ -20,9 +20,10 @@ from app.config.logging.logger import log
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
-from app.core.workflow.node_helper.common import _runtime_context, emit
+from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.models.enums.error_kind import ErrorKind
 from app.models.enums.react_route import ReactRoute
 
@@ -58,7 +59,12 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
         observations = _reject_mixed_decision_batch(rc, calls, step_id, hitl_names)
     else:
         loop = asyncio.get_running_loop()
-        observations = [await asyncio.to_thread(_execute_call, rc, call, step_id, loop) for call in calls]
+        # 准入与发出这次请求时的工具集同源；整批共用一份，批内调用的结果不改变本批准入。
+        request_tools = rc.request_tools(_message_context())
+        observations = [
+            await asyncio.to_thread(_execute_call, rc, call, step_id, loop, request_tools)
+            for call in calls
+        ]
     log.info(
         "tools_node_completed",
         extra={
@@ -109,7 +115,11 @@ def _reject_mixed_decision_batch(
 
 
 def _execute_call(
-    rc: RuntimeContext, call: ToolCall, step_id: str, loop: asyncio.AbstractEventLoop
+    rc: RuntimeContext,
+    call: ToolCall,
+    step_id: str,
+    loop: asyncio.AbstractEventLoop,
+    request_tools: RequestTools,
 ) -> ToolObservation:
     """执行单个调用并发终态；未知工具名也交给执行器，由准入门禁产出稳定观察。
 
@@ -126,10 +136,11 @@ def _execute_call(
         event_sink=rc.event_sink,
         tool_call_id=call.call_id,
         writable_subpath=rc.session.extra.writable_root,
+        request_tools=request_tools,
     )
     try:
         observation = get_tool_executor().execute(
-            call, execution_context=execution_context, allowed_tool_names=rc.admitted_tools
+            call, execution_context=execution_context, request_tools=request_tools
         )
     except Exception as exc:
         observation = _internal_error(execution_context, call, exc)

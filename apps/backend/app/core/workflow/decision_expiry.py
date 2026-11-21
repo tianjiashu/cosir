@@ -1,6 +1,9 @@
 """「等用户回应」的等待决定何时过期、怎么过期、怎么告诉模型（``ToolDefinition.user_decision``
 的工具，目前是提问）。整条规则只在这里。
 
+等决定的占位只有 ``user_decision`` 工具会写下（``tool_awaiting_decision``），所以「有等决定的占位」就是
+「在等用户回应」，这里不再回注册表查工具声明。
+
 这类决定问的是「此刻做不做这件事」：用户作答、跳过，或者不理它、直接说了别的话——那句话就是
 回应。它不按回合算：别的 Agent 发来的消息同样开启回合，却与用户答不答无关；Run 正常完成后提问
 仍在，回答可以落进之后的回合。四处结束它：
@@ -14,7 +17,7 @@
 两处没有驱动在跑，直接改库（:func:`expire_decisions_after_run`）。Run 正常完成不过期，理由见
 ``SessionActor._expire_decisions``。
 
-过期只读工具声明，不按工具名分支。占位推到 ``cancelled`` 并带短提示，正文不变——它仍是这次调用
+不按工具名分支。占位推到 ``cancelled`` 并带短提示，正文不变——它仍是这次调用
 在模型协议上的结果；等待占位说过「结果另行送达」，所以除了模型自己重复提问，都要另给一条通知
 （:func:`expired_notice`）。
 """
@@ -24,7 +27,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, cast
 
-from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.placeholder_settlement import publish_settled
@@ -40,15 +42,6 @@ from app.storage.store_engines import main_db_factory
 
 # 卡片短提示：等用户决定的调用没等到回答（区别于用户主动跳过，那是 ``completed``）。
 UNANSWERED_HINT = "未作答"
-
-def ends_on_user_input(tool_name: str) -> bool:
-    """这个工具的等待决定是否等的是用户的回应：用户说了别的话就结束（``ToolDefinition.user_decision``）。
-
-    已不在注册表里的工具（旧会话里残留的等待占位）不算。
-    """
-    definition = get_tool_registry().get_tool_definition(tool_name)
-    return definition is not None and definition.user_decision
-
 
 ExpiryCause = Literal["user_message", "run_stopped", "run_ended"]
 
@@ -81,11 +74,9 @@ class IncomingDecisionEffects:
     answered_before_input: frozenset[str]
     answered: frozenset[str]
 
-    def still_awaiting(self, tool_call_id: str, tool_name: str) -> bool:
-        """这次并入之后，这个此刻还在等待的调用是否仍在等。"""
-        if tool_call_id in self.answered:
-            return False
-        return self.user_input is None or not ends_on_user_input(tool_name)
+    def still_awaiting(self, tool_call_id: str) -> bool:
+        """这次并入之后，这个此刻还在等待的调用是否仍在等：没被回答，也没有用户输入让它作废。"""
+        return tool_call_id not in self.answered and self.user_input is None
 
 
 def incoming_decision_effects(pending: list[SessionMessage]) -> IncomingDecisionEffects:
@@ -136,11 +127,7 @@ def expire_decisions(*, step_id: str, keep: frozenset[str] = frozenset()) -> lis
     """
     rc = _runtime_context()
     context = _message_context()
-    expired = [
-        call_id
-        for call_id, tool_name in context.awaiting_decision_calls()
-        if call_id not in keep and ends_on_user_input(tool_name)
-    ]
+    expired = [call_id for call_id, _ in context.awaiting_decision_calls() if call_id not in keep]
     if not expired:
         return []
     with main_db_factory().begin() as db:
@@ -184,11 +171,7 @@ def expire_decisions_after_run(session_id: int, hint: str) -> list[str]:
     是否告知模型由调用方决定。同步写库，调用方放在工作线程。
     """
     context = service_depends.get_session_context_service()
-    expiring = frozenset(
-        call_id
-        for call_id, (tool_name, _arguments) in context.awaiting_decision_calls(session_id).items()
-        if ends_on_user_input(tool_name)
-    )
+    expiring = frozenset(context.awaiting_decision_calls(session_id))
     if not expiring:
         return []
     settled = context.expire_awaiting_decisions(session_id, expiring, hint)

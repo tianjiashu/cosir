@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 from app.core.events import EventSink
 from app.core.events.event_sink import event_sink
 from app.core.tool.multi_agent.session_tool_scope import banned_derivation_tools
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.workflow.cancel.run_cancellation_registry import (
     CancelReason,
     cancel_end_reason,
@@ -21,6 +22,7 @@ from app.session_runtime.session_runtime_space_registry import session_runtime_s
 
 if TYPE_CHECKING:
     from app.core.agents.agent_runtime_config import AgentRuntimeConfig
+    from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
     from app.core.llm_provider.openai_model import OpenAIChatModel
     from app.session_runtime.session_runtime_space import SessionRuntimeSpace
 
@@ -41,9 +43,8 @@ class RuntimeContext:
     workspace: WorkspaceRecord
     # 本次 Run 的 Agent 运行时配置：Agent 定义与模型选择的最终解析，模型字段已完整。
     agent: AgentRuntimeConfig
-    # 本 Run 准入的工具名；只在模型返回调用后拦截，模型绑定仍用 Session 固化的完整 schema。
-    admitted_tools: frozenset[str]
-    # Session 固化工具里本 Run 不准入的那部分；工具准入通知据此告诉模型「为什么不能用」。
+    # Session 固化工具里本 Run 不准入的那部分（派生限制）：请求工具集据此算准入名单，工具准入通知据此
+    # 告诉模型「为什么不能用」。
     banned_tools: frozenset[str]
     # 这次驱动之前 Session 的当前 Run 是什么样：新 Run 是上一个 Run，恢复是本 Run 迁回 running 前的
     # 记录（恢复会清空结束原因），唤醒为 None。只供驱动开始时推导通知（``drive_notices``）。
@@ -66,19 +67,17 @@ class RuntimeContext:
     def for_run(
         cls, run: RunRecord, preceding_run: RunRecord | None
     ) -> RuntimeContext:
-        """为单个 Run 的一次驱动装配运行上下文，算出本 Run 的工具准入边界。
+        """为单个 Run 的一次驱动装配运行上下文，算出本 Run 禁用的工具。
 
         Session、工作区与 mailbox 取自 Run 所属 Session 的运行时空间（空间按 Session 只物化一次，这里不再
         重复读库）；Agent 配置由 ``AgentRuntimeConfig.for_run`` 合成，事件回调经
         ``app.service.depends`` 取 projector——core 因此不直接依赖 Assistant Transport。
 
-        ``admitted_tools`` 以 Session 固化的工具名为基准，减去这类 Session 不允许的派生方式与派生深度已到
-        上限的派生工具。禁用集合按本 Run 现算，所以改 ``AGENT_MAX_DERIVATION_DEPTH`` 对下一次 Run 即时生效——但只对 schema 里仍有派生工具的 Session
-        （fork）有效，schema 已固化的子 Session 在创建时就没有那些工具声明（见 ``session_tool_scope``
-        模块说明）。准入只供工具执行层在
-        模型返回调用后拦截。模型绑定始终使用 Session 固化的完整 schema，不得按准入过滤，否则会改变同一
-        Session 的请求前缀并破坏缓存复用。工具准入通知不在这里：它要对照上下文，由 workflow 在
-        ``begin_run`` 之后推导（``drive_notices``）。
+        ``banned_tools`` 是 Session 固化工具里这类 Session 不允许的派生方式与派生深度已到上限的派生工具。
+        禁用集合按本 Run 现算，所以改 ``AGENT_MAX_DERIVATION_DEPTH`` 对下一次 Run 即时生效——但只对 schema
+        里仍有派生工具的 Session（fork）有效，schema 已固化的子 Session 在创建时就没有那些工具声明（见
+        ``session_tool_scope`` 模块说明）。准入名单与发给模型的定义见 :meth:`request_tools`。工具准入通知
+        不在这里：它要对照上下文，由 workflow 在 ``begin_run`` 之后推导（``drive_notices``）。
         """
 
         from app.core.agents.agent_runtime_config import AgentRuntimeConfig
@@ -93,12 +92,24 @@ class RuntimeContext:
             session=session,
             workspace=session_space.current_workspace,
             agent=AgentRuntimeConfig.for_run(run),
-            admitted_tools=session_tools - banned,
             banned_tools=banned,
             preceding_run=preceding_run,
             session_space=session_space,
             event_sink=event_sink(),
             mailbox=session_space.mailbox,
+        )
+
+    def request_tools(self, context: RuntimeMessageContextManager) -> RequestTools:
+        """这一次模型请求的工具集（定义与准入名单）；每次请求现取，规则见 ``request_tools`` 模块。
+
+        ``context`` 是本次驱动的上下文（节点里的 ``_message_context()``）：已加载的延迟工具从它推导。
+        """
+        return RequestTools.derive(
+            self.session_space.session_tool_schemas,
+            self.banned_tools,
+            deferred_schemas=self.session_space.session_deferred_schemas,
+            loaded_builtin=context.loaded_builtin_tools(),
+            loaded_external=context.loaded_external_tools(),
         )
 
     def is_cancelled(self) -> bool:

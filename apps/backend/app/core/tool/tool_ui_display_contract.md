@@ -6,9 +6,7 @@
 
 成功观察可不提供展示数据；提供时必须有稳定 kind。错误/取消由工具结果治理收口为短提示（`status_hint`，≤8 字，由失败的调用点按原因分类给出，如「原文未匹配」「需先读取」「需要登录」）；实际已收集的结构化部分结果可保留 kind（终端取消、超时输出，补丁部分写入后失败时的 `file-changes`），不把部分结果解释为成功。Transport 的 completed 只表示调用完成，pending 可能是后台占位；awaitingUser 与 background 必须读取显式字段。Run 状态不等于工具状态，后台 completed 不等于业务成功。
 
-调用意图由 `ToolDefinition.to_model_tool_definition` 在模型可见 schema 根部统一注入必填 `intent`，不进入业务 Args、Hook 参数、handler kwargs、宿主参数或 MCP 远端参数。执行准入拆出后放入 `ToolExecutionContext.call_intent`：必填是对模型的要求，缺失或非法不拒绝调用（值为 `None`，记 `tool_call_intent_missing` 日志，标题回落到动词），因为它只服务展示，而不强制 strict 的厂商会在长参数调用里漏写；Hook 不得改写该保留字段。终端后台标签消费同一上下文，缺失时回落到命令首个非空行，不再使用工具专有 `description`。
-
-原始 `assistant.tool_calls[].function.arguments.intent` 是唯一持久来源。模型流正常/异常/取消收口都独立发布意图事实，Transport 投影为 `tool part.intent`，不依赖是否准入执行；冷重建使用同一解析规则。不完整 JSON 不猜意图。意图是模型声明的目的，不是进度、执行承诺或授权依据。Session 冻结模型 schema，因此变更后新建 Session 使用新契约，不迁移旧 schema 或保留旧字段兼容分支。
+调用意图不是平台字段：参数一眼看不懂的工具（`execute_terminal`、`browser_evaluate`）在参数模型里用 `tools/tool_models/call_intent.intent_field` 声明 `intent`，其余工具按「动词 · 目标」展示。它是普通业务参数（缺省空串，漏写不拒绝），只服务展示：执行、授权与日志不读它，不发给宿主；前端工具目录按工具名从 `args.intent` 取标题，终端后台标签取它，空时回落到命令首个非空行。原始调用参数是唯一持久来源，模型流收口与冷重建都用 `display_arguments` 解码后投影为 `tool part.args`。
 
 前端 `TurnLayout` 将当前活动放在最近的过程区间，正文开始后前一区间转为历史摘要。模型阶段与后台登记组合展示，后台收尾不冒充运行；渲染与估高共享区间可见规则。普通工具组、时间线终端详情默认折叠；用户选择、必要审批与独立 Reader 保留。
 
@@ -16,7 +14,7 @@
 
 - `wait_messages` 正常调用是纯控制，默认无活动行、不计工作次数；错误、取消或需要操作仍可见。`browser_tabs` 无 kind 但仍保留通用活动行。
 - 工具按原始顺序投影到活动、待决定和结果入口；原调用身份不变，不因折叠新增消息。
-- 异常结果由结构化字段解释：命令非零退出、图片失败、浏览器未完成步骤、网页 partial、MCP 服务错误；不靠解析中文提示、模型正文或命令内容判断结果。
+- 异常结果由结构化字段解释：命令非零退出、图片失败、浏览器未完成步骤、网页 partial、MCP 服务报错；不靠解析中文提示、模型正文或命令内容判断结果。
 - 文件变更是每次操作的记录，不能累加为工作区净 diff，也不保证列全终端或失败工具的副作用。
 - 未知 kind 保留通用标题和状态，不能因此隐藏错误或必要操作。
 
@@ -52,10 +50,11 @@
 | `session_status` | `agent-session-result` | 结构化结果见第 4 节 |
 | `propose_agent_configuration` | `agent-configuration-draft` | 结构化结果见第 4 节 |
 | `ask_user` | `user-question` | 结构化结果见第 4 节 |
-| `present_deliverables` | `deliverables` | 展示数据只带这批交付的说明；交付记录是结果行 metadata 的 `deliverables`（持久化事实），投影为工具 part 的 `deliverables` 字段（`type`、`key`、`caption`，文件另有 `workspacePath`、`absolutePath`、`kind`、`size`、`width`、`height`，目录有前两者，网址有 `url`），交付卡与产出清单读它 |
+| `present_deliverables` | `deliverables` | 展示数据只带这批交付的说明；交付记录是结果行 metadata 的 `facts.deliverables`（持久化事实），投影为工具 part 的 `deliverables` 字段（`type`、`key`、`caption`，文件另有 `workspacePath`、`absolutePath`、`kind`、`size`、`width`、`height`，目录有前两者，网址有 `url`），交付卡与产出清单读它 |
 | `offer_next_step` | `next-step` | 结构化结果见第 4 节 |
-| `mcp` | `mcp-tool-result` | 结构化结果见第 4 节 |
 | `skill` | `skill-content` | 结构化结果见第 4 节 |
+| `tool_search` | 无 | 只有通用活动行；加载的工具是结果行 metadata 的 `facts.loaded_external_tools` / `facts.loaded_builtin_tools`（持久化事实，不投影到前端） |
+| `mcp__<服务>__<工具>` | `mcp-tool-result` | `tool_search` 加载的 MCP 工具：名字不在封闭集合里，前端工具目录按前缀认成一族；结构化结果见第 4 节 |
 
 ## 4 字段与解释
 
@@ -80,7 +79,7 @@
 | user-question | questions[{question,header,options[{label,description,preview?}],multi_select}]（参数原样）；作答后补 decision（approve / reject）、answers{问题原文: label 或自由文字，多选为列表}、annotations{问题原文: {notes}}；全部跳过只有 decision=reject；作废（未作答）不补字段，状态为 cancelled |
 | deliverables | note（这批交付的说明，去空白后为空即 null，长度上限在参数模型）：卡片顶部的一两句话，按纯文本显示；一次调用一张卡，交付项读 part 上的交付记录，不在这里 |
 | next-step | ask、replies[1–2]：回复下方的一个问题与按钮，第一个是推荐；不是等待中的决定，后端不登记，点按钮即替用户发出标签原文；前端只在会话最后一条正常完成的回复上显示，同一回合只认最后一次 |
-| mcp-tool-result | action=call: server_name/tool_name/scope/images（结果图片的附件 asset id，卡片显示缩略图）；action=list: servers[{server_name,scope,tools[{name,description}],error?}]（输入 schema 只给模型），`scope` 为 system / workspace，单服务 error 不改变整个调用的生命周期 |
+| mcp-tool-result | server_name/tool_name（服务与原工具名）/scope（system / workspace）/images（结果图片的附件 asset id，卡片显示缩略图） |
 | skill-content | action=list: skills[{name,description,scope}]；action=load: skill_name/resource_path/scope，正文只进模型上下文 |
 
 `terminal-result` 的实时预览由命令启动时的初始展示（`terminal_command_started`，命令与工作目录）建立、输出块只往上追加，与终态展示数据使用同一窗口规则（`trim_output_window`）：卡片只保留最近一段，终态展示数据到达后整体覆盖实时预览，前端不自己截断。

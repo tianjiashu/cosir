@@ -107,7 +107,7 @@ def _open_items(rc: RuntimeContext, context: RuntimeMessageContextManager) -> No
     awaiting = [
         (call_id, tool_name)
         for call_id, tool_name in context.awaiting_decision_calls()
-        if effects.still_awaiting(call_id, tool_name)
+        if effects.still_awaiting(call_id)
     ]
     commands = background_commands().pending(session_id)
     derived = open_derived_titles(session_id)

@@ -13,8 +13,8 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CONFIGURATION
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_CONFIGURATION
 
 
 class ProposeAgentConfigurationTool(HandlerBase):
@@ -111,6 +111,8 @@ class ProposeAgentConfigurationTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
+            # 只在配置 Agent 时用，延迟加载。
+            deferred=True,
         )
 
 

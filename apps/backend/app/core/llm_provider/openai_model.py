@@ -42,29 +42,33 @@ def usage_from_response(value: Any) -> dict[str, Any] | None:
     }
 
 
-class OpenAIChatModel:
-    """每次驱动独占 client 与固定工具定义；流式推理和最终格式化共用连接。"""
+def _tool_parameters(tools: Sequence[FunctionDefinition]) -> dict[str, Any]:
+    """请求里的工具字段；没有工具时整段不带（部分厂商拒绝空 ``tools`` 或孤立的 ``parallel_tool_calls``）。"""
+    if not tools:
+        return {}
+    return {
+        "tools": [{"type": "function", "function": schema} for schema in tools],
+        "parallel_tool_calls": True,
+    }
 
-    def __init__(
-        self,
-        client: AsyncOpenAI,
-        parameters: dict[str, Any],
-        *,
-        tools: Sequence[FunctionDefinition] = (),
-    ) -> None:
-        """绑定 Session 固化的工具快照；两种请求保留相同定义与顺序以复用缓存前缀。"""
+
+class OpenAIChatModel:
+    """每次驱动独占 client 与模型参数；流式推理和最终格式化共用连接。
+
+    工具定义不绑在实例上，由调用方每次请求传入：一次驱动内的工具集可以变（见 ``RequestTools``）。
+    """
+
+    def __init__(self, client: AsyncOpenAI, parameters: dict[str, Any]) -> None:
         self.client = client
         self.parameters = dict(parameters)
-        if tools:
-            self.parameters.update(
-                tools=[{"type": "function", "function": schema} for schema in tools],
-                parallel_tool_calls=True,
-            )
 
     async def stream(
-        self, messages: Sequence[ChatCompletionMessageParam]
+        self,
+        messages: Sequence[ChatCompletionMessageParam],
+        *,
+        tools: Sequence[FunctionDefinition],
     ) -> AsyncGenerator[ChunkEvent, None]:
-        """流式推理使用构建期工具，产出 SDK chunk 事件与聚合快照。
+        """流式推理，产出 SDK chunk 事件与聚合快照；``tools`` 是这一次请求的工具定义，顺序即请求顺序。
 
         SDK 内部快照可变；产出前复制，使调用方可以跨迭代保留快照。不启用 SDK 自动
         结构化解析；调用身份的规范化归 context 的持久化入口，完整工具调用由业务准入处理。
@@ -72,6 +76,7 @@ class OpenAIChatModel:
         state = ChatCompletionStreamState()
         stream = await self.client.chat.completions.create(
             **self.parameters,
+            **_tool_parameters(tools),
             messages=list(messages),
             stream=True,
             stream_options=ChatCompletionStreamOptionsParam(include_usage=True),
@@ -90,19 +95,23 @@ class OpenAIChatModel:
         self,
         messages: Sequence[ChatCompletionMessageParam],
         *,
+        tools: Sequence[FunctionDefinition],
         response_format: ResponseFormatJSONObject,
     ) -> ChatCompletion:
         """一次性生成最终格式化结果，直接返回 SDK 响应，不经过流式聚合。
 
-        保留构建期 tools 以稳定缓存前缀，通过 tool_choice 禁止调用；请求参数不写回模型
-        实例。完成原因和 JSON/schema 校验仍由业务节点负责，不调用 SDK 自动解析 helper。
+        调用方传与主线请求相同的 ``tools`` 以接上缓存前缀，这里用 ``tool_choice`` 禁止调用（没有工具时
+        不带它）。完成原因和 JSON/schema 校验仍由业务节点负责，不调用 SDK 自动解析 helper。
         """
+        tool_parameters = _tool_parameters(tools)
+        if tool_parameters:
+            tool_parameters["tool_choice"] = "none"
         return await self.client.chat.completions.create(
             **self.parameters,
+            **tool_parameters,
             messages=list(messages),
             stream=False,
             response_format=response_format,
-            tool_choice="none",
         )
 
     async def close(self) -> None:

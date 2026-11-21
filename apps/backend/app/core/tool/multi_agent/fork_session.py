@@ -30,8 +30,8 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.message_queue.session_message import RunLaunch
 from app.models.conversation_input import MessageSource
@@ -188,6 +188,8 @@ class ForkSessionTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
+            # 分叉是少数协作场景才用，延迟加载。
+            deferred=True,
         )
 
 

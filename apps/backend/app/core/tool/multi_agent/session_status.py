@@ -12,8 +12,8 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
-from app.core.tool.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.service.depends import get_run_ledger, get_session_service
 
 
@@ -111,6 +111,8 @@ class SessionStatusTool(HandlerBase):
             description=self.description,
             handler=self.execute,
             args_model=self.args_model,
+            # 只在查派生 Session 状态时用，延迟加载。
+            deferred=True,
         )
 
 def build_session_status_definition() -> ToolDefinition:

@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
+from openai.types.shared_params import FunctionDefinition
+
 from app.models.message_metadata import PromptSourceEntry
 from app.utils.workspace_instruction import find_workspace_instruction_file
 
@@ -40,15 +42,21 @@ class SourceContext:
     tool_names: frozenset[str]
     agent: AgentRuntimeConfig
     workspace_instruction: tuple[Path, Path] | None
+    # Session 能延迟加载的内置工具定义：延迟工具目录（``DeferredToolsSource``）把它们与外部工具并列。
+    deferred_tools: tuple[FunctionDefinition, ...] = ()
 
     @classmethod
     def locate(
-        cls, workspace_root: str, tool_names: frozenset[str], agent: AgentRuntimeConfig
+        cls,
+        workspace_root: str,
+        tool_names: frozenset[str],
+        agent: AgentRuntimeConfig,
+        deferred_tools: tuple[FunctionDefinition, ...] = (),
     ) -> SourceContext:
         """现定位工作区指令文件并构造投影输入。"""
 
         found = find_workspace_instruction_file(Path(workspace_root))
-        return cls(workspace_root, tool_names, agent, found)
+        return cls(workspace_root, tool_names, agent, found, deferred_tools)
 
 
 @dataclass(frozen=True)

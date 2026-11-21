@@ -39,13 +39,11 @@ class ReactLikeWorkflow:
     async def run(self, rc: RuntimeContext) -> None:
         """驱动一次 Run：解析本次独占的模型、按持久化进度补齐驱动期状态，再循环节点直到 END。
 
-        ``rc`` 由装配方注入本次 Run 的事实与协作者；模型 schema 用 Session 固化的完整工具 schema，
-        不按本轮准入过滤，避免同一 Session 的请求前缀变化。client 归本次驱动独占，标题支线也复用它，
-        所以关闭前先收尾支线（见 ``branch.session_title.settle``）。
+        ``rc`` 由装配方注入本次 Run 的事实与协作者；工具定义不绑在模型上，每次请求由节点经
+        ``rc.request_tools(context)`` 现取。client 归本次驱动独占，标题支线也复用它，所以关闭前先收尾支线（见
+        ``branch.session_title.settle``）。
         """
-        resolved = resolve_chat_model(
-            model=rc.agent.model, tools=list(rc.session_space.session_tool_schemas)
-        )
+        resolved = resolve_chat_model(model=rc.agent.model)
         rc.model = resolved.model
         rc.thinking_channel = "reasoning_content" if resolved.supports_thinking else ""
         try:

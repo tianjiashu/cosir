@@ -190,7 +190,7 @@ def terminal_event(
                 tool_call_id=tool_call_id,
             ),
             background=observation.background,
-            deliverables=observation.deliverables,
+            facts=observation.facts,
         ),
     )
 
