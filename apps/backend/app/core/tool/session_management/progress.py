@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Any, cast
 
 from app.config.constant import Constant
+from app.core.context.context_store import ContextStore
 from app.models import RunRecord, SessionRecord
 from app.models.enums.run_status import ACTIVE_RUN_STATUSES, RunStatus
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
@@ -61,6 +62,9 @@ class SessionProgress:
     end_reason: str | None
     # 最近几步之前还有没显示的步：模型据此知道看到的不是全部（不计总数，那要多读整段历史）。
     earlier_hidden: bool = False
+    # 活动中的 Run 由用户输入开启：用户正在侧栏或工作台直接和它对话，这次 Run 是用户的、不会汇报给派生方。
+    # 只标注、不拦停止：派生方据此自己判断别去打扰。
+    user_driven: bool = False
 
     @classmethod
     def read(cls, session: SessionRecord, *, steps: int) -> SessionProgress:
@@ -72,9 +76,15 @@ class SessionProgress:
         waiting_on: list[str] = []
         if run is not None and run.status == RunStatus.SUSPENDED.value:
             waiting_on = cls._waiting_on(session.id)
+        # 只对活动 Run 有意义：落定的 Run 不管是谁开的，此刻都没人在用它。
+        user_driven = (
+            run is not None
+            and run.status in ACTIVE_RUN_STATUSES
+            and ContextStore().run_opened_by_user(session.id, run.id)
+        )
         return cls.from_facts(
             session, run, rows, queued=queued, waiting_on=waiting_on, steps=steps, now=utc_now(),
-            window_full=len(rows) == window,
+            window_full=len(rows) == window, user_driven=user_driven,
         )
 
     @classmethod
@@ -89,6 +99,7 @@ class SessionProgress:
         steps: int,
         now: datetime,
         window_full: bool = False,
+        user_driven: bool = False,
     ) -> SessionProgress:
         """纯投影：``rows`` 是按序号升序的尾部行，``waiting_on`` 是挂起时它在等的东西（已写成短语）；
         ``window_full`` 表示尾部窗口读满了，窗口之前可能还有更早的步。"""
@@ -115,6 +126,7 @@ class SessionProgress:
             if terminal and run is not None
             else None,
             earlier_hidden=steps > 0 and (len(entries) > steps or window_full),
+            user_driven=user_driven,
         )
 
     def summary_line(self, *, derived_by: int | None = None) -> str:
@@ -124,6 +136,8 @@ class SessionProgress:
             state = f"{state} {self.elapsed}"
         kind = self.kind if derived_by is None else f"{self.kind}, derived by #{derived_by}"
         line = f"#{self.session_id} {self.name} ({kind}) — {state} — {self.now}"
+        if self.user_driven:
+            line = f"{line}; the user is talking to it directly"
         return f"{line}; {self.queued} queued" if self.queued else line
 
     def render(self) -> str:
@@ -136,6 +150,11 @@ class SessionProgress:
             f"status: {state}",
             f"now: {self.now}",
         ]
+        if self.user_driven:
+            lines.append(
+                "user: the user is working in it directly; this run is theirs and will not report to you, "
+                "so do not wait for it"
+            )
         if self.end_reason:
             lines.append(f"end reason: {self.end_reason}")
         if self.queued:
@@ -146,7 +165,22 @@ class SessionProgress:
             lines.extend(f"- {step}" for step in self.steps)
         if self.final_output:
             lines.extend(["final output:", self.final_output])
+        if self._reports_later():
+            lines.append(
+                "next: it reports back to you when this run ends; to wait for it, use wait_messages "
+                "instead of reading again"
+            )
         return "\n".join(lines)
+
+    def _reports_later(self) -> bool:
+        """结果之后还会自己送到：Run 未开出或仍在活动，且不是用户的 Run。
+
+        防轮询只靠这句固定提示、不记读取时间：模型反复读多半是怕错过结果，在它读完结果、决定下一步的
+        那一刻告诉它「会主动汇报」比写在工具描述里管用。用户的 Run 不汇报（``derived_report``），那时
+        提示「去等」会让它一直挂着，所以改由 ``user`` 一行说别等。
+        """
+        pending = self.status is None or self.status in ACTIVE_RUN_STATUSES
+        return pending and not self.user_driven
 
     @staticmethod
     def _waiting_on(session_id: int) -> list[str]:
@@ -162,7 +196,9 @@ class SessionProgress:
         ]
         ledger = get_run_ledger()
         for derived in get_session_service().list_derived_sessions(session_id):
-            if derived.current_run_id is not None and ledger.get_run(derived.current_run_id).status in ACTIVE_RUN_STATUSES:
+            if derived.current_run_id is None:
+                continue
+            if ledger.get_run(derived.current_run_id).status in ACTIVE_RUN_STATUSES:
                 waits.append(f"derived session: {derived.title}")
         return waits
 

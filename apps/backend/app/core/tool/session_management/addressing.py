@@ -23,7 +23,9 @@ def find_recipient(
     if isinstance(session, ToolObservation):
         return session
     if session.workspace_id != execution_context.workspace_id:
-        return tool_error(tool_name, f"session {session_id} is in another workspace; choose a session in this workspace.")
+        return tool_error(
+            tool_name, f"session {session_id} is in another workspace; choose a session in this workspace."
+        )
     return session
 
 
@@ -77,4 +79,4 @@ def _lookup(
     try:
         return get_session_service().get_session(session_id)
     except KeyError:
-        return tool_error(tool_name, f"session not found: {session_id}.")
+        return tool_error(tool_name, f"session not found: {session_id}; it may have been deleted.")

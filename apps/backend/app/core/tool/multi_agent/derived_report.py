@@ -24,7 +24,6 @@ Agent 消息，会开启发起方的 Run，若按发送方回报，父子会互�
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable
-from typing import cast
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -39,7 +38,6 @@ from app.core.workflow.message_queue.session_message import (
 from app.models import RunRecord, SessionRecord
 from app.models.conversation_input import AgentReport, MessageSource
 from app.models.enums.run_status import ACTIVE_RUN_STATUSES, RunStatus
-from app.models.message_metadata import UserMessageMetadata
 from app.service import depends as service_depends
 
 
@@ -55,7 +53,7 @@ def report_settled(run: RunRecord) -> None:
     if (
         deriver_id is None
         or run.end_reason == Constant.Run.RUN_END_REASON_PARENT_CANCELLED
-        or _opened_by_user(run)
+        or ContextStore().run_opened_by_user(run.session_id, run.id)
     ):
         return
     if run.status == RunStatus.CANCELLED.value:
@@ -180,21 +178,6 @@ def open_derived_titles(session_id: int) -> list[str]:
         if current is not None and current.status in ACTIVE_RUN_STATUSES:
             titles.append(derived.title)
     return titles
-
-
-def _opened_by_user(run: RunRecord) -> bool:
-    """这个 Run 的第一条输入是不是用户输入；没有输入开头的 Run（后台结论续跑）不算。
-
-    通知不是输入，先跳过（fork 的交接通知排在任务说明前面）。
-    """
-    for record in ContextStore().run_records(run.session_id, run.id):
-        if record.message["role"] != "user":
-            continue
-        kind = cast(UserMessageMetadata, record.metadata).kind
-        if kind == "notice":
-            continue
-        return kind == "user_input"
-    return False
 
 
 def _report_text(run: RunRecord) -> str:

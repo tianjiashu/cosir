@@ -21,6 +21,7 @@ from app.core.context.context_entry import ContextEntry
 from app.models.message_metadata import (
     MessageMetadata,
     SystemMessageMetadata,
+    UserMessageMetadata,
     empty_message_metadata,
 )
 from app.models.session_context import (
@@ -153,6 +154,22 @@ class ContextStore:
             for record in self._crud.get(session_id, include_in_context=False)
             if record.run_id == run_id
         ]
+
+    def run_opened_by_user(self, session_id: int, run_id: int) -> bool:
+        """这个 Run 是不是由用户输入开启的：第一条输入是 ``user_input``；没有输入开头的 Run（后台结论续跑）不算。
+
+        用户在侧栏或工作台直接和派生 Session 对话时，这个 Run 就是用户的：派生汇报不为它汇报
+        （``derived_report``），会话管理工具把它标给派生方看。通知不是输入，先跳过（fork 的交接通知排在
+        任务说明前面）。
+        """
+        for record in self.run_records(session_id, run_id):
+            if record.message["role"] != "user":
+                continue
+            kind = cast(UserMessageMetadata, record.metadata).kind
+            if kind == "notice":
+                continue
+            return kind == "user_input"
+        return False
 
     def run_last_turn_withdrawn(self, session_id: int, run_id: int) -> bool:
         """这个 Run 的最后一个回合是否已被撤回（规则见 ``run_last_turn_withdrawn`` 纯函数）。"""

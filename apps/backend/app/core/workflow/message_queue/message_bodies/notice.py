@@ -27,15 +27,22 @@ NoticeKind = Literal[
 ]
 NoticeLevel = Literal["session", "run", "turn"]
 
-# 通知按它说的事属于哪一层分级，级别决定通知从哪来、撤回回合时怎么办：
-# - session：Session 环境的变化（分叉交接、后端重启、派生 Session 被用户停止）。事件只在那一刻
-#   存在，经外部队列投递、只投一次；所在回合被撤回时重新投递，否则之后的 Run 永远看不到这次变化。
-# - run：本 Run 的事实（工具准入、还有哪些事没了结），或对照上下文推导的环境事实（配置变化）。
-#   从持久化事实与上下文里最近一条同类通知推导，不入队：前两种在驱动开始时推导（``drive_notices``），
-#   配置变化在每次模型请求前推导（``RuntimeMessageContextManager.configuration_change_notice``）。
-# - turn：上一个回合怎样结束（用户已停止）或本次驱动内的提示（续写）。驱动开始时推导或驱动内投递，
-#   不入队。
-# run 与 turn 级都从持久化事实与上下文现推，撤回后自然重新推导，所以撤回只需重新投递 session 级。
+# 通知分级：级别决定通知从哪来、存在哪、丢了或所在回合被撤回时怎么办。分界只看一个问题——
+# 这件事能不能事后从持久化事实与上下文里重新算出来：
+# - session：发生过一次的事件（分叉交接、后端重启、派生 Session 被用户停止或删除、提问作废）。事后推不出
+#   「模型还没被告知」，所以由事件发生处经外部队列投一次，确认与写入 context 同一事务、不会丢；所在
+#   回合被撤回时重新投递（``turn_withdrawal_service``），否则之后的 Run 永远看不到。
+# - run：此刻成立的状态（工具准入、还有哪些事没了结、Agent 看到的配置）。不入队，经 ``mailbox.notify``
+#   投、随 mailbox 重置丢弃；比对基准是上下文里最近一条同类通知（配置没有通知时看 seq 0 系统行），写入
+#   后才成为新基准，所以写入前的任何中断与撤回都只会让下次重推，不会漏告。会在驱动中途变的每次模型请求
+#   前对账（目前只有配置：``RuntimeMessageContextManager.configuration_change_notice``），其余在驱动开始时
+#   推导（``drive_notices``）。
+# - turn：上一回合怎样结束（用户已停止，``drive_notices``）或驱动内的一次性提示（输出被截断时的续写，由
+#   model 节点当场投）。同 run 级，不入队、可重推或丢了无妨。
+# 新增通知按此归类：推不出来 → session，经 ``session_runtime_spaces.enqueue`` 入队；推得出来 → 驱动
+# 中途会变且下一步就该知道，进每次请求前的对账，否则加进 ``drive_notices``；基准一律取上下文，不放进程内记忆。
+# 例外：``decision_expired`` 在 Run 内作废时走 mailbox（``prepare_input`` 先提交作废、再与本批通知一起
+# 写入，两步不同事务，中间崩溃会漏告，已接受）；Run 落定后作废才经外部队列。
 #
 # 送达占位结局的通知必须带所指调用（``tool_call_ids``）：提问作废、重启中断把占位原地改成「已取消 /
 # 已中断」、正文不动，结局只在这条通知里；派生 Session 被停止说的是派生它的那次调用。占位的结局总是
@@ -50,8 +57,7 @@ NOTICE_LEVELS: dict[NoticeKind, NoticeLevel] = {
     "configuration_changed": "run",
     "user_cancelled": "turn",
     "model_continuation": "turn",
-    # 提问没等到回答：这件事只发生一次。Run 内作废时由驱动投，Run 落定后作废时经外部队列投；所在
-    # 回合被撤回时重新投递——提问仍是作废的，模型还得知道。
+    # 所在回合被撤回时重新投递：提问仍是作废的，模型还得知道。
     "decision_expired": "session",
 }
 

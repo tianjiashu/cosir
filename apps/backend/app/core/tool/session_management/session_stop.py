@@ -1,8 +1,6 @@
 """session_stop 工具：停止一个自己派生的 Session，连带收回它交出去的工作。"""
 
 from app.config.logging.logger import log
-from app.core.tool.session_management.args.session_stop_args import SessionStopArgs
-from app.core.tool.session_management.addressing import find_stoppable_session
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_SESSION_STOP,
@@ -11,6 +9,8 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
+from app.core.tool.session_management.addressing import find_stoppable_session
+from app.core.tool.session_management.args.session_stop_args import SessionStopArgs
 from app.core.tool.tool_base import HandlerBase
 from app.models.enums.run_status import ACTIVE_RUN_STATUSES
 from app.service.depends import get_session_service
@@ -32,16 +32,18 @@ class SessionStopTool(HandlerBase):
     name: str = TOOL_SESSION_STOP
     # 中文译文：停止你直接派生的一个会话：打断它当前的运行，并收回它启动的后台命令和它派生的会话（整棵下级一起
     # 停）。只在必要时用：它的结果你已经不需要了，或者它明显走偏、用 session_send 纠正也不管用。否则让它做完，或
-    # 用 session_send 追加指示——停掉会丢掉它进行中的工作。更深一层的会话只有它的派生方能停。不会回报给你；停止前
+    # 用 session_send 追加指示——停掉会丢掉它进行中的工作；用户正在直接对话的会话（session_list / session_read 会标出）
+    # 交给用户。更深一层的会话只有它的派生方能停。不会回报给你；停止前
     # 已排队的消息不会自动接着跑，之后再用 session_send 发消息会开出新的运行。用 session_read 确认已停下。
     description: str = (
         "Stop a session you derived directly: interrupt its current run and recall the background "
         "commands and sessions it started (everything below it stops too). Use it only when necessary: "
         "you no longer need its result, or it is clearly going the wrong way and correcting it with "
         "session_send will not help. Otherwise let it finish or send it instructions; stopping throws "
-        "away its work in progress. Deeper sessions can be stopped only by their own deriver. It sends "
-        "no report back. Messages queued before the stop do not run automatically; a later session_send "
-        "starts a new run. Confirm with session_read."
+        "away its work in progress. Leave a session the user is talking to directly (marked by "
+        "session_list and session_read) to the user. Deeper sessions can be stopped only by their own "
+        "deriver. It sends no report back. Messages queued before the stop do not run automatically; "
+        "a later session_send starts a new run. Confirm with session_read."
     )
     args_model: type[SessionStopArgs] = SessionStopArgs
     group = TOOL_GROUP_CHILD_AGENT

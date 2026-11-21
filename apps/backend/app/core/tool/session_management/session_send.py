@@ -9,8 +9,6 @@ from typing import cast
 from app.config.logging.logger import log
 from app.core.agents.agent_profile import AgentProfileConfigError, AgentProfileType
 from app.core.tool.multi_agent.agent_message import prepare_agent_message
-from app.core.tool.session_management.addressing import find_recipient
-from app.core.tool.session_management.args.session_send_args import SessionSendArgs
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
@@ -20,6 +18,8 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
+from app.core.tool.session_management.addressing import find_recipient
+from app.core.tool.session_management.args.session_send_args import SessionSendArgs
 from app.core.tool.tool_base import HandlerBase
 from app.core.workflow.message_queue.dispatch_policy import next_input
 from app.core.workflow.message_queue.session_message import LaunchInputBody, RunLaunch

@@ -10,5 +10,8 @@ class SessionStopArgs(BaseModel):
 
     session_id: int = Field(
         gt=0,
-        description="A session you derived directly (marked stop in session_list), or an id from delegate_task or fork_session.",
+        description=(
+            "A session you derived directly (marked stop in session_list), "
+            "or an id from delegate_task or fork_session."
+        ),
     )

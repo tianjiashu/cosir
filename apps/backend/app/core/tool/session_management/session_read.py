@@ -2,9 +2,6 @@
 
 from typing import Any
 
-from app.core.tool.session_management.args.session_read_args import SessionReadArgs
-from app.core.tool.session_management.addressing import find_readable_session
-from app.core.tool.session_management.progress import SessionProgress
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_SESSION_READ,
@@ -13,6 +10,9 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
+from app.core.tool.session_management.addressing import find_readable_session
+from app.core.tool.session_management.args.session_read_args import SessionReadArgs
+from app.core.tool.session_management.progress import SessionProgress
 from app.core.tool.tool_base import HandlerBase
 
 
@@ -20,10 +20,10 @@ class SessionReadTool(HandlerBase):
     """只读、不写任何事实；进度的推导归 ``SessionProgress``，本工具只负责寻址与包装结果。"""
 
     name: str = TOOL_SESSION_READ
-    # 中文译文：读取你派生树里任意一个会话（含它们再派生的）的进度：状态、此刻在做什么、还没并入的排队消息、最近几步（说了什么、
-    # 调了哪些工具、结果如何），落定后还有最终输出。用它决定是等、追加指示还是停掉，而不是发「做完了吗」。
-    # 不要反复调用来等它做完：用 wait_messages，它落定时会汇报给你。进度是线索：关键结论仍以它的汇报和你
-    # 自己的核对为准。
+    # 中文译文：读取你派生树里任意一个会话（含它们再派生的）的进度：状态、此刻在做什么、还没并入的排队消息、
+    # 最近几步（说了什么、调了哪些工具、结果如何），落定后还有最终输出。
+    # 用它决定是等、追加指示还是停掉，而不是发「做完了吗」。不要反复调用来等它做完：用 wait_messages，
+    # 它落定时会汇报给你。进度是线索：关键结论仍以它的汇报和你自己的核对为准。
     description: str = (
         "Read the progress of any session in your derivation tree (sessions you derived and the ones "
         "they derived): its status, what it is doing now, queued "
