@@ -6,7 +6,6 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.core.tool.call_intent import model_parameters_with_intent
 from app.core.tool.presentation import ToolPresentation
 from app.core.tool.schemas.decision_payload import DecisionPayload
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
@@ -43,15 +42,15 @@ class ToolDefinition:
     # 决定携带的结构化载荷（见 :class:`DecisionPayload`）；``None`` 表示决定只有批准 / 驳回与附言。
     # 载荷渲染成给模型的正文，并进等待占位的展示数据。
     decision_model: type[DecisionPayload] | None = None
-    # 产出图片给模型看（观察的 ``images``）：本次 Run 的模型不支持图片输入时，准入门禁直接拒绝，
-    # 不进 handler——判定只在 ``ToolAccessGate`` 一处，各工具不再各写一遍。
-    returns_images: bool = False
     # 要在用户能操作的界面里才用得了（交互终端、配置草稿）：只给侧栏会话。需要用户作答的工具
     # （``user_decision``）天然如此，不必重复声明，见 :attr:`requires_user_surface`。
     needs_user_surface: bool = False
     # 调用本身就是回复的一部分（回复下方的按钮、交付卡），不是过程：同一回复里它前面的正文与它之后的收尾
     # 一起算最终回复（规则只在 ``core/context/final_reply``）。模型常把答案和这类调用写在同一条回复里。
     part_of_reply: bool = False
+    # 延迟加载：不进 Session 每次请求的基础 schema，模型在目录里看到名字、经 ``tool_search`` 加载后才可调用。
+    # 给只在少数任务里用、定义又大的工具（浏览器一族等）；固化与加载见 ``app.models.session_tool_surface``。
+    deferred: bool = False
 
     @property
     def requires_user_surface(self) -> bool:
@@ -88,7 +87,5 @@ class ToolDefinition:
             "name": self.name,
             "description": self.description,
             "strict": True,
-            "parameters": model_parameters_with_intent(
-                self.parameters_schema or strict_parameters_schema(self.args_model)
-            ),
+            "parameters": self.parameters_schema or strict_parameters_schema(self.args_model),
         }

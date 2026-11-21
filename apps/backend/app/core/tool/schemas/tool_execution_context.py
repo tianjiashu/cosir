@@ -13,14 +13,14 @@ from app.utils.path.system_cosir import session_scratch_dir
 if TYPE_CHECKING:
     from app.core.agents.agent_runtime_config import AgentRuntimeConfig
     from app.core.events import EventSink
+    from app.core.tool.schemas.request_tools import RequestTools
 
 
 @dataclass(frozen=True)
 class ToolExecutionContext:
     """一次工具调用所处的运行时边界：会话、工作区根、Run / step 与调用身份。
 
-    由 ``tools_node`` 的单次调用入口按调用构造，一次给齐 Run / step 事实与调用身份；
-    ``ToolExecutor`` 准入后附加调用意图，下游直接消费。只承载 Run / step / 调用级事实；进程级单例（Agent registry、终端会话服务等）由 handler
+    由 ``tools_node`` 的单次调用入口按调用构造，一次给齐 Run / step 事实与调用身份，下游直接消费。只承载 Run / step / 调用级事实；进程级单例（Agent registry、终端会话服务等）由 handler
     直接取用，不经本对象转手。
 
     Attributes:
@@ -41,8 +41,8 @@ class ToolExecutionContext:
     event_loop: asyncio.AbstractEventLoop | None = None
     event_sink: EventSink | None = None
     tool_call_id: str = ""
-    # 准入时从原始调用提取，模型漏写时为 None；仅供展示，绝不能用作执行/授权依据。
-    call_intent: str | None = None
+    # 这次调用所在请求的工具集（``RequestTools``）：``tool_search`` 从中取目录的内置部分与已加载的工具。
+    request_tools: RequestTools | None = None
     # Session 的可写根事实（``SessionExtra.writable_root``）；消费方读 :attr:`writable_root`。
     writable_subpath: str | None = None
 

@@ -11,8 +11,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from app.models.deliverable import Deliverable
 from app.models.message_metadata import BackgroundWork
+from app.models.tool_result_facts import ToolResultFacts
 
 
 @dataclass(frozen=True)
@@ -102,8 +102,8 @@ class ToolObservation:
     display_data: dict[str, Any] | None = field(default_factory=dict)
     waiting: Waiting | None = None
     images: tuple[str, ...] = ()
-    # 交付记录（只有 ``present_deliverables``）：原样持久化为结果行 metadata 的 ``deliverables``。
-    deliverables: tuple[Deliverable, ...] | None = None
+    # 交给运行时的结构化结果（交付记录、加载的外部工具等）：原样持久化为结果行 metadata 的 ``facts``。
+    facts: ToolResultFacts | None = None
 
     @property
     def suspend(self) -> bool:
