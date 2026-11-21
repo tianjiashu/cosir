@@ -96,6 +96,7 @@ export const editorTheme = [
     ".cm-dialog .cm-textfield, .cm-dialog .cm-button": {
       margin: "0 0 0 0.375rem",
       borderRadius: "var(--radius-sm)",
+      cornerShape: "var(--corner-shape)",
       padding: "0.125rem 0.5rem",
       fontSize: "inherit",
     },

@@ -343,11 +343,6 @@ Electron 桌面应用
 - [ ] **站点图标**：对话里的公网链接一显示就请求该主机的 `/favicon.ico`（`lib/links/site-icon.ts`），站点能看到本机 IP，模型写出的子域名可夹带数据。
 - [ ] **本机 API**：后端 CORS 放行任意端口的本机来源且 API 无认证（`app/app.py`）；命令能替用户作答；方案是 API 加认证，沙箱不屏蔽端口。
 
-Agent 派生（委派、fork）目前只按派生深度限制层数，以下上限暂不做：
-
-- [ ] **宽度上限**：同一个根下同时活动的派生 Session 数量；计数须与创建同事务，`session_send` 激活的 Session 也要算进去。
-- [ ] **调用次数上限**：单个 Run 内的派生调用次数。
-
 桌面宿主的进程、Worker、临时目录、窗口外框与启动入口由 CI（`.github/workflows/desktop-host.yml`，Windows Server / macOS / Linux 跑机）守着；以下 Windows 行为 CI 覆盖不到或尚未通过：
 
 - [ ] **终端交互**：用户多行粘贴的确认（前端 xterm）、ConPTY 下的重排（Windows 10 需宿主上报构建号，尚未做，跑机不是 Win10）、`C:\` 路径链接、复制输出的换行。Agent 填入（括号粘贴）与 Ctrl+方向键按词移动已由 CI 验证。

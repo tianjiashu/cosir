@@ -14,7 +14,7 @@ import { DeliverableBadge, describeDeliverable } from "./deliverable-label";
 import { useDeliverableFile } from "./use-deliverable-file";
 
 /** 高度取 `CAPSULE_HEIGHT`（与估高同一个数），不写在类名里。 */
-const CAPSULE_CLASS = "group/capsule bg-card relative inline-flex min-w-0 max-w-full items-center rounded-(--radius) border shadow-xs hover:bg-muted focus-within:bg-muted";
+const CAPSULE_CLASS = "group/capsule bg-card relative inline-flex min-w-0 max-w-full items-center rounded-lg border shadow-xs hover:bg-muted focus-within:bg-muted";
 /** 已不存在、无法访问：虚线边框、没有投影与底色，悬停也不变灰（不可点）。 */
 const UNAVAILABLE_CLASS = "border-dashed bg-transparent shadow-none hover:bg-transparent";
 const FOCUS_CLASS = "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
@@ -52,7 +52,7 @@ export function DeliverableCapsule({ deliverable, links }: { deliverable: Transp
               aria-disabled={!target || undefined}
               aria-label={`${target ? (links.describe(target) ?? "打开") : "无法打开"} · ${name}`}
               onClick={() => target && links.open(target)}
-              className={cn("flex h-full min-w-0 items-center gap-2 rounded-[inherit] pr-3 pl-2 text-left aria-disabled:cursor-default", FOCUS_CLASS)}
+              className={cn("flex h-full min-w-0 items-center gap-2 rounded-[inherit] [corner-shape:inherit] pr-3 pl-2 text-left aria-disabled:cursor-default", FOCUS_CLASS)}
             />
           }
         >

@@ -44,6 +44,7 @@
   border: 1px solid var(--markdown-block-border);
   border-bottom-width: 2px;
   border-radius: 4px;
+  corner-shape: var(--corner-shape);
   background: var(--muted);
   padding: 0 0.35em;
   font-family: var(--app-font-mono);
@@ -54,6 +55,7 @@
 .aui-md [data-streamdown="code-block"] {
   border-color: var(--markdown-block-border);
   border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
   background: var(--background);
   box-shadow: none;
   gap: 0;
@@ -117,6 +119,7 @@
   right: 0.25rem;
   z-index: 10;
   border-radius: var(--radius-md);
+  corner-shape: var(--corner-shape);
   background: var(--markdown-action-background);
   padding: 0.125rem;
 }
@@ -124,6 +127,7 @@
 .aui-md [data-streamdown="table-wrapper"] > div:last-child {
   border-color: var(--markdown-canvas-border);
   border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
   background: var(--background);
 }
 
@@ -147,6 +151,7 @@
 .aui-md [data-streamdown="mermaid-block"] {
   border-color: var(--markdown-block-border);
   border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
   background: var(--background);
   box-shadow: none;
 }
@@ -196,6 +201,7 @@
 .aui-md [data-streamdown="mermaid-block-actions"] {
   border-color: transparent;
   border-radius: var(--radius-md);
+  corner-shape: var(--corner-shape);
   background: var(--markdown-action-background);
   box-shadow: none;
 }
@@ -205,6 +211,7 @@
   min-width: 2rem;
   min-height: 2rem;
   border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
 }
 
 .aui-md [data-streamdown="code-block-actions"] button:hover,

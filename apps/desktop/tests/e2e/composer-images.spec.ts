@@ -50,6 +50,8 @@ for (const theme of ["light", "dark"]) {
     const first = page.getByRole("button", { name: "预览图片 横图.png" });
     const remove = page.getByRole("button", { name: "移除附件 横图.png" });
     await page.mouse.move(0, 0);
+    await expect(first).toHaveCSS("corner-shape", "superellipse(1.5)");
+    await expect(remove).toHaveCSS("corner-shape", /^(round|superellipse\(1\))$/);
     await expect(remove).toHaveCSS("opacity", "0");
     await first.hover();
     await expect(remove).toHaveCSS("opacity", "1");

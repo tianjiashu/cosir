@@ -53,6 +53,8 @@ test("宽窗口默认固定为一列；打开右侧面板后收起，点开才�
   await expect(railButton(page)).toHaveAttribute("aria-pressed", "false");
   await railButton(page).click();
   await expect(rail(page)).toHaveAttribute("data-conversation-aside", "floating");
+  await expect(rail(page)).toHaveCSS("corner-shape", "superellipse(1.7)");
+  await expect(card(page)).toHaveCSS("corner-shape", "superellipse(1.5)");
   await expect(card(page).getByText("cd /work && make", { exact: true })).toBeInViewport({ ratio: 1 });
   await page.screenshot({ path: testInfo.outputPath("rail-floating.png") });
 
@@ -73,6 +75,7 @@ test("固定的侧栏在对话视口里：靠视口最右侧，底部终端延�
   await page.getByRole("button", { name: /^终端，/ }).click();
   const terminal = page.getByRole("region", { name: "终端工作台" });
   await expect(terminal).toBeVisible();
+  await expect(terminal).toHaveCSS("corner-shape", "superellipse(1.7)");
   const terminalBox = (await terminal.boundingBox())!;
   expect(terminalBox.x + terminalBox.width).toBeGreaterThan(railBox.x + railBox.width - 24);
   await page.screenshot({ path: testInfo.outputPath("rail-docked-with-terminal.png") });

@@ -65,6 +65,8 @@ test("窗口和侧栏变化限制实际宽度，End 和鼠标拖动均保留主�
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/sessions/100");
   await seedDrafts(page);
+  await expect(page.getByRole("complementary", { name: "工作台" })).toHaveCSS("corner-shape", "superellipse(1.7)");
+  await expect(page.getByRole("textbox", { name: "描述", exact: true })).toHaveCSS("corner-shape", "superellipse(1.5)");
   const resize = page.getByRole("separator", { name: "调整工作台宽度" });
   await resize.focus();
   await page.keyboard.press("End");

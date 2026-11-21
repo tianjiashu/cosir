@@ -49,7 +49,13 @@ for (const theme of ["light", "dark"] as const) {
 
     test("表格：吸顶表头、数字右对齐、行号", async ({ page }) => {
       const { surface, panel } = await openPreview(page, theme, "cities.csv");
+      await expect(panel).toHaveCSS("corner-shape", "superellipse(1.7)");
       await surface.getByRole("table", { name: "表格" }).getByRole("columnheader", { name: "人口" }).click();
+      const table = surface.getByRole("table", { name: "表格" });
+      await expect(table).toHaveCSS("corner-shape", "superellipse(1.5)");
+      await expect(table.getByRole("row").first()).toHaveCSS("corner-top-left-shape", "superellipse(1.5)");
+      await expect(table.getByRole("row").first()).toHaveCSS("corner-bottom-left-shape", /^(round|superellipse\(1\))$/);
+      await expect(table).toHaveCSS("overflow", "visible");
       await expect(panel).toHaveScreenshot(`table-${theme}.png`);
     });
 

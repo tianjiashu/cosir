@@ -80,8 +80,8 @@ export function TablePreview({
         )}
       </div>
       <div ref={scroller} className="min-h-0 flex-1 overflow-auto p-3">
-        <div role="table" aria-label="表格" aria-rowcount={visible.length + 1} className="w-max min-w-full rounded-(--radius) border text-sm">
-          <div role="row" className="bg-muted sticky top-0 z-10 grid rounded-t-[inherit] border-b font-medium" style={{ gridTemplateColumns: template }}>
+        <div role="table" aria-label="表格" aria-rowcount={visible.length + 1} className="w-max min-w-full rounded-lg border text-sm">
+          <div role="row" className="bg-muted sticky top-0 z-10 grid rounded-t-[inherit] [corner-top-left-shape:inherit] [corner-top-right-shape:inherit] border-b font-medium" style={{ gridTemplateColumns: template }}>
             <span role="columnheader" className="text-muted-foreground px-2 py-1 text-right text-xs tabular-nums">#</span>
             {table.header.map((title, column) => {
               const active = sort?.column === column ? sort.direction : null;

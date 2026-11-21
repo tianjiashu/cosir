@@ -134,6 +134,7 @@
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
   --radius: 0.625rem;
+  --corner-shape: superellipse(1.5);
   /* 窗口底色：侧栏所在的下沉层。区域之间靠它与 --background 的明度差分隔，不画结构分割线。 */
   --canvas: oklch(0.97 0.002 90);
   /* 停靠卡片（工作台、终端）浮在主区之上的投影。 */
@@ -200,12 +201,34 @@
 }
 
 /*
+ * 应用矩形表面的曲线与现有 rounded 尺寸一起覆盖：调用方仍只选半径，cn() 合并、状态变体、
+ * important 与 @apply 都沿 Tailwind 原有链路。full 保留圆形 / 胶囊；局部圆角只设置对应的角。
+ * 不对 DOM 全局继承，避免改变原生控件、图标和文档内部图形；直接写半径的 CSS / 第三方主题
+ * 在各自的样式入口读取 --corner-shape。新增尺寸应在这里接入，不给组件另加曲线参数。
+ */
+@utility rounded { corner-shape: var(--corner-shape); }
+@utility rounded-sm { corner-shape: var(--corner-shape); }
+@utility rounded-md { corner-shape: var(--corner-shape); }
+@utility rounded-lg { corner-shape: var(--corner-shape); }
+@utility rounded-xl { corner-shape: var(--corner-shape); }
+@utility rounded-2xl { corner-shape: var(--corner-shape); }
+@utility rounded-3xl { corner-shape: var(--corner-shape); }
+@utility rounded-full { corner-shape: round; }
+@utility rounded-b-xl {
+  corner-bottom-left-shape: var(--corner-shape);
+  corner-bottom-right-shape: var(--corner-shape);
+}
+
+/*
  * 停靠面板卡片（工作台、终端面板及其崩溃降级）：只定义外观，留白与调整手柄归
  * PanelDock。背景不在这里给出——终端面板用自己的 bg-terminal-pane，与 bg-* 同层工具类比较
  * 先后顺序不可靠，由调用方显式设置。overflow-hidden 让子元素背景不越过圆角。
+ * 外框单独采用 1.7；不覆盖 --corner-shape，内部控件继续使用通用的 1.5。
  */
 @utility dock-panel {
-  @apply overflow-hidden rounded-xl border shadow-panel;
+  @apply overflow-hidden border shadow-panel;
+  border-radius: var(--radius-xl);
+  corner-shape: superellipse(1.7);
 }
 
 /*
@@ -396,6 +419,7 @@ body > :not(#root) > * {
     padding-inline: 0.375rem 0.125rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
+    corner-shape: var(--corner-shape);
     background: var(--muted);
     color: var(--foreground);
     vertical-align: bottom;
@@ -422,6 +446,7 @@ body > :not(#root) > * {
   .cosir-inline-token-label {
     gap: 0.25rem;
     border-radius: var(--radius-sm);
+    corner-shape: var(--corner-shape);
     white-space: nowrap;
   }
 
@@ -459,6 +484,7 @@ body > :not(#root) > * {
     width: 1.25rem;
     height: 1.25rem;
     border-radius: var(--radius-sm);
+    corner-shape: var(--corner-shape);
     color: inherit;
     opacity: 0.55;
     cursor: pointer;

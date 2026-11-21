@@ -14,7 +14,7 @@ export function AwaitingFrame({ toolCallId, title, className, children }: { tool
       data-tool-call-id={toolCallId}
       aria-label={`等你操作：${title}`}
       className={cn(
-        "min-w-0 rounded-(--radius) px-3 py-2.5 text-2sm",
+        "min-w-0 rounded-lg px-3 py-2.5 text-2sm",
         "border border-[color-mix(in_oklab,var(--info)_38%,transparent)] bg-[color-mix(in_oklab,var(--info)_6%,transparent)]",
         className,
       )}

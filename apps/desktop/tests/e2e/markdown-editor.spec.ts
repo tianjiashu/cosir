@@ -153,3 +153,16 @@ test("配置页编辑器填满内容区，保存栏始终在视口内", async ({
   await expect(page.getByRole("button", { name: /保存主 Agent 提示词/ })).toBeInViewport({ ratio: 1 });
   await expect(page.getByText("估算 Token", { exact: true })).toBeInViewport({ ratio: 1 });
 });
+
+// CodeMirror 的自带控件不消费 Tailwind 类，主题入口必须同步曲线且保留跳转与退出行为。
+test("跳转面板的输入和按钮使用统一曲线", async ({ page }) => {
+  const editor = await openMainAgentPrompt(page, "第一行\n第二行");
+  await editor.click();
+  await page.keyboard.press("Control+g");
+  const dialog = page.locator(".cm-dialog");
+  await expect(dialog.locator("input")).toHaveCSS("corner-shape", "superellipse(1.5)");
+  await expect(dialog.locator("button").first()).toHaveCSS("corner-shape", "superellipse(1.5)");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(editor).toBeFocused();
+});

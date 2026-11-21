@@ -12,6 +12,7 @@
 .sidebar-nav-item,
 .sidebar-icon-button {
   border-radius: var(--radius-md);
+  corner-shape: var(--corner-shape);
   transition: background-color 150ms;
 }
 

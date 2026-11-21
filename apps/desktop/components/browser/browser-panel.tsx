@@ -108,28 +108,31 @@ export function BrowserPanel({ sessionId, sizing, maximized, onToggleMaximized, 
         </>
       )}
     >
-      {!host ? (
-        <EmptyState className="m-4" title="内置浏览器只在桌面应用中可用" />
-      ) : sessionId === null ? (
-        <EmptyState className="m-4" icon={<GlobeIcon />} title="打开一个会话后使用浏览器" description="标签页归属于对话：Agent 与你在同一个会话里看到同一组标签。" />
-      ) : active ? (
-        <>
-          {active.dialog && (
-            <BrowserDialogBanner
-              key={active.dialog.id}
-              host={host}
-              tabId={active.tabId}
-              dialog={active.dialog}
-            />
-          )}
-          {active.operation === "unknown" && <p role="status" className="px-3 py-2 text-sm text-warning">页面操作尚未确认结束，暂不能继续自动操作。请先检查页面，必要时关闭重开；不要重复提交。</p>}
-          {!active.dialog && active.operation !== "unknown" && (agentRunning || active.agentBusy) && <AgentActivityBar busy={active.agentBusy} />}
-          <BrowserView key={active.tabId} host={host} tabId={active.tabId} url={active.url} loading={active.loading} crashed={active.crashed} />
-        </>
-      ) : (
-        <NewTabPrompt onOpen={openTab} />
-      )}
-      {host && sessionId !== null && downloads.length > 0 && <DownloadBar key={sessionId} host={host} downloads={downloads} />}
+      {/* 原生网页不受 DOM 圆角裁切；内容底边退入面板圆角范围，实时画面与冻结帧共用原来的矩形槽。 */}
+      <div className="flex min-h-0 flex-1 flex-col pb-(--radius-xl)">
+        {!host ? (
+          <EmptyState className="m-4" title="内置浏览器只在桌面应用中可用" />
+        ) : sessionId === null ? (
+          <EmptyState className="m-4" icon={<GlobeIcon />} title="打开一个会话后使用浏览器" description="标签页归属于对话：Agent 与你在同一个会话里看到同一组标签。" />
+        ) : active ? (
+          <>
+            {active.dialog && (
+              <BrowserDialogBanner
+                key={active.dialog.id}
+                host={host}
+                tabId={active.tabId}
+                dialog={active.dialog}
+              />
+            )}
+            {active.operation === "unknown" && <p role="status" className="px-3 py-2 text-sm text-warning">页面操作尚未确认结束，暂不能继续自动操作。请先检查页面，必要时关闭重开；不要重复提交。</p>}
+            {!active.dialog && active.operation !== "unknown" && (agentRunning || active.agentBusy) && <AgentActivityBar busy={active.agentBusy} />}
+            <BrowserView key={active.tabId} host={host} tabId={active.tabId} url={active.url} loading={active.loading} crashed={active.crashed} />
+          </>
+        ) : (
+          <NewTabPrompt onOpen={openTab} />
+        )}
+        {host && sessionId !== null && downloads.length > 0 && <DownloadBar key={sessionId} host={host} downloads={downloads} />}
+      </div>
     </DockFrame>
   );
 }
