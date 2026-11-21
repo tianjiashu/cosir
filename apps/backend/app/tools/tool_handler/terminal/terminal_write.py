@@ -7,8 +7,8 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.tool_base import HandlerBase
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_TERMINAL_SESSION
+from app.core.tool.tool_base import HandlerBase
 from app.service import depends as service_depends
 from app.tools.tool_handler.terminal.tool_observation import (
     observation_result,
