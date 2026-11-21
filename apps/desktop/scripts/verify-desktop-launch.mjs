@@ -1,7 +1,13 @@
 /**
- * 启动入口冒烟：跑一个启动命令（`npm run electron:dev`、`scripts/start-desktop.ps1`），等后端 ready，再只强杀
- * Electron 主进程（模拟宿主崩溃），断言后端经宿主存活契约自行优雅退出（bootstate 落到 `stopped`，见
- * `apps/backend/app/parent_watch.py` 与 `lifespan.py`）。最后清掉启动命令留下的整棵进程树。
+ * 启动入口冒烟：跑一个启动命令（`npm run electron:dev`、`scripts/start-desktop.*`），等后端 ready，再只强杀
+ * Electron 主进程（模拟宿主崩溃），断言宿主之下的进程（后端及其子进程）30 秒内全部退出、不留孤儿。最后清掉启动命令
+ * 留下的整棵进程树。
+ *
+ * 两个平台的退出方式不同，断言按平台分：
+ * - POSIX：后端是独立进程组，宿主死后读到 stdin EOF，经宿主存活契约优雅关闭（bootstate 落到 `stopped`，见
+ *   `apps/backend/app/parent_watch.py` 与 `lifespan.py`）。
+ * - Windows：Node（libuv）把非 detached 的子进程放进一个随父进程关闭即结束全部成员的 Job Object，宿主一死后端连同
+ *   它的子进程被系统直接结束，不走优雅关闭，bootstate 停在 `ready`；只断言不留孤儿。
  *
  * 用法：`node scripts/verify-desktop-launch.mjs <命令> [参数...]`。数据根指到新建的临时目录
  * （`CODING_AGENT_DATA_DIR`），不碰真实数据；有后端虚拟环境时直接用它的解释器。
@@ -59,19 +65,19 @@ try {
   console.log(`[launch-smoke] backend ready; host tree ${JSON.stringify([...tree])}; killing only the Electron main process ${electronMain}`);
   const killedAt = Date.now();
   killOne(electronMain);
-  try {
-    await waitFor("backend stopped after the host was killed", STOP_TIMEOUT_MS, () => bootstatePhase() === "stopped");
-  } finally {
-    // 无论成败都报出宿主之下的进程什么时候退出：没写 stopped 时，用来区分「优雅关闭卡住、被强制退出」与「一直没退」。
-    const exitedAt = new Map();
-    await waitFor("host tree exit", STOP_TIMEOUT_MS, () => {
-      for (const [pid] of tree) if (!exitedAt.has(pid) && !isAlive(pid)) exitedAt.set(pid, Math.round((Date.now() - killedAt) / 1000));
-      return exitedAt.size === tree.size;
-    }).catch(() => {});
-    const report = [...tree].map(([pid, name]) => `${name}#${pid}: ${exitedAt.has(pid) ? `exited by ${exitedAt.get(pid)}s` : "still alive"}`);
+  const exitedAt = new Map();
+  await waitFor("the host's process tree to exit", STOP_TIMEOUT_MS, () => {
+    for (const [pid] of tree) if (!exitedAt.has(pid) && !isAlive(pid)) exitedAt.set(pid, ((Date.now() - killedAt) / 1000).toFixed(1));
+    return exitedAt.size === tree.size && (isWindows || bootstatePhase() === "stopped");
+  }).finally(() => {
+    const report = [...tree].map(([pid, name]) => `${name}#${pid}: ${exitedAt.has(pid) ? `exited after ${exitedAt.get(pid)}s` : "still alive"}`);
     console.log(`[launch-smoke] after the host was killed: ${report.join(", ")}; bootstate ${bootstatePhase() ?? "missing"}`);
-  }
-  console.log("[launch-smoke] backend shut down gracefully after the host disappeared");
+  });
+  console.log(
+    isWindows
+      ? "[launch-smoke] the backend and everything under it ended with the host (Node's job object), nothing left behind"
+      : "[launch-smoke] the backend shut down gracefully after the host disappeared, nothing left behind",
+  );
 } catch (error) {
   console.error(`[launch-smoke] ${error.message}`);
   printLogs();
@@ -112,7 +118,8 @@ function electronMainProcess(rootPid) {
       }
     }
   }
-  const isElectron = (item) => item !== undefined && /electron/i.test(item.name);
+  // 只认可执行文件名：npm 把进程标题改成「npm run electron:dev」，按子串认会把 npm 当成 Electron。
+  const isElectron = (item) => item !== undefined && /^electron(\.exe)?$/i.test(item.name);
   const main = processes.find((item) => descendants.has(item.pid) && isElectron(item) && !isElectron(byPid.get(item.ppid)));
   if (!main) throw new Error(`no Electron process under the launcher ${rootPid}`);
   return main.pid;
@@ -126,7 +133,7 @@ function descendantsOf(rootPid) {
   while (grew) {
     grew = false;
     for (const item of processes) {
-      if (!found.has(item.pid) && (item.ppid === rootPid || found.has(item.ppid)) && !/electron|helper/i.test(item.name)) {
+      if (!found.has(item.pid) && (item.ppid === rootPid || found.has(item.ppid)) && !/^electron(\.exe)?$|helper/i.test(item.name)) {
         found.set(item.pid, item.name);
         grew = true;
       }
