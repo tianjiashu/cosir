@@ -15,10 +15,6 @@ export function toolResultSignal(data: TransportToolDisplayData | null | undefin
     }
     case "web-fetch-urls":
       return data.partial === true ? "部分成功" : null;
-    case "mcp-tool-result":
-      return data.action === "list" && Array.isArray(data.servers)
-        && data.servers.some((server) => typeof (server as { error?: unknown } | null)?.error === "string")
-        ? "部分服务不可用" : null;
     default:
       return null;
   }

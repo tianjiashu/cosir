@@ -32,16 +32,16 @@ describe("unowned activity", () => {
 describe("segment activity", () => {
   const thinking = { label: "思考中", animated: true };
   it("an executing call takes precedence; otherwise the segment says the unowned state", () => {
-    const call = toolCallPart("read", "read_file", { intent: "检查登录配置", status: "running" });
+    const call = toolCallPart("read", "execute_terminal", { args: { intent: "检查登录配置" }, status: "running" });
     expect(segmentActivity([call, { ...call, toolCallId: "other" }], none, thinking)?.label).toBe("检查登录配置 · 另 1 项");
     // 先串行后并行：排在前面的 pending 不是正在执行的那个。
-    const queued = toolCallPart("first", "read_file", { intent: "读取说明", status: "pending" });
-    expect(segmentActivity([queued, { ...call, intent: "修改配置" }], none, null)?.label).toBe("修改配置 · 另 1 项");
+    const queued = toolCallPart("first", "execute_terminal", { args: { intent: "读取说明" }, status: "pending" });
+    expect(segmentActivity([queued, { ...call, args: { intent: "修改配置" } }], none, null)?.label).toBe("修改配置 · 另 1 项");
     expect(segmentActivity([{ ...call, status: "completed" }], none, thinking)).toBe(thinking);
     expect(segmentActivity([{ ...call, status: "completed" }], none, null)).toBeNull();
   });
   it("leaves background and awaiting calls to their own surfaces", () => {
-    const detaching = toolCallPart("bg", "execute_terminal", { intent: "检查导出", status: "running" });
+    const detaching = toolCallPart("bg", "execute_terminal", { args: { intent: "检查导出" }, status: "running" });
     // 转后台的那一瞬：看板已有条目，part 上的 background 还没写入，不能算作前台。
     expect(segmentActivity([detaching], new Set(["bg"]), null)).toBeNull();
     expect(segmentActivity([{ ...detaching, status: "pending", awaitingUser: true }], none, null)).toBeNull();
@@ -52,7 +52,7 @@ describe("one segment, one row, one clock", () => {
   const model = activity(1, "running", { modelActivity: { stepId: "s", phase: "reasoning", startedAt: T0 } });
   const idle = { ...model, modelActivity: null };
   const responding = { ...model, modelActivity: { stepId: "s", phase: "responding" as const, startedAt: T0 } };
-  const call = toolCallPart("read", "read_file", { intent: "检查配置", status: "running" });
+  const call = toolCallPart("read", "execute_terminal", { args: { intent: "检查配置" }, status: "running" });
 
   it("thinking, preparing, executing and thinking again are one segment with one identity", () => {
     const start = projectTurn([text("先看看。")], "running", null, null, model);

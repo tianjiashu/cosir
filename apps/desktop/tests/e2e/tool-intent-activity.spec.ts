@@ -24,10 +24,10 @@ for (const colorScheme of ["light", "dark"] as const) test(`I6–I9 ${colorSchem
   await expect(feedback).toHaveCount(1);
   const text = page.getByText(prose.text, { exact: true });
   await text.evaluate(el => Object.assign(window, { intentProse: el }));
-  const call = toolCallPart("read", "read_file", { status: "running", intent: "核对身份验证配置", args: { path: "config.ts" } });
+  const call = toolCallPart("read", "execute_terminal", { status: "running", args: { intent: "核对身份验证配置", command: "cat config.ts" } });
   await seed(request, model([prose, call]));
   // 思考与执行是同一段工作：同一行说当前状态，只有这一处。
-  await expect(feedback).toHaveText(call.intent!);
+  await expect(feedback).toHaveText("核对身份验证配置");
   await expect(feedback).toHaveCount(1);
   await expect(page.locator('[data-tool-call-id="read"]')).toHaveCount(0);
   const head = page.locator('[data-slot="activity-head"]');
@@ -41,12 +41,12 @@ for (const colorScheme of ["light", "dark"] as const) test(`I6–I9 ${colorSchem
   const more = { type: "text" as const, text: "已定位配置，继续检查。" };
   await seed(request, model([prose, { ...call, status: "completed" }, more], "reasoning"));
   await expect(feedback).toHaveCount(1);
-  await expect(head).toHaveText("读取文件 1 次");
+  await expect(head).toHaveText("执行命令 1 次");
   expect(await text.evaluate(el => el === (window as unknown as { intentProse: Element }).intentProse)).toBe(true);
-  const long = toolCallPart("long", "read_file", { status: "running", intent: "Review".repeat(26), args: { path: "long.ts" } });
+  const long = toolCallPart("long", "execute_terminal", { status: "running", args: { intent: "Review".repeat(26), command: "cat long.ts" } });
   await seed(request, model([prose, { ...call, status: "completed" }, more, long]));
   await page.setViewportSize({ width: 760, height: 720 });
-  await expect(feedback).toHaveText(long.intent!);
+  await expect(feedback).toHaveText("Review".repeat(26));
   // 段这一行内省略，不撑出窄栏。
   expect(await feedback.evaluate(el => { const row = el.closest('[data-slot="activity-head"]')!; return row.scrollWidth <= row.clientWidth + 1; })).toBe(true);
   expect(await feedback.locator('[data-slot="current-activity-label"]').evaluate(el => getComputedStyle(el).textOverflow)).toBe("ellipsis");
@@ -57,7 +57,7 @@ for (const colorScheme of ["light", "dark"] as const) test(`I6–I9 ${colorSchem
 
 test("I5/I7/I8 background settling disables stop and updates the rail reader", async ({ page, request }) => {
   const job = { toolCallId: "cmd", kind: "terminal_command" as const, label: "检查导出", status: "running" as const, startedAt: "2026-01-01", endedAt: null };
-  const command = toolCallPart("cmd", "execute_terminal", { status: "pending", intent: "检查导出", args: { command: "knip" }, background: { kind: "terminal_command", label: "检查导出", startedAt: "2026-01-01", endedAt: null }, display_data: { kind: "terminal-result", command: "knip", output: "first\n" } });
+  const command = toolCallPart("cmd", "execute_terminal", { status: "pending", args: { intent: "检查导出", command: "knip" }, background: { kind: "terminal_command", label: "检查导出", startedAt: "2026-01-01", endedAt: null }, display_data: { kind: "terminal-result", command: "knip", output: "first\n" } });
   const state = model([command], "reasoning"); state.background_tasks = [job];
   await seed(request, state); await page.goto("/sessions/42");
   const head = page.locator('[data-slot="activity-head"]'); await head.click();

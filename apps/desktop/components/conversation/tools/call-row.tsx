@@ -81,7 +81,7 @@ function CallRowContent({ sessionId, toolCallId, toolName, args, artifact, inter
   }
 
   // 标题与 `turn-layout.callTitle` 同源：都按工具目录从参数算出。
-  const { title, target, targetIsPath } = toolHeading(toolName, args, artifact.intent);
+  const { title, target, targetIsPath } = toolHeading(toolName, args);
   const feedback = projectCallStatus(status, artifact.awaitingUser, artifact.background, workStatus);
   const kindMeta = resolved?.meta;
   const signal = failed || cancelled ? null : toolResultSignal(artifact.display_data);

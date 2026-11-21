@@ -28,7 +28,7 @@ test("面板关着时会话订阅工作区；文件更新后胶囊大小跟着�
   await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: SESSION_ID, title: "交付物现读" } });
   const present: TransportMessagePart = {
     type: "tool-call", toolCallId: "call-present", toolName: "present_deliverables", presentation: "quiet",
-    args: { items: [{ target: "src/main.py" }] }, intent: null, status: "completed", error: null, awaitingUser: false,
+    args: { items: [{ target: "src/main.py" }] }, status: "completed", error: null, awaitingUser: false,
     deliverables: [{ type: "file", key: "/w/src/main.py", caption: null, workspacePath: "src/main.py", absolutePath: "/w/src/main.py", kind: "text", size: 999, width: null, height: null }],
   };
   await seedState(request, SESSION_ID, completedState(1, { id: "u-1", parts: [{ type: "text", text: "交付", status: "completed" }] }, [

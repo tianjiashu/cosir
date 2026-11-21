@@ -189,11 +189,10 @@ function validatePart(value: unknown, path: string): void {
     return;
   }
   if (type !== "tool-call") throw new TransportSnapshotValidationError(`${path}.type`, "已知消息 part 类型");
-  const allowed = ["type", "toolCallId", "toolName", "presentation", "status", "args", "intent", "error", "awaitingUser", "display_data", "background", "deliverables", "startedAt", "terminal_output_seq"];
+  const allowed = ["type", "toolCallId", "toolName", "presentation", "status", "args", "error", "awaitingUser", "display_data", "background", "deliverables", "startedAt", "terminal_output_seq"];
   if (Object.keys(part).some((key) => !allowed.includes(key))) throw new TransportSnapshotValidationError(path, "已知字段");
   requireString(part.toolCallId, `${path}.toolCallId`);
   requireString(part.toolName, `${path}.toolName`);
-  if (part.intent != null) requireString(part.intent, `${path}.intent`);
   if (!["activity", "standalone", "quiet"].includes(part.presentation as string)) throw new TransportSnapshotValidationError(path, "工具呈现类别");
   const status = requireString(part.status, `${path}.status`);
   if (!["pending", "running", "completed", "failed", "cancelled"].includes(status)) {

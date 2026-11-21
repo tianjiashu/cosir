@@ -248,8 +248,8 @@ function alternatingSequenceState(phase) {
       },
     }),
     { type: "text", text: "tick 是写死的常量，配置模块已有校验工具，可以直接加字段。", status: "completed" },
-    call("alt-typecheck", "execute_terminal", { command: "bun run typecheck" }, "failed", {
-      intent: "运行类型检查", error: "命令执行失败", display_data: { status_hint: "命令执行失败" },
+    call("alt-typecheck", "execute_terminal", { intent: "运行类型检查", command: "bun run typecheck" }, "failed", {
+      error: "命令执行失败", display_data: { status_hint: "命令执行失败" },
     }),
     call("alt-patch", "apply_patch", { patch: "diff --git a/src/config.ts b/src/config.ts\n" }, "completed", {
       display_data: {
@@ -262,8 +262,8 @@ function alternatingSequenceState(phase) {
     }),
   ];
   if (phase === "running") {
-    parts.push(call("alt-test", "execute_terminal", { command: "bun test tests/session.test.ts" }, "running", {
-      intent: "运行单元测试", display_data: { kind: "terminal-result", command: "bun test tests/session.test.ts", workdir: "/work", output: "bun test v1.1\n\ntests/session.test.ts:\n✓ tick reads config\n" },
+    parts.push(call("alt-test", "execute_terminal", { intent: "运行单元测试", command: "bun test tests/session.test.ts" }, "running", {
+      display_data: { kind: "terminal-result", command: "bun test tests/session.test.ts", workdir: "/work", output: "bun test v1.1\n\ntests/session.test.ts:\n✓ tick reads config\n" },
     }));
   } else {
     parts.push(

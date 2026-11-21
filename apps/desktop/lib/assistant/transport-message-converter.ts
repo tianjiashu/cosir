@@ -170,7 +170,6 @@ function convertToolCallPart(part: TransportToolCallPart): ThreadMessage["conten
   const backendStatus = part.status;
   const artifact: ToolArtifact = {
     backendStatus,
-    intent: part.intent ?? null,
     presentation: part.presentation,
     awaitingUser: part.awaitingUser,
     display_data: part.display_data ?? null,

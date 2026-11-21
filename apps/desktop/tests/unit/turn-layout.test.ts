@@ -102,11 +102,10 @@ describe("stable conversation projection", () => {
       call("images", { display_data: { kind: "image-read", failures: ["a", "b"] } }),
       call("browser", { display_data: { kind: "browser-page", steps: [{ status: "skipped" }] } }),
       call("web", { display_data: { kind: "web-fetch-urls", partial: true } }),
-      call("mcp", { display_data: { kind: "mcp-tool-result", action: "list", servers: [{ error: "offline" }] } }),
     ], "settled");
     expect(firstGroupSummary(layout).failedCount).toBe(0);
     expect(describeCallProblems(firstGroupSummary(layout))).toBeNull();
-    expect(firstGroupSummary(layout).verbCounts).toEqual([{ label: "读取文件", count: 5 }]);
+    expect(firstGroupSummary(layout).verbCounts).toEqual([{ label: "读取文件", count: 4 }]);
   });
   it("unknown tools remain visible and do not acquire invented result semantics", () => {
     const layout = projectTurn([call("future", { toolName: "future_tool", status: "completed", display_data: { kind: "future-result" } })], "settled");
@@ -220,7 +219,7 @@ describe("活动段汇总的产出", () => {
   // 目的：汇总行的「改了多少、看到了什么」与调用行同源；潜在缺陷：只数第一个文件、图片顺序乱、失败调用冒出图片。
   it("sums every file operation and lists images in the order they appeared", () => {
     const failed = toolCallPart("bad", "read_image", { status: "failed", display_data: null });
-    const mcp = toolCallPart("m1", "mcp", { status: "completed", display_data: { kind: "mcp-tool-result", action: "call", server_name: "figma", tool_name: "render", scope: "system", images: [SHA("d")] } });
+    const mcp = toolCallPart("m1", "mcp__figma__render", { status: "completed", display_data: { kind: "mcp-tool-result", server_name: "figma", tool_name: "render", scope: "system", images: [SHA("d")] } });
     const { group: g } = group([
       edit("e1", [{ path: "a.ts", insertions: 3, deletions: 1 }, { path: "b.ts", insertions: 2, deletions: 0 }]),
       read("r1", [SHA("a"), SHA("b")]), failed, shot("s1", SHA("c")), mcp,

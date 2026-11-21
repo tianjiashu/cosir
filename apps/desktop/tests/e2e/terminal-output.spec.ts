@@ -34,7 +34,7 @@ const command = "cd /Users/example/workspace && printf 'long command'\n" + "prin
 function state(display: TransportToolDisplayData, status: "running" | "completed" | "failed" | "cancelled" = "running", renderedCommand = command) {
   return transportState({
     messages: [userMessage("u", 1, "查看真实命令输出"), assistantMessage("a", 1, [toolCallPart("cmd", "execute_terminal", {
-      status, intent: "统计代码规模", args: { command: renderedCommand }, display_data: { ...display, command: renderedCommand },
+      status, args: { intent: "统计代码规模", command: renderedCommand }, display_data: { ...display, command: renderedCommand },
       error: status === "failed" ? "命令超时" : status === "cancelled" ? "已取消" : null,
     })], status === "running" ? null : outcome("completed"))],
     activity: activity(1, status === "running" ? "suspended" : "completed", { startedAt: new Date().toISOString() }),

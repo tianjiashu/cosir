@@ -46,7 +46,7 @@ describe("增量与完整快照遵守同一当前契约", () => {
         : level === "parts" ? { path: ["messages", 0, "parts"], value: [invalid] }
           : { path: ["messages", 0], value: { ...initial.messages[0], parts: [invalid] } };
     expect(() => store.applyFrame(mutation([
-      { kind: "set", path: ["messages", 0, "parts", 0, "intent"], value: "不得提交" },
+      { kind: "set", path: ["messages", 0, "parts", 0, "error"], value: "不得提交" },
       { kind: "set", ...change },
     ]))).toThrow("status");
     expect(store.getSnapshot().state).toBe(initial);

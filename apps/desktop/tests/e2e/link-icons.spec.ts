@@ -27,7 +27,7 @@ const REPLY = [
 
 const search = toolCallPart("search", "web_search", {
   status: "completed",
-  intent: "查资料",
+ 
   args: { query: "icons" },
   display_data: { kind: "web-search-results", results: [{ url: "https://icon.example/result", title: "搜索结果" }] },
 });

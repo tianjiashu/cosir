@@ -124,7 +124,7 @@ export function QuestionCard({ sessionId, toolCallId, toolName, args, artifact, 
   const display = readUserQuestionDisplay(artifact.display_data);
   const progress = useQuestionProgress(sessionId, toolCallId);
   const submitting = commandPending(useCommandRequest(sessionId, decisionTarget(toolCallId)));
-  const { title } = toolHeading(toolName, args, artifact.intent);
+  const { title } = toolHeading(toolName, args);
   const questions = display?.questions ?? [];
   const index = Math.min(progress.index, Math.max(questions.length - 1, 0));
   const question = questions[index];

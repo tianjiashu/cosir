@@ -143,7 +143,7 @@ test("zero duration remains explicit and tool failures stay visible", async ({ p
 
 test("long live tool labels truncate within the narrow column without duplicating status", async ({ page, request }) => {
   await page.setViewportSize({ width: 768, height: 900 });
-  const parts = [toolCallPart("cmd", "execute_terminal", { status: "running", intent: "LongAction".repeat(16), args: { command: "echo ok" } })];
+  const parts = [toolCallPart("cmd", "execute_terminal", { status: "running", args: { intent: "LongAction".repeat(16), command: "echo ok" } })];
   await seedState(request, 42, transportState({ messages: [userMessage("u", 1), assistantMessage("a", 1, parts)], activity: activity(1, "suspended") }));
   await page.goto("/sessions/42");
   await page.locator('[data-slot="activity-head"]').click();

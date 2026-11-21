@@ -3,9 +3,8 @@ import { useAttachmentWorkspaceId } from "@/components/conversation/thread/attac
 import { ImageStrip } from "@/components/image/image-strip";
 import { attachmentContentUrl } from "@/lib/assistant/attachments/image-src";
 import type { CallView } from "../call-view";
-import { DetailBudget } from "../detail-budget";
-import { asRecord, readArray, readRecords } from "../display-data-readers";
-import { DETAIL_ROW_CLASS, DetailEmpty, listDetail } from "./detail-parts";
+import { readArray, readRecords } from "../display-data-readers";
+import { DETAIL_ROW_CLASS, listDetail } from "./detail-parts";
 
 /** 结果图片按对话图片的统一外观横排；地址按消息附件同一规则解析。 */
 function MCPResultImages({ assetIds }: { assetIds: string[] }) {
@@ -18,48 +17,14 @@ function MCPResultImages({ assetIds }: { assetIds: string[] }) {
 }
 
 /**
- * `mcp-tool-result`：`list` 列出服务与其工具，工作区自己的服务（`scope === "workspace"`）在列表与调用行都标「工作区」；`call` 的结果正文只进模型上下文，
- * 服务与工具已在目标里（`服务/工具`），元信息只补「工作区」与图片张数；结果带图片（`images` 为附件 asset id）时展开可看缩略图。
+ * `mcp-tool-result`：一次 MCP 工具调用。结果正文只进模型上下文，服务与工具已在目标里（`服务/工具`），元信息只补
+ * 「工作区」（服务定义在工作区自己的配置里）与图片张数；结果带图片（`images` 为附件 asset id）时展开可看缩略图。
  */
 export const mcpView: CallView = (data) => {
   const images = readArray(data.images).filter((item): item is string => typeof item === "string");
   return {
-    meta: data.action === "call"
-      ? [data.scope === "workspace" ? "工作区" : null, images.length > 0 ? `${images.length} 张图片` : null].filter(Boolean).join(" · ") || undefined
-      : `${readArray(data.servers).length} 个服务`,
-    detail: data.action === "call" ? (images.length > 0 ? { render: () => <MCPResultImages assetIds={images} /> } : undefined) : {
-      render: () => {
-        const servers = readArray(data.servers).map(asRecord);
-        if (servers.length === 0) return <DetailEmpty>没有已启用的 MCP 服务</DetailEmpty>;
-        return (
-          <DetailBudget><ul className="space-y-3 text-xs">
-            {servers.map((server, index) => {
-              const tools = readArray(server.tools).map(asRecord);
-              return (
-                <li key={`${String(server.server_name ?? "server")}-${index}`}>
-                  <p className="font-medium">
-                    {String(server.server_name ?? "MCP 服务")}
-                    {server.scope === "workspace" && <span className="text-muted-foreground ml-2 font-normal">工作区</span>}
-                  </p>
-                  {typeof server.error === "string" && <p className="text-muted-foreground mt-1">{server.error}</p>}
-                  {tools.length > 0 && (
-                    <ul className="mt-1 space-y-1 pl-3">
-                      {tools.map((tool, toolIndex) => (
-                        <li key={`${String(tool.name ?? "tool")}-${toolIndex}`}>
-                          <span className="font-mono">{String(tool.name ?? "未命名工具")}</span>
-                          {typeof tool.description === "string" && tool.description && <span className="text-muted-foreground ml-2">{tool.description}</span>}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {tools.length === 0 && typeof server.error !== "string" && <p className="text-muted-foreground mt-1">没有发现工具</p>}
-                </li>
-              );
-            })}
-          </ul></DetailBudget>
-        );
-      },
-    },
+    meta: [data.scope === "workspace" ? "工作区" : null, images.length > 0 ? `${images.length} 张图片` : null].filter(Boolean).join(" · ") || undefined,
+    detail: images.length > 0 ? { render: () => <MCPResultImages assetIds={images} /> } : undefined,
   };
 };
 

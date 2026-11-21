@@ -9,7 +9,6 @@ import type { TransportToolDisplayData, TransportToolStatus } from "@/lib/assist
  */
 export type ToolArtifact = {
   backendStatus: TransportToolStatus;
-  intent?: string | null;
   presentation: "activity" | "standalone" | "quiet";
   /** 是否在等用户决定；投影自 part `awaitingUser`，不从 `pending` 推断。 */
   awaitingUser: boolean;

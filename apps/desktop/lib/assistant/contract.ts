@@ -62,8 +62,6 @@ export type TransportToolCallPart = {
    * 后端不下发图标、动词或标题，前端按 `toolName` + `args` 查 `tool-catalog.ts`。
    */
   args?: Record<string, unknown> | null;
-  /** 原始模型声明的目的，不用于判断执行状态。 */
-  intent?: string | null;
   /** 工具执行错误文本；成功时为空。 */
   error?: string | null;
   /** 后端工具调用生命周期状态，已由传输入口校验。 */

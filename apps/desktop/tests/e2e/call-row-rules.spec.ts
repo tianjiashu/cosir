@@ -5,15 +5,15 @@ import { activity, assistantMessage, outcome, toolCallPart, userMessage } from "
 import type { TransportMessagePart, TransportState } from "../../lib/assistant/contract";
 
 /**
- * 调用行规则：问题信号单独一格、长标题挤不掉；补丁部分写入的改动算进行与汇总；子 Agent 运行中由行说出、完成后安静。
+ * 调用行规则：问题信号单独一格、长目标挤不掉；补丁部分写入的改动算进行与汇总；子 Agent 运行中由行说出、完成后安静。
  * 潜在缺陷：窄屏下失败原因被截掉、「它其实改了文件」看不到、并行子 Agent 分不清谁还在跑。
  */
-const longIntent = "把配置模块里所有和调度节拍有关的常量统一改成从配置文件读取并补上范围校验";
+const longPath = "src/scheduler/configuration/runtime/tick-settings/defaults/range-validated-tick-settings-loader.ts";
 const parts: TransportMessagePart[] = [
   { type: "text", text: "开始改。" },
-  toolCallPart("edit", "edit_file", { status: "failed", intent: longIntent, args: { path: "src/scheduler/config/tick-settings.ts" }, error: "原文未匹配", display_data: { status_hint: "原文未匹配" } }),
+  toolCallPart("edit", "edit_file", { status: "failed", args: { path: longPath }, error: "原文未匹配", display_data: { status_hint: "原文未匹配" } }),
   toolCallPart("patch", "apply_patch", {
-    status: "failed", intent: "重构路由", error: "部分已写入",
+    status: "failed", error: "部分已写入",
     display_data: { kind: "file-changes", status_hint: "部分已写入", changes: [{ path: "src/router.ts", status: "modified", patch: null, insertions: 12, deletions: 3 }] },
   }),
   toolCallPart("cmd", "execute_terminal", { status: "completed", args: { command: "npm test --watch=false\necho done" }, display_data: { kind: "terminal-result", command: "npm test", workdir: "/w", output: "ok\n", end: "exited", exit_code: 0 } }),
@@ -33,7 +33,7 @@ async function open(page: Page, request: APIRequestContext, width: number) {
 }
 const call = (page: Page, id: string) => page.locator(`[data-tool-call-id="${id}"] [data-slot="call-row"]`);
 
-for (const width of [1100, 360]) test(`at ${width}px the failure reason survives a long title`, async ({ page, request }) => {
+for (const width of [1100, 360]) test(`at ${width}px the failure reason survives a long target`, async ({ page, request }) => {
   await open(page, request, width);
   const row = call(page, "edit");
   const problem = row.locator('[data-slot="call-problem"]');

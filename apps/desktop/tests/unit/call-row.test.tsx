@@ -72,8 +72,8 @@ describe("CallRow 标题与目标", () => {
     expect(read).toContain("lucide-eye");
   });
 
-  it("命令的标题使用统一 intent，不重复命令；没写意图时目标露首行", () => {
-    const html = render({ intent: "运行后端单元测试" }, { toolName: "execute_terminal", args: { command: "uv run pytest -q\necho done" } });
+  it("命令的标题使用它自己的 intent 参数，不重复命令；没写意图时目标露首行", () => {
+    const html = render({}, { toolName: "execute_terminal", args: { intent: "运行后端单元测试", command: "uv run pytest -q\necho done" } });
     expect(html).toContain("运行后端单元测试");
     expect(html).not.toContain("uv run pytest -q");
     const bare = render({}, { toolName: "execute_terminal", args: { command: "uv run pytest -q\necho done" } });
@@ -297,7 +297,7 @@ describe("CallRow 运行时长", () => {
 
   it("运行超过 3 秒才在标题后显示时长，所有工具一样", () => {
     expect(render({ backendStatus: "running", startedAt: startedSecondsAgo(1) })).not.toContain('data-slot="call-elapsed"');
-    const html = render({ backendStatus: "running", startedAt: startedSecondsAgo(75) }, { toolName: "mcp", args: { action: "call", server_name: "jira", tool_name: "search" } });
+    const html = render({ backendStatus: "running", startedAt: startedSecondsAgo(75) }, { toolName: "mcp__jira__search", args: { query: "bug" } });
     expect(html).toMatch(/data-slot="call-elapsed"[^>]*>1分钟1[45]秒</);
     expect(html.indexOf('data-slot="call-title"')).toBeLessThan(html.indexOf('data-slot="call-elapsed"'));
   });

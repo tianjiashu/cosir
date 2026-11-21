@@ -13,13 +13,17 @@ describe("toolHeading", () => {
   });
 
   // 目的：目标写用户认得的实体；潜在缺陷：没写意图时一串行全叫「执行命令」、子 Agent 只露配置 id。
-  it("标题是意图（没有时用动词），目标是命令首行与子 Agent 名", () => {
-    expect(toolHeading("execute_terminal", { command: "pytest -q\necho" }, "Run backend unit tests"))
+  it("命令与页面脚本的标题是它们的 intent 参数（没有时用动词），其余工具只用动词；目标是命令首行与子 Agent 名", () => {
+    expect(toolHeading("execute_terminal", { intent: "Run backend unit tests", command: "pytest -q\necho" }))
       .toMatchObject({ title: "Run backend unit tests", target: null });
+    expect(toolHeading("browser_evaluate", { intent: "读页面标题", expression: "document.title" }))
+      .toMatchObject({ title: "读页面标题", target: null });
+    // 不声明意图的工具：参数里即使出现 intent 也不当标题（外部工具的 intent 是业务参数）。
+    expect(toolHeading("read_file", { intent: "x", path: "a.py" }).title).toBe("读取文件");
     expect(toolHeading("execute_terminal", { command: "pytest -q\necho" })).toMatchObject({ title: "执行命令", target: "pytest -q" });
     expect(toolHeading("execute_terminal", { command: `npm run ${"x".repeat(80)}` }).target).toHaveLength(61);
-    expect(toolHeading("delegate_task", { agent_name: "安全审查员", child_agent_id: "reviewer" }, "审查登录模块"))
-      .toMatchObject({ title: "审查登录模块", target: "安全审查员" });
+    expect(toolHeading("delegate_task", { agent_name: "安全审查员", child_agent_id: "reviewer" }))
+      .toMatchObject({ title: "委派任务", target: "安全审查员" });
     expect(toolHeading("fork_session", { title: "换个思路" })).toMatchObject({ title: "分叉会话", target: "换个思路" });
     expect(toolHeading("read_file", { path: "app/main.py" })).toEqual({ title: "读取文件", target: "app/main.py", targetIsPath: true });
     expect(toolHeading("execute_terminal", { command: "ls" }).targetIsPath).toBe(false);
@@ -44,8 +48,9 @@ describe("toolHeading", () => {
     expect(toolHeading("terminal_stop", { terminal_id: "call-1" })).toMatchObject({ title: "停止命令", target: "call-1" });
     // 流式参数里命令先于终端 id 到达时不拼出「null · 命令」。
     expect(toolHeading("terminal_write", { command: "npm test" }).target).toBeNull();
-    expect(toolHeading("mcp", { action: "call", server_name: "fs", tool_name: "read" })).toMatchObject({ title: "调用 MCP", target: "fs/read" });
-    expect(toolHeading("mcp", { action: "list", server_name: "fs" }).target).toBe("fs");
+    // MCP 工具按名字前缀认成一族，目标取名字里的「服务/工具」。
+    expect(toolHeading("mcp__fs__read_file", { path: "a" })).toMatchObject({ title: "调用 MCP", target: "fs/read_file" });
+    expect(toolHeading("mcp__classify__run", { intent: "refund" }).title).toBe("调用 MCP");
     expect(toolHeading("skill", { action: "load", skill_name: "pdf", resource_path: "ref.md" }).target).toBe("pdf/ref.md");
     expect(toolHeading("send_message", { session_id: 12 }).target).toBe("#12");
   });

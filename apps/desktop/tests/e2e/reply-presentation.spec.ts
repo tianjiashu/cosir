@@ -28,13 +28,13 @@ const DELIVERABLES = [
 const FILES: TransportMessagePart = {
   type: "tool-call", toolCallId: "call-files", toolName: "present_deliverables", presentation: "quiet",
   args: { items: DELIVERABLES.map((item) => ({ target: item.key })) },
-  intent: null, status: "completed", error: null, awaitingUser: false,
+  status: "completed", error: null, awaitingUser: false,
   deliverables: [...DELIVERABLES],
 };
 const OFFER: TransportMessagePart = {
   type: "tool-call", toolCallId: "call-offer", toolName: "offer_next_step", presentation: "quiet",
   args: { ask: "要把同样的修复应用到移动端吗？", replies: ["好，应用", "先不用"] },
-  intent: null, status: "completed", error: null, awaitingUser: false,
+  status: "completed", error: null, awaitingUser: false,
   display_data: { kind: "next-step", ask: "要把同样的修复应用到移动端吗？", replies: ["好，应用", "先不用"] },
 };
 
@@ -347,7 +347,7 @@ const presentCall = (id: string, deliverables: TransportDeliverable[], note: str
 });
 const READ: TransportMessagePart = {
   type: "tool-call", toolCallId: "call-read", toolName: "read_file", presentation: "activity", args: { path: "docs/report.md" },
-  intent: "看报告", status: "completed", error: null, awaitingUser: false, display_data: null,
+  status: "completed", error: null, awaitingUser: false, display_data: null,
 };
 const slots = (page: Page) => page.locator('[data-role="assistant"] [data-slot="turn"] > div:not([hidden])').evaluateAll((nodes) =>
   nodes.map((node) => node.getAttribute("data-slot") ?? "").filter((slot) => ["prose-part", "deliverables-part", "process-part"].includes(slot)));

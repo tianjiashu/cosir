@@ -84,7 +84,7 @@ test("手动分叉的历史可读、截图可查看，但不操作来源会话",
         outcome: null,
         parts: [
           { type: "tool-call", presentation: "standalone", toolCallId: "history-8:child", toolName: "fork_session", status: "pending", awaitingUser: false, args: {}, display_data: { kind: "fork-session-result", title: "来源子会话", child_session_id: 991 } },
-          { type: "tool-call", presentation: "activity", toolCallId: "history-8:browser", toolName: "browser_screenshot", status: "completed", awaitingUser: false, intent: "查看已保存网页", args: {}, display_data: { kind: "browser-page", tab_id: "gone", url: "https://example.com", title: "历史页面", screenshot: assetId } },
+          { type: "tool-call", presentation: "activity", toolCallId: "history-8:browser", toolName: "browser_screenshot", status: "completed", awaitingUser: false, args: {}, display_data: { kind: "browser-page", tab_id: "gone", url: "https://example.com", title: "历史页面", screenshot: assetId } },
         ] },
     ],
   });
@@ -92,7 +92,7 @@ test("手动分叉的历史可读、截图可查看，但不操作来源会话",
   await expect(page.locator('[data-slot="turn"][data-inherited="true"]')).toBeVisible();
   await expect(page.getByRole("button", { name: "撤回" })).toHaveCount(0);
   await page.locator('[data-slot="activity-head"]').click();
-  await page.getByRole("button", { name: /查看已保存网页/ }).click();
+  await page.locator('[data-tool-call-id="history-8:browser"] [data-slot="call-row"]').click();
   await expect(page.getByRole("img", { name: "网页截图", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /在浏览器面板打开|打开分叉会话|停止子会话|继续运行/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "在会话观测中查看本回合" })).toBeVisible();
@@ -111,12 +111,12 @@ test("继承历史共用文件、终端和错误展示，展开状态跨虚拟�
     messages: [...history, { id: "assistant-turn-101", role: "assistant", turn: 101, inherited: true, outcome: null, source: null, parts: [
       { type: "text", text: "继承展示验收", status: "completed" },
       { type: "tool-call", presentation: "activity", toolCallId: "context-file", toolName: "read_file", status: "completed", awaitingUser: false,
-        intent: "读取验收文件", args: { path: "src/review.py" }, display_data: { kind: "read-file-meta", path: "src/review.py", file_size: 4096, line_range: { start: 12, end: 24 }, truncated: true } },
+        args: { path: "src/review.py" }, display_data: { kind: "read-file-meta", path: "src/review.py", file_size: 4096, line_range: { start: 12, end: 24 }, truncated: true } },
       { type: "tool-call", presentation: "activity", toolCallId: "context-terminal", toolName: "execute_terminal", status: "failed", awaitingUser: false,
-        intent: "执行验收命令", error: "失败后仍保留输出", args: { command: "printf review-output" }, display_data: { kind: "terminal-result", output: "review-output\nretained-output", command: "printf review-output", exit_code: 2 } },
+        error: "失败后仍保留输出", args: { intent: "执行验收命令", command: "printf review-output" }, display_data: { kind: "terminal-result", output: "review-output\nretained-output", command: "printf review-output", exit_code: 2 } },
       { type: "tool-call", presentation: "activity", toolCallId: "context-draft", toolName: "propose_agent_configuration", status: "completed", awaitingUser: false, args: {},
         display_data: { kind: "agent-configuration-draft", status: "draft", agent_id: "historical-helper", role: "历史角色", description: "历史说明", system_prompt: "历史指令" } },
-      { type: "tool-call", presentation: "quiet", toolCallId: "context-wait", toolName: "wait_messages", status: "completed", awaitingUser: false, intent: "不应显示的协调调用", args: {} },
+      { type: "tool-call", presentation: "quiet", toolCallId: "context-wait", toolName: "wait_messages", status: "completed", awaitingUser: false, args: {} },
     ] }],
   });
   await page.goto("/sessions/9");
@@ -132,7 +132,7 @@ test("继承历史共用文件、终端和错误展示，展开状态跨虚拟�
   await expect(turn.getByText(/L12-L24/)).toBeVisible();
   await expect(turn.getByText(/文件过大，已截断/)).toBeVisible();
   await expect(turn.getByText("失败后仍保留输出", { exact: true })).toBeVisible();
-  await expect(turn.getByText("不应显示的协调调用", { exact: true })).toHaveCount(0);
+  await expect(turn.locator('[data-tool-call-id="context-wait"]')).toHaveCount(0);
   await expect(turn.getByText(/继承的配置提案/)).toBeVisible();
   await expect(turn.getByText("未保存草稿", { exact: true })).toHaveCount(0);
   await expect(turn.getByRole("button", { name: "编辑配置", exact: true })).toHaveCount(0);

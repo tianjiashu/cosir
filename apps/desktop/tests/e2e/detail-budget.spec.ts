@@ -14,13 +14,13 @@ const longPatch = ["diff --git a/big.ts b/big.ts", "--- a/big.ts", "+++ b/big.ts
 const longLine = `${"x".repeat(50_000)}END_OF_OUTPUT`;
 const parts: TransportMessagePart[] = [
   { type: "text", text: "开始。" },
-  toolCallPart("search", "search_content", { status: "completed", intent: "搜索 needle", display_data: { kind: "content-search-results", pattern: "needle", path: ".", matches: rows, page: { offset: 0, total: 1000 }, match_count: 1000 } }),
-  toolCallPart("edit", "write_file", { status: "completed", intent: "写入大文件", display_data: { kind: "file-changes", changes: [{ path: "big.ts", status: "modified", patch: longPatch, insertions: 600, deletions: 0 }] } }),
-  toolCallPart("huge", "write_file", { status: "completed", intent: "写入超大文件", display_data: { kind: "file-changes", changes: [{ path: "huge.ts", status: "modified", patch: null, insertions: 90000, deletions: 3 }] } }),
-  toolCallPart("term", "execute_terminal", { status: "completed", intent: "打印长行", args: { command: "cat big.json" }, display_data: { kind: "terminal-result", command: "cat big.json", workdir: "/work", output: `${longLine}\n`, end: "exited", exit_code: 0 } }),
-  toolCallPart("few", "find_files", { status: "completed", intent: "找配置", display_data: { kind: "file-list", files: [{ path: "a.ts" }, { path: "b.ts" }], pattern: "*.ts", path: ".", page: { offset: 0, total: 2 }, match_count: 2 } }),
+  toolCallPart("search", "search_content", { status: "completed", display_data: { kind: "content-search-results", pattern: "needle", path: ".", matches: rows, page: { offset: 0, total: 1000 }, match_count: 1000 } }),
+  toolCallPart("edit", "write_file", { status: "completed", display_data: { kind: "file-changes", changes: [{ path: "big.ts", status: "modified", patch: longPatch, insertions: 600, deletions: 0 }] } }),
+  toolCallPart("huge", "write_file", { status: "completed", display_data: { kind: "file-changes", changes: [{ path: "huge.ts", status: "modified", patch: null, insertions: 90000, deletions: 3 }] } }),
+  toolCallPart("term", "execute_terminal", { status: "completed", args: { command: "cat big.json" }, display_data: { kind: "terminal-result", command: "cat big.json", workdir: "/work", output: `${longLine}\n`, end: "exited", exit_code: 0 } }),
+  toolCallPart("few", "find_files", { status: "completed", display_data: { kind: "file-list", files: [{ path: "a.ts" }, { path: "b.ts" }], pattern: "*.ts", path: ".", page: { offset: 0, total: 2 }, match_count: 2 } }),
   { type: "text", text: "然后委派。" },
-  toolCallPart("delegate", "delegate_task", { status: "completed", presentation: "standalone", intent: "委派长任务", args: { message: "任务说明。".repeat(600) }, display_data: { kind: "delegation-result", title: "子任务", child_agent_id: "worker" } }),
+  toolCallPart("delegate", "delegate_task", { status: "completed", presentation: "standalone", args: { message: "任务说明。".repeat(600) }, display_data: { kind: "delegation-result", title: "子任务", child_agent_id: "worker" } }),
   { type: "text", text: "告一段落。" },
 ];
 

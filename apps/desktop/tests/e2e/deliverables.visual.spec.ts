@@ -32,12 +32,12 @@ const OUTSIDE: TransportDeliverable[] = [
 function state(deliverables: TransportDeliverable[], withOffer = false): TransportState {
   const present: TransportMessagePart = {
     type: "tool-call", toolCallId: "call-present", toolName: "present_deliverables", presentation: "quiet",
-    args: { items: deliverables.map((item) => ({ target: item.key })) }, intent: null, status: "completed", error: null, awaitingUser: false,
+    args: { items: deliverables.map((item) => ({ target: item.key })) }, status: "completed", error: null, awaitingUser: false,
     deliverables,
   };
   const offer: TransportMessagePart = {
     type: "tool-call", toolCallId: "call-offer", toolName: "offer_next_step", presentation: "quiet",
-    args: { ask: "要导出成 PDF 吗？", replies: ["好，导出", "先不用"] }, intent: null, status: "completed", error: null, awaitingUser: false,
+    args: { ask: "要导出成 PDF 吗？", replies: ["好，导出", "先不用"] }, status: "completed", error: null, awaitingUser: false,
     display_data: { kind: "next-step", ask: "要导出成 PDF 吗？", replies: ["好，导出", "先不用"] },
   };
   const base = completedState(1, { id: "u-1", parts: [{ type: "text", text: "整理成报告", status: "completed" }] }, [
@@ -156,7 +156,7 @@ for (const theme of ["light", "dark"] as const) {
     test("V14 交付说明与多次交付：每次一张卡、说明在卡片顶部，叠在最终回复之上", async ({ page }) => {
       const noted = (id: string, deliverables: TransportDeliverable[], note: string): TransportMessagePart => ({
         type: "tool-call", toolCallId: id, toolName: "present_deliverables", presentation: "quiet",
-        args: { items: deliverables.map((item) => ({ target: item.key })), note }, intent: null, status: "completed", error: null, awaitingUser: false,
+        args: { items: deliverables.map((item) => ({ target: item.key })), note }, status: "completed", error: null, awaitingUser: false,
         display_data: { kind: "deliverables", note }, deliverables,
       });
       const base = completedState(1, { id: "u-1", parts: [{ type: "text", text: "整理成报告", status: "completed" }] }, [

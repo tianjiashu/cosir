@@ -36,7 +36,7 @@ const tool = (status: TransportToolCallPart["status"], extra: Partial<TransportT
 
 describe("assistant transport converter", () => {
   it("正文追加复用未变工具的 part/artifact；工具状态或展示数据改变时创建新版本", () => {
-    const source = { ...tool("running"), intent: "核对工具结果" };
+    const source = tool("running");
     const context = runningTurn(1);
     const before = toThreadMessage({ id: "a", role: "assistant", parts: [source, { type: "text", text: "开始" }] }, context);
     const after = toThreadMessage({ id: "a", role: "assistant", parts: [source, { type: "text", text: "开始继续" }] }, context);
@@ -49,8 +49,6 @@ describe("assistant transport converter", () => {
     if (settled.type !== "tool-call") throw new Error("expected tool call");
     expect(readToolArtifact(settled.artifact)).toMatchObject({ backendStatus: "completed", display_data: { output: "done" } });
     expect(readToolArtifact(first.artifact).backendStatus).toBe("running");
-    expect(readToolArtifact(first.artifact).intent).toBe("核对工具结果");
-    expect(readToolArtifact(settled.artifact).intent).toBe("核对工具结果");
   });
   it("乐观用户消息复用渲染上下文，正文胶囊与图片原样投影", () => {
     const command = { type: "add-message", message: { role: "user", parts: [

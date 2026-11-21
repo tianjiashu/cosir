@@ -35,7 +35,7 @@ test("a tooltip wraps a long unbroken file name inside its max width", async ({ 
   await request.post(`${API_ORIGIN}/__test__/reset`);
   await request.post(`${API_ORIGIN}/__test__/seed-mermaid`);
   const base = await readState(request, 42);
-  const read = toolCallPart("r", "read_image", { status: "completed", intent: "看截图", display_data: {
+  const read = toolCallPart("r", "read_image", { status: "completed", display_data: {
     kind: "image-read", images: [{ path: LONG_NAME, asset_id: "a".repeat(64), width: 320, height: 200 }], failures: [],
   } });
   await request.post(`${API_ORIGIN}/__test__/seed-state`, { data: { sessionId: 42, hold: true, state: {

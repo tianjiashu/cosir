@@ -35,7 +35,7 @@ export function segmentActivity(calls: readonly TransportToolCallPart[], board: 
   if (!executing.length) return unowned;
   const lead = executing.find(call => call.status === "running") ?? executing[0];
   const more = executing.length > 1 ? ` · 另 ${executing.length - 1} 项` : "";
-  return { label: toolHeading(lead.toolName, lead.args, lead.intent).title + more, animated: true, since: lead.startedAt ?? undefined };
+  return { label: toolHeading(lead.toolName, lead.args).title + more, animated: true, since: lead.startedAt ?? undefined };
 }
 
 /**

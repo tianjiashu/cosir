@@ -20,7 +20,6 @@ describe("detail availability without building body", () => {
     ["content-search-results", {}, "未找到匹配"],
     ["web-search-results", {}, "未找到匹配"],
     ["web-fetch-urls", {}, "未找到匹配"],
-    ["mcp-tool-result", { action: "list" }, "没有已启用的 MCP 服务"],
     ["skill-content", { action: "list" }, "没有可用 Skill"],
   ])("%s keeps an expandable empty-state detail", (kind, fields, label) => {
     const detail = resolve({ kind, ...fields })?.detail;
@@ -30,14 +29,14 @@ describe("detail availability without building body", () => {
 
   it.each([
     ["read-file-meta", {}], ["file-changes", { changes: [] }],
-    ["mcp-tool-result", { action: "call" }], ["skill-content", { action: "load" }],
+    ["mcp-tool-result", {}], ["skill-content", { action: "load" }],
     ["terminal-session", {}],
   ])("%s keeps summary-only payloads non-expandable", (kind, fields) => {
     expect(resolve({ kind, ...fields })?.detail).toBeUndefined();
   });
 
   it("mcp call results with images expand to thumbnails", () => {
-    const presentation = resolve({ kind: "mcp-tool-result", action: "call", server_name: "shots", tool_name: "capture", images: ["a".repeat(64)] });
+    const presentation = resolve({ kind: "mcp-tool-result", server_name: "shots", tool_name: "capture", images: ["a".repeat(64)] });
     // 服务与工具已在目标里，元信息不再重复。
     expect(presentation?.meta).toBe("1 张图片");
     expect(renderToStaticMarkup(<>{presentation!.detail!.render()}</>)).toContain("MCP 工具返回的图片");

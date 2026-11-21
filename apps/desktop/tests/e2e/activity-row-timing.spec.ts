@@ -36,14 +36,14 @@ test("the activity row names the current state and times only that state", async
   await expect(elapsed).toHaveText(/^[5-7]秒$/);
 
   // 执行：说调用意图，计时换成这次调用的起点。
-  const call = toolCallPart("read", "read_file", { status: "running", intent: "核对登录配置", args: { path: "config.ts" }, startedAt: ago(4) });
+  const call = toolCallPart("read", "execute_terminal", { status: "running", args: { intent: "核对登录配置", command: "cat config.ts" }, startedAt: ago(4) });
   await seed(request, turn([call], null));
   await expect(label).toHaveText("核对登录配置");
   await expect(elapsed).toHaveText(/^[4-6]秒$/);
 
   // 没有意图时退回动词；还在写参数（pending、没有起点）时不计时。
-  await seed(request, turn([{ ...call, intent: undefined, status: "pending", startedAt: null }], null));
-  await expect(label).toHaveText("读取文件");
+  await seed(request, turn([{ ...call, args: { command: "cat config.ts" }, status: "pending", startedAt: null }], null));
+  await expect(label).toHaveText("执行命令");
   await expect(elapsed).toHaveCount(0);
 
   // 下一个模型步：回到「思考中」，从头算，不接调用或上一次思考。

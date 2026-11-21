@@ -86,7 +86,7 @@ export type TurnLayout = {
   defaultProcessOpen: boolean;
 };
 
-export function callTitle(part: TransportToolCallPart): string { return toolHeading(part.toolName, part.args, part.intent).title; }
+export function callTitle(part: TransportToolCallPart): string { return toolHeading(part.toolName, part.args).title; }
 export function callVerb(part: TransportToolCallPart): string { return toolVerb(part.toolName); }
 export function isUnfinished(part: TransportToolCallPart): boolean { return part.status === "pending" || part.status === "running"; }
 export function visibleCall(part: TransportToolCallPart): boolean {

@@ -42,7 +42,7 @@ function askingState(): TransportState {
           { type: "text", text: "有三处需要你定。", status: "completed" },
           {
             type: "tool-call", toolCallId: CALL_ID, toolName: "ask_user", presentation: "standalone",
-            args: { questions: QUESTIONS }, intent: "确认登录方案", status: "pending", error: null,
+            args: { questions: QUESTIONS }, status: "pending", error: null,
             awaitingUser: true, display_data: { kind: "user-question", questions: QUESTIONS },
           },
         ] },
@@ -127,7 +127,7 @@ test("逐题作答：单选、多选加「其他」、批注、跳过，提交�
   })]);
 
   const row = page.locator(`[data-tool-call-id="${CALL_ID}"]`).filter({ has: page.locator('[data-slot="call-row"]') });
-  await expect(row).toContainText("确认登录方案");
+  await expect(row).toContainText("向你提问");
   await expect(row).toContainText("已作答");
   await expect(row).not.toContainText("等你操作");
   await row.locator('[data-slot="call-row"]').click();
