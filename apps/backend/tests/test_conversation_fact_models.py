@@ -21,11 +21,11 @@ from app.core.workflow.run_ledger import (
 from app.models.conversation_input import UserInputPresentation
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import ToolMessageMetadata
-from app.models.run_command import RunCommand
-from app.models.run_record import RunRecord
-from app.models.session_context import SessionContextRecord
-from app.models.session_extra import SessionExtra
-from app.models.session_record import SessionRecord
+from app.models.run.run_command import RunCommand
+from app.models.run.run_record import RunRecord
+from app.models.session.session_context import SessionContextRecord
+from app.models.session.session_extra import SessionExtra
+from app.models.session.session_record import SessionRecord
 from app.service.conversation.session_context_service import (
     SessionContextService,
 )
@@ -191,7 +191,7 @@ def test_run_service_prepares_new_command_for_model_and_persistence(monkeypatch,
     service = _input_service(monkeypatch, tmp_path)
     command = RunCommand(text=f'请阅读 <file path="{attachment_path}" />')
 
-    prepared = service.prepare(7, command, "test/m3", None, "main_agent")
+    prepared = service.prepare(7, command, "test/m3", None, "main_agent", "request_approval")
 
     # 模型正文与展示正文是同一份规范化胶囊文本。
     assert prepared.text == command.text
@@ -203,7 +203,9 @@ def test_prepare_returns_a_user_input_body_for_the_caller_to_queue(monkeypatch, 
     """投递方式是信封属性，由入队方按 Session 当时的阶段决定；这里只产出消息体。"""
     service = _input_service(monkeypatch, tmp_path)
 
-    body = service.prepare(7, RunCommand(text="检查项目"), "test/m3", None, "main_agent")
+    body = service.prepare(
+        7, RunCommand(text="检查项目"), "test/m3", None, "main_agent", "request_approval"
+    )
 
     assert isinstance(body, UserInputBody)
     assert body.text == "检查项目"
@@ -218,6 +220,7 @@ def test_input_preparation_keeps_run_options_out_of_message(monkeypatch, tmp_pat
         "test/m3",
         "high",
         "main_agent",
+        "request_approval",
     )
     assert queued.launch.reasoning_effort == "high"
     assert queued.launch.model_config_id == "test/m3"
@@ -243,7 +246,9 @@ def test_prepare_maps_missing_model_config_to_input_rejection(monkeypatch, tmp_p
     service._session = SimpleNamespace(get=lambda _session_id: SimpleNamespace(workspace_id=7))
 
     with pytest.raises(UserInputRejectedError) as caught:
-        service.prepare(7, RunCommand(text="你好"), "test/m3", None, "main_agent")
+        service.prepare(
+            7, RunCommand(text="你好"), "test/m3", None, "main_agent", "request_approval"
+        )
 
     assert caught.value.code == "MODEL_CONFIG_UNAVAILABLE"
 

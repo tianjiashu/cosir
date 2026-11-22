@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
-from app.models import SessionRecord
-from app.models.session_kind import SessionType
+from app.models.session.session_kind import SessionType
+from app.models.session.session_record import SessionRecord
 from app.service.depends import (
     close_service_dependencies,
     get_run_crud,

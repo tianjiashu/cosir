@@ -19,11 +19,11 @@ from app.core.events import (
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
 )
-from app.models.enums.run_status import RunStatus
 from app.models.message_metadata import AssistantMessageMetadata
-from app.models.run_record import RunRecord
-from app.models.session_context import SessionContextRecord
-from app.models.session_record import SessionRecord
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import RunStatus
+from app.models.session.session_context import SessionContextRecord
+from app.models.session.session_record import SessionRecord
 
 NOW = datetime(2026, 11, 7, tzinfo=UTC)
 

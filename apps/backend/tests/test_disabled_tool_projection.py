@@ -8,7 +8,7 @@ from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
 )
 from app.models.message_metadata import ToolMessageMetadata
-from app.models.session_context import (
+from app.models.session.session_context import (
     SessionContextRecord,
 )
 

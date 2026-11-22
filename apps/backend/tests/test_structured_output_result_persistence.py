@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.events import RunResultUpdatedEvent, RunStatusChangedEvent
-from app.models.enums.run_status import RunTransition
+from app.models.run.run_status import RunTransition
 from app.service.depends import (
     get_run_crud,
     get_run_ledger,

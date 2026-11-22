@@ -12,7 +12,12 @@ def _message(text: str = "hello", **extra: object) -> dict[str, object]:
 
 def _send(**overrides: object) -> SendMessageRequest:
     return SendMessageRequest.model_validate(
-        {"message": _message(), "modelConfigId": "test/m1", **overrides}
+        {
+            "message": _message(),
+            "modelConfigId": "test/m1",
+            "terminalPermissionMode": "request_approval",
+            **overrides,
+        }
     )
 
 
@@ -37,6 +42,7 @@ def test_text_parts_are_joined_and_images_map_to_asset_ids() -> None:
                 ],
             },
             "modelConfigId": "test/m1",
+            "terminalPermissionMode": "request_approval",
         }
     )
 

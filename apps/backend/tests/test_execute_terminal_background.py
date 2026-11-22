@@ -14,7 +14,9 @@ from typing import Any
 
 import pytest
 
+from app.core.file_access.write_attribution import write_attribution
 from app.core.tool.schemas import ToolExecutionContext
+from app.models.file_access import FileVersion
 from app.tools.terminal_runtime.command.command_output import CommandOutput as _CommandOutput
 from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
 from app.tools.terminal_runtime.permissions.policy import TerminalExecutionPolicy
@@ -303,6 +305,9 @@ def test_unrecognized_write_runs_and_reports_the_actual_change(tmp_path) -> None
     [change] = audit.changes
     assert not change.recognized and change.previously_read is False
     assert target.read_text() == "after"
+    # 审计看到的变化记到本会话名下：别的会话读过这个文件时，变化通知据此写明修改者。
+    writer = write_attribution.writer_of(target.resolve(), FileVersion.of(target))
+    assert writer is not None and (writer.session_id, writer.confirmed) == (_SESSION_ID, False)
 
 
 def test_background_reservation_lasts_until_command_settles(tmp_path, delivered) -> None:

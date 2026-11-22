@@ -19,6 +19,7 @@ from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolCall, ToolDefinition
 from app.core.workflow import decision_expiry
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.message_queue.session_message import (
     AgentMessageBody,
@@ -31,12 +32,11 @@ from app.core.workflow.message_queue.session_message import (
 from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.nodes import prepare_input_node, tools_node
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.enums.react_route import ReactRoute
 from app.models.message_metadata import ToolMessageMetadata
 from tests.runtime_context_stub import run_batch, runtime_stub
 
 # prepare_input 用替身上下文：每步的配置对账另有专门测试。
-pytestmark = pytest.mark.usefixtures("skip_configuration_reconcile")
+pytestmark = pytest.mark.usefixtures("skip_request_reconcile")
 
 _CALL = {
     "id": "call-hitl",

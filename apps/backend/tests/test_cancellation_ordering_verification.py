@@ -43,7 +43,7 @@ from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_c
 from app.core.workflow.nodes import tools_node
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import ToolMessageMetadata
-from app.models.session_extra import SessionExtra
+from app.models.session.session_extra import SessionExtra
 from tests.runtime_context_stub import admitting, runtime_stub
 from tests.transport_fixtures import consumed
 

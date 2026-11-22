@@ -33,8 +33,8 @@ from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolObservation
 from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
 from app.models.conversation_input import UserInputPresentation
-from app.models.enums.run_status import RunStatus
 from app.models.message_metadata import ToolMessageMetadata
+from app.models.run.run_status import RunStatus
 from tests.transport_fixtures import consumed, queue_user_input
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。

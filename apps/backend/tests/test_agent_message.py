@@ -22,9 +22,9 @@ from app.core.workflow.message_queue.session_message import AgentMessageBody, Ru
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_metadata import UserMessageMetadata
-from app.models.run_record import RunRecord
-from app.models.session_context import SessionContextRecord
-from app.models.session_record import SessionRecord
+from app.models.run.run_record import RunRecord
+from app.models.session.session_context import SessionContextRecord
+from app.models.session.session_record import SessionRecord
 
 _SOURCE = MessageSource(session_id=4, name='主会话 "A"')
 # 形如胶囊标签的文字：用户输入会去校验指针，Agent 消息只当文字。

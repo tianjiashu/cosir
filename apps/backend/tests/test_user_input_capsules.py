@@ -10,7 +10,7 @@ import app.assistant_transport.service.user_input_service as user_input_module
 from app.assistant_transport.service.user_input_service import UserInputService
 from app.core.capsules.capsule_grammar import FileCapsule, serialize_capsule
 from app.models.errors.input_errors import UserInputRejectedError
-from app.models.run_command import RunCommand
+from app.models.run.run_command import RunCommand
 from tests.model_config_fixtures import model_config_record, model_configs
 
 _SESSION_ID = 7
@@ -43,7 +43,9 @@ def _service(monkeypatch: pytest.MonkeyPatch, workspace_root: Path) -> UserInput
 
 
 def _prepare(service: UserInputService, text: str):
-    return service.prepare(_SESSION_ID, RunCommand(text=text), "test/m1", None, "main_agent")
+    return service.prepare(
+        _SESSION_ID, RunCommand(text=text), "test/m1", None, "main_agent", "request_approval"
+    )
 
 
 def _write_skill(root: Path, name: str, *, disabled: list[str]) -> None:

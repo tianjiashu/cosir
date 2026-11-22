@@ -20,9 +20,9 @@ from app.core.workflow.message_queue.session_message import (
     SessionMessage,
     UserInputBody,
 )
-from app.models import RunRecord
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.enums.run_status import RunStatus
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import RunStatus
 
 _LAUNCH = RunLaunch(model_config_id="test/m1")
 _OTHER = RunLaunch(model_config_id="test/m2")

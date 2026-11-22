@@ -2,7 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
 import { expect, test } from "@playwright/test";
-import { backendBaseUrl, desktopFetch, launchDesktop, unstartedSession, waitForAppShell } from "./desktop-app";
+import {
+  backendBaseUrl,
+  capabilityFor,
+  captureCapability,
+  desktopFetch,
+  launchDesktop,
+  unstartedSession,
+  waitForAppShell,
+} from "./desktop-app";
 
 /** 真实 Chromium 请求钩子和 ASGI 边界：SSE 由桌面冒烟覆盖，此处覆盖 WS、frame 与重定向。 */
 test("keeps local control identity in the main frame and supports real terminal WebSocket input", async () => {
@@ -86,5 +94,46 @@ test("keeps local control identity in the main frame and supports real terminal 
     await app.close();
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+/** 宿主每次拉起后端都重新发一份身份：重启后旧凭据必须失效，而页面无需任何动作即可继续通信。 */
+test("reissues the local control identity when the backend restarts", async () => {
+  const { app, page } = await launchDesktop();
+  try {
+    await waitForAppShell(page);
+    const before = await backendBaseUrl(page);
+    const beforeToken = capabilityFor(before);
+    expect(beforeToken).toBeTruthy();
+    expect(await page.evaluate((base) => fetch(`${base}/workspaces`).then((r) => r.status), before)).toBe(200);
+    const generation = (await page.evaluate(() => window.cosirHost!.backend.snapshot())).generation;
+
+    await page.evaluate(() => window.cosirHost!.backend.restart());
+    // 换代判据用 generation 而不是地址：新后端可能恰好复用了旧端口。
+    await expect
+      .poll(
+        async () => {
+          const snapshot = await page.evaluate(() => window.cosirHost!.backend.snapshot());
+          return snapshot.status.state === "ready" && snapshot.generation > generation;
+        },
+        { timeout: 120_000, intervals: [500] },
+      )
+      .toBe(true);
+    const restarted = await page.evaluate(() => window.cosirHost!.backend.snapshot());
+    const after = restarted.backendBaseUrl!;
+    const afterToken = await captureCapability(page, after);
+
+    expect(afterToken).not.toBe(beforeToken);
+    // 新的一代由宿主自动注入新身份，页面不用做任何事就继续能通信。
+    expect(await page.evaluate((base) => fetch(`${base}/workspaces`).then((r) => r.status), after)).toBe(200);
+
+    // 直连进程不经过宿主钩子：旧凭据与不带凭据都必须被拒绝。
+    const withOldToken = await fetch(`${after}/workspaces`, {
+      headers: { "X-Cosir-Capability": beforeToken! },
+    });
+    expect(withOldToken.status).toBe(403);
+    expect((await fetch(`${after}/workspaces`)).status).toBe(403);
+  } finally {
+    await app.close();
   }
 });

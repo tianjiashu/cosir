@@ -27,7 +27,6 @@ from app.core.tool.multi_agent.session_tool_scope import (
     main_agent_tool_surface,
     tools_for_session,
 )
-from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import (
     TOOL_BROWSER_NAVIGATE,
@@ -35,16 +34,17 @@ from app.core.tool.schemas import (
     TOOL_PROPOSE_AGENT_CONFIGURATION,
     TOOL_READ_FILE,
     TOOL_SEARCH,
-    TOOL_SESSION_SEND,
     TOOL_SESSION_LIST,
     TOOL_SESSION_READ,
+    TOOL_SESSION_SEND,
     TOOL_SESSION_STOP,
     ToolCall,
     ToolDefinition,
     ToolExecutionContext,
 )
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.tool_registry import ToolRegistry
-from app.models.session_kind import SessionType
+from app.models.session.session_kind import SessionType
 from app.models.tool_result_facts import ToolResultFacts
 from app.service.configuration.agents.builtin_agents import BUILTIN_CHILD_AGENTS
 from tests.live_cold_support import LiveColdEnv, tool_call, tool_parts

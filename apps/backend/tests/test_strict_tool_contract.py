@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from app.config.configuration import get_tool_registry
 from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
-from app.models.session_tool_surface import SessionToolSurface
+from app.models.session.session_tool_surface import SessionToolSurface
 from app.session_runtime.session_runtime_space import SessionRuntimeSpace
 from app.tools.tool_models import TerminalWriteArgs
 from app.tools.tool_models.read_file_args import ReadFileArgs

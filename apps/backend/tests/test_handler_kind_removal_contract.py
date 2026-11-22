@@ -47,7 +47,7 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.nodes import tools_node
-from app.models.session_extra import SessionExtra
+from app.models.session.session_extra import SessionExtra
 from tests.runtime_context_stub import admitting, run_batch, runtime_stub
 from tests.tool_executor_fakes import emit_running
 

@@ -7,9 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.config.environment_field_catalog import ENVIRONMENT_FIELDS
 from app.core.tool.multi_agent.derivation import DERIVATIONS, child_depth
-from app.models.session_extra import SessionExtra
+from app.models.session.session_extra import SessionExtra
+from app.service.configuration.environment.field_catalog import ENVIRONMENT_FIELDS
 from app.storage.crud.session_crud import SessionCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from tests.session_extra_fixtures import fork_extra
@@ -51,7 +51,7 @@ def test_only_sessions_this_agent_derived_answer_to_it() -> None:
     """
     from datetime import UTC, datetime
 
-    from app.models.session_record import SessionRecord
+    from app.models.session.session_record import SessionRecord
 
     now = datetime.now(UTC)
 

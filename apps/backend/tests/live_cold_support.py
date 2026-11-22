@@ -32,8 +32,8 @@ from app.core.workflow.message_queue.session_message import (
     UserInputBody,
 )
 from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.run_record import RunRecord
-from app.models.session_record import SessionRecord
+from app.models.run.run_record import RunRecord
+from app.models.session.session_record import SessionRecord
 from app.service import depends
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces as spaces
 from app.storage.model.session_model import SessionModel

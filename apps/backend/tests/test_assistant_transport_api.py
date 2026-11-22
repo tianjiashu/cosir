@@ -15,8 +15,8 @@ from app.assistant_transport.api import (
     assistant_transport_attach,
 )
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.models.enums.run_status import RunTransition
-from app.models.session_extra import SessionExtra
+from app.models.run.run_status import RunTransition
+from app.models.session.session_extra import SessionExtra
 from app.service.depends import get_workspace_service
 from app.service.recover_service import RecoverService
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces

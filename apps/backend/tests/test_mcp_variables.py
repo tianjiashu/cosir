@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.api.configuration import extensions
 from app.app import app
-from app.service.configuration.environment_configuration_service import (
+from app.service.configuration.environment.configuration_service import (
     EnvironmentConfigurationError,
     EnvironmentConfigurationService,
 )
@@ -156,7 +156,7 @@ def _env_service(
 ) -> EnvironmentConfigurationService:
     root = tmp_path / "root"
     root.mkdir()
-    module = "app.service.configuration.environment_configuration_service"
+    module = "app.service.configuration.environment.configuration_service"
     monkeypatch.setattr(f"{module}.system_cosir_dir", lambda: root)
     monkeypatch.setattr(f"{module}.system_env_file", lambda: root / ".env")
     return EnvironmentConfigurationService()

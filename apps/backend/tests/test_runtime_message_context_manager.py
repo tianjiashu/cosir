@@ -341,7 +341,7 @@ def test_add_message_replaces_paired_tool_result_row_in_place() -> None:
 def test_notice_and_empty_draft_do_not_steal_the_first_visible_input_turn():
     """后台唤醒只写下空草稿后中断，同 Run 收到用户输入仍应有正常的用户气泡。"""
     from app.assistant_transport.projection.snapshot_rebuild import _turn_messages
-    from app.models.session_context import SessionContextRecord
+    from app.models.session.session_context import SessionContextRecord
 
     manager = _manager(_ContextStore(0))
     values = [

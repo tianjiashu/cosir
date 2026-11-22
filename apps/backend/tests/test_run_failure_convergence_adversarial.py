@@ -37,16 +37,16 @@ from app.config.constant import Constant
 from app.core.agents.agent_runtime_config import AgentRuntimeConfig
 from app.core.llm_provider.model_failure import classify_model_failure
 from app.core.workflow import run_driver
+from app.core.workflow import run_failure as failure_catalog
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
-from app.core.workflow.workflow_run_failure import WorkflowRunFailure
-from app.models import run_failure as failure_catalog
-from app.models.enums.error_kind import ErrorKind
-from app.models.enums.run_status import RunStatus, RunTransition
-from app.models.run_failure import (
+from app.core.workflow.run_failure import (
+    WorkflowRunFailure,
     run_failure_message,
     run_terminal_error,
 )
-from app.models.run_record import RunRecord
+from app.models.enums.error_kind import ErrorKind
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import RunStatus, RunTransition
 
 # --------------------------------------------------------------------------------------
 # 测试替身

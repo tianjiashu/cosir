@@ -27,8 +27,8 @@ from app.core.workflow.message_queue.session_message import (
     UserInputBody,
 )
 from app.models.conversation_input import UserInputPresentation
-from app.models.enums.run_status import RunTransition
-from app.models.errors.session_command_errors import SessionCommandConflictError
+from app.models.run.run_status import RunTransition
+from app.models.session.session_command_errors import SessionCommandConflictError
 from app.tools.tool_handler.terminal.command_job import CommandConclusion
 from tests.command_job_fakes import FakeCommandJob
 

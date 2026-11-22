@@ -9,9 +9,9 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.workflow.decision_expiry import expire_decisions_after_run
-from app.models.errors.session_command_errors import SessionCommandConflictError
 from app.models.message_metadata import ToolMessageMetadata
-from app.models.session_context import SessionContextRecord
+from app.models.session.session_command_errors import SessionCommandConflictError
+from app.models.session.session_context import SessionContextRecord
 from app.service import depends
 from app.service.conversation import tool_decision_service
 

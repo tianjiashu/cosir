@@ -1,16 +1,19 @@
-"""Session 推送：状态只在有订阅者时读库、同一 Session 只留最新值；目录失效按工作区去重、只收侧栏 Session；
-流先发整表，再分别发状态变化与目录失效。"""
+"""Session 推送：状态只在有订阅者时读库、同一 Session 只留最新值，终端批准计入显示它的会话；
+目录失效按工作区去重、只收侧栏 Session；流先发整表，再分别发状态变化与目录失效。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
 from app.api.session_feed_api import session_feed_stream
-from app.models.session_kind import SessionType
-from app.models.session_status import SessionStatus
+from app.core.tool.terminal_approval import TerminalApprovalRegistry
+from app.models.session.session_kind import SessionType
+from app.models.session.session_status import SessionStatus
+from app.service.session import session_feed as session_feed_module
 from app.service.session.session_feed import CatalogChange, SessionFeed
 
 
@@ -80,6 +83,39 @@ async def test_subscribers_get_the_latest_status_per_session() -> None:
     feed.publish_status(1)
     await asyncio.sleep(0)
     assert subscription.take().statuses == {}
+
+
+@pytest.mark.asyncio
+async def test_pending_terminal_approvals_count_as_awaiting_on_the_display_session(monkeypatch) -> None:
+    registry = TerminalApprovalRegistry()
+    monkeypatch.setattr(session_feed_module, "terminal_approvals", registry)
+    feed, _ = _feed({1: SessionStatus("running", 1), 2: SessionStatus("running", 0)})
+    # 子 Agent 2 的批准冒泡到用户会话 1：计在显示它的会话上，不计在发起方。
+    request = registry.request(  # noqa: S604 - 登记测试描述，不运行 shell
+        origin_session_id=2,
+        display_session_id=1,
+        run_id=5,
+        tool_call_id="call-1",
+        command="ls",
+        shell="zsh",
+        cwd=str(Path.cwd()),
+        network=False,
+        write_roots=(),
+        justification="",
+    )
+    assert feed.statuses() == {1: SessionStatus("running", 2), 2: SessionStatus("running", 0)}
+
+    subscription = feed.subscribe(asyncio.get_running_loop())
+    feed.publish_status(1)
+    await asyncio.sleep(0)
+    assert subscription.take().statuses == {1: SessionStatus("running", 2)}
+
+    registry.cancel(request)
+    feed.publish_status(1)
+    await asyncio.sleep(0)
+    assert subscription.take().statuses == {1: SessionStatus("running", 1)}
+    assert feed.statuses()[1] == SessionStatus("running", 1)
+    feed.unsubscribe(subscription)
 
 
 @pytest.mark.asyncio

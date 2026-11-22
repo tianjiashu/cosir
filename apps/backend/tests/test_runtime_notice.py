@@ -20,11 +20,11 @@ from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.nodes import prepare_input_node
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.message_metadata import NoticeEntry
-from app.models.session_kind import SessionType
+from app.models.session.session_kind import SessionType
 from tests.runtime_context_stub import runtime_stub
 
 # prepare_input 用替身上下文：每步的配置对账另有专门测试。
-pytestmark = pytest.mark.usefixtures("skip_configuration_reconcile")
+pytestmark = pytest.mark.usefixtures("skip_request_reconcile")
 
 
 def _space(mailbox: RunMailbox) -> SimpleNamespace:

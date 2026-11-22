@@ -162,7 +162,7 @@ def test_delegate_writes_the_child_depth(
     """
     from types import SimpleNamespace
 
-    from app.models.session_extra import SessionExtra
+    from app.models.session.session_extra import SessionExtra
 
     (tmp_path / "pkg" / "web").mkdir(parents=True)
     (tmp_path / "docs").mkdir()

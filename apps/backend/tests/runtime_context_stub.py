@@ -24,7 +24,7 @@ from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.run_usage_stats import (
     RunUsageStats,
 )
-from app.models.session_extra import SessionExtra
+from app.models.session.session_extra import SessionExtra
 from app.service import depends as service_depends
 
 

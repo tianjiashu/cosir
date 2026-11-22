@@ -52,7 +52,7 @@ def test_run_status_transition_drop_is_logged() -> None:
     """终态迁移被白名单丢弃时同样必须留痕（completed 不可逆分支）。"""
 
     from app.core.events import RunStatusChangedEvent
-    from app.models.enums.run_status import RunStatus
+    from app.models.run.run_status import RunStatus
 
     settled = {
         **_SNAPSHOT,

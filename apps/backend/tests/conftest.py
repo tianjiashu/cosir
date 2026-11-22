@@ -156,15 +156,17 @@ def restore_backend_logging_state() -> Iterator[None]:
 
 
 @pytest.fixture
-def skip_configuration_reconcile(monkeypatch: pytest.MonkeyPatch) -> None:
-    """prepare_input 节点单测用替身上下文（没有工具名与配置基准）：显式关掉每步的配置对账。
+def skip_request_reconcile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """prepare_input 节点单测用替身上下文（没有工具名、配置基准与读取证据）：显式关掉每次请求前的
+    配置对账与读过的文件对账。
 
-    对账本身由 ``test_configuration_notice.py`` 覆盖；走真实上下文的用例不用它。
+    对账本身由 ``test_configuration_notice.py`` 与 ``test_read_change_notice.py`` 覆盖；走真实上下文的用例不用它。
     """
 
     from app.core.workflow.nodes import prepare_input_node
 
     monkeypatch.setattr(prepare_input_node, "_reconcile_configuration", lambda: None)
+    monkeypatch.setattr(prepare_input_node, "_reconcile_read_files", lambda: None)
 
 
 @pytest.fixture(autouse=True)

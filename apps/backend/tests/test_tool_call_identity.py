@@ -9,7 +9,7 @@ import asyncio
 import pytest
 
 from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_surface
-from app.models.errors.session_command_errors import SessionCommandConflictError
+from app.models.session.session_command_errors import SessionCommandConflictError
 from app.service import depends
 from app.service.conversation.tool_decision_service import ToolDecisionService
 from app.tools.tool_handler.terminal.command_results import command_results

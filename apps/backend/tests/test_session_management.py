@@ -16,11 +16,11 @@ from app.core.tool.session_management.session_list import SessionListTool
 from app.core.tool.session_management.session_stop import SessionStopTool
 from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
-from app.models.run_record import RunRecord
-from app.models.session_context import SessionContextRecord
-from app.models.session_extra import SessionExtra, SessionFork, SessionForkLaunch
-from app.models.session_kind import SessionType
-from app.models.session_record import SessionRecord
+from app.models.run.run_record import RunRecord
+from app.models.session.session_context import SessionContextRecord
+from app.models.session.session_extra import SessionExtra, SessionFork, SessionForkLaunch
+from app.models.session.session_kind import SessionType
+from app.models.session.session_record import SessionRecord
 from app.service.session.session_service import SessionService
 from app.storage.crud.run_crud import RunCrud
 from app.storage.crud.session_context_crud import SessionContextCrud

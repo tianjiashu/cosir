@@ -28,7 +28,7 @@ from app.core.events import (
     WorkflowEventEnvelope,
 )
 from app.models.conversation_input import UserInputPresentation
-from app.models.enums.run_status import RunStatus
+from app.models.run.run_status import RunStatus
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
 _RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)

@@ -13,8 +13,8 @@ from app.core.tool.multi_agent.delegate_task import DelegateTaskTool
 from app.core.tool.session_management.progress import SessionProgress
 from app.core.tool.session_management.session_read import SessionReadTool
 from app.models.message_metadata import ToolMessageMetadata
-from app.models.run_record import RunRecord
-from app.models.session_context import SessionContextRecord
+from app.models.run.run_record import RunRecord
+from app.models.session.session_context import SessionContextRecord
 
 
 def _run(

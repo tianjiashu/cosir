@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 
 from app.core.tool.multi_agent import derived_report
-from app.models import RunStatus
+from app.models.run.run_status import RunStatus
 from app.service import depends
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 

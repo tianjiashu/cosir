@@ -12,7 +12,7 @@ from app.api.workspaces_api import delete_workspace as delete_workspace_endpoint
 from app.models.conversation_input import UserInputPresentation
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.models.message_metadata import UserMessageMetadata
-from app.models.session_context import SessionContextRecord
+from app.models.session.session_context import SessionContextRecord
 from app.service.depends import (
     close_service_dependencies,
     get_run_crud,

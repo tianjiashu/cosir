@@ -13,7 +13,7 @@ import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.session_management import addressing, session_send
-from app.models.session_record import SessionRecord
+from app.models.session.session_record import SessionRecord
 from app.tools.tool_handler.terminal.command_results import command_results
 from tests.session_extra_fixtures import fork_extra
 
@@ -253,7 +253,7 @@ def test_deleted_fork_model_is_rejected_before_enqueue(
 ):
     """Real model deletion + session_send preparation: a frozen ID never bypasses admission."""
     from app.core.tool.multi_agent.agent_message import prepare_agent_message
-    from app.models.session_kind import SessionType
+    from app.models.session.session_kind import SessionType
     from app.service.depends import get_model_config_service
     from app.storage.crud.session_crud import SessionCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud

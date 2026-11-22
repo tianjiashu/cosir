@@ -1,5 +1,6 @@
 """执行批准、路径策略和沙箱外观察的行为回归；原生隔离另由 Rust 测试覆盖。"""
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -7,15 +8,18 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.core.session_actor import SessionActor
 from app.core.tool.schemas import ToolExecutionContext
-from app.models.errors.session_command_errors import SessionCommandConflictError
-from app.models.session_kind import SessionType
+from app.core.tool.terminal_approval import terminal_approvals
+from app.core.workflow.execution_state.run_mailbox import RunMailbox
+from app.models.session.session_command_errors import SessionCommandConflictError
+from app.models.session.session_kind import SessionType
 from app.models.terminal_permissions import TerminalPermissions
+from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.shell.file_access.command_effects import TerminalRead
 from app.tools.shell.file_access.read_evidence import TerminalReadEvidence
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.terminal_runtime.permissions import policy as policy_module
-from app.tools.terminal_runtime.permissions.approval_registry import terminal_approvals
 from app.tools.terminal_runtime.permissions.policy import TerminalExecutionPolicy
 from app.tools.tool_handler.terminal import execute_terminal as module
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
@@ -45,6 +49,9 @@ def terminal(tmp_path, monkeypatch):
             )
         ),
     )
+    space = SimpleNamespace(session_id=1, mailbox=RunMailbox(), operation=threading.RLock)
+    space.actor = SessionActor(space)
+    monkeypatch.setattr(session_runtime_spaces, "get_or_create", lambda _: space)
     calls = []
 
     class Backend:
@@ -179,7 +186,7 @@ def test_full_access_needs_no_approval(terminal):
 
 
 def test_cancel_racing_with_approval_reports_the_actual_winner(monkeypatch, tmp_path):
-    from app.tools.terminal_runtime.permissions.approval_registry import TerminalApprovalRegistry
+    from app.core.tool.terminal_approval import TerminalApprovalRegistry
 
     registry = TerminalApprovalRegistry()
     request = registry.request(  # noqa: S604 - 登记权限请求，不调用 shell
@@ -278,7 +285,7 @@ def test_old_child_background_result_cannot_restore_full_access(
 def test_terminal_notice_uses_frozen_run_and_is_announced_once():
     from app.core.workflow.drive_notices import _terminal_permissions
     from app.models.message_metadata import NoticeEntry
-    from app.models.session_extra import SessionExtra
+    from app.models.session.session_extra import SessionExtra
 
     rc = SimpleNamespace(
         run=SimpleNamespace(id=7, terminal_permission_mode="request_approval"),

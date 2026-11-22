@@ -14,7 +14,7 @@ from app.assistant_transport.service.assistant_transport_service import Assistan
 from app.core.tool.schemas.decision_payload import DecisionPayload
 from app.core.workflow.message_queue.session_message import DecisionBody, SessionMessage
 from app.models.errors.input_errors import UserInputRejectedError
-from app.models.errors.session_command_errors import SessionCommandConflictError
+from app.models.session.session_command_errors import SessionCommandConflictError
 from app.service.conversation import tool_decision_service as module
 
 _SESSION_ID = 3

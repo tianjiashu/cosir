@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -23,7 +25,7 @@ from app.core.workflow.message_queue.session_message import (
 )
 from app.core.workflow.message_queue.session_message_queue import SessionMessageQueue
 from app.models.conversation_input import UserInputPresentation
-from app.models.errors.session_command_errors import SessionCommandConflictError
+from app.models.session.session_command_errors import SessionCommandConflictError
 
 _LAUNCH = RunLaunch(model_config_id="test/m5")
 
@@ -36,14 +38,15 @@ def _input(text: str) -> SessionMessage:
 @pytest.fixture
 def harness(canonical_store, monkeypatch):
     queue = SessionMessageQueue()
+    actor = SimpleNamespace(accept_immediate_input=AsyncMock())
+    space = SimpleNamespace(async_operation=nullcontext, actor=actor)
     monkeypatch.setattr(service_module, "main_db_factory", lambda: canonical_store.factory)
     monkeypatch.setattr(
         service_module,
         "session_runtime_spaces",
         SimpleNamespace(
-            enqueue=lambda session_id, message, db=None: queue.put(
-                session_id, message, db=db
-            )
+            get_or_create=lambda _id: space,
+            enqueue=lambda session_id, message, db=None: queue.put(session_id, message, db=db),
         ),
     )
     refreshed: list[int] = []
@@ -52,7 +55,11 @@ def harness(canonical_store, monkeypatch):
     service._sessions = SimpleNamespace(get_session=lambda _session_id: None)
     service._states = SimpleNamespace(refresh_queued_messages=refreshed.append)
     return SimpleNamespace(
-        queue=queue, service=service, refreshed=refreshed, session_id=canonical_store.session.id
+        queue=queue,
+        service=service,
+        refreshed=refreshed,
+        actor=actor,
+        session_id=canonical_store.session.id,
     )
 
 
@@ -71,6 +78,7 @@ async def test_send_now_requeues_as_immediate_with_a_new_identity(harness) -> No
     assert rows[1].id > target
     assert rows[1].body.launch == _LAUNCH
     assert harness.refreshed == [harness.session_id]
+    harness.actor.accept_immediate_input.assert_awaited_once()
 
 
 async def test_delete_withdraws_only_the_target(harness) -> None:
@@ -91,6 +99,7 @@ async def test_consumed_message_is_a_non_retryable_conflict(harness, command) ->
     assert caught.value.code == "MESSAGE_CONSUMED"
     assert caught.value.retryable is False
     assert harness.refreshed == []
+    harness.actor.accept_immediate_input.assert_not_awaited()
 
 
 @pytest.mark.parametrize("command", ["send_queued_now", "delete_queued"])
@@ -100,8 +109,10 @@ async def test_non_user_input_is_rejected_and_kept(harness, command) -> None:
         harness.session_id,
         SessionMessage.of(
             BackgroundResultBody(
-                ended_at="2026-01-01T00:01:00+00:00", tool_call_id="call-probe",
-                tool_name="execute_terminal", tool_result="x",
+                ended_at="2026-01-01T00:01:00+00:00",
+                tool_call_id="call-probe",
+                tool_name="execute_terminal",
+                tool_result="x",
             )
         ),
     )
@@ -110,3 +121,4 @@ async def test_non_user_input_is_rejected_and_kept(harness, command) -> None:
         await getattr(harness.service, command)(harness.session_id, result)
 
     assert [row.id for row in harness.queue.pending_nowait(harness.session_id)] == [result]
+    harness.actor.accept_immediate_input.assert_not_awaited()

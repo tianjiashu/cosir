@@ -10,26 +10,29 @@ from app.core.llm_provider.message_codec import assistant_message
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.schemas import AwaitMessages, ToolCall, ToolObservation
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.session_message import (
     BackgroundResultBody,
     NoticeBody,
+    RunLaunch,
     SessionMessage,
+    UserInputBody,
 )
 from app.core.workflow.node_helper import model_stream_state_machine as streaming
 from app.core.workflow.node_helper import tool_observation_projection as projection
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import observation_node, prepare_input_node, tools_node
-from app.models.enums.react_route import ReactRoute
-from app.models.enums.run_status import RunTransition
-from app.models.session_extra import SessionExtra
+from app.models.conversation_input import UserInputPresentation
+from app.models.run.run_status import RunTransition
+from app.models.session.session_extra import SessionExtra
 from tests.runtime_context_stub import install_runtime_singletons, run_batch, runtime_stub
 from tests.sdk_fixtures import sdk_completion
 from tests.tool_executor_fakes import emit_running
 
 # prepare_input 用替身上下文：每步的配置对账另有专门测试。
-pytestmark = pytest.mark.usefixtures("skip_configuration_reconcile")
+pytestmark = pytest.mark.usefixtures("skip_request_reconcile")
 
 
 def _raw(call_id: str = "call-1", arguments: str = "{}") -> dict:
@@ -521,3 +524,73 @@ def test_observation_persists_all_results_before_events(monkeypatch) -> None:
 
     assert order == ["persist", "visible", "persist", "hidden"]
     assert [item.status for item in written_metadata] == ["completed", "completed"]
+
+
+@pytest.mark.parametrize("arrives_during_call", [False, True])
+def test_new_user_input_closes_remaining_calls_without_replaying_or_changing_run(
+    monkeypatch, arrives_during_call
+):
+    runtime = runtime_stub()
+    install_runtime_singletons(runtime)
+    calls, events = [], []
+    message = SessionMessage.of(
+        UserInputBody(
+            text="changed instruction",
+            launch=RunLaunch(model_config_id="test/m1"),
+            presentation=UserInputPresentation(text="changed instruction"),
+        ),
+        message_id=10,
+    )
+
+    def run_call(_rc, call, *_args):
+        calls.append(call.call_id)
+        runtime.mailbox.post(message)
+        return ToolObservation(
+            tool_name="read_file",
+            tool_call_id=call.call_id,
+            status="success",
+            content="actual result",
+        )
+
+    if not arrives_during_call:
+        runtime.mailbox.post(message)
+    monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(
+        tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge)
+    )
+    monkeypatch.setattr(tools_node, "_execute_call", run_call)
+    monkeypatch.setattr(tools_node, "emit", events.append)
+    patch = asyncio.run(
+        tools_node._tools_node(
+            _state(ToolBatch(calls=[_raw("first"), _raw("second"), _raw("third")]))
+        )
+    )
+    observations = patch["batch"].observations
+    assert calls == (["first"] if arrives_during_call else [])
+    assert [o.tool_call_id for o in observations] == ["first", "second", "third"]
+    assert [o.status for o in observations] == (
+        ["success", "cancelled", "cancelled"] if arrives_during_call else ["cancelled"] * 3
+    )
+    assert all("not started" in o.content for o in observations if o.status == "cancelled")
+    assert runtime.mailbox.ordered() == [message]
+    assert runtime.run.id == 2
+    assert patch["next_node"] == ReactRoute.OBSERVE
+    assert all(e.status == "cancelled" for e in events)
+
+
+def test_background_notice_does_not_supersede_a_tool_batch(monkeypatch):
+    runtime = runtime_stub()
+    runtime.mailbox.notify(NoticeBody(content="background event", notice_kind="fork_handover"))
+    calls = []
+
+    def run_call(_rc, call, *_args):
+        calls.append(call.call_id)
+        return ToolObservation(tool_name="read_file", tool_call_id=call.call_id, status="success")
+
+    monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
+    monkeypatch.setattr(
+        tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge)
+    )
+    monkeypatch.setattr(tools_node, "_execute_call", run_call)
+    asyncio.run(tools_node._tools_node(_state(ToolBatch(calls=[_raw("first"), _raw("second")]))))
+    assert calls == ["first", "second"]

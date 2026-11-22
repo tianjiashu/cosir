@@ -19,8 +19,8 @@ from app.core.workflow.message_queue.session_message import (
 )
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
-from app.models.withdrawal_plan import WithdrawalPlan
 from app.service import depends
+from app.service.conversation.turn_withdrawal_plan import WithdrawalPlan
 from app.storage.crud.run_crud import RunCrud
 from app.storage.crud.session_context_crud import SessionContextCrud
 from app.storage.crud.session_crud import SessionCrud
@@ -199,7 +199,7 @@ def test_withdraw_gathers_every_side_effect_of_the_turn(history, side_effects) -
 
 
 def test_withdraw_rejects_a_stale_target_before_touching_anything(history, side_effects) -> None:
-    from app.models.errors.session_command_errors import SessionCommandConflictError
+    from app.models.session.session_command_errors import SessionCommandConflictError
 
     with pytest.raises(SessionCommandConflictError) as caught:
         depends.get_turn_withdrawal_service().withdraw(history.session_id, 11)
@@ -306,7 +306,7 @@ def test_cold_rebuild_is_not_resumable_once_the_last_turn_is_withdrawn(
 def test_plan_withdraws_the_interrupted_draft_with_its_turn() -> None:
     """流式中途停止后撤回：被打断的草稿从不进上下文却照常显示，必须随回合一起移出，否则撤回后用户的话
     没了、半截回复还挂在线程里，之后的分叉还会把它复制过去。"""
-    from app.models.session_context import SessionContextRecord, run_last_turn_withdrawn
+    from app.models.session.session_context import SessionContextRecord, run_last_turn_withdrawn
 
     def row(row_id: int, turn: int, message: dict, *, include: bool, metadata=None) -> SessionContextRecord:
         return SessionContextRecord(
@@ -354,7 +354,7 @@ def test_notices_about_withdrawn_calls_are_dropped_not_redelivered(history, side
 
 def test_plan_does_not_redeliver_session_notices_about_withdrawn_calls() -> None:
     from app.models.message_metadata import NoticeEntry
-    from app.models.session_context import SessionContextRecord
+    from app.models.session.session_context import SessionContextRecord
 
     notice = UserMessageMetadata(
         kind="notice",

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.models.session_kind import SessionType
+from app.models.session.session_kind import SessionType
 from app.service import depends
 from app.storage.crud.session_crud import SessionCrud
 

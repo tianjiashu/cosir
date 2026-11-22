@@ -10,7 +10,7 @@ from app.core.llm_provider import model_factory
 from app.core.workflow.message_queue.session_message import RunLaunch
 from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.model_config_record import ModelConfigRecord
-from app.models.run_record import RunRecord
+from app.models.run.run_record import RunRecord
 from tests.model_config_fixtures import model_config_record
 
 

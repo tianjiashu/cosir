@@ -10,7 +10,7 @@ import pytest
 
 import app.lifespan as lifespan_module
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
-from app.models.enums.run_status import RunStatus
+from app.models.run.run_status import RunStatus
 
 _RUN_ID = 7001
 

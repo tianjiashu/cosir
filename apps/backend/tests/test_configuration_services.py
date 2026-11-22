@@ -11,7 +11,6 @@ from app.app import app
 from app.config.configuration import build_agent_registry
 from app.config.settings import Settings
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
-from app.models.environment.environment_change import EnvironmentChange
 from app.service.configuration import file_store
 from app.service.configuration.agents.configuration import (
     AgentConfiguration,
@@ -21,7 +20,8 @@ from app.service.configuration.agents.configuration_service import (
     AgentConfigurationError,
     AgentConfigurationService,
 )
-from app.service.configuration.environment_configuration_service import (
+from app.service.configuration.environment.configuration import EnvironmentChange
+from app.service.configuration.environment.configuration_service import (
     EnvironmentConfigurationError,
     EnvironmentConfigurationService,
 )
@@ -214,7 +214,7 @@ def _bind_env_file(monkeypatch: pytest.MonkeyPatch, env_file: Path) -> None:
     """
 
     monkeypatch.setattr(
-        "app.service.configuration.environment_configuration_service.system_env_file",
+        "app.service.configuration.environment.configuration_service.system_env_file",
         lambda: env_file,
     )
 
@@ -225,7 +225,7 @@ def test_environment_service_masks_secrets_and_preserves_unknown_lines(
     root = tmp_path / "root"
     root.mkdir()
     monkeypatch.setattr(
-        "app.service.configuration.environment_configuration_service.system_cosir_dir",
+        "app.service.configuration.environment.configuration_service.system_cosir_dir",
         lambda: root,
     )
     env_file = root / ".env"
@@ -322,7 +322,7 @@ def test_environment_update_can_reload_runtime_settings(
     root = tmp_path / "root"
     root.mkdir()
     monkeypatch.setattr(
-        "app.service.configuration.environment_configuration_service.system_cosir_dir",
+        "app.service.configuration.environment.configuration_service.system_cosir_dir",
         lambda: root,
     )
     env_file = root / ".env"
@@ -350,7 +350,7 @@ def test_environment_service_validates_main_agent_max_steps(
     root = tmp_path / "root"
     root.mkdir()
     monkeypatch.setattr(
-        "app.service.configuration.environment_configuration_service.system_cosir_dir",
+        "app.service.configuration.environment.configuration_service.system_cosir_dir",
         lambda: root,
     )
     env_file = root / ".env"
@@ -474,7 +474,7 @@ def test_environment_configuration_schema_error(
     root = tmp_path / "root"
     root.mkdir()
     monkeypatch.setattr(
-        "app.service.configuration.environment_configuration_service.system_cosir_dir",
+        "app.service.configuration.environment.configuration_service.system_cosir_dir",
         lambda: root,
     )
     _bind_env_file(monkeypatch, root / ".env")

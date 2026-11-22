@@ -24,8 +24,8 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.tool_registry import ToolRegistry
-from app.models.session_context import SessionContextRecord
-from app.models.session_extra import SessionExtra
+from app.models.session.session_context import SessionContextRecord
+from app.models.session.session_extra import SessionExtra
 from app.tools.tool_handler.read_file import ReadFileTool
 
 # ============================================================================

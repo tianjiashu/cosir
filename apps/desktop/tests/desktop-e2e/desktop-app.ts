@@ -49,15 +49,30 @@ export async function waitForAppShell(page: Page, timeout = 120_000): Promise<vo
 export async function backendBaseUrl(page: Page): Promise<string> {
   const snapshot = await page.evaluate(() => window.cosirHost!.backend.snapshot());
   expect(snapshot.status).toEqual({ state: "ready" });
-  if (!capabilities.has(snapshot.backendBaseUrl!)) {
-    // Playwright 能看到宿主注入后的真实请求头；不在产品接口中开放取 token 的入口。
-    const observed = page.waitForRequest((request) => request.url() === `${snapshot.backendBaseUrl}/health?desktop-test`);
-    await page.evaluate((base) => fetch(`${base}/health?desktop-test`).then((r) => r.text()), snapshot.backendBaseUrl!);
-    const headers = await (await observed).allHeaders();
-    expect(headers["x-cosir-capability"]).toBeTruthy();
-    capabilities.set(snapshot.backendBaseUrl!, headers["x-cosir-capability"]);
-  }
-  return snapshot.backendBaseUrl!;
+  const baseUrl = snapshot.backendBaseUrl!;
+  if (!capabilities.has(new URL(baseUrl).origin)) await captureCapability(page, baseUrl);
+  return baseUrl;
+}
+
+/**
+ * 重新捕获某一代后端注入的身份。宿主重启后端口可能被复用，缓存不能沿用：
+ * 验证「换代换证」时必须为新一代重新取一次。
+ */
+export async function captureCapability(page: Page, baseUrl: string): Promise<string> {
+  // Playwright 能看到宿主注入后的真实请求头；不在产品接口中开放取 token 的入口。
+  const probe = `${baseUrl}/health?desktop-test=${Date.now()}`;
+  const observed = page.waitForRequest((request) => request.url() === probe);
+  await page.evaluate((url) => fetch(url).then((r) => r.text()), probe);
+  const headers = await (await observed).allHeaders();
+  const token = headers["x-cosir-capability"] ?? "";
+  expect(token).toBeTruthy();
+  capabilities.set(new URL(baseUrl).origin, token);
+  return token;
+}
+
+/** 测试内存里该代后端的凭据；没捕获过返回 undefined。 */
+export function capabilityFor(baseUrl: string): string | undefined {
+  return capabilities.get(new URL(baseUrl).origin);
 }
 
 /** 取或建工作区未开始的会话。首个 Run 建立前反复调用得到的是同一个，要第二个会话须先让它开始。 */

@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from app.api import terminal_sessions_api
 from app.app import app
-from app.models.session_extra import SessionExtra
+from app.models.session.session_extra import SessionExtra
 from app.service import depends
 from app.service.terminal import terminal_workbench_service
 from app.tools.terminal_runtime.errors import (

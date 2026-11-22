@@ -8,9 +8,9 @@ import pytest
 import app.core.workflow.workflow as module
 from app.core.tool.schemas import AwaitMessages, ToolObservation
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.models.enums.react_route import ReactRoute
-from app.models.enums.run_status import RunTransition
+from app.models.run.run_status import RunTransition
 from tests.runtime_context_stub import admitting, run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion
 

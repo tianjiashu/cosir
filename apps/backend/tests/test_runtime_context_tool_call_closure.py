@@ -37,7 +37,7 @@ from app.models.message_metadata import (
     ToolMessageMetadata,
     UserMessageMetadata,
 )
-from app.models.session_context import SessionContextRecord
+from app.models.session.session_context import SessionContextRecord
 from app.service.conversation.session_context_service import (
     SessionContextService,
 )
@@ -877,6 +877,7 @@ def test_recovery_keeps_invalid_context_and_waiting_run(env, caplog):
 async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeypatch):
     """上下文有孤儿结果时模型请求前即失败：原始结果与外部队列中的输入都保持原状。"""
     from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+    from app.core.workflow.execution_state.react_route import ReactRoute
     from app.core.workflow.message_queue.session_message import (
         RunLaunch,
         SessionMessage,
@@ -884,7 +885,6 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
     )
     from app.core.workflow.nodes import model_node
     from app.models.conversation_input import UserInputPresentation
-    from app.models.enums.react_route import ReactRoute
     from app.storage.crud.session_message_crud import SessionMessageCrud
 
     run = env.seed_run("running")

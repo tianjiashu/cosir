@@ -39,7 +39,7 @@ from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
-from app.models.session_extra import SessionExtra
+from app.models.session.session_extra import SessionExtra
 from app.tools.display.terminal_display import build_terminal_display_data
 from app.tools.terminal_runtime.command.command_output import CommandOutput
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult

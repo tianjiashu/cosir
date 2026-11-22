@@ -39,9 +39,9 @@ from app.core.workflow.message_queue.session_message import (
     UserInputBody,
 )
 from app.models.conversation_input import UserInputPresentation
-from app.models.enums.run_status import RunTransition
-from app.models.errors.session_command_errors import SessionCommandConflictError
-from app.models.session_extra import SessionExtra
+from app.models.run.run_status import RunTransition
+from app.models.session.session_command_errors import SessionCommandConflictError
+from app.models.session.session_extra import SessionExtra
 from app.session_runtime import session_runtime_space_registry as registry_module
 from tests.command_job_fakes import FakeCommandJob
 
@@ -288,6 +288,7 @@ def _send_request(text: str):
         {
             "message": {"role": "user", "parts": [{"type": "text", "text": text}]},
             "modelConfigId": "test/m1",
+            "terminalPermissionMode": "request_approval",
         }
     )
 

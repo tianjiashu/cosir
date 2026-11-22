@@ -9,7 +9,7 @@ from app.assistant_transport.projection.snapshot_rebuild import (
 )
 from app.core.events import ToolCallStatusChangedEvent
 from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, parse_message_metadata
-from app.models.session_context import SessionContextRecord
+from app.models.session.session_context import SessionContextRecord
 
 
 @pytest.mark.parametrize(

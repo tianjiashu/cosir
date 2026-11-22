@@ -13,9 +13,9 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.models.conversation_input import UserInputPresentation
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
-from app.models.run_record import RunRecord
-from app.models.session_context import SessionContextRecord
-from app.models.session_record import SessionRecord
+from app.models.run.run_record import RunRecord
+from app.models.session.session_context import SessionContextRecord
+from app.models.session.session_record import SessionRecord
 
 
 def _timestamp() -> datetime:

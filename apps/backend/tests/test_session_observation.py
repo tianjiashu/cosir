@@ -5,11 +5,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from app.api.schemas.response.SessionObservationResponse import SessionObservationResponse
-from app.models.enums.run_status import RunStatus
 from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
-from app.models.run_extra import RunExtra, RunStatusChange
-from app.models.run_record import RunRecord
-from app.models.session_context import SessionContextRecord
+from app.models.run.run_extra import RunExtra, RunStatusChange
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import RunStatus
+from app.models.session.session_context import SessionContextRecord
 from app.service.conversation.session_context_service import SessionContextService
 from app.service.conversation.session_observation import SessionObservation
 from app.storage.crud.run_crud import RunCrud

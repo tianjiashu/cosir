@@ -14,15 +14,14 @@ from app.assistant_transport.service.conversation_state_service import (
 )
 from app.assistant_transport.stream.session_sse_stream import SessionSseStream
 from app.core.events import RunStatusChangedEvent
+from app.core.workflow.run_failure import run_failure_message, run_terminal_error
 from app.core.workflow.run_ledger import RunLedger
-from app.models import RunStatus
 from app.models.conversation_input import UserInputPresentation
-from app.models.enums.run_status import RunTransition
 from app.models.message_metadata import SystemMessageMetadata, UserMessageMetadata
-from app.models.run_failure import run_failure_message, run_terminal_error
-from app.models.run_record import RunRecord
-from app.models.session_context import SessionContextRecord
-from app.models.session_record import SessionRecord
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import RunStatus, RunTransition
+from app.models.session.session_context import SessionContextRecord
+from app.models.session.session_record import SessionRecord
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
 # 会话运行时空间在构造时会读当前 session，因此本文件全部用例都需要隔离主库。
