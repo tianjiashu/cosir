@@ -1,23 +1,10 @@
-"""Stable error classification values for logs and runtime events."""
+"""稳定的错误分类词表：日志、运行时事件与 Run 失败文案（``core/workflow/run_failure``）共用。"""
 
 from enum import Enum
 
 
 class ErrorKind(str, Enum):
-    """日志、运行时事件与回放分析共用的稳定错误分类。
-
-    参数:
-        无。
-
-    返回:
-        无。
-
-    异常:
-        无。
-
-    副作用:
-        无。
-    """
+    """成员值是稳定字符串，直接写进日志与 JSON payload；``model_*`` 也用作 Run 失败 code。"""
 
     PARSE_INVALID = "parse_invalid"
     SCHEMA_INVALID = "schema_invalid"
@@ -26,8 +13,7 @@ class ErrorKind(str, Enum):
     PERMISSION_DENIED = "permission_denied"
     CANCELLED = "cancelled"
     MODEL_NOT_CONFIGURED = "model_not_configured"
-    # 模型调用错误细分（设计文档阶段 4，由 ``model_error_mapper`` 从 provider 响应
-    # 异常归一，供前端按 error_code 给出修复引导）。
+    # 模型调用错误细分：由 ``core/llm_provider/model_failure`` 从 provider 异常归一，前端按 code 给出修复引导。
     MODEL_AUTH_FAILED = "model_auth_failed"
     MODEL_RATE_LIMITED = "model_rate_limited"
     MODEL_TIMEOUT = "model_timeout"
@@ -41,19 +27,4 @@ class ErrorKind(str, Enum):
     MODEL_UNKNOWN = "model_unknown"
 
     def __str__(self) -> str:
-        """返回可写入日志与 JSON payload 的稳定字符串值。
-
-        参数:
-            无。
-
-        返回:
-            枚举成员的字符串值。
-
-        异常:
-            无。
-
-        副作用:
-            无。
-        """
-
         return self.value

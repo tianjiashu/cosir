@@ -3,8 +3,9 @@
 from pydantic import BaseModel, ConfigDict
 
 from app.models.enums.reasoning_effort import ReasoningEffort
-from app.models.run_record import RunRecord
-from app.models.session_kind import FORK_SESSION_TYPES, SessionType
+from app.models.run.run_record import RunRecord
+from app.models.session.session_kind import FORK_SESSION_TYPES, SessionType
+from app.models.terminal_permissions import TerminalPermissionMode
 
 # Agent 派生出的 Session：记下派生它的那次工具调用（撤回那一回合时据此收回）。
 _AGENT_DERIVED_TYPES = frozenset({SessionType.DELEGATED, SessionType.AGENT_FORK})
@@ -17,6 +18,7 @@ class SessionForkLaunch(BaseModel):
 
     agent_id: str | None
     model_config_id: str | None
+    terminal_permission_mode: TerminalPermissionMode = "request_approval"
     reasoning_effort: ReasoningEffort | None
 
     @classmethod
@@ -27,6 +29,7 @@ class SessionForkLaunch(BaseModel):
             agent_id=run.agent_id,
             model_config_id=run.model_config_id,
             reasoning_effort=run.reasoning_effort,
+            terminal_permission_mode=run.terminal_permission_mode,
         )
 
 

@@ -11,9 +11,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import cast
 
-from app.models.session_extra import SessionExtra, SessionFork
-from app.models.session_kind import SessionType
-from app.models.session_tool_surface import SessionToolSurface
+from app.models.session.session_extra import SessionExtra, SessionFork
+from app.models.session.session_kind import SessionType
+from app.models.session.session_tool_surface import SessionToolSurface
 from app.storage.model.session_model import SessionModel
 from app.utils.datetime_utils import from_text, to_text
 
@@ -32,7 +32,7 @@ class SessionRecord:
     session_type: SessionType = SessionType.USER
     parent_session_id: int | None = None
     current_run_id: int | None = None
-    # 派生深度（见 ``models.session_kind``）；创建后不变，所以缓存在运行时空间里的记录也可信。
+    # 派生深度（见 ``models.session.session_kind``）；创建后不变，所以缓存在运行时空间里的记录也可信。
     derivation_depth: int = 0
 
     @property
