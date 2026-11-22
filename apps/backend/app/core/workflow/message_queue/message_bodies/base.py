@@ -14,7 +14,7 @@ from app.models.message_context.message_metadata.base.message_kinds import Sessi
 from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
 
 WakeScope = Literal["new_or_active", "active", "none"]
-"""一条消息能把 Session 推进到哪一步，``dispatch_policy`` 与挂起判定只读它：
+"""一条消息能把 Session 推进到哪一步，推进判定（``Action.decide``）与挂起判定只读它：
 
 - ``new_or_active``：唤醒挂起的 Run，Session 空闲（终态或尚无 Run）时凭它开新 Run；
 - ``active``：只对活动 Run 起作用——驱动中不让它挂起、挂起中唤醒它；Session 空闲时不开新 Run，消息

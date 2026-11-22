@@ -12,8 +12,10 @@ from app.core.workflow.message_queue.message_bodies.base import (
     WakeScope,
 )
 from app.core.workflow.message_queue.message_bodies.rendering import render_time
-from app.models.message_context.message_metadata.notice_entry import NoticeEntry
-from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import (
+    NoticeEntry,
+    UserMessageMetadata,
+)
 
 NoticeKind = Literal[
     "fork_handover",

@@ -34,7 +34,7 @@ Delivery = Literal["immediate", "next_run"]
 """并入时机：``immediate`` 在当前执行的下一次模型请求前并入；``next_run`` 只交给下一个 Run。
 
 用户输入还据此分通道：``immediate`` 优先被新 Run 选中，``next_run`` 排队、一个 Run 只消费一条
-（见 ``dispatch_policy.next_input``）。
+（见 ``PendingMessages.next_input``）。
 """
 
 __all__ = [
