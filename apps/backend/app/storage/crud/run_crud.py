@@ -23,6 +23,7 @@ from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.enums.run_status import RunStatus
 from app.models.run_extra import RunExtra, RunStatusChange
 from app.models.run_usage import RunUsage
+from app.models.terminal_permissions import TerminalPermissionMode
 from app.storage.model.run_model import RunModel
 from app.storage.store_engines import main_db_factory
 from app.utils.datetime_utils import to_text, utc_now
@@ -125,6 +126,7 @@ class RunCrud:
         model_config_id: str | None = None,
         context_window_total: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
+        terminal_permission_mode: TerminalPermissionMode = "request_approval",
         usage: RunUsage | None = None,
         error: RunError | None = None,
         db: DbSession | None = None,
@@ -139,6 +141,7 @@ class RunCrud:
                 model_config_id=model_config_id,
                 context_window_total=context_window_total,
                 reasoning_effort=reasoning_effort,
+                terminal_permission_mode=terminal_permission_mode,
                 usage=usage,
                 error=error,
             )
@@ -151,6 +154,7 @@ class RunCrud:
                 model_config_id=model_config_id,
                 context_window_total=context_window_total,
                 reasoning_effort=reasoning_effort,
+                terminal_permission_mode=terminal_permission_mode,
                 usage=usage,
                 error=error,
             )
@@ -165,6 +169,7 @@ class RunCrud:
         model_config_id: str | None,
         context_window_total: int | None,
         reasoning_effort: ReasoningEffort | None,
+        terminal_permission_mode: TerminalPermissionMode,
         usage: RunUsage | None,
         error: RunError | None,
     ) -> RunRecord:
@@ -201,13 +206,14 @@ class RunCrud:
             status=status,
             created_at=now,
             updated_at=now,
-            extra=RunExtra(
-                status_history=[RunStatusChange(at=now, status=status)]
-            ).model_dump(mode="json"),
+            extra=RunExtra(status_history=[RunStatusChange(at=now, status=status)]).model_dump(
+                mode="json"
+            ),
             agent_id=agent_id,
             model_config_id=model_config_id,
             context_window_total=context_window_total,
             reasoning_effort=reasoning_effort,
+            terminal_permission_mode=terminal_permission_mode,
             execution_data=ReactExecutionState().model_dump(mode="json"),
             usage_json=_serialize_typed_json(usage),
             error_json=_serialize_typed_json(error),
@@ -245,9 +251,7 @@ class RunCrud:
         if not run_ids:
             return {}
         with self._db_factory() as db:
-            rows = db.scalars(
-                select(RunModel).where(RunModel.id.in_(run_ids))
-            ).all()
+            rows = db.scalars(select(RunModel).where(RunModel.id.in_(run_ids))).all()
         return {row.id: RunRecord.from_model(row) for row in rows}
 
     @staticmethod
@@ -347,9 +351,7 @@ class RunCrud:
             rows = (
                 db.execute(
                     select(RunModel)
-                    .where(
-                        RunModel.status == RunStatus.RUNNING.value
-                    )
+                    .where(RunModel.status == RunStatus.RUNNING.value)
                     .order_by(
                         asc(RunModel.created_at),
                         asc(RunModel.id),
@@ -476,9 +478,7 @@ class RunCrud:
             return [
                 row[0]
                 for row in db.execute(
-                    select(RunModel.id).where(
-                        RunModel.session_id.in_(session_ids)
-                    )
+                    select(RunModel.id).where(RunModel.session_id.in_(session_ids))
                 ).all()
             ]
 
@@ -531,11 +531,7 @@ class RunCrud:
         if not run_ids:
             return
         if db is not None:
-            db.execute(
-                delete(RunModel).where(RunModel.id.in_(run_ids))
-            )
+            db.execute(delete(RunModel).where(RunModel.id.in_(run_ids)))
             return
         with self._db_factory.begin() as db:
-            db.execute(
-                delete(RunModel).where(RunModel.id.in_(run_ids))
-            )
+            db.execute(delete(RunModel).where(RunModel.id.in_(run_ids)))
