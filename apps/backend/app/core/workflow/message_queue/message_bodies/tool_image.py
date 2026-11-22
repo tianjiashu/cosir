@@ -9,7 +9,7 @@ from app.core.workflow.message_queue.message_bodies.rendering import (
     render_time,
     user_message_with_images,
 )
-from app.models.message_metadata import UserMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
 
 
 class ToolImageBody(BaseModel):

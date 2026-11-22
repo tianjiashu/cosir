@@ -20,12 +20,14 @@ from app.core.workflow.message_queue.message_bodies.rendering import (
     render_time,
     user_message_with_images,
 )
-from app.models.conversation_input import UserInputPresentation
 from app.models.enums.reasoning_effort import ReasoningEffort
-from app.models.message_metadata import UserMessageMetadata
+from app.models.message_context.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
+from app.models.terminal_permissions import TerminalPermissionMode
 
 if TYPE_CHECKING:
-    from app.models import RunRecord, SessionRecord
+    from app.models.run.run_record import RunRecord
+    from app.models.session.session_record import SessionRecord
 
 
 class RunLaunch(BaseModel):
@@ -36,6 +38,7 @@ class RunLaunch(BaseModel):
     agent_id: str = "main_agent"
     model_config_id: str
     reasoning_effort: ReasoningEffort | None = None
+    terminal_permission_mode: TerminalPermissionMode = "request_approval"
 
     @classmethod
     def from_run(cls, run: "RunRecord | None") -> "RunLaunch | None":
@@ -50,6 +53,7 @@ class RunLaunch(BaseModel):
             agent_id=run.agent_id,
             model_config_id=run.model_config_id,
             reasoning_effort=run.reasoning_effort,
+            terminal_permission_mode=run.terminal_permission_mode,
         )
 
     @classmethod
@@ -70,6 +74,7 @@ class RunLaunch(BaseModel):
             agent_id=launch.agent_id,
             model_config_id=launch.model_config_id,
             reasoning_effort=launch.reasoning_effort,
+            terminal_permission_mode=launch.terminal_permission_mode,
         )
 
 

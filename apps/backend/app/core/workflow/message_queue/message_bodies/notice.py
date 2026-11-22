@@ -12,7 +12,8 @@ from app.core.workflow.message_queue.message_bodies.base import (
     WakeScope,
 )
 from app.core.workflow.message_queue.message_bodies.rendering import render_time
-from app.models.message_metadata import NoticeEntry, PromptSourceBaseline, UserMessageMetadata
+from app.models.message_context.message_metadata.notice_entry import NoticeEntry
+from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
 
 NoticeKind = Literal[
     "fork_handover",
@@ -24,6 +25,9 @@ NoticeKind = Literal[
     "decision_expired",
     "open_items",
     "configuration_changed",
+    "terminal_file_changes",
+    "terminal_permissions",
+    "read_files_changed",
 ]
 NoticeLevel = Literal["session", "run", "turn"]
 
@@ -35,8 +39,8 @@ NoticeLevel = Literal["session", "run", "turn"]
 # - run：此刻成立的状态（工具准入、还有哪些事没了结、Agent 看到的配置）。不入队，经 ``mailbox.notify``
 #   投、随 mailbox 重置丢弃；比对基准是上下文里最近一条同类通知（配置没有通知时看 seq 0 系统行），写入
 #   后才成为新基准，所以写入前的任何中断与撤回都只会让下次重推，不会漏告。会在驱动中途变的每次模型请求
-#   前对账（目前只有配置：``RuntimeMessageContextManager.configuration_change_notice``），其余在驱动开始时
-#   推导（``drive_notices``）。
+#   前对账（配置：``RuntimeMessageContextManager.configuration_change_notice``；读过的文件：
+#   ``read_change_notice``），其余在驱动开始时推导（``drive_notices``）。
 # - turn：上一回合怎样结束（用户已停止，``drive_notices``）或驱动内的一次性提示（输出被截断时的续写，由
 #   model 节点当场投）。同 run 级，不入队、可重推或丢了无妨。
 # 新增通知按此归类：推不出来 → session，经 ``session_runtime_spaces.enqueue`` 入队；推得出来 → 驱动
@@ -55,6 +59,9 @@ NOTICE_LEVELS: dict[NoticeKind, NoticeLevel] = {
     "tool_availability": "run",
     "open_items": "run",
     "configuration_changed": "run",
+    "terminal_file_changes": "session",
+    "terminal_permissions": "run",
+    "read_files_changed": "run",
     "user_cancelled": "turn",
     "model_continuation": "turn",
     # 所在回合被撤回时重新投递：提问仍是作废的，模型还得知道。
@@ -71,13 +78,16 @@ NOTICE_WAKE_SCOPES: dict[NoticeKind, WakeScope] = {
     "tool_availability": "none",
     "open_items": "none",
     "configuration_changed": "none",
+    "terminal_file_changes": "none",
+    "terminal_permissions": "none",
+    "read_files_changed": "none",
     "user_cancelled": "none",
     "model_continuation": "none",
     "decision_expired": "none",
 }
 
 
-class NoticeBody(EnqueuedMessageBody):
+class NoticeBody(EnqueuedMessageBody, NoticeEntry):
     """系统通知；不启动 Run、不投影。
 
     ``content`` 保持原始文本，``<system_notice>`` 包装由 :func:`notices_to_context` 统一加；
@@ -85,10 +95,11 @@ class NoticeBody(EnqueuedMessageBody):
     规则）、只进系统提示词，不随每条通知重复；读法里不列举通知种类，「这是什么」由每条通知的正文开头自己
     说明，新增种类不必回来改读法；只为配置变化多写一句行为规则：它带来的是指令（替换提示词里对应的
     部分），而前言把系统消息归为「待评估的信息」，不点明 Agent 会只当参考。``notice_kind`` /
-    ``metadata`` 只服务观测，不进模型正文。
+    ``metadata`` 只服务观测，不进模型正文。字段定义（含四个比对基准）继承自落库的 ``NoticeEntry``，
+    这里只收窄 ``notice_kind`` 并加上只属于队列的 ``metadata``。
     """
 
-    KIND: ClassVar[SessionMessageKind] = "system_notice"
+    KIND: ClassVar[SessionMessageKind] = "notice"
     TAG: ClassVar[str] = "system_notice"
     PROMPT_GUIDE: ClassVar[str | None] = (
         "runtime facts from the system: take them into account silently; never reply to, "
@@ -100,17 +111,8 @@ class NoticeBody(EnqueuedMessageBody):
     PRIORITY: ClassVar[int] = 0
     # 类型层面不推进（启动调度不为它拉起 actor）；按通知种类细分见 ``wake_scope``。
     WAKE: ClassVar[WakeScope] = "none"
-    content: str
     notice_kind: NoticeKind
     metadata: dict[str, str | None] = Field(default_factory=dict)
-    # 这条通知给哪些调用送达了结局（见本模块开头的说明）；与具体调用无关的通知为空。
-    tool_call_ids: list[str] = Field(default_factory=list)
-    # 只有工具准入通知带：告知时禁用的工具名（排序），是下一次推导的比对基准（随行落库）。
-    banned_tools: list[str] | None = None
-    # 只有未了结事项通知带：告知时的清单（排序），同样是下一次推导的比对基准。
-    open_items: list[str] | None = None
-    # 只有配置变化通知带：告知后 Agent 看到的全部配置指纹，是下一次对账的基准。
-    prompt_sources: PromptSourceBaseline | None = None
 
     def wake_scope(self) -> WakeScope:
         return NOTICE_WAKE_SCOPES[self.notice_kind]
@@ -121,9 +123,16 @@ class NoticeBody(EnqueuedMessageBody):
     def render(self) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
         return notices_to_context([self])
 
+    def entry(self) -> NoticeEntry:
+        """落库用的那份：只取 ``NoticeEntry`` 自己的字段，队列专属的 ``metadata`` 不进合成通知行。
+
+        不能用 ``NoticeEntry.model_validate(self)``：子类实例会原样返回，连同 ``metadata`` 一起落库。
+        """
+        return NoticeEntry.model_validate(self.model_dump(include=set(NoticeEntry.model_fields)))
+
 
 def notices_to_context(
-        notices: Sequence[NoticeBody],
+    notices: Sequence[NoticeBody],
 ) -> tuple[ChatCompletionUserMessageParam, UserMessageMetadata]:
     """把一批通知合成一条带 ``<system_notice>`` 标签的 user 消息。
 
@@ -139,16 +148,6 @@ def notices_to_context(
         ChatCompletionUserMessageParam(role="user", content=content),
         UserMessageMetadata(
             kind="notice",
-            notices=[
-                NoticeEntry(
-                    notice_kind=item.notice_kind,
-                    content=item.content,
-                    tool_call_ids=item.tool_call_ids,
-                    banned_tools=item.banned_tools,
-                    open_items=item.open_items,
-                    prompt_sources=item.prompt_sources,
-                )
-                for item in notices
-            ],
+            notices=[item.entry() for item in notices],
         ),
     )

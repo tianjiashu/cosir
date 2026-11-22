@@ -10,11 +10,8 @@ from typing import ClassVar, Literal
 from openai.types.chat import ChatCompletionUserMessageParam
 from pydantic import BaseModel, ConfigDict
 
-from app.models.message_metadata import UserMessageMetadata
-
-SessionMessageKind = Literal[
-    "user_input", "agent_message", "system_notice", "background_result", "user_decision"
-]
+from app.models.message_context.message_metadata.base.message_kinds import SessionMessageKind
+from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
 
 WakeScope = Literal["new_or_active", "active", "none"]
 """一条消息能把 Session 推进到哪一步，``dispatch_policy`` 与挂起判定只读它：

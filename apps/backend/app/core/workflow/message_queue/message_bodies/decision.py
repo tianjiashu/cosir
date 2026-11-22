@@ -10,7 +10,7 @@ from app.core.workflow.message_queue.message_bodies.base import (
     WakeScope,
 )
 from app.core.workflow.message_queue.message_bodies.rendering import escape_tag, render_time
-from app.models.message_metadata import UserMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
 
 
 class DecisionBody(EnqueuedMessageBody):
@@ -24,7 +24,7 @@ class DecisionBody(EnqueuedMessageBody):
     补进占位的展示数据。
     """
 
-    KIND: ClassVar[SessionMessageKind] = "user_decision"
+    KIND: ClassVar[SessionMessageKind] = "decision"
     TAG: ClassVar[str] = "user_decision"
     PROMPT_GUIDE: ClassVar[str | None] = (
         "the user's own decision on the call it continues; `feedback`, if present, is in their "
