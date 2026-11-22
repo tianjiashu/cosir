@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from app.models.file_kind import FileKind
+from app.models.enums.file_kind import FileKind
 
 
 class FileConflictError(Exception):

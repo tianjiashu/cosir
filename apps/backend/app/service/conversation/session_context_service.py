@@ -20,12 +20,10 @@ from app.core.context.tool_call_closure import (
     plan_tool_call_closures,
 )
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.models.message_metadata import (
-    TURN_INPUT_KINDS,
-    ToolMessageMetadata,
-    UserMessageMetadata,
-)
-from app.models.session_context import SessionContextRecord
+from app.models.message_context.message_metadata.base.message_kinds import TURN_INPUT_KINDS
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
+from app.models.message_context.session_context import SessionContextRecord
 from app.service.conversation.session_observation import SessionObservation
 from app.storage.crud.run_crud import RunCrud
 from app.storage.crud.session_context_crud import SessionContextCrud

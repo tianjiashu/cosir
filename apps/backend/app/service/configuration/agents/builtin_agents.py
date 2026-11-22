@@ -37,9 +37,9 @@ from app.core.tool.schemas.tool_names import (
     TOOL_READ_IMAGE,
     TOOL_SEARCH,
     TOOL_SEARCH_CONTENT,
-    TOOL_SESSION_SEND,
     TOOL_SESSION_LIST,
     TOOL_SESSION_READ,
+    TOOL_SESSION_SEND,
     TOOL_SESSION_STOP,
     TOOL_TERMINAL_LIST,
     TOOL_TERMINAL_READ,
@@ -65,7 +65,7 @@ from app.service.configuration.agents.configuration import AgentConfiguration
 #
 # 正文**不得**出现工具可用性（「你没有某工具」「你必须永不委派」之类）：同一 profile 在不同场景下的
 # 工具面并不相同——能不能再委派取决于派生深度，委派子 Agent 拿到的工具还要按
-# Session 类型规则过滤（``models.session_kind``）——写死任一侧都必然在另一侧变成假话，且工具事实
+# Session 类型规则过滤（``models.session.session_kind``）——写死任一侧都必然在另一侧变成假话，且工具事实
 # 本就由 ``<tool_layer>`` / ``<runtime_context>`` 声明。要约束行为就写成行为要求
 # （「不得改动工作区」「不要绕过缺口」），不要写成能力断言。
 # 交差写法：三个内置子 Agent 共用。报告只经最后一条消息交给父 Agent（由编排作为 Agent 消息汇报），

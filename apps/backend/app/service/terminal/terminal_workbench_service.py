@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.config.logging.logger import log
-from app.models.session_kind import USER_FACING_SESSION_TYPES
+from app.models.session.session_kind import USER_FACING_SESSION_TYPES
 from app.service.depends import (
     get_session_service,
     get_terminal_session_service,
@@ -42,7 +42,7 @@ class TerminalWorkbenchService:
                 不可用）。
         """
         session = get_session_service().get_session(session_id)
-        # 只有侧栏会话有终端工作台，与终端工具只给侧栏会话同一条规则（``models.session_kind``）。
+        # 只有侧栏会话有终端工作台，与终端工具只给侧栏会话同一条规则（``models.session.session_kind``）。
         if session.session_type not in USER_FACING_SESSION_TYPES:
             raise TerminalWorkbenchSessionTypeError(
                 f"session type {session.session_type} does not support terminal workbench"

@@ -11,8 +11,8 @@ from typing import cast
 
 from openai.types.chat import ChatCompletionMessageFunctionToolCallParam
 
-from app.models.run_record import RunRecord
-from app.models.session_context import SessionContextRecord
+from app.models.message_context.session_context import SessionContextRecord
+from app.models.run.run_record import RunRecord
 from app.utils.datetime_utils import from_text
 
 

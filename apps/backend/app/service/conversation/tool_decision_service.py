@@ -15,7 +15,7 @@ from app.config.logging.logger import log
 from app.core.tool.validation.call_arguments import CallArgumentsError, resolve_call_arguments
 from app.core.workflow.message_queue.session_message import DecisionBody, SessionMessage
 from app.models.errors.input_errors import UserInputRejectedError
-from app.models.errors.session_command_errors import SessionCommandConflictError
+from app.models.session.session_command_errors import SessionCommandConflictError
 from app.service import depends as service_depends
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.storage.store_engines import main_db_factory

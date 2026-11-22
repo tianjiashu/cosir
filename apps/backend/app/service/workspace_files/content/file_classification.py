@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.models.file_kind import FileKind
+from app.models.enums.file_kind import FileKind
 
 TEXT_MIME = "text/plain"
 BINARY_MIME = "application/octet-stream"

@@ -17,8 +17,9 @@ from app.config.configuration import get_agent_registry
 from app.config.logging.logger import log
 from app.core.context.prompt_sources.cache import projection_cache
 from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_surface
-from app.models import SessionRecord, WorkspaceRecord
 from app.models.errors.deletion_errors import DeletionBusyError
+from app.models.session.session_record import SessionRecord
+from app.models.workspace_record import WorkspaceRecord
 from app.service import depends as service_depends
 from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.mcp.configuration_service import MCPConfigurationService
@@ -261,8 +262,7 @@ class WorkspaceService:
         新会话页在第一次需要 Session 时调用（开终端、开浏览器标签、发首条消息）：Session 级资源
         只按 Session 寻址，所以先有这一行；它不进侧栏，首个 Run 建立后原地成为普通会话
         （``SessionRecord.unstarted``），没用上的留着下次复用，不回收。查找与创建都在 workspace
-        闸门内，并发调用拿到同一个。标题留空：首条用户输入并入时才命名
-        （``branch.session_title.name_untitled``）。
+        闸门内，并发调用拿到同一个。标题留空，由标题支线生成；界面对空标题显示「新会话」。
 
         异常:
             KeyError: 如果 workspace 不存在。

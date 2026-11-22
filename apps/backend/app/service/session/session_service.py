@@ -15,13 +15,18 @@ from sqlalchemy.orm.session import Session as DbSession
 from app.config.logging.logger import log
 from app.core.workflow.message_queue.message_bodies import ADVANCING_KINDS
 from app.core.workflow.message_queue.session_message import SessionMessage
-from app.models import RunRecord, SessionRecord
-from app.models.enums.run_status import ACTIVE_RUN_STATUSES
 from app.models.errors.deletion_errors import DeletionBusyError
-from app.models.errors.session_fork_errors import SessionForkConflictError
-from app.models.session_extra import SessionExtra, SessionFork
-from app.models.session_kind import FORK_SESSION_TYPES, USER_FACING_SESSION_TYPES, SessionType
-from app.models.session_tool_surface import SessionToolSurface
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import ACTIVE_RUN_STATUSES
+from app.models.session.session_extra import SessionExtra, SessionFork
+from app.models.session.session_fork_errors import SessionForkConflictError
+from app.models.session.session_kind import (
+    FORK_SESSION_TYPES,
+    USER_FACING_SESSION_TYPES,
+    SessionType,
+)
+from app.models.session.session_record import SessionRecord
+from app.models.session.session_tool_surface import SessionToolSurface
 from app.service import depends as service_depends
 from app.service.session.fork_source import ForkCut, ForkSource
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
@@ -115,7 +120,7 @@ class SessionService:
         也等不到唤醒。遗留 running Run 已由恢复流程收敛为 cancelled，不在此列；只有通知的 Session
         也不在此列——通知不推进 Run，随它下次被驱动时并入（见 ``ADVANCING_KINDS``）。
         """
-        from app.models.enums.run_status import RunStatus
+        from app.models.run.run_status import RunStatus
         from app.storage.crud.session_message_crud import SessionMessageCrud
 
         with self._db_factory() as db:
@@ -218,13 +223,6 @@ class SessionService:
         """
         if self._session.update_title(session_id, title):
             service_depends.get_session_feed().publish_session_catalog(session_id)
-
-    def fill_empty_title(self, session_id: int, title: str) -> bool:
-        """给还没有标题的 Session 写入标题，返回是否写入；已有标题或已删除时不动。"""
-        filled = self._session.fill_empty_title(session_id, title)
-        if filled:
-            service_depends.get_session_feed().publish_session_catalog(session_id)
-        return filled
 
     async def fork_session(
         self,

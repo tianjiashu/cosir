@@ -23,14 +23,16 @@ from app.core.context.context_entry import ContextEntry
 from app.core.context.context_store import ContextStore
 from app.core.context.tool_call_closure import plan_tool_call_closures
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody
-from app.models.enums.run_status import ACTIVE_RUN_STATUSES
-from app.models.errors.session_fork_errors import SessionForkConflictError
-from app.models.message_metadata import TURN_INPUT_KINDS, ToolMessageMetadata, UserMessageMetadata
-from app.models.run_record import RunRecord
-from app.models.session_context import SessionContextRecord, turn_withdrawn
-from app.models.session_extra import SessionFork, SessionForkLaunch
-from app.models.session_kind import SessionType
-from app.models.session_record import SessionRecord
+from app.models.message_context.message_metadata.base.message_kinds import TURN_INPUT_KINDS
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
+from app.models.message_context.session_context import SessionContextRecord, turn_withdrawn
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import ACTIVE_RUN_STATUSES
+from app.models.session.session_extra import SessionFork, SessionForkLaunch
+from app.models.session.session_fork_errors import SessionForkConflictError
+from app.models.session.session_kind import SessionType
+from app.models.session.session_record import SessionRecord
 from app.storage.crud.session_context_crud import SessionContextCrud
 from app.utils.path.system_cosir import session_scratch_dir
 
@@ -65,7 +67,9 @@ _MANUAL_FORK_IDENTITY = (
 )
 # 临时目录按会话 id 推导，分叉沿用来源的系统提示词，里面写的是来源的目录（文件工具写不进去）；两种分叉都
 # 在身份声明里更正，与可写根同一种写法。
-_SCRATCH_DIR = " Your scratch directory is {scratch_dir}; it replaces any scratch directory stated earlier."
+_SCRATCH_DIR = (
+    " Your scratch directory is {scratch_dir}; it replaces any scratch directory stated earlier."
+)
 
 
 @dataclass(frozen=True)
@@ -281,7 +285,8 @@ class ForkSource:
         if target.session_type != SessionType.USER_FORK:
             return None
         return NoticeBody(
-            content=_MANUAL_FORK_IDENTITY.format(target_id=target.id, source_id=self.session.id) + scratch,
+            content=_MANUAL_FORK_IDENTITY.format(target_id=target.id, source_id=self.session.id)
+            + scratch,
             notice_kind="fork_handover",
         )
 

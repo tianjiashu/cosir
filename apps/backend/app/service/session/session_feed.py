@@ -1,6 +1,6 @@
 """Session 推送的进程内通道：侧栏、命令面板、页头与工作台标签共用一条连接，送两类事实。
 
-- **状态**：Session 状态是两项正交的事实（见 ``app.models.session_status``）：执行状态的事实源是
+- **状态**：Session 状态是两项正交的事实（见 ``app.models.session.session_status``）：执行状态的事实源是
   ``RunModel.status``（经 Session 当前 Run 指针读取），等你操作是 HITL 等待占位行与进程内等待的
   终端批准（计在显示它的会话上）之和，两者只在这里合成。在 Run 开始、状态变化、工具调用状态迁移
   或终端批准变化时现读并转发。
@@ -22,8 +22,8 @@ from threading import Lock
 
 from app.config.logging.logger import log
 from app.core.tool.terminal_approval import terminal_approvals
-from app.models.session_kind import USER_FACING_SESSION_TYPES, SessionType
-from app.models.session_status import SessionStatus
+from app.models.session.session_kind import USER_FACING_SESSION_TYPES, SessionType
+from app.models.session.session_status import SessionStatus
 from app.storage.crud.session_crud import SessionCrud
 
 SessionStatuses = dict[int, SessionStatus]
