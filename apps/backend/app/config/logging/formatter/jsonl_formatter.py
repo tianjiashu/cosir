@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from app.models.mapped_log_record import LogError, MappedLogRecord
+from app.config.logging.formatter.mapped_log_record import LogError, MappedLogRecord
 
 
 class JsonlFormatter(logging.Formatter):

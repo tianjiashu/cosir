@@ -47,13 +47,16 @@ from app.core.context.final_reply import CommittedResponse, final_reply_sequence
 from app.core.context.turn_visibility import is_turn_input, is_visible_reply
 from app.core.llm_provider.message_codec import display_arguments
 from app.core.tool.presentation import ToolPresentation
-from app.models.message_context.conversation_input import MessageSource, UserInputPresentation
+from app.models.message_context.conversation_input import MessageSource
 from app.models.message_context.message_metadata.assistant_message_metadata import (
     AssistantMessageMetadata,
 )
 from app.models.message_context.message_metadata.base.message_kinds import TURN_INPUT_KINDS
 from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
-from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import (
+    UserInputPresentation,
+    UserMessageMetadata,
+)
 from app.models.message_context.session_context import (
     SessionContextRecord,
     run_last_turn_withdrawn,

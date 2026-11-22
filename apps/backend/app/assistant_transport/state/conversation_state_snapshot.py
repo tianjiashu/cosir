@@ -128,8 +128,8 @@ class ConversationStateSnapshot(TypedDict):
     deliverables: list[ConversationDeliverable]
 
 
-def empty_snapshot(title: str = "新会话") -> ConversationStateSnapshot:
-    """返回新 Session 的空 snapshot 基线。"""
+def empty_snapshot(title: str = "") -> ConversationStateSnapshot:
+    """返回新 Session 的空 snapshot 基线；``title`` 投影自 ``sessions.title``，还没起名时为空。"""
 
     return ConversationStateSnapshot(
         title=title,
@@ -204,7 +204,7 @@ def validate_mutated(
 
 
 def _validate_title(value: object) -> None:
-    # 允许为空：未开始的会话还没有标题（首条用户输入并入时才命名），界面按「新会话」显示。
+    # 允许为空：还没起名的会话没有标题（由标题支线生成），界面统一按「新会话」显示。
     require_str(value, "snapshot title")
 
 

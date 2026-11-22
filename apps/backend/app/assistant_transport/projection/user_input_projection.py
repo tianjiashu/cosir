@@ -20,10 +20,8 @@ from app.assistant_transport.state.conversation_state_part import (
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.assistant_transport.state.message_identity import reply_id, user_message_id
 from app.core.events import InputConsumedEvent
-from app.models.message_context.conversation_input import (
-    MessageSource,
-    UserInputPresentation,
-)
+from app.models.message_context.conversation_input import MessageSource
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 
 UserInputPart = ConversationStateTextPart | ConversationStateImagePart
 

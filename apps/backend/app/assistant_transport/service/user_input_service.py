@@ -25,7 +25,7 @@ from app.models.message_context.capsules.grammar.capsule import Capsule
 from app.models.message_context.capsules.grammar.file_capsule import FileCapsule
 from app.models.message_context.capsules.grammar.ref_capsule import RefCapsule
 from app.models.message_context.capsules.grammar.skill_capsule import SkillCapsule
-from app.models.message_context.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.run.run_command import RunCommand
 from app.models.terminal_permissions import TerminalPermissionMode
 from app.service.attachment.attachment_service import AttachmentService

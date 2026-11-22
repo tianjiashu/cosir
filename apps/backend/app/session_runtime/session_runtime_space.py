@@ -51,7 +51,8 @@ if TYPE_CHECKING:
     from app.core.agents.agent_runtime_config import AgentRuntimeConfig
     from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
     from app.core.session_actor import SessionActor
-    from app.models import SessionRecord, WorkspaceRecord
+    from app.models.session.session_record import SessionRecord
+    from app.models.workspace_record import WorkspaceRecord
 
 _T = TypeVar("_T")
 _tool_schemas_adapter = TypeAdapter(list[FunctionDefinition])

@@ -3157,7 +3157,7 @@
     "/terminal/sandbox": {
       "get": {
         "summary": "Terminal Sandbox Capability",
-        "description": "探测 OS 隔离能力，不会执行用户命令。",
+        "description": "在最小沙箱里跑一条无副作用命令探测 OS 隔离能力，不执行用户命令。",
         "operationId": "terminal_sandbox_capability_terminal_sandbox_get",
         "responses": {
           "200": {
@@ -6796,15 +6796,15 @@
               "request_approval",
               "full_access"
             ],
-            "title": "Terminalpermissionmode",
-            "default": "request_approval"
+            "title": "Terminalpermissionmode"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "message",
-          "modelConfigId"
+          "modelConfigId",
+          "terminalPermissionMode"
         ],
         "title": "SendMessageRequest",
         "description": "发送消息；并入时机不由请求决定：后端按 Session 是否有活动 Run 定排队还是立即处理。\n\n发起配置随消息携带，只在这条消息开新 Run 时生效（见 ``RunLaunch``）。"
