@@ -98,6 +98,7 @@ class _Ledger:
             end_reason=None,
             model_config_id=launch.model_config_id,
             reasoning_effort=launch.reasoning_effort,
+            terminal_permission_mode=launch.terminal_permission_mode,
         )
         self.runs[run.id] = run
         self.current = run
@@ -119,6 +120,9 @@ class _Ledger:
 
     def require_current_run(self, _session_id: int) -> SimpleNamespace | None:
         return self.current
+
+    def collect_session_tree_ids(self, session_id: int) -> list[int]:
+        return [session_id]
 
     def list_derived_sessions(self, _session_id: int) -> list:
         return []
@@ -243,10 +247,21 @@ async def chain(monkeypatch):
     )
     service = AssistantTransportService.__new__(AssistantTransportService)
     service._sessions = ledger
+    service._queue = queue
     service._inputs = SimpleNamespace(
-        prepare=lambda _session_id, command, model_config_id, _reasoning_effort, agent_id: UserInputBody(
+        prepare=lambda _session_id,
+        command,
+        model_config_id,
+        _reasoning_effort,
+        agent_id,
+        *,
+        terminal_permission_mode: UserInputBody(
             text=command.text,
-            launch=RunLaunch(agent_id=agent_id, model_config_id=model_config_id),
+            launch=RunLaunch(
+                agent_id=agent_id,
+                model_config_id=model_config_id,
+                terminal_permission_mode=terminal_permission_mode,
+            ),
             presentation=UserInputPresentation(text=command.text),
         )
     )
@@ -385,8 +400,10 @@ async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) ->
         _SESSION_ID,
         SessionMessage.of(
             BackgroundResultBody(
-                ended_at="2026-01-01T00:01:00+00:00", tool_call_id="call-probe",
-                tool_name="execute_terminal", tool_result="done",
+                ended_at="2026-01-01T00:01:00+00:00",
+                tool_call_id="call-probe",
+                tool_name="execute_terminal",
+                tool_result="done",
             )
         ),
     )
@@ -727,8 +744,10 @@ async def test_background_result_after_stop_starts_a_run(chain) -> None:
         _SESSION_ID,
         SessionMessage.of(
             BackgroundResultBody(
-                ended_at="2026-01-01T00:01:00+00:00", tool_call_id="call-probe",
-                tool_name="execute_terminal", tool_result="done",
+                ended_at="2026-01-01T00:01:00+00:00",
+                tool_call_id="call-probe",
+                tool_name="execute_terminal",
+                tool_result="done",
             )
         ),
     )

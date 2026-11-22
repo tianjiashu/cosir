@@ -42,10 +42,11 @@ def test_rebuild_empty_session_returns_valid_empty_snapshot() -> None:
         "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
+        "terminal_approvals": [],
         "background_tasks": [],
         "foreground_waits": [],
         "deliverables": [],
-            "queued_messages": [],
+        "queued_messages": [],
     }
 
 
@@ -164,6 +165,7 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
         "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
+        "terminal_approvals": [],
         "background_tasks": [],
         "foreground_waits": [],
         "deliverables": [],
@@ -198,6 +200,7 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
         "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
+        "terminal_approvals": [],
         "background_tasks": [],
         "foreground_waits": [],
         "deliverables": [],
@@ -335,7 +338,8 @@ def test_rebuild_restores_child_session_locator_and_workspace_role_from_display_
     )
 
     tool_part = pair_tool_parts(
-        [row, result_row], {},
+        [row, result_row],
+        {},
     )["delegate-1"]
 
     assert tool_part["display_data"]["child_session_id"] == 22

@@ -26,6 +26,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.http_test_support import TRUSTED_HEADERS
 from tests.process_tree_support import descendants, kill, survivors
 from tests.terminal_test_support import requires_terminal_worker, terminal_worker_path
 
@@ -91,7 +92,9 @@ def backend(tmp_path: Path) -> Iterator[_Backend]:
         deadline = time.monotonic() + _READY_TIMEOUT
         while started.phase() != "ready":
             if process.poll() is not None or time.monotonic() > deadline:
-                pytest.fail(f"backend did not become ready (phase {started.phase()}):\n{started.console_tail()}")
+                pytest.fail(
+                    f"backend did not become ready (phase {started.phase()}):\n{started.console_tail()}"
+                )
             time.sleep(0.2)
         yield started
     finally:
@@ -106,7 +109,7 @@ def _start_terminal(backend: _Backend, workspace: Path) -> dict[int, str]:
     """经 HTTP 建工作区、会话与一个交互终端；返回此时后端的全部后代（含 Worker 与 shell）。"""
 
     workspace.mkdir()
-    with httpx.Client(base_url=backend.base_url, timeout=30) as client:
+    with httpx.Client(base_url=backend.base_url, timeout=30, headers=TRUSTED_HEADERS) as client:
         created = client.post("/workspaces", json={"name": "ws", "root_path": str(workspace)})
         assert created.status_code == 200, created.text
         workspace_id = created.json()["workspace_id"]
@@ -144,11 +147,15 @@ def test_closing_stdin_shuts_the_backend_down_gracefully_with_its_processes(
         pytest.fail(f"backend did not exit after its stdin closed:\n{backend.console_tail()}")
     # 优雅关闭走完 lifespan 收尾才会写 stopped；强制退出兜底（15 秒）不写。
     assert backend.phase() == "stopped", backend.console_tail()
-    assert time.monotonic() - started < 15, "graceful shutdown must not wait for the hard-exit fallback"
+    assert (
+        time.monotonic() - started < 15
+    ), "graceful shutdown must not wait for the hard-exit fallback"
     assert survivors(list(tree), timeout=10) == [], f"processes left behind: {tree}"
 
 
-def test_killing_only_the_backend_still_cleans_up_the_terminal(backend: _Backend, tmp_path: Path) -> None:
+def test_killing_only_the_backend_still_cleans_up_the_terminal(
+    backend: _Backend, tmp_path: Path
+) -> None:
     """目的：后端被强杀（只杀后端本身）时，Worker 读到 stdin EOF 自行结束 shell 并退出。
     潜在缺陷：Worker 只靠后端关闭它，强杀后 Worker 与 shell 都成为孤儿。"""
 

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { activeRunLaunch } from "@/lib/assistant/run-launch";
 import { activity, transportState } from "./transport-fixtures";
 
-const LAUNCH = { modelConfigId: "c/m3", reasoningEffort: "high" };
+const LAUNCH = { terminalPermissionMode: "request_approval" as const, modelConfigId: "c/m3", reasoningEffort: "high" };
 
 const state = (status: Parameters<typeof activity>[1]) => transportState({ activity: activity(1, status, { launch: LAUNCH }) });
 

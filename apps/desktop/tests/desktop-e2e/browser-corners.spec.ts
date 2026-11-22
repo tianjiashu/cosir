@@ -4,7 +4,7 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { expect, test } from "@playwright/test";
 
-import { backendBaseUrl, launchDesktop, openNewConversation, unstartedSession, waitForAppShell } from "./desktop-app";
+import { desktopFetch, backendBaseUrl, launchDesktop, openNewConversation, unstartedSession, waitForAppShell } from "./desktop-app";
 
 /** 真实宿主与后端：DOM 裁切无法约束 WebContentsView，守住矩形槽的留白、原生 bounds 与冻结恢复。 */
 test("浏览器原生画面退入圆角，铺满还原与冻结帧保持同一槽位", async () => {
@@ -21,7 +21,7 @@ test("浏览器原生画面退入圆角，铺满还原与冻结帧保持同一�
       const base = await backendBaseUrl(page);
       const root = path.join(home, "workspace");
       fs.mkdirSync(root);
-      const response = await fetch(`${base}/workspaces`, {
+      const response = await desktopFetch(`${base}/workspaces`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: "圆角验收", root_path: root }),
       });

@@ -19,7 +19,7 @@ const PAIRS = 60;
 const ACTIVITY_OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
 // `durationMs` 只属于结局；activity 是固定字段的白名单。
 const OUTCOME = { ...ACTIVITY_OUTCOME, durationMs: 0 };
-const LAUNCH = { modelConfigId: null, reasoningEffort: null };
+const LAUNCH = { terminalPermissionMode: "request_approval" as const, modelConfigId: null, reasoningEffort: null };
 
 function answer(index: number): string {
   const lines = [`## 第 ${index} 轮回答`, "", "这是一段较长的说明文字，用来撑开消息高度。".repeat(4 + (index % 4)), ""];
@@ -42,7 +42,7 @@ function longConversation(): TransportState {
   }
   return {
     title: "长对话", messages, messageOffset: 0, activity: { modelActivity: null, turn: PAIRS, resumable: false, ...ACTIVITY_OUTCOME, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
-    terminal_sessions: [], background_tasks: [], foreground_waits: [], deliverables: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [],
   };
 }
 

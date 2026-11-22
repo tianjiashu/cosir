@@ -354,10 +354,8 @@ async def test_tool_batch_runs_terminal_off_loop_with_bound_context(tmp_path: Pa
     rc = runtime_stub(
         tool_executor=Executor(),
         request_tools=admitting(frozenset({"execute_terminal"})),
-        tool_definitions={
-            "execute_terminal": SimpleNamespace(user_decision=False)
-        },
-        run=SimpleNamespace(id=9, session_id=7),
+        tool_definitions={"execute_terminal": SimpleNamespace(user_decision=False)},
+        run=SimpleNamespace(id=9, session_id=7, terminal_permission_mode="request_approval"),
         session=SimpleNamespace(id=7, extra=SessionExtra()),
         workspace=SimpleNamespace(id=2, root_path=str(tmp_path)),
         agent=agent,
@@ -527,11 +525,15 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            result=ToolMessageMetadata(status="pending", background=BackgroundWork(
+            result=ToolMessageMetadata(
+                status="pending",
+                background=BackgroundWork(
                     run_id=1,
                     label="make",
                     started_at=_RUN_CREATED_AT.isoformat(),
-                ), display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"}),
+                ),
+                display_data={"kind": "terminal-result", "command": "make", "workdir": "/w"},
+            ),
         )
     )
     projector.process(
@@ -553,14 +555,17 @@ def test_background_placeholder_keeps_streaming_after_its_run_suspends() -> None
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            result=ToolMessageMetadata(status="completed", display_data={
+            result=ToolMessageMetadata(
+                status="completed",
+                display_data={
                     "kind": "terminal-result",
                     "command": "make",
                     "workdir": "/w",
                     "output": "before after",
                     "end": "exited",
                     "exit_code": 0,
-                }),
+                },
+            ),
         )
     )
     projector.process(_terminal_output_update(2, " late"))
@@ -634,11 +639,14 @@ def test_final_terminal_status_uses_authoritative_output_including_unstreamed_ta
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            result=ToolMessageMetadata(status="completed", display_data={
+            result=ToolMessageMetadata(
+                status="completed",
+                display_data={
                     "kind": "terminal-result",
                     "output": streamed_output + "final unstreamed tail",
                     "exit_code": 0,
-                }),
+                },
+            ),
         )
     )
 
@@ -925,12 +933,15 @@ def test_leaving_running_clears_the_start_time() -> None:
             session_id=7,
             run_id=9,
             tool_call_id="call-1",
-            result=ToolMessageMetadata(status="completed", display_data={
+            result=ToolMessageMetadata(
+                status="completed",
+                display_data={
                     "kind": "terminal-result",
                     "command": "make",
                     "workdir": "/w",
                     "output": "",
-                }),
+                },
+            ),
         )
     )
 

@@ -51,7 +51,9 @@ def test_render_marks_messages_from_the_deriver_as_parent() -> None:
     """派生方发来的消息是这个 Session 的任务：渲染成 relation="parent"；其他 Agent 的消息不带。"""
 
     parent = MessageSource(session_id=4, name="main", from_deriver=True)
-    body = AgentMessageBody(text="修复登录", launch=RunLaunch(model_config_id="test/m1"), source=parent)
+    body = AgentMessageBody(
+        text="修复登录", launch=RunLaunch(model_config_id="test/m1"), source=parent
+    )
 
     assert 'relation="parent"' in body.render()[0]["content"]
     assert "relation=" not in _body().render()[0]["content"]
@@ -76,7 +78,11 @@ def test_prepare_carries_launch_and_rejects_empty_text(monkeypatch: pytest.Monke
     )
 
     message = agent_message_module.prepare_agent_message(
-        "继续", source=_SOURCE, agent_id="child_a", model_config_id="test/m3", reasoning_effort="high"
+        "继续",
+        source=_SOURCE,
+        agent_id="child_a",
+        model_config_id="test/m3",
+        reasoning_effort="high",
     )
 
     assert message.kind == "agent_message"
@@ -227,6 +233,7 @@ def test_snapshot_rejects_a_source_on_assistant_messages() -> None:
         "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
+        "terminal_approvals": [],
         "background_tasks": [],
         "foreground_waits": [],
         "deliverables": [],

@@ -11,7 +11,7 @@ import { API_ORIGIN as origin, OUTPUT_DIR } from "./e2e-env";
 
 const SESSION_ID = 42;
 const CALL_ID = "call-ask";
-const LAUNCH = { modelConfigId: "demo/demo-model", reasoningEffort: null };
+const LAUNCH = { terminalPermissionMode: "request_approval" as const, modelConfigId: "demo/demo-model", reasoningEffort: null };
 const STORE = "登录态要保存在哪里？";
 const EXPIRY = "哪些情况下要让登录态失效？";
 const MIGRATE = "旧会话怎么处理？";
@@ -52,7 +52,7 @@ function askingState(): TransportState {
       contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z",
     },
     queued_messages: [],
-    terminal_sessions: [], background_tasks: [], foreground_waits: [], deliverables: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [],
   };
 }
 

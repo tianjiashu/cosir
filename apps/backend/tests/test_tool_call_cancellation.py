@@ -111,7 +111,9 @@ def _make_tool(
     )
 
 
-def _run_handler(tool: ToolDefinition, arguments: dict[str, Any], context: ToolExecutionContext) -> Any:
+def _run_handler(
+    tool: ToolDefinition, arguments: dict[str, Any], context: ToolExecutionContext
+) -> Any:
     """只跑执行器里调用 handler 的那一段（准入与 running 由其他用例覆盖）。"""
 
     return ToolExecutor(ToolRegistry([tool]))._run_handler(
@@ -203,8 +205,13 @@ def test_registry_concurrent_access_does_not_crosstalk() -> None:
                 tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, call_id)
                 assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, call_id) is True
                 # 并发写入不得挤掉见证键，也不得让本线程误命中别的 Session。
-                assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, witness_call_id) is True
-                assert tool_call_cancellation_registry.is_cancelled(_OTHER_SESSION, call_id) is False
+                assert (
+                    tool_call_cancellation_registry.is_cancelled(_SESSION_ID, witness_call_id)
+                    is True
+                )
+                assert (
+                    tool_call_cancellation_registry.is_cancelled(_OTHER_SESSION, call_id) is False
+                )
                 tool_call_cancellation_registry.clear(_SESSION_ID, call_id)
         except BaseException as exc:  # 线程异常需回传主线程断言，不能静默丢失
             errors.append(exc)
@@ -241,9 +248,7 @@ def _capture_workflow_emits(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 def test_result_is_kept_when_cancel_arrives_during_execution() -> None:
     """handler 已完成就保留真实结果，执行期间到达的取消不推翻已发生的副作用。"""
 
-    tool = _make_tool(
-        _handler_marks_own_call_signal, name="thread_post_boundary"
-    )
+    tool = _make_tool(_handler_marks_own_call_signal, name="thread_post_boundary")
 
     observation = _run_handler(
         tool,
@@ -270,7 +275,7 @@ def test_runner_cancellation_does_not_project_transport_state(
     tool = _make_tool(lambda execution_context=None, **_kwargs: "ran", name="no_bypass")
 
     observation = ToolExecutor(ToolRegistry([tool])).execute(
-        ToolCall(tool_name="no_bypass", arguments='{}', call_id="call-1"),
+        ToolCall(tool_name="no_bypass", arguments="{}", call_id="call-1"),
         _make_context(_RUN_A, tool_call_id="call-1"),
         RequestTools(schemas=(), admitted=frozenset({"no_bypass"})),
     )
@@ -315,11 +320,11 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
     monkeypatch.setattr(ToolExecutor, "_run_handler", _fake_runner_execute)
     monkeypatch.setattr(tools_node, "emit", _record_emit)
     monkeypatch.setattr(tool_executor_module, "emit", _record_emit)
-    executor = ToolExecutor(
-        registry=ToolRegistry([_make_tool(_handler_sleeps_then_writes)])
-    )
+    executor = ToolExecutor(registry=ToolRegistry([_make_tool(_handler_sleeps_then_writes)]))
     rc = runtime_stub(
-        run=SimpleNamespace(id=_RUN_A, session_id=_SESSION_ID),
+        run=SimpleNamespace(
+            id=_RUN_A, session_id=_SESSION_ID, terminal_permission_mode="request_approval"
+        ),
         session=SimpleNamespace(id=_SESSION_ID, extra=SessionExtra()),
         tool_executor=executor,
         request_tools=admitting(frozenset({"probe_tool"})),
@@ -327,10 +332,11 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
 
     observation = tools_node._execute_call(
         rc,
-        ToolCall(tool_name="probe_tool", arguments='{}', call_id="call-1"),
+        ToolCall(tool_name="probe_tool", arguments="{}", call_id="call-1"),
         "step-1",
-
-        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+        _NO_LOOP,
+        rc.request_tools(None),
+        FileKnowledge(),
     )
 
     assert observation.status == "cancelled"
@@ -361,11 +367,15 @@ def test_late_tool_call_signal_survives_until_execution_cleanup() -> None:
 
     tool_call_cancellation_registry.mark_cancelled(_SESSION_ID, "call-already-finished")
 
-    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-already-finished") is True
+    assert (
+        tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-already-finished") is True
+    )
 
     tool_call_cancellation_registry.clear_session(_SESSION_ID)
 
-    assert tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-already-finished") is False
+    assert (
+        tool_call_cancellation_registry.is_cancelled(_SESSION_ID, "call-already-finished") is False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +413,8 @@ def _running_tool_state(tool_call_id: str = "call-9") -> dict[str, Any]:
                 "outcome": None,
                 "source": None,
                 "parts": [
-                    {"presentation": "activity",
+                    {
+                        "presentation": "activity",
                         "type": "tool-call",
                         "toolCallId": tool_call_id,
                         "toolName": "execute_terminal",
@@ -413,7 +424,8 @@ def _running_tool_state(tool_call_id: str = "call-9") -> dict[str, Any]:
                 ],
             }
         ],
-        "activity": {"modelActivity": None,
+        "activity": {
+            "modelActivity": None,
             "runId": 4,
             "status": "running",
             "endReason": None,
@@ -485,7 +497,9 @@ def test_placeholder_overwrite_transition_cancelled_to_completed_is_applied() ->
         session_id=11,
         run_id=_RUN_A,
         tool_call_id="call-1",
-        result=ToolMessageMetadata(status="completed", display_data={"kind": "read-file-meta", "path": "a.py"}),
+        result=ToolMessageMetadata(
+            status="completed", display_data={"kind": "read-file-meta", "path": "a.py"}
+        ),
     )
 
     mutations = {

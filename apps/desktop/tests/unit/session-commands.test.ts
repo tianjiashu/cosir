@@ -21,6 +21,7 @@ const REQUEST: SessionMessageRequest = {
   message: { role: "user", parts: [{ type: "text", text: "hello" }] },
   modelConfigId: "c/m1",
   reasoningEffort: "high",
+  terminalPermissionMode: "request_approval",
 };
 
 /** 后端处理完这一轮返回 200 `{}`，输出经 Session 长订阅到达。 */

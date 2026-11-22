@@ -30,6 +30,7 @@ from app.service.configuration.instructions.global_instruction_service import (
     InstructionConfigurationError,
     InstructionConfigurationService,
 )
+from tests.http_test_support import TRUSTED_HEADERS
 
 
 def _configuration_registry() -> AgentProfileRegistry:
@@ -95,20 +96,20 @@ def test_agent_configuration_round_trip_preserves_model_override(
             "FakeModelConfigService",
             (),
             {
-                    "get_config": staticmethod(
-                        lambda config_id: type(
-                            "Config",
-                            (),
-                            {
-                                "model_name": "model-a",
-                                "base_url": "https://example.test",
-                                "api_key": "secret",
-                                "context_window_k": 128,
-                                "supports_thinking": True,
-                                "supports_reasoning_effort": True,
-                                "supports_image": False,
-                            },
-                        )()
+                "get_config": staticmethod(
+                    lambda config_id: type(
+                        "Config",
+                        (),
+                        {
+                            "model_name": "model-a",
+                            "base_url": "https://example.test",
+                            "api_key": "secret",
+                            "context_window_k": 128,
+                            "supports_thinking": True,
+                            "supports_reasoning_effort": True,
+                            "supports_image": False,
+                        },
+                    )()
                 )
             },
         )(),
@@ -176,9 +177,7 @@ def test_builtin_agent_is_editable_but_not_deletable(
     registry = _configuration_registry()
     service = _service(monkeypatch, registry)
     current = _document(service, "general-purpose")
-    updated = AgentConfiguration(
-        **{**current.__dict__, "description": "可编辑的系统通用 Agent"}
-    )
+    updated = AgentConfiguration(**{**current.__dict__, "description": "可编辑的系统通用 Agent"})
 
     service.update("general-purpose", updated)
 
@@ -485,7 +484,7 @@ def test_environment_configuration_schema_error(
 
     # 不进入 lifespan：``backend_env`` 已装配隔离主库与单例；lifespan 的 ``Settings.load()`` 会
     # ``paths.reset()`` 回真实用户数据目录，用例因此会去打开开发者本机的主库。
-    response = TestClient(app).post(
+    response = TestClient(app, headers=TRUSTED_HEADERS).post(
         "/configuration/agents",
         json={
             "agent_id": "unknown-field",
@@ -498,6 +497,7 @@ def test_environment_configuration_schema_error(
     )
     assert response.status_code == 400
     assert response.json()["detail"]["code"] == "configuration_invalid"
+
 
 # 本文件全部用例都需要真实后端环境（隔离主库 + 进程级单例）。
 pytestmark = pytest.mark.usefixtures("backend_env")

@@ -22,9 +22,7 @@ from app.service import depends
 from app.tools.tool_handler.terminal.command_job import CommandConclusion
 from tests.command_job_fakes import FakeCommandJob
 
-_WORK = BackgroundWork(
-    run_id=1, label="make", started_at="2026-01-01T00:00:00+00:00"
-)
+_WORK = BackgroundWork(run_id=1, label="make", started_at="2026-01-01T00:00:00+00:00")
 _ENDED_AT = "2026-01-01T00:01:00+00:00"
 _FINISHED_WORK = _WORK.model_copy(update={"ended_at": _ENDED_AT})
 
@@ -63,11 +61,11 @@ def _metadata(stored, call_id: str) -> ToolMessageMetadata:
 
 
 def test_only_pending_background_rows_are_settled(stored) -> None:
-    assert [r.message["tool_call_id"] for r in stored.crud.list_unsettled_placeholders()] == ["call-bg"]
+    assert [r.message["tool_call_id"] for r in stored.crud.list_unsettled_placeholders()] == [
+        "call-bg"
+    ]
 
-    settled_sessions = cancel_placeholders(
-        stored.session_id, None, INTERRUPTED_HINT
-    )
+    settled_sessions = cancel_placeholders(stored.session_id, None, INTERRUPTED_HINT)
 
     assert settled_sessions == {stored.session_id: frozenset({"call-bg"})}
     settled = _metadata(stored, "call-bg")
@@ -90,10 +88,11 @@ def test_settlement_filters_by_call(stored) -> None:
 
 
 def test_terminal_event_keeps_background_placeholders_pending() -> None:
-    observation = ToolObservation(tool_name="terminal_write", status="success", waiting=RunInBackground(_WORK))
+    observation = ToolObservation(
+        tool_name="terminal_write", status="success", waiting=RunInBackground(_WORK)
+    )
     event = terminal_event(observation, session_id=1, run_id=2, step_id="s", tool_call_id="c")
     assert (event.status, event.result.background) == ("pending", _WORK)
-
 
 
 def test_observe_persists_background_placeholder_as_pending(monkeypatch) -> None:
@@ -120,7 +119,6 @@ def test_observe_persists_background_placeholder_as_pending(monkeypatch) -> None
                 waiting=RunInBackground(_WORK),
             )
         ],
-
     )
 
     projection_module.settle_observations(batch, step_id="step-1")
@@ -140,7 +138,16 @@ def test_background_placeholder_projects_a_valid_part_field() -> None:
         "startedAt": _WORK.started_at,
         "endedAt": None,
     }
-    _validate_part({"presentation": "activity", "type": "tool-call", "toolCallId": "c", "toolName": "t", "args": {}, **fields})
+    _validate_part(
+        {
+            "presentation": "activity",
+            "type": "tool-call",
+            "toolCallId": "c",
+            "toolName": "t",
+            "args": {},
+            **fields,
+        }
+    )
 
 
 class _Context:
@@ -160,7 +167,8 @@ def test_consumed_result_completes_the_placeholder(monkeypatch) -> None:
     """消费结论在认领事务中结算占位；返回提交后待发布的事件。"""
     context = _Context(
         ToolMessageMetadata(
-            status="pending", background=_WORK,
+            status="pending",
+            background=_WORK,
         )
     )
     emitted: list[Any] = []
@@ -173,16 +181,27 @@ def test_consumed_result_completes_the_placeholder(monkeypatch) -> None:
     monkeypatch.setattr(projection_module, "emit", emitted.append)
 
     card = {"kind": "terminal-result", "command": "make", "output": "ok", "exit_code": 0}
-    body = BackgroundResultBody(tool_call_id="call-bg", tool_name="terminal_command", tool_result="{}",
-                                placeholder_display_data=card, ended_at=_ENDED_AT)
-    event = projection_module.settle_background_placeholder("call-bg", body, step_id="step-2", db=object())
+    body = BackgroundResultBody(
+        tool_call_id="call-bg",
+        tool_name="terminal_command",
+        tool_result="{}",
+        placeholder_display_data=card,
+        ended_at=_ENDED_AT,
+    )
+    event = projection_module.settle_background_placeholder(
+        "call-bg", body, step_id="step-2", db=object()
+    )
 
     # 作业给卡片的终态展示随结算写入（写入即持久化），投影按实际写入的展示数据发出。
     [update] = context.updates
     assert (update.status, update.display_data) == ("completed", card)
     assert update.background == _FINISHED_WORK
     assert not emitted
-    assert (event.tool_call_id, event.status, event.result.display_data) == ("call-bg", "completed", card)
+    assert (event.tool_call_id, event.status, event.result.display_data) == (
+        "call-bg",
+        "completed",
+        card,
+    )
     assert event.result.background == _FINISHED_WORK
 
 
@@ -208,7 +227,12 @@ def test_consumed_result_leaves_other_rows_alone(monkeypatch, metadata) -> None:
     body = BackgroundResultBody(
         tool_call_id="call-x", tool_name="execute_terminal", tool_result="{}", ended_at=_ENDED_AT
     )
-    assert projection_module.settle_background_placeholder("call-x", body, step_id="step-2", db=object()) is None
+    assert (
+        projection_module.settle_background_placeholder(
+            "call-x", body, step_id="step-2", db=object()
+        )
+        is None
+    )
 
     assert context.updates == []
 
@@ -229,9 +253,12 @@ def test_result_arriving_while_user_stopping_is_still_delivered(stored) -> None:
     )
     cancellation_registry.request_cancel(stored.session_id, "user")
     try:
-        assert command_results.complete(
-            stored.session_id, "call-bg", CommandConclusion({"exit_code": 0})
-        ) is True
+        assert (
+            command_results.complete(
+                stored.session_id, "call-bg", CommandConclusion({"exit_code": 0})
+            )
+            is True
+        )
     finally:
         cancellation_registry.consume(stored.session_id)
         command_results.drop_session(stored.session_id)
@@ -278,14 +305,21 @@ def test_real_parent_stop_persists_output_without_waking_agent(stored, tmp_path)
     from app.tools.tool_handler.terminal.command_results import command_results
     from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
     from tests.terminal_test_support import terminal_worker_path
+
     if not terminal_worker_path().is_file():
         pytest.skip("terminal worker not built")
     marker = tmp_path / "started"
     ExecuteTerminalTool().execute(
         command=f"printf '完整取消输出\\n'; touch '{marker}'; sleep 10",
-        background=True, execution_context=ToolExecutionContext(
-            session_id=stored.session_id, run_id=None, workspace_id=1, workspace_root=tmp_path,
-            step_id="test", tool_call_id="call-bg",
+        background=True,
+        execution_context=ToolExecutionContext(
+            session_id=stored.session_id,
+            run_id=None,
+            workspace_id=1,
+            workspace_root=tmp_path,
+            step_id="test",
+            tool_call_id="call-bg",
+            terminal_permission_mode="full_access",
         ),
     )
     try:

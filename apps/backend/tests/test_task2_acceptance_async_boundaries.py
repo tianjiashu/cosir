@@ -88,9 +88,7 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
         def recover_after_restart(self) -> None:
             pass
 
-    monkeypatch.setattr(
-        lifespan_module, "configure_logging", lambda **_kwargs: None
-    )
+    monkeypatch.setattr(lifespan_module, "configure_logging", lambda **_kwargs: None)
     monkeypatch.setattr(lifespan_module, "shutdown_logging", lambda: None)
     monkeypatch.setattr(lifespan_module.Settings, "load", staticmethod(lambda: None))
     monkeypatch.setattr(lifespan_module, "initialize_service_dependencies", lambda: None)
@@ -104,6 +102,11 @@ async def test_normal_shutdown_dependency_cleanup_runs_off_event_loop(
         lifespan_module,
         "get_conversation_event_projector",
         lambda: SimpleNamespace(process=lambda _event: None),
+    )
+    monkeypatch.setattr(
+        lifespan_module,
+        "get_conversation_state_service",
+        lambda: SimpleNamespace(refresh_terminal_approvals=lambda _id: None),
     )
     # Registry 只保存内置 profile，用户 JSON 由注册表在作用域首次被读取时按需装载，
     # 因此启动编排不再遍历 workspace 调用装载方法。

@@ -33,6 +33,7 @@ requires_terminal_worker = pytest.mark.skipif(
     not terminal_worker_path().is_file(), reason="terminal-worker binary is not built"
 )
 
+
 class FakeWorker:
     pid = 4321
     rows = 24
@@ -86,7 +87,8 @@ class FakeWorker:
     ) -> None:
         height, width = size or (self.rows, self.columns)
         lines = [
-            {"text": row, "wrapped": False} if isinstance(row, str)
+            {"text": row, "wrapped": False}
+            if isinstance(row, str)
             else {"text": row[0], "wrapped": row[1]}
             for row in rows
         ]
@@ -153,8 +155,9 @@ def _spec(shell: str, integration: str) -> Any:
     return ShellSpec(kind, f"/bin/{kind}", (f"/bin/{kind}",), integration)
 
 
-def start(service: TerminalSessionService, tmp_path: Any, *, session_id: int = 1,
-          shell: str = "auto") -> str:
+def start(
+    service: TerminalSessionService, tmp_path: Any, *, session_id: int = 1, shell: str = "auto"
+) -> str:
     runtime = service.start(
         session_id=session_id,
         cwd=str(tmp_path),
@@ -177,7 +180,9 @@ def never() -> bool:
     return False
 
 
-def session_view(service: TerminalSessionService, terminal_session_id: str, session_id: int = 1) -> Any:
+def session_view(
+    service: TerminalSessionService, terminal_session_id: str, session_id: int = 1
+) -> Any:
     """测试检查用：会话当前快照。"""
     return service.require(terminal_session_id, session_id).snapshot()
 
@@ -191,7 +196,9 @@ def session_entries(service: TerminalSessionService, session_id: int = 1) -> lis
     return [dict(to_terminal_session(r.snapshot())) for r in service.session_runtimes(session_id)]
 
 
-def geometry(service: TerminalSessionService, terminal_session_id: str, session_id: int = 1) -> tuple[int, int]:
+def geometry(
+    service: TerminalSessionService, terminal_session_id: str, session_id: int = 1
+) -> tuple[int, int]:
     """测试检查用：会话当前屏幕尺寸（跟随 worker screen 事件）。"""
     buffer = service.require(terminal_session_id, session_id)._observation.buffer
     return buffer.rows, buffer.columns
@@ -243,7 +250,18 @@ def run_local_command(
     from app.tools.terminal_runtime.command.command_output import CommandOutput
     from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
 
-    output = CommandOutput(workspace_root=Path(cwd), model_budget_chars=Constant.Tools.MAX_OUTPUT_CHARS)
-    result = LocalExecutionBackend().execute(command, str(cwd), timeout, output, shell=shell)
+    output = CommandOutput(
+        workspace_root=Path(cwd), model_budget_chars=Constant.Tools.MAX_OUTPUT_CHARS
+    )
+    from app.tools.terminal_runtime.permissions.policy import TerminalExecutionPolicy
+
+    result = LocalExecutionBackend().execute(
+        command,
+        str(cwd),
+        timeout,
+        output,
+        shell=shell,
+        policy=TerminalExecutionPolicy(full_access=True, network=True),
+    )
     output.finish()
     return result, output.summary()

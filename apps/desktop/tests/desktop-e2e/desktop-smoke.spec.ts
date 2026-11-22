@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 
-import { backendBaseUrl, launchDesktop, openNewConversation, unstartedSession, waitForAppShell } from "./desktop-app";
+import { desktopFetch, backendBaseUrl, launchDesktop, openNewConversation, unstartedSession, waitForAppShell } from "./desktop-app";
 import { attachFirstFrame } from "./attach-first-frame";
 
 test("starts the host, reaches the workspace shell and isolates its data under the given home", async () => {
@@ -56,7 +56,7 @@ test("closing the main window only hides it; the backend keeps running", async (
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
 
     await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((item) => item.isVisible()))).toEqual([false]);
-    expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
+    expect((await desktopFetch(`${baseUrl}/health`)).status).toBe(200);
   } finally {
     await app.close();
   }
@@ -72,7 +72,7 @@ test("quitting stops the backend process tree", async () => {
 
   await expect.poll(async () => {
     try {
-      await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(500) });
+      await desktopFetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(500) });
       return "alive";
     } catch {
       return "stopped";
@@ -87,7 +87,7 @@ test("opens and reloads a conversation through the real attach first frame", asy
     const base = await backendBaseUrl(page);
     const workspacePath = path.join(home, "workspace");
     fs.mkdirSync(workspacePath);
-    const workspaceResponse = await fetch(`${base}/workspaces`, {
+    const workspaceResponse = await desktopFetch(`${base}/workspaces`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "HTTP 回归", root_path: workspacePath }),
     });
@@ -95,7 +95,7 @@ test("opens and reloads a conversation through the real attach first frame", asy
     const workspace = await workspaceResponse.json() as { workspace_id: number };
     const session = await unstartedSession(base, workspace.workspace_id);
     expect((await attachFirstFrame(base, session)).messages).toEqual([]);
-    expect((await fetch(`${base}/sessions/${session}/assistant/messages?end=0`)).status).toBe(200);
+    expect((await desktopFetch(`${base}/sessions/${session}/assistant/messages?end=0`)).status).toBe(200);
     await page.reload();
     await openNewConversation(page, "HTTP 回归", session);
     await expect(page.getByRole("textbox")).toBeVisible();

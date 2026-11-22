@@ -24,6 +24,7 @@ from app.service.depends import (
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.storage.store_engines import init_storage
 from app.utils.path import system_cosir as paths
+from tests.http_test_support import TRUSTED_HEADERS
 from tests.model_config_fixtures import create_model_config
 
 
@@ -50,11 +51,7 @@ def _entry(name: str, window: int = 8, **capabilities: bool) -> ModelEntry:
 def _run_for(model_config_id: str) -> int:
     workspace = get_workspace_crud().create("coding-agent", str(Path.cwd()))
     session = get_session_crud().create(workspace.id, "root")
-    return (
-        get_run_crud()
-        .create(session.id, status="failed", model_config_id=model_config_id)
-        .id
-    )
+    return get_run_crud().create(session.id, status="failed", model_config_id=model_config_id).id
 
 
 def test_connection_and_models_are_written_in_file_order_and_duplicates_conflict() -> None:
@@ -190,7 +187,7 @@ def test_http_routes_return_written_connections_and_map_errors() -> None:
     """写接口返回写入后的连接；重名 409、未知连接 404；模型名带 ``/`` 也能寻址。"""
 
     assert models_api  # 导入即注册路由
-    client = TestClient(app)
+    client = TestClient(app, headers=TRUSTED_HEADERS)
     root = "/configuration/model-connections"
     model = {"model_name": "org/qwen-a", "context_window_k": 128, "supports_image": True}
 
@@ -226,7 +223,7 @@ def test_http_reports_a_broken_file_as_400_with_its_location() -> None:
     service.path.parent.mkdir(parents=True, exist_ok=True)
     service.path.write_text('{"connections": [', encoding="utf-8")
 
-    response = TestClient(app).get("/configuration/model-connections")
+    response = TestClient(app, headers=TRUSTED_HEADERS).get("/configuration/model-connections")
 
     assert response.status_code == 400
     message = response.json()["detail"]["message"]

@@ -26,6 +26,7 @@ from app.tools.terminal_runtime.errors import (
     TerminalSessionStateError,
     TerminalWorkerUnavailableError,
 )
+from tests.http_test_support import TRUSTED_HEADERS
 from tests.session_extra_fixtures import fork_extra
 
 _SHELLS = [{"kind": "zsh", "label": "zsh", "isDefault": True, "integrationSupported": True}]
@@ -67,7 +68,7 @@ def terminals(monkeypatch: pytest.MonkeyPatch) -> _FakeTerminals:
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(app)
+    return TestClient(app, headers=TRUSTED_HEADERS)
 
 
 @pytest.fixture
@@ -82,8 +83,12 @@ def _session(workspace: Any, session_type: str = "user") -> int:
         return sessions.create(
             workspace.id, "child", session_type=session_type, parent_session_id=parent.id
         ).id
-    return sessions.create(workspace.id, "session", session_type=session_type,
-                        extra=fork_extra(987) if session_type.endswith("_fork") else SessionExtra()).id
+    return sessions.create(
+        workspace.id,
+        "session",
+        session_type=session_type,
+        extra=fork_extra(987) if session_type.endswith("_fork") else SessionExtra(),
+    ).id
 
 
 def test_list_shells_and_active_count(client: TestClient, terminals: _FakeTerminals) -> None:
@@ -180,7 +185,9 @@ def test_create_rejects_malformed_body(
     client: TestClient, terminals: _FakeTerminals, workspace: Any
 ) -> None:
     session_id = _session(workspace)
-    response = client.post(f"/sessions/{session_id}/terminal/sessions", json={"shell": "auto", "x": 1})
+    response = client.post(
+        f"/sessions/{session_id}/terminal/sessions", json={"shell": "auto", "x": 1}
+    )
     assert response.status_code in {400, 422}
     assert terminals.started == []
 

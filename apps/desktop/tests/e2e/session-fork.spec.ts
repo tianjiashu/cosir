@@ -4,7 +4,7 @@ import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
 import { API_ORIGIN as origin } from "./e2e-env";
 
-const LAUNCH = { modelConfigId: null, reasoningEffort: null };
+const LAUNCH = { terminalPermissionMode: "request_approval" as const, modelConfigId: null, reasoningEffort: null };
 /** 两轮回复：第一轮已结束（带结局），第二轮处于 `status`。 */
 const snapshot = (status: "completed" | "running" | "suspended"): TransportState => {
   const ended = (runStatus: string) => runStatus === "completed";
@@ -19,7 +19,7 @@ const snapshot = (status: "completed" | "running" | "suspended"): TransportState
     title: "测试对话",
     messages: [...exchange(1, "completed"), ...exchange(2, status)],
     messageOffset: 0, activity: {modelActivity: null, turn: 2, resumable: false, status, endReason: null, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
-    terminal_sessions: [], background_tasks: [], foreground_waits: [], deliverables: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [],
   };
 };
 

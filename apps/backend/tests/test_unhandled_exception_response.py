@@ -6,6 +6,7 @@
 from fastapi.testclient import TestClient
 
 from app.app import app
+from tests.http_test_support import TRUSTED_HEADERS
 
 
 def test_unhandled_exception_returns_structured_500_with_cors_headers() -> None:
@@ -14,7 +15,7 @@ def test_unhandled_exception_returns_structured_500_with_cors_headers() -> None:
         raise RuntimeError("raw internal detail")
 
     try:
-        response = TestClient(app, raise_server_exceptions=False).get(
+        response = TestClient(app, headers=TRUSTED_HEADERS, raise_server_exceptions=False).get(
             "/__test__/boom", headers={"Origin": "app://cosir"}
         )
     finally:

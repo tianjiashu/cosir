@@ -56,7 +56,11 @@ class _StubRegistry:
         return sorted(self._definitions)
 
     def reply_tool_names(self) -> frozenset[str]:
-        return frozenset(name for name, item in self._definitions.items() if getattr(item, "part_of_reply", False))
+        return frozenset(
+            name
+            for name, item in self._definitions.items()
+            if getattr(item, "part_of_reply", False)
+        )
 
 
 class _StubRegistryProxy:
@@ -117,7 +121,11 @@ def admitting(names: Any = ()) -> Any:
 def runtime_stub(**overrides: Any) -> SimpleNamespace:
     rc = SimpleNamespace(
         run=SimpleNamespace(
-            id=2, session_id=1, execution_data=ReactExecutionState(), usage=None
+            id=2,
+            session_id=1,
+            execution_data=ReactExecutionState(),
+            usage=None,
+            terminal_permission_mode="request_approval",
         ),
         # 默认不是侧栏会话：不触发标题支线，需要它的用例显式覆盖 session。
         session=SimpleNamespace(

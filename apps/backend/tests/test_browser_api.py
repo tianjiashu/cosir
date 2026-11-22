@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from app.app import app
 from app.config.settings import Settings
 from app.service import depends
+from tests.http_test_support import TRUSTED_HEADERS
 
 pytestmark = pytest.mark.usefixtures("isolated_storage")
 
@@ -26,7 +27,9 @@ def test_returns_limits_and_the_workspace_download_dir(
     workspace = depends.get_workspace_crud().create("ws", str(tmp_path))
     session_id = depends.get_session_crud().create(workspace.id, "session").id
 
-    response = TestClient(app).get(f"/sessions/{session_id}/browser-context")
+    response = TestClient(app, headers=TRUSTED_HEADERS).get(
+        f"/sessions/{session_id}/browser-context"
+    )
 
     assert response.status_code == 200
     assert response.json() == {
@@ -36,6 +39,6 @@ def test_returns_limits_and_the_workspace_download_dir(
 
 
 def test_missing_session_is_404() -> None:
-    response = TestClient(app).get("/sessions/999/browser-context")
+    response = TestClient(app, headers=TRUSTED_HEADERS).get("/sessions/999/browser-context")
 
     assert response.status_code == 404

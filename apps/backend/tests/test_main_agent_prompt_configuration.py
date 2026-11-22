@@ -21,6 +21,7 @@ from app.service.configuration.instructions.main_agent_prompt_service import (
     MainAgentPromptConfigurationError,
     MainAgentPromptConfigurationService,
 )
+from tests.http_test_support import TRUSTED_HEADERS
 
 
 def test_missing_main_prompt_creates_blank_user_file(tmp_path: Path) -> None:
@@ -143,7 +144,7 @@ def test_update_api_saves_the_file_and_registry_sees_it(
 def test_update_api_is_registered_as_http_endpoint(system_data: Path) -> None:
     """配置中心应把主 Agent prompt 更新暴露为标准 HTTP 接口。"""
 
-    response = TestClient(app).put(
+    response = TestClient(app, headers=TRUSTED_HEADERS).put(
         "/configuration/main-agent-prompt",
         json={"content": "HTTP 新协议"},
     )

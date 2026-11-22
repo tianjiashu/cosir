@@ -17,6 +17,7 @@ import pytest
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.terminal_runtime.command.command_output import CommandOutput as _CommandOutput
 from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
+from app.tools.terminal_runtime.permissions.policy import TerminalExecutionPolicy
 from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.write_file import WriteFileTool
@@ -38,7 +39,11 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
 
     def deliver(session_id, tool_call_id, conclusion, *, starts_run=True) -> bool:
         calls.append(
-            (tool_call_id, "execute_terminal", {**conclusion.result, "card": conclusion.display_data})
+            (
+                tool_call_id,
+                "execute_terminal",
+                {**conclusion.result, "card": conclusion.display_data},
+            )
         )
         return True
 
@@ -55,6 +60,7 @@ def _context(tmp_path: Path, tool_call_id: str) -> ToolExecutionContext:
         workspace_root=tmp_path,
         run_id=1,
         tool_call_id=tool_call_id,
+        terminal_permission_mode="full_access",
     )
 
 
@@ -155,9 +161,7 @@ def test_cancelling_a_background_command_kills_its_process_tree(tmp_path, delive
     assert delivered == []
 
 
-def test_background_payload_fits_the_tools_own_budget(
-    tmp_path, delivered, monkeypatch
-) -> None:
+def test_background_payload_fits_the_tools_own_budget(tmp_path, delivered, monkeypatch) -> None:
     """后台结论通道没有执行器的通用预算：正文由工具裁一次，标记指向命令自己的完整日志。"""
     from app.config.constant import Constant
 
@@ -181,7 +185,13 @@ def test_local_backend_kills_the_command_when_stopped(tmp_path) -> None:
     threading.Timer(0.2, backend.stop).start()
     started = time.monotonic()
     output = _CommandOutput(workspace_root=tmp_path, model_budget_chars=20_000)
-    result = backend.execute(f"sleep 2; touch {marker}", str(tmp_path), 30, output)
+    result = backend.execute(
+        f"sleep 2; touch {marker}",
+        str(tmp_path),
+        30,
+        output,
+        policy=TerminalExecutionPolicy(full_access=True, network=True),
+    )
     assert result.end == "cancelled" and result.exit_code is None
     assert time.monotonic() - started < 1.5
     time.sleep(2)
@@ -193,10 +203,12 @@ def test_parent_stop_retains_real_output_without_delivery(tmp_path, delivered) -
     from app.core.workflow.cancel.run_cancellation_registry import (
         cancellation_registry,
     )
+
     marker = tmp_path / "ready"
     ExecuteTerminalTool().execute(
         command=f"printf '已收集\\n'; touch '{marker}'; sleep 10",
-        background=True, execution_context=_context(tmp_path, "call-parent-stop"),
+        background=True,
+        execution_context=_context(tmp_path, "call-parent-stop"),
     )
     _wait_for(marker.exists)
     cancellation_registry.request_cancel(_SESSION_ID, "user")
@@ -210,7 +222,8 @@ def test_parent_stop_retains_real_output_without_delivery(tmp_path, delivered) -
 
 def test_timeout_retains_real_output(tmp_path) -> None:
     result = ExecuteTerminalTool().execute(
-        command="printf 'before-timeout\\n'; sleep 10", timeout=0.2,
+        command="printf 'before-timeout\\n'; sleep 10",
+        timeout=0.2,
         execution_context=_context(tmp_path, "call-timeout-output"),
     )
     assert result.status == "error"
@@ -220,6 +233,7 @@ def test_timeout_retains_real_output(tmp_path) -> None:
 
 def test_foreground_cancel_retains_real_output(tmp_path) -> None:
     from concurrent.futures import ThreadPoolExecutor
+
     marker = tmp_path / "ready"
     with ThreadPoolExecutor(max_workers=1) as executor:
         result = executor.submit(
@@ -228,9 +242,7 @@ def test_foreground_cancel_retains_real_output(tmp_path) -> None:
             execution_context=_context(tmp_path, "call-cancel-output"),
         )
         _wait_for(marker.exists)
-        assert command_results.request_cancel(
-            _SESSION_ID, "call-cancel-output", driving=False
-        )
+        assert command_results.request_cancel(_SESSION_ID, "call-cancel-output", driving=False)
         observation = result.result(timeout=5)
     assert observation.status == "cancelled"
     assert "before-cancel" in observation.display_data["output"]
@@ -265,7 +277,10 @@ def test_terminal_reads_unlock_literal_writes_only_after_delivery(tmp_path) -> N
     assert overwrite.status == "success"
     [change] = overwrite.facts.terminal_file_audit.changes
     assert (change.path, change.operation, change.recognized, change.previously_read) == (
-        "a file.txt", "modified", True, True,
+        "a file.txt",
+        "modified",
+        True,
+        True,
     )
     assert source.read_text() == "replacement\n"
     assert tool.execute(command="rm 'a file.txt'", execution_context=context).display_data == {
@@ -303,31 +318,43 @@ def test_background_reservation_lasts_until_command_settles(tmp_path, delivered)
     )
     assert result.background
     _wait_for(marker.exists)
-    assert WriteFileTool().execute("file.txt", "new", edit_context).display_data == {"status_hint": "正在修改"}
+    assert WriteFileTool().execute("file.txt", "new", edit_context).display_data == {
+        "status_hint": "正在修改"
+    }
 
     (tmp_path / "continue").touch()
     _wait_for(lambda: len(delivered) == 1)
     assert target.read_text() == "done\n"
     assert "modified: 'file.txt' (recognized target)" in str(delivered[0][2]["output"])
-    assert WriteFileTool().execute("file.txt", "new", edit_context).display_data == {"status_hint": "文件已变化"}
+    assert WriteFileTool().execute("file.txt", "new", edit_context).display_data == {
+        "status_hint": "文件已变化"
+    }
 
 
-def test_background_reports_observed_files_before_completion(tmp_path, delivered, monkeypatch) -> None:
+def test_background_reports_observed_files_before_completion(
+    tmp_path, delivered, monkeypatch
+) -> None:
     from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
     from app.tools.terminal_runtime.command import file_audit
 
     notices = []
     monkeypatch.setattr(file_audit, "_INTERVAL", 0.03)
-    monkeypatch.setattr(session_runtime_spaces, "enqueue", lambda session, message: notices.append(message))
+    monkeypatch.setattr(
+        session_runtime_spaces, "enqueue", lambda session, message: notices.append(message)
+    )
     result = ExecuteTerminalTool().execute(
         command='target=dynamic.txt; printf data > "$target"; while [ ! -f finish ]; do sleep 0.02; done',
-        background=True, execution_context=_context(tmp_path, "report-while-running"),
+        background=True,
+        execution_context=_context(tmp_path, "report-while-running"),
     )
     assert result.background
     _wait_for(lambda: bool(notices))
     notice = notices[0].body
     assert notice.wake_scope() == "none" and not notice.answered_calls()
-    assert "report-while-running" in notice.content and "'dynamic.txt' (unrecognized target)" in notice.content
+    assert (
+        "report-while-running" in notice.content
+        and "'dynamic.txt' (unrecognized target)" in notice.content
+    )
     assert delivered == []
     (tmp_path / "finish").touch()
     _wait_for(lambda: bool(delivered))

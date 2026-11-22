@@ -86,8 +86,12 @@ def test_write_tool_writes_own_scratch_and_refuses_another_sessions(home: Path) 
     mine = paths.session_scratch_dir(1) / "nested" / "probe.py"
     theirs = paths.session_scratch_dir(2) / "probe.py"
 
-    ok = WriteFileTool().execute(path=str(mine), content="print(1)\n", execution_context=_ctx(workspace, 1))
-    refused = WriteFileTool().execute(path=str(theirs), content="x", execution_context=_ctx(workspace, 1))
+    ok = WriteFileTool().execute(
+        path=str(mine), content="print(1)\n", execution_context=_ctx(workspace, 1)
+    )
+    refused = WriteFileTool().execute(
+        path=str(theirs), content="x", execution_context=_ctx(workspace, 1)
+    )
 
     assert ok.status == "success" and mine.read_text(encoding="utf-8") == "print(1)\n"
     assert refused.status == "error" and not theirs.exists()
@@ -111,7 +115,9 @@ def test_scratch_does_not_open_the_rest_of_cosir_or_the_workspace_rules(home: Pa
 
 def test_missing_scratch_is_not_writable(home: Path) -> None:
     absent = paths.session_scratch_dir(9)
-    resolved, error = PathResolver(home / "proj", scratch_dir=absent).resolve_for_write(str(absent / "a"))
+    resolved, error = PathResolver(home / "proj", scratch_dir=absent).resolve_for_write(
+        str(absent / "a")
+    )
     assert resolved is None and error
 
 
@@ -137,7 +143,9 @@ def test_a_locked_scratch_is_left_logged_and_reclaimed_at_next_startup(
     潜在缺陷：删除异常冒出后台线程或被静默吞掉，目录永远留在 ``.cosir/scratch``。"""
 
     warnings: list[str] = []
-    monkeypatch.setattr(session_scratch.log, "warning", lambda event, **_kwargs: warnings.append(event))
+    monkeypatch.setattr(
+        session_scratch.log, "warning", lambda event, **_kwargs: warnings.append(event)
+    )
     locked = paths.session_scratch_dir(1) / "build.log"
     # Python 在 Windows 上打开文件不带 FILE_SHARE_DELETE：握着句柄时删不掉，模拟编译器或杀毒软件占着文件。
     with locked.open("w", encoding="utf-8") as handle:
@@ -169,5 +177,5 @@ def test_prompt_states_scratch_dir_and_the_exception_to_never_modify(home: Path)
 
     assert f"- Scratch directory: {scratch}." in with_scratch
     assert "COSIR_SCRATCH_DIR" in with_scratch
-    assert "never modify either, except your scratch directory" in with_scratch
-    assert "Scratch directory" not in without and "never modify either." in without
+    assert "reserved read-only area" in with_scratch
+    assert "Scratch directory" not in without and "reserved read-only area" in without

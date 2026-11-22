@@ -18,6 +18,7 @@ from app.service.configuration.extension_scope import ExtensionScope
 from app.service.configuration.mcp.configuration import MCPServerConfig, ScopedMCPServer
 from app.service.configuration.mcp.machine_state import MCPMachineState, MCPServerCatalog
 from app.service.configuration.mcp.variable_references import MissingVariablesError
+from tests.http_test_support import TRUSTED_HEADERS
 
 _ENVIRON = {"TOKEN": "secret", "HOST": "api.example.com"}
 
@@ -121,7 +122,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         return root
 
     monkeypatch.setattr(extensions, "resolve_workspace_root", resolve)
-    return TestClient(app)
+    return TestClient(app, headers=TRUSTED_HEADERS)
 
 
 def test_configuration_page_shows_variable_status_and_workspace_literals(
@@ -150,7 +151,9 @@ def test_configuration_page_shows_variable_status_and_workspace_literals(
     assert system.json()["servers"][0]["literal_fields"] == []
 
 
-def _env_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> EnvironmentConfigurationService:
+def _env_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> EnvironmentConfigurationService:
     root = tmp_path / "root"
     root.mkdir()
     module = "app.service.configuration.environment_configuration_service"
@@ -207,7 +210,9 @@ def test_variables_route_maps_rejections_to_400(client: TestClient) -> None:
     assert json.dumps(response.json(), ensure_ascii=False).count("内部变量") == 1
 
 
-def test_each_server_gets_one_main_status_in_priority_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_each_server_gets_one_main_status_in_priority_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """用户只需要知道「能不能用、下一步做什么」：停用 > 缺变量 > 需要授权 > 待测试 > 可用。"""
 
     from app.config.settings import Settings

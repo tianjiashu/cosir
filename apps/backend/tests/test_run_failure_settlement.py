@@ -106,7 +106,8 @@ def _running_state() -> ConversationStateSnapshot:
     """构造只含一个 running Run 的合法 snapshot（含新的 ``error`` 键）。"""
 
     state = empty_snapshot()
-    state["activity"] = ConversationStateActivity(modelActivity=None,
+    state["activity"] = ConversationStateActivity(
+        modelActivity=None,
         status="running",
         turn=None,
         resumable=False,
@@ -115,7 +116,11 @@ def _running_state() -> ConversationStateSnapshot:
         usage=None,
         contextWindowTotal=None,
         startedAt="2026-01-01T00:00:00+00:00",
-        launch={"modelConfigId": None, "reasoningEffort": None},
+        launch={
+            "modelConfigId": None,
+            "reasoningEffort": None,
+            "terminalPermissionMode": "request_approval",
+        },
     )
     return state
 
@@ -145,8 +150,8 @@ def test_failure_code_for_falls_back_to_graph_failed() -> None:
     """无法归类为模型错误的异常使用中性兜底 code，而不是猜测成模型问题。"""
 
     assert (
-            run_driver._failure_code_for(RuntimeError("node exploded"))
-            == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+        run_driver._failure_code_for(RuntimeError("node exploded"))
+        == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
     )
 
 
@@ -158,8 +163,8 @@ def test_failure_code_for_honours_workflow_failure_code() -> None:
     )
 
     assert (
-            run_driver._failure_code_for(failure)
-            == Constant.Run.RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE
+        run_driver._failure_code_for(failure)
+        == Constant.Run.RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE
     )
 
 
@@ -170,9 +175,7 @@ def _make_agent(monkeypatch: pytest.MonkeyPatch, workflow_error: BaseException) 
         async def run(self, *_args: object, **_kwargs: object) -> None:
             raise workflow_error
 
-    monkeypatch.setattr(
-        "app.core.workflow.workflow.ReactLikeWorkflow", _StubWorkflow
-    )
+    monkeypatch.setattr("app.core.workflow.workflow.ReactLikeWorkflow", _StubWorkflow)
     return 7
 
 
@@ -209,13 +212,12 @@ def _make_runtime(
         return operations
 
     monkeypatch.setattr(RuntimeContext, "for_run", classmethod(_build))
-    monkeypatch.setattr(
-        AgentRuntimeConfig, "for_run", classmethod(lambda *_args: object())
-    )
+    monkeypatch.setattr(AgentRuntimeConfig, "for_run", classmethod(lambda *_args: object()))
     monkeypatch.setattr(
         "app.service.depends.get_conversation_event_projector",
-        lambda: SimpleNamespace(process=lambda _event: None,
-    ),
+        lambda: SimpleNamespace(
+            process=lambda _event: None,
+        ),
     )
     monkeypatch.setattr(
         run_driver,
@@ -306,7 +308,6 @@ async def test_run_agent_propagates_settlement_failure(
     assert len(run_state_service.calls) == 1
 
 
-
 def test_status_changed_event_projects_controlled_error() -> None:
     """终态事件把受控错误写进 Run snapshot。"""
 
@@ -339,7 +340,12 @@ def test_non_terminal_transition_clears_previous_error() -> None:
         "code": _QUOTA_CODE,
         "message": run_failure_message(_QUOTA_CODE),
     }
-    event = RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), session_id=7, run_id=1, status=RunStatus.RUNNING)
+    event = RunStatusChangedEvent(
+        changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+        session_id=7,
+        run_id=1,
+        status=RunStatus.RUNNING,
+    )
 
     assert _error_mutation_values(state, event) == [None]
 

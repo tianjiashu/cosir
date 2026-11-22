@@ -15,6 +15,7 @@ from app.service.workspace_files.file_models import FileConflictError
 from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
 from app.tools.tool_handler.find_files import FindFilesTool
 from app.tools.tool_handler.search_content import SearchContentTool
+from tests.http_test_support import TRUSTED_HEADERS
 
 
 @pytest.fixture
@@ -120,7 +121,9 @@ def test_browser_settings_never_change_agent_tools(files, tmp_path):
     (tmp_path / "src/secret.py").write_text("unique_needle\n")
     files.change_visibility(1, ["src"], ignored=True)
     assert search_paths(files, "*.py") == set()
-    context = ToolExecutionContext(step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1)
+    context = ToolExecutionContext(
+        step_id="step-1", session_id=1, workspace_id=1, workspace_root=tmp_path, run_id=1
+    )
     found = FindFilesTool().execute(pattern="*.py", path=".", execution_context=context)
     content = SearchContentTool().execute(
         pattern="unique_needle", path="src", execution_context=context
@@ -135,7 +138,7 @@ def test_http_mutation_and_search_contract(files, tmp_path):
     (tmp_path / "hide.txt").write_text("still readable")
     app.dependency_overrides[get_workspace_files_service] = lambda: files
     try:
-        client = TestClient(app)
+        client = TestClient(app, headers=TRUSTED_HEADERS)
         url = "/workspaces/1/files"
         assert (
             client.patch(

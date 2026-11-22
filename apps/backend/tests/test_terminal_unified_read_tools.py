@@ -32,20 +32,33 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
 
     def deliver(session_id, tool_call_id, conclusion, *, starts_run=True) -> bool:
         calls.append(
-            (tool_call_id, "execute_terminal", {**conclusion.result, "card": conclusion.display_data})
+            (
+                tool_call_id,
+                "execute_terminal",
+                {**conclusion.result, "card": conclusion.display_data},
+            )
         )
         return True
 
     def report_cancelled(session_id, tool_call_id, conclusion) -> bool:
-        calls.append((tool_call_id, "execute_terminal", {
-            **conclusion.result, "cancel_hint": conclusion.cancel_hint,
-            "card": conclusion.display_data,
-        }))
+        calls.append(
+            (
+                tool_call_id,
+                "execute_terminal",
+                {
+                    **conclusion.result,
+                    "cancel_hint": conclusion.cancel_hint,
+                    "card": conclusion.display_data,
+                },
+            )
+        )
         return True
 
     monkeypatch.setattr(CommandResultRegistry, "_enqueue_result", staticmethod(deliver))
     monkeypatch.setattr(
-        CommandResultRegistry, "_enqueue_cancel_receipt", staticmethod(report_cancelled),
+        CommandResultRegistry,
+        "_enqueue_cancel_receipt",
+        staticmethod(report_cancelled),
     )
     yield calls
     # 收尾：撤销这个 Session 全部后台条目，并等作业线程把登记表条目清掉。
@@ -55,7 +68,9 @@ def delivered(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str | None, str, di
         time.sleep(0.02)
 
 
-def _context(tmp_path: Path, tool_call_id: str, session_id: int = _SESSION_ID) -> ToolExecutionContext:
+def _context(
+    tmp_path: Path, tool_call_id: str, session_id: int = _SESSION_ID
+) -> ToolExecutionContext:
     return ToolExecutionContext(
         step_id="step-1",
         session_id=session_id,
@@ -63,6 +78,7 @@ def _context(tmp_path: Path, tool_call_id: str, session_id: int = _SESSION_ID) -
         workspace_root=tmp_path,
         run_id=1,
         tool_call_id=tool_call_id,
+        terminal_permission_mode="full_access",
     )
 
 

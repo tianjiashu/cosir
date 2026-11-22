@@ -6,6 +6,15 @@ import { _electron as electron, expect, type ElectronApplication, type Page } fr
 const desktopRoot = path.resolve(__dirname, "..", "..");
 const repositoryRoot = path.resolve(desktopRoot, "..", "..");
 const backendPython = path.join(repositoryRoot, "apps", "backend", process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python");
+const capabilities = new Map<string, string>();
+
+/** 测试驱动作为可信用户客户端；凭据从真实宿主出站请求捕获，只保留在测试内存。 */
+export function desktopFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const token = capabilities.get(new URL(input).origin);
+  const headers = new Headers(init.headers);
+  if (token) headers.set("X-Cosir-Capability", token);
+  return fetch(input, { ...init, headers });
+}
 
 /**
  * 启动真实宿主。数据根指向临时目录（`CODING_AGENT_DATA_DIR`）：SQLite、日志与运行期文件全部隔离，不碰开发者的真实数据。
@@ -40,12 +49,20 @@ export async function waitForAppShell(page: Page, timeout = 120_000): Promise<vo
 export async function backendBaseUrl(page: Page): Promise<string> {
   const snapshot = await page.evaluate(() => window.cosirHost!.backend.snapshot());
   expect(snapshot.status).toEqual({ state: "ready" });
+  if (!capabilities.has(snapshot.backendBaseUrl!)) {
+    // Playwright 能看到宿主注入后的真实请求头；不在产品接口中开放取 token 的入口。
+    const observed = page.waitForRequest((request) => request.url() === `${snapshot.backendBaseUrl}/health?desktop-test`);
+    await page.evaluate((base) => fetch(`${base}/health?desktop-test`).then((r) => r.text()), snapshot.backendBaseUrl!);
+    const headers = await (await observed).allHeaders();
+    expect(headers["x-cosir-capability"]).toBeTruthy();
+    capabilities.set(snapshot.backendBaseUrl!, headers["x-cosir-capability"]);
+  }
   return snapshot.backendBaseUrl!;
 }
 
 /** 取或建工作区未开始的会话。首个 Run 建立前反复调用得到的是同一个，要第二个会话须先让它开始。 */
 export async function unstartedSession(base: string, workspaceId: number): Promise<number> {
-  const response = await fetch(`${base}/workspaces/${workspaceId}/unstarted-session`, { method: "PUT" });
+  const response = await desktopFetch(`${base}/workspaces/${workspaceId}/unstarted-session`, { method: "PUT" });
   expect(response.status, await response.clone().text()).toBe(200);
   return ((await response.json()) as { session_id: number }).session_id;
 }

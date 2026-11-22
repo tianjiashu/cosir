@@ -51,7 +51,9 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         "get_session_service",
         lambda: SimpleNamespace(
             get_session=lambda session_id: SimpleNamespace(
-                id=session_id, title="主对话", derivation_depth=state.parent_depth,
+                id=session_id,
+                title="主对话",
+                derivation_depth=state.parent_depth,
                 extra=SessionExtra(writable_root=state.parent_root),
             ),
             fork_for_agent=fork_for_agent,
@@ -65,6 +67,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
                 agent_id="main_agent",
                 model_config_id="test/m3",
                 reasoning_effort="high",
+                terminal_permission_mode="request_approval",
             )
         ),
     )
@@ -91,12 +94,18 @@ def test_fork_keeps_the_parents_identity_and_completes_once_assigned(env, tmp_pa
     assert observation.status == "success" and observation.background is None
     assert '"status":"started"' in (observation.content or "")
     assert observation.display_data == {
-        "kind": "fork-session-result", "title": "前端部分", "child_session_id": 41,
+        "kind": "fork-session-result",
+        "title": "前端部分",
+        "child_session_id": 41,
     }
     [forked] = env.forked
     assert forked == {
-        "source_session_id": 7, "run_id": 70, "tool_call_id": "call-fork",
-        "title": "前端部分", "derivation_depth": 1, "narrowed_root": None,
+        "source_session_id": 7,
+        "run_id": 70,
+        "tool_call_id": "call-fork",
+        "title": "前端部分",
+        "derivation_depth": 1,
+        "narrowed_root": None,
     }
     # 分叉不换身份：模型与推理强度都沿用发起它的 Run；任务说明以 Agent 消息投递。
     [prepared] = env.prepared
@@ -117,7 +126,10 @@ def test_fork_narrows_or_inherits_the_writable_root(env, tmp_path) -> None:
 
     def fork(writable_root: str | None):
         return tool.execute(
-            title="x", message="y", writable_root=writable_root, execution_context=_context(tmp_path)
+            title="x",
+            message="y",
+            writable_root=writable_root,
+            execution_context=_context(tmp_path),
         )
 
     narrowed = fork("pkg/web")

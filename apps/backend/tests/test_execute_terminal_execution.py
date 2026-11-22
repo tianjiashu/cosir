@@ -55,6 +55,13 @@ class _Command:
         assert not self.thread.is_alive()
 
 
+@pytest.fixture(autouse=True)
+def mock_sandbox_capability(monkeypatch):
+    monkeypatch.setattr(
+        terminal_module, "probe_sandbox", lambda _: type("Capability", (), {"supported": True})()
+    )
+
+
 @pytest.fixture
 def command(monkeypatch):
     command = _Command()
@@ -92,10 +99,16 @@ def delivered(monkeypatch):
 
 def _execute(tmp_path: Path, *, background=False, call_id="call-1", tool=None):
     return (tool or ExecuteTerminalTool()).execute(
-        command=call_id, intent="test command", background=background,
+        command=call_id,
+        intent="test command",
+        background=background,
         execution_context=ToolExecutionContext(
-            session_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
-            step_id="step-1", tool_call_id=call_id,
+            session_id=1,
+            run_id=2,
+            workspace_id=1,
+            workspace_root=tmp_path,
+            step_id="step-1",
+            tool_call_id=call_id,
         ),
     )
 
@@ -109,7 +122,12 @@ def _wait_registered(call_id="call-1") -> None:
 
 @pytest.mark.parametrize(("background", "expected"), [(True, None), (False, 300.0)])
 def test_only_background_commands_run_without_a_timeout_by_default(
-    tmp_path, command, pool, delivered, background, expected,
+    tmp_path,
+    command,
+    pool,
+    delivered,
+    background,
+    expected,
 ):
     """后台命令属于 Session、缺省不限时（开发服务器要常驻）；前台缺省仍是 300 秒。"""
     result = pool.submit(_execute, tmp_path, background=background)
@@ -137,7 +155,9 @@ def test_commands_get_the_session_scratch_dir_as_environment_variable(tmp_path, 
     """提示词让模型在命令里用 COSIR_SCRATCH_DIR，不必抄绝对路径；值只给这一条命令。"""
     result = pool.submit(_execute, tmp_path)
     assert command.started.wait(2)
-    assert command.kwargs["extra_env"] == {"COSIR_SCRATCH_DIR": str(session_scratch_dir(1))}
+    assert command.kwargs["extra_env"] == {
+        key: str(session_scratch_dir(1)) for key in ("COSIR_SCRATCH_DIR", "TMPDIR", "TMP", "TEMP")
+    }
     command.release.set()
     result.result(timeout=2)
     command.join()
@@ -151,10 +171,16 @@ def test_commands_start_in_the_writable_root_unless_a_workdir_is_given(tmp_path,
 
     def run(workdir):
         return ExecuteTerminalTool().execute(
-            command="pwd", workdir=workdir,
+            command="pwd",
+            workdir=workdir,
             execution_context=ToolExecutionContext(
-                session_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
-                step_id="step-1", tool_call_id="call-1", writable_subpath="pkg",
+                session_id=1,
+                run_id=2,
+                workspace_id=1,
+                workspace_root=tmp_path,
+                step_id="step-1",
+                tool_call_id="call-1",
+                writable_subpath="pkg",
             ),
         )
 
@@ -177,7 +203,11 @@ def test_background_returns_placeholder_and_delivers_later(tmp_path, command, de
 
 @pytest.mark.parametrize("background", [False, True])
 def test_fast_command_starts_after_registration_and_delivers(
-    tmp_path, command, monkeypatch, delivered, background,
+    tmp_path,
+    command,
+    monkeypatch,
+    delivered,
+    background,
 ):
     register = command_results.register
 
@@ -211,7 +241,12 @@ def test_detach_keeps_running_and_delivers_once(tmp_path, command, pool, deliver
 
 @pytest.mark.parametrize("withdraw", [False, True], ids=["completed", "withdrawn"])
 def test_detach_before_waiter_returns_keeps_placeholder(
-    tmp_path, command, pool, monkeypatch, delivered, withdraw,
+    tmp_path,
+    command,
+    pool,
+    monkeypatch,
+    delivered,
+    withdraw,
 ):
     entered, release = threading.Event(), threading.Event()
     wait = CommandJob.wait
@@ -254,7 +289,11 @@ def test_execution_exception_finishes_the_call(tmp_path, command, delivered, bac
 
 @pytest.mark.parametrize("stop_run", [False, True], ids=["single_cancel", "run_cancel"])
 def test_foreground_cancel_stops_command_and_waits_for_result(
-    tmp_path, command, pool, delivered, stop_run,
+    tmp_path,
+    command,
+    pool,
+    delivered,
+    stop_run,
 ):
     result = pool.submit(_execute, tmp_path)
     _wait_registered()
@@ -277,7 +316,11 @@ def test_parent_stop_drops_background_result(tmp_path, command, delivered):
 
 
 def test_same_tool_instance_keeps_overlapping_calls_independent(
-    tmp_path, command, pool, monkeypatch, delivered,
+    tmp_path,
+    command,
+    pool,
+    monkeypatch,
+    delivered,
 ):
     tool = ExecuteTerminalTool()
     first = pool.submit(_execute, tmp_path, tool=tool)
@@ -354,8 +397,13 @@ def test_model_text_fits_the_channel_once_whatever_the_ending(
         terminal_module, "LocalExecutionBackend", lambda: _NoisyCommand(text, result)
     )
     monkeypatch.setattr(terminal_module.LiveOutputChannel, "open", lambda _: None)
-    context = ToolExecutionContext( session_id=1, run_id=2, workspace_id=1, workspace_root=tmp_path,
-        step_id="step-1", tool_call_id="call-1",
+    context = ToolExecutionContext(
+        session_id=1,
+        run_id=2,
+        workspace_id=1,
+        workspace_root=tmp_path,
+        step_id="step-1",
+        tool_call_id="call-1",
     )
     try:
         observation = ExecuteTerminalTool().execute(
@@ -392,19 +440,26 @@ def test_model_text_fits_the_channel_once_whatever_the_ending(
 
 @pytest.mark.parametrize("background", [False, True])
 def test_refused_registration_returns_cancelled_without_a_placeholder(
-    tmp_path, command, delivered, background,
+    tmp_path,
+    command,
+    delivered,
+    background,
 ):
     """Session 正被收回时登记被拒：作业已停下，工具按取消返回，不写一张没人结算的后台占位。"""
     cancellation_registry.request_cancel(1, "parent")
     observation = _execute(tmp_path, background=background)
-    command.join()
-    assert command.stopped.is_set()
+    assert not command.started.is_set()
+    assert not command.stopped.is_set()
     assert observation.status == "cancelled" and observation.background is None
     assert delivered == []
 
 
 def test_run_cancel_right_after_detach_keeps_the_command_running(
-    tmp_path, command, pool, monkeypatch, delivered,
+    tmp_path,
+    command,
+    pool,
+    monkeypatch,
+    delivered,
 ):
     """转后台后、等待线程下一次检查之前 Run 被用户停止：已转后台的命令不受影响（两者在登记表锁内的
     裁决见 ``test_command_results`` 的 ``cancel_foreground`` 用例）。"""

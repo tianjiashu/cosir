@@ -218,7 +218,7 @@ def _creation_service(store, monkeypatch, projector):
         ),
     )
     monkeypatch.setattr(
-        "app.service.user_input.user_input_service.get_model_config_service",
+        "app.assistant_transport.service.user_input_service.get_model_config_service",
         lambda: model_configs(
             lambda _id: model_config_record(model_name="test", context_window_k=128)
         ),

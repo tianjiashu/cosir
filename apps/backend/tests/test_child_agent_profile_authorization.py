@@ -8,20 +8,25 @@ import pytest
 
 from app.config import configuration
 from app.core.agents.agent_profile import AgentProfileType
-from app.core.tool.session_management import addressing, session_send
 from app.core.tool.schemas import ToolExecutionContext
-
+from app.core.tool.session_management import addressing, session_send
 
 
 @pytest.fixture(autouse=True)
 def _addressing_uses_the_patched_service(monkeypatch: pytest.MonkeyPatch) -> None:
     """寻址规则在 ``addressing``：让它跟着用例给 ``session_send`` 换上的假服务走。"""
-    monkeypatch.setattr(addressing, "get_session_service", lambda: session_send.get_session_service())
+    monkeypatch.setattr(
+        addressing, "get_session_service", lambda: session_send.get_session_service()
+    )
+
 
 @pytest.fixture(autouse=True)
 def target_space(monkeypatch):
-    monkeypatch.setattr(session_send.session_runtime_spaces, "get_or_create",
-                        lambda _: SimpleNamespace(operation=nullcontext))
+    monkeypatch.setattr(
+        session_send.session_runtime_spaces,
+        "get_or_create",
+        lambda _: SimpleNamespace(operation=nullcontext),
+    )
 
 
 @pytest.mark.asyncio
@@ -106,8 +111,14 @@ def test_session_send_to_a_fork_reuses_its_own_launch_without_profiles(
         ),
     )
     monkeypatch.setattr(session_send, "get_workspace_service", lambda: None)
-    run = SimpleNamespace(id=11, status="completed", agent_id="main_agent", model_config_id="test/m3",
-                          reasoning_effort="high")
+    run = SimpleNamespace(
+        id=11,
+        status="completed",
+        agent_id="main_agent",
+        model_config_id="test/m3",
+        reasoning_effort="high",
+        terminal_permission_mode="request_approval",
+    )
     monkeypatch.setattr(
         configuration, "get_agent_registry", lambda: pytest.fail("resolved a child profile")
     )
@@ -133,9 +144,7 @@ def test_session_send_to_a_fork_reuses_its_own_launch_without_profiles(
         event_loop=SimpleNamespace(is_closed=lambda: False),  # type: ignore[arg-type]
     )
 
-    result = session_send.SessionSendTool().execute(
-        41, "再补个测试", execution_context=context
-    )
+    result = session_send.SessionSendTool().execute(41, "再补个测试", execution_context=context)
 
     assert result.status == "success"
     [kwargs] = prepared

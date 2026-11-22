@@ -109,6 +109,7 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
         model_config_id="test/m1",
         reasoning_effort=None,
         created_at=_RUN_CREATED_AT,
+        terminal_permission_mode="request_approval",
     )
 
     class FakeRunCrud:
@@ -131,6 +132,9 @@ def test_direct_create_does_not_append_user_event_after_canonical_user_write(
     from app.core.workflow.message_queue.session_message import RunLaunch
 
     service._db_factory = SimpleNamespace(begin=lambda: nullcontext(object()))
+    monkeypatch.setattr(
+        "app.core.workflow.run_ledger.begin_immediate", lambda _: nullcontext(object())
+    )
     monkeypatch.setattr(
         "app.service.depends.get_conversation_event_projector",
         lambda: Projector(),

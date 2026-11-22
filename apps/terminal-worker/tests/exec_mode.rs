@@ -74,7 +74,7 @@ impl Drop for Worker {
 }
 
 fn exec(script: &str) -> Value {
-    json!({"type": "start_exec", "program": "/bin/sh", "args": ["-c", script], "raw_args": false, "cwd": "/"})
+    json!({"type": "start_exec", "policy": {"full_access":true,"network":true,"writable_roots":[],"writable_exceptions":[],"denied_read":[],"readable_exceptions":[],"readonly_roots":[]}, "program": "/bin/sh", "args": ["-c", script], "raw_args": false, "cwd": "/"})
 }
 
 fn output(events: &[Value]) -> String {
@@ -168,7 +168,7 @@ fn input_frames_are_rejected_without_stopping_the_command() {
 #[test]
 fn a_command_that_cannot_start_is_reported_after_the_handshake() {
     let mut worker = Worker::start(json!({
-        "type": "start_exec", "program": "/no/such/program", "args": [], "raw_args": false, "cwd": "/"
+        "type": "start_exec", "policy": {"full_access":true,"network":true,"writable_roots":[],"writable_exceptions":[],"denied_read":[],"readable_exceptions":[],"readonly_roots":[]}, "program": "/no/such/program", "args": [], "raw_args": false, "cwd": "/"
     }));
     let events = worker.events();
     assert_eq!(events[0]["mode"], "exec");

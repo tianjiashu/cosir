@@ -97,14 +97,16 @@ def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -
 
     runtime = runtime_stub(
         session=SimpleNamespace(id=3, extra=SessionExtra()),
-        run=SimpleNamespace(id=4, session_id=3),
+        run=SimpleNamespace(id=4, session_id=3, terminal_permission_mode="request_approval"),
         tool_definitions={"read_file": SimpleNamespace(name="read_file", user_decision=False)},
     )
     batch = ToolBatch(
         calls=[_raw(arguments='{"path":"a.py"}')],
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
-    monkeypatch.setattr(tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge))
+    monkeypatch.setattr(
+        tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge)
+    )
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
     patch = asyncio.run(tools_node._tools_node(_state(batch)))
@@ -125,12 +127,14 @@ def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
 
     def run_call(_rc, call, _step_id, _loop, _admitted, _knowledge):
         received.append(call)
-        return ToolObservation(tool_name=call.tool_name, status="success", tool_call_id=call.call_id)
+        return ToolObservation(
+            tool_name=call.tool_name, status="success", tool_call_id=call.call_id
+        )
 
     banned = {**_raw("banned"), "function": {"name": "write_file", "arguments": "{}"}}
     runtime = runtime_stub(
         session=SimpleNamespace(id=3, extra=SessionExtra()),
-        run=SimpleNamespace(id=4, session_id=3),
+        run=SimpleNamespace(id=4, session_id=3, terminal_permission_mode="request_approval"),
         tool_definitions={
             "read_file": SimpleNamespace(name="read_file", user_decision=False),
             "write_file": SimpleNamespace(name="write_file", user_decision=False),
@@ -140,7 +144,9 @@ def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
         calls=[_raw("visible"), banned],
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
-    monkeypatch.setattr(tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge))
+    monkeypatch.setattr(
+        tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge)
+    )
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
 
@@ -171,14 +177,10 @@ class _StartingExecutor:
 def _batch_runtime(executor):
     return runtime_stub(
         session=SimpleNamespace(id=3, extra=SessionExtra()),
-        run=SimpleNamespace(id=4, session_id=3),
+        run=SimpleNamespace(id=4, session_id=3, terminal_permission_mode="request_approval"),
         tool_definitions={
-            "read_file": SimpleNamespace(
-                name="read_file", user_decision=False
-            ),
-            "write_file": SimpleNamespace(
-                name="write_file", user_decision=False
-            ),
+            "read_file": SimpleNamespace(name="read_file", user_decision=False),
+            "write_file": SimpleNamespace(name="write_file", user_decision=False),
         },
         tool_executor=executor,
     )
@@ -269,10 +271,12 @@ def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
 
     runtime = runtime_stub(
         session=SimpleNamespace(id=3, extra=SessionExtra()),
-        run=SimpleNamespace(id=4, session_id=3),
+        run=SimpleNamespace(id=4, session_id=3, terminal_permission_mode="request_approval"),
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
-    monkeypatch.setattr(tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge))
+    monkeypatch.setattr(
+        tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge)
+    )
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
 
@@ -286,7 +290,9 @@ def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
 
 def _observation(call_id: str = "call-1", *, suspend: bool = False) -> ToolObservation:
     return ToolObservation(
-        tool_name="review", status="success", tool_call_id=call_id,
+        tool_name="review",
+        status="success",
+        tool_call_id=call_id,
         waiting=AwaitMessages() if suspend else None,
     )
 
@@ -313,7 +319,13 @@ def test_observe_node_only_settles_and_keeps_batch(monkeypatch, suspend) -> None
 
 
 def _gate_runtime(
-    monkeypatch, *, cancelled=False, result_ids=(), notice_rows=(), local_notices=(), notice_kind="fork_handover"
+    monkeypatch,
+    *,
+    cancelled=False,
+    result_ids=(),
+    notice_rows=(),
+    local_notices=(),
+    notice_kind="fork_handover",
 ):
     """prepare_input 关口用的最小运行时：记录状态迁移，并入消息与通知不落库。
 
@@ -324,7 +336,9 @@ def _gate_runtime(
     mailbox = RunMailbox()
     for message_id in result_ids:
         body = BackgroundResultBody(
-            tool_call_id=f"call-{message_id}", tool_name="execute_terminal", tool_result="{}",
+            tool_call_id=f"call-{message_id}",
+            tool_name="execute_terminal",
+            tool_result="{}",
             ended_at="t",
         )
         mailbox.post(SessionMessage.of(body, message_id=message_id))
@@ -334,7 +348,7 @@ def _gate_runtime(
     for text in local_notices:
         mailbox.notify(NoticeBody(content=text, notice_kind="model_continuation"))
     runtime = SimpleNamespace(
-        run=SimpleNamespace(id=4, session_id=3),
+        run=SimpleNamespace(id=4, session_id=3, terminal_permission_mode="request_approval"),
         session=SimpleNamespace(id=3, extra=SessionExtra()),
         usage_stats=None,
         mailbox=mailbox,
@@ -451,18 +465,22 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
 
     def run_call(_rc, call, _step_id, _loop, _admitted, _knowledge):
         called.append(call)
-        return ToolObservation(tool_name=call.tool_name, status="success", tool_call_id=call.call_id)
+        return ToolObservation(
+            tool_name=call.tool_name, status="success", tool_call_id=call.call_id
+        )
 
     runtime = runtime_stub(
         session=SimpleNamespace(id=3, extra=SessionExtra()),
-        run=SimpleNamespace(id=4, session_id=3),
+        run=SimpleNamespace(id=4, session_id=3, terminal_permission_mode="request_approval"),
         tool_definitions={"read_file": SimpleNamespace(name="read_file", user_decision=False)},
     )
     batch = ToolBatch(
         calls=[_raw(arguments='{"path":')],
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
-    monkeypatch.setattr(tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge))
+    monkeypatch.setattr(
+        tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge)
+    )
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
 
@@ -473,7 +491,9 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
 
 def test_observation_persists_all_results_before_events(monkeypatch) -> None:
     order = []
-    runtime = SimpleNamespace(run=SimpleNamespace(id=4, session_id=3))
+    runtime = SimpleNamespace(
+        run=SimpleNamespace(id=4, session_id=3, terminal_permission_mode="request_approval")
+    )
     written_metadata = []
 
     def add_message(_message, *, metadata: object):

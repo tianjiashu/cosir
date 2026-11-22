@@ -4,7 +4,7 @@ import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
 import { API_ORIGIN as origin } from "./e2e-env";
 
-const LAUNCH = { modelConfigId: null, reasoningEffort: null };
+const LAUNCH = { terminalPermissionMode: "request_approval" as const, modelConfigId: null, reasoningEffort: null };
 
 /** 主对话的一轮：Agent 调用 fork_session 分出一条侧栏会话，卡片带分叉的标题与 Session id。 */
 const parentState: TransportState = {
@@ -26,7 +26,7 @@ const parentState: TransportState = {
   ],
   messageOffset: 0,
   activity: {modelActivity: null, turn: 1, resumable: false, status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
-  terminal_sessions: [], background_tasks: [], foreground_waits: [], deliverables: [],
+  terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [],
 };
 
 test.beforeEach(async ({ request }) => {

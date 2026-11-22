@@ -1,3 +1,4 @@
+import { desktopFetch } from "./desktop-app";
 import type { TransportState } from "../../lib/assistant/contract";
 
 /**
@@ -9,7 +10,7 @@ import type { TransportState } from "../../lib/assistant/contract";
 export async function attachFirstFrame(base: string, sessionId: number): Promise<TransportState> {
   const controller = new AbortController();
   try {
-    const response = await fetch(`${base}/sessions/${sessionId}/assistant/attach`, {
+    const response = await desktopFetch(`${base}/sessions/${sessionId}/assistant/attach`, {
       method: "POST", headers: { Accept: "text/event-stream" }, signal: controller.signal,
     });
     if (!response.ok || !response.body) throw new Error(`attach ${sessionId} failed: ${response.status}`);

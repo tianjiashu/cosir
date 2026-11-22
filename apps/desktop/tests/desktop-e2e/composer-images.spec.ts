@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 
-import { backendBaseUrl, launchDesktop, openNewConversation, unstartedSession } from "./desktop-app";
+import { desktopFetch, backendBaseUrl, launchDesktop, openNewConversation, unstartedSession } from "./desktop-app";
 
 /** 真实 Electron + 后端，文件选择只替代系统对话框，验证 app:// 页面中的图片呈现与键盘焦点。 */
 test("待发图片在真实桌面中完整显示、可预览和移除", async () => {
@@ -12,7 +12,7 @@ test("待发图片在真实桌面中完整显示、可预览和移除", async ()
     const base = await backendBaseUrl(page);
     const root = path.join(home, "workspace");
     fs.mkdirSync(root);
-    const response = await fetch(`${base}/workspaces`, {
+    const response = await desktopFetch(`${base}/workspaces`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "图片交互验收", root_path: root }),
     });

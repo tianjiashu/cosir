@@ -118,9 +118,7 @@ class _Collector:
 
     async def wait_frames(self, count: int) -> None:
         async with self._received:
-            await asyncio.wait_for(
-                self._received.wait_for(lambda: len(self.frames) >= count), 1
-            )
+            await asyncio.wait_for(self._received.wait_for(lambda: len(self.frames) >= count), 1)
 
 
 async def _settle() -> None:
@@ -156,6 +154,7 @@ async def test_attach_without_run_pushes_full_frame_and_stays_open() -> None:
         "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
+        "terminal_approvals": [],
         "background_tasks": [],
         "foreground_waits": [],
         "deliverables": [],
@@ -175,7 +174,14 @@ async def test_one_connection_survives_run_completion_new_run_cancel_and_suspend
     await collector.wait_frames(1)
 
     def _status(run_id: int, status: RunStatus) -> None:
-        service.apply_planned(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), session_id=_SESSION_ID, run_id=run_id, status=status))
+        service.apply_planned(
+            RunStatusChangedEvent(
+                changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+                session_id=_SESSION_ID,
+                run_id=run_id,
+                status=status,
+            )
+        )
 
     service.apply_planned(
         RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=_SESSION_ID, run_id=1)
@@ -227,10 +233,20 @@ async def test_idle_boundary_follows_each_burst_exactly_once() -> None:
         RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=_SESSION_ID, run_id=1)
     )
     service.apply_planned(
-        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), session_id=_SESSION_ID, run_id=1, status=RunStatus.RUNNING)
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            session_id=_SESSION_ID,
+            run_id=1,
+            status=RunStatus.RUNNING,
+        )
     )
     service.apply_planned(
-        RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), session_id=_SESSION_ID, run_id=1, status=RunStatus.COMPLETED)
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            session_id=_SESSION_ID,
+            run_id=1,
+            status=RunStatus.COMPLETED,
+        )
     )
     await _settle()
 
@@ -305,6 +321,7 @@ async def test_attach_envelopes_encode_session_view_frames_without_run_fields() 
         "messageOffset": 0,
         "activity": None,
         "terminal_sessions": [],
+        "terminal_approvals": [],
         "background_tasks": [],
         "foreground_waits": [],
         "deliverables": [],

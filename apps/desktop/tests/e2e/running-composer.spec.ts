@@ -16,7 +16,7 @@ import { API_ORIGIN as origin } from "./e2e-env";
 
 const SESSION_ID = 42;
 // 活动 Run 冻结的发起配置：运行中发送沿用它，而不是 composer 里的选择。
-const RUN_LAUNCH = { modelConfigId: "demo/demo-model", reasoningEffort: null };
+const RUN_LAUNCH = { terminalPermissionMode: "request_approval" as const, modelConfigId: "demo/demo-model", reasoningEffort: null };
 
 function activeState(queued: TransportState["queued_messages"] = []): TransportState {
   return {
@@ -32,7 +32,7 @@ function activeState(queued: TransportState["queued_messages"] = []): TransportS
       contextWindowTotal: null, launch: RUN_LAUNCH, startedAt: "2026-10-27T00:00:00.000Z",
     },
     queued_messages: queued,
-    terminal_sessions: [], background_tasks: [], foreground_waits: [], deliverables: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [],
   };
 }
 

@@ -25,6 +25,7 @@ from app.service.configuration.skills.configuration_view import SkillCatalogView
 from app.tools.tool_handler.skill_tool import SkillTool
 from app.utils.path import system_cosir as paths
 from app.utils.token_estimator import TokenEstimator
+from tests.http_test_support import TRUSTED_HEADERS
 
 
 def _write_skill(directory: Path, frontmatter: str, body: str = "正文") -> Path:
@@ -77,7 +78,7 @@ def workspace(tmp_path, monkeypatch) -> Path:
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(app)
+    return TestClient(app, headers=TRUSTED_HEADERS)
 
 
 def _groups(view: dict) -> list[tuple]:
@@ -93,7 +94,9 @@ def _groups(view: dict) -> list[tuple]:
     ]
 
 
-def test_each_page_lists_both_directories_even_before_they_exist(client, system_own, workspace) -> None:
+def test_each_page_lists_both_directories_even_before_they_exist(
+    client, system_own, workspace
+) -> None:
     system = client.get("/configuration/skill-catalog").json()["groups"]
     workspace_page = client.get("/workspaces/7/configuration/skill-catalog").json()["groups"]
 
@@ -110,7 +113,9 @@ def test_each_page_lists_both_directories_even_before_they_exist(client, system_
     ]
 
 
-def test_only_cosir_and_agents_directories_are_read(client, home, system_own, system_shared) -> None:
+def test_only_cosir_and_agents_directories_are_read(
+    client, home, system_own, system_shared
+) -> None:
     _skill(system_shared / "shared-one")
     _skill(system_own / "own-one")
     # 其他产品各自的目录不读；想用就导入或软链进来。
@@ -148,7 +153,9 @@ def test_same_fingerprint_is_one_skill_listed_once(client, system_own, system_sh
         ("system", "cosir", [("copied", "effective"), ("linked", "effective")]),
         ("system", "shared", []),
     ]
-    assert client.get("/configuration/skills/copied").json()["also_at"] == ["~/.agents/skills/copied"]
+    assert client.get("/configuration/skills/copied").json()["also_at"] == [
+        "~/.agents/skills/copied"
+    ]
 
 
 def test_different_fingerprint_lets_cosir_win_in_the_same_scope(
@@ -176,7 +183,11 @@ def test_workspace_overrides_system_with_the_same_name(client, workspace, system
 
     assert set(infos) == {"review", "lint"}
     review = infos["review"]
-    assert (review.scope.kind, review.description, review.overrides) == ("workspace", "项目级", True)
+    assert (review.scope.kind, review.description, review.overrides) == (
+        "workspace",
+        "项目级",
+        True,
+    )
     assert review.has_scripts is True
     assert infos["lint"].overrides is False
     assert _groups(client.get("/workspaces/7/configuration/skill-catalog").json()) == [
@@ -263,7 +274,9 @@ def test_import_into_the_real_system_cosir_passes_the_protected_paths(
 
     data_root = tmp_path / "data"
     monkeypatch.setattr(extension_scope, "system_cosir_dir", lambda: data_root / ".cosir")
-    monkeypatch.setattr(skill_root, "system_cosir_skills_dir", lambda: data_root / ".cosir" / "skills")
+    monkeypatch.setattr(
+        skill_root, "system_cosir_skills_dir", lambda: data_root / ".cosir" / "skills"
+    )
     source = _skill(tmp_path / "import-source" / "review")
     paths.override(DATA_DIR=data_root)
     try:
@@ -305,7 +318,9 @@ def test_skills_cannot_be_deleted_from_cosir(client, workspace, system_shared) -
     assert (workspace / ".agents" / "skills" / "local" / "SKILL.md").is_file()
 
 
-def test_manual_only_skills_stay_out_of_the_model_catalog_but_load(system_shared, workspace) -> None:
+def test_manual_only_skills_stay_out_of_the_model_catalog_but_load(
+    system_shared, workspace
+) -> None:
     _write_skill(
         system_shared / "deploy",
         "name: deploy\ndescription: 发布\ndisable-model-invocation: true",
@@ -434,8 +449,6 @@ def test_agent_catalog_size_matches_the_prompt_catalog(client, home) -> None:
 
     view = client.get("/configuration/skill-catalog").json()
 
-    expected = render_skill_catalog(
-        [("release", "Prepare a release"), ("review", "审查代码改动")]
-    )
+    expected = render_skill_catalog([("release", "Prepare a release"), ("review", "审查代码改动")])
     assert view["agent_skills"] == 2
     assert view["agent_tokens"] == TokenEstimator.estimate(expected)

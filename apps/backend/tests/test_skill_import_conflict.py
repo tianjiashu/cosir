@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.app import app
 from app.service.configuration.skills.configuration import SkillConfiguration
+from tests.http_test_support import TRUSTED_HEADERS
 
 
 def _skill(directory: Path, name: str, description: str) -> Path:
@@ -26,7 +27,7 @@ def _skill(directory: Path, name: str, description: str) -> Path:
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(app)
+    return TestClient(app, headers=TRUSTED_HEADERS)
 
 
 @pytest.fixture
@@ -70,7 +71,9 @@ def test_identical_effective_skill_is_not_imported_again(client, tmp_path, own, 
     assert not (own / "review").exists()
 
 
-def test_override_needs_confirmation_and_keeps_the_other_copy(client, tmp_path, own, shared) -> None:
+def test_override_needs_confirmation_and_keeps_the_other_copy(
+    client, tmp_path, own, shared
+) -> None:
     _skill(shared / "review", "review", "共享版本")
     source = _skill(tmp_path / "source" / "review", "review", "cosir 版本")
 
@@ -85,13 +88,13 @@ def test_override_needs_confirmation_and_keeps_the_other_copy(client, tmp_path, 
     assert "共享版本" in (shared / "review" / "SKILL.md").read_text(encoding="utf-8")
 
 
-def test_replace_swaps_the_cosir_copy_even_under_another_folder_name(
-    client, tmp_path, own
-) -> None:
+def test_replace_swaps_the_cosir_copy_even_under_another_folder_name(client, tmp_path, own) -> None:
     # 文件夹名与名称不一致的旧版本：以前导入会静默失效（扫描把新的当重名跳过）。
     _skill(own / "old-folder", "review", "旧版本")
     (own.parent / "config").mkdir(parents=True)
-    (own.parent / "config" / "skills.json").write_text('{"disabled_skills": ["review"]}', encoding="utf-8")
+    (own.parent / "config" / "skills.json").write_text(
+        '{"disabled_skills": ["review"]}', encoding="utf-8"
+    )
     source = _skill(tmp_path / "source" / "review", "review", "新版本")
 
     asked = _import(client, source)
@@ -103,7 +106,9 @@ def test_replace_swaps_the_cosir_copy_even_under_another_folder_name(
     assert sorted(path.name for path in own.iterdir()) == ["review"]
     assert "新版本" in (own / "review" / "SKILL.md").read_text(encoding="utf-8")
     # 用户刚选了它：停用名单里的同名项一并移除。
-    assert json.loads((own.parent / "config" / "skills.json").read_text()) == {"disabled_skills": []}
+    assert json.loads((own.parent / "config" / "skills.json").read_text()) == {
+        "disabled_skills": []
+    }
     listing = {item["name"]: item for item in client.get("/configuration/skills").json()}
     assert (listing["review"]["description"], listing["review"]["enabled"]) == ("新版本", True)
 
@@ -113,7 +118,9 @@ def test_replace_restores_the_old_copy_when_the_configuration_cannot_be_written(
 ) -> None:
     _skill(own / "review", "review", "旧版本")
     (own.parent / "config").mkdir(parents=True)
-    (own.parent / "config" / "skills.json").write_text('{"disabled_skills": ["review"]}', encoding="utf-8")
+    (own.parent / "config" / "skills.json").write_text(
+        '{"disabled_skills": ["review"]}', encoding="utf-8"
+    )
     source = _skill(tmp_path / "source" / "review", "review", "新版本")
 
     def fail_write(self, scope):

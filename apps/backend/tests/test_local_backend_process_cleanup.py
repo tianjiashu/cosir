@@ -16,6 +16,7 @@ import pytest
 
 from app.tools.terminal_runtime.command.command_output import CommandOutput as _CommandOutput
 from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
+from app.tools.terminal_runtime.permissions.policy import TerminalExecutionPolicy
 from tests.terminal_test_support import requires_terminal_worker, run_local_command
 
 pytestmark = [
@@ -50,7 +51,7 @@ def test_processes_left_behind_are_cleaned_without_holding_the_call(tmp_path: Pa
 
     started = time.monotonic()
     result, output = run_local_command(
-        "sleep 60 & a=$!; nohup sleep 60 >/dev/null 2>&1 & b=$!; echo \"PIDS $a $b\"",
+        'sleep 60 & a=$!; nohup sleep 60 >/dev/null 2>&1 & b=$!; echo "PIDS $a $b"',
         tmp_path,
         30,
     )
@@ -96,7 +97,13 @@ def test_stop_before_the_command_starts_never_starts_it(tmp_path: Path) -> None:
     backend.stop()
 
     output = _CommandOutput(workspace_root=tmp_path, model_budget_chars=20_000)
-    result = backend.execute(f"touch {marker}", str(tmp_path), 30, output)
+    result = backend.execute(
+        f"touch {marker}",
+        str(tmp_path),
+        30,
+        output,
+        policy=TerminalExecutionPolicy(full_access=True, network=True),
+    )
 
     assert result.end == "cancelled"
     time.sleep(0.3)
@@ -109,7 +116,13 @@ def test_a_stop_after_the_command_exited_keeps_its_exit(tmp_path: Path) -> None:
     threading.Timer(0.3, backend.stop).start()
 
     output = _CommandOutput(workspace_root=tmp_path, model_budget_chars=20_000)
-    result = backend.execute("(trap '' HUP TERM; exec sleep 5) & echo done", str(tmp_path), 30, output)
+    result = backend.execute(
+        "(trap '' HUP TERM; exec sleep 5) & echo done",
+        str(tmp_path),
+        30,
+        output,
+        policy=TerminalExecutionPolicy(full_access=True, network=True),
+    )
     output.finish()
 
     assert result.end == "exited" and result.exit_code == 0
@@ -135,10 +148,12 @@ def test_command_is_cleaned_up_when_the_backend_process_group_is_killed(tmp_path
 import time
 from pathlib import Path
 from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
+from app.tools.terminal_runtime.permissions.policy import TerminalExecutionPolicy
 from app.tools.terminal_runtime.command.command_output import CommandOutput
 output = CommandOutput(workspace_root=Path({str(tmp_path)!r}), model_budget_chars=20_000)
 LocalExecutionBackend().execute(
-    "trap '' HUP TERM; sleep 60 & echo $! > {job_file}; wait", {str(tmp_path)!r}, 120, output
+    "trap '' HUP TERM; sleep 60 & echo $! > {job_file}; wait", {str(tmp_path)!r}, 120, output,
+    policy=TerminalExecutionPolicy(full_access=True, network=True)
 )
 time.sleep(60)
 """

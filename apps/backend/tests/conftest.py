@@ -48,6 +48,7 @@ from app.storage.store_engines import init_storage, initialize_app_schema
 from app.tools.tool_registration import build_tool_registry
 from app.utils.path import shared_skills
 from app.utils.path import system_cosir as paths
+from tests.http_test_support import TEST_CAPABILITY
 from tests.terminal_test_support import terminal_worker_path
 
 # 会被 ``configure_logging`` 改写 ``propagate`` / ``level`` 的后端 logger。
@@ -105,6 +106,12 @@ def _restore(snapshot: tuple[dict[str, _LoggerState], int]) -> None:
         logger.propagate = propagate
         logger.disabled = disabled
     logging.disable(root_disable)
+
+
+@pytest.fixture(autouse=True)
+def local_control_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """API 测试显式模拟可信桌面客户端，不在产品中开放跳过身份校验的开关。"""
+    monkeypatch.setenv("CODING_AGENT_API_TOKEN", TEST_CAPABILITY)
 
 
 @pytest.fixture(autouse=True)
@@ -266,7 +273,9 @@ def isolate_scope_config_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     # 主 Agent 提示词同理：注册表读系统作用域时现读它（并按签名判断是否重读）。
     main_prompt = system_cosir_root / "main_agent_system_prompt.md"
     monkeypatch.setattr(main_agent_prompt_service, "system_cosir_dir", lambda: system_cosir_root)
-    monkeypatch.setattr(main_agent_prompt_service, "system_main_agent_prompt_file", lambda: main_prompt)
+    monkeypatch.setattr(
+        main_agent_prompt_service, "system_main_agent_prompt_file", lambda: main_prompt
+    )
     monkeypatch.setattr(agent_profile_source, "system_main_agent_prompt_file", lambda: main_prompt)
     # 模型配置文件同理：每次现读，且测试会写它。
     monkeypatch.setattr(model_config_service, "system_cosir_dir", lambda: system_cosir_root)

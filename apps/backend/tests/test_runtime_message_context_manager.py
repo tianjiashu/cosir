@@ -157,7 +157,9 @@ def test_merging_tool_result_metadata_keeps_the_deliverables_record():
             {"role": "tool", "tool_call_id": "c", "content": "presented"},
             2,
             2,
-            metadata=ToolMessageMetadata(status="completed", facts=ToolResultFacts(deliverables=record)),
+            metadata=ToolMessageMetadata(
+                status="completed", facts=ToolResultFacts(deliverables=record)
+            ),
             turn=1,
         )
     ]
@@ -244,9 +246,7 @@ def test_save_model_response_writes_once_and_controls_context_membership(include
     manager = _manager(context_store, next_sequence=5)
     manager.current_run_id = 2
     response = sdk_completion(content="最后收到的内容")
-    manager.save_model_response(
-        response, include_in_context=include_in_context
-    )
+    manager.save_model_response(response, include_in_context=include_in_context)
     assert len(context_store.appended) == 1
     assert context_store.appended[0][2]["content"] == "最后收到的内容"
     assert context_store.appended[0][4] is include_in_context
@@ -299,9 +299,7 @@ def test_model_response_keeps_unknown_calls_for_the_gate():
         ]
     )
 
-    entry = manager.save_model_response(
-        response, include_in_context=True
-    )
+    entry = manager.save_model_response(response, include_in_context=True)
 
     # 不认识的工具名不在这里过滤：随响应进上下文，由准入门禁给出错误观察。
     assert [call["id"] for call in entry.message["tool_calls"]] == ["known", "unknown"]
@@ -338,3 +336,43 @@ def test_add_message_replaces_paired_tool_result_row_in_place() -> None:
     assert [entry.message.get("content") for entry in manager._entries] == ["", "real"]
     assert manager._entries[-1].metadata == ToolMessageMetadata(status="completed")
     assert manager._message_sequence == 7, "覆盖不得推进序号游标"
+
+
+def test_notice_and_empty_draft_do_not_steal_the_first_visible_input_turn():
+    """后台唤醒只写下空草稿后中断，同 Run 收到用户输入仍应有正常的用户气泡。"""
+    from app.assistant_transport.projection.snapshot_rebuild import _turn_messages
+    from app.models.session_context import SessionContextRecord
+
+    manager = _manager(_ContextStore(0))
+    values = [
+        (
+            {"role": "user", "content": "permissions"},
+            UserMessageMetadata(kind="notice"),
+            False,
+            True,
+        ),
+        ({"role": "assistant", "content": ""}, EmptyMessageMetadata(), True, False),
+        ({"role": "user", "content": "request"}, _user_meta("request"), True, True),
+        ({"role": "assistant", "content": "response"}, EmptyMessageMetadata(), True, True),
+    ]
+    rows = []
+    for index, (message, metadata, project, included) in enumerate(values, 1):
+        turn = manager._turn_for_new_row(message, metadata, project)
+        rows.append(
+            SessionContextRecord(
+                session_id=7,
+                run_id=1,
+                sequence=index,
+                message=message,
+                metadata=metadata,
+                include_in_context=included,
+                project_to_transport=project,
+                turn=turn,
+                message_id=123 if index == 3 else None,
+            )
+        )
+    assert [row.turn for row in rows] == [1, 1, 1, 1]
+    messages = _turn_messages(rows, {}, inherited=False)
+    assert [item["role"] for item in messages] == ["user", "assistant"]
+    assert messages[0]["parts"][0]["text"] == "request"
+    assert messages[1]["parts"][0]["text"] == "response"

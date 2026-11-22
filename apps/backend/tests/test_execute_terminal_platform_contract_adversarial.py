@@ -282,9 +282,7 @@ def test_validation_is_strict_about_shell_subtype(model: type[BaseModel]) -> Non
     """strict 模型不得把非字符串（如 None/True）强转为合法 shell 值。"""
 
     for bad in (None, True, 0):
-        result = validate_tool_arguments(
-            {"command": "echo hi", "shell": bad}, {}, model
-        )
+        result = validate_tool_arguments({"command": "echo hi", "shell": bad}, {}, model)
         assert result.ok is False, f"shell={bad!r} 被错误放行"
 
 
@@ -386,6 +384,8 @@ def test_all_field_descriptions_are_nonempty_english_and_stop_with_period(
         "timeout",
         "workdir",
         "background",
+        "permissions",
+        "justification",
     }
     for name, schema in properties.items():
         description = str(schema["description"])
@@ -633,6 +633,8 @@ def test_resolver_result_is_usable_as_args_model_directly() -> None:
         "timeout": None,
         "workdir": None,
         "background": None,
+        "permissions": None,
+        "justification": "",
     }
 
 
@@ -702,9 +704,7 @@ def test_accepted_shells_match_declared_literals(model: type[BaseModel]) -> None
         else get_args(MacExecuteTerminalShell)
     )
     for value in literals:
-        result = validate_tool_arguments(
-            {"command": "echo hi", "shell": value}, {}, model
-        )
+        result = validate_tool_arguments({"command": "echo hi", "shell": value}, {}, model)
         detail = f"{model.__name__} 拒绝了自身声明的 shell={value!r}: {result.error}"
         assert result.ok is True, detail
 
@@ -815,7 +815,7 @@ def test_execute_reports_unavailable_shell_before_any_execution(
 
 
 def test_resolve_workdir_boundaries(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-    """workdir 解析：缺省=根、越界被拒、不存在被拒、根内相对路径可用。"""
+    """workdir 解析只解析存在目录；访问范围由有效沙箱策略校验。"""
 
     _patch_windows_environment(monkeypatch)
     tool = ExecuteTerminalTool()
@@ -827,8 +827,8 @@ def test_resolve_workdir_boundaries(monkeypatch: pytest.MonkeyPatch, tmp_path: A
     assert tool._resolve_workdir("sub", root) == ((root / "sub").resolve(), "")
 
     escaped, err = tool._resolve_workdir("..", root)
-    assert escaped == Path()
-    assert "escapes workspace root" in err
+    assert escaped == root.parent.resolve()
+    assert err == ""
 
     missing, missing_err = tool._resolve_workdir("nope", root)
     assert "not found" in missing_err

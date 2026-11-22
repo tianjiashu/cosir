@@ -95,7 +95,9 @@ def _batch_runtime(
     """
 
     return runtime_stub(
-        run=SimpleNamespace(id=_RUN_ID, session_id=_SESSION_ID),
+        run=SimpleNamespace(
+            id=_RUN_ID, session_id=_SESSION_ID, terminal_permission_mode="request_approval"
+        ),
         session=SimpleNamespace(id=_SESSION_ID, extra=SessionExtra()),
         workspace=SimpleNamespace(id=1, root_path=str(workspace_root)),
         event_sink=event_sink or (lambda _event: None),
@@ -181,7 +183,8 @@ def _project_cancelled_via_real_path(
         ToolCall(tool_name="execute_terminal", arguments="{}", call_id=call_id),
         "step-1",
         None,
-        RequestTools(schemas=(), admitted=frozenset({"execute_terminal"})), FileKnowledge(),
+        RequestTools(schemas=(), admitted=frozenset({"execute_terminal"})),
+        FileKnowledge(),
     )
     assert len(captured) == 1
     return captured[0]

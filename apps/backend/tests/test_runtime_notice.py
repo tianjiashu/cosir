@@ -49,8 +49,9 @@ def _stub_for_run_deps(monkeypatch, agent) -> None:
     )
     monkeypatch.setattr(
         "app.service.depends.get_conversation_event_projector",
-        lambda: SimpleNamespace(process=print,
-    ),
+        lambda: SimpleNamespace(
+            process=print,
+        ),
     )
 
 
@@ -99,6 +100,8 @@ def open_sources(monkeypatch):
     """未了结事项的另外两个事实来源：后台命令与派生 Session，默认都没有。"""
     from app.core.workflow import drive_notices as module
 
+    # 此文件验证既有驱动通知，终端权限通知由 test_terminal_permissions 单独验证。
+    monkeypatch.setattr(module, "_terminal_permissions", lambda _rc, _context: None)
     sources = SimpleNamespace(commands=[], derived=[])
     monkeypatch.setattr(
         module, "background_commands", lambda: SimpleNamespace(pending=lambda _id: sources.commands)
@@ -112,9 +115,7 @@ def _notices(monkeypatch, space, banned=None, latest=None, *, run_id: int = 7) -
     from app.core.workflow.drive_notices import drive_notices
 
     rc = _for_run(monkeypatch, space, banned, run_id=run_id)
-    return [
-        n for n in drive_notices(rc, _context(latest)) if n.notice_kind == "tool_availability"
-    ]
+    return [n for n in drive_notices(rc, _context(latest)) if n.notice_kind == "tool_availability"]
 
 
 @pytest.mark.parametrize("banned", [[], ["read_file"], ["read_file", "write_file"]])
@@ -130,11 +131,15 @@ def test_for_run_computes_admission_without_notifying(monkeypatch, banned) -> No
     assert mailbox.take_notices() == []
 
 
-def test_agent_fork_is_told_and_refused_fork_session_without_changing_its_schema(monkeypatch) -> None:
+def test_agent_fork_is_told_and_refused_fork_session_without_changing_its_schema(
+    monkeypatch,
+) -> None:
     """分叉的工具列表与来源相同，``fork_session`` 只在准入层被拒，并由工具准入通知提前告知。"""
     space = _space(RunMailbox())
     space.session_tool_names = ("read_file", "fork_session", "delegate_task")
-    space.current_task = SimpleNamespace(id=1, session_type=SessionType.AGENT_FORK, derivation_depth=1)
+    space.current_task = SimpleNamespace(
+        id=1, session_type=SessionType.AGENT_FORK, derivation_depth=1
+    )
 
     [notice] = _notices(monkeypatch, space)
 
@@ -149,7 +154,9 @@ def test_agent_fork_is_told_and_refused_fork_session_without_changing_its_schema
 def test_derivation_rules_do_not_announce_tools_the_session_never_had(monkeypatch) -> None:
     """委派子 Session 的 schema 本来就没有 ``fork_session``，不能通知成「被禁用」；没有禁用就什么都不说。"""
     space = _space(RunMailbox())
-    space.current_task = SimpleNamespace(id=1, session_type=SessionType.DELEGATED, derivation_depth=1)
+    space.current_task = SimpleNamespace(
+        id=1, session_type=SessionType.DELEGATED, derivation_depth=1
+    )
 
     assert _notices(monkeypatch, space) == []
 
@@ -180,7 +187,9 @@ def test_locked_derivation_is_announced_per_session_and_never_re_enabled(monkeyp
     """Session 级禁用（派生封顶）配置不变时每个 Run 都成立：下一个 Run 只说 still disabled。"""
     space = _space(RunMailbox())
     space.session_tool_names = ("read_file", "fork_session")
-    space.current_task = SimpleNamespace(id=1, session_type=SessionType.AGENT_FORK, derivation_depth=1)
+    space.current_task = SimpleNamespace(
+        id=1, session_type=SessionType.AGENT_FORK, derivation_depth=1
+    )
 
     [first] = _notices(monkeypatch, space)
     assert "disabled (for this session: fork_session)" in first.content
@@ -213,10 +222,7 @@ def test_user_stopped_is_derived_from_how_the_preceding_run_ended(
     preceding = SimpleNamespace(id=6, end_reason=end_reason)
     rc = _for_run(monkeypatch, _space(RunMailbox()), preceding=preceding)
 
-    kinds = [
-        n.notice_kind
-        for n in module.drive_notices(rc, _context())
-    ]
+    kinds = [n.notice_kind for n in module.drive_notices(rc, _context())]
 
     assert ("user_cancelled" in kinds) is told
 
@@ -328,7 +334,9 @@ def test_tool_availability_notice_rules() -> None:
     )
     # 未变化：全部可用时不通知；仍有禁用时重复提醒。
     assert notice(f(), f()) is None
-    assert notice(f("a"), f("a")) == "Tool availability notice: still disabled (for this session: a)."
+    assert (
+        notice(f("a"), f("a")) == "Tool availability notice: still disabled (for this session: a)."
+    )
     # 变化：增量 + 当前状态。
     assert notice(f("a"), f("b")) == (
         "Tool availability notice: changed since last round "
@@ -340,7 +348,9 @@ def test_tool_availability_notice_rules() -> None:
 def test_mailbox_dedupes_persisted_rows_within_one_execution() -> None:
     """同一外部队列行在一次执行内只收一次（派发方每次按外部队列全量投递）。"""
     mailbox = RunMailbox()
-    persisted = SessionMessage.of(NoticeBody(content="broadcast", notice_kind="fork_handover"), message_id=5)
+    persisted = SessionMessage.of(
+        NoticeBody(content="broadcast", notice_kind="fork_handover"), message_id=5
+    )
 
     mailbox.post(persisted)
     mailbox.post(persisted)
@@ -363,7 +373,10 @@ def test_mailbox_takes_notices_from_both_sources_in_delivery_order() -> None:
     )
     result = SessionMessage.of(
         BackgroundResultBody(
-            tool_call_id="call-bg", tool_name="execute_terminal", tool_result="{}", ended_at="t",
+            tool_call_id="call-bg",
+            tool_name="execute_terminal",
+            tool_result="{}",
+            ended_at="t",
         ),
         message_id=6,
     )

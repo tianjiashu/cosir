@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from app.app import app
 from app.service import depends
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
+from tests.http_test_support import TRUSTED_HEADERS
 
 pytestmark = pytest.mark.usefixtures("backend_env")
 
@@ -20,7 +21,7 @@ _MISSING = 987654
 
 
 def _client() -> TestClient:
-    return TestClient(app, raise_server_exceptions=False)
+    return TestClient(app, headers=TRUSTED_HEADERS, raise_server_exceptions=False)
 
 
 @pytest.mark.parametrize(

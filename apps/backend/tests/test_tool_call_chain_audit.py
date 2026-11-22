@@ -17,12 +17,12 @@ from app.assistant_transport.projection.snapshot_rebuild import (
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.events import ToolCallCreatedEvent, ToolCallStatusChangedEvent
 from app.core.tool.execute.tool_access_gate import ToolAccessGate
-from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.schemas import (
     ToolCall,
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.tool_registry import ToolRegistry
 from app.models.session_context import SessionContextRecord
 from app.models.session_extra import SessionExtra
@@ -127,7 +127,9 @@ def test_t2_disabled_and_invalid_args_yields_argument_denial(tmp_path: Any) -> N
             call_id="call-disabled",
         ),
         execution_context=_execution_context(tmp_path),
-        request_tools=RequestTools(schemas=(), admitted=frozenset({"other_tool"})),  # read_file 已注册但本轮被禁用
+        request_tools=RequestTools(
+            schemas=(), admitted=frozenset({"other_tool"})
+        ),  # read_file 已注册但本轮被禁用
     )
 
     assert outcome.denial is not None
@@ -176,11 +178,11 @@ def test_t2_unknown_tool_wins_over_everything(tmp_path: Any) -> None:
     registry = ToolRegistry([ReadFileTool().to_definition()])
     gate = ToolAccessGate(registry)
     outcome = gate.evaluate(
-        ToolCall(
-            tool_name="ghost_tool", arguments='{}', call_id="call-ghost"
-        ),
+        ToolCall(tool_name="ghost_tool", arguments="{}", call_id="call-ghost"),
         execution_context=_execution_context(tmp_path),
-        request_tools=RequestTools(schemas=(), admitted=frozenset(set())),  # 连空白名单都要先让位给「注册表未命中」
+        request_tools=RequestTools(
+            schemas=(), admitted=frozenset(set())
+        ),  # 连空白名单都要先让位给「注册表未命中」
     )
 
     assert outcome.denial is not None
@@ -331,6 +333,7 @@ def test_t4_rebuild_snapshot_materializes_all_tool_results(
         extra=SessionExtra(),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
+        terminal_permission_mode="request_approval",
     )
     session = SimpleNamespace(
         id=7, title="session", current_run_id=1, context_window_total=None, extra=SessionExtra()

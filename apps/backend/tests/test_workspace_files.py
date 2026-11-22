@@ -22,6 +22,7 @@ from app.service.workspace_files.directory.directory_index import DirectoryIndex
 from app.service.workspace_files.file_models import FileConflictError, FileEntry
 from app.service.workspace_files.file_watch import WorkspaceFileWatcher
 from app.service.workspace_files.search.text_search import search_text
+from tests.http_test_support import TRUSTED_HEADERS
 
 
 @pytest.fixture
@@ -187,7 +188,7 @@ def test_http_contract_and_resource_range(files, workspace_root):
     (workspace_root / "test.pdf").write_bytes(b"%PDF-1.7\n" + b"x" * 100)
     app.dependency_overrides[get_workspace_files_service] = lambda: files
     try:
-        client = TestClient(app, raise_server_exceptions=True)
+        client = TestClient(app, headers=TRUSTED_HEADERS, raise_server_exceptions=True)
         assert (
             client.get("/workspaces/1/files/info", params={"path": "data.txt"}).json()["kind"]
             == "text"
@@ -236,7 +237,10 @@ class _RecordingObserver:
     @property
     def emitters(self) -> list[SimpleNamespace]:
         """每个注册一条监听线程（与 watchdog 一样以 ``watch`` 对应注册）。"""
-        return [SimpleNamespace(watch=watch, is_alive=lambda w=watch: w not in self.dead) for watch in self.handlers]
+        return [
+            SimpleNamespace(watch=watch, is_alive=lambda w=watch: w not in self.dead)
+            for watch in self.handlers
+        ]
 
     def start(self) -> None:
         pass
@@ -418,7 +422,7 @@ def test_resource_range_images_and_changed_version(files, workspace_root, monkey
     Image.new("RGB", (20, 10), "red").save(workspace_root / "picture.png")
     app.dependency_overrides[get_workspace_files_service] = lambda: files
     try:
-        client = TestClient(app)
+        client = TestClient(app, headers=TRUSTED_HEADERS)
         url = "/workspaces/1/files/resource"
         pdf_params = {"path": "test.pdf", "version": files.info(1, "test.pdf").version}
         picture_params = {"path": "picture.png", "version": files.info(1, "picture.png").version}
@@ -612,7 +616,9 @@ def test_directory_cancel_releases_scan(files, workspace_root):
     assert len(files._snapshots) == 0
 
 
-def test_completed_directory_index_survives_request_cancellation(files, workspace_root, monkeypatch):
+def test_completed_directory_index_survives_request_cancellation(
+    files, workspace_root, monkeypatch
+):
     monkeypatch.setattr("app.service.workspace_files.directory.directory_index.MEMORY_ENTRIES", 10)
     for number in range(300):
         (workspace_root / f"item{number}.txt").touch()
@@ -655,7 +661,7 @@ def test_tiff_is_served_as_png_and_media_with_its_table_type(files, workspace_ro
     (workspace_root / "tone.wav").write_bytes(wav)
     app.dependency_overrides[get_workspace_files_service] = lambda: files
     try:
-        client = TestClient(app)
+        client = TestClient(app, headers=TRUSTED_HEADERS)
         url = "/workspaces/1/files/resource"
         info = files.info(1, "scan.tif")
         assert (info.kind, info.mime, info.width, info.height) == ("image", "image/tiff", 8, 4)
@@ -682,7 +688,7 @@ def test_broken_tiff_is_an_unviewable_image_not_a_server_error(files, workspace_
     (workspace_root / "broken.tif").write_bytes(b"II*\x00" + b"\xff" * 64)
     app.dependency_overrides[get_workspace_files_service] = lambda: files
     try:
-        client = TestClient(app)
+        client = TestClient(app, headers=TRUSTED_HEADERS)
         info = files.info(1, "broken.tif")
         assert (info.kind, info.width) == ("image", None)
         response = client.get(
@@ -707,7 +713,7 @@ def test_deliverable_previews_cover_the_tile_and_fit_the_card(files, workspace_r
     (workspace_root / "doc.pdf").write_bytes(b"%PDF-1.7\n" + b"x" * 10)
     app.dependency_overrides[get_workspace_files_service] = lambda: files
     try:
-        client = TestClient(app)
+        client = TestClient(app, headers=TRUSTED_HEADERS)
         url = "/workspaces/1/files/resource"
 
         def fetch(path: str, preview: str):
@@ -745,7 +751,7 @@ def test_previews_keep_exif_orientation(files, workspace_root):
     photo.save(workspace_root / "portrait.jpg", exif=exif)
     app.dependency_overrides[get_workspace_files_service] = lambda: files
     try:
-        client = TestClient(app)
+        client = TestClient(app, headers=TRUSTED_HEADERS)
         params = {
             "path": "portrait.jpg",
             "version": files.info(1, "portrait.jpg").version,

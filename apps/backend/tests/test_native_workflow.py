@@ -31,6 +31,7 @@ def loop(monkeypatch):
     )
     # 未了结事项的另一个来源（派生 Session）要读库；本文件不涉及派生。
     monkeypatch.setattr("app.core.workflow.drive_notices.open_derived_titles", lambda _id: [])
+    monkeypatch.setattr("app.core.workflow.drive_notices._terminal_permissions", lambda *_: None)
     model = SimpleNamespace(close=AsyncMock())
     run = SimpleNamespace(id=1, session_id=2, execution_data=ReactExecutionState(), usage=None)
     operations = runtime_stub(
@@ -42,8 +43,13 @@ def loop(monkeypatch):
             save_execution=lambda _run_id, value: progress.append(value),
             transition=lambda _run_id, transition, **k: calls.append(transition.name.lower()),
         ),
-        session_space=SimpleNamespace(session_tool_schemas=(), session_deferred_schemas=(), get_context_manager=lambda **k: context),
+        session_space=SimpleNamespace(
+            session_tool_schemas=(),
+            session_deferred_schemas=(),
+            get_context_manager=lambda **k: context,
+        ),
     )
+
     async def prepare_input(state):
         """message_queue 并入节点替身：不触碰真实 message_queue，只记录经过并流向 model。"""
         if not operations.cancelled:
@@ -107,7 +113,10 @@ async def test_cancelled_resume_does_not_replay_old_tools(loop, monkeypatch):
             ],
             observations=[
                 ToolObservation(
-                    tool_name="review", status="success", tool_call_id="old", waiting=AwaitMessages()
+                    tool_name="review",
+                    status="success",
+                    tool_call_id="old",
+                    waiting=AwaitMessages(),
                 )
             ],
         ),
@@ -176,6 +185,7 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
     成功后必须立即结束：回归点是成功写入后又落到失败写入，把 end_reason 覆盖成失败。
     """
     from app.core.workflow.node_helper.common import _runtime_context
+
     loop.ops.agent.structured_output = SimpleNamespace(
         name="result", json_schema={"type": "object", "required": ["ok"]}
     )
@@ -252,11 +262,7 @@ async def test_structured_output_updates_completed_run_result(loop, monkeypatch,
     monkeypatch.setattr(module, "_model_node", model)
     await module.ReactLikeWorkflow().run(loop.ops)
     assert loop.calls.count("format") == (
-        0
-        if outcome == "missing_context"
-        else 4
-        if outcome in {"invalid", "tools_empty"}
-        else 1
+        0 if outcome == "missing_context" else 4 if outcome in {"invalid", "tools_empty"} else 1
     )
     # 正文合规即采纳：多余 tool_calls 与 length 截断都不丢弃可用结果。
     if outcome in {"success", "late_cancel", "tools", "truncated"}:

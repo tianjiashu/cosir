@@ -13,6 +13,7 @@ import pytest
 from app.tools.terminal_runtime.command import local_backend
 from app.tools.terminal_runtime.command.command_output import CommandOutput
 from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
+from app.tools.terminal_runtime.permissions.policy import TerminalExecutionPolicy
 
 
 class _SilentWorker:
@@ -50,14 +51,23 @@ def _run(backend: LocalExecutionBackend, tmp_path: Path, timeout: float | None):
     output = CommandOutput(workspace_root=tmp_path, model_budget_chars=1000)
     results = []
     thread = threading.Thread(
-        target=lambda: results.append(backend.execute("sleep 100", str(tmp_path), timeout, output)),
+        target=lambda: results.append(
+            backend.execute(
+                "sleep 100",
+                str(tmp_path),
+                timeout,
+                output,
+                policy=TerminalExecutionPolicy(full_access=True, network=True),
+            )
+        ),
     )
     thread.start()
     return thread, results
 
 
 def test_cancelling_an_unlimited_command_returns_within_the_shutdown_deadline(
-    tmp_path: Path, silent_worker: list[_SilentWorker],
+    tmp_path: Path,
+    silent_worker: list[_SilentWorker],
 ) -> None:
     backend = LocalExecutionBackend()
     thread, results = _run(backend, tmp_path, None)
@@ -72,7 +82,8 @@ def test_cancelling_an_unlimited_command_returns_within_the_shutdown_deadline(
 
 
 def test_cancelling_does_not_wait_out_the_remaining_command_timeout(
-    tmp_path: Path, silent_worker: list[_SilentWorker],
+    tmp_path: Path,
+    silent_worker: list[_SilentWorker],
 ) -> None:
     backend = LocalExecutionBackend()
     thread, results = _run(backend, tmp_path, 60)
@@ -84,7 +95,8 @@ def test_cancelling_does_not_wait_out_the_remaining_command_timeout(
 
 
 def test_timeout_still_stops_and_reports_timed_out(
-    tmp_path: Path, silent_worker: list[_SilentWorker],
+    tmp_path: Path,
+    silent_worker: list[_SilentWorker],
 ) -> None:
     backend = LocalExecutionBackend()
     thread, results = _run(backend, tmp_path, 0.1)

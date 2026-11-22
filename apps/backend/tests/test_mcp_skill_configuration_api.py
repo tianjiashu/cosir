@@ -19,10 +19,9 @@ from app.app import app
 from app.service.configuration.mcp import configuration_service as mcp_configuration_service
 from app.service.configuration.mcp.machine_state import MCPServerCatalog, MCPToolEntry
 from app.service.configuration.skills.configuration import SkillConfiguration
+from tests.http_test_support import TRUSTED_HEADERS
 
 _SEARCH_TOOLS = [MCPToolEntry(name="search", description="Search", input_schema={"type": "object"})]
-
-
 
 
 def _write_skill(root: Path, name: str, description: str | None = None) -> None:
@@ -64,7 +63,7 @@ def workspace(tmp_path, monkeypatch) -> Path:
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(app)
+    return TestClient(app, headers=TRUSTED_HEADERS)
 
 
 @pytest.fixture
@@ -222,7 +221,12 @@ def test_a_transient_test_failure_keeps_the_server_available(client, monkeypatch
 # B4 潜在缺陷：一个服务的地址变量展开后不合法，整个列表与保存都报 400，连改变量的卡片都看不到。
 def test_an_invalid_expanded_url_only_marks_that_server(client, monkeypatch) -> None:
     monkeypatch.setenv("BAD_MCP_URL", "localhost:3000")
-    broken = {"name": "remote", "transport": "streamable_http", "url": "${BAD_MCP_URL}", "enabled": True}
+    broken = {
+        "name": "remote",
+        "transport": "streamable_http",
+        "url": "${BAD_MCP_URL}",
+        "enabled": True,
+    }
 
     saved = client.put("/configuration/mcp-servers", json={"servers": [_server(), broken]})
     listed = client.get("/configuration/mcp-servers")
@@ -447,7 +451,9 @@ def test_skill_import_asks_before_replacing_a_same_name_cosir_skill(
     assert "duplicate description" in (skills_root / "duplicate" / "SKILL.md").read_text()
 
 
-def test_skill_zip_import_copies_archive_contents(system_cosir_skills, client, tmp_path, system_cosir) -> None:
+def test_skill_zip_import_copies_archive_contents(
+    system_cosir_skills, client, tmp_path, system_cosir
+) -> None:
     archive_path = tmp_path / "new-skill.zip"
     with zipfile.ZipFile(archive_path, "w") as bundle:
         bundle.writestr("new-skill/SKILL.md", b"---\nname: new-skill\ndescription: zipped\n---\n")
@@ -462,9 +468,7 @@ def test_skill_zip_import_copies_archive_contents(system_cosir_skills, client, t
 
     assert response.status_code == 201
     assert response.json()["description"] == "zipped"
-    assert (system_cosir_skills / "new-skill" / "references" / "guide.md").read_text() == (
-        "Guide"
-    )
+    assert (system_cosir_skills / "new-skill" / "references" / "guide.md").read_text() == ("Guide")
 
 
 @pytest.mark.parametrize(
@@ -536,7 +540,9 @@ def test_authorize_route_reports_pending_authorization_and_unknown_flows_are_404
     """登录授权要去浏览器时只返回授权信息（status 区分两种结局）；授权已不存在时等待与取消都给 404。"""
 
     async def pending(self, config):
-        return mcp_configuration_service.PendingAuthorization("flow-1", "https://auth.example/authorize")
+        return mcp_configuration_service.PendingAuthorization(
+            "flow-1", "https://auth.example/authorize"
+        )
 
     monkeypatch.setattr(mcp_configuration_service.MCPConfigurationService, "authorize", pending)
 

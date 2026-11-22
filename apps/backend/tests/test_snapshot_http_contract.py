@@ -6,12 +6,13 @@ from fastapi.testclient import TestClient
 from app.app import app
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
 from app.service import depends
+from tests.http_test_support import TRUSTED_HEADERS
 
 
 def test_history_uses_real_storage_over_http(backend_env, tmp_path):
     workspace = depends.get_workspace_crud().create("http-contract", str(tmp_path))
     session = depends.get_session_crud().create(workspace.id, "snapshot-contract")
-    client = TestClient(app)
+    client = TestClient(app, headers=TRUSTED_HEADERS)
     page = client.get(f"/sessions/{session.id}/assistant/messages?end=0")
     assert page.status_code == 200, page.text
     assert page.json() == {"messages": [], "messageOffset": 0}
@@ -27,7 +28,8 @@ def test_nested_tool_parts_serialize_through_actual_routes(presentation):
         {
             "id": "assistant-1",
             "role": "assistant",
-            "turn": 1, "inherited": False,
+            "turn": 1,
+            "inherited": False,
             "outcome": None,
             "source": None,
             "parts": [
@@ -50,7 +52,7 @@ def test_nested_tool_parts_serialize_through_actual_routes(presentation):
 
     app.dependency_overrides[get_assistant_transport_service] = Source
     try:
-        client = TestClient(app)
+        client = TestClient(app, headers=TRUSTED_HEADERS)
         response = client.get("/sessions/1/assistant/messages?end=1")
         assert response.status_code == 200, response.text
         part = response.json()["messages"][0]["parts"][0]
