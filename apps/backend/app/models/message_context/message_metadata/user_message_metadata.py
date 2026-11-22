@@ -1,9 +1,7 @@
-"""落库 user 行的附属信息：来源种类、展示绑定、调用归属、合成通知与后台结论的文件事实。"""
+"""落库 user 行的附属信息：来源种类、展示绑定、调用归属与合成通知。"""
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
-from app.models.file_access.file_facts import FileFacts
-from app.models.file_access.file_stale_read import StaleRead
 from app.models.message_context.conversation_input import MessageSource
 from app.models.message_context.message_metadata.base.message_kinds import (
     CALL_RESULT_KINDS,
@@ -34,8 +32,9 @@ class NoticeEntry(BaseModel):
     open_items: list[str] | None = None
     # 配置变化通知：告知后 Agent 看到的全部配置指纹（见 ``SystemMessageMetadata``）。
     prompt_sources: PromptSourceBaseline | None = None
-    # 读过的文件变化通知：告知时全部「读过但已变化」的文件（见 ``core/file_access/read_change_notice``）。
-    stale_reads: list[StaleRead] | None = None
+    # 读过的文件变化通知：告知时全部「读过但已变化」的文件，不透明，只有文件系统解读
+    # （``app/tools/file_system/read_changes``）。
+    stale_reads: list[dict[str, JsonValue]] | None = None
 
 
 class UserInputPresentation(BaseModel):
@@ -71,8 +70,6 @@ class UserMessageMetadata(MessageMetadata):
       之后的回合才并入，撤回据它判断这行回答的是哪次调用（见 ``turn_withdrawal_service``）。
     - ``notices``：合成通知行（``notice``）里的每条通知。分叉交接、后端重启这类 Session 级通知只投递
       一次，所在的回合被撤回时要据此重新投递，否则之后的 Run 永远看不到。
-    - ``file_facts``：后台命令的结论（``background_result``）。结论晚于结果行到达，它的文件事实跟着
-      这一行走，``file_knowledge`` 据此认读取证据。
     """
 
     kind: MessageKind
@@ -80,7 +77,6 @@ class UserMessageMetadata(MessageMetadata):
     source: MessageSource | None = None
     tool_call_id: str | None = None
     notices: list[NoticeEntry] = Field(default_factory=list)
-    file_facts: FileFacts | None = None
 
     @property
     def answered_calls(self) -> frozenset[str]:
@@ -105,6 +101,4 @@ class UserMessageMetadata(MessageMetadata):
             raise ValueError("tool_call_id is required for call results and forbidden otherwise")
         if self.notices and self.kind != "notice":
             raise ValueError("notices are only allowed for notice messages")
-        if self.file_facts is not None and self.kind != "background_result":
-            raise ValueError("file_facts are only allowed for background results")
         return self

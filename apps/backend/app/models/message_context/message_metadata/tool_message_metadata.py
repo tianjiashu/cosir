@@ -1,16 +1,18 @@
 """工具结果行的持久化事实：展示事实、等待状态、后台工作记录，以及工具交给运行时的结构化结果。
 
 模型只读观察的 ``content``，卡片只读 ``display_data``；``ToolResultFacts`` 是既不进模型正文、也不进
-卡片的那部分后端事实（交付记录、已加载的工具，以及文件事实 ``FileFacts``）。
+卡片的那部分后端事实（交付记录、已加载的工具、文件事实与正文是否被截断）。
 """
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, JsonValue
 
-from app.models.deliverable import Deliverable
+from app.models.deliverable_file import Deliverable
 from app.models.enums.tool_call_status import ToolCallEventStatus
 from app.models.external_tool import ExternalToolDefinition
-from app.models.file_access.file_facts import FileFacts
 from app.models.message_context.message_metadata.base.message_metadata_base import MessageMetadata
+
+# 文件系统交出的事实（``app/tools/file_system`` 的 ``FileFacts`` 的 JSON 形态）：core 只存放、透传，不解读。
+FileFactsPayload = dict[str, JsonValue]
 
 
 class BackgroundWork(BaseModel):
@@ -45,8 +47,7 @@ class ToolResultFacts(BaseModel):
     要用的定位信息，后端规则同样不解析正文。
 
     工具经 ``tool_success(facts=...)`` 交出，随结果行持久化，再随上下文继承（分叉）、移出（撤回）与
-    重建（恢复、重启）。整份为空（``facts is None``）表示这次调用不交出任何后端事实。后台命令的结论
-    晚于结果行到达，只带文件事实，落在并入时的 user 行（见 ``FileFacts``）。
+    重建（恢复、重启）。整份为空（``facts is None``）表示这次调用不交出任何后端事实。
 
     每个字段只属于一个工具（见各字段注释），新的同类事实在这里加一个字段即可，构造、投递与持久化
     都不用改。读取方按字段分工：
@@ -55,7 +56,8 @@ class ToolResultFacts(BaseModel):
       ``conversation_state_deliverable``）；
     - ``loaded_external_tools`` / ``loaded_builtin_tools``：下一次请求的工具集与准入
       （``runtime_message_context_manager``、``core/tool/external_tools``）；
-    - ``file_facts``：文件读写证据与终端对账，读取方是 ``core/file_access``（见 ``FileFacts``）。
+    - ``file_facts``：文件读写证据，不透明，只有 ``app/tools/file_system`` 解读（core 经执行上下文原样交还）；
+    - ``content_truncated``：通用输出预算截断了模型正文，文件系统据此不认这次结果里的读取证据。
 
     实例构造后不可变（``frozen`` + ``extra="forbid"``）：事实只能在结果行产生时决定，读取方不得
     原地修改；需要改写时用 ``model_copy(update=...)`` 生成新副本。
@@ -69,8 +71,10 @@ class ToolResultFacts(BaseModel):
     # 快照（见 ``app.models.external_tool``）；内置工具只存名字，定义取 Session 工具面固化的那一份。
     loaded_external_tools: tuple[ExternalToolDefinition, ...] | None = None
     loaded_builtin_tools: tuple[str, ...] | None = None
-    # 文件读写工具、终端读取与 ``execute_terminal`` 交出。
-    file_facts: FileFacts | None = None
+    # 文件读写工具交出。
+    file_facts: FileFactsPayload | None = None
+    # 由执行器的通用输出预算写下：模型看到的不是全文。
+    content_truncated: bool = False
 
 
 class ToolMessageMetadata(MessageMetadata):
@@ -86,11 +90,6 @@ class ToolMessageMetadata(MessageMetadata):
     # 工具交给运行时的结构化结果（见 ``ToolResultFacts``）。与 ``background``
     # 一样「有才写」：投影不会因为某次事件没带它而清掉 part 上已有的。
     facts: ToolResultFacts | None = None
-
-    @property
-    def file_facts(self) -> FileFacts | None:
-        """与 ``UserMessageMetadata.file_facts`` 同名：读取证据的一方不必区分事实从哪种行来。"""
-        return self.facts.file_facts if self.facts is not None else None
 
     @property
     def awaiting_decision(self) -> bool:
