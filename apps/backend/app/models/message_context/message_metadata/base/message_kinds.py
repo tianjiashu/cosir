@@ -1,16 +1,18 @@
-"""Session 消息队列的消息种类，以及按用途划分的两个子集。"""
+"""消息种类的唯一词表：Session 消息队列的种类、落库 user 行的种类，以及按用途划分的两个子集。
+
+两处同一个概念只用一个词：队列行的 ``kind`` 并入 context 后原样记在 user 行的 metadata 上。给模型看的
+标签（``<system_notice>`` 等）是提示词协议，归各消息体的 ``TAG``，不跟这里的词走。
+"""
 
 from typing import Literal
 
-MessageKind = Literal[
-    "user_input",
-    "agent_message",
-    "notice",
-    "decision",
-    "background_result",
-    "tool_image",
+SessionMessageKind = Literal[
+    "user_input", "agent_message", "notice", "decision", "background_result"
 ]
-"""Session 消息队列的消息种类；并入 context 后记在 user 消息的 metadata 上，后端规则只读它。"""
+"""入队的消息种类（``session_messages.kind`` 与消息体的判别值）。"""
+
+MessageKind = Literal[SessionMessageKind, "tool_image"]
+"""落库 user 行的种类：入队的种类，加上不入队、由 observe 节点直接写入的工具图片。后端规则只读它。"""
 
 CALL_RESULT_KINDS: frozenset[MessageKind] = frozenset(
     {"decision", "background_result", "tool_image"}
