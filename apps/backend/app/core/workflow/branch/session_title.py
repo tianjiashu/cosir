@@ -17,11 +17,9 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from openai.types.chat import (
-    ChatCompletionContentPartParam,
-    ChatCompletionContentPartTextParam,
     ChatCompletionMessageParam,
     ChatCompletionUserMessageParam,
 )
@@ -32,11 +30,7 @@ from app.config.logging.logger import log
 from app.core.events import SessionTitleUpdatedEvent
 from app.core.llm_provider.openai_model import usage_from_response
 from app.core.workflow.node_helper.common import _message_context, emit
-from app.models.message_context.capsules.capsule_grammar import TextSegment, parse_capsules
-from app.models.message_context.capsules.grammar.capsule import Capsule
-from app.models.message_context.capsules.grammar.file_capsule import FileCapsule
-from app.models.message_context.capsules.grammar.ref_capsule import RefCapsule
-from app.models.message_context.capsules.grammar.skill_capsule import SkillCapsule
+from app.models.message_context.capsules.capsule_grammar import Segment
 from app.models.session.session_kind import USER_FACING_SESSION_TYPES
 from app.service import depends as service_depends
 from app.utils.datetime_utils import SESSION_TITLE_LIMIT, preview
@@ -59,7 +53,7 @@ def name_untitled(rc: RuntimeContext, text: str) -> None:
     """
     if rc.session.title:
         return
-    title = preview(_plain_text(text), limit=SESSION_TITLE_LIMIT) or "新会话"
+    title = preview(Segment.plain_text(text), limit=SESSION_TITLE_LIMIT) or "新会话"
     if not service_depends.get_session_service().fill_empty_title(rc.session.id, title):
         return
     # 同步缓存的记录：随后启动的支线把它当作「当前标题」交给模型。
@@ -115,9 +109,10 @@ async def _generate(rc: RuntimeContext, messages: list[ChatCompletionMessagePara
     started = time.monotonic()
     current = rc.session.title
     try:
-        # 标题模型只看用户说了什么：胶囊在请求副本里投影成可读名称，避免标签本身干扰主题判断。
-        messages = _plain_text_messages(messages)
-        messages.append(ChatCompletionUserMessageParam(role="user", content=_instruction(current)))
+        messages = [
+            *messages,
+            ChatCompletionUserMessageParam(role="user", content=_instruction(current)),
+        ]
         response = await asyncio.wait_for(
             rc.model.complete(  # type: ignore[union-attr]  # 驱动期已补齐
                 messages,
@@ -187,73 +182,14 @@ async def _generate(rc: RuntimeContext, messages: list[ChatCompletionMessagePara
     )
 
 
-def _plain_text_messages(
-    messages: list[ChatCompletionMessageParam],
-) -> list[ChatCompletionMessageParam]:
-    """把请求副本里的 user 消息正文投影为纯文本（``str`` 或 content 列表里的 text block）。
-
-    只处理 user 消息：胶囊只出现在用户输入里，系统提示词与工具结果保持原样。副本由调用方取好，
-    这里返回新列表，不改动主线正在使用的请求。
-    """
-    projected: list[ChatCompletionMessageParam] = []
-    for message in messages:
-        if message["role"] != "user":
-            projected.append(message)
-            continue
-        content = message["content"]
-        if isinstance(content, str):
-            text_content: str | list[ChatCompletionContentPartParam] = _plain_text(content)
-        else:
-            text_content = [
-                ChatCompletionContentPartTextParam(type="text", text=_plain_text(part["text"]))
-                if part["type"] == "text"
-                else part
-                for part in content
-            ]
-        projected.append(
-            cast(
-                ChatCompletionUserMessageParam,
-                {**message, "content": text_content},
-            )
-        )
-    return projected
-
-
-def _plain_text(text: str) -> str:
-    """展示/标题用的纯文本投影：胶囊换成可读名称，普通文本原样。"""
-
-    return "".join(
-        segment.text if isinstance(segment, TextSegment) else _capsule_plain_text(segment.capsule)
-        for segment in parse_capsules(text)
-    )
-
-
-def _capsule_plain_text(capsule: Capsule) -> str:
-    if isinstance(capsule, FileCapsule):
-        return _basename(capsule.path)
-    if isinstance(capsule, RefCapsule):
-        if capsule.lines is not None:
-            locator = f":{capsule.lines}"
-        elif capsule.page is not None:
-            locator = f" (p.{capsule.page})"
-        else:
-            locator = ""
-        return f"{capsule.path or '工作区'}{locator}"
-    if isinstance(capsule, SkillCapsule):
-        return capsule.name
-    raise TypeError(f"unsupported capsule: {type(capsule).__name__}")
-
-
-def _basename(path: str) -> str:
-    trimmed = path.rstrip("/\\")
-    return trimmed.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] or trimmed or path
-
-
 def _instruction(current_title: str) -> str:
     """请求末尾的临时指令，不写回 canonical context；带上当前标题，主题未变时让模型原样返回。"""
     return "\n\n".join(
         [
             "Do not answer or continue the conversation above. Your only job now is to name it.",
+            "Attachment pointers such as <file ... />, <ref ... /> and <skill ... /> in the"
+            " conversation are references the user attached; they are not the topic and must not"
+            " appear in the title.",
             (
                 "Write a short title that summarizes what the user wants in this conversation, "
                 "in the same language the user writes in, "
