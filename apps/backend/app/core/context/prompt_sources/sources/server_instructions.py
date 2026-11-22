@@ -31,7 +31,7 @@ from app.core.context.prompt_sources.source import (
 from app.core.tool.external_tools import ExternalCatalogUnavailable, external_tools
 from app.core.tool.results.external_content import ExternalContent
 from app.core.tool.schemas.tool_names import TOOL_SEARCH
-from app.models.message_metadata import PromptSourceEntry
+from app.models.message_context.message_metadata.system_message_metadata import PromptSourceEntry
 
 # 外部目录读不出来时的唯一条目键：空串，服务名至少一个字符，不会撞上。
 UNAVAILABLE_KEY = ""
@@ -77,7 +77,9 @@ class ServerInstructionsSource(PromptSource):
         return with_ambient(self._changes(diff, items, previous))
 
     @staticmethod
-    def _changes(diff: ItemDiff, items: SourceItems, previous: Mapping[str, PromptSourceEntry]) -> str:
+    def _changes(
+        diff: ItemDiff, items: SourceItems, previous: Mapping[str, PromptSourceEntry]
+    ) -> str:
         if UNAVAILABLE_KEY in items:
             return f"- {_UNAVAILABLE_TEXT}"
         external = ExternalContent()
@@ -94,7 +96,9 @@ class ServerInstructionsSource(PromptSource):
             )
         removed = [name for name in diff.removed if name != UNAVAILABLE_KEY]
         if removed:
-            lines.append(f"  No longer in effect (server removed or gave none): {', '.join(removed)}.")
+            lines.append(
+                f"  No longer in effect (server removed or gave none): {', '.join(removed)}."
+            )
         if len(lines) == 1:
             # 只有标记消失：目录恢复了，但没有任何服务给说明。
             return "- MCP server instructions are readable again; no server provides any."

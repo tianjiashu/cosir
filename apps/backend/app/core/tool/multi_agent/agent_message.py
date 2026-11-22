@@ -9,36 +9,19 @@ from app.core.workflow.message_queue.session_message import (
     RunLaunch,
     SessionMessage,
 )
-from app.models.conversation_input import MessageSource
-from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
+from app.models.message_context.conversation_input import MessageSource
 from app.service.depends import get_model_config_service
 
 
-def prepare_agent_message(
-    text: str,
-    *,
-    source: MessageSource,
-    agent_id: str,
-    model_config_id: str,
-    reasoning_effort: ReasoningEffort | None = None,
-) -> SessionMessage:
+def prepare_agent_message(text: str, *, source: MessageSource, launch: RunLaunch) -> SessionMessage:
     """组装一条携带发起配置的 Agent 消息（尚未入队）；一律 ``immediate``：没有人替 Agent 点
-    「立即发送」。
+    「立即发送」。发起配置由调用方给全（多数直接沿用目标会话现成的 ``launch``），这里不补默认值。
 
     异常:
         UserInputRejectedError: 模型配置不存在、不支持所选推理强度，或正文为空。
     """
-    get_model_config_service().check_launch_config(model_config_id, reasoning_effort)
+    get_model_config_service().check_launch_config(launch.model_config_id, launch.reasoning_effort)
     if not text.strip():
         raise UserInputRejectedError("EMPTY_INPUT", "Agent 消息正文为空")
-    body = AgentMessageBody(
-        text=text,
-        source=source,
-        launch=RunLaunch(
-            agent_id=agent_id,
-            model_config_id=model_config_id,
-            reasoning_effort=reasoning_effort,
-        ),
-    )
-    return SessionMessage.of(body)
+    return SessionMessage.of(AgentMessageBody(text=text, source=source, launch=launch))

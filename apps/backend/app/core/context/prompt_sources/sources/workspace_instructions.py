@@ -21,7 +21,7 @@ from app.core.context.prompt_sources.source import (
     fingerprint,
     text_change,
 )
-from app.models.message_metadata import PromptSourceEntry
+from app.models.message_context.message_metadata.system_message_metadata import PromptSourceEntry
 from app.utils.file_signature import stat_signature
 from app.utils.file_utils import read_text_file
 from app.utils.token_estimator import TokenEstimator
@@ -78,15 +78,14 @@ class WorkspaceInstructionsSource(PromptSource):
 
         if not items:
             return "- The workspace AGENTS.md (<workspace_layer>) is gone; drop its rules."
-        (path, item), = items.items()
+        ((path, item),) = items.items()
         new = _body(item.text)
         if not previous:
             return f"- The workspace AGENTS.md is now ./{path}. " + text_change("", new)
-        (old_path, old_item), = previous.items()
+        ((old_path, old_item),) = previous.items()
         where = "" if old_path == path else f" It is now loaded from ./{path} (was ./{old_path})."
-        return (
-            f"- The workspace AGENTS.md (<workspace_layer>) changed.{where} "
-            + text_change(_body(old_item.text), new)
+        return f"- The workspace AGENTS.md (<workspace_layer>) changed.{where} " + text_change(
+            _body(old_item.text), new
         )
 
 

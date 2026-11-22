@@ -17,8 +17,8 @@ from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.events.event_sink import event_sink
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.models.message_metadata import ToolMessageMetadata
-from app.models.session_context import SessionContextRecord
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.session_context import SessionContextRecord
 from app.service import depends as service_depends
 
 # 卡片短提示（约 5 字）：区分「被谁结束」，状态本身都是 ``cancelled``。

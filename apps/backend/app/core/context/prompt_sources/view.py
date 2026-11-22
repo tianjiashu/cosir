@@ -11,7 +11,10 @@ from app.core.context.prompt_sources.source import (
     SourceContext,
     SourceItem,
 )
-from app.models.message_metadata import PromptSourceBaseline, PromptSourceEntry
+from app.models.message_context.message_metadata.system_message_metadata import (
+    PromptSourceBaseline,
+    PromptSourceEntry,
+)
 
 
 @dataclass(frozen=True)

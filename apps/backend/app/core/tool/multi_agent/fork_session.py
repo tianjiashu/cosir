@@ -1,7 +1,7 @@
 """fork_session 工具：把当前会话复制成一条侧栏可见的分叉会话，交给它一份任务说明，当场完成。
 
 与 ``delegate_task`` 的分工：委派换一个子 Agent 身份、只带任务说明；fork 不换身份，带着到上一条回复为止的
-上下文去做。两者共用派生的其余部分：派生深度（``core.tool.derivation.child_depth``）、以 Agent 消息
+上下文去做。两者共用派生的其余部分：派生深度（``core.tool.multi_agent.derivation.child_depth``）、以 Agent 消息
 投递任务说明、Run 落定时由编排向本 Session 汇报（``derived_report``），父 Agent 用 ``wait_messages``
 等汇报。用户在分叉里直接对话开出的 Run 不汇报。
 
@@ -34,8 +34,8 @@ from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.message_queue.session_message import RunLaunch
-from app.models.conversation_input import MessageSource
-from app.models.errors.session_fork_errors import SessionForkConflictError
+from app.models.message_context.conversation_input import MessageSource
+from app.models.session.session_fork_errors import SessionForkConflictError
 from app.service.depends import get_run_ledger, get_session_service
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
@@ -95,7 +95,11 @@ class ForkSessionTool(HandlerBase):
             run = self._ledger.get_run(execution_context.run_id)
             launch = cast(RunLaunch, RunLaunch.from_run(run))
             narrowed_root = (
-                narrow(execution_context.workspace_root, parent_session.extra.writable_root, writable_root)
+                narrow(
+                    execution_context.workspace_root,
+                    parent_session.extra.writable_root,
+                    writable_root,
+                )
                 if writable_root
                 else None
             )
@@ -113,9 +117,7 @@ class ForkSessionTool(HandlerBase):
                 source=MessageSource(
                     session_id=parent_session.id, name=parent_session.title, from_deriver=True
                 ),
-                agent_id=launch.agent_id,
-                model_config_id=launch.model_config_id,
-                reasoning_effort=launch.reasoning_effort,
+                launch=launch,
             )
             # 交接通知已随分支写入队列（优先级在前），任务说明开出的第一个 Run 先读到身份再读到任务。
             fork_root = fork.extra.writable_root

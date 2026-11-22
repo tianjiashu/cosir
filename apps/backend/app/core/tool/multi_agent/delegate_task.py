@@ -5,6 +5,7 @@
 （``core.tool.multi_agent.derived_report``）；父侧用 ``wait_messages`` 挂起等待，或 ``session_read``
 查询。参数校验与准入门禁归 ``ToolAccessGate``。
 """
+
 import json
 from typing import Any
 
@@ -30,9 +31,10 @@ from app.core.tool.schemas import (
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
-from app.models.conversation_input import MessageSource
-from app.models.session_extra import SessionExtra
-from app.models.session_kind import SessionType
+from app.core.workflow.message_queue.session_message import RunLaunch
+from app.models.message_context.conversation_input import MessageSource
+from app.models.session.session_extra import SessionExtra
+from app.models.session.session_kind import SessionType
 from app.service.depends import (
     get_run_ledger,
     get_session_service,
@@ -94,12 +96,12 @@ class DelegateTaskTool(HandlerBase):
         self._ledger = get_run_ledger()
 
     def execute(
-            self,
-            child_agent_id: str,
-            agent_name: str,
-            message: str,
-            execution_context: ToolExecutionContext,
-            writable_root: str | None = None,
+        self,
+        child_agent_id: str,
+        agent_name: str,
+        message: str,
+        execution_context: ToolExecutionContext,
+        writable_root: str | None = None,
     ) -> ToolObservation:
         """委派一个自由文本子会话给指定 child Agent，投递任务说明后返回已启动的观察。
 
@@ -139,8 +141,8 @@ class DelegateTaskTool(HandlerBase):
             child_agent_id,
         )
         if (
-                child_agent_profile is None
-                or child_agent_profile.agent_type is not AgentProfileType.CHILD
+            child_agent_profile is None
+            or child_agent_profile.agent_type is not AgentProfileType.CHILD
         ):
             log.warning(
                 "delegate_child_resolve_failed",
@@ -174,7 +176,9 @@ class DelegateTaskTool(HandlerBase):
             child_session_tools = child_agent_profile.select_tools(
                 get_tool_registry().get_all_definitions()
             )
-            child_final_session_tools = tools_for_session(SessionType.DELEGATED, child_session_tools, depth=depth)
+            child_final_session_tools = tools_for_session(
+                SessionType.DELEGATED, child_session_tools, depth=depth
+            )
 
             child_session = self._session_service.create_session(
                 workspace_id=execution_context.workspace_id,
@@ -189,9 +193,11 @@ class DelegateTaskTool(HandlerBase):
                 derivation_depth=depth,
             )
 
-            reasoning_effort = (child_agent_profile.model_settings.reasoning_effort
-                                if child_agent_profile.model_settings is not None
-                                else None)
+            reasoning_effort = (
+                child_agent_profile.model_settings.reasoning_effort
+                if child_agent_profile.model_settings is not None
+                else None
+            )
             child_agent_model_config_id = child_agent_profile.model_config_id
             model_config_id = child_agent_model_config_id or parent_run.model_config_id
             # 子 Session 的 actor 新开 Run。任务说明是父 Agent 说的话，以 Agent 消息投递：子 Agent 不会
@@ -203,9 +209,12 @@ class DelegateTaskTool(HandlerBase):
                     source=MessageSource(
                         session_id=parent_session.id, name=parent_session.title, from_deriver=True
                     ),
-                    agent_id=child_agent_id,
-                    model_config_id=model_config_id,
-                    reasoning_effort=reasoning_effort,
+                    launch=RunLaunch(
+                        agent_id=child_agent_id,
+                        model_config_id=model_config_id,
+                        reasoning_effort=reasoning_effort,
+                        terminal_permission_mode=parent_run.terminal_permission_mode,
+                    ),
                 ),
             )
             return tool_success(
@@ -246,6 +255,7 @@ class DelegateTaskTool(HandlerBase):
                 tool_name=self.name,
                 content="An error occurred while delegating the task.",
             )
+
     @staticmethod
     def _delegation_display_data(
         *,

@@ -14,9 +14,9 @@ from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.agents.resolved_model import ResolvedModel, resolve_model
 from app.core.agents.structured_output_spec import StructuredOutputSpec
-from app.models import RunRecord
 from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.model_config_record import ModelConfigRecord
+from app.models.run.run_record import RunRecord
 from app.service.depends import get_model_config_service, get_session_service, get_workspace_service
 
 

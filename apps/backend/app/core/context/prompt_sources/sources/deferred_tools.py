@@ -26,7 +26,7 @@ from app.core.context.prompt_sources.source import (
 )
 from app.core.tool.handler.deferred.deferred_catalog import DeferredCatalog
 from app.core.tool.schemas.tool_names import TOOL_SEARCH
-from app.models.message_metadata import PromptSourceEntry
+from app.models.message_context.message_metadata.system_message_metadata import PromptSourceEntry
 
 # 外部目录读不出来时的唯一条目键：空串，工具名至少一个字符，不会撞上。
 UNAVAILABLE_KEY = ""
@@ -42,7 +42,8 @@ class DeferredToolsSource(PromptSource):
         catalog = DeferredCatalog.read(context.deferred_tools, context.workspace_root)
         items = {
             entry.name: SourceItem(
-                fingerprint(json.dumps(entry.function, sort_keys=True, ensure_ascii=False)), entry.name
+                fingerprint(json.dumps(entry.function, sort_keys=True, ensure_ascii=False)),
+                entry.name,
             )
             for entry in catalog.entries
         }
@@ -51,7 +52,9 @@ class DeferredToolsSource(PromptSource):
                 "system_prompt_deferred_catalog_unavailable",
                 extra={"msg": "外部工具目录读取失败", "data": {"error": catalog.unavailable}},
             )
-            items[UNAVAILABLE_KEY] = SourceItem(fingerprint(catalog.unavailable), catalog.unavailable)
+            items[UNAVAILABLE_KEY] = SourceItem(
+                fingerprint(catalog.unavailable), catalog.unavailable
+            )
         return items
 
     def render(self, items: SourceItems) -> str:
@@ -85,7 +88,8 @@ class DeferredToolsSource(PromptSource):
         if diff.changed:
             blocks.append(
                 "The following deferred tools changed their definitions. If you loaded them before, "
-                f'load them again with {TOOL_SEARCH} before calling them:\n' + "\n".join(diff.changed)
+                f"load them again with {TOOL_SEARCH} before calling them:\n"
+                + "\n".join(diff.changed)
             )
         if diff.removed:
             blocks.append(
@@ -93,7 +97,6 @@ class DeferredToolsSource(PromptSource):
                 f"{TOOL_SEARCH} will return no match:\n" + "\n".join(diff.removed)
             )
         return "\n\n".join(blocks)
-
 
     @staticmethod
     def _available(names: list[str]) -> str:

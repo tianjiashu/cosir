@@ -26,7 +26,7 @@ from app.core.tool.schemas import TOOL_SEARCH, ToolDefinition, ToolExecutionCont
 from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_MCP
 from app.core.tool.tool_base import HandlerBase
-from app.models.tool_result_facts import ToolResultFacts
+from app.models.message_context.message_metadata.tool_message_metadata import ToolResultFacts
 
 NO_MATCH = "No matching deferred tools found"
 # 重复加载时的提醒：不再给一遍定义（也不再记一次加载），指回模型已有的那份。
@@ -116,7 +116,8 @@ class ToolSearchTool(HandlerBase):
     def _render_functions(entries: list[DeferredEntry]) -> str:
         """``<functions>`` 块：每个工具一行，JSON 与请求里的定义同一份。"""
         lines = (
-            f"<function>{json.dumps(entry.function, ensure_ascii=False)}</function>" for entry in entries
+            f"<function>{json.dumps(entry.function, ensure_ascii=False)}</function>"
+            for entry in entries
         )
         return "<functions>\n" + "\n".join(lines) + "\n</functions>\n" + _LOADED_NOTE
 

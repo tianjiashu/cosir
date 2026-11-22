@@ -22,7 +22,7 @@ from app.core.context.prompt_sources.source import (
 )
 from app.core.context.prompt_sources.sources.metadata_encoding import prompt_line
 from app.core.tool.schemas.tool_names import TOOL_SKILL
-from app.models.message_metadata import PromptSourceEntry
+from app.models.message_context.message_metadata.system_message_metadata import PromptSourceEntry
 from app.utils.file_signature import directory_entries, stat_signature
 
 # 配置读取失败时的唯一条目键：空串，Skill 名至少一个字符（``catalog._SKILL_NAME_PATTERN``），不会撞上。
@@ -111,7 +111,6 @@ class SkillsSource(PromptSource):
         if diff.removed:
             lines.append(f"  No longer available: {', '.join(diff.removed)}.")
         return "\n".join(lines)
-
 
 
 def render_skill_catalog(entries: Iterable[tuple[str, str]]) -> str:

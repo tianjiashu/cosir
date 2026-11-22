@@ -11,8 +11,10 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from app.models.message_metadata import BackgroundWork
-from app.models.tool_result_facts import ToolResultFacts
+from app.models.message_context.message_metadata.tool_message_metadata import (
+    BackgroundWork,
+    ToolResultFacts,
+)
 
 
 @dataclass(frozen=True)

@@ -35,9 +35,10 @@ from app.core.workflow.message_queue.session_message import (
     RunLaunch,
     SessionMessage,
 )
-from app.models import RunRecord, SessionRecord
-from app.models.conversation_input import AgentReport, MessageSource
-from app.models.enums.run_status import ACTIVE_RUN_STATUSES, RunStatus
+from app.models.message_context.conversation_input import AgentReport, MessageSource
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import ACTIVE_RUN_STATUSES, RunStatus
+from app.models.session.session_record import SessionRecord
 from app.service import depends as service_depends
 
 

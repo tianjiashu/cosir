@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -67,6 +67,17 @@ def _render_truncation_marker(
     )
 
 
+@dataclass(frozen=True)
+class ClippedOutput:
+    head: str
+    marker: str
+    tail: str
+
+    @property
+    def text(self) -> str:
+        return self.head + self.marker + self.tail
+
+
 def fit_head_tail(
     head: str,
     tail: str,
@@ -76,6 +87,20 @@ def fit_head_tail(
     artifact_path: str,
     max_chars: int,
 ) -> str:
+    """拼接预算内保留的头尾文本及中间的截断标记。"""
+    return clip_head_tail(head, tail, total_chars=total_chars, total_lines=total_lines,
+                          artifact_path=artifact_path, max_chars=max_chars).text
+
+
+def clip_head_tail(
+    head: str,
+    tail: str,
+    *,
+    total_chars: int,
+    total_lines: int,
+    artifact_path: str,
+    max_chars: int,
+) -> ClippedOutput:
     """从全文的前缀 ``head`` 与后缀 ``tail`` 里取「头 + 截断标记 + 尾」，总长不超过 ``max_chars``。
 
     调用方保证 ``head`` 至少有 ``max_chars`` 个字符或就是全文，``tail`` 同理；因此两个切片不会
@@ -100,9 +125,8 @@ def fit_head_tail(
     )
     if max_chars <= len(marker_upper_bound):
         # 预算连标记都装不下：退化为只保留标记本身（裁到预算内），不保留正文。
-        return _render_truncation_marker(total_chars, total_chars, total_lines, artifact_path)[
-            :max_chars
-        ]
+        marker = _render_truncation_marker(total_chars, total_chars, total_lines, artifact_path)
+        return ClippedOutput("", marker[:max_chars], "")
 
     budget = max_chars - len(marker_upper_bound)
     head_len = min(budget, max(0, int(budget * _HEAD_BUDGET_RATIO)))
@@ -115,7 +139,7 @@ def fit_head_tail(
         total_lines - head_part.count("\n") - tail_part.count("\n"),
         artifact_path,
     )
-    return head_part + marker + tail_part
+    return ClippedOutput(head_part, marker, tail_part)
 
 
 def _snap_head_to_line_end(head: str) -> str:
@@ -179,8 +203,13 @@ class ToolOutputBudget:
 
         # 超限：先把完整原文落盘，再把模型可见正文截断为「头 + 标记 + 尾」。
         artifact_path = self._write_artifact(normalized_observation, execution_context)
+        # File tools page their own text. If the generic budget still removes
+        # text, discard read evidence whose source spans are no longer known.
+        facts = normalized_observation.facts
+        if facts is not None and facts.file_facts is not None and facts.file_facts.reads:
+            facts = facts.model_copy(update={"file_facts": facts.file_facts.without_reads()})
         return replace(
-            normalized_observation, content=self._truncate_content(content, artifact_path)
+            normalized_observation, content=self._truncate_content(content, artifact_path), facts=facts,
         )
 
     def _truncate_content(self, content: str, artifact_path: str) -> str:

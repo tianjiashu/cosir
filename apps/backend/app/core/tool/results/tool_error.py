@@ -28,6 +28,7 @@ from app.core.tool.schemas.tool_names import (
     TOOL_WEB_SEARCH,
     TOOL_WRITE_FILE,
 )
+from app.models.message_context.message_metadata.tool_message_metadata import ToolResultFacts
 
 _DEFAULT_STATUS_HINTS = {
     TOOL_READ_FILE: "读取失败",
@@ -97,6 +98,8 @@ def tool_error(
     tool_call_id: str = "",
     status_hint: str | None = None,
     partial_display: dict | None = None,
+    *,
+    facts: ToolResultFacts | None = None,
 ) -> ToolObservation:
     """构造失败的工具观察结果（纯工厂函数）。
 
@@ -118,7 +121,11 @@ def tool_error(
         status="error",
         content=content,
         tool_call_id=tool_call_id,
+        facts=facts,
     )
     # 错误 UI 通道只有短提示与真实发生的部分结果；完整失败文本仅供模型通道。
-    observation.display_data = {**(partial_display or {}), "status_hint": normalize_status_hint(tool_name, status_hint)}
+    observation.display_data = {
+        **(partial_display or {}),
+        "status_hint": normalize_status_hint(tool_name, status_hint),
+    }
     return observation

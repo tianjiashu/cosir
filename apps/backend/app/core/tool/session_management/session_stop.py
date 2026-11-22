@@ -12,7 +12,7 @@ from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.session_management.addressing import find_stoppable_session
 from app.core.tool.session_management.args.session_stop_args import SessionStopArgs
 from app.core.tool.tool_base import HandlerBase
-from app.models.enums.run_status import ACTIVE_RUN_STATUSES
+from app.models.run.run_status import ACTIVE_RUN_STATUSES
 from app.service.depends import get_session_service
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 

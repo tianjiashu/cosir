@@ -31,7 +31,7 @@ from app.core.workflow.cancel.run_cancellation_registry import cancellation_regi
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.node_helper import emit
 from app.models.enums.error_kind import ErrorKind
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
 
 # 取消只在调用 handler 之前检查，所以检出时调用一定还没执行：如实说没跑过，模型恢复后才敢在需要时重做。
 _NOT_STARTED_REASON = (
@@ -82,7 +82,10 @@ class ToolExecutor:
                 "tool_execution_cancelled",
                 extra={
                     "msg": "Session 已停止，工具调用在开始前中止",
-                    "data": {"tool_name": tool_name, "tool_call_id": execution_context.tool_call_id},
+                    "data": {
+                        "tool_name": tool_name,
+                        "tool_call_id": execution_context.tool_call_id,
+                    },
                 },
             )
             observation = tool_cancelled(

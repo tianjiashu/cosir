@@ -46,25 +46,27 @@ from app.core.session_execution import SessionExecution
 from app.core.session_recall import SessionRecall
 from app.core.tool.multi_agent import derived_report
 from app.core.tool.placeholder_settlement import RUN_STOPPED_HINT
+from app.core.tool.terminal_approval import terminal_approvals
 from app.core.workflow.cancel.run_cancellation_registry import (
     CancelReason,
     cancel_end_reason,
 )
-from app.core.workflow.decision_expiry import (
+from app.core.workflow.dispatch_policy import Action, Deliver, Phase, StartRun, Wake
+from app.core.workflow.message_queue.pending_messages import PendingMessages
+from app.core.workflow.message_queue.session_message import Delivery, SessionMessage
+from app.core.workflow.user_decision.decision_expiry import (
     UNANSWERED_HINT,
     expire_decisions_after_run,
     expired_notice,
 )
-from app.core.workflow.message_queue import dispatch_policy
-from app.core.workflow.message_queue.session_message import SessionMessage
-from app.models import RunRecord
-from app.models.enums.run_status import (
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import (
     CONTINUE_AFTER_STATUSES,
     TERMINAL_RUN_STATUSES,
     RunStatus,
     RunTransition,
 )
-from app.models.errors.session_command_errors import SessionCommandConflictError
+from app.models.session.session_command_errors import SessionCommandConflictError
 from app.service import depends as service_depends
 
 if TYPE_CHECKING:
@@ -217,7 +219,7 @@ class SessionActor:
                 )
 
     async def _advance(self, pending: list[SessionMessage], fresh: list[SessionMessage]) -> None:
-        """在 Session 闸门内按 ``dispatch_policy`` 推进一次：投递、唤醒、新开 Run 或不动。
+        """在 Session 闸门内按 ``Action.decide`` 推进一次：投递、唤醒、新开 Run 或不动。
 
         新建 Run 后先登记执行再发布快照：顺序反过来时，一次投影异常就会留下「running 但没有执行者」
         的 Session；快照发布属于观测旁路，失败只记录。
@@ -230,23 +232,22 @@ class SessionActor:
             await asyncio.to_thread(event_sink(), SessionQueueChangedEvent(session_id=self.session_id))
         async with self._space.async_operation():
             current = await asyncio.to_thread(self._sessions.require_current_run, self.session_id)
-            action = dispatch_policy.next_action(self._phase(current), current, pending, fresh)
-            if isinstance(action, dispatch_policy.Deliver):
-                for message in action.messages:
-                    self.mailbox.post(message)
-            elif isinstance(action, dispatch_policy.Wake):
+            action = Action.decide(self._phase(current), current, PendingMessages.of(pending), fresh)
+            if isinstance(action, Deliver):
+                self._deliver(action.messages)
+            elif isinstance(action, Wake):
                 woken = await asyncio.to_thread(
                     self._ledger.transition, cast(RunRecord, current).id,
                     RunTransition.WAKE,
                 )
                 if woken is not None:
                     self._start(woken, pending, fresh_run=False, preceding_run=None)
-            elif isinstance(action, dispatch_policy.StartRun):
+            elif isinstance(action, StartRun):
                 launch = action.launch
                 # 模型在配置文件里，Run 只存 id：模型被删或文件写坏后，发起配置可能
                 # 指向不存在的模型。开不了新 Run 就不动，消息留在队列里等用户换模型再发，
                 # 与原来外键置空后 ``RunLaunch.from_run`` 返回 None 的「不动」一致；
-                # ``dispatch_policy`` 保持纯函数，不读文件。
+                # 判定规则（``Action.decide``）保持纯函数，不读文件。
                 models = service_depends.get_model_config_service()
                 if not await asyncio.to_thread(models.exists, launch.model_config_id):
                     log.warning(
@@ -261,6 +262,74 @@ class SessionActor:
                     # 增量收到，不重建、不推整份快照（长对话里每轮重发全部历史）。
                     run = await asyncio.to_thread(self._ledger.create_run, self.session_id, launch)
                     self._start(run, pending, fresh_run=True, preceding_run=current)
+
+    async def user_input_delivery(self) -> Delivery:
+        """调用方持输入准入闸门；按执行阶段和此页面的真实等待决定并入时机。"""
+        phase = await self.phase()
+        awaits_reply = phase == "suspended" and await asyncio.to_thread(
+            service_depends.get_tool_decision_service().awaits_user_reply, self.session_id
+        )
+        return self._send_delivery(
+            phase,
+            awaits_user_reply=awaits_reply,
+            awaits_terminal_approval=bool(terminal_approvals.displayed(self.session_id)),
+        )
+
+    @staticmethod
+    def _send_delivery(
+        phase: Phase, *, awaits_user_reply: bool, awaits_terminal_approval: bool
+    ) -> Delivery:
+        """用户发送一条消息时的并入时机。
+
+        - 空闲：``immediate``。取消后队列里可能还留着旧的排队消息，新发送的这条应先跑（见
+          ``PendingMessages.next_input``）。
+        - 挂起且有决定在等用户回应（提问）：``immediate``，消息唤醒同一个 Run——用户没答、
+          直接说了新的话，这句话就是回应，提问随它开启的新回合作废（``decision_expiry``）。
+        - 有终端批准在此页面等待：``immediate``，新输入取代尚未批准的旧调用。
+        - 其余（驱动中、只在等后台结果的挂起）：``next_run`` 排队，当前 Run 结束后依次处理。
+        """
+        if phase == "idle" or awaits_terminal_approval or (phase == "suspended" and awaits_user_reply):
+            return "immediate"
+        return "next_run"
+
+    async def accept_immediate_input(self) -> None:
+        """立即用户输入提交后，在同一准入闸门内投递，再解除旧审批等待。
+
+        全量读取已提交队列以保持用户输入与后台结果的既有顺序；loop 后续重复投递由 mailbox 去重。
+        """
+        pending = await asyncio.to_thread(self._queue.pending_nowait, self.session_id)
+        immediate = PendingMessages.of(pending).immediate()
+        if self.driving and not self._execution.stopping:
+            self._deliver(immediate)
+        elif any(m.kind == "user_input" for m in immediate):
+            terminal_approvals.supersede(self.session_id)
+
+    def _deliver(self, messages: list[SessionMessage]) -> None:
+        """首次投递用户输入后撤销旧审批；HTTP 接管和常驻 loop 共用此真实投递边界。"""
+        user_ids = []
+        for message in messages:
+            if self.mailbox.post(message) and message.kind == "user_input":
+                user_ids.append(message.id)
+        if not user_ids:
+            return
+        terminal_approvals.supersede(self.session_id)
+        log.info(
+            "user_input_taken_over",
+            extra={
+                "msg": "立即用户输入已投递，旧终端审批已收敛",
+                "data": {"session_id": self.session_id, "message_ids": user_ids},
+            },
+        )
+
+    def cancel_drive(self, run_id: int) -> None:
+        """停止指定 Run 的这次驱动（在事件循环上）：迟到的请求不误伤后来的 Run，不收回后台工作。"""
+        self._execution.cancel_drive(run_id)
+
+    def request_cancel_drive(self, run_id: int) -> None:
+        """从工具线程发起 :meth:`cancel_drive`，只投递、不等待；运行中的工具调用保证 actor 在事件循环上。"""
+        cast(asyncio.AbstractEventLoop, self._event_loop).call_soon_threadsafe(
+            self.cancel_drive, run_id
+        )
 
     async def cancel(self, reason: CancelReason = "user") -> None:
         """停止这个 Session；只发起停止，不等执行落定。重复取消幂等。
@@ -423,7 +492,7 @@ class SessionActor:
             # 恢复清空结束原因：把迁移前的记录交给驱动，「用户已停止」据此推导。
             self._start(resumed, pending, fresh_run=False, preceding_run=current)
 
-    async def phase(self) -> dispatch_policy.Phase:
+    async def phase(self) -> Phase:
         """读当前 Run 得出执行阶段；供闸门外的调用方（HTTP 命令）判断活动。
 
         异常:
@@ -439,7 +508,7 @@ class SessionActor:
         """是否有执行者；同步判定，不读库（见 ``SessionExecution.driving``）。"""
         return self._execution.driving
 
-    def _phase(self, current: RunRecord | None) -> dispatch_policy.Phase:
+    def _phase(self, current: RunRecord | None) -> Phase:
         """由当前 Run 与执行登记得出执行阶段：驱动、取消、恢复与闸门外判断共用这一处。
 
         有执行者即 ``driving``，不看 Run 状态——workflow 先写终态或挂起，执行者还要跑完 STOP Hook、
@@ -461,16 +530,17 @@ class SessionActor:
             fresh_run: bool,
             preceding_run: RunRecord | None,
     ) -> None:
-        """按 ``dispatch_policy`` 选出初始消息，把 Run 交给执行登记；调用方持 Session 闸门。
+        """按 ``PendingMessages.initial`` 选出初始消息，把 Run 交给执行登记；调用方持 Session 闸门。
 
         ``preceding_run`` 是这次驱动之前 Session 的当前 Run（见 ``RuntimeContext.preceding_run``）。
 
         异常:
             ValueError: 该 Session 已有执行（调用方违约）。
         """
-        self._execution.start(
-            run, dispatch_policy.initial_messages(pending, fresh_run=fresh_run), preceding_run
-        )
+        initial = PendingMessages.of(pending).initial(fresh_run=fresh_run)
+        self._execution.start(run, initial, preceding_run)
+        if any(m.kind == "user_input" for m in initial):
+            terminal_approvals.supersede(self.session_id)
 
 
     async def _after_drive(self, run: RunRecord, reason: CancelReason | None) -> None:

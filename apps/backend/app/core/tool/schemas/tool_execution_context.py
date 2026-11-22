@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from app.core.file_access.knowledge import FileKnowledge
 from app.core.permission.writable_root import absolute as absolute_writable_root
+from app.models.terminal_permissions import TerminalPermissionMode
 from app.utils.path.system_cosir import session_scratch_dir
 
 if TYPE_CHECKING:
@@ -20,8 +22,8 @@ if TYPE_CHECKING:
 class ToolExecutionContext:
     """一次工具调用所处的运行时边界：会话、工作区根、Run / step 与调用身份。
 
-    由 ``tools_node`` 的单次调用入口按调用构造，一次给齐 Run / step 事实与调用身份，下游直接消费。只承载 Run / step / 调用级事实；进程级单例（Agent registry、终端会话服务等）由 handler
-    直接取用，不经本对象转手。
+    由 ``tools_node`` 为每次调用构造，提供 Run、step 与调用身份。批次也在此传入文件知识，
+    供读写类工具消费。进程级服务由 handler 直接取用。
 
     Attributes:
         agent: 本次 Run 的 Agent 运行时配置（准入门禁据它判断模型能力）。
@@ -45,6 +47,8 @@ class ToolExecutionContext:
     request_tools: RequestTools | None = None
     # Session 的可写根事实（``SessionExtra.writable_root``）；消费方读 :attr:`writable_root`。
     writable_subpath: str | None = None
+    file_knowledge: FileKnowledge = field(default_factory=FileKnowledge)
+    terminal_permission_mode: TerminalPermissionMode = "request_approval"
 
     @property
     def writable_root(self) -> Path:

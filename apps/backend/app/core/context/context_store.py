@@ -18,13 +18,12 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.config.logging.logger import log
 from app.core.context.context_entry import ContextEntry
-from app.models.message_metadata import (
-    MessageMetadata,
+from app.models.message_context.message_metadata.base.message_metadata_base import MessageMetadata
+from app.models.message_context.message_metadata.system_message_metadata import (
     SystemMessageMetadata,
-    UserMessageMetadata,
-    empty_message_metadata,
 )
-from app.models.session_context import (
+from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
+from app.models.message_context.session_context import (
     SessionContextRecord,
     run_last_turn_withdrawn,
 )
@@ -70,7 +69,7 @@ class ContextStore:
             run_id=run_id,
             message=message,
             message_id=message_id,
-            metadata=metadata if metadata is not None else empty_message_metadata(message["role"]),
+            metadata=metadata if metadata is not None else MessageMetadata.empty(message["role"]),
             include_in_context=include_in_context,
             sequence=seq,
             turn=turn,

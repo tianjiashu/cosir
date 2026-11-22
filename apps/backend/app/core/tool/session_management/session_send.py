@@ -21,13 +21,15 @@ from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.session_management.addressing import find_recipient
 from app.core.tool.session_management.args.session_send_args import SessionSendArgs
 from app.core.tool.tool_base import HandlerBase
-from app.core.workflow.message_queue.dispatch_policy import next_input
+from app.core.workflow.message_queue.pending_messages import PendingMessages
 from app.core.workflow.message_queue.session_message import LaunchInputBody, RunLaunch
-from app.models import RunRecord, SessionRecord
-from app.models.conversation_input import MessageSource
-from app.models.enums.run_status import RunStatus
 from app.models.errors.input_errors import UserInputRejectedError
-from app.models.session_kind import SessionType
+from app.models.message_context.conversation_input import MessageSource
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import RunStatus
+from app.models.session.session_kind import SessionType
+from app.models.session.session_record import SessionRecord
+from app.models.terminal_permissions import TerminalPermissionMode
 from app.service.depends import (
     get_session_message_queue,
     get_session_service,
@@ -75,7 +77,7 @@ class SessionSendTool(HandlerBase):
         告诉发送方消息的去向（对照 Claude Code 的 delivered / queued：只说「送达」时，发送方分不清对方是
         顺手看到、被唤醒还是为它开了新 Run）。
 
-        去向在 Session 闸门内判定、与入队同一时刻：之后对方怎么推进归它的 actor（``dispatch_policy``）。
+        去向在 Session 闸门内判定、与入队同一时刻：之后对方怎么推进归它的 actor（``Action.decide``）。
         少见的例外不在这里兜：对方正在被停止时，消息会在停止落定后开新 Run；发起配置的模型已被删时，消息
         留在队列里等用户换模型（见 ``SessionActor``）。
         """
@@ -98,9 +100,7 @@ class SessionSendTool(HandlerBase):
                             name=sender.title,
                             from_deriver=target.derived_by(sender.id),
                         ),
-                        agent_id=launch.agent_id,
-                        model_config_id=launch.model_config_id,
-                        reasoning_effort=launch.reasoning_effort,
+                        launch=launch,
                     ),
                 )
         except KeyError:
@@ -139,9 +139,19 @@ class SessionSendTool(HandlerBase):
     ) -> RunLaunch | ToolObservation:
         """只读收件方配置。首 Run 尚未建立时，继承 actor 将选中的启动输入。"""
         if current is None:
-            first = next_input(get_session_message_queue().pending_nowait(target.id))
+            first = PendingMessages.of(get_session_message_queue().pending_nowait(target.id)).next_input()
             if first is not None:
-                return cast(LaunchInputBody, first.body).launch
+                launch = cast(LaunchInputBody, first.body).launch
+                if target.session_type == SessionType.DELEGATED:
+                    return launch.model_copy(
+                        update={
+                            "terminal_permission_mode": self._child_terminal_mode(
+                                launch.terminal_permission_mode,
+                                execution_context.terminal_permission_mode,
+                            )
+                        }
+                    )
+                return launch
             initial = RunLaunch.from_fork(target)
             if initial is not None:
                 return initial
@@ -199,6 +209,22 @@ class SessionSendTool(HandlerBase):
             model_config_id=current_profile.model_config_id
             or cast(str, current_run.model_config_id),
             reasoning_effort=reasoning_effort,
+            terminal_permission_mode=self._child_terminal_mode(
+                current_run.terminal_permission_mode,
+                execution_context.terminal_permission_mode,
+            ),
+        )
+
+    @staticmethod
+    def _child_terminal_mode(
+        recipient_mode: TerminalPermissionMode,
+        sender_mode: TerminalPermissionMode,
+    ) -> TerminalPermissionMode:
+        """消息不能超出发送方权限；所有权祖先上限由 RunLedger 在新建 Run 时收口。"""
+        return (
+            "request_approval"
+            if "request_approval" in (recipient_mode, sender_mode)
+            else "full_access"
         )
 
     def to_definition(self) -> ToolDefinition:

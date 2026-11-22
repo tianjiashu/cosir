@@ -13,9 +13,10 @@ from pydantic import Field, StrictInt, StrictStr
 
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
 from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
-from app.models import RunError
 from app.models.enums.reasoning_effort import ReasoningEffort
-from app.models.enums.run_status import RunStatus
+from app.models.run.run_record import RunError
+from app.models.run.run_status import RunStatus
+from app.models.terminal_permissions import TerminalPermissionMode
 
 
 class RunInitializedEvent(WorkflowEventEnvelope):
@@ -40,6 +41,7 @@ class RunInitializedEvent(WorkflowEventEnvelope):
     context_window_total: StrictInt | None = Field(default=None, ge=0)
     model_config_id: StrictStr | None = None
     reasoning_effort: ReasoningEffort | None = None
+    terminal_permission_mode: TerminalPermissionMode = "request_approval"
 
 
 class RunStatusChangedEvent(WorkflowEventEnvelope):

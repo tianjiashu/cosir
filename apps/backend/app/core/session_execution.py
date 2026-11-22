@@ -26,7 +26,7 @@ from app.core.workflow.cancel.run_cancellation_registry import (
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.message_queue.session_message import SessionMessage
 from app.core.workflow.run_driver import RunDriver
-from app.models import RunRecord
+from app.models.run.run_record import RunRecord
 
 OnReleased = Callable[[RunRecord, CancelReason | None], Awaitable[None]]
 """执行释放后的回调：收到这次 Run 与收尾时取走的取消原因（没收到取消为 ``None``）。"""
@@ -91,6 +91,12 @@ class SessionExecution:
             return False
         cancellation_registry.request_cancel(self.session_id, reason)
         return True
+
+    def cancel_drive(self, run_id: int) -> bool:
+        """只停 ``run_id`` 的这次驱动：迟到的请求不能取消后来的 Run。不收回后台工作。"""
+        if self._run is None or self._run.id != run_id:
+            return False
+        return self.cancel("user")
 
     async def wait_released(self) -> None:
         """等当前执行（含释放后的回调）结束；没有执行时立即返回。

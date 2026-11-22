@@ -20,7 +20,7 @@ from app.core.context.prompt_sources.source import (
     fingerprint,
     text_change,
 )
-from app.models.message_metadata import PromptSourceEntry
+from app.models.message_context.message_metadata.system_message_metadata import PromptSourceEntry
 from app.utils.token_estimator import TokenEstimator
 
 
@@ -61,7 +61,9 @@ class AgentPresetSource(PromptSource):
         self, diff: ItemDiff, items: SourceItems, previous: Mapping[str, PromptSourceEntry]
     ) -> str:
         if not items:
-            return "- Your agent preset (<agent_layer>) was removed; follow only the remaining layers."
+            return (
+                "- Your agent preset (<agent_layer>) was removed; follow only the remaining layers."
+            )
         new = next(iter(items.values())).text
         old = next(iter(previous.values())).text if previous else ""
         return "- Your agent preset (<agent_layer>) changed. " + text_change(old, new)

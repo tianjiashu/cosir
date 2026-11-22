@@ -21,7 +21,7 @@ from app.core.context.prompt_sources.source import (
     fingerprint,
     text_change,
 )
-from app.models.message_metadata import PromptSourceEntry
+from app.models.message_context.message_metadata.system_message_metadata import PromptSourceEntry
 from app.service.configuration import file_store
 from app.utils.file_signature import stat_signature
 from app.utils.file_utils import read_text_file

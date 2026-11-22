@@ -71,7 +71,7 @@ from app.core.tool.schemas.tool_names import (
     TOOL_WEB_SEARCH,
 )
 from app.core.workflow.message_queue.session_message import MODEL_INPUT_BODIES
-from app.models.message_metadata import PromptSourceBaseline
+from app.models.message_context.message_metadata.system_message_metadata import PromptSourceBaseline
 from app.utils.host_platform import host_platform_name
 from app.utils.path.system_cosir import system_cosir_dir
 
@@ -194,9 +194,7 @@ class SystemPromptBuilder:
                 f"{system_cosir_dir()} (only its skills/ is readable); tools that write, edit, "
                 "delete, or move files only work inside it, and "
                 ".cosir/ is a reserved read-only area (runtime metadata) they refuse. Shell "
-                "commands are not sandboxed: they can reach anything "
-                "they are given, including paths outside the workspace and .cosir/, so never "
-                "modify either."
+                "commands use the terminal permissions announced for the current Run."
             )
         else:
             lines.extend(
@@ -207,9 +205,8 @@ class SystemPromptBuilder:
                         f"directory {system_cosir_dir()} (only its skills/ and scratch/ are "
                         "readable); tools that write, edit, delete, or move files only work inside "
                         "it and in your scratch directory, and .cosir/ is a reserved read-only area "
-                        "(runtime metadata) they refuse. Shell commands are not sandboxed: they can "
-                        "reach anything they are given, including paths outside the workspace and "
-                        ".cosir/, so never modify either, except your scratch directory."
+                        "(runtime metadata) they refuse. Shell commands use the terminal permissions "
+                        "announced for the current Run."
                     ),
                     # 写法对照 Claude Code 的 scratchpad 说明：用途、归属与回收、给用户提路径时写全。
                     # 环境变量不写引用语法：PowerShell、cmd 与 POSIX shell 各不相同，模型按 shell 自己写。
@@ -295,7 +292,9 @@ class SystemPromptBuilder:
             ),
             *(f"  - <{body.TAG}>: {body.PROMPT_GUIDE}" for body in guided),
             *(
-                [f"  - {', '.join(f'<{body.TAG}>' for body in bare)}: described by their attributes."]
+                [
+                    f"  - {', '.join(f'<{body.TAG}>' for body in bare)}: described by their attributes."
+                ]
                 if bare
                 else []
             ),
@@ -313,7 +312,7 @@ class SystemPromptBuilder:
             TOOL_READ_IMAGE,
             TOOL_SEARCH_CONTENT,
             TOOL_FIND_FILES,
-                    TOOL_WEB_SEARCH,
+            TOOL_WEB_SEARCH,
             TOOL_WEB_FETCH,
         }
     )
@@ -365,15 +364,14 @@ class SystemPromptBuilder:
         """
         tools = set(available_tool_names)
         lines: list[str] = []
-        file_roles = [
-            role for name, role in SystemPromptBuilder._FILE_TOOL_ROLES if name in tools
-        ]
+        file_roles = [role for name, role in SystemPromptBuilder._FILE_TOOL_ROLES if name in tools]
         if file_roles:
             sentence = f"- Use dedicated tools for files: {', '.join(file_roles)}."
             if TOOL_EXECUTE_TERMINAL in tools:
                 sentence += (
-                    f" Use {TOOL_EXECUTE_TERMINAL} for builds, tests, git and running programs, not for "
-                    "cat/sed/head/grep/rg/find/ls."
+                    f" You can also read or edit through {TOOL_EXECUTE_TERMINAL}. "
+                    "Read the current file in an earlier model step before modifying it. "
+                    "Read the full file before replacing all its contents."
                 )
             lines.append(sentence)
         # 用户输入里的胶囊怎么读（语法在消息协议里，用法按工具裁剪在这里）。
@@ -455,7 +453,9 @@ class SystemPromptBuilder:
             return []
         follow_up = ""
         if TOOL_WAIT_MESSAGES in tools:
-            follow_up += f": wait for it with {TOOL_WAIT_MESSAGES}, or keep doing work that does not overlap"
+            follow_up += (
+                f": wait for it with {TOOL_WAIT_MESSAGES}, or keep doing work that does not overlap"
+            )
         follow_up += "."
         if TOOL_SESSION_SEND in tools:
             follow_up += f" Give it more instructions with {TOOL_SESSION_SEND}."
@@ -495,7 +495,9 @@ class SystemPromptBuilder:
         if TOOL_ASK_USER in available_tool_names:
             confirm_how = f"Ask with {TOOL_ASK_USER}."
         else:
-            confirm_how = "If you cannot get that confirmation, do not do it; report what needs approval."
+            confirm_how = (
+                "If you cannot get that confirmation, do not do it; report what needs approval."
+            )
         return "\n".join(
             [
                 "<work_layer>",

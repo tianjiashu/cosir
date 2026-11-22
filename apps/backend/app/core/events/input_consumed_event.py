@@ -3,7 +3,8 @@
 from typing import Literal
 
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
-from app.models.conversation_input import MessageSource, UserInputPresentation
+from app.models.message_context.conversation_input import MessageSource
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 
 
 class InputConsumedEvent(WorkflowEventEnvelope):

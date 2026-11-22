@@ -49,12 +49,12 @@ class ToolDefinition:
     # 一起算最终回复（规则只在 ``core/context/final_reply``）。模型常把答案和这类调用写在同一条回复里。
     part_of_reply: bool = False
     # 延迟加载：不进 Session 每次请求的基础 schema，模型在目录里看到名字、经 ``tool_search`` 加载后才可调用。
-    # 给只在少数任务里用、定义又大的工具（浏览器一族等）；固化与加载见 ``app.models.session_tool_surface``。
+    # 给只在少数任务里用、定义又大的工具（浏览器一族等）；固化与加载见 ``app.models.session.session_tool_surface``。
     deferred: bool = False
 
     @property
     def requires_user_surface(self) -> bool:
-        """是否只能给用户能操作的 Session（``models.session_kind.SessionKind.user_facing``）。"""
+        """是否只能给用户能操作的 Session（``models.session.session_kind.SessionKind.user_facing``）。"""
         return self.needs_user_surface or self.user_decision
 
     def normalized(self) -> "ToolDefinition":

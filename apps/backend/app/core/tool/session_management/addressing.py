@@ -11,7 +11,7 @@
 
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
-from app.models import SessionRecord
+from app.models.session.session_record import SessionRecord
 from app.service.depends import get_session_service
 
 

@@ -20,11 +20,13 @@ from typing import Any, cast
 
 from app.config.constant import Constant
 from app.core.context.context_store import ContextStore
-from app.models import RunRecord, SessionRecord
-from app.models.enums.run_status import ACTIVE_RUN_STATUSES, RunStatus
-from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
-from app.models.session_context import SessionContextRecord
-from app.models.session_kind import SessionType
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
+from app.models.message_context.session_context import SessionContextRecord
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import ACTIVE_RUN_STATUSES, RunStatus
+from app.models.session.session_kind import SessionType
+from app.models.session.session_record import SessionRecord
 from app.service.depends import (
     get_run_ledger,
     get_session_context_crud,
@@ -39,7 +41,12 @@ _ROWS_PER_STEP = 6
 _TEXT_LIMIT = 160
 _ARGS_LIMIT = 100
 _KIND_LABELS = {SessionType.DELEGATED: "delegated child agent", SessionType.AGENT_FORK: "fork"}
-_CALL_STATUS = {"completed": "ok", "failed": "failed", "cancelled": "cancelled", "running": "running"}
+_CALL_STATUS = {
+    "completed": "ok",
+    "failed": "failed",
+    "cancelled": "cancelled",
+    "running": "running",
+}
 _END_REASONS = {
     Constant.Run.RUN_END_REASON_USER_CANCELLED: "stopped by the user",
     Constant.Run.RUN_END_REASON_PARENT_CANCELLED: "stopped from upstream (you or your deriver)",
@@ -83,8 +90,15 @@ class SessionProgress:
             and ContextStore().run_opened_by_user(session.id, run.id)
         )
         return cls.from_facts(
-            session, run, rows, queued=queued, waiting_on=waiting_on, steps=steps, now=utc_now(),
-            window_full=len(rows) == window, user_driven=user_driven,
+            session,
+            run,
+            rows,
+            queued=queued,
+            waiting_on=waiting_on,
+            steps=steps,
+            now=utc_now(),
+            window_full=len(rows) == window,
+            user_driven=user_driven,
         )
 
     @classmethod
@@ -160,7 +174,11 @@ class SessionProgress:
         if self.queued:
             lines.append(f"queued: {self.queued} message(s) not yet taken in")
         if self.steps:
-            heading = f"last {len(self.steps)} steps, older ones not shown" if self.earlier_hidden else "all steps"
+            heading = (
+                f"last {len(self.steps)} steps, older ones not shown"
+                if self.earlier_hidden
+                else "all steps"
+            )
             lines.append(f"recent steps ({heading}; oldest first):")
             lines.extend(f"- {step}" for step in self.steps)
         if self.final_output:
@@ -248,7 +266,9 @@ class SessionProgress:
         return None
 
     @classmethod
-    def _call_line(cls, call: dict[str, Any], result: ToolMessageMetadata | None, *, live: bool) -> str:
+    def _call_line(
+        cls, call: dict[str, Any], result: ToolMessageMetadata | None, *, live: bool
+    ) -> str:
         function = call["function"]
         target = f"{function['name']}({cls._args_summary(function.get('arguments'))})"
         if result is None:
@@ -269,7 +289,11 @@ class SessionProgress:
         if run is None:
             return "waiting for its first run to start"
         if run.status == RunStatus.SUSPENDED.value:
-            return f"paused, waiting for {', '.join(waiting_on)}" if waiting_on else "paused, waiting for messages"
+            return (
+                f"paused, waiting for {', '.join(waiting_on)}"
+                if waiting_on
+                else "paused, waiting for messages"
+            )
         if run.status != RunStatus.RUNNING.value:
             return "idle (run ended)"
         # 最后一条助手行之后只跟着它这批工具的结果行时，它就是当前这一步；之后又并入了输入，就是在等
@@ -315,5 +339,11 @@ class SessionProgress:
         seconds = max(int((end - run.created_at).total_seconds()), 0)
         minutes, seconds = divmod(seconds, 60)
         hours, minutes = divmod(minutes, 60)
-        text = f"{hours}h{minutes}m" if hours else f"{minutes}m{seconds}s" if minutes else f"{seconds}s"
+        text = (
+            f"{hours}h{minutes}m"
+            if hours
+            else f"{minutes}m{seconds}s"
+            if minutes
+            else f"{seconds}s"
+        )
         return f"for {text}" if run.status in ACTIVE_RUN_STATUSES else f"took {text}"

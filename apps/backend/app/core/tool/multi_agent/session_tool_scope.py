@@ -1,6 +1,7 @@
 """工具范围的唯一规则入口：按 Session 类型与派生深度决定哪些工具可用。
 
-规则来自两张表：Session 一侧在 ``models.session_kind.SESSION_KINDS``，派生工具在 ``core.tool.derivation``。
+规则来自两张表：Session 一侧在 ``models.session.session_kind.SESSION_KINDS``，派生工具在
+``core.tool.multi_agent.derivation``。
 去掉三类工具：需要用户界面、而这类 Session 不是用户能操作的对话的；这类 Session 不允许的派生方式对应的
 派生工具；新 Session 深度已到上限时的全部派生工具。
 
@@ -24,8 +25,8 @@ from app.config.settings import Settings
 from app.core.agents.agent_profile_registry import AgentProfileRegistry
 from app.core.tool.multi_agent.derivation import DERIVATIONS
 from app.core.tool.schemas import TOOL_SEARCH, ToolDefinition
-from app.models.session_kind import SESSION_KINDS, SessionType
-from app.models.session_tool_surface import SessionToolSurface
+from app.models.session.session_kind import SESSION_KINDS, SessionType
+from app.models.session.session_tool_surface import SessionToolSurface
 
 _DERIVATION_TOOLS = frozenset(rule.tool for rule in DERIVATIONS.values())
 

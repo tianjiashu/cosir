@@ -10,7 +10,7 @@ from pydantic import Field
 
 from app.core.events.workflow_event_envelope import WorkflowEventEnvelope
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
 
 
 class ToolCallCreatedEvent(WorkflowEventEnvelope):

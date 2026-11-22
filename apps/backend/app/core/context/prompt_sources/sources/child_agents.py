@@ -23,7 +23,7 @@ from app.core.context.prompt_sources.source import (
 )
 from app.core.context.prompt_sources.sources.metadata_encoding import prompt_line
 from app.core.tool.schemas.tool_names import TOOL_DELEGATE_TASK
-from app.models.message_metadata import PromptSourceEntry
+from app.models.message_context.message_metadata.system_message_metadata import PromptSourceEntry
 
 
 class ChildAgentsSource(PromptSource):

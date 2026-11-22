@@ -37,51 +37,36 @@ from app.core.context.tool_call_closure import (
     build_placeholder_tool_message,
     plan_tool_call_closures,
 )
+from app.core.context.turn_visibility import is_turn_input, is_visible_reply
 from app.core.context.vision_input import resolve_messages_for_model
+from app.core.file_access.knowledge import FileKnowledge
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody
-from app.models import (
-    RunRecord,
-    WorkspaceRecord,
-)
 from app.models.external_tool import ExternalToolDefinition
-from app.models.message_metadata import (
-    TURN_INPUT_KINDS,
+from app.models.message_context.message_metadata.assistant_message_metadata import (
     AssistantMessageMetadata,
-    MessageMetadata,
-    NoticeEntry,
+)
+from app.models.message_context.message_metadata.base.message_metadata_base import MessageMetadata
+from app.models.message_context.message_metadata.system_message_metadata import (
     PromptSourceBaseline,
     SystemMessageMetadata,
-    ToolMessageMetadata,
-    UserMessageMetadata,
-    empty_message_metadata,
 )
-from app.models.session_context import (
+from app.models.message_context.message_metadata.tool_message_metadata import (
+    ToolMessageMetadata,
+    ToolResultFacts,
+)
+from app.models.message_context.message_metadata.user_message_metadata import (
+    NoticeEntry,
+    UserMessageMetadata,
+)
+from app.models.message_context.session_context import (
     SessionContextRecord,
 )
-from app.models.tool_result_facts import ToolResultFacts
+from app.models.run.run_record import RunRecord
+from app.models.workspace_record import WorkspaceRecord
 from app.utils.message_content import content_to_text
 from app.utils.path.system_cosir import session_scratch_dir
 from app.utils.workspace_instruction import find_workspace_instruction_file
-
-
-def _is_turn_input(
-    message: ChatCompletionMessageParam, metadata: MessageMetadata, project: bool
-) -> bool:
-    """可见的一轮输入（用户输入或 Agent 消息）；隐藏的输入不在前端开回合，也就不算。"""
-    return (
-        message["role"] == "user"
-        and isinstance(metadata, UserMessageMetadata)
-        and metadata.kind in TURN_INPUT_KINDS
-        and project
-    )
-
-
-def _is_visible_reply(message: ChatCompletionMessageParam) -> bool:
-    """有正文或调用的 assistant 行：实时投影只在这时建出回复（见 ``ensure_reply``）。"""
-    return message["role"] == "assistant" and bool(
-        content_to_text(message.get("content")) or message.get("tool_calls")
-    )
 
 
 @dataclass
@@ -178,8 +163,8 @@ class RuntimeMessageContextManager:
         # 取最大值而不是最后一行：补给本 Run 早先调用的占位排在最后，却属于更早的回合。
         self._run_turn = max((r.turn for r in written), default=None)
         self._run_shown = any(
-            _is_turn_input(r.message, r.metadata, r.project_to_transport)
-            or _is_visible_reply(r.message)
+            is_turn_input(r.message, r.metadata, r.project_to_transport)
+            or is_visible_reply(r.message)
             for r in written
         )
         self._workspace_instruction = find_workspace_instruction_file(
@@ -200,18 +185,18 @@ class RuntimeMessageContextManager:
         """这一行（尚未写入）是否开启新回合：回合规则的唯一实现。
 
         - Run 写下的第一行开启回合：没有输入开头的回复（唤醒、结果续跑）也是一个回合；
-        - 用户输入开启回合；
-        - Agent 消息只在本 Run 还没有可见内容（开回合的输入或可见回复）时开回合，否则是当前回复的
-          一段（这时这一回合在快照里已有回复，实时投影按回合号把它并进去）；
+        - 已有可见内容后，用户输入开启下一回合；首个输入沿用前置通知所在回合；
+        - Agent 消息沿用本 Run 当前回合（首行时已由上一条规则开启），是当前回复的一段；
         - 其余行（回复、通知、工具结果与图片、决定与后台结论）留在当前回合。
 
         工具结果不经这里，属于发起调用的那一回合。
         """
         if self._run_turn is None:
             return True
-        if not _is_turn_input(message, metadata, project):
+        if not is_turn_input(message, metadata, project):
             return False
-        return cast(UserMessageMetadata, metadata).source is None or not self._run_shown
+        # 首条可见输入沿用前置运行通知预占的回合；通知本身不能多制造一轮对话。
+        return self._run_shown and cast(UserMessageMetadata, metadata).kind == "user_input"
 
     def _turn_for_new_row(
         self, message: ChatCompletionMessageParam, metadata: MessageMetadata, project: bool
@@ -220,7 +205,7 @@ class RuntimeMessageContextManager:
         if self._opens_turn(message, metadata, project):
             self._max_turn += 1
             self._run_turn = self._max_turn
-        if _is_turn_input(message, metadata, project) or _is_visible_reply(message):
+        if is_turn_input(message, metadata, project) or is_visible_reply(message):
             self._run_shown = True
         return cast(int, self._run_turn)
 
@@ -287,7 +272,7 @@ class RuntimeMessageContextManager:
                 existing = self._entries[paired.tool_index]
             owner = self._entries[plan.target_index] if paired is not None and plan else None
         resolved_metadata = (
-            metadata if metadata is not None else empty_message_metadata(message["role"])
+            metadata if metadata is not None else MessageMetadata.empty(message["role"])
         )
         if existing is not None:
             # 同一批次内，调用可能先写了取消或中断占位，随后才拿到真实结果；
@@ -452,6 +437,16 @@ class RuntimeMessageContextManager:
         """上下文里 ``tool_search`` 加载过的内置延迟工具名；定义取 Session 工具面固化的那一份。"""
         return {name for facts in self._tool_facts() for name in facts.loaded_builtin_tools or ()}
 
+    def file_knowledge(self) -> FileKnowledge:
+        """从模型请求使用的同一批有效消息重建文件读取证据。"""
+        knowledge = FileKnowledge()
+        for entry in self._effective_entries():
+            if isinstance(entry.metadata, ToolMessageMetadata | UserMessageMetadata) and (
+                file_facts := entry.metadata.file_facts
+            ):
+                knowledge.observe(file_facts)
+        return knowledge
+
     def _tool_facts(self) -> list[ToolResultFacts]:
         return [
             entry.metadata.facts
@@ -590,7 +585,7 @@ class RuntimeMessageContextManager:
             else:
                 self._draft_response = entry
             return entry
-        if _is_visible_reply(message):
+        if is_visible_reply(message):
             # 草稿首帧常是空的，正文与调用在后续帧才到；回合判定要知道本 Run 已有可见回复。
             self._run_shown = True
         self.context_store.replace_message(
@@ -742,14 +737,22 @@ class RuntimeMessageContextManager:
         """
 
         responses = [
-            entry for entry in self._entries
+            entry
+            for entry in self._entries
             if entry.run_id == self.current_run_id and entry.message["role"] == "assistant"
         ]
         sequences = final_reply_sequences(
-            [CommittedResponse.from_message(entry.sequence, entry.turn, entry.message) for entry in responses],
+            [
+                CommittedResponse.from_message(entry.sequence, entry.turn, entry.message)
+                for entry in responses
+            ],
             reply_tools,
         )
-        texts = (content_to_text(entry.message.get("content")) for entry in responses if entry.sequence in sequences)
+        texts = (
+            content_to_text(entry.message.get("content"))
+            for entry in responses
+            if entry.sequence in sequences
+        )
         return sequences, "\n\n".join(text for text in texts if text.strip())
 
     def _effective_entries(self) -> list[ContextEntry]:

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from openai.types.shared_params import FunctionDefinition
 
-from app.models.message_metadata import PromptSourceEntry
+from app.models.message_context.message_metadata.system_message_metadata import PromptSourceEntry
 from app.utils.workspace_instruction import find_workspace_instruction_file
 
 if TYPE_CHECKING:

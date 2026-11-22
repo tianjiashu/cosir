@@ -16,7 +16,7 @@ from app.core.context.prompt_sources.source import (
     SourceItems,
     fingerprint,
 )
-from app.models.message_metadata import PromptSourceEntry
+from app.models.message_context.message_metadata.system_message_metadata import PromptSourceEntry
 
 _ITEM_KEY = "language"
 

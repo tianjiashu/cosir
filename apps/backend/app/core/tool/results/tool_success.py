@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.core.tool.schemas import ToolObservation, Waiting
-from app.models.tool_result_facts import ToolResultFacts
+from app.models.message_context.message_metadata.tool_message_metadata import ToolResultFacts
 
 
 def tool_success(
@@ -35,7 +35,8 @@ def tool_success(
         display_data: 仅供客户端展示消费的结构化数据；会写入
             ``ToolObservation.display_data``，不会回传给模型。
         waiting: 调用之后还要等什么（等决定、后台、等消息），见 ``ToolObservation.waiting``。
-        facts: 交给运行时、不给模型的结构化结果（见 ``app.models.tool_result_facts``），持久化为结果行 metadata。
+        facts: 交给运行时、不给模型的结构化结果（见 ``ToolResultFacts``），
+            持久化为结果行 metadata。
         images: 给模型看的图片（``AttachmentService.save_image`` 返回的相对路径）；模型不支持图片时由
             observe 节点换成说明（``withhold_unviewable_images``），工具不必判断。
 

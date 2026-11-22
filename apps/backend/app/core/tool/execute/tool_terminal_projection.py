@@ -29,7 +29,7 @@ from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.schemas import ToolObservation
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
 
 ToolTerminalStatus = Literal["completed", "failed", "cancelled"]
 

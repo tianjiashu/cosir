@@ -4,7 +4,10 @@ from dataclasses import dataclass, field
 
 from openai.types.chat import ChatCompletionMessageParam
 
-from app.models.message_metadata import EmptyMessageMetadata, MessageMetadata
+from app.models.message_context.message_metadata.base.message_metadata_base import (
+    EmptyMessageMetadata,
+    MessageMetadata,
+)
 
 
 @dataclass
