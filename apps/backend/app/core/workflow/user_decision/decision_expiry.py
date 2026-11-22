@@ -1,5 +1,6 @@
 """「等用户回应」的等待决定何时过期、怎么过期、怎么告诉模型（``ToolDefinition.user_decision``
-的工具，目前是提问）。整条规则只在这里。
+的工具，目前是提问）。作废的时机与操作只在这里；一批待并入消息会让哪些等待作废的判定在
+``incoming_decision_effects``，作答的结算在 ``decision_settlement``。
 
 等决定的占位只有 ``user_decision`` 工具会写下（``tool_awaiting_decision``），所以「有等决定的占位」就是
 「在等用户回应」，这里不再回注册表查工具声明。
@@ -13,7 +14,8 @@
 - Run 被用户停下或失败（``SessionActor`` 的落定点）：那一回合不会再往下走；
 - 后端重启收敛了运行中的 Run（``RecoverService``）。
 
-前两处在 Run 内，经 context manager 把内存工作副本与库一起改（:func:`expire_decisions`）；后
+前两处在 Run 内，经 context manager 把内存工作副本与库一起改（:func:`expire_decisions`，第一处的
+入口是 :func:`expire_on_user_input`）；后
 两处没有驱动在跑，直接改库（:func:`expire_decisions_after_run`）。Run 正常完成不过期，理由见
 ``SessionActor._expire_decisions``。
 
@@ -24,19 +26,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal
 
 from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.placeholder_settlement import publish_settled
-from app.core.workflow.message_queue.session_message import (
-    DecisionBody,
-    NoticeBody,
-    SessionMessage,
-)
+from app.core.workflow.message_queue.session_message import NoticeBody
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
-from app.models.message_metadata import ToolMessageMetadata
+from app.core.workflow.user_decision.incoming_decision_effects import IncomingDecisionEffects
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
 from app.service import depends as service_depends
 from app.storage.store_engines import main_db_factory
 
@@ -58,48 +56,6 @@ _EXPIRY_REASONS: dict[ExpiryCause, str] = {
         "decision is still needed."
     ),
 }
-
-
-@dataclass(frozen=True)
-class IncomingDecisionEffects:
-    """这次待并入的消息会怎样改变「等用户决定」的调用；并入之前就要知道答案的地方共用。
-
-    字段:
-        user_input: 这批消息里的第一条用户输入（没有为 ``None``）；有它，等用户回应的等待就要作废。
-        answered_before_input: 决定排在 ``user_input`` 前面的调用——先作答、后发消息，回答算数。
-        answered: 这批消息里有决定的全部调用；并入之后它们都不再等待（被回答，或已作废而决定被丢弃）。
-    """
-
-    user_input: SessionMessage | None
-    answered_before_input: frozenset[str]
-    answered: frozenset[str]
-
-    def still_awaiting(self, tool_call_id: str) -> bool:
-        """这次并入之后，这个此刻还在等待的调用是否仍在等：没被回答，也没有用户输入让它作废。"""
-        return tool_call_id not in self.answered and self.user_input is None
-
-
-def incoming_decision_effects(pending: list[SessionMessage]) -> IncomingDecisionEffects:
-    """按出队顺序读这批消息（``RunMailbox.ordered``）；决定与输入同优先级、按到达先后并入，所以
-    先后有意义。
-
-    只有用户自己的输入算「说了别的话」。别的 Agent 发来的消息（子 Agent 汇报、会话间消息）同样
-    会开启回合，但与用户答不答无关：让它作废提问，卡片就会在用户没操作时消失。
-    """
-
-    def decided(messages: list[SessionMessage]) -> frozenset[str]:
-        return frozenset(
-            cast(DecisionBody, message.body).tool_call_id
-            for message in messages
-            if message.kind == "user_decision"
-        )
-
-    index = next((i for i, message in enumerate(pending) if message.kind == "user_input"), None)
-    return IncomingDecisionEffects(
-        user_input=None if index is None else pending[index],
-        answered_before_input=decided(pending if index is None else pending[:index]),
-        answered=decided(pending),
-    )
 
 
 def expired_notice(tool_call_id: str, cause: ExpiryCause) -> NoticeBody:
@@ -155,6 +111,25 @@ def expire_decisions(*, step_id: str, keep: frozenset[str] = frozenset()) -> lis
         },
     )
     return expired
+
+
+# ==============用户没回答问题、直接说了别的话时，把 Agent 那次提问作废，并告诉模型「那句话就是回答，别再问」=====
+def expire_on_user_input(step_id: str) -> list[NoticeBody]:
+    """mailbox 里有用户输入时，先作废等用户回应的等待决定，返回告知模型的通知；工作线程执行。
+
+    每次模型请求前经 ``notices.request_notices`` 调用（取通知之前）、而不是在写那条输入的事务里：
+    通知要与这批通知合成一条、排在输入前面，写输入时才结算就来不及了。代价是结算与输入不同事务——输入随后确认失败（极少：投递后、
+    并入前被撤回）时提问已作废而输入没写入，可接受。排在这条输入前面的决定（先作答、后发消息）会先
+    结算占位，所以它回答的调用不作废；排在后面的决定并入时发现占位已作废，只确认不写入。
+    """
+    rc = _runtime_context()
+    effects = IncomingDecisionEffects.of(rc.mailbox.ordered())
+    if effects.user_input is None:
+        return []
+    return [
+        expired_notice(call_id, "user_message")
+        for call_id in expire_decisions(step_id=step_id, keep=effects.answered_before_input)
+    ]
 
 
 def expire_decisions_after_run(session_id: int, hint: str) -> list[str]:

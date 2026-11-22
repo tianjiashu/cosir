@@ -23,7 +23,7 @@ from app.core.events import (
 from app.core.events.model_activity_event import ModelActivityPhase
 from app.core.llm_provider.message_codec import display_arguments
 from app.core.workflow.node_helper.common import _message_context, emit
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
 
 
 class ModelStreamStateMachine:
@@ -133,10 +133,15 @@ class ModelStreamStateMachine:
         self._close()
         arguments, self._arguments = self._arguments, {}
         for call_id, raw in arguments.items():
-            self._emit(ToolCallArgumentsEvent(
-                session_id=self._session_id, run_id=self._run_id, step_id=self._step_id,
-                tool_call_id=call_id, args=display_arguments(raw),
-            ))
+            self._emit(
+                ToolCallArgumentsEvent(
+                    session_id=self._session_id,
+                    run_id=self._run_id,
+                    step_id=self._step_id,
+                    tool_call_id=call_id,
+                    args=display_arguments(raw),
+                )
+            )
 
     def exit(self) -> None:
         """模型步退出时清除阶段；由 model 节点在这一步的所有出口调用，重复调用不发事件。

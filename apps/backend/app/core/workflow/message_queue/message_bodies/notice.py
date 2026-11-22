@@ -41,13 +41,12 @@ NoticeLevel = Literal["session", "run", "turn"]
 # - run：此刻成立的状态（工具准入、还有哪些事没了结、Agent 看到的配置）。不入队，经 ``mailbox.notify``
 #   投、随 mailbox 重置丢弃；比对基准是上下文里最近一条同类通知（配置没有通知时看 seq 0 系统行），写入
 #   后才成为新基准，所以写入前的任何中断与撤回都只会让下次重推，不会漏告。会在驱动中途变的每次模型请求
-#   前对账（配置：``RuntimeMessageContextManager.configuration_change_notice``；读过的文件：
-#   ``read_change_notice``），其余在驱动开始时推导（``drive_notices``）。
+#   前推导（``request_notices``：配置、读过的文件），其余在驱动开始时推导（``drive_notices``）。
 # - turn：上一回合怎样结束（用户已停止，``drive_notices``）或驱动内的一次性提示（输出被截断时的续写，由
 #   model 节点当场投）。同 run 级，不入队、可重推或丢了无妨。
 # 新增通知按此归类：推不出来 → session，经 ``session_runtime_spaces.enqueue`` 入队；推得出来 → 驱动
-# 中途会变且下一步就该知道，进每次请求前的对账，否则加进 ``drive_notices``；基准一律取上下文，不放进程内记忆。
-# 例外：``decision_expired`` 在 Run 内作废时走 mailbox（``prepare_input`` 先提交作废、再与本批通知一起
+# 中途会变且下一步就该知道，加进 ``request_notices``，否则加进 ``drive_notices``；基准一律取上下文，不放进程内记忆。
+# 例外：``decision_expired`` 在 Run 内作废时走 mailbox（``request_notices`` 先提交作废、再与本批通知一起
 # 写入，两步不同事务，中间崩溃会漏告，已接受）；Run 落定后作废才经外部队列。
 #
 # 送达占位结局的通知必须带所指调用（``tool_call_ids``）：提问作废、重启中断把占位原地改成「已取消 /

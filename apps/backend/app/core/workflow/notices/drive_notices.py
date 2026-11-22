@@ -1,6 +1,9 @@
-"""驱动开始时推导的通知：Run 级（工具准入、未了结事项）与回合级（用户已停止）。
+"""驱动开始时推导的通知：Run 级（终端权限、工具准入、未了结事项）与回合级（用户已停止）。
 
-这几类通知说的是本 Run 或上一回合的事实，不是只在某一刻存在的事件，所以不入队：每次驱动开始、
+同一驱动里模型的上下文是连续的，只有新 Run、唤醒、恢复时它才可能记不清这些事，所以只在驱动开始时推导；
+驱动中途开启的回合里，它们要么没变，要么是模型自己刚做的（中途会变的见 ``request_notices``）。
+
+它们说的是可重推的状态，不是只发生一次的事件，所以不入队：每次驱动开始、
 上下文重建之后（``begin_run``）从持久化事实与上下文现推，投进本次驱动的 mailbox，由 prepare_input
 写入。比对基准都取自上下文里模型实际看到的通知，不取进程内记忆，因此重启、缓存卸载、撤回与分叉之后
 推导仍然成立；撤回移出了某条通知，下一次驱动就重新推出它。通知分级见 ``NOTICE_LEVELS``。
@@ -11,6 +14,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import cast
 
 from app.config.constant import Constant
@@ -18,9 +22,9 @@ from app.core.context.context_store import ContextStore
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.tool.background_commands import background_commands
 from app.core.tool.multi_agent.derived_report import open_derived_titles
-from app.core.workflow.decision_expiry import incoming_decision_effects
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody
+from app.core.workflow.user_decision.incoming_decision_effects import IncomingDecisionEffects
 
 # 准入通知的固定前缀：通知文本会成为 canonical 历史的一行，前缀同时充当稳定标识。
 _TOOL_NOTICE_PREFIX = "Tool availability notice:"
@@ -39,7 +43,12 @@ _USER_STOPPED = (
 
 def drive_notices(rc: RuntimeContext, context: RuntimeMessageContextManager) -> list[NoticeBody]:
     """本次驱动开始时应投递的通知；调用方在 ``begin_run`` 之后调用（要读重建后的上下文）。"""
-    notices = [_user_stopped(rc), _tool_availability(rc, context), _open_items(rc, context)]
+    notices = [
+        _terminal_permissions(rc, context),
+        _user_stopped(rc),
+        _tool_availability(rc, context),
+        _open_items(rc, context),
+    ]
     return [notice for notice in notices if notice is not None]
 
 
@@ -71,17 +80,13 @@ def _tool_availability(
     """
     banned = rc.banned_tools
     latest = context.latest_notice("tool_availability")
-    announced = (
-        None if latest is None else frozenset(cast(list[str], latest[1].banned_tools))
-    )
+    announced = None if latest is None else frozenset(cast(list[str], latest[1].banned_tools))
     if latest is not None and latest[0] == rc.run.id and announced == banned:
         return None
     content = tool_availability_notice(announced, banned)
     if content is None:
         return None
-    return NoticeBody(
-        content=content, notice_kind="tool_availability", banned_tools=sorted(banned)
-    )
+    return NoticeBody(content=content, notice_kind="tool_availability", banned_tools=sorted(banned))
 
 
 def _open_items(rc: RuntimeContext, context: RuntimeMessageContextManager) -> NoticeBody | None:
@@ -103,7 +108,7 @@ def _open_items(rc: RuntimeContext, context: RuntimeMessageContextManager) -> No
     会一直以为它们还开着。
     """
     session_id = rc.session.id
-    effects = incoming_decision_effects(rc.mailbox.ordered())
+    effects = IncomingDecisionEffects.of(rc.mailbox.ordered())
     awaiting = [
         (call_id, tool_name)
         for call_id, tool_name in context.awaiting_decision_calls()
@@ -125,7 +130,9 @@ def _open_items(rc: RuntimeContext, context: RuntimeMessageContextManager) -> No
         return None
     lines = [_OPEN_ITEMS_PREFIX]
     if awaiting:
-        calls = ", ".join(f"{tool_name} (tool_call_id={call_id})" for call_id, tool_name in awaiting)
+        calls = ", ".join(
+            f"{tool_name} (tool_call_id={call_id})" for call_id, tool_name in awaiting
+        )
         lines.append(
             f"- Awaiting the user: {calls}. Do not repeat these calls or assume their outcome; "
             "each result arrives as a separate message. You may end your turn while they are open."
@@ -190,3 +197,30 @@ def _names(tools: frozenset[str]) -> str:
     """工具名排序后逗号分隔：同一集合跨进程生成同一文本，保住前缀缓存。"""
 
     return ", ".join(sorted(tools))
+
+
+def _terminal_permissions(
+    rc: RuntimeContext, context: RuntimeMessageContextManager
+) -> NoticeBody | None:
+    """从冻结的 Run 重推终端权限，沿用上下文基准而不是进程内已告知标志。"""
+    mode = rc.run.terminal_permission_mode
+    latest = context.latest_notice("terminal_permissions")
+    if latest is not None and latest[0] == rc.run.id:
+        return None
+    root = rc.workspace.root_path
+    writable = rc.session.extra.writable_root
+    path = str(Path(root) / writable) if writable else root
+    content = (
+        f"Terminal permissions for this Run: {mode}. Base writable root: {path}. "
+        "Your session scratch is also writable. "
+        + (
+            "Commands run with the current OS user permissions without a terminal sandbox. "
+            if mode == "full_access"
+            else "Commands run in an OS sandbox with IP networking off. Request permissions.network and/or "
+            "permissions.write_roots plus a justification on execute_terminal before starting commands "
+            "that need them; the user must approve this exact command. The Cosir control directory stays protected. "
+        )
+        + "Approval never automatically reruns a failed command. Check partial effects before retrying. "
+        "This mode affects Agent commands only; file tools, browser, MCP and user terminals have their own boundaries."
+    )
+    return NoticeBody(notice_kind="terminal_permissions", content=content, metadata={"mode": mode})

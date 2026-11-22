@@ -2,31 +2,25 @@
 
 步与步之间的停止都在这里落定；模型请求中、工具执行中的取消仍由 model 节点与工具运行器就地中断。
 mailbox 是进入 Run 的唯一通道：外部队列行的副本确认（删除外部队列行）与 context 写入同一事务提交，
-消息不会丢也不会并入两次；执行内通知没有队列行，写入即可。写入前先对账配置（``RuntimeMessageContextManager.configuration_change_notice``：
-Agent 看到的配置变了就投一条净差异通知）。全部通知（两种来源）先写、合成一条 ``<system_notice>``，
-其余消息再按优先级逐条写。本节点不读外部队列、不按模型截断、不持
+消息不会丢也不会并入两次；执行内通知没有队列行，写入即可。写入前先取本次请求的通知
+（``notices.request_notices``：提问作废、配置变化、读过的文件变化），与 mailbox 里的通知合成一条
+``<system_notice>`` 先写，其余消息再按优先级逐条写。本节点不读外部队列、不按模型截断、不持
 Session 闸门。Run 首次并入用户输入后，顺带启动标题支线（``branch.session_title``，每个 Run 至多
 一次），它与主线并行、不影响流转。
 
-用户决定（提问）按 mailbox 的优先级与时间线和其余消息一起交给模型；它没有执行结果，所以并入的
-同一事务就把等待占位推到 ``completed``，占位已不在等待（已作答、已作废）的迟到决定只确认、不写入。
+用户决定（提问）按 mailbox 的优先级与时间线和其余消息一起交给模型；作废与结算规则在
+``user_decision``，占位已不在等待的迟到决定只确认、不写入。
 并入前不必先闭合工具协议：``load_message`` 发请求前会把被用户消息隔开的工具结果按调用恢复到合法顺序。
 """
 
 import asyncio
 from typing import cast
 
-from sqlalchemy.orm import Session as DbSession
-
 from app.config.logging.logger import log
-from app.core.events import InputConsumedEvent, ToolCallStatusChangedEvent
+from app.core.events import InputConsumedEvent
 from app.core.workflow.branch import session_title
-from app.core.workflow.decision_expiry import (
-    expire_decisions,
-    expired_notice,
-    incoming_decision_effects,
-)
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
+from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.session_message import (
     BackgroundResultBody,
@@ -47,10 +41,11 @@ from app.core.workflow.node_helper.finalize_max_steps import _finalize_max_steps
 from app.core.workflow.node_helper.tool_observation_projection import (
     settle_background_placeholder,
 )
-from app.models.conversation_input import UserInputPresentation
-from app.models.enums.react_route import ReactRoute
-from app.models.enums.run_status import RunTransition
-from app.models.message_metadata import TURN_INPUT_KINDS, ToolMessageMetadata
+from app.core.workflow.notices.request_notices import request_notices
+from app.core.workflow.user_decision.decision_settlement import settle_answered
+from app.models.message_context.message_metadata.base.message_kinds import TURN_INPUT_KINDS
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
+from app.models.run.run_status import RunTransition
 from app.service import depends as service_depends
 from app.storage.store_engines import main_db_factory
 
@@ -86,8 +81,8 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
     if step_count > state.step_limit:
         return await _finalize_max_steps(step_count, state.step_limit)
 
-    await asyncio.to_thread(_expire_decisions_on_user_input, step_id)
-    await asyncio.to_thread(_reconcile_configuration)
+    for notice in await asyncio.to_thread(request_notices, step_id):
+        rc.mailbox.notify(notice)
     notices = rc.mailbox.take_notices()
     if notices:
         await asyncio.to_thread(_write_notices, notices)
@@ -96,40 +91,17 @@ async def _prepare_input_node(state: ReactExecutionState) -> dict[str, object]:
         message = rc.mailbox.pop()
         if not await asyncio.to_thread(_write_message, message, step_id=step_id):
             continue
-        if isinstance(message.body, UserInputBody):
-            consumed_input = True
-            await asyncio.to_thread(session_title.name_untitled, rc, message.body.text)
-    # 用户说了新话才值得重新起标题；副本在主线开始流式改写 working copy 前取好。
-    patch: dict[str, object] = {**route_state(state.step_count, ReactRoute.MODEL), "batch": ToolBatch(), "wait_for_input": False}
-    if consumed_input and session_title.should_launch(rc, state):
-        session_title.launch(rc, await asyncio.to_thread(_message_context().load_message))
-        patch["title_requested"] = True
+        consumed_input = consumed_input or isinstance(message.body, UserInputBody)
     # 下一模型步不再看上一批观察或复用本次挂起请求。
+    patch: dict[str, object] = {
+        **route_state(state.step_count, ReactRoute.MODEL),
+        "batch": ToolBatch(),
+        "wait_for_input": False,
+    }
+    # 用户说了新话才值得重新起标题。
+    if consumed_input and await session_title.start_after_input(rc, state):
+        patch["title_requested"] = True
     return patch
-
-
-def _reconcile_configuration() -> None:
-    """Agent 看到的配置变了就投一条净差异通知，与本批其余通知合成一条写入；工作线程执行。"""
-    rc = _runtime_context()
-    notice = _message_context().configuration_change_notice(rc.agent)
-    if notice is not None:
-        rc.mailbox.notify(notice)
-
-
-def _expire_decisions_on_user_input(step_id: str) -> None:
-    """mailbox 里有用户输入时，先作废等用户回应的等待决定并告知模型；工作线程执行。
-
-    放在取通知之前、而不是写那条输入的事务里：通知要与这批通知合成一条、排在输入前面，写输入时
-    才结算就来不及了。代价是结算与输入不同事务——输入随后确认失败（极少：投递后、并入前被撤回）
-    时提问已作废而输入没写入，可接受。排在这条输入前面的决定（先作答、后发消息）会先结算占位，
-    所以它回答的调用不作废；排在后面的决定并入时发现占位已作废，只确认不写入。
-    """
-    rc = _runtime_context()
-    effects = incoming_decision_effects(rc.mailbox.ordered())
-    if effects.user_input is None:
-        return
-    for call_id in expire_decisions(step_id=step_id, keep=effects.answered_before_input):
-        rc.mailbox.notify(expired_notice(call_id, "user_message"))
 
 
 def _write_notices(notices: list[SessionMessage]) -> None:
@@ -174,16 +146,20 @@ def _write_message(session_message: SessionMessage, *, step_id: str) -> bool:
         if current is None:
             return False
         if isinstance(current.body, DecisionBody):
-            answered_event = _settle_answered(current.body, step_id=step_id, db=db)
-        stale_decision = (
-            isinstance(current.body, DecisionBody) and answered_event is None
-        )
+            answered_event = settle_answered(current.body, step_id=step_id, db=db)
+        stale_decision = isinstance(current.body, DecisionBody) and answered_event is None
         message, metadata = current.body.render()
         if stale_decision:
-            log.info("prepare_input_stale_decision_dropped", extra={
-                "msg": "决定并入时调用已不在等待，只确认不写入",
-                "data": {"run_id": rc.run.id, "tool_call_id": metadata.tool_call_id},
-            })
+            log.info(
+                "prepare_input_stale_decision_dropped",
+                extra={
+                    "msg": "决定并入时调用已不在等待，只确认不写入",
+                    "data": {
+                        "run_id": rc.run.id,
+                        "tool_call_id": cast(DecisionBody, current.body).tool_call_id,
+                    },
+                },
+            )
             return False
         # 回合输入以队列行 id 为消息身份：快照里的用户消息与途中来信都按它寻址。
         is_turn_input = metadata.kind in TURN_INPUT_KINDS
@@ -203,11 +179,17 @@ def _write_message(session_message: SessionMessage, *, step_id: str) -> bool:
     if answered_event is not None:
         emit(answered_event)
     if background_event is not None:
-        log.info("background_placeholder_settled", extra={
-            "msg": "后台结论已并入，占位已结算",
-            "data": {"run_id": rc.run.id, "tool_call_id": background_event.tool_call_id,
-                     "status": background_event.status},
-        })
+        log.info(
+            "background_placeholder_settled",
+            extra={
+                "msg": "后台结论已并入，占位已结算",
+                "data": {
+                    "run_id": rc.run.id,
+                    "tool_call_id": background_event.tool_call_id,
+                    "status": background_event.status,
+                },
+            },
+        )
         emit(background_event)
     if is_turn_input:
         emit(
@@ -221,41 +203,6 @@ def _write_message(session_message: SessionMessage, *, step_id: str) -> bool:
             )
         )
     return True
-
-
-def _settle_answered(
-    body: DecisionBody, *, step_id: str, db: DbSession
-) -> ToolCallStatusChangedEvent | None:
-    """用户决定并入时结算等待占位，返回提交后才可发布的卡片事件；占位不在等待时返回 ``None``。
-
-    这类工具没有执行结果，占位只能在这里收尾：推到 ``completed``（驳回也是——用户已经作出决定），
-    决定与载荷并进展示数据，卡片据此显示回答。占位离开 ``pending`` 后决定入口不再认它在等待，
-    重复提交被拒，「等你操作」的计数随状态事件更新。
-    """
-    rc = _runtime_context()
-    context = _message_context()
-    placeholder = context.tool_result_metadata(body.tool_call_id)
-    if placeholder is None or not placeholder.awaiting_decision:
-        return None
-    written = context.update_tool_result_metadata(
-        body.tool_call_id,
-        ToolMessageMetadata(
-            status="completed",
-            display_data={
-                **(placeholder.display_data or {}),
-                "decision": body.decision,
-                **(body.data or {}),
-            },
-        ),
-        db=db,
-    )
-    return ToolCallStatusChangedEvent(
-        session_id=rc.run.session_id,
-        run_id=rc.run.id,
-        step_id=step_id,
-        tool_call_id=body.tool_call_id,
-        result=written,
-    )
 
 
 def _cancel_before_request(step_id: str, run_id: int) -> None:

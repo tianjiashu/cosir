@@ -22,14 +22,20 @@ from app.core.events import RunInitializedEvent, RunResultUpdatedEvent, RunStatu
 from app.core.events.event_sink import event_sink
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
-from app.core.workflow.message_queue.session_message import RunLaunch
-from app.models import RunRecord, RunStatus
-from app.models.enums.run_status import RunTransition
-from app.models.run_failure import run_terminal_error
-from app.models.run_usage import RunUsage
+from app.core.workflow.message_queue.session_message import (
+    LAUNCH_INPUT_BODIES,
+    LaunchInputBody,
+    RunLaunch,
+)
+from app.core.workflow.run_failure import run_terminal_error
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import RunStatus, RunTransition
+from app.models.run.run_usage import RunUsage
+from app.models.terminal_permissions import TerminalPermissionMode
 from app.service import depends as service_depends
 from app.service.depends import get_model_config_service
 from app.storage.store_engines import main_db_factory
+from app.storage.write_transaction import begin_immediate
 
 
 class RunLedger:
@@ -49,13 +55,13 @@ class RunLedger:
     def create_run(self, session_id: int, launch: RunLaunch) -> RunRecord:
         """新建 Run 的唯一路径：同一事务内按发起配置建 running Run → 写 Session 当前 Run 指针。
 
-        配置由调度方按 ``dispatch_policy.next_action`` 从队列选定，这里不读队列；输入仍在外部
+        配置由调度方按 ``Action.decide`` 从队列选定，这里不读队列；输入仍在外部
         队列，由新执行的初始投递交给 ``prepare_input`` 并入。只由 Session 的调度 actor（``SessionActor``）
         调用并随即交给执行器，因此直接以 running 创建。
         """
 
         config = get_model_config_service().get_config(launch.model_config_id)
-        with self._db_factory.begin() as db:
+        with begin_immediate(self._db_factory) as db:
             run = self._run.create(
                 session_id,
                 RunStatus.RUNNING.value,
@@ -63,6 +69,9 @@ class RunLedger:
                 model_config_id=launch.model_config_id,
                 context_window_total=config.model.context_window_k * 1000,
                 reasoning_effort=launch.reasoning_effort,
+                terminal_permission_mode=self._terminal_mode(
+                    db, session_id, launch.terminal_permission_mode
+                ),
                 db=db,
             )
             self._session.set_current_run_id(session_id, run.id, db=db)
@@ -74,9 +83,38 @@ class RunLedger:
                 context_window_total=run.context_window_total,
                 model_config_id=run.model_config_id,
                 reasoning_effort=run.reasoning_effort,
+                terminal_permission_mode=run.terminal_permission_mode,
             ),
         )
         return run
+
+    def _terminal_mode(
+        self, db: DbSession, session_id: int, requested: TerminalPermissionMode
+    ) -> TerminalPermissionMode:
+        """所有新 Run 在此扣除所有权祖先的权限上限，覆盖消息和后台结果等自动入口。
+
+        父会话刚把降权输入入队、尚未建立新 Run 时，排队输入也立即构成上限。
+        因此释放所有权树闸门后，子 actor 先获得执行机会也不能恢复旧 full 权限。
+        所有读取与建 Run 共用 BEGIN IMMEDIATE 事务，不能拼接旧父 Run 与新空队列。
+        """
+        if requested == "request_approval":
+            return requested
+        session = self._session.ensure_session(db, session_id)
+        queue = service_depends.get_session_message_queue()
+        while session.parent_session_id is not None:
+            session = self._session.ensure_session(db, session.parent_session_id)
+            if session.current_run_id is not None:
+                current = self._run.get_in_db(db, session.current_run_id)
+                if current.terminal_permission_mode == "request_approval":
+                    return "request_approval"
+            if any(
+                isinstance(message.body, LAUNCH_INPUT_BODIES)
+                and cast(LaunchInputBody, message.body).launch.terminal_permission_mode
+                == "request_approval"
+                for message in queue.pending_nowait(session.id, db=db)
+            ):
+                return "request_approval"
+        return requested
 
     def get_run(self, run_id: int) -> RunRecord:
         """按标识读取单个 Run 记录。
@@ -190,9 +228,7 @@ class RunLedger:
             )
         return record
 
-    def _persisted_usage(
-        self, usage_stats: RunUsageStats | None
-    ) -> RunUsage | None:
+    def _persisted_usage(self, usage_stats: RunUsageStats | None) -> RunUsage | None:
         """运行时 token 累加器 → Run 行六键用量；``None`` 表示不写用量列。"""
 
         if usage_stats is None:

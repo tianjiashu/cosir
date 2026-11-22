@@ -1,12 +1,12 @@
 """Session 标题支线：Run 首次并入用户输入后，与主线并行地请模型给对话起一个简短标题；
-每个 Run 至多一次。还没有标题的 Session 先以这条输入的摘要命名（``name_untitled``），支线失败时
-它就是兜底。
+每个 Run 至多一次。``sessions.title`` 只存真标题：还没起名的 Session 标题为空，界面统一显示「新会话」，
+不往库里写占位——占位与真标题在库里分不出来，还会被当作「当前标题」交给模型原样保留。
 
 为什么挂在驱动上：支线复用本次 Run 的 ``rc.model``（同一 client、同一工具定义，
 命中 Session 的前缀缓存），
 而 client 在 ``ReactLikeWorkflow.run`` 收尾时关闭，所以支线由驱动持有（``rc.title_branch``），
 ``settle`` 在关闭 client 前收尾它。成败都不影响 Run：失败、超时、取消只记日志，标题保持原样
-（首条输入的摘要，或上一次生成的标题）。
+（仍为空，或上一次生成的标题）。
 
 用量不计入 Run：``RunUsageStats`` 是「最新一次调用覆盖」语义并驱动上下文窗口展示，并行的
 标题请求写进去会覆盖主线用量，只记进日志。
@@ -30,7 +30,6 @@ from app.config.logging.logger import log
 from app.core.events import SessionTitleUpdatedEvent
 from app.core.llm_provider.openai_model import usage_from_response
 from app.core.workflow.node_helper.common import _message_context, emit
-from app.models.message_context.capsules.capsule_grammar import Segment
 from app.models.session.session_kind import USER_FACING_SESSION_TYPES
 from app.service import depends as service_depends
 from app.utils.datetime_utils import SESSION_TITLE_LIMIT, preview
@@ -44,23 +43,6 @@ if TYPE_CHECKING:
 _SETTLE_POLL_SECONDS = 0.2
 
 
-def name_untitled(rc: RuntimeContext, text: str) -> None:
-    """用户输入并入后，给还没有标题的 Session 以这条输入的摘要命名；工作线程执行。
-
-    未开始的会话建立时还没有输入（新会话页开终端、开浏览器标签时就建了），标题留空，到这里才有
-    可用的文字；纯图片输入没有文字，落到「新会话」。是否为空以库里的值为准（``fill_empty_title``
-    的条件更新）：``rc.session`` 是运行时空间缓存的记录，标题可能已被别的 Run 改过。
-    """
-    if rc.session.title:
-        return
-    title = preview(Segment.plain_text(text), limit=SESSION_TITLE_LIMIT) or "新会话"
-    if not service_depends.get_session_service().fill_empty_title(rc.session.id, title):
-        return
-    # 同步缓存的记录：随后启动的支线把它当作「当前标题」交给模型。
-    rc.session.title = title
-    emit(SessionTitleUpdatedEvent(session_id=rc.session.id, run_id=rc.run.id, title=title))
-
-
 def should_launch(rc: RuntimeContext, state: ReactExecutionState) -> bool:
     """本 Run 尚未起过支线，且 Session 是侧栏会话；调用方据此决定是否准备上下文副本。
 
@@ -69,6 +51,18 @@ def should_launch(rc: RuntimeContext, state: ReactExecutionState) -> bool:
     """
     # 只改写侧栏会话的标题：子 Agent 的标题是 Agent 名。
     return not state.title_requested and rc.session.session_type in USER_FACING_SESSION_TYPES
+
+
+async def start_after_input(rc: RuntimeContext, state: ReactExecutionState) -> bool:
+    """prepare_input 并入了用户输入之后的唯一入口：该起就取请求副本、启动支线，返回是否启动。
+
+    返回 ``True`` 时调用方置位 ``title_requested``，由 workflow 随节点结果落库。副本在主线开始流式
+    改写 working copy 之前取好。
+    """
+    if not should_launch(rc, state):
+        return False
+    launch(rc, await asyncio.to_thread(_message_context().load_message))
+    return True
 
 
 def launch(rc: RuntimeContext, messages: list[ChatCompletionMessageParam]) -> None:
@@ -183,7 +177,15 @@ async def _generate(rc: RuntimeContext, messages: list[ChatCompletionMessagePara
 
 
 def _instruction(current_title: str) -> str:
-    """请求末尾的临时指令，不写回 canonical context；带上当前标题，主题未变时让模型原样返回。"""
+    """请求末尾的临时指令，不写回 canonical context；已有标题时带上它，主题未变时让模型原样返回。"""
+    keep = (
+        [
+            f"Current title: {json.dumps(current_title, ensure_ascii=False)}",
+            "If the topic has not clearly changed, return the current title unchanged.",
+        ]
+        if current_title
+        else []
+    )
     return "\n\n".join(
         [
             "Do not answer or continue the conversation above. Your only job now is to name it.",
@@ -195,15 +197,18 @@ def _instruction(current_title: str) -> str:
                 "in the same language the user writes in, "
                 f"at most {SESSION_TITLE_LIMIT} characters, without quotes or trailing punctuation."
             ),
-            f"Current title: {json.dumps(current_title, ensure_ascii=False)}",
-            "If the topic has not clearly changed, return the current title unchanged.",
+            *keep,
             'Return only JSON: {"title": "..."}. Do not call tools.',
         ]
     )
 
 
 def _parse_title(text: str) -> str | None:
-    """取出 ``title`` 并归一为单行、按统一上限截断；不合格返回 ``None``。"""
+    """取出 ``title``，去掉包裹的引号并按统一上限截断；不合格返回 ``None``。
+
+    模型输出按文本处理，不解析其中的胶囊标签：标题请求带着原始上下文时它偶尔会把标签抄进来，
+    这种个例不值得为它引入一套语法依赖。
+    """
     try:
         value = json.loads(text.strip())
     except ValueError:

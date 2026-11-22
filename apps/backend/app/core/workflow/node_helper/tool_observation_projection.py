@@ -11,16 +11,16 @@ from app.core.tool.execute.tool_terminal_projection import (
     terminal_event,
 )
 from app.core.tool.schemas import ToolObservation
-from app.core.workflow.decision_expiry import (
-    expire_decisions,
-)
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.session_message import (
     BackgroundResultBody,
     ToolImageBody,
 )
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
-from app.models.message_metadata import ToolMessageMetadata
+from app.core.workflow.user_decision.decision_expiry import (
+    expire_decisions,
+)
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
 
 
 def settle_observations(batch: ToolBatch, *, step_id: str) -> None:

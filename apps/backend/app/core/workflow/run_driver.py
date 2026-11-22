@@ -24,11 +24,10 @@ from app.core.llm_provider.model_failure import (
 from app.core.tool.placeholder_settlement import INTERRUPTED_HINT, cancel_placeholders
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
-from app.core.workflow.workflow_run_failure import WorkflowRunFailure
-from app.models import RunRecord
-from app.models.enums.run_status import RunTransition
-from app.models.message_metadata import ToolMessageMetadata
-from app.models.run_failure import run_failure_message
+from app.core.workflow.run_failure import WorkflowRunFailure, run_failure_message
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.run.run_record import RunRecord
+from app.models.run.run_status import RunTransition
 from app.service.depends import (
     get_run_ledger,
     get_session_context_service,
@@ -49,9 +48,7 @@ class RunDriver:
         self._ledger = get_run_ledger()
         self._workflow = ReactLikeWorkflow()
 
-    async def drive(
-        self, run: RunRecord, preceding_run: RunRecord | None
-    ) -> None:
+    async def drive(self, run: RunRecord, preceding_run: RunRecord | None) -> None:
         """驱动一次 Run：装配运行上下文 → 驱动 workflow，异常在此落定。
 
         ``preceding_run`` 是这次驱动之前 Session 的当前 Run（见 ``RuntimeContext.preceding_run``），由
@@ -89,7 +86,7 @@ class RunDriver:
         留下「Run 仍停在 running」的 run 级事实，遗留的 running 由下次启动收敛。
         """
 
-        failure_code = _failure_code_for(exc)
+        failure_code = self._failure_code_for(exc)
         try:
             failed = self._ledger.transition(
                 run.id,
@@ -158,18 +155,20 @@ class RunDriver:
                     result=ToolMessageMetadata(status="cancelled"),
                 )
             )
-        cancel_placeholders(run.session_id, context.claimed_decisions(run.session_id), INTERRUPTED_HINT)
+        cancel_placeholders(
+            run.session_id, context.claimed_decisions(run.session_id), INTERRUPTED_HINT
+        )
 
 
-def _failure_code_for(exc: BaseException) -> str:
-    """把异常归类为 Run 失败 code。
+    def _failure_code_for(self,exc: BaseException) -> str:
+        """把异常归类为 Run 失败 code。
 
-    上下文完整性错误用本地 code，不归因于模型服务；``WorkflowRunFailure`` 已自带 code，不二次
-    猜测；其余交给模型失败分类器，分类不出时回退中性 code，避免把普通执行错误误报成模型问题。
-    """
+        上下文完整性错误用本地 code，不归因于模型服务；``WorkflowRunFailure`` 已自带 code，不二次
+        猜测；其余交给模型失败分类器，分类不出时回退中性 code，避免把普通执行错误误报成模型问题。
+        """
 
-    if isinstance(exc, ContextProtocolError):
-        return Constant.Run.RUN_FAILURE_CODE_CONTEXT_PROTOCOL_INVALID
-    if isinstance(exc, WorkflowRunFailure):
-        return exc.failure_code
-    return classify_model_failure(exc) or Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
+        if isinstance(exc, ContextProtocolError):
+            return Constant.Run.RUN_FAILURE_CODE_CONTEXT_PROTOCOL_INVALID
+        if isinstance(exc, WorkflowRunFailure):
+            return exc.failure_code
+        return classify_model_failure(exc) or Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
