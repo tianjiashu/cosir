@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
-from app.models.session_kind import SessionType
-from app.models.session_record import SessionRecord
+from app.models.session.session_kind import SessionType
+from app.models.session.session_record import SessionRecord
 from app.utils.datetime_utils import to_text
 
 
@@ -28,7 +28,7 @@ class SessionResponse(BaseModel):
         session_id: 会话标识。
         workspace_id: 所属工作区标识。
         title: 会话标题。
-        session_type: 会话类型，取值见 ``models.session_kind.SESSION_KINDS``：``"user"`` 为用户创建，
+        session_type: 会话类型，取值见 ``models.session.session_kind.SESSION_KINDS``：``"user"`` 为用户创建，
             ``"user_fork"`` / ``"agent_fork"`` 区分分叉发起方，``"delegated"`` 为委派子会话。
         parent_session_id: 父会话标识，委派子会话有值。
         unstarted: 未开始的会话（``SessionRecord.unstarted``）：前端目录据此不把它放进侧栏、把它当作

@@ -8,12 +8,12 @@ from pydantic import BaseModel
 
 from app.core.llm_provider.message_codec import display_arguments
 from app.core.llm_provider.openai_model import usage_from_response
-from app.models.message_metadata import (
+from app.models.message_context.message_metadata.assistant_message_metadata import (
     AssistantMessageMetadata,
-    ToolMessageMetadata,
-    UserMessageMetadata,
 )
-from app.models.session_context import SessionContextRecord
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
+from app.models.message_context.session_context import SessionContextRecord
 from app.service.conversation.session_observation import (
     ObservedRun,
     ObservedStatusChange,

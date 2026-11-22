@@ -18,7 +18,7 @@ from app.api.schemas import (
 )
 from app.app import app
 from app.models.errors.deletion_errors import DeletionBusyError
-from app.models.errors.session_fork_errors import SessionForkConflictError
+from app.models.session.session_fork_errors import SessionForkConflictError
 from app.service.conversation.session_context_service import (
     SessionContextService,
 )

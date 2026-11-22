@@ -17,8 +17,8 @@ from app.api.schemas.request.EnvironmentVariablesUpdateRequest import (
 )
 from app.api.schemas.response.EnvironmentResponse import EnvironmentResponse
 from app.app import app
-from app.models.environment.environment_change import EnvironmentChange
-from app.service.configuration.environment_configuration_service import (
+from app.service.configuration.environment.configuration import EnvironmentChange
+from app.service.configuration.environment.configuration_service import (
     EnvironmentConfigurationService,
 )
 
