@@ -1,8 +1,9 @@
 """Session 推送的进程内通道：侧栏、命令面板、页头与工作台标签共用一条连接，送两类事实。
 
 - **状态**：Session 状态是两项正交的事实（见 ``app.models.session_status``）：执行状态的事实源是
-  ``RunModel.status``（经 Session 当前 Run 指针读取），等你操作的事实源是 HITL 等待占位行。
-  在 Run 开始、状态变化或工具调用状态迁移时现读并转发。
+  ``RunModel.status``（经 Session 当前 Run 指针读取），等你操作是 HITL 等待占位行与进程内等待的
+  终端批准（计在显示它的会话上）之和，两者只在这里合成。在 Run 开始、状态变化、工具调用状态迁移
+  或终端批准变化时现读并转发。
 - **目录失效**：侧栏目录（工作区列表、各工作区的侧栏 Session）的写入方在提交后通知「这块目录变了」，
   前端据此重读目录接口。只推失效、不推内容：目录接口仍是唯一事实源，这里不复制目录投影。前端的
   目录刷新只来自这里（外加首次加载与重连后的整体重读），不再由页面事件推断，所以后台会话的
@@ -16,10 +17,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import Lock
 
 from app.config.logging.logger import log
+from app.core.tool.terminal_approval import terminal_approvals
 from app.models.session_kind import USER_FACING_SESSION_TYPES, SessionType
 from app.models.session_status import SessionStatus
 from app.storage.crud.session_crud import SessionCrud
@@ -106,7 +108,11 @@ class SessionFeed:
 
     def statuses(self) -> SessionStatuses:
         """当前全部 Session 的状态（整表帧与周期对账）。"""
-        return self._sessions.list_statuses()
+        approvals = terminal_approvals.displayed_counts()
+        return {
+            session_id: self._with_approvals(status, approvals[session_id])
+            for session_id, status in self._sessions.list_statuses().items()
+        }
 
     def publish_status(self, session_id: int) -> None:
         """Session 状态可能变化后调用（Run 开始或迁移、工具调用状态迁移、撤回回合）：现读该 Session 的
@@ -121,6 +127,7 @@ class SessionFeed:
             status = self._sessions.get_status(session_id)
         except KeyError:
             return
+        status = self._with_approvals(status, len(terminal_approvals.displayed(session_id)))
         self._deliver(subscriptions, lambda subscription: subscription.offer_statuses({session_id: status}))
 
     def publish_catalog(self, workspace_id: int, session_type: SessionType) -> None:
@@ -149,6 +156,13 @@ class SessionFeed:
         """工作区列表变了（建、删工作区）：前端整体重读目录。"""
         change = CatalogChange(workspaces=True)
         self._deliver(self._snapshot(), lambda subscription: subscription.offer_catalog(change))
+
+    @staticmethod
+    def _with_approvals(status: SessionStatus, approvals: int) -> SessionStatus:
+        """库里读出的等待数只含 HITL 占位；在会话页上等批准的终端调用同样在等你，在这里合入。"""
+        if not approvals:
+            return status
+        return replace(status, awaiting_user_calls=status.awaiting_user_calls + approvals)
 
     def _snapshot(self) -> tuple[SessionFeedSubscription, ...]:
         with self._lock:

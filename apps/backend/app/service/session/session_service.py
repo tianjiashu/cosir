@@ -31,6 +31,7 @@ from app.storage.write_transaction import begin_immediate
 
 _T = TypeVar("_T")
 
+
 class SessionService:
     """Orchestrate session creation, lifecycle management, and execution-status derivation."""
 
@@ -135,7 +136,9 @@ class SessionService:
         session = self._session.get(session_id)
         forks = [
             fork
-            for fork in self._session.list_by_workspace_and_type(session.workspace_id, SessionType.AGENT_FORK)
+            for fork in self._session.list_by_workspace_and_type(
+                session.workspace_id, SessionType.AGENT_FORK
+            )
             if fork.deriver_id() == session_id
         ]
         return [*self._session.list_by_parent_session(session_id), *forks]
@@ -344,18 +347,20 @@ class SessionService:
                 fork_cut = cut(fork_source)
                 target = self._session.create(
                     workspace_id=source.workspace_id,
-                    title=title or self._session.next_fork_title(
-                        source.workspace_id, source.title, db
-                    ),
+                    title=title
+                    or self._session.next_fork_title(source.workspace_id, source.title, db),
                     session_type=session_type,
-                    extra=SessionExtra(fork=SessionFork(
-                        source_session_id=source.id,
-                        source_title=source.title,
-                        tree_parent_session_id=source.id,
-                        initial_launch=fork_cut.launch,
-                    ), deriving_call_id=deriving_call_id,
+                    extra=SessionExtra(
+                        fork=SessionFork(
+                            source_session_id=source.id,
+                            source_title=source.title,
+                            tree_parent_session_id=source.id,
+                            initial_launch=fork_cut.launch,
+                        ),
+                        deriving_call_id=deriving_call_id,
                         # 可写根随上下文一起继承：上下文里写明了范围，事实要与它一致。
-                        writable_root=narrowed_root or source.extra.writable_root),
+                        writable_root=narrowed_root or source.extra.writable_root,
+                    ),
                     # 工具列表是请求前缀的一部分，改了就接不上源的缓存；派生限制由运行期准入执行。
                     tool_surface=source.tool_surface.model_copy(deep=True),
                     db=db,
@@ -407,7 +412,9 @@ class SessionService:
         """
         return self._session.list_by_workspace(workspace_id)
 
-    async def delete_session_tree(self, session_id: int, *, with_forks: bool = False) -> frozenset[int]:
+    async def delete_session_tree(
+        self, session_id: int, *, with_forks: bool = False
+    ) -> frozenset[int]:
         """删除 Session 的用户用例：删除 = 停止 + 删除记录，停止在任何锁之外；返回实际删除的 Session id。
 
         经 :meth:`stop_then_delete` 先停下所有权子树（沿 ``parent_session_id`` 的委派子 Agent），再由
@@ -441,7 +448,9 @@ class SessionService:
                 active_derived[session.id] = session
             return session_ids
 
-        deleted = await self.stop_then_delete(collect, lambda: self.delete_session(session_id, fork_ids))
+        deleted = await self.stop_then_delete(
+            collect, lambda: self.delete_session(session_id, fork_ids)
+        )
         await asyncio.to_thread(derived_report.report_deleted, active_derived.values(), deleted)
         return deleted
 
@@ -451,7 +460,11 @@ class SessionService:
         for session_id in session_ids:
             session = self.get_session(session_id)
             current = self.require_current_run(session_id)
-            if session.deriver_id() is not None and current is not None and current.status in ACTIVE_RUN_STATUSES:
+            if (
+                session.deriver_id() is not None
+                and current is not None
+                and current.status in ACTIVE_RUN_STATUSES
+            ):
                 found.append(session)
         return found
 
@@ -462,7 +475,8 @@ class SessionService:
 
         停止即墓碑（见 ``SessionRuntimeSpaceRegistry.stop``）；收集与停止反复到集合不再增长，覆盖父 Agent
         在停下前刚委派出的子 Session。``collect`` 与 ``delete`` 是同步函数，在工作线程里调用。``delete``
-        没成功（闸门忙、写库失败）时为已停下的 Session 换上新 actor：Session 仍在，不能留着没有调度者。请求被取消时不回滚——工作线程里的删除可能照常提交，
+        没成功（闸门忙、写库失败）时为已停下的 Session 换上新 actor：Session 仍在，不能留着没有调度者。
+        请求被取消时不回滚——工作线程里的删除可能照常提交，
         回滚会给已删除的 Session 拉起 actor。
         """
         stopped: set[int] = set()
@@ -504,7 +518,9 @@ class SessionService:
                     pending.append(child_id)
         return frozenset(found)
 
-    def delete_session(self, session_id: int, fork_ids: frozenset[int] = frozenset()) -> frozenset[int]:
+    def delete_session(
+        self, session_id: int, fork_ids: frozenset[int] = frozenset()
+    ) -> frozenset[int]:
         """原子删除会话树并级联清理其下全部子产物；调用方须已停下这棵树的 actor。
 
         删除前先校验会话存在（不存在则抛 ``KeyError``），再取得 workspace 闸门（与 fork、删除
@@ -538,7 +554,9 @@ class SessionService:
                 deleted = self._delete_session_after_operations(session_id, fork_ids)
         except TimeoutError as exc:
             raise DeletionBusyError("session", session_id) from exc
-        service_depends.get_session_feed().publish_catalog(session.workspace_id, session.session_type)
+        service_depends.get_session_feed().publish_catalog(
+            session.workspace_id, session.session_type
+        )
         log.info(
             "session_deleted",
             extra={
@@ -626,7 +644,6 @@ class SessionService:
         """
         from app.service.session.session_scratch import remove_session_scratch
         from app.tools.browser_runtime.tab_reclaim import drop_sessions as drop_browser_sessions
-        from app.tools.tool_handler.file_observations import file_observations
         from app.tools.tool_handler.terminal.command_results import command_results
 
         service_depends.get_terminal_session_service().delete_session_terminals(session_ids)
@@ -635,8 +652,10 @@ class SessionService:
         # 临时目录同样发后即忘：后台线程删除，残留由启动对账补回收（见 ``session_scratch``）。
         remove_session_scratch(session_ids)
         for session_id in session_ids:
+            from app.core.tool.terminal_approval import terminal_approvals
+
+            terminal_approvals.cancel_session(session_id)
             command_results.drop_session(session_id)
-            file_observations.drop_session(session_id)
         self._unload_deleted_session_spaces(set(session_ids))
 
     def _unload_deleted_session_spaces(self, session_ids: set[int]) -> None:
