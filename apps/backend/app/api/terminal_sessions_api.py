@@ -10,6 +10,7 @@ worker、清理进程树）放进工作线程，不占事件循环。
 """
 
 import asyncio
+import os
 from typing import NoReturn
 
 from fastapi import HTTPException
@@ -21,6 +22,7 @@ from app.api.schemas.response.TerminalWorkbenchResponse import (
     TerminalShellsResponse,
 )
 from app.app import app
+from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.service.depends import get_terminal_session_service
 from app.service.terminal.terminal_workbench_service import (
@@ -34,6 +36,7 @@ from app.tools.terminal_runtime.errors import (
     TerminalSessionOwnershipError,
     TerminalWorkerUnavailableError,
 )
+from app.tools.terminal_runtime.permissions.policy import SandboxCapability, probe_sandbox
 from app.tools.terminal_runtime.session.shell_resolver import available_session_shells
 
 _service = TerminalWorkbenchService()
@@ -121,3 +124,9 @@ async def close_terminal_session(session_id: int, terminal_session_id: str) -> d
     except TerminalError as exc:
         _raise_terminal_error(exc, session_id=session_id, operation="close")
     return {}
+
+
+@app.get("/terminal/sandbox", response_model=SandboxCapability)
+async def terminal_sandbox_capability() -> SandboxCapability:
+    """在最小沙箱里跑一条无副作用命令探测 OS 隔离能力，不执行用户命令。"""
+    return await asyncio.to_thread(probe_sandbox, os.environ.get(Constant.Terminal.WORKER_ENV, ""))
