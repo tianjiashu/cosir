@@ -21,8 +21,6 @@ from app.models.message_context.capsules.grammar.file_capsule import FileCapsule
 from app.models.message_context.capsules.grammar.ref_capsule import RefCapsule
 from app.models.message_context.capsules.grammar.skill_capsule import SkillCapsule
 
-
-
 # 与前端 ``CAPSULE_TAG_PATTERN`` 完全一致；属性值里不会出现裸双引号（``"`` 已转义）。
 CAPSULE_TAG_PATTERN = re.compile(r'<(file|ref|skill)\s+([a-z]+="[^"]*"(?:\s+[a-z]+="[^"]*")*)\s*/>')
 _ATTRIBUTE_PATTERN = re.compile(r'([a-z]+)="([^"]*)"')
@@ -34,6 +32,7 @@ _ALLOWED_ATTRIBUTES: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "ref": (frozenset({"path"}), frozenset({"lines", "page"})),
     "skill": (frozenset({"name"}), frozenset({"path"})),
 }
+
 
 @dataclass(frozen=True, slots=True)
 class Segment:
@@ -67,6 +66,41 @@ class Segment:
         """把解析结果按规范写法拼回正文（规范化用，不改变普通文本）。"""
 
         return "".join(segment.serialize() for segment in segments)
+
+    @classmethod
+    def plain_text(cls, text: str) -> str:
+        """展示用纯文本投影：胶囊换成可读名称，普通文本原样。"""
+
+        parts: list[str] = []
+        for segment in cls.parse(text):
+            if isinstance(segment, TextSegment):
+                parts.append(segment.text)
+            elif isinstance(segment, CapsuleSegment):
+                parts.append(cls._display_name(segment.capsule))
+            else:
+                raise TypeError(f"unsupported segment: {type(segment).__name__}")
+        return "".join(parts)
+
+    @staticmethod
+    def _display_name(capsule: Capsule) -> str:
+        if isinstance(capsule, FileCapsule):
+            return Segment._basename(capsule.path)
+        if isinstance(capsule, RefCapsule):
+            if capsule.lines is not None:
+                locator = f":{capsule.lines}"
+            elif capsule.page is not None:
+                locator = f" (p.{capsule.page})"
+            else:
+                locator = ""
+            return f"{capsule.path or '工作区'}{locator}"
+        if isinstance(capsule, SkillCapsule):
+            return capsule.name
+        raise TypeError(f"unsupported capsule: {type(capsule).__name__}")
+
+    @staticmethod
+    def _basename(path: str) -> str:
+        trimmed = path.rstrip("/\\")
+        return trimmed.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] or trimmed or path
 
     @staticmethod
     def unescape_attribute(value: str) -> str:
@@ -141,8 +175,6 @@ class CapsuleSegment(Segment):
 
     def serialize(self) -> str:
         return self.capsule.serialize()
-
-
 
 
 __all__ = [
