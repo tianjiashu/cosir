@@ -23,6 +23,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.api.middleware.local_identity import warn_if_capability_missing
 from app.bootstate import (
     boot_state_file_from_env,
     write_bootstate,
@@ -40,6 +41,7 @@ from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.events.event_sink import set_event_sink
 from app.core.tool.background_commands import set_background_commands
 from app.core.tool.external_tools import set_external_tools
+from app.core.tool.terminal_approval import terminal_approvals
 from app.service.configuration import file_store
 from app.service.depends import (
     close_service_dependencies,
@@ -47,6 +49,7 @@ from app.service.depends import (
     get_conversation_state_service,
     get_host_link,
     get_recover_service,
+    get_session_feed,
     initialize_service_dependencies,
 )
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
@@ -66,6 +69,12 @@ from app.utils.path.system_cosir import (
 def _on_background_changed(session_id: int) -> None:
     """后台结果登记表的监听方：把看板与前台等待整表重投影进 Transport snapshot。"""
     get_conversation_state_service().refresh_background_results(session_id)
+
+
+def _on_terminal_approval_changed(session_id: int) -> None:
+    """终端批准登记表的监听方（``session_id`` 是显示会话）：重投影批准卡片，并让「等你操作」跟上。"""
+    get_conversation_state_service().refresh_terminal_approvals(session_id)
+    get_session_feed().publish_status(session_id)
 
 
 @asynccontextmanager
@@ -171,6 +180,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
         max_bytes=Constant.Logging.MAX_BYTES,
         backup_count=Constant.Logging.BACKUP_COUNT,
     )
+    # 身份缺失时每个领域接口都会 403；在这里留一条 WARNING，避免「界面全崩、后端日志干净」。
+    warn_if_capability_missing()
     _ensure_system_cosir_dir()
     # 确保系统级 Agent 配置目录存在，作为用户手工放置自定义配置的固定位置。配置内容不在此处装载：
     # registry 读取作用域时按文件签名重读，运行期新建的 workspace、手动改动的配置都无需重启。
@@ -192,6 +203,7 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     set_event_sink(get_conversation_event_projector().process)
     # 登记表变化：把看板与前台等待整表重投影进 Transport snapshot（通知线程、锁外）。
     command_results.set_listener(_on_background_changed)
+    terminal_approvals.set_listener(_on_terminal_approval_changed)
     get_recover_service().recover_after_restart()
     # 宿主随后端 ready 连上链路；每次连上对账一次，补回收丢了删除通知的 Session 的浏览器标签。
     get_host_link().set_on_connected(schedule_tab_reclaim)
@@ -204,6 +216,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
             # 先禁止后台结果投递（撤销全部条目、等在途投递写完）：之后关闭终端会把会话结束为
             # closed、唤醒等待线程与交接，它们不得在关闭期间写 session_messages。再停下全部 actor
             # （取消执行，不调度后续 Run），最后关闭服务依赖（终端服务随之关闭）。
+            terminal_approvals.close()
+            terminal_approvals.set_listener(None)
             await asyncio.to_thread(command_results.close)
             command_results.set_listener(None)
             get_host_link().set_on_connected(None)

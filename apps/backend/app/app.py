@@ -22,6 +22,7 @@ from app.api.middleware.api_logging import (
     install_http_exception_logging,
     install_request_logging,
 )
+from app.api.middleware.local_identity import LocalIdentityMiddleware
 from app.api.middleware.validation_error import install_request_validation_error_handler
 from app.config.logging.logger import log
 from app.lifespan import lifespan
@@ -29,6 +30,7 @@ from app.lifespan import lifespan
 app = FastAPI(title="coding-agent backend", lifespan=lifespan)
 
 install_request_logging(app, log)
+app.add_middleware(LocalIdentityMiddleware)
 # CORS 必须最后注册（最外层）：请求日志 middleware 收敛出的 500 才会带上 CORS 头。
 # 桌面渲染进程直接连本机动态端口。来源只放本机桌面与开发来源：构建产物的页面来源是 app://cosir
 # （见 electron/main/app-protocol.ts），开发期是 Vite 与测试服务；后端只绑定 127.0.0.1，不是网络服务。
