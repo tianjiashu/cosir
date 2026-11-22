@@ -16,7 +16,7 @@ import pytest
 
 from app.core.file_access.write_attribution import write_attribution
 from app.core.tool.schemas import ToolExecutionContext
-from app.models.file_access import FileVersion
+from app.models.file_access.file_version import FileVersion
 from app.tools.terminal_runtime.command.command_output import CommandOutput as _CommandOutput
 from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
 from app.tools.terminal_runtime.permissions.policy import TerminalExecutionPolicy
@@ -248,7 +248,7 @@ def test_foreground_cancel_retains_real_output(tmp_path) -> None:
         observation = result.result(timeout=5)
     assert observation.status == "cancelled"
     assert "before-cancel" in observation.display_data["output"]
-    assert observation.facts.terminal_file_audit.changes[0].operation == "created"
+    assert observation.facts.file_facts.terminal_audit.changes[0].operation == "created"
 
 
 def test_terminal_reads_unlock_literal_writes_only_after_delivery(tmp_path) -> None:
@@ -269,15 +269,15 @@ def test_terminal_reads_unlock_literal_writes_only_after_delivery(tmp_path) -> N
     assert not (tmp_path / "other.txt").exists()
 
     first_page = tool.execute(command="head -n 1 'a file.txt'", execution_context=context)
-    context.file_knowledge.observe(first_page.facts)
+    context.file_knowledge.observe(first_page.facts.file_facts)
     overwrite = tool.execute(command="echo replacement > 'a file.txt'", execution_context=context)
     assert overwrite.display_data == {"status_hint": "需读全文"}
 
     read = tool.execute(command="cat 'a file.txt'", execution_context=context)
-    context.file_knowledge.observe(read.facts)
+    context.file_knowledge.observe(read.facts.file_facts)
     overwrite = tool.execute(command="echo replacement > 'a file.txt'", execution_context=context)
     assert overwrite.status == "success"
-    [change] = overwrite.facts.terminal_file_audit.changes
+    [change] = overwrite.facts.file_facts.terminal_audit.changes
     assert (change.path, change.operation, change.recognized, change.previously_read) == (
         "a file.txt",
         "modified",
@@ -300,7 +300,7 @@ def test_unrecognized_write_runs_and_reports_the_actual_change(tmp_path) -> None
     result = tool.execute(command=command, execution_context=context)
     assert result.status == "success"
     assert "unrecognized target, no prior read of the original version" in result.content
-    audit = result.facts.terminal_file_audit
+    audit = result.facts.file_facts.terminal_audit
     assert audit.complete and audit.total_changes == 1
     [change] = audit.changes
     assert not change.recognized and change.previously_read is False

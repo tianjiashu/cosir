@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
-
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.message_queue.session_message import (
@@ -18,8 +17,11 @@ from app.core.workflow.message_queue.session_message import (
 )
 from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.nodes import prepare_input_node
-from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.message_metadata import NoticeEntry
+from app.models.message_context.conversation_input import MessageSource
+from app.models.message_context.message_metadata.user_message_metadata import (
+    NoticeEntry,
+    UserInputPresentation,
+)
 from app.models.session.session_kind import SessionType
 from tests.runtime_context_stub import runtime_stub
 
@@ -98,7 +100,7 @@ def _context(
 @pytest.fixture(autouse=True)
 def open_sources(monkeypatch):
     """未了结事项的另外两个事实来源：后台命令与派生 Session，默认都没有。"""
-    from app.core.workflow import drive_notices as module
+    from app.core.workflow.notices import drive_notices as module
 
     # 此文件验证既有驱动通知，终端权限通知由 test_terminal_permissions 单独验证。
     monkeypatch.setattr(module, "_terminal_permissions", lambda _rc, _context: None)
@@ -112,7 +114,7 @@ def open_sources(monkeypatch):
 
 def _notices(monkeypatch, space, banned=None, latest=None, *, run_id: int = 7) -> list[NoticeBody]:
     """装配一次驱动并推导通知；``latest`` 是上下文里最近一条准入通知（没有为 ``None``）。"""
-    from app.core.workflow.drive_notices import drive_notices
+    from app.core.workflow.notices.drive_notices import drive_notices
 
     rc = _for_run(monkeypatch, space, banned, run_id=run_id)
     return [n for n in drive_notices(rc, _context(latest)) if n.notice_kind == "tool_availability"]
@@ -212,7 +214,7 @@ def test_user_stopped_is_derived_from_how_the_preceding_run_ended(
     monkeypatch, end_reason, withdrawn, told
 ) -> None:
     """「用户已停止」只在上一次驱动以用户停止结束、且那一回合模型仍看得到时出现。"""
-    from app.core.workflow import drive_notices as module
+    from app.core.workflow.notices import drive_notices as module
 
     monkeypatch.setattr(
         module,
@@ -233,7 +235,7 @@ def test_user_stopped_is_derived_from_how_the_preceding_run_ended(
 
 
 def _open(monkeypatch, context, mailbox: RunMailbox | None = None, *, run_id: int = 7):
-    from app.core.workflow.drive_notices import drive_notices
+    from app.core.workflow.notices.drive_notices import drive_notices
 
     rc = _for_run(monkeypatch, _space(mailbox or RunMailbox()), run_id=run_id)
     return [n for n in drive_notices(rc, context) if n.notice_kind == "open_items"]
@@ -322,7 +324,7 @@ def test_decisions_this_drive_is_about_to_settle_are_not_open(monkeypatch, open_
 
 def test_tool_availability_notice_rules() -> None:
     """规则是纯函数：按上次告知的集合与本 Run 的禁用集合取通知文本，无需装配上下文。"""
-    from app.core.workflow.drive_notices import tool_availability_notice as notice
+    from app.core.workflow.notices.drive_notices import tool_availability_notice as notice
 
     def f(*names: str) -> frozenset[str]:
         return frozenset(names)

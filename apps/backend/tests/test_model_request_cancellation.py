@@ -6,8 +6,6 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from openai import APITimeoutError, AsyncOpenAI
-
 from app.config.constant import Constant
 from app.core.llm_provider.openai_model import OpenAIChatModel
 from app.core.workflow.cancel.run_cancellation_registry import (
@@ -20,6 +18,7 @@ from app.core.workflow.node_helper import model_stream_state_machine as streamin
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import model_node, structured_output_node
 from app.models.run.run_status import RunTransition
+from openai import APITimeoutError, AsyncOpenAI
 from tests.runtime_context_stub import run_state_stub, runtime_stub
 
 

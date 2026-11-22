@@ -10,7 +10,7 @@ export const APP_ORIGIN = "app://cosir";
  * 构建产物的前端目录。开发期（未打包）读仓库 `target/frontend`（vite build 的输出），
  * 打包后的位置由 P2 的打包配置决定并在这里切换。
  */
-function frontendDir(): string {
+export function frontendDir(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, "frontend")
     : path.resolve(__dirname, "..", "frontend");

@@ -1,4 +1,5 @@
-"""调度规则（``dispatch_policy``）逐条覆盖：纯函数，不依赖执行器与数据库。
+"""调度规则逐条覆盖：推进判定（``Action.decide``）、待处理消息的挑选（``PendingMessages``）与发送的
+并入时机（``SessionActor._send_delivery``）；纯规则，不依赖执行器与数据库。
 
 规则：有消息就处理（系统通知例外）。只看新到达的消息决定是否推进，残留消息随推进一并投递。
 """
@@ -7,9 +8,10 @@ from datetime import datetime
 
 import pytest
 
-from app.core.workflow.message_queue import dispatch_policy
-from app.core.workflow.message_queue.dispatch_policy import Deliver, StartRun, Stay, Wake
+from app.core.session_actor import SessionActor
+from app.core.workflow.dispatch_policy import Action, Deliver, Phase, StartRun, Stay, Wake
 from app.core.workflow.message_queue.message_bodies.notice import NoticeKind
+from app.core.workflow.message_queue.pending_messages import PendingMessages
 from app.core.workflow.message_queue.session_message import (
     AgentMessageBody,
     BackgroundResultBody,
@@ -20,7 +22,8 @@ from app.core.workflow.message_queue.session_message import (
     SessionMessage,
     UserInputBody,
 )
-from app.models.conversation_input import MessageSource, UserInputPresentation
+from app.models.message_context.conversation_input import MessageSource
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.run.run_record import RunRecord
 from app.models.run.run_status import RunStatus
 
@@ -68,7 +71,7 @@ def _result(message_id: int) -> SessionMessage:
     )
 
 
-def _phase(current, driving) -> dispatch_policy.Phase:
+def _phase(current, driving) -> Phase:
     """与 ``SessionActor._phase`` 相同的判定。
 
     阶段规则归 actor，这里只是喂给 ``next_action`` 的脚手架。
@@ -82,7 +85,7 @@ def _phase(current, driving) -> dispatch_policy.Phase:
 
 
 def _next(current, driving, pending, fresh):
-    return dispatch_policy.next_action(_phase(current, driving), current, pending, fresh)
+    return Action.decide(_phase(current, driving), current, PendingMessages.of(pending), fresh)
 
 
 @pytest.mark.parametrize("status", ["completed", "suspended"])
@@ -140,7 +143,7 @@ def test_immediate_input_jumps_ahead_of_queued_inputs() -> None:
     pending = [_user(1, _OTHER, "next_run"), _user(2, _LAUNCH, "immediate")]
     action = _next(_run("cancelled", _OTHER), False, pending, pending[-1:])
     assert action == StartRun(_LAUNCH)
-    assert dispatch_policy.initial_messages(pending, fresh_run=True) == [pending[1]]
+    assert PendingMessages.of(pending).initial(fresh_run=True) == [pending[1]]
 
 
 def test_new_run_without_user_input_inherits_the_current_run_launch() -> None:
@@ -190,12 +193,12 @@ def test_suspended_run_ignores_notices_and_next_run_inputs() -> None:
 def test_fresh_run_receives_one_user_input_resumed_run_only_immediate() -> None:
     """新 Run 接收全部非用户输入与一条用户输入；唤醒 / 续跑只接收 ``immediate``。"""
     pending = [_user(1, delivery="next_run"), _notice(2), _user(3, delivery="next_run"), _result(4)]
-    assert dispatch_policy.initial_messages(pending, fresh_run=True) == [
+    assert PendingMessages.of(pending).initial(fresh_run=True) == [
         pending[0],
         pending[1],
         pending[3],
     ]
-    assert dispatch_policy.initial_messages(pending, fresh_run=False) == [pending[1], pending[3]]
+    assert PendingMessages.of(pending).initial(fresh_run=False) == [pending[1], pending[3]]
 
 
 def _agent(message_id: int, launch: RunLaunch = _OTHER) -> SessionMessage:
@@ -208,14 +211,14 @@ def _agent(message_id: int, launch: RunLaunch = _OTHER) -> SessionMessage:
 def test_agent_message_starts_a_run_with_its_own_launch_without_a_current_run() -> None:
     """委派刚建的子 Session 没有 Run、无从继承：Agent 消息自带的配置开出第一个 Run。"""
     pending = [_agent(1)]
-    assert dispatch_policy.next_action("idle", None, pending, pending) == StartRun(_OTHER)
+    assert Action.decide("idle", None, PendingMessages.of(pending), pending) == StartRun(_OTHER)
 
 
 def test_agent_message_and_user_input_share_the_one_input_per_run_channel() -> None:
     """两类输入都携带配置、一个新 Run 只消费一条：先到的 immediate 先跑，其余留给后续 Run。"""
     pending = [_agent(1), _user(2), _notice(3)]
-    assert dispatch_policy.next_input(pending) is pending[0]
-    assert dispatch_policy.initial_messages(pending, fresh_run=True) == [pending[0], pending[2]]
+    assert PendingMessages.of(pending).next_input() is pending[0]
+    assert PendingMessages.of(pending).initial(fresh_run=True) == [pending[0], pending[2]]
 
 
 @pytest.mark.parametrize(
@@ -232,4 +235,4 @@ def test_agent_message_and_user_input_share_the_one_input_per_run_channel() -> N
     ],
 )
 def test_send_delivery(phase, awaits: bool, expected: str) -> None:
-    assert dispatch_policy.send_delivery(phase, awaits_user_reply=awaits) == expected
+    assert SessionActor._send_delivery(phase, awaits_user_reply=awaits, awaits_terminal_approval=False) == expected

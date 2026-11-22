@@ -3,13 +3,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-from sqlalchemy import create_engine, inspect, select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session as DbSession
-from sqlalchemy.orm import sessionmaker
-
 import app.assistant_transport.service.user_input_service as user_input_module
+import pytest
 from app.assistant_transport.service.user_input_service import UserInputService
 from app.core.context.context_store import ContextStore
 from app.core.events import RunStatusChangedEvent
@@ -18,12 +13,12 @@ from app.core.workflow.message_queue.session_message import UserInputBody
 from app.core.workflow.run_ledger import (
     RunLedger,
 )
-from app.models.conversation_input import UserInputPresentation
 from app.models.errors.input_errors import UserInputRejectedError
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.run.run_command import RunCommand
 from app.models.run.run_record import RunRecord
-from app.models.session.session_context import SessionContextRecord
 from app.models.session.session_extra import SessionExtra
 from app.models.session.session_record import SessionRecord
 from app.service.conversation.session_context_service import (
@@ -38,6 +33,10 @@ from app.storage.model.run_model import RunModel
 from app.storage.model.session_context_model import SessionContextModel
 from app.storage.model.session_model import SessionModel
 from app.storage.store_engines import initialize_app_schema
+from sqlalchemy import create_engine, inspect, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.orm import sessionmaker
 from tests.model_config_fixtures import model_config_record, model_configs
 
 
@@ -367,9 +366,7 @@ def test_real_orphan_recovery_persists_run_and_interrupted_tool_repair(monkeypat
             ).all()
             repaired = [
                 record
-                for record in (
-                    SessionContextRecord._from_model(row) for row in context_rows
-                )
+                for record in (SessionContextRecord._from_model(row) for row in context_rows)
                 if record.message["role"] == "tool"
             ]
 

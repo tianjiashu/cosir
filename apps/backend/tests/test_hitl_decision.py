@@ -17,7 +17,6 @@ from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolCall, ToolDefinition
-from app.core.workflow import decision_expiry
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
@@ -31,8 +30,10 @@ from app.core.workflow.message_queue.session_message import (
 )
 from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.nodes import prepare_input_node, tools_node
-from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.message_metadata import ToolMessageMetadata
+from app.core.workflow.user_decision import decision_expiry
+from app.models.message_context.conversation_input import MessageSource
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from tests.runtime_context_stub import run_batch, runtime_stub
 
 # prepare_input 用替身上下文：每步的配置对账另有专门测试。
@@ -119,7 +120,7 @@ class _Context:
 
 def test_session_message_kind_follows_body_and_roundtrips_through_storage() -> None:
     message = _decision("reject")
-    assert (message.kind, message.project_to_transport) == ("user_decision", False)
+    assert (message.kind, message.project_to_transport) == ("decision", False)
 
     row = SimpleNamespace(
         id=9,
@@ -169,7 +170,7 @@ def test_mailbox_take_first_removes_only_the_first_match() -> None:
         mailbox.post(message)
 
     def is_decision(message: SessionMessage) -> bool:
-        return message.kind == "user_decision"
+        return message.kind == "decision"
 
     assert mailbox.take_first(is_decision) is first
     assert [mailbox.pop() for _ in range(2)] == [_notice("a", 11), second]
@@ -257,11 +258,13 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
             {
                 "id": "m1",
                 "role": "assistant",
-                "turn": 2, "inherited": False,
+                "turn": 2,
+                "inherited": False,
                 "outcome": None,
                 "source": None,
                 "parts": [
-                    {"presentation": "activity",
+                    {
+                        "presentation": "activity",
                         "type": "tool-call",
                         "toolCallId": "c1",
                         "toolName": "hitl_tool",
@@ -356,7 +359,9 @@ async def test_reply_decision_settles_the_placeholder_with_the_answer(
     [(call_id, metadata)] = context.updated
     assert (call_id, metadata.status) == ("call-hitl", "completed")
     assert metadata.display_data == {
-        "kind": "probe", "decision": "approve", "answers": {"Q?": "A"},
+        "kind": "probe",
+        "decision": "approve",
+        "answers": {"Q?": "A"},
     }
     [db] = context.update_sessions
     assert db is not None
@@ -399,9 +404,7 @@ def test_context_finds_call_and_updates_only_tool_result_metadata() -> None:
     placeholder = {"role": "tool", "tool_call_id": "call-hitl", "content": "awaiting"}
     manager._entries = [
         ContextEntry({"role": "assistant", "content": None, "tool_calls": [_CALL]}, 1, 3, turn=1),
-        ContextEntry(
-            placeholder, 1, 4, metadata=ToolMessageMetadata(status="pending")
-        , turn=1),
+        ContextEntry(placeholder, 1, 4, metadata=ToolMessageMetadata(status="pending"), turn=1),
         ContextEntry({"role": "user", "content": "later"}, 2, 5, turn=1),
     ]
 
@@ -435,9 +438,7 @@ def test_decision_result_without_display_keeps_the_placeholder_card() -> None:
             {"role": "tool", "tool_call_id": "call-hitl", "content": "awaiting"},
             1,
             4,
-            metadata=ToolMessageMetadata(
-                status="pending", display_data={"kind": "probe"}
-            ),
+            metadata=ToolMessageMetadata(status="pending", display_data={"kind": "probe"}),
             turn=1,
         ),
     ]
@@ -566,9 +567,7 @@ def test_asking_again_keeps_only_the_new_question(expiry_events: list[Any]) -> N
     context = _Two(placeholder=ToolMessageMetadata(status="pending"))
 
     with execution_scope(rc, context):
-        expired = decision_expiry.expire_decisions(
-            step_id="step-1", keep=frozenset({"call-new"})
-        )
+        expired = decision_expiry.expire_decisions(step_id="step-1", keep=frozenset({"call-new"}))
 
     assert expired == ["call-old"]
     assert [call_id for call_id, _ in context.updated] == ["call-old"]
@@ -582,7 +581,10 @@ def test_context_lists_the_calls_still_awaiting_the_user() -> None:
     def tool_row(call_id: str, status: str, **metadata: Any) -> ContextEntry:
         return ContextEntry(
             {"role": "tool", "tool_call_id": call_id, "content": "awaiting"},
-            1, 4, metadata=ToolMessageMetadata(status=status, **metadata), turn=1,
+            1,
+            4,
+            metadata=ToolMessageMetadata(status=status, **metadata),
+            turn=1,
         )
 
     def call(call_id: str) -> dict[str, Any]:
@@ -597,7 +599,10 @@ def test_context_lists_the_calls_still_awaiting_the_user() -> None:
         # 继承来的副本（没有本地 Run）不能作出决定，不算在等。
         ContextEntry(
             {"role": "tool", "tool_call_id": "call-inherited", "content": "awaiting"},
-            None, 5, metadata=ToolMessageMetadata(status="pending"), turn=1,
+            None,
+            5,
+            metadata=ToolMessageMetadata(status="pending"),
+            turn=1,
         ),
     ]
 

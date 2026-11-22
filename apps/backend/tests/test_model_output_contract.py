@@ -5,17 +5,16 @@ from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-from openai.lib.streaming.chat import ChunkEvent
-from openai.types.chat import ChatCompletion
-
 import app.core.workflow.node_helper.model_stream_state_machine as streaming_module
+import pytest
 from app.core.file_access.knowledge import FileKnowledge
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.nodes import model_node as model_module
 from app.models.run.run_status import RunTransition
+from openai.lib.streaming.chat import ChunkEvent
+from openai.types.chat import ChatCompletion
 from tests.runtime_context_stub import admitting, run_state_stub, runtime_stub
 from tests.sdk_fixtures import sdk_completion, sdk_event
 

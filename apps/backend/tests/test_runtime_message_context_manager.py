@@ -2,22 +2,27 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from app.core.context.context_entry import ContextEntry
+from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
+from app.models.deliverable import DeliveredUrl
+from app.models.message_context.message_metadata.base.message_metadata_base import (
+    EmptyMessageMetadata,
+)
+from app.models.message_context.message_metadata.system_message_metadata import (
+    SystemMessageMetadata,
+)
+from app.models.message_context.message_metadata.tool_message_metadata import (
+    BackgroundWork,
+    ToolMessageMetadata,
+    ToolResultFacts,
+)
+from app.models.message_context.message_metadata.user_message_metadata import (
+    UserInputPresentation,
+    UserMessageMetadata,
+)
 from openai.types.chat import (
     ChatCompletionAssistantMessageParam,
 )
-
-from app.core.context.context_entry import ContextEntry
-from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
-from app.models.conversation_input import UserInputPresentation
-from app.models.deliverable import DeliveredUrl
-from app.models.message_metadata import (
-    BackgroundWork,
-    EmptyMessageMetadata,
-    SystemMessageMetadata,
-    ToolMessageMetadata,
-    UserMessageMetadata,
-)
-from app.models.tool_result_facts import ToolResultFacts
 from tests.sdk_fixtures import sdk_completion
 
 
@@ -341,13 +346,13 @@ def test_add_message_replaces_paired_tool_result_row_in_place() -> None:
 def test_notice_and_empty_draft_do_not_steal_the_first_visible_input_turn():
     """后台唤醒只写下空草稿后中断，同 Run 收到用户输入仍应有正常的用户气泡。"""
     from app.assistant_transport.projection.snapshot_rebuild import _turn_messages
-    from app.models.session.session_context import SessionContextRecord
+    from app.models.message_context.session_context import SessionContextRecord
 
     manager = _manager(_ContextStore(0))
     values = [
         (
             {"role": "user", "content": "permissions"},
-            UserMessageMetadata(kind="notice"),
+            UserMessageMetadata(kind="notice", notices=[]),
             False,
             True,
         ),

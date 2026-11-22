@@ -24,8 +24,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
-
 from app.assistant_transport.projection.event_projection import plan_event
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.file_access.knowledge import FileKnowledge
@@ -39,8 +37,9 @@ from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.nodes import tools_node
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
 from app.models.session.session_extra import SessionExtra
+from pydantic import BaseModel
 from tests.runtime_context_stub import admitting, runtime_stub
 
 # 同步用例没有运行中的事件循环；只有进程工具的实时输出与子 Run 调度会用到它。

@@ -7,16 +7,15 @@
 from __future__ import annotations
 
 import pytest
-
 from app.assistant_transport.projection.user_input_projection import plan_input_consumed
 from app.assistant_transport.service.conversation_state_service import (
     ConversationStateService,
 )
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
 from app.core.events import InputConsumedEvent
-from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
+from app.core.workflow.message_queue.message_bodies.run_launch import RunLaunch
 from app.core.workflow.message_queue.session_message import SessionMessage, UserInputBody
-from app.models.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.service import depends
 from app.storage.store_engines import main_db_factory
 

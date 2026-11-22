@@ -163,10 +163,10 @@ def skip_request_reconcile(monkeypatch: pytest.MonkeyPatch) -> None:
     对账本身由 ``test_configuration_notice.py`` 与 ``test_read_change_notice.py`` 覆盖；走真实上下文的用例不用它。
     """
 
-    from app.core.workflow.nodes import prepare_input_node
+    from app.core.workflow.notices import request_notices
 
-    monkeypatch.setattr(prepare_input_node, "_reconcile_configuration", lambda: None)
-    monkeypatch.setattr(prepare_input_node, "_reconcile_read_files", lambda: None)
+    monkeypatch.setattr(request_notices, "_configuration_changed", lambda: None)
+    monkeypatch.setattr(request_notices, "_read_files_changed", lambda: None)
 
 
 @pytest.fixture(autouse=True)

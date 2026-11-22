@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import get_args
 
 import pytest
-
 from app.config.constant import Constant
 from app.core.agents.agent_profile import AgentProfile, AgentProfileType
 from app.core.context import system_prompt_builder as spb

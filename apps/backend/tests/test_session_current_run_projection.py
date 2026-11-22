@@ -4,13 +4,13 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import text
-from sqlalchemy.orm import sessionmaker
-
 from app.api.sessions_api import get_session
 from app.api.workspaces_api import list_workspace_sessions
-from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
-from app.models.session.session_context import SessionContextRecord
+from app.models.message_context.message_metadata.tool_message_metadata import (
+    BackgroundWork,
+    ToolMessageMetadata,
+)
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.session.session_extra import SessionExtra
 from app.models.session.session_status import SessionStatus
 from app.service.session.session_service import SessionService
@@ -21,6 +21,8 @@ from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.model.session_context_model import SessionContextModel
 from app.storage.store_engines import initialize_app_schema
+from sqlalchemy import text
+from sqlalchemy.orm import sessionmaker
 from tests.session_extra_fixtures import fork_extra
 
 
@@ -39,8 +41,12 @@ def store(tmp_path):
     service = SessionService.__new__(SessionService)
     service._session = sessions
     yield SimpleNamespace(
-        sessions=sessions, runs=runs, contexts=contexts, workspace=workspace,
-        service=service, factory=factory,
+        sessions=sessions,
+        runs=runs,
+        contexts=contexts,
+        workspace=workspace,
+        service=service,
+        factory=factory,
     )
     engine.dispose()
 
@@ -89,16 +95,21 @@ def test_awaiting_user_counts_only_local_hitl_placeholders_still_in_context(stor
     session = store.sessions.create(store.workspace.id, "审批")
     run = store.runs.create(session.id, status="completed")
     store.sessions.set_current_run_id(session.id, run.id)
-    background = BackgroundWork(
-        run_id=run.id, label="build", started_at="2026-11-12T00:00:00Z"
-    )
+    background = BackgroundWork(run_id=run.id, label="build", started_at="2026-11-12T00:00:00Z")
     rows = [
         _tool_row(session.id, 1, ToolMessageMetadata(status="pending"), run_id=run.id),
         _tool_row(session.id, 2, ToolMessageMetadata(status="pending"), run_id=run.id),
-        _tool_row(session.id, 3, ToolMessageMetadata(status="pending", background=background), run_id=run.id),
+        _tool_row(
+            session.id,
+            3,
+            ToolMessageMetadata(status="pending", background=background),
+            run_id=run.id,
+        ),
         _tool_row(session.id, 4, ToolMessageMetadata(status="running"), run_id=run.id),
         _tool_row(session.id, 5, ToolMessageMetadata(status="pending"), run_id=None),
-        _tool_row(session.id, 6, ToolMessageMetadata(status="pending"), run_id=run.id, include=False),
+        _tool_row(
+            session.id, 6, ToolMessageMetadata(status="pending"), run_id=run.id, include=False
+        ),
         _tool_row(session.id, 7, ToolMessageMetadata(status="completed"), run_id=run.id),
     ]
     for row in rows:
@@ -112,8 +123,9 @@ def test_awaiting_user_counts_only_local_hitl_placeholders_still_in_context(stor
 def test_awaiting_user_queries_use_the_partial_index(store):
     """整表对账每 15 秒一次、每次工具状态迁移按 Session 读一次：两条计数都必须走只收录 pending 行的
     部分索引，不扫整张 context 表，也不扫这个 Session 的全部行。"""
-    queries = SessionCrud._AWAITING_COUNTS, SessionCrud._AWAITING_COUNTS.where(
-        SessionContextModel.session_id == 1
+    queries = (
+        SessionCrud._AWAITING_COUNTS,
+        SessionCrud._AWAITING_COUNTS.where(SessionContextModel.session_id == 1),
     )
     with store.factory() as db:
         for statement in queries:
@@ -124,8 +136,12 @@ def test_awaiting_user_queries_use_the_partial_index(store):
 
 def test_session_responses_carry_no_execution_state(store):
     for kind in ("user", "user_fork", "agent_fork", "delegated"):
-        session = store.sessions.create(store.workspace.id, kind, session_type=kind,
-                                  extra=fork_extra(987) if kind.endswith("_fork") else SessionExtra())
+        session = store.sessions.create(
+            store.workspace.id,
+            kind,
+            session_type=kind,
+            extra=fork_extra(987) if kind.endswith("_fork") else SessionExtra(),
+        )
         run = store.runs.create(session.id, status="suspended")
         store.sessions.set_current_run_id(session.id, run.id)
     records = asyncio.run(list_workspace_sessions(store.workspace.id, store.service))

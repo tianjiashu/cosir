@@ -4,17 +4,19 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-
 from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
     rebuild_snapshot,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
-from app.models.conversation_input import UserInputPresentation
-from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import (
+    UserInputPresentation,
+    UserMessageMetadata,
+)
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.run.run_record import RunRecord
-from app.models.session.session_context import SessionContextRecord
 from app.models.session.session_record import SessionRecord
 
 

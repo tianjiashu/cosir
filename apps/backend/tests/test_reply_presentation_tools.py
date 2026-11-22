@@ -6,17 +6,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
-
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.core.agents.define_agents import main_agent
 from app.core.tool.handler.offer_next_step import OfferNextStepTool
 from app.models.deliverable import DeliveredDirectory, DeliveredFile, DeliveredUrl
-from app.models.message_metadata import ToolMessageMetadata
-from app.models.tool_result_facts import ToolResultFacts
+from app.models.message_context.message_metadata.tool_message_metadata import (
+    ToolMessageMetadata,
+    ToolResultFacts,
+)
 from app.tools.tool_handler import present_deliverables as present_module
 from app.tools.tool_handler.present_deliverables import PresentDeliverablesTool
 from app.utils.path.file_identity import UnsupportedFileSystemError, canonical_path
+from pydantic import ValidationError
 
 
 def _context(root: Path) -> SimpleNamespace:
@@ -244,7 +245,8 @@ def test_part_projection_carries_the_record_in_wire_shape() -> None:
     )
     fields = project_tool_result(
         ToolMessageMetadata(
-            status="completed", facts=ToolResultFacts(deliverables=(record, DeliveredUrl(url="http://h", caption="c")))
+            status="completed",
+            facts=ToolResultFacts(deliverables=(record, DeliveredUrl(url="http://h", caption="c"))),
         )
     )
     assert fields["deliverables"] == [
@@ -326,5 +328,8 @@ def test_note_goes_to_the_card_display_only(workspace: Path) -> None:
     # 超长在参数边界拒绝（schema 同一份上限），不截断成半句话。
     with pytest.raises(ValidationError):
         PresentDeliverablesArgs.model_validate(
-            {"items": [{"target": "a", "caption": None}], "note": "长" * (PRESENT_DELIVERABLES_NOTE_MAX + 1)}
+            {
+                "items": [{"target": "a", "caption": None}],
+                "note": "长" * (PRESENT_DELIVERABLES_NOTE_MAX + 1),
+            }
         )

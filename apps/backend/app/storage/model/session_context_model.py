@@ -20,7 +20,7 @@ class SessionContextModel(StorageBase):
     所属回合的 Session 内序号，写入时由 ``RuntimeMessageContextManager`` 一处判定（系统提示词为 0）。
 
     该表是上下文消息的**唯一持久化真相**，与
-    :class:`app.models.session_context.SessionContextRecord` 一一对应；
+    :class:`app.models.message_context.session_context.SessionContextRecord` 一一对应；
     所有行↔对象映射必须经 record 的 ``_from_model`` / ``_to_model``。
 
     职责边界：

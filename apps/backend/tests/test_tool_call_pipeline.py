@@ -24,7 +24,8 @@ from app.core.workflow.node_helper import model_stream_state_machine as streamin
 from app.core.workflow.node_helper import tool_observation_projection as projection
 from app.core.workflow.node_helper.common import RunStopped
 from app.core.workflow.nodes import observation_node, prepare_input_node, tools_node
-from app.models.conversation_input import UserInputPresentation
+from app.core.workflow.user_decision import decision_expiry
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.run.run_status import RunTransition
 from app.models.session.session_extra import SessionExtra
 from tests.runtime_context_stub import install_runtime_singletons, run_batch, runtime_stub
@@ -359,6 +360,8 @@ def _gate_runtime(
         cancel_end_reason=lambda: "user_cancelled",
     )
     monkeypatch.setattr(prepare_input_node, "_runtime_context", lambda: runtime)
+    # 并入用户输入前的提问作废在 user_decision 里读运行时上下文。
+    monkeypatch.setattr(decision_expiry, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
         prepare_input_node.service_depends,
         "get_run_ledger",

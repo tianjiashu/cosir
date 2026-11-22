@@ -11,21 +11,20 @@ from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-from PIL import Image
-from pydantic import BaseModel, ConfigDict
-
 import app.core.context.vision_input as vision_input
 import app.core.workflow.node_helper.tool_observation_projection as projection
+import pytest
 from app.core.tool.execute.tool_access_gate import ToolAccessGate
-from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import ToolCall, ToolDefinition, ToolExecutionContext
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.session_message import MODEL_INPUT_BODIES, ToolImageBody
 from app.service.attachment.attachment_service import AttachmentService
+from PIL import Image
+from pydantic import BaseModel, ConfigDict
 
 
 def _png(color: tuple[int, int, int] = (200, 30, 30)) -> bytes:

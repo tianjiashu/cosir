@@ -30,8 +30,8 @@ def loop(monkeypatch):
         ],
     )
     # 未了结事项的另一个来源（派生 Session）要读库；本文件不涉及派生。
-    monkeypatch.setattr("app.core.workflow.drive_notices.open_derived_titles", lambda _id: [])
-    monkeypatch.setattr("app.core.workflow.drive_notices._terminal_permissions", lambda *_: None)
+    monkeypatch.setattr("app.core.workflow.notices.drive_notices.open_derived_titles", lambda _id: [])
+    monkeypatch.setattr("app.core.workflow.notices.drive_notices._terminal_permissions", lambda *_: None)
     model = SimpleNamespace(close=AsyncMock())
     run = SimpleNamespace(id=1, session_id=2, execution_data=ReactExecutionState(), usage=None)
     operations = runtime_stub(

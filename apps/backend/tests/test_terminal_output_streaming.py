@@ -12,8 +12,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
-
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -37,8 +35,11 @@ from app.core.events import (
 from app.core.tool.execute.tool_output_budget import ToolOutputBudget
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolCall, ToolExecutionContext, ToolObservation
-from app.models.conversation_input import UserInputPresentation
-from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import (
+    BackgroundWork,
+    ToolMessageMetadata,
+)
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.session.session_extra import SessionExtra
 from app.tools.display.terminal_display import build_terminal_display_data
 from app.tools.terminal_runtime.command.command_output import CommandOutput
@@ -46,6 +47,7 @@ from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal import execute_terminal as execute_terminal_module
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_handler.terminal.live_output_channel import LiveOutputChannel
+from pydantic import ValidationError
 from tests.runtime_context_stub import admitting, run_batch, runtime_stub
 from tests.tool_output_support import truncated_artifact_path
 from tests.transport_fixtures import consumed

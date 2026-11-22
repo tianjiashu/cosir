@@ -37,6 +37,7 @@ export type SessionMessageRequest = {
   message: SessionUserMessage;
   modelConfigId: string;
   reasoningEffort: string | null;
+  terminalPermissionMode: "request_approval" | "full_access";
 };
 
 /**
@@ -71,6 +72,10 @@ export function sendSessionMessage(
   init?: CommandInit,
 ): Promise<void> {
   return postSessionCommand(`/sessions/${sessionId}/messages`, request, init);
+}
+
+export function decideTerminalApproval(sessionId: number, requestId: string, decision: "approve" | "reject"): Promise<void> {
+  return postSessionCommand(`/sessions/${sessionId}/terminal-approvals/${encodeURIComponent(requestId)}/decision`, { decision });
 }
 
 function queuedMessagePath(sessionId: number, messageId: string): string {

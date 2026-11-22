@@ -148,6 +148,6 @@ def test_session_send_to_a_fork_reuses_its_own_launch_without_profiles(
 
     assert result.status == "success"
     [kwargs] = prepared
-    assert (kwargs["agent_id"], kwargs["model_config_id"]) == ("main_agent", "test/m3")
-    assert kwargs["reasoning_effort"] == "high"
+    assert (kwargs["launch"].agent_id, kwargs["launch"].model_config_id) == ("main_agent", "test/m3")
+    assert kwargs["launch"].reasoning_effort == "high"
     assert enqueued == [(41, "agent-message")]

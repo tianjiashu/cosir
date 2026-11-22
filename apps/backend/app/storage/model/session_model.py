@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy import JSON, ForeignKey, Index, Integer, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.session_kind import SessionType
+from app.models.session.session_kind import SessionType
 from app.storage.model.base import StorageBase
 
 

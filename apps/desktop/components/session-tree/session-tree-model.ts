@@ -1,9 +1,9 @@
 import type { WorkspaceSession } from "@/lib/api/workspaces";
-import { capsuleTextToPlainText } from "@/lib/assistant/capsules";
+import { sessionDisplayTitle } from "@/lib/session-title/session-display-title";
 
 export type SessionTreeNode = WorkspaceSession & {
   children: SessionTreeNode[];
-  /** 侧栏标题：已剥离内部 token、不截断；按侧栏宽度由 CSS 省略，完整文本在 tooltip 中可见。 */
+  /** 侧栏标题：不截断；按侧栏宽度由 CSS 省略，完整文本在 tooltip 中可见。 */
   full_title: string;
 };
 
@@ -17,29 +17,6 @@ function getForkSourceSessionId(session: WorkspaceSession): number | null {
   if (session.session_type !== "user_fork" && session.session_type !== "agent_fork") return null;
   const sourceSessionId = session.extra?.fork?.tree_parent_session_id;
   return typeof sourceSessionId === "number" && Number.isInteger(sourceSessionId) ? sourceSessionId : null;
-}
-
-/** 标题投影后没有可见内容时的展示回退文案。 */
-const EMPTY_TITLE_FALLBACK = "新会话";
-
-/**
- * 把原始标题归一为用户可读文本。
- *
- * 负责什么：把标题里的胶囊标签（会话标题由首条消息正文派生，可能含 `<file …/>` / `<ref …/>` /
- * `<skill …/>`）投影为可读名称，全部投影为空时回退为占位文案。
- * 不负责什么：不截断长度、不修改会话事实。
- *
- * 参数:
- *     rawTitle: 后端返回的会话标题原文。
- *
- * 返回:
- *     投影后的单行标题；无可见内容时返回 `EMPTY_TITLE_FALLBACK`。
- *
- * 异常/副作用:
- *     无；纯函数。
- */
-function visibleSessionTitle(rawTitle: string): string {
-  return capsuleTextToPlainText(rawTitle).trim() || EMPTY_TITLE_FALLBACK;
 }
 
 function compareByUpdatedAt(left: WorkspaceSession, right: WorkspaceSession): number {
@@ -109,7 +86,7 @@ export function buildSessionForest(sessions: WorkspaceSession[]): SessionTreeNod
 
   const makeNode = (session: WorkspaceSession): SessionTreeNode => ({
     ...session,
-    full_title: visibleSessionTitle(session.title),
+    full_title: sessionDisplayTitle(session.title),
     children: (childrenByParent.get(session.session_id) ?? []).map(makeNode),
   });
 

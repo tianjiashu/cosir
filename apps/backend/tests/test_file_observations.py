@@ -23,7 +23,7 @@ def test_new_file_and_confirmed_own_write_need_no_disk_read(tmp_path: Path) -> N
     tool = WriteFileTool()
     first = tool.execute("a.txt", "first", context)
     assert first.facts and first.status == "success"
-    context.file_knowledge.observe(first.facts, include_reads=False)
+    context.file_knowledge.observe(first.facts.file_facts, include_reads=False)
     assert tool.execute("a.txt", "again", context).status == "success"
 
 
@@ -32,10 +32,10 @@ def test_read_in_same_model_batch_does_not_unlock_edit(tmp_path: Path) -> None:
     context = _ctx(tmp_path)
     observed = ReadFileTool().execute("a.txt", context)
     assert observed.facts
-    context.file_knowledge.observe(observed.facts, include_reads=False)
+    context.file_knowledge.observe(observed.facts.file_facts, include_reads=False)
     edit = EditFileTool()
     assert edit.execute(context, "a.txt", "old", "new").display_data == {"status_hint": "需先读取"}
-    context.file_knowledge.observe(observed.facts)
+    context.file_knowledge.observe(observed.facts.file_facts)
     assert edit.execute(context, "a.txt", "old", "new").status == "success"
 
 
@@ -45,12 +45,12 @@ def test_entire_file_required_for_overwrite_and_pages_can_be_combined(tmp_path: 
     read = ReadFileTool()
     first = read.execute("a.txt", context, limit=1)
     assert first.facts
-    context.file_knowledge.observe(first.facts)
+    context.file_knowledge.observe(first.facts.file_facts)
     tool = WriteFileTool()
     assert tool.execute("a.txt", "new", context).display_data == {"status_hint": "需读全文"}
     rest = read.execute("a.txt", context, offset=2)
     assert rest.facts
-    context.file_knowledge.observe(rest.facts)
+    context.file_knowledge.observe(rest.facts.file_facts)
     assert tool.execute("a.txt", "new", context).status == "success"
 
 
@@ -59,10 +59,10 @@ def test_edit_after_partial_read_still_cannot_overwrite(tmp_path: Path) -> None:
     context = _ctx(tmp_path)
     first = ReadFileTool().execute("a.txt", context, limit=1)
     assert first.facts
-    context.file_knowledge.observe(first.facts)
+    context.file_knowledge.observe(first.facts.file_facts)
     edit = EditFileTool().execute(context, "a.txt", "one", "new")
     assert edit.status == "success" and edit.facts
-    context.file_knowledge.observe(edit.facts, include_reads=False)
+    context.file_knowledge.observe(edit.facts.file_facts, include_reads=False)
     overwrite = WriteFileTool().execute("a.txt", "replacement", context)
     assert overwrite.display_data == {"status_hint": "需读全文"}
 
@@ -143,8 +143,8 @@ def test_patch_error_retains_committed_changes(tmp_path, monkeypatch) -> None:
     )
     result = ApplyPatchTool().execute(context, patch)
     assert result.display_data["status_hint"] == "部分已写入"
-    [mutation] = result.facts.file_mutations
+    [mutation] = result.facts.file_facts.mutations
     assert Path(mutation.path).name == "first.txt"
     assert (tmp_path / "second.txt").read_text() == "original\n"
-    context.file_knowledge.observe(result.facts, include_reads=False)
+    context.file_knowledge.observe(result.facts.file_facts, include_reads=False)
     assert WriteFileTool().execute("first.txt", "next", context).status == "success"

@@ -6,6 +6,7 @@ import { HOST_CHANNEL } from "../shared/host-contract";
 import { applyDockIcon } from "./app-icon";
 import { installAppMenu } from "./app-menu";
 import { handleAppProtocol, registerAppScheme } from "./app-protocol";
+import { BackendRequestIdentity } from "./backend/request-identity";
 import { BackendSupervisor } from "./backend/supervisor";
 import { BrowserHost } from "./browser/browser-host";
 import { configureBrowserSession, configureBrowserUserAgent } from "./browser/browser-partition";
@@ -24,6 +25,7 @@ import {
   getMainWindow,
   markQuitting,
   restrictSessionPermissions,
+  rendererSession,
   showMainWindow,
 } from "./window";
 
@@ -78,6 +80,8 @@ function bootstrap(): void {
   void app.whenReady().then(() => {
     handleAppProtocol();
     restrictSessionPermissions();
+    new BackendRequestIdentity(() => supervisor.connectionIdentity(), () => getMainWindow()?.webContents.id,
+      process.env.COSIR_RENDERER_URL ? new URL(process.env.COSIR_RENDERER_URL).origin : "app://cosir").install(rendererSession());
     configureBrowserSession(browser);
     registerHostIpc(supervisor, browser);
     followNativeThemeInTitleBar();
@@ -95,7 +99,7 @@ function bootstrap(): void {
     event.preventDefault();
     if (exitState === "confirming") return;
     exitState = "confirming";
-    void confirmExit(supervisor.readyBaseUrl()).then((confirmed) => {
+    void confirmExit(supervisor.readyBaseUrl(), supervisor.connectionIdentity()?.token).then((confirmed) => {
       if (!confirmed) {
         exitState = "idle";
         return;

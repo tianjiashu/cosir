@@ -111,8 +111,8 @@ def test_fork_keeps_the_parents_identity_and_completes_once_assigned(env, tmp_pa
     [prepared] = env.prepared
     assert prepared["text"] == "只做前端"
     assert prepared["source"].session_id == 7
-    assert (prepared["agent_id"], prepared["model_config_id"]) == ("main_agent", "test/m3")
-    assert prepared["reasoning_effort"] == "high"
+    assert (prepared["launch"].agent_id, prepared["launch"].model_config_id) == ("main_agent", "test/m3")
+    assert prepared["launch"].reasoning_effort == "high"
     # 工具只投递任务说明；交接通知由分叉层随分支在同一事务里写入（见 ``test_session_fork``）。
     assert env.enqueued == [(41, "agent-message")]
 

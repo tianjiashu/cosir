@@ -4,14 +4,11 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from pydantic import BaseModel, ConfigDict
-
 from app.assistant_transport.projection.snapshot_rebuild import pair_tool_parts
 from app.assistant_transport.projection.tool_call_event_projection import plan_tool_call_arguments
 from app.config.configuration import get_tool_registry
 from app.core.events import ToolCallArgumentsEvent, ToolCallStatusChangedEvent
 from app.core.tool.execute.tool_executor import ToolExecutor
-from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.schemas import (
     TOOL_BROWSER_EVALUATE,
     TOOL_EXECUTE_TERMINAL,
@@ -20,9 +17,11 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.node_helper import model_stream_state_machine as stream
 from app.tools.tool_models.call_intent import INTENT_FIELD, intent_field
+from pydantic import BaseModel, ConfigDict
 
 _INTENT_TOOLS = {TOOL_EXECUTE_TERMINAL, TOOL_BROWSER_EVALUATE}
 

@@ -11,8 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, ConfigDict
-
 from app.config.configuration import get_tool_registry
 from app.core.context.prompt_sources.source import SourceContext
 from app.core.context.prompt_sources.sources.deferred_tools import DeferredToolsSource
@@ -44,9 +42,10 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.tool_registry import ToolRegistry
+from app.models.message_context.message_metadata.tool_message_metadata import ToolResultFacts
 from app.models.session.session_kind import SessionType
-from app.models.tool_result_facts import ToolResultFacts
 from app.service.configuration.agents.builtin_agents import BUILTIN_CHILD_AGENTS
+from pydantic import BaseModel, ConfigDict
 from tests.live_cold_support import LiveColdEnv, tool_call, tool_parts
 
 _BROWSER = {
@@ -78,17 +77,32 @@ def _probe_definition(seen: list[str]) -> ToolDefinition:
         return tool_success("probe", "probed")
 
     return ToolDefinition(
-        name="probe", group="test", description="Probe things", handler=handler, args_model=_NoArgs,
+        name="probe",
+        group="test",
+        description="Probe things",
+        handler=handler,
+        args_model=_NoArgs,
         deferred=True,
     ).normalized()
 
 
-def _context(tmp_path: Path, *deferred: Any, loaded: Any = (), external: Any = ()) -> ToolExecutionContext:
+def _context(
+    tmp_path: Path, *deferred: Any, loaded: Any = (), external: Any = ()
+) -> ToolExecutionContext:
     request_tools = RequestTools.derive(
-        (), frozenset(), deferred_schemas=tuple(deferred), loaded_builtin=loaded, loaded_external=external
+        (),
+        frozenset(),
+        deferred_schemas=tuple(deferred),
+        loaded_builtin=loaded,
+        loaded_external=external,
     )
     return ToolExecutionContext(
-        session_id=1, workspace_id=1, workspace_root=tmp_path, step_id="s", run_id=1, tool_call_id="c1",
+        session_id=1,
+        workspace_id=1,
+        workspace_root=tmp_path,
+        step_id="s",
+        run_id=1,
+        tool_call_id="c1",
         request_tools=request_tools,
     )
 
@@ -140,7 +154,11 @@ def test_deferred_tools_bring_tool_search_with_them() -> None:
     read = registry.get_tool_definition(TOOL_READ_FILE)
     navigate = registry.get_tool_definition(TOOL_BROWSER_NAVIGATE)
     with_browser = freeze_tool_surface([read, navigate])
-    assert [s["name"] for s in with_browser.schemas] == [TOOL_READ_FILE, TOOL_BROWSER_NAVIGATE, TOOL_SEARCH]
+    assert [s["name"] for s in with_browser.schemas] == [
+        TOOL_READ_FILE,
+        TOOL_BROWSER_NAVIGATE,
+        TOOL_SEARCH,
+    ]
     assert with_browser.deferred == [TOOL_BROWSER_NAVIGATE]
     # 没有延迟工具就不补：tool_search 只在需要时出现（Agent 配置自己选了它除外）。
     assert [s["name"] for s in freeze_tool_surface([read]).schemas] == [TOOL_READ_FILE]
@@ -170,7 +188,10 @@ def test_loading_a_builtin_admits_it_without_touching_the_tool_list() -> None:
     assert before.unloaded == {"probe", "other"} and "probe" not in before.admitted
 
     after = RequestTools.derive(
-        base, frozenset({"other"}), deferred_schemas=(probe, other), loaded_builtin={"probe", "other"}
+        base,
+        frozenset({"other"}),
+        deferred_schemas=(probe, other),
+        loaded_builtin={"probe", "other"},
     )
     assert after.schemas == base
     assert "probe" in after.admitted and "other" not in after.admitted
@@ -189,7 +210,9 @@ def test_calling_an_unloaded_builtin_says_to_load_it_first(tmp_path: Path) -> No
     assert denied.status == "error" and '"select:probe"' in denied.content
     assert denied.display_data["status_hint"] == "工具未加载"
 
-    after = RequestTools.derive((), frozenset(), deferred_schemas=(schema,), loaded_builtin={"probe"})
+    after = RequestTools.derive(
+        (), frozenset(), deferred_schemas=(schema,), loaded_builtin={"probe"}
+    )
     assert executor.execute(call, _context(tmp_path), after).status == "success"
     assert seen == ["c1"]
 
@@ -203,11 +226,16 @@ def test_tool_search_returns_the_frozen_definition_and_records_the_name(external
         query="select:probe", max_results=5, execution_context=_context(tmp_path, schema)
     )
     line = json.dumps(schema, ensure_ascii=False)
-    assert observation.content == f"<functions>\n<function>{line}</function>\n</functions>\n{LOADED_NOTE}"
+    assert (
+        observation.content
+        == f"<functions>\n<function>{line}</function>\n</functions>\n{LOADED_NOTE}"
+    )
     assert observation.facts == ToolResultFacts(loaded_builtin_tools=("probe",))
 
 
-def test_reloading_an_unchanged_tool_reminds_instead_of_returning_it_again(external, tmp_path) -> None:
+def test_reloading_an_unchanged_tool_reminds_instead_of_returning_it_again(
+    external, tmp_path
+) -> None:
     schema = _probe_definition([]).to_model_tool_definition()
     other = {**schema, "name": "other"}
     observation = ToolSearchTool().execute(
@@ -220,17 +248,25 @@ def test_reloading_an_unchanged_tool_reminds_instead_of_returning_it_again(exter
     assert "Already loaded" in observation.content and observation.content.endswith("probe")
     assert observation.facts == ToolResultFacts(loaded_builtin_tools=("other",))
     again = ToolSearchTool().execute(
-        query="select:probe", max_results=5, execution_context=_context(tmp_path, schema, loaded={"probe"})
+        query="select:probe",
+        max_results=5,
+        execution_context=_context(tmp_path, schema, loaded={"probe"}),
     )
     assert again.status == "success" and "<functions>" not in again.content and again.facts is None
 
 
-def test_builtin_tools_stay_searchable_when_the_external_catalog_is_unreadable(external, tmp_path) -> None:
+def test_builtin_tools_stay_searchable_when_the_external_catalog_is_unreadable(
+    external, tmp_path
+) -> None:
     external.unavailable = "external catalog is unavailable"
     schema = _probe_definition([]).to_model_tool_definition()
-    found = ToolSearchTool().execute(query="probe", max_results=5, execution_context=_context(tmp_path, schema))
+    found = ToolSearchTool().execute(
+        query="probe", max_results=5, execution_context=_context(tmp_path, schema)
+    )
     assert found.status == "success" and found.facts.loaded_builtin_tools == ("probe",)
-    missed = ToolSearchTool().execute(query="slack", max_results=5, execution_context=_context(tmp_path, schema))
+    missed = ToolSearchTool().execute(
+        query="slack", max_results=5, execution_context=_context(tmp_path, schema)
+    )
     assert missed.status == "error" and "external catalog is unavailable" in missed.content
 
 
@@ -268,11 +304,18 @@ def _done() -> tuple[list[dict[str, Any]], str]:
     return [{"content": "完成"}], "stop"
 
 
-async def test_a_deferred_builtin_is_listed_then_loaded_then_called(backend_env, tmp_path, monkeypatch) -> None:
+async def test_a_deferred_builtin_is_listed_then_loaded_then_called(
+    backend_env, tmp_path, monkeypatch
+) -> None:
     env = LiveColdEnv(
         tmp_path,
         monkeypatch,
-        [_call("c0", "probe_deferred"), _search("c1", "probe_deferred"), _call("c2", "probe_deferred"), _done()],
+        [
+            _call("c0", "probe_deferred"),
+            _search("c1", "probe_deferred"),
+            _call("c2", "probe_deferred"),
+            _done(),
+        ],
     )
     try:
         env.send()

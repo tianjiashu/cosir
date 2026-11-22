@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -24,7 +25,7 @@ from app.core.workflow.message_queue.session_message import (
 )
 from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.nodes import prepare_input_node
-from app.models.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.service import depends as service_depends
 from app.utils.datetime_utils import SESSION_TITLE_LIMIT
 from tests.runtime_context_stub import runtime_stub
@@ -65,7 +66,9 @@ def _titled_rc(model: _Model | None = None, *, session_type: str = "user") -> Si
 @pytest.fixture
 def titles(monkeypatch) -> list[tuple[int, str]]:
     written: list[tuple[int, str]] = []
-    service = SimpleNamespace(update_title=lambda session_id, title: written.append((session_id, title)))
+    service = SimpleNamespace(
+        update_title=lambda session_id, title: written.append((session_id, title))
+    )
     monkeypatch.setattr(service_depends, "get_session_service", lambda: service)
     return written
 
@@ -163,6 +166,18 @@ async def test_prepare_input_skips_when_already_requested_or_no_user_input(monke
 
     assert launched == []
     assert context.loads == 0
+
+
+async def test_untitled_session_gets_a_title_without_a_placeholder(titles) -> None:
+    """还没起名时库里是空标题，不写占位；请求里不带「当前标题」，模型不会被引导原样保留它。"""
+    model = _Model()
+    rc = _titled_rc(model)
+    rc.session.title = ""
+
+    await _run_branch(rc)
+
+    assert titles == [(1, "重构登录模块")]
+    assert "Current title" not in model.requests[0][-1]["content"]
 
 
 # ── 生成与写入 ────────────────────────────────────────────────────────────
@@ -271,7 +286,6 @@ def test_snapshot_requires_a_non_empty_title() -> None:
 
 def test_update_title_keeps_sidebar_order_and_reports_missing_session(isolated_storage) -> None:
     """侧栏按 ``updated_at`` 排序：改标题不能让对话换位置。"""
-    from pathlib import Path
 
     from app.service.depends import get_session_crud, get_workspace_crud
 
@@ -286,27 +300,3 @@ def test_update_title_keeps_sidebar_order_and_reports_missing_session(isolated_s
     assert updated.updated_at == session.updated_at
     with pytest.raises(KeyError):
         crud.update_title(session.id + 999, "x")
-
-
-def test_title_request_projects_capsules_out_of_user_messages() -> None:
-    """标题模型只看用户说了什么：请求副本里的胶囊投影成可读名称，标签本身不进标题请求。"""
-    messages = [
-        {"role": "system", "content": "sys"},
-        {
-            "role": "user",
-            "content": '看 <file path="/a/notes.md" /> 并检查 <ref path="src/a.py" lines="1-2" />',
-        },
-        {"role": "assistant", "content": "ok"},
-        {
-            "role": "user",
-            "content": [{"type": "text", "text": '用 <skill name="review" /> 检查'}],
-        },
-    ]
-
-    projected = session_title._plain_text_messages(messages)  # type: ignore[arg-type]
-
-    assert projected[1]["content"] == "看 notes.md 并检查 src/a.py:1-2"
-    assert projected[2] is messages[2]
-    assert projected[3]["content"] == [{"type": "text", "text": "用 review 检查"}]
-    # 投影只发生在请求副本上，不改主线正在使用的消息。
-    assert messages[1]["content"] != projected[1]["content"]

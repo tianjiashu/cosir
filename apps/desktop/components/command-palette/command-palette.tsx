@@ -18,6 +18,7 @@ import { formatRelativeTime } from "@/lib/format/relative-time";
 import { shortcutLabel } from "@/lib/keyboard/shortcuts";
 
 import { buildCommandPaletteModel, type CommandPaletteCommand } from "./command-palette-model";
+import { sessionDisplayTitle } from "@/lib/session-title/session-display-title";
 
 export type CommandPaletteProps = {
   open: boolean;
@@ -76,7 +77,7 @@ export function CommandPalette({ open, onOpenChange, workspaces, onSelectSession
                   }}
                 >
                   <MessageSquareIcon className="text-muted-foreground" />
-                  <span className="min-w-0 truncate">{session.title}</span>
+                  <span className="min-w-0 truncate">{sessionDisplayTitle(session.title)}</span>
                   <SessionStatusMarker sessionId={session.session_id} />
                   <span className="shrink-0 truncate text-xs text-muted-foreground">{workspaceName}</span>
                   <CommandShortcut className="shrink-0 tracking-normal">{formatRelativeTime(session.updated_at, now)}</CommandShortcut>

@@ -11,7 +11,6 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-
 from app.core.context import system_prompt_builder as spb
 from app.core.permission.protected_paths import ProtectedPaths
 from app.core.tool.schemas import ToolExecutionContext

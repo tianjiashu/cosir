@@ -5,10 +5,6 @@ import threading
 from contextlib import contextmanager
 
 import pytest
-from fastapi import HTTPException
-from pydantic import ValidationError
-from sqlalchemy import update
-
 from app.api.schemas import ForkSessionRequest
 from app.api.sessions_api import fork_session
 from app.assistant_transport.projection.snapshot_rebuild import (
@@ -17,13 +13,18 @@ from app.assistant_transport.projection.snapshot_rebuild import (
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
 from app.config.settings import Settings
 from app.core.context.tool_call_closure import ContextProtocolError, plan_tool_call_closures
-from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.message_metadata import (
-    TURN_INPUT_KINDS,
-    BackgroundWork,
+from app.models.message_context.conversation_input import MessageSource
+from app.models.message_context.message_metadata.base.message_kinds import TURN_INPUT_KINDS
+from app.models.message_context.message_metadata.system_message_metadata import (
     PromptSourceEntry,
     SystemMessageMetadata,
+)
+from app.models.message_context.message_metadata.tool_message_metadata import (
+    BackgroundWork,
     ToolMessageMetadata,
+)
+from app.models.message_context.message_metadata.user_message_metadata import (
+    UserInputPresentation,
     UserMessageMetadata,
 )
 from app.service.session.fork_source import ForkSource
@@ -31,6 +32,9 @@ from app.service.session.session_service import SessionService
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.session_runtime.workspace_operation_registry import workspace_operations
 from app.storage.model.session_model import SessionModel
+from fastapi import HTTPException
+from pydantic import ValidationError
+from sqlalchemy import update
 
 # 分叉前 Agent 已看到的一份工作区规则（系统行上的初始基准）。
 _SEEN = PromptSourceEntry(fingerprint="fp", text="rules")
@@ -100,7 +104,7 @@ def _turn_of(store, run, message, metadata, project) -> int:
         and (r.message.get("content") or r.message.get("tool_calls"))
         for r in run_rows
     )
-    if metadata.source is None or not (earlier_input or earlier_reply):
+    if (isinstance(metadata, UserMessageMetadata) and metadata.kind == "user_input") or not (earlier_input or earlier_reply):
         return current + 1
     return run_rows[-1].turn
 
@@ -121,10 +125,14 @@ def append(store, run, message, *, metadata=None, message_id=None, include=True,
 
 def input_message(store, run, text, kind="user_input"):
     mid = store.context.max_sequence(store.session.id) + 100
-    meta = UserMessageMetadata(
-        kind=kind,
-        presentation=UserInputPresentation(text=text),
-        source=MessageSource(session_id=999, name="Parent") if kind == "agent_message" else None,
+    presentation = UserInputPresentation(text=text)
+    meta = (
+        UserMessageMetadata(
+            kind="agent_message",
+            presentation=presentation, source=MessageSource(session_id=999, name="Parent")
+        )
+        if kind == "agent_message"
+        else UserMessageMetadata(kind="user_input", presentation=presentation)
     )
     append(store, run, {"role": "user", "content": text}, metadata=meta, message_id=mid)
     return str(mid)
@@ -170,7 +178,8 @@ def snapshot(store, target):
     state = rebuild_snapshot(
         target,
         store.runs.list_by_session(target.id),
-        store.contexts.get(target.id, include_in_context=False), {},
+        store.contexts.get(target.id, include_in_context=False),
+        {},
     )
     validate_snapshot(state)
     return state
@@ -256,7 +265,7 @@ def history_with_every_kind_of_turn(s):
         s,
         woken,
         {"role": "user", "content": "<background_result>"},
-        metadata=UserMessageMetadata(kind="background_result"),
+        metadata=UserMessageMetadata(kind="background_result", tool_call_id="bg"),
         project=False,
     )
     append(s, woken, {"role": "assistant", "content": "woken reply"})
@@ -335,8 +344,12 @@ def test_fork_carries_the_writable_root_and_manual_forks_inherit_it(fork_store):
     run = append_run(s, "running")
     call(s, run)
     child = s.service.fork_for_agent(
-        s.session.id, run_id=run.id, tool_call_id="fork-call", title="Child",
-        derivation_depth=1, narrowed_root="pkg",
+        s.session.id,
+        run_id=run.id,
+        tool_call_id="fork-call",
+        title="Child",
+        derivation_depth=1,
+        narrowed_root="pkg",
     )
     assert child.extra.writable_root == "pkg"
     grandchild = s.service._fork_at_turn(child.id, turn_of_input(s, earlier.input_id))
@@ -349,7 +362,9 @@ def test_agent_fork_publishes_the_catalog_change_after_commit(fork_store, monkey
     from app.service import depends
 
     published = []
-    feed = type("Feed", (), {"publish_catalog": staticmethod(lambda *args: published.append(args))})()
+    feed = type(
+        "Feed", (), {"publish_catalog": staticmethod(lambda *args: published.append(args))}
+    )()
     monkeypatch.setattr(depends, "get_session_feed", lambda: feed)
     s = fork_store
     run = append_run(s, "running")
@@ -367,7 +382,7 @@ def test_agent_in_a_run_without_input_keeps_the_previous_reply(fork_store):
         s,
         run,
         {"role": "user", "content": "<background_result>"},
-        metadata=UserMessageMetadata(kind="background_result"),
+        metadata=UserMessageMetadata(kind="background_result", tool_call_id="bg"),
         project=False,
     )
     append(s, run, {"role": "assistant", "content": "current turn"})
@@ -401,7 +416,9 @@ def test_agent_fork_keeps_the_source_tools_at_any_depth(fork_store, monkeypatch,
     tools = [{"name": "read_file"}, {"name": "fork_session"}, {"name": "delegate_task"}]
     with s.factory() as db:
         db.execute(
-            update(SessionModel).where(SessionModel.id == s.session.id).values(tool_surface={"schemas": tools, "deferred": ["fork_session"]})
+            update(SessionModel)
+            .where(SessionModel.id == s.session.id)
+            .values(tool_surface={"schemas": tools, "deferred": ["fork_session"]})
         )
         db.commit()
     monkeypatch.setattr(Settings, "AGENT_MAX_DERIVATION_DEPTH", 2)
@@ -455,7 +472,7 @@ def test_manual_fork_of_agent_restores_hidden_history_and_keeps_internal_flags(f
         s,
         earlier,
         {"role": "user", "content": "internal fact"},
-        metadata=UserMessageMetadata(kind="notice"),
+        metadata=UserMessageMetadata(kind="notice", notices=[]),
         project=False,
     )
     run = append_run(s, "running")
@@ -528,9 +545,7 @@ def test_pending_history_is_inert_and_source_deletion_does_not_remove_it(fork_st
 
 def background_placeholder(s, run, call_id, status):
     call(s, run, call_id)
-    work = BackgroundWork(
-        run_id=run.id, label="work", started_at="2026-01-01T00:00:00Z"
-    )
+    work = BackgroundWork(run_id=run.id, label="work", started_at="2026-01-01T00:00:00Z")
     append(
         s,
         run,
@@ -769,7 +784,11 @@ def _expired_question(s, run, call_id="ask"):
     append(
         s,
         run,
-        {"role": "tool", "tool_call_id": call_id, "content": "This tool call is awaiting the user's decision."},
+        {
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": "This tool call is awaiting the user's decision.",
+        },
         metadata=ToolMessageMetadata(status="cancelled", error="未作答"),
     )
 
@@ -802,7 +821,7 @@ def test_question_expired_in_place_with_its_notice_still_queued_is_not_inherited
 
 
 def test_question_expired_in_place_with_its_notice_after_the_cut_is_not_inherited(fork_store):
-    from app.models.message_metadata import NoticeEntry
+    from app.models.message_context.message_metadata.user_message_metadata import NoticeEntry
 
     s = fork_store
     run = append_run(s, "cancelled")
@@ -815,7 +834,11 @@ def test_question_expired_in_place_with_its_notice_after_the_cut_is_not_inherite
         {"role": "user", "content": f"<system_notice>{notice.content}</system_notice>"},
         metadata=UserMessageMetadata(
             kind="notice",
-            notices=[NoticeEntry(notice_kind=notice.notice_kind, content=notice.content, tool_call_ids=["ask"])],
+            notices=[
+                NoticeEntry(
+                    notice_kind=notice.notice_kind, content=notice.content, tool_call_ids=["ask"]
+                )
+            ],
         ),
         project=False,
     )
@@ -830,7 +853,7 @@ def test_question_expired_in_place_with_its_notice_after_the_cut_is_not_inherite
 def test_manual_fork_of_an_agent_fork_restates_identity(fork_store):
     """交接通知说的是来源自己的身份与汇报关系（「你是 B，结果汇报给 A」），手动分叉复制到它时，分支的身份
     通知要声明它不再适用。"""
-    from app.models.message_metadata import NoticeEntry
+    from app.models.message_context.message_metadata.user_message_metadata import NoticeEntry
     from app.service import depends
 
     s = fork_store
@@ -878,7 +901,10 @@ def test_plain_manual_fork_is_told_its_own_id_and_scratch_dir(fork_store):
 
     [message] = depends.get_session_message_queue().pending_nowait(child.id)
     assert message.body.notice_kind == "fork_handover"
-    assert f"You are session {child.id}, a copy the user made of session {s.session.id}" in message.body.content
+    assert (
+        f"You are session {child.id}, a copy the user made of session {s.session.id}"
+        in message.body.content
+    )
     assert f"Your scratch directory is {session_scratch_dir(child.id)};" in message.body.content
     assert str(session_scratch_dir(s.session.id)) + ";" not in message.body.content
 
@@ -903,8 +929,12 @@ def test_agent_fork_is_written_with_its_handover_in_the_same_transaction(fork_st
 
     call(s, run, "fork-narrowed")
     narrowed = s.service.fork_for_agent(
-        s.session.id, run_id=run.id, tool_call_id="fork-narrowed", title="Narrow",
-        derivation_depth=1, narrowed_root="pkg/web",
+        s.session.id,
+        run_id=run.id,
+        tool_call_id="fork-narrowed",
+        title="Narrow",
+        derivation_depth=1,
+        narrowed_root="pkg/web",
     )
     [message] = depends.get_session_message_queue().pending_nowait(narrowed.id)
     assert "Your writable root is pkg/web" in message.body.content

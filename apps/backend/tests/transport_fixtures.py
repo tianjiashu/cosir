@@ -12,7 +12,7 @@ from typing import Any
 from app.assistant_transport.projection.user_input_projection import build_presentation_parts
 from app.core.events import InputConsumedEvent
 from app.core.workflow.message_queue.session_message import Delivery
-from app.models.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 
 
 def queue_user_input(

@@ -18,7 +18,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from app.assistant_transport.service import assistant_transport_service as service_module
 from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
 from app.core import session_actor as actor_module
@@ -38,7 +37,7 @@ from app.core.workflow.message_queue.session_message import (
     SessionMessage,
     UserInputBody,
 )
-from app.models.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.run.run_status import RunTransition
 from app.models.session.session_command_errors import SessionCommandConflictError
 from app.models.session.session_extra import SessionExtra

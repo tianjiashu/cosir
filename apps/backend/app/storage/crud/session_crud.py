@@ -15,11 +15,15 @@ from typing import cast
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session as DbSession
 
-from app.models import SessionRecord
-from app.models.session_extra import SessionExtra, SessionFork
-from app.models.session_kind import FORK_SESSION_TYPES, USER_FACING_SESSION_TYPES, SessionType
-from app.models.session_status import SessionStatus
-from app.models.session_tool_surface import SessionToolSurface
+from app.models.session.session_extra import SessionExtra, SessionFork
+from app.models.session.session_kind import (
+    FORK_SESSION_TYPES,
+    USER_FACING_SESSION_TYPES,
+    SessionType,
+)
+from app.models.session.session_record import SessionRecord
+from app.models.session.session_status import SessionStatus
+from app.models.session.session_tool_surface import SessionToolSurface
 from app.storage.crud.session_context_crud import SessionContextCrud
 from app.storage.model.run_model import RunModel
 from app.storage.model.session_context_model import SessionContextModel
@@ -401,19 +405,6 @@ class SessionCrud:
                 .values(title=title, updated_at=SessionModel.updated_at)
             )
             return True
-
-    def fill_empty_title(self, session_id: int, title: str) -> bool:
-        """标题还是空的才写入，返回是否写入；判断与写入是同一条语句，不依赖调用方手里可能过期的记录。
-
-        Session 已删除时同样返回 ``False``；与 :meth:`update_title` 一样不刷新 ``updated_at``。
-        """
-        with self._db_factory.begin() as db:
-            result = db.execute(
-                update(SessionModel)
-                .where(SessionModel.id == session_id, SessionModel.title == "")
-                .values(title=title, updated_at=SessionModel.updated_at)
-            )
-            return bool(result.rowcount)
 
     def list_by_workspace(self, workspace_id: int) -> list[SessionRecord]:
         """侧栏会话（``USER_FACING_SESSION_TYPES``），按更新时间倒序；委派子会话不在侧栏。"""

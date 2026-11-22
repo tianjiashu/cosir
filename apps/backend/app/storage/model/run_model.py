@@ -7,8 +7,8 @@ from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.enums.reasoning_effort import ReasoningEffort
-from app.models.enums.run_status import RunStatus
-from app.models.run_extra import RunExtra
+from app.models.run.run_extra import RunExtra
+from app.models.run.run_status import RunStatus
 from app.storage.model.base import StorageBase
 
 

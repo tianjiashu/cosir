@@ -3,13 +3,13 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from app.api.schemas.response.SessionObservationResponse import SessionObservationResponse
-from app.models.message_metadata import ToolMessageMetadata, UserMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.run.run_extra import RunExtra, RunStatusChange
 from app.models.run.run_record import RunRecord
 from app.models.run.run_status import RunStatus
-from app.models.session.session_context import SessionContextRecord
 from app.service.conversation.session_context_service import SessionContextService
 from app.service.conversation.session_observation import SessionObservation
 from app.storage.crud.run_crud import RunCrud
@@ -120,7 +120,7 @@ def _rows() -> list[SessionContextRecord]:
             2,
             11,
             {"role": "user", "content": "<system_notice>…</system_notice>"},
-            metadata=_user("notice"),
+            metadata=_user("notice", notices=[]),
             project_to_transport=False,
         ),
         _row(

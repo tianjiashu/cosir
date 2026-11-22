@@ -8,23 +8,22 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from sqlalchemy.orm import sessionmaker
-
 from app.assistant_transport.projection.snapshot_rebuild import (
     rebuild_snapshot,
 )
 from app.core.events import RunInitializedEvent
 from app.core.workflow.run_ledger import RunLedger
-from app.models.message_metadata import parse_message_metadata
+from app.models.message_context.message_metadata.base.message_metadata_base import MessageMetadata
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.run.run_record import RunRecord
 from app.models.run.run_status import RunStatus
-from app.models.session.session_context import SessionContextRecord
 from app.models.session.session_record import SessionRecord
 from app.storage.crud.run_crud import RunCrud
 from app.storage.crud.session_crud import SessionCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.store_engines import initialize_app_schema
+from sqlalchemy.orm import sessionmaker
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
 _RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)
@@ -73,7 +72,7 @@ def _context_row(
         message=message,
         include_in_context=True,
         sequence=sequence,
-        metadata=parse_message_metadata(
+        metadata=MessageMetadata.parse(
             message["role"],
             metadata
             # 落库的 user 行必须带展示绑定；测试用正文作展示文本。

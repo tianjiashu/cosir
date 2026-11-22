@@ -11,8 +11,6 @@ from datetime import UTC, datetime
 from typing import Literal, get_args
 
 import pytest
-from pydantic import BaseModel, TypeAdapter, ValidationError
-
 from app.core.events import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
@@ -27,8 +25,9 @@ from app.core.events import (
     WorkflowEvent,
     WorkflowEventEnvelope,
 )
-from app.models.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.run.run_status import RunStatus
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。
 _RUN_CREATED_AT = datetime(2026, 1, 1, tzinfo=UTC)

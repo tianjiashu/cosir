@@ -14,16 +14,15 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-
 from app.assistant_transport.service.conversation_state_service import (
     ConversationStateService,
 )
 from app.assistant_transport.stream import TransportFrame
 from app.assistant_transport.stream.session_sse_stream import SessionSseStream
 from app.core.events import RunInitializedEvent, RunStatusChangedEvent
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.run.run_record import RunRecord
 from app.models.run.run_status import RunStatus
-from app.models.session.session_context import SessionContextRecord
 from app.models.session.session_record import SessionRecord
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 

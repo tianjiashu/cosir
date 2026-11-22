@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from app.core.context.system_prompt_builder import SystemPromptBuilder
 from app.core.permission.writable_root import WritableRootError, absolute, narrow
 from app.core.tool.schemas import ToolExecutionContext

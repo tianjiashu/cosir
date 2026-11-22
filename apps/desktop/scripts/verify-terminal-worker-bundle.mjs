@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { terminalWorkerExecutableName } from "./cargo-target.mjs";
 import { repositoryRoot, targetDirectory } from "./project-paths.mjs";
 
@@ -18,6 +18,18 @@ assert.equal(fs.existsSync(workerPath), true, `Terminal Worker resource 不存�
 if (process.platform !== "win32") {
   assert.equal(fs.statSync(workerPath).mode & 0o111, 0o111, "Terminal Worker 没有执行权限");
 }
+
+// 限制模式必须从 stage 目录找到自己的 Linux helper，不能误用开发机上的 bwrap。
+if (process.platform === "linux") {
+  const bwrap = path.join(path.dirname(workerPath), "cosir-bwrap");
+  assert.equal(fs.existsSync(bwrap), true, "缺少 bundled cosir-bwrap");
+  assert.equal(fs.statSync(bwrap).mode & 0o111, 0o111);
+}
+if (process.platform === "darwin" || process.platform === "linux") {
+  const probe = spawnSync(workerPath, ["--probe-sandbox"], { encoding: "utf8" });
+  assert.equal(probe.status, 0, `stage 沙箱能力探测失败：${probe.stderr}`);
+}
+assert.equal(fs.existsSync(path.join(path.dirname(workerPath), "third-party", "openai-codex", "LICENSE")), true);
 
 /** 控制帧与事件帧的结构以 `apps/terminal-worker/src/protocol.rs` 为准（4 字节大端长度 + JSON）；协议变更时须同步这里。 */
 function frame(message) {

@@ -12,9 +12,9 @@ from app.assistant_transport.projection.snapshot_rebuild import (
 from app.core.tool.multi_agent.delegate_task import DelegateTaskTool
 from app.core.tool.session_management.progress import SessionProgress
 from app.core.tool.session_management.session_read import SessionReadTool
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.run.run_record import RunRecord
-from app.models.session.session_context import SessionContextRecord
 
 
 def _run(
@@ -45,7 +45,7 @@ def test_child_agent_display_builders_emit_stable_kinds_and_safe_fields() -> Non
         status="completed",
         elapsed="took 3s",
         now="idle (run ended)",
-        steps=("said \"secret step text\"",),
+        steps=('said "secret step text"',),
         queued=0,
         final_output="summary",
         end_reason=None,

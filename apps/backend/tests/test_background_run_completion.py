@@ -6,12 +6,11 @@ import threading
 from types import SimpleNamespace
 
 import pytest
-
 from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
 from app.core.workflow import workflow
 from app.core.workflow.branch import session_title
 from app.core.workflow.message_queue.session_message import RunLaunch, SessionMessage, UserInputBody
-from app.models.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.service import depends
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces as spaces
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
@@ -193,7 +192,7 @@ async def test_background_results_reopen_the_session_after_its_run_answered(back
             assert result_call_ids == ["bg-A"]
             assert [len(results) for results in parent_inputs] == [0, 0, 1]
             assert final_answers == ["answer with 0 results", "answer with 1 results"]
-            expected_kind = "background_result" if last == "cancel" else "system_notice"
+            expected_kind = "background_result" if last == "cancel" else "notice"
             assert [message.kind for message in pending] == [expected_kind]
         else:
             assert [(r.status, r.final_output) for r in runs] == [

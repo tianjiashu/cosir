@@ -3,7 +3,6 @@
 from datetime import UTC, datetime
 
 import pytest
-
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.projection.snapshot_rebuild import (
     rebuild_snapshot,
@@ -19,10 +18,12 @@ from app.core.events import (
     RunResultUpdatedEvent,
     RunStatusChangedEvent,
 )
-from app.models.message_metadata import AssistantMessageMetadata
+from app.models.message_context.message_metadata.assistant_message_metadata import (
+    AssistantMessageMetadata,
+)
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.run.run_record import RunRecord
 from app.models.run.run_status import RunStatus
-from app.models.session.session_context import SessionContextRecord
 from app.models.session.session_record import SessionRecord
 
 NOW = datetime(2026, 11, 7, tzinfo=UTC)
@@ -50,9 +51,14 @@ def test_live_and_rebuild_agree(status, reason, content, expected):
     for sequence, text in [(1, "中途进展"), (2, content)]:
         apply(
             state,
-            AssistantTextDeltaEvent(session_id=7, run_id=1, turn=1, source_sequence=sequence, delta=text),
+            AssistantTextDeltaEvent(
+                session_id=7, run_id=1, turn=1, source_sequence=sequence, delta=text
+            ),
         )
-        apply(state, AssistantPartClosedEvent(session_id=7, run_id=1, turn=1, source_sequence=sequence))
+        apply(
+            state,
+            AssistantPartClosedEvent(session_id=7, run_id=1, turn=1, source_sequence=sequence),
+        )
     apply(
         state,
         RunStatusChangedEvent(
@@ -72,9 +78,7 @@ def test_live_and_rebuild_agree(status, reason, content, expected):
             sequence=sequence,
             include_in_context=True,
             message={"role": "assistant", "content": text},
-            metadata=AssistantMessageMetadata(
-                finish_reason=reason
-            ),
+            metadata=AssistantMessageMetadata(finish_reason=reason),
             turn=1,
         )
         for sequence, text in [(1, "中途进展"), (2, content)]
@@ -109,9 +113,14 @@ def test_all_text_parts_from_final_response_marked_and_structured_result_does_no
     for sequence, text in [(1, "草稿"), (2, "结论上半"), (2, "结论下半")]:
         apply(
             state,
-            AssistantTextDeltaEvent(session_id=7, run_id=1, turn=1, source_sequence=sequence, delta=text),
+            AssistantTextDeltaEvent(
+                session_id=7, run_id=1, turn=1, source_sequence=sequence, delta=text
+            ),
         )
-        apply(state, AssistantPartClosedEvent(session_id=7, run_id=1, turn=1, source_sequence=sequence))
+        apply(
+            state,
+            AssistantPartClosedEvent(session_id=7, run_id=1, turn=1, source_sequence=sequence),
+        )
     apply(
         state,
         RunStatusChangedEvent(
@@ -123,7 +132,9 @@ def test_all_text_parts_from_final_response_marked_and_structured_result_does_no
             response_sequences=[2],
         ),
     )
-    apply(state, RunResultUpdatedEvent(session_id=7, run_id=1, end_reason="structured_output_failed"))
+    apply(
+        state, RunResultUpdatedEvent(session_id=7, run_id=1, end_reason="structured_output_failed")
+    )
     assert [bool(p.get("finalReply")) for p in state["messages"][0]["parts"]] == [False, True, True]
     validate_snapshot(state)
 
@@ -132,9 +143,14 @@ def _complete_turn(state, run_id: int, turn: int, text: str, end_reason: str = "
     apply(state, RunInitializedEvent(session_id=7, run_id=run_id, created_at=NOW))
     apply(
         state,
-        AssistantTextDeltaEvent(session_id=7, run_id=run_id, turn=turn, source_sequence=turn, delta=text),
+        AssistantTextDeltaEvent(
+            session_id=7, run_id=run_id, turn=turn, source_sequence=turn, delta=text
+        ),
     )
-    apply(state, AssistantPartClosedEvent(session_id=7, run_id=run_id, turn=turn, source_sequence=turn))
+    apply(
+        state,
+        AssistantPartClosedEvent(session_id=7, run_id=run_id, turn=turn, source_sequence=turn),
+    )
     apply(
         state,
         RunStatusChangedEvent(
@@ -153,7 +169,9 @@ def test_later_runs_neither_clear_earlier_final_replies_nor_receive_their_result
     state = empty_snapshot()
     _complete_turn(state, 1, 1, "第一个结论")
     _complete_turn(state, 2, 2, "第二个结论")
-    apply(state, RunResultUpdatedEvent(session_id=7, run_id=2, end_reason="structured_output_failed"))
+    apply(
+        state, RunResultUpdatedEvent(session_id=7, run_id=2, end_reason="structured_output_failed")
+    )
     validate_snapshot(state)
     first, second = state["messages"]
     assert (first["id"], second["id"]) == ("assistant-turn-1", "assistant-turn-2")

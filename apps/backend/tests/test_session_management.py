@@ -14,10 +14,17 @@ from app.core.tool.session_management import addressing, session_list, session_s
 from app.core.tool.session_management.progress import SessionProgress
 from app.core.tool.session_management.session_list import SessionListTool
 from app.core.tool.session_management.session_stop import SessionStopTool
-from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
+from app.models.message_context.conversation_input import MessageSource
+from app.models.message_context.message_metadata.tool_message_metadata import (
+    BackgroundWork,
+    ToolMessageMetadata,
+)
+from app.models.message_context.message_metadata.user_message_metadata import (
+    UserInputPresentation,
+    UserMessageMetadata,
+)
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.run.run_record import RunRecord
-from app.models.session.session_context import SessionContextRecord
 from app.models.session.session_extra import SessionExtra, SessionFork, SessionForkLaunch
 from app.models.session.session_kind import SessionType
 from app.models.session.session_record import SessionRecord
@@ -33,19 +40,35 @@ _START = datetime(2026, 11, 21, 8, 0, tzinfo=UTC)
 
 def _session(session_id: int = 7, deriver: int = 1) -> SessionRecord:
     return SessionRecord(
-        id=session_id, workspace_id=1, title="审查后端", created_at=_START, updated_at=_START,
-        session_type=SessionType.DELEGATED, parent_session_id=deriver, current_run_id=3,
+        id=session_id,
+        workspace_id=1,
+        title="审查后端",
+        created_at=_START,
+        updated_at=_START,
+        session_type=SessionType.DELEGATED,
+        parent_session_id=deriver,
+        current_run_id=3,
     )
 
 
 def _run(status: str, **fields: object) -> RunRecord:
-    return RunRecord(id=3, session_id=7, status=status, created_at=_START, updated_at=_START, **fields)
+    return RunRecord(
+        id=3, session_id=7, status=status, created_at=_START, updated_at=_START, **fields
+    )
 
 
-def _row(sequence: int, message: dict, metadata: object = None, *, include: bool = True) -> SessionContextRecord:
+def _row(
+    sequence: int, message: dict, metadata: object = None, *, include: bool = True
+) -> SessionContextRecord:
     extra = {} if metadata is None else {"metadata": metadata}
     return SessionContextRecord(
-        session_id=7, run_id=3, message=message, include_in_context=include, sequence=sequence, turn=1, **extra
+        session_id=7,
+        run_id=3,
+        message=message,
+        include_in_context=include,
+        sequence=sequence,
+        turn=1,
+        **extra,
     )
 
 
@@ -53,28 +76,42 @@ def _assistant(text: str = "", *calls: tuple[str, str, dict]) -> dict:
     message: dict = {"role": "assistant", "content": text}
     if calls:
         message["tool_calls"] = [
-            {"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args)},
+            }
             for call_id, name, args in calls
         ]
     return message
 
 
-def _tool(call_id: str, status: str, background: BackgroundWork | None = None) -> tuple[dict, ToolMessageMetadata]:
+def _tool(
+    call_id: str, status: str, background: BackgroundWork | None = None
+) -> tuple[dict, ToolMessageMetadata]:
     return (
         {"role": "tool", "tool_call_id": call_id, "content": "ok"},
         ToolMessageMetadata(status=status, background=background),
     )
 
 
-def _project(run: RunRecord | None, rows: list[SessionContextRecord], **overrides: object) -> SessionProgress:
-    facts: dict = {"queued": 0, "waiting_on": [], "steps": 8, "now": _START + timedelta(minutes=2, seconds=5)}
+def _project(
+    run: RunRecord | None, rows: list[SessionContextRecord], **overrides: object
+) -> SessionProgress:
+    facts: dict = {
+        "queued": 0,
+        "waiting_on": [],
+        "steps": 8,
+        "now": _START + timedelta(minutes=2, seconds=5),
+    }
     facts.update(overrides)
     return SessionProgress.from_facts(_session(), run, rows, **facts)
 
 
 def _user_input(sequence: int, text: str) -> SessionContextRecord:
     return _row(
-        sequence, {"role": "user", "content": text},
+        sequence,
+        {"role": "user", "content": text},
         UserMessageMetadata(kind="user_input", presentation=UserInputPresentation(text=text)),
     )
 
@@ -84,7 +121,12 @@ def test_running_tool_call_is_what_it_is_doing_now() -> None:
         _user_input(1, "审查 api 层"),
         _row(2, _assistant("先读路由", ("c1", "read_file", {"path": "app/api/a.py"}))),
         _row(3, *_tool("c1", "completed")),
-        _row(4, _assistant("", ("c2", "execute_terminal", {"command": "pytest -q", "intent": "跑后端测试"}))),
+        _row(
+            4,
+            _assistant(
+                "", ("c2", "execute_terminal", {"command": "pytest -q", "intent": "跑后端测试"})
+            ),
+        ),
     ]
     progress = _project(_run("running"), rows)
 
@@ -105,7 +147,10 @@ def test_streaming_reply_and_closed_batch() -> None:
     assert _project(_run("running"), streaming).now == "writing a reply"
     assert _project(_run("running"), streaming).steps == ('writing a reply…; "正在写结论"',)
 
-    closed = [_row(1, _assistant("", ("c1", "find_files", {"pattern": "*.py"}))), _row(2, *_tool("c1", "failed"))]
+    closed = [
+        _row(1, _assistant("", ("c1", "find_files", {"pattern": "*.py"}))),
+        _row(2, *_tool("c1", "failed")),
+    ]
     progress = _project(_run("running"), closed)
     assert progress.now == "waiting for the model"
     assert progress.steps == ('find_files({"pattern":"*.py"}) → failed',)
@@ -116,7 +161,9 @@ def test_interrupted_output_of_a_stopped_run_is_not_live() -> None:
     progress = _project(_run("cancelled", end_reason="parent_cancelled"), rows)
 
     assert progress.now == "idle (run ended)"
-    assert progress.steps == ('interrupted output; "写了一半"; read_file({"path":"x"}) → no result',)
+    assert progress.steps == (
+        'interrupted output; "写了一半"; read_file({"path":"x"}) → no result',
+    )
     assert progress.end_reason == "stopped from upstream (you or your deriver)"
     assert progress.elapsed == "took 0s"
 
@@ -127,7 +174,9 @@ def test_suspended_says_what_it_waits_for() -> None:
         _row(1, _assistant("", ("c1", "execute_terminal", {"intent": "dev server"}))),
         _row(2, *_tool("c1", "pending", work)),
     ]
-    progress = _project(_run("suspended"), rows, waiting_on=["background command: dev server"], queued=2)
+    progress = _project(
+        _run("suspended"), rows, waiting_on=["background command: dev server"], queued=2
+    )
 
     assert progress.now == "paused, waiting for background command: dev server"
     assert progress.steps == ("execute_terminal(dev server) → running in background",)
@@ -140,9 +189,11 @@ def test_finished_run_renders_final_output_and_trims_steps() -> None:
     rows = [_user_input(index, f"第 {index} 条") for index in range(1, 6)]
     rows.append(
         _row(
-            6, {"role": "user", "content": "补充一点"},
+            6,
+            {"role": "user", "content": "补充一点"},
             UserMessageMetadata(
-                kind="agent_message", presentation=UserInputPresentation(text="补充一点"),
+                kind="agent_message",
+                presentation=UserInputPresentation(text="补充一点"),
                 source=MessageSource(session_id=1, name="主会话"),
             ),
         )
@@ -160,9 +211,10 @@ def test_render_says_when_older_steps_are_hidden() -> None:
     rows = [_user_input(index, f"第 {index} 条") for index in range(1, 4)]
 
     assert "recent steps (all steps; oldest first):" in _project(_run("running"), rows).render()
-    assert "recent steps (last 2 steps, older ones not shown; oldest first):" in _project(
-        _run("running"), rows, steps=2
-    ).render()
+    assert (
+        "recent steps (last 2 steps, older ones not shown; oldest first):"
+        in _project(_run("running"), rows, steps=2).render()
+    )
     # 窗口读满时更早的行没读出来，即使显示的步数没超过 steps 也要说明。
     assert "older ones not shown" in _project(_run("running"), rows, window_full=True).render()
 
@@ -187,22 +239,37 @@ def test_read_points_to_wait_messages_only_while_a_report_is_still_coming() -> N
     assert "so do not wait for it" in user_run
 
 
-def test_run_opened_by_user_skips_notices_and_ignores_agent_input(isolated_storage, tmp_path) -> None:
+def test_run_opened_by_user_skips_notices_and_ignores_agent_input(
+    isolated_storage, tmp_path
+) -> None:
     workspace = WorkspaceCrud().create("opened", str(tmp_path))
     session = SessionCrud().create(workspace.id, "opened")
     by_user = RunCrud().create(session.id, status="running")
     by_agent = RunCrud().create(session.id, status="running")
     store = ContextStore()
-    notice = UserMessageMetadata(kind="notice")
-    store.append(session.id, by_user.id, {"role": "user", "content": "handover"}, 1, metadata=notice, turn=1)
+    notice = UserMessageMetadata(kind="notice", notices=[])
     store.append(
-        session.id, by_user.id, {"role": "user", "content": "帮我看看"}, 2,
-        metadata=UserMessageMetadata(kind="user_input", presentation=UserInputPresentation(text="帮我看看")), turn=1,
+        session.id, by_user.id, {"role": "user", "content": "handover"}, 1, metadata=notice, turn=1
     )
     store.append(
-        session.id, by_agent.id, {"role": "user", "content": "继续"}, 3,
+        session.id,
+        by_user.id,
+        {"role": "user", "content": "帮我看看"},
+        2,
         metadata=UserMessageMetadata(
-            kind="agent_message", presentation=UserInputPresentation(text="继续"),
+            kind="user_input",
+            presentation=UserInputPresentation(text="帮我看看")
+        ),
+        turn=1,
+    )
+    store.append(
+        session.id,
+        by_agent.id,
+        {"role": "user", "content": "继续"},
+        3,
+        metadata=UserMessageMetadata(
+            kind="agent_message",
+            presentation=UserInputPresentation(text="继续"),
             source=MessageSource(session_id=1, name="主会话"),
         ),
         turn=2,
@@ -230,7 +297,9 @@ def test_recent_run_rows_skip_inherited_and_withdrawn_rows(isolated_storage, tmp
     store.append(session.id, None, {"role": "assistant", "content": "inherited"}, 1, turn=1)
     store.append(session.id, run.id, {"role": "assistant", "content": "withdrawn"}, 2, turn=2)
     for sequence in range(3, 7):
-        store.append(session.id, run.id, {"role": "assistant", "content": f"a{sequence}"}, sequence, turn=3)
+        store.append(
+            session.id, run.id, {"role": "assistant", "content": f"a{sequence}"}, sequence, turn=3
+        )
     crud = SessionContextCrud()
     withdrawn = next(row for row in crud.get(session.id) if row.sequence == 2)
     with main_db_factory().begin() as db:
@@ -271,22 +340,40 @@ class _SessionCrud:
             if s.session_type == SessionType.DELEGATED and s.parent_session_id == session_id
         ]
 
-    def list_by_workspace_and_type(self, _workspace_id: int, session_type: SessionType) -> list[SessionRecord]:
+    def list_by_workspace_and_type(
+        self, _workspace_id: int, session_type: SessionType
+    ) -> list[SessionRecord]:
         return [s for s in self.sessions.values() if s.session_type == session_type]
 
 
 def _user_session(session_id: int) -> SessionRecord:
-    return SessionRecord(id=session_id, workspace_id=1, title=f"会话{session_id}", created_at=_START, updated_at=_START)
+    return SessionRecord(
+        id=session_id,
+        workspace_id=1,
+        title=f"会话{session_id}",
+        created_at=_START,
+        updated_at=_START,
+    )
 
 
 def _fork(session_id: int, *, source: int) -> SessionRecord:
     return SessionRecord(
-        id=session_id, workspace_id=1, title="分叉", created_at=_START, updated_at=_START,
+        id=session_id,
+        workspace_id=1,
+        title="分叉",
+        created_at=_START,
+        updated_at=_START,
         session_type=SessionType.AGENT_FORK,
-        extra=SessionExtra(fork=SessionFork(
-            source_session_id=source, source_title="子", tree_parent_session_id=None,
-            initial_launch=SessionForkLaunch(agent_id=None, model_config_id=None, reasoning_effort=None),
-        )),
+        extra=SessionExtra(
+            fork=SessionFork(
+                source_session_id=source,
+                source_title="子",
+                tree_parent_session_id=None,
+                initial_launch=SessionForkLaunch(
+                    agent_id=None, model_config_id=None, reasoning_effort=None
+                ),
+            )
+        ),
     )
 
 
@@ -299,7 +386,12 @@ def _tree_service(run: RunRecord | None = None) -> SessionService:
 
 def _context(caller: int = 1) -> ToolExecutionContext:
     return ToolExecutionContext(
-        session_id=caller, run_id=9, tool_call_id="call", workspace_id=1, workspace_root="/w", step_id=1
+        session_id=caller,
+        run_id=9,
+        tool_call_id="call",
+        workspace_id=1,
+        workspace_root="/w",
+        step_id=1,
     )
 
 
@@ -328,7 +420,10 @@ def test_stop_recalls_a_direct_derived_session(monkeypatch) -> None:
     assert actor.reasons == ["parent"]
     assert "stop requested for session 2 (was suspended)" in str(observation.content)
     assert observation.display_data == {
-        "kind": "agent-session-result", "operation": "stop", "session_id": 2, "agent_name": "审查后端",
+        "kind": "agent-session-result",
+        "operation": "stop",
+        "session_id": 2,
+        "agent_name": "审查后端",
     }
 
 
@@ -358,7 +453,9 @@ def test_read_reaches_the_whole_tree_but_not_beyond(monkeypatch) -> None:
     monkeypatch.setattr(addressing, "get_session_service", lambda: service)
 
     for target in (2, 7, 8):
-        assert isinstance(addressing.find_readable_session("session_read", target, _context()), SessionRecord)
+        assert isinstance(
+            addressing.find_readable_session("session_read", target, _context()), SessionRecord
+        )
     refused = addressing.find_readable_session("session_read", 9, _context())
     assert refused.status == "error"
 
@@ -367,12 +464,15 @@ def test_list_indents_the_tree_and_marks_what_you_may_do(monkeypatch) -> None:
     service = _tree_service()
     monkeypatch.setattr(session_list, "get_session_service", lambda: service)
     monkeypatch.setattr(
-        SessionProgress, "read",
+        SessionProgress,
+        "read",
         classmethod(lambda cls, session, *, steps: _project(_run("running"), [])),
     )
     # 投影用同一个假 Session；这里只看树形、派生方与标注。
     monkeypatch.setattr(
-        SessionProgress, "summary_line", lambda self, *, derived_by=None: f"line(derived_by={derived_by})"
+        SessionProgress,
+        "summary_line",
+        lambda self, *, derived_by=None: f"line(derived_by={derived_by})",
     )
 
     lines = SessionListTool().execute(execution_context=_context()).content.splitlines()

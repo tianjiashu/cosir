@@ -52,6 +52,7 @@ import { WorkbenchProvider } from "@/lib/workbench/workbench-context";
 import { SIDEBAR_WIDTH, useLayoutPreferences } from "@/lib/layout/preferences";
 import { cn } from "@/lib/utils";
 import { useSessionFeed } from "@/lib/session-feed/use-session-feed";
+import { sessionDisplayTitle } from "@/lib/session-title/session-display-title";
 
 /** 路由表上每个子路由通过 handle 声明自己属于哪个区域（见 src/router.tsx）。 */
 export type RouteHandle = { section: SidebarSection; files?: boolean };
@@ -242,7 +243,7 @@ export function AppLayout() {
     if (routeSessionId === null || focusedUnstarted) return [{ label: "新会话" }];
     return [
       { label: catalog.activeWorkspace?.name ?? "工作区" },
-      { label: catalog.activeSession?.title || "会话" },
+      { label: sessionDisplayTitle(catalog.activeSession?.title ?? "") },
     ];
   }, [catalog.activeSession?.title, catalog.activeWorkspace?.name, catalog.workspaces, conversationPath, focusedUnstarted, params.skillName, params.tab, routeSessionId, section, workspaceConfigurationId]);
 

@@ -6,7 +6,7 @@ from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.orm import Session as DbSession
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.models.session_context import SessionContextRecord
+from app.models.message_context.session_context import SessionContextRecord
 from app.storage.model.session_context_model import (
     AWAITING_STATUS_CONDITION,
     SessionContextModel,

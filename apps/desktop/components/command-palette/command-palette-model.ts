@@ -5,6 +5,7 @@ import { configurationPath, SYSTEM_CONFIGURATION_TABS } from "@/components/confi
 import type { WorkspaceTreeSource } from "@/components/session-tree/workspace-tree-model";
 import type { WorkspaceSession } from "@/lib/api/workspaces";
 import type { ShortcutId } from "@/lib/keyboard/shortcuts";
+import { sessionDisplayTitle } from "@/lib/session-title/session-display-title";
 
 /**
  * 命令面板的纯数据模型：把工作区会话、固定操作与配置入口按查询词过滤、排序并截断。
@@ -91,7 +92,7 @@ export function filterCommandPaletteSessions(workspaces: WorkspaceTreeSource[], 
   const terms = queryTerms(query);
   const matched = workspaces.flatMap((workspace) =>
     workspace.sessions
-      .filter((session) => matchesAll(terms, `${session.title} ${workspace.name}`))
+      .filter((session) => matchesAll(terms, `${sessionDisplayTitle(session.title)} ${workspace.name}`))
       .map((session) => ({ session, workspaceId: workspace.workspace_id, workspaceName: workspace.name })),
   );
   matched.sort((a, b) => updatedAtMs(b.session) - updatedAtMs(a.session));

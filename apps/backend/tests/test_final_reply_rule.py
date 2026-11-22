@@ -19,10 +19,12 @@ from app.core.events import (
     RunInitializedEvent,
     RunStatusChangedEvent,
 )
-from app.models.message_metadata import AssistantMessageMetadata
+from app.models.message_context.message_metadata.assistant_message_metadata import (
+    AssistantMessageMetadata,
+)
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.run.run_record import RunRecord
 from app.models.run.run_status import RunStatus
-from app.models.session.session_context import SessionContextRecord
 from app.models.session.session_record import SessionRecord
 
 NOW = datetime(2026, 11, 18, tzinfo=UTC)
@@ -143,11 +145,17 @@ def test_final_output_joins_every_final_reply_segment() -> None:
     from app.core.context.context_entry import ContextEntry
     from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 
-    def entry(sequence: int, content: str, tool: str | None = None, run_id: int = 9) -> ContextEntry:
+    def entry(
+        sequence: int, content: str, tool: str | None = None, run_id: int = 9
+    ) -> ContextEntry:
         message: dict = {"role": "assistant", "content": content}
         if tool:
             message["tool_calls"] = [
-                {"id": f"c{sequence}", "type": "function", "function": {"name": tool, "arguments": "{}"}}
+                {
+                    "id": f"c{sequence}",
+                    "type": "function",
+                    "function": {"name": tool, "arguments": "{}"},
+                }
             ]
         return ContextEntry(message, run_id, sequence, turn=1)
 

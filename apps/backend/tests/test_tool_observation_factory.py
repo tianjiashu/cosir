@@ -1,13 +1,12 @@
 """ToolObservation 工厂：模型正文与 UI 展示数据隔离，以及等待（占位）的推导与落库往返。"""
 
 import pytest
-
 from app.core.tool.results.tool_error import tool_error
 from app.core.tool.results.tool_success import tool_success
 from app.core.tool.schemas import AwaitDecision, AwaitMessages, RunInBackground, ToolObservation
 from app.core.tool.schemas.tool_names import TOOL_EDIT_FILE, TOOL_READ_FILE
 from app.core.workflow.execution_state.tool_batch import ToolBatch
-from app.models.message_metadata import BackgroundWork
+from app.models.message_context.message_metadata.tool_message_metadata import BackgroundWork
 
 
 def test_success_keeps_ui_and_internal_data_separate() -> None:
@@ -51,9 +50,7 @@ def test_error_uses_short_tool_default_and_rejects_long_ui_text() -> None:
     replace_defaulted = tool_error(TOOL_EDIT_FILE, "missing. Fix it.")
     assert replace_defaulted.display_data == {"status_hint": "编辑失败"}
 
-    long_hint = tool_error(
-        TOOL_READ_FILE, "missing. Fix it.", status_hint="完整错误原因泄漏到前端"
-    )
+    long_hint = tool_error(TOOL_READ_FILE, "missing. Fix it.", status_hint="完整错误原因泄漏到前端")
     assert long_hint.display_data == {"status_hint": "读取失败"}
 
 
@@ -66,9 +63,7 @@ def test_error_uses_short_tool_default_and_rejects_long_ui_text() -> None:
         (AwaitDecision(), True, True, False),
         (AwaitMessages(), True, False, False),
         (
-            RunInBackground(
-                BackgroundWork(run_id=1, label="build", started_at="t0")
-            ),
+            RunInBackground(BackgroundWork(run_id=1, label="build", started_at="t0")),
             False,
             False,
             True,
@@ -78,7 +73,9 @@ def test_error_uses_short_tool_default_and_rejects_long_ui_text() -> None:
 def test_waiting_round_trips_through_the_persisted_batch(
     waiting, suspend, awaiting_decision, has_background
 ) -> None:
-    batch = ToolBatch(observations=[ToolObservation(tool_name="t", status="success", waiting=waiting)])
+    batch = ToolBatch(
+        observations=[ToolObservation(tool_name="t", status="success", waiting=waiting)]
+    )
 
     [restored] = ToolBatch.model_validate_json(batch.model_dump_json()).observations
 

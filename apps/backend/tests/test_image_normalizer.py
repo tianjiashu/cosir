@@ -2,17 +2,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from PIL import Image
-
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.state.conversation_state_snapshot import empty_snapshot
 from app.config.constant import Constant
 from app.core.events import RunInitializedEvent
-from app.models.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.service.attachment.image_normalizer import (
     ImageNormalizationError,
     normalize_image,
 )
+from PIL import Image
 from tests.transport_fixtures import consumed
 
 # RunInitializedEvent 的 created_at 由领域侧从 Run 记录填入；测试给固定值。

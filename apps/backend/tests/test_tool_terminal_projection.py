@@ -16,8 +16,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, ConfigDict
-
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -58,9 +56,10 @@ from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.nodes import tools_node
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.tool_handler.read_file import ReadFileTool
+from pydantic import BaseModel, ConfigDict
 from tests.runtime_context_stub import admitting, runtime_stub
 from tests.tool_executor_fakes import emit_running
 
@@ -84,7 +83,6 @@ class _MemorySnapshotOwner:
 
     def get_state(self, _session_id: int) -> ConversationStateSnapshot:
         return copy.deepcopy(self.state)
-
 
     def apply_planned(self, event: Any) -> TransportFrame:
         mutations = tuple(plan_event(event, copy.deepcopy(self.state), {}))
@@ -290,7 +288,9 @@ def test_terminal_event_keeps_status_when_display_data_is_not_a_mapping(
     )
 
     with caplog.at_level("WARNING", logger="coding_agent.backend"):
-        event = terminal_event(observation, session_id=1, run_id=2, step_id="s", tool_call_id="call-1")
+        event = terminal_event(
+            observation, session_id=1, run_id=2, step_id="s", tool_call_id="call-1"
+        )
 
     assert event.status == "failed"
     assert event.result.display_data is None, "不可用展示数据必须跳过展示字段更新，而非伪造载荷"
@@ -321,7 +321,9 @@ def test_terminal_event_keeps_status_when_deepcopy_fails(
     )
 
     with caplog.at_level("WARNING", logger="coding_agent.backend"):
-        event = terminal_event(observation, session_id=1, run_id=2, step_id="s", tool_call_id="call-1")
+        event = terminal_event(
+            observation, session_id=1, run_id=2, step_id="s", tool_call_id="call-1"
+        )
 
     assert event.status == "failed"
     assert event.result.display_data is None
@@ -334,7 +336,9 @@ def test_dropped_log_carries_full_identity(caplog: pytest.LogCaptureFixture) -> 
     observation = _observation("error", display_data=["not", "a", "mapping"])
 
     with caplog.at_level("WARNING"):
-        terminal_event(observation, session_id=11, run_id=22, step_id="s", tool_call_id="call-early")
+        terminal_event(
+            observation, session_id=11, run_id=22, step_id="s", tool_call_id="call-early"
+        )
 
     dropped = _dropped_records(caplog)
     assert len(dropped) == 1, "应恰写一条 tool_display_data_dropped"
@@ -362,21 +366,35 @@ def test_projection_module_does_not_reach_global_projector() -> None:
 
 def _seed_run(owner: _MemorySnapshotOwner, session_id: int, run_id: int, call_id: str) -> None:
     projector = ConversationEventProjector(owner)
-    projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=session_id, run_id=run_id))
-    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), session_id=session_id, run_id=run_id, status="running"))
+    projector.process(
+        RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=session_id, run_id=run_id)
+    )
+    projector.process(
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            session_id=session_id,
+            run_id=run_id,
+            status="running",
+        )
+    )
     owner.state["messages"].append(
         {
             "id": f"assistant-turn-{run_id}",
             "role": "assistant",
             "parts": [],
-            "turn": run_id, "inherited": False,
+            "turn": run_id,
+            "inherited": False,
             "outcome": None,
             "source": None,
         }
     )
     projector.process(
         ToolCallCreatedEvent(
-            session_id=session_id, run_id=run_id, turn=run_id, tool_call_id=call_id, tool_name="read_file"
+            session_id=session_id,
+            run_id=run_id,
+            turn=run_id,
+            tool_call_id=call_id,
+            tool_name="read_file",
         )
     )
     projector.process(
@@ -505,8 +523,9 @@ def test_success_emits_running_then_completed(
         rc,
         ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"),
         "step-1",
-
-        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+        _NO_LOOP,
+        rc.request_tools(None),
+        FileKnowledge(),
     )
 
     assert observation.status == "success"
@@ -516,7 +535,9 @@ def test_success_emits_running_then_completed(
     assert (running.session_id, running.run_id, running.step_id) == (1, 2, "step-1")
     assert terminal.result.error is None
     assert terminal.step_id == "step-1"
-    assert isinstance(terminal.result.display_data, dict) and terminal.result.display_data, "成功终态丢了展示数据"
+    assert (
+        isinstance(terminal.result.display_data, dict) and terminal.result.display_data
+    ), "成功终态丢了展示数据"
 
 
 def test_running_is_emitted_only_after_admission(
@@ -549,10 +570,11 @@ def test_running_is_emitted_only_after_admission(
 
     tools_node._execute_call(
         rc,
-        ToolCall(tool_name="probe", arguments='{}', call_id="call-probe"),
+        ToolCall(tool_name="probe", arguments="{}", call_id="call-probe"),
         "s",
         _NO_LOOP,
-        rc.request_tools(None), FileKnowledge(),
+        rc.request_tools(None),
+        FileKnowledge(),
     )
 
     assert seen_during_handler == [["running"]]
@@ -571,10 +593,11 @@ def test_unknown_tool_emits_failed_without_running(
 
     observation = tools_node._execute_call(
         rc,
-        ToolCall(tool_name="no_such_tool", arguments='{}', call_id="call-unknown"),
+        ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-unknown"),
         "s",
-
-        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+        _NO_LOOP,
+        rc.request_tools(None),
+        FileKnowledge(),
     )
 
     assert observation.status == "error"
@@ -600,8 +623,9 @@ def test_profile_denied_tool_emits_failed_without_running(
         rc,
         ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-denied"),
         "s",
-
-        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+        _NO_LOOP,
+        rc.request_tools(None),
+        FileKnowledge(),
     )
 
     assert observation.status == "error"
@@ -623,8 +647,9 @@ def test_invalid_arguments_emit_failed_without_running(
         rc,
         ToolCall(tool_name="read_file", arguments='{"nonexistent": 1}', call_id="call-bad"),
         "s",
-
-        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+        _NO_LOOP,
+        rc.request_tools(None),
+        FileKnowledge(),
     )
 
     assert observation.status == "error"
@@ -650,11 +675,15 @@ def test_denied_calls_emit_failure_without_running(
             rc,
             ToolCall(tool_name=tool_name, arguments=arguments, call_id=call_id),
             "s",
-
-            _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+            _NO_LOOP,
+            rc.request_tools(None),
+            FileKnowledge(),
         )
 
-    assert [(e.tool_call_id, e.status) for e in recorder.events] == [("call-unregistered", "failed"), ("call-banned", "failed")]
+    assert [(e.tool_call_id, e.status) for e in recorder.events] == [
+        ("call-unregistered", "failed"),
+        ("call-banned", "failed"),
+    ]
 
 
 def test_execute_call_specializes_context_per_call(
@@ -685,10 +714,11 @@ def test_execute_call_specializes_context_per_call(
 
     tools_node._execute_call(
         rc,
-        ToolCall(tool_name="probe", arguments='{}', call_id="call-a"),
+        ToolCall(tool_name="probe", arguments="{}", call_id="call-a"),
         "s",
         _NO_LOOP,
-        rc.request_tools(None), FileKnowledge(),
+        rc.request_tools(None),
+        FileKnowledge(),
     )
 
     assert received == ["call-a"]
@@ -725,10 +755,11 @@ def test_malformed_display_data_still_emits_failed_terminal(
 
     observation = tools_node._execute_call(
         rc,
-        ToolCall(tool_name="bad_display", arguments='{}', call_id="call-bad-display"),
+        ToolCall(tool_name="bad_display", arguments="{}", call_id="call-bad-display"),
         "s",
-
-        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+        _NO_LOOP,
+        rc.request_tools(None),
+        FileKnowledge(),
     )
 
     assert observation.status == "error"
@@ -757,8 +788,9 @@ def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
             rc,
             ToolCall(tool_name="read_file", arguments='{"path": "sample.txt"}', call_id="call-ok"),
             "s",
-
-            _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+            _NO_LOOP,
+            rc.request_tools(None),
+            FileKnowledge(),
         )
 
     assert observation.status == "success"
@@ -803,10 +835,11 @@ def test_executor_exception_becomes_error_observation_and_failed_terminal(
     with caplog.at_level("ERROR"):
         observation = tools_node._execute_call(
             rc,
-            ToolCall(tool_name="read_file", arguments='{}', call_id="call-boom"),
+            ToolCall(tool_name="read_file", arguments="{}", call_id="call-boom"),
             "s",
-
-            _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+            _NO_LOOP,
+            rc.request_tools(None),
+            FileKnowledge(),
         )
 
     assert observation.status == "error"
@@ -836,10 +869,11 @@ def test_executor_exception_after_start_closes_running_card(
 
     observation = tools_node._execute_call(
         rc,
-        ToolCall(tool_name="read_file", arguments='{}', call_id="call-late"),
+        ToolCall(tool_name="read_file", arguments="{}", call_id="call-late"),
         "s",
-
-        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+        _NO_LOOP,
+        rc.request_tools(None),
+        FileKnowledge(),
     )
 
     assert observation.content.startswith(
@@ -848,9 +882,7 @@ def test_executor_exception_after_start_closes_running_card(
     assert recorder.statuses("call-late") == ["running", "failed"]
 
 
-def test_executor_exception_emits_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_executor_exception_emits_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """执行器异常必须发布失败事实，不依赖前端是否已有卡片。"""
 
     recorder = _install_recorder(monkeypatch)
@@ -858,10 +890,11 @@ def test_executor_exception_emits_failure(
 
     observation = tools_node._execute_call(
         rc,
-        ToolCall(tool_name="read_file", arguments='{}', call_id="call-hidden"),
+        ToolCall(tool_name="read_file", arguments="{}", call_id="call-hidden"),
         "s",
-
-        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+        _NO_LOOP,
+        rc.request_tools(None),
+        FileKnowledge(),
     )
 
     assert observation.status == "error"
@@ -910,10 +943,11 @@ def test_suspending_tool_still_closes_its_call_in_the_same_step(
 
     observation = tools_node._execute_call(
         rc,
-        ToolCall(tool_name="suspend_probe", arguments='{}', call_id="call-suspend"),
+        ToolCall(tool_name="suspend_probe", arguments="{}", call_id="call-suspend"),
         "s",
-
-        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+        _NO_LOOP,
+        rc.request_tools(None),
+        FileKnowledge(),
     )
 
     assert observation.status == "success"
@@ -927,9 +961,24 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
     owner = _MemorySnapshotOwner(empty_snapshot())
     projector = ConversationEventProjector(owner)
     projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=1, run_id=9))
-    projector.process(RunStatusChangedEvent(changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC), session_id=1, run_id=9, status="running"))
+    projector.process(
+        RunStatusChangedEvent(
+            changed_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC),
+            session_id=1,
+            run_id=9,
+            status="running",
+        )
+    )
     owner.state["messages"].append(
-        {"id": "assistant-turn-9", "role": "assistant", "parts": [], "turn": 9, "inherited": False, "outcome": None, "source": None}
+        {
+            "id": "assistant-turn-9",
+            "role": "assistant",
+            "parts": [],
+            "turn": 9,
+            "inherited": False,
+            "outcome": None,
+            "source": None,
+        }
     )
     projector.process(
         ToolCallCreatedEvent(
@@ -983,12 +1032,15 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
             session_id=1,
             run_id=9,
             tool_call_id="call-t",
-            result=ToolMessageMetadata(status="completed", display_data={
+            result=ToolMessageMetadata(
+                status="completed",
+                display_data={
                     "kind": "terminal-result",
                     "output": "authoritative final output",
                     "truncated": False,
                     "exit_code": 0,
-                }),
+                },
+            ),
         )
     )
 
@@ -1029,8 +1081,9 @@ def test_concurrent_calls_project_each_call_independently(
             rc,
             ToolCall(tool_name="read_file", arguments=json.dumps({"path": name}), call_id=call_id),
             "s",
-
-            _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+            _NO_LOOP,
+            rc.request_tools(None),
+            FileKnowledge(),
         )
 
     threads = [threading.Thread(target=run, args=(i,)) for i in range(4)]
@@ -1065,15 +1118,17 @@ def test_mixed_batch_distinct_statuses_do_not_cross_talk(
         rc,
         ToolCall(tool_name="read_file", arguments='{"path": "good.txt"}', call_id="call-good"),
         "s",
-
-        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+        _NO_LOOP,
+        rc.request_tools(None),
+        FileKnowledge(),
     )
     tools_node._execute_call(
         rc,
-        ToolCall(tool_name="no_such_tool", arguments='{}', call_id="call-bad"),
+        ToolCall(tool_name="no_such_tool", arguments="{}", call_id="call-bad"),
         "s",
-
-        _NO_LOOP, rc.request_tools(None), FileKnowledge(),
+        _NO_LOOP,
+        rc.request_tools(None),
+        FileKnowledge(),
     )
 
     assert recorder.statuses("call-good") == ["running", "completed"]
@@ -1108,12 +1163,21 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
     # 直接向进程内 state service 注入一条 run 骨架，使投影能命中 part。
     state = empty_snapshot()
     state["messages"] = [
-        {"id": "m0", "role": "user", "parts": [], "turn": 5, "inherited": False, "outcome": None, "source": None},
+        {
+            "id": "m0",
+            "role": "user",
+            "parts": [],
+            "turn": 5,
+            "inherited": False,
+            "outcome": None,
+            "source": None,
+        },
         {
             "id": "m1",
             "role": "assistant",
             "parts": [
-                {"presentation": "activity",
+                {
+                    "presentation": "activity",
                     "type": "tool-call",
                     "toolCallId": "call-r",
                     "toolName": "read_file",
@@ -1121,12 +1185,14 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
                     "error": None,
                 }
             ],
-            "turn": 5, "inherited": False,
+            "turn": 5,
+            "inherited": False,
             "outcome": None,
             "source": None,
         },
     ]
-    state["activity"] = {"modelActivity": None,
+    state["activity"] = {
+        "modelActivity": None,
         "turn": None,
         "resumable": False,
         "status": "running",

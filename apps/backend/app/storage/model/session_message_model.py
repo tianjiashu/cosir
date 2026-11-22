@@ -5,7 +5,8 @@ from typing import Any, get_args
 from sqlalchemy import JSON, Boolean, Enum, ForeignKey, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.workflow.message_queue.session_message import Delivery, SessionMessageKind
+from app.core.workflow.message_queue.session_message import Delivery
+from app.models.message_context.message_metadata.base.message_kinds import SessionMessageKind
 from app.storage.model.base import StorageBase
 
 

@@ -4,8 +4,6 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from openai.types.chat import ParsedFunctionToolCall
-
 from app.core.events import (
     AssistantPartClosedEvent,
     AssistantTextDeltaEvent,
@@ -17,6 +15,7 @@ from app.core.workflow.node_helper import (
     ModelStreamStateMachine,
 )
 from app.core.workflow.node_helper import model_stream_state_machine as machine_module
+from openai.types.chat import ParsedFunctionToolCall
 from tests.runtime_context_stub import install_runtime_singletons
 
 

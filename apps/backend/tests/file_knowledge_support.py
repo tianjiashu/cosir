@@ -9,8 +9,8 @@ from app.tools.tool_handler.read_file import ReadFileTool
 def with_read_files(context: ToolExecutionContext, *paths: Path | str) -> ToolExecutionContext:
     for path in paths:
         result = ReadFileTool().execute(str(path), context)
-        if result.facts is not None:
-            context.file_knowledge.observe(result.facts)
+        if result.facts is not None and result.facts.file_facts is not None:
+            context.file_knowledge.observe(result.facts.file_facts)
     return context
 
 

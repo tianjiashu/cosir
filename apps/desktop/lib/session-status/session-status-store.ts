@@ -3,7 +3,7 @@ import { create } from "zustand";
 
 /**
  * 一个 Session 的状态：两项正交的事实。`executionStatus` 是当前 Run 的状态（没有 Run 时为 null），
- * `awaitingUserCalls` 是在等你作出决定的调用数（事实源是后端的 HITL 等待占位，与 Run 怎么走无关：
+ * `awaitingUserCalls` 是在等你作出决定的调用数（后端合成：HITL 等待占位加上本页等待的终端批准，与 Run 怎么走无关：
  * Run 被停下或已完成时审批仍可能在等你）。
  */
 export type SessionStatus = { executionStatus: string | null; awaitingUserCalls: number };

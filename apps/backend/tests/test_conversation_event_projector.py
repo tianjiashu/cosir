@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.projection.user_input_projection import build_presentation_parts
 from app.assistant_transport.service.conversation_event_projector import (
@@ -32,8 +31,8 @@ from app.core.events import (
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.schemas import ToolObservation
 from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
-from app.models.conversation_input import UserInputPresentation
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.run.run_status import RunStatus
 from tests.transport_fixtures import consumed, queue_user_input
 
@@ -104,7 +103,9 @@ def _consume(
     run_id: int = 1,
 ) -> object:
     owner = projector._state_service
-    queue_user_input(owner.states.setdefault(session_id, empty_snapshot()), message_id, presentation)
+    queue_user_input(
+        owner.states.setdefault(session_id, empty_snapshot()), message_id, presentation
+    )
     return projector.process(consumed(session_id, run_id, message_id, presentation))
 
 
@@ -171,14 +172,17 @@ def test_delegation_status_event_projects_display_data_to_target_tool(
         session_id=1,
         run_id=1,
         tool_call_id="delegate-1",
-        result=ToolMessageMetadata(status="completed", display_data={
+        result=ToolMessageMetadata(
+            status="completed",
+            display_data={
                 "kind": "delegation-result",
                 "child_agent_id": "delegate_reviewer",
                 "child_session_id": 22,
                 "title": "审查前端",
                 "role": "Reviewer",
                 "status": "running",
-            }),
+            },
+        ),
     )
 
     change = event_projector.process(event)
@@ -424,9 +428,7 @@ def test_run_status_usage_is_projected(
             session_id=1,
             run_id=1,
             status=RunStatus.COMPLETED,
-            usage_stats=RunUsageStats(
-                input_tokens=10, output_tokens=4, total_tokens=14
-            ),
+            usage_stats=RunUsageStats(input_tokens=10, output_tokens=4, total_tokens=14),
         )
     )
     state = snapshots.states[1]
@@ -455,9 +457,7 @@ def test_terminal_usage_is_projected(
             session_id=1,
             run_id=1,
             status=RunStatus.COMPLETED,
-            usage_stats=RunUsageStats(
-                input_tokens=100, output_tokens=50, total_tokens=150
-            ),
+            usage_stats=RunUsageStats(input_tokens=100, output_tokens=50, total_tokens=150),
         )
     )
     assert _run(snapshots.states[1], 1)["usage"]["total_tokens"] == 150
@@ -482,9 +482,7 @@ def test_new_run_clears_previous_run_usage(
             session_id=1,
             run_id=1,
             status=RunStatus.COMPLETED,
-            usage_stats=RunUsageStats(
-                input_tokens=10, output_tokens=4, total_tokens=14
-            ),
+            usage_stats=RunUsageStats(input_tokens=10, output_tokens=4, total_tokens=14),
         )
     )
     event_projector.process(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=1, run_id=2))

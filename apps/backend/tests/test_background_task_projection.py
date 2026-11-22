@@ -6,7 +6,6 @@
 from dataclasses import replace
 
 import pytest
-
 from app.assistant_transport.service.conversation_state_service import (
     ConversationStateService,
 )
@@ -16,8 +15,11 @@ from app.assistant_transport.state.conversation_state_background_task import (
 )
 from app.core.events import ToolCallStatusChangedEvent
 from app.core.tool.placeholder_settlement import cancel_placeholders
-from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
-from app.models.session.session_context import SessionContextRecord
+from app.models.message_context.message_metadata.tool_message_metadata import (
+    BackgroundWork,
+    ToolMessageMetadata,
+)
+from app.models.message_context.session_context import SessionContextRecord
 from app.service import depends
 from app.tools.tool_handler.terminal.command_results import command_results
 from tests.command_job_fakes import FakeCommandJob
@@ -28,13 +30,12 @@ _START = "2026-01-01T00:00:00+00:00"
 
 
 def _work(label: str, *, started_at: str = _START, ended_at: str | None = None) -> BackgroundWork:
-    return BackgroundWork(
-        run_id=1, label=label, started_at=started_at, ended_at=ended_at
-    )
+    return BackgroundWork(run_id=1, label=label, started_at=started_at, ended_at=ended_at)
 
 
 def _part(call_id: str, status: str, work: BackgroundWork | None = None) -> dict[str, object]:
-    part: dict[str, object] = {"presentation": "activity",
+    part: dict[str, object] = {
+        "presentation": "activity",
         "type": "tool-call",
         "toolCallId": call_id,
         "toolName": "execute_terminal",
@@ -50,7 +51,17 @@ def _part(call_id: str, status: str, work: BackgroundWork | None = None) -> dict
 
 
 def _messages(*parts: dict[str, object]) -> list[dict[str, object]]:
-    return [{"id": "m1", "role": "assistant", "parts": list(parts), "turn": 1, "inherited": False, "outcome": None, "source": None}]
+    return [
+        {
+            "id": "m1",
+            "role": "assistant",
+            "parts": list(parts),
+            "turn": 1,
+            "inherited": False,
+            "outcome": None,
+            "source": None,
+        }
+    ]
 
 
 def test_live_entries_win_and_unsettled_placeholders_are_settling_not_dropped():
@@ -187,9 +198,9 @@ def test_hot_projection_matches_cold_rebuild_through_cancellation(
         "process",
         service.apply_planned,
     )
-    assert cancel_placeholders(
-        session.id, ["call-bg"], "cancelled"
-    ) == {session.id: frozenset({"call-bg"})}
+    assert cancel_placeholders(session.id, ["call-bg"], "cancelled") == {
+        session.id: frozenset({"call-bg"})
+    }
     hot = service.get_state(session.id)["background_tasks"]
     assert hot[0]["status"] == "cancelled" and hot[0]["endedAt"] is not None
     service.republish_from_canonical(session.id)

@@ -5,10 +5,12 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
 from app.core.context.context_store import ContextStore
-from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.message_metadata import UserMessageMetadata
+from app.models.message_context.conversation_input import MessageSource
+from app.models.message_context.message_metadata.user_message_metadata import (
+    UserInputPresentation,
+    UserMessageMetadata,
+)
 from app.service.depends import get_session_context_service
 from app.storage.crud.run_crud import RunCrud
 from app.storage.crud.session_crud import SessionCrud
@@ -40,7 +42,7 @@ def session(isolated_storage, tmp_path):
         ({"role": "user", "content": "second"}, _user("second"), 12),
         ({"role": "assistant", "content": "a2"}, None, None),
         # 通知同样是 user 角色，但不是用户输入，不能被当作编辑目标。
-        ({"role": "user", "content": "<system_notice/>"}, UserMessageMetadata(kind="notice"), 13),
+        ({"role": "user", "content": "<system_notice/>"}, UserMessageMetadata(kind="notice", notices=[]), 13),
     ]
     for sequence, (message, metadata, message_id) in enumerate(rows, start=1):
         store.append(

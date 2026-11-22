@@ -13,13 +13,6 @@ from types import SimpleNamespace
 from typing import TypeVar, cast
 
 import pytest
-from openai.types.chat import (
-    ChatCompletionAssistantMessageParam,
-    ChatCompletionMessageParam,
-)
-from sqlalchemy.orm import Session as DbSession
-from sqlalchemy.orm import sessionmaker
-
 from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
     rebuild_snapshot,
@@ -31,13 +24,15 @@ from app.core.context.context_store import ContextStore
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.context.tool_call_closure import ContextProtocolError
 from app.core.workflow.run_ledger import RunLedger
-from app.models.conversation_input import UserInputPresentation
-from app.models.message_metadata import (
+from app.models.message_context.message_metadata.system_message_metadata import (
     SystemMessageMetadata,
-    ToolMessageMetadata,
+)
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import (
+    UserInputPresentation,
     UserMessageMetadata,
 )
-from app.models.session.session_context import SessionContextRecord
+from app.models.message_context.session_context import SessionContextRecord
 from app.service.conversation.session_context_service import (
     SessionContextService,
 )
@@ -48,6 +43,12 @@ from app.storage.crud.session_crud import SessionCrud
 from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.store_engines import initialize_app_schema
+from openai.types.chat import (
+    ChatCompletionAssistantMessageParam,
+    ChatCompletionMessageParam,
+)
+from sqlalchemy.orm import Session as DbSession
+from sqlalchemy.orm import sessionmaker
 from tests.runtime_context_stub import install_runtime_singletons, runtime_stub
 
 _TOOL_STATUS_VALUES = {"pending", "running", "completed", "failed", "cancelled"}
@@ -58,7 +59,8 @@ _CrudT = TypeVar("_CrudT")
 def _user_metadata(message: dict) -> UserMessageMetadata:
     """落库的 user 行必须带展示绑定；测试用正文作展示文本。"""
     return UserMessageMetadata(
-        kind="user_input", presentation=UserInputPresentation(text=message["content"])
+        kind="user_input",
+        presentation=UserInputPresentation(text=message["content"])
     )
 
 
@@ -564,10 +566,18 @@ def test_close_unclosed_tool_call_is_idempotent_and_ordered(env: SimpleNamespace
     third_result = {"role": "tool", "content": "c done", "tool_call_id": "call-3"}
     env.context.append(env.session.id, run.id, first_call, 1, True, turn=1)
     env.context.append(
-        env.session.id, run.id, first_result, 2, True, ToolMessageMetadata(status="completed"), turn=1
+        env.session.id,
+        run.id,
+        first_result,
+        2,
+        True,
+        ToolMessageMetadata(status="completed"),
+        turn=1,
     )
     env.context.append(env.session.id, run.id, second_call, 3, True, turn=1)
-    env.context.append(env.session.id, run.id, third_result, 4, True, {"status": "completed"}, turn=1)
+    env.context.append(
+        env.session.id, run.id, third_result, 4, True, {"status": "completed"}, turn=1
+    )
 
     manager = _manager(
         context_store=env.context,
@@ -610,10 +620,18 @@ def test_close_keeps_completed_batches_and_only_appends_missing_results(
     second_result = {"role": "tool", "content": "b done", "tool_call_id": "call-2"}
     env.context.append(env.session.id, run.id, first_call, 1, True, turn=1)
     env.context.append(
-        env.session.id, run.id, first_result, 2, True, ToolMessageMetadata(status="completed"), turn=1
+        env.session.id,
+        run.id,
+        first_result,
+        2,
+        True,
+        ToolMessageMetadata(status="completed"),
+        turn=1,
     )
     env.context.append(env.session.id, run.id, second_call, 3, True, turn=1)
-    env.context.append(env.session.id, run.id, second_result, 4, True, {"status": "completed"}, turn=1)
+    env.context.append(
+        env.session.id, run.id, second_result, 4, True, {"status": "completed"}, turn=1
+    )
 
     manager = _manager(
         context_store=env.context,
@@ -783,11 +801,10 @@ def test_cold_reload_normalizes_earlier_batches_without_rewriting_facts(env):
 
 def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypatch):
     """流式取消产生的展示占位不是执行结果，不得提升为模型上下文的孤儿 tool。"""
-    from openai.types.chat import ParsedFunctionToolCall
-
     import app.core.workflow.node_helper.model_stream_state_machine as machine_module
     from app.core.events import ToolCallStatusChangedEvent
     from app.core.workflow.node_helper import ModelStreamStateMachine
+    from openai.types.chat import ParsedFunctionToolCall
     from tests.sdk_fixtures import sdk_completion
 
     run = env.seed_run("running")
@@ -799,9 +816,7 @@ def test_stream_cancelled_preview_stays_display_only_after_reload(env, monkeypat
         next_sequence=1,
     )
     completion = sdk_completion(tool_calls=_ai_message("preview")["tool_calls"])
-    manager.save_model_response(
-        completion, include_in_context=False
-    )
+    manager.save_model_response(completion, include_in_context=False)
     events: list[object] = []
     monkeypatch.setattr(machine_module, "_message_context", lambda: manager)
     runtime = SimpleNamespace(
@@ -884,7 +899,9 @@ async def test_orphan_context_blocks_model_request_and_leaves_queue(env, monkeyp
         UserInputBody,
     )
     from app.core.workflow.nodes import model_node
-    from app.models.conversation_input import UserInputPresentation
+    from app.models.message_context.message_metadata.user_message_metadata import (
+        UserInputPresentation,
+    )
     from app.storage.crud.session_message_crud import SessionMessageCrud
 
     run = env.seed_run("running")

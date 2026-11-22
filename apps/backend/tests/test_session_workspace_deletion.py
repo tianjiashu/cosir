@@ -4,15 +4,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
-from sqlalchemy import func, select
-
 from app.api.sessions_api import delete_session as delete_session_endpoint
 from app.api.workspaces_api import delete_workspace as delete_workspace_endpoint
-from app.models.conversation_input import UserInputPresentation
 from app.models.errors.deletion_errors import DeletionBusyError
-from app.models.message_metadata import UserMessageMetadata
-from app.models.session.session_context import SessionContextRecord
+from app.models.message_context.message_metadata.user_message_metadata import (
+    UserInputPresentation,
+    UserMessageMetadata,
+)
+from app.models.message_context.session_context import SessionContextRecord
 from app.service.depends import (
     close_service_dependencies,
     get_run_crud,
@@ -29,6 +28,8 @@ from app.storage.model.session_model import SessionModel
 from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import init_storage, main_db_factory
 from app.utils.path import system_cosir as paths
+from fastapi import HTTPException
+from sqlalchemy import func, select
 from tests.command_job_fakes import FakeCommandJob
 from tests.session_extra_fixtures import fork_extra
 
@@ -343,7 +344,9 @@ async def test_delete_session_tree_stops_until_the_tree_stops_growing(
     monkeypatch.setattr(service, "collect_session_tree_ids", lambda _session_id: next(trees))
     # 这里的 Session id 没有记录：删除后通知派生方的读取另有用例覆盖。
     monkeypatch.setattr(service, "_active_derived", lambda _session_ids: [])
-    monkeypatch.setattr(service, "delete_session", lambda session_id, _fork_ids: deleted.append(session_id))
+    monkeypatch.setattr(
+        service, "delete_session", lambda session_id, _fork_ids: deleted.append(session_id)
+    )
 
     await service.delete_session_tree(1)
 
@@ -451,7 +454,9 @@ def test_deleting_a_root_keeps_its_forks_as_roots(storage, tmp_path) -> None:
     workspace = get_workspace_crud().create("roots", str(tmp_path))
     a = get_session_crud().create(workspace.id, "a").id
     child = (
-        get_session_crud().create(workspace.id, "child", session_type="delegated", parent_session_id=a).id
+        get_session_crud()
+        .create(workspace.id, "child", session_type="delegated", parent_session_id=a)
+        .id
     )
     b = _fork(workspace.id, a)
 
@@ -484,12 +489,13 @@ def test_deleting_an_idle_session_revokes_its_background_work(storage, tmp_path)
 
 
 @pytest.mark.parametrize("delete_workspace", [False, True])
-def test_committed_deletion_closes_session_terminals(storage, tmp_path, monkeypatch, delete_workspace):
+def test_committed_deletion_closes_session_terminals(
+    storage, tmp_path, monkeypatch, delete_workspace
+):
     from functools import lru_cache
 
-    from terminal_test_support import active_session_ids, make_service
-
     from app.service import depends
+    from terminal_test_support import active_session_ids, make_service
 
     workspace = get_workspace_crud().create("terminal", str(tmp_path))
     session = get_session_crud().create(workspace.id, "owner")
@@ -510,9 +516,8 @@ def test_committed_deletion_closes_session_terminals(storage, tmp_path, monkeypa
 def test_failed_session_deletion_does_not_close_or_fence_terminal(storage, tmp_path, monkeypatch):
     from functools import lru_cache
 
-    from terminal_test_support import make_service
-
     from app.service import depends
+    from terminal_test_support import make_service
 
     workspace = get_workspace_crud().create("terminal", str(tmp_path))
     session = get_session_crud().create(workspace.id, "owner")
@@ -530,12 +535,7 @@ def test_failed_session_deletion_does_not_close_or_fence_terminal(storage, tmp_p
         assert get_session_crud().get(session.id).id == session.id
         assert not workers[0].closed
         assert (
-            terminal.start(
-                session_id=session.id, cwd=str(tmp_path)
-            )
-            .snapshot()
-            .status
-            == "running"
+            terminal.start(session_id=session.id, cwd=str(tmp_path)).snapshot().status == "running"
         )
     finally:
         terminal.shutdown()
@@ -563,7 +563,9 @@ def test_deleting_with_forks_removes_fork_trees_and_their_children(storage, tmp_
     b = _fork(workspace.id, a)
     c = _fork(workspace.id, b)
     child = (
-        get_session_crud().create(workspace.id, "child", session_type="delegated", parent_session_id=b).id
+        get_session_crud()
+        .create(workspace.id, "child", session_type="delegated", parent_session_id=b)
+        .id
     )
     other = get_session_crud().create(workspace.id, "other").id
     kept = _fork(workspace.id, other)
@@ -587,7 +589,9 @@ async def test_delete_session_tree_with_forks_stops_every_fork_tree_first(
     a = get_session_crud().create(workspace.id, "a").id
     b = _fork(workspace.id, a)
     child = (
-        get_session_crud().create(workspace.id, "child", session_type="delegated", parent_session_id=b).id
+        get_session_crud()
+        .create(workspace.id, "child", session_type="delegated", parent_session_id=b)
+        .id
     )
 
     deleted = await get_session_service().delete_session_tree(a, with_forks=True)

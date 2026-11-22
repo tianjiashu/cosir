@@ -120,8 +120,9 @@ const USAGE_KEYS = [
 
 function validateLaunch(value: unknown, path: string): void {
   const launch = requireRecord(value, path);
-  requireExactKeys(launch, ["modelConfigId", "reasoningEffort"], path);
+  requireExactKeys(launch, ["modelConfigId", "reasoningEffort", "terminalPermissionMode"], path);
   if (launch.modelConfigId !== null && (typeof launch.modelConfigId !== "string" || !launch.modelConfigId)) throw new TransportSnapshotValidationError(`${path}.modelConfigId`, "非空字符串或 null");
+  if (!["request_approval", "full_access"].includes(launch.terminalPermissionMode as string)) throw new TransportSnapshotValidationError(`${path}.terminalPermissionMode`, "终端权限模式");
   if (launch.reasoningEffort !== null && typeof launch.reasoningEffort !== "string") throw new TransportSnapshotValidationError(`${path}.reasoningEffort`, "字符串或 null");
 }
 
@@ -403,7 +404,7 @@ export function validateTransportUpdate(previous: TransportState, next: Transpor
 
 export function parseTransportState(value: unknown): TransportState {
   const state = requireRecord(value, "snapshot");
-  requireExactKeys(state, ["title", "messages", "messageOffset", "activity", "terminal_sessions", "background_tasks", "foreground_waits", "deliverables", ...(state.fork === undefined ? [] : ["fork"]), ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
+  requireExactKeys(state, ["title", "messages", "messageOffset", "activity", "terminal_sessions", "background_tasks", "foreground_waits", "terminal_approvals", "deliverables", ...(state.fork === undefined ? [] : ["fork"]), ...(state.queued_messages === undefined ? [] : ["queued_messages"])], "snapshot");
   // 允许为空：未开始的会话还没有标题，首条用户输入并入时才命名。
   if (typeof state.title !== "string") throw new TransportSnapshotValidationError("title", "字符串");
   if (state.fork !== undefined) {
@@ -436,6 +437,13 @@ export function parseTransportState(value: unknown): TransportState {
   validateDeliverables(state.deliverables, "deliverables");
   const deliverableKeys = new Set((state.deliverables as { key: string }[]).map((item) => item.key));
   if (deliverableKeys.size !== (state.deliverables as unknown[]).length) throw new TransportSnapshotValidationError("deliverables", "key 不重复");
+  if (!Array.isArray(state.terminal_approvals)) throw new TransportSnapshotValidationError("terminal_approvals", "数组");
+  for (const value of state.terminal_approvals) {
+    const row = requireRecord(value, "terminal approval");
+    requireExactKeys(row, ["id", "originSessionId", "toolCallId", "command", "shell", "cwd", "network", "writeRoots", "justification"], "terminal approval");
+    for (const key of ["id", "toolCallId", "command", "shell", "cwd", "justification"]) requireString(row[key], `terminal approval ${key}`);
+    if (typeof row.originSessionId !== "number" || !Number.isInteger(row.originSessionId) || row.originSessionId < 1 || typeof row.network !== "boolean" || !Array.isArray(row.writeRoots) || row.writeRoots.some((root) => typeof root !== "string")) throw new TransportSnapshotValidationError("terminal approval", "有效的权限申请");
+  }
   if (!Array.isArray(state.foreground_waits)) throw new TransportSnapshotValidationError("foreground_waits", "数组");
   const foregroundIds = new Set<string>();
   state.foreground_waits.forEach((value, index) => {

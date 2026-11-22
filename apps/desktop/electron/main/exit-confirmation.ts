@@ -14,14 +14,14 @@ const LOG_CALLER = "exit_confirmation";
  * 后端未就绪、查询失败或超时都直接放行，不阻塞用户退出。只查终端会话：它们是用户可能正在用、
  * 退出后无法恢复的进程；Agent Run 会在后端重启后收敛为 cancelled，用户可在对话里继续。
  */
-export async function confirmExit(readyBaseUrl: string | null): Promise<boolean> {
+export async function confirmExit(readyBaseUrl: string | null, apiToken?: string): Promise<boolean> {
   if (!readyBaseUrl) {
     logDesktopEvent("INFO", LOG_CALLER, "application_exit_confirmation_skipped", { reason: "backend_not_ready" });
     return true;
   }
   let count: number;
   try {
-    count = await queryActiveCount(readyBaseUrl);
+    count = await queryActiveCount(readyBaseUrl, apiToken);
   } catch (error) {
     logDesktopEvent("WARNING", LOG_CALLER, "terminal_active_count_query_failed", {}, error);
     return true;
@@ -43,8 +43,8 @@ export async function confirmExit(readyBaseUrl: string | null): Promise<boolean>
   return confirmed;
 }
 
-async function queryActiveCount(baseUrl: string): Promise<number> {
-  const response = await fetch(`${baseUrl}${ACTIVE_COUNT_PATH}`, { signal: AbortSignal.timeout(ACTIVE_COUNT_TIMEOUT_MS) });
+async function queryActiveCount(baseUrl: string, apiToken?: string): Promise<number> {
+  const response = await fetch(`${baseUrl}${ACTIVE_COUNT_PATH}`, { signal: AbortSignal.timeout(ACTIVE_COUNT_TIMEOUT_MS), headers: apiToken ? { "X-Cosir-Capability": apiToken } : {} });
   if (!response.ok) throw new Error(`终端会话数查询失败：HTTP ${response.status}`);
   const body: unknown = await response.json();
   const count = (body as { count?: unknown }).count;

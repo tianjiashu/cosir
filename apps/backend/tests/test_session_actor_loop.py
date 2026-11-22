@@ -11,7 +11,6 @@ from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
-
 from app.core import session_actor as actor_module
 from app.core import session_execution as execution_module
 from app.core import session_recall
@@ -26,7 +25,7 @@ from app.core.workflow.message_queue.session_message import (
     SessionMessage,
     UserInputBody,
 )
-from app.models.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.run.run_status import RunTransition
 from app.models.session.session_command_errors import SessionCommandConflictError
 from app.tools.tool_handler.terminal.command_job import CommandConclusion
@@ -761,7 +760,7 @@ async def test_stopping_a_run_suspended_on_a_question_expires_it_and_tells_the_m
     assert run.status == "cancelled"
     assert harness.expired == [(_SESSION_ID, "已停止")]
     [(session_id, notice)] = notices
-    assert session_id == _SESSION_ID and notice.kind == "system_notice"
+    assert session_id == _SESSION_ID and notice.kind == "notice"
     assert "tool_call_id=call-ask" in notice.body.content
     assert "stopped you instead of answering" in notice.body.content
     # 通知不开新 Run：恢复或下一条消息到来时才并入。

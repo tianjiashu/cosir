@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -30,6 +31,7 @@ const MAX_CRASH_RECOVERY_ATTEMPTS = 1;
  */
 export class BackendSupervisor {
   private generation = 0;
+  private apiToken = "";
   // 宿主在应用就绪时立即调用 start()，所以初始即为 starting：页面最早读到的快照不会是会被误判为失败的 stopped。
   private status: BackendStatus = { state: "starting" };
   private backendBaseUrl: string | null = null;
@@ -42,6 +44,10 @@ export class BackendSupervisor {
 
   /** `hostToken` 在宿主进程生命周期内不变，每次拉起后端都注入同一个值。 */
   constructor(private readonly hostToken: string) {}
+
+  connectionIdentity(): { baseUrl: string; token: string; generation: number } | null {
+    return this.status.state === "ready" && this.backendBaseUrl ? { baseUrl: this.backendBaseUrl, token: this.apiToken, generation: this.generation } : null;
+  }
 
   snapshot(): BackendSnapshot {
     return { generation: this.generation, status: this.status, backendBaseUrl: this.backendBaseUrl };
@@ -119,6 +125,7 @@ export class BackendSupervisor {
       fs.rmSync(bootstateFile, { force: true });
       const port = await findAvailablePort();
       if (!this.isCurrent(generation)) return;
+      this.apiToken = randomBytes(32).toString("hex");
       const child = spawnBackend({
         runtime,
         port,
@@ -126,6 +133,7 @@ export class BackendSupervisor {
         dataDir: systemDataRoot(),
         consoleLogFile: path.join(appLogDir(), "backend-console.log"),
         hostToken: this.hostToken,
+        apiToken: this.apiToken,
       });
       let spawnError: Error | null = null;
       child.once("error", (error) => {

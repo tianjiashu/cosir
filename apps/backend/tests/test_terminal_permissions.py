@@ -221,7 +221,8 @@ def test_old_child_background_result_cannot_restore_full_access(
 
     from app.core.events.event_sink import set_event_sink
     from app.core.workflow import run_ledger as ledger_module
-    from app.core.workflow.message_queue.dispatch_policy import StartRun, next_action
+    from app.core.workflow.dispatch_policy import Action, StartRun
+    from app.core.workflow.message_queue.pending_messages import PendingMessages
     from app.core.workflow.message_queue.session_message import (
         BackgroundResultBody,
         RunLaunch,
@@ -230,7 +231,9 @@ def test_old_child_background_result_cannot_restore_full_access(
     )
     from app.core.workflow.message_queue.session_message_queue import SessionMessageQueue
     from app.core.workflow.run_ledger import RunLedger
-    from app.models.conversation_input import UserInputPresentation
+    from app.models.message_context.message_metadata.user_message_metadata import (
+        UserInputPresentation,
+    )
     from app.storage.crud.session_crud import SessionCrud
     from app.storage.crud.workspace_crud import WorkspaceCrud
 
@@ -275,7 +278,7 @@ def test_old_child_background_result_cannot_restore_full_access(
             ended_at="2026-11-22T00:00:00+00:00",
         )
     )
-    action = next_action("idle", old_child, [completion], [completion])
+    action = Action.decide("idle", old_child, PendingMessages.of([completion]), [completion])
     assert isinstance(action, StartRun) and action.launch.terminal_permission_mode == "full_access"
     new_child = ledger.create_run(child.id, action.launch)
     assert new_child.terminal_permission_mode == "request_approval"
@@ -283,8 +286,8 @@ def test_old_child_background_result_cannot_restore_full_access(
 
 
 def test_terminal_notice_uses_frozen_run_and_is_announced_once():
-    from app.core.workflow.drive_notices import _terminal_permissions
-    from app.models.message_metadata import NoticeEntry
+    from app.core.workflow.notices.drive_notices import _terminal_permissions
+    from app.models.message_context.message_metadata.user_message_metadata import NoticeEntry
     from app.models.session.session_extra import SessionExtra
 
     rc = SimpleNamespace(

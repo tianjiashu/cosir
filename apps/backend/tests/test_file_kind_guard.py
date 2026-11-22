@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import get_args
 
-from app.models.file_kind import FileKind
+from app.models.enums.file_kind import FileKind
 
 _FRONTEND = Path("../desktop/lib/api/workspace-files.ts")
 

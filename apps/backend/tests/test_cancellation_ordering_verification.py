@@ -13,7 +13,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -41,8 +40,8 @@ from app.core.tool.schemas import (
 from app.core.tool.schemas.request_tools import RequestTools
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.nodes import tools_node
-from app.models.conversation_input import UserInputPresentation
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.session.session_extra import SessionExtra
 from tests.runtime_context_stub import admitting, runtime_stub
 from tests.transport_fixtures import consumed

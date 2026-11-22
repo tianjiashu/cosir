@@ -6,8 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-from sqlalchemy import inspect, update
-
 from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
 )
@@ -20,11 +18,13 @@ from app.core.events import AssistantTextDeltaEvent
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
 from app.core.workflow.run_ledger import RunLedger
-from app.models.conversation_input import UserInputPresentation
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.models.message_metadata import (
+from app.models.message_context.message_metadata.system_message_metadata import (
     SystemMessageMetadata,
-    ToolMessageMetadata,
+)
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import (
+    UserInputPresentation,
     UserMessageMetadata,
 )
 from app.models.run.run_record import RunError
@@ -36,6 +36,7 @@ from app.session_runtime.session_runtime_space_registry import session_runtime_s
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.model.session_context_model import SessionContextModel
 from app.storage.store_engines import APP_MODELS, initialize_app_schema
+from sqlalchemy import inspect, update
 
 
 # 本组测试使用独立 canonical_store；只需呈现目录，不再创建第二套存储环境。
@@ -237,9 +238,7 @@ def test_real_sqlite_cold_state_and_agent_context_rebuild_all_canonical_tool_out
     # 消息身份与正文取自 context 的展示绑定，不从 Run 反推。
     assert state["messages"][0]["parts"][0]["text"] == f"user-{completed.id}"
     # 工具终态由 Run 分组配对产出（同一份 canonical 行同时驱动冷读快照与模型上下文）。
-    tool_parts = pair_tool_parts(
-        store.contexts.get(store.session.id, include_in_context=False), {}
-    )
+    tool_parts = pair_tool_parts(store.contexts.get(store.session.id, include_in_context=False), {})
     assert {call_id: part["status"] for call_id, part in tool_parts.items()} == {
         "call-success": "completed",
         "call-failed": "failed",

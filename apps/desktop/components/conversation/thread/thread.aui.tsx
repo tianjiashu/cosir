@@ -15,6 +15,7 @@ import {
 import { StopButton } from "@/components/conversation-runtime/stop-button";
 import { SessionContextUsage } from "@/components/conversation-runtime/usage-display";
 import { ComposerAddMenu } from "@/components/composer/add-menu/add-menu";
+import { TerminalPermissionSelector, TerminalApprovalCards } from "@/components/terminal/terminal-permissions";
 import { ModelSelector } from "@/components/composer/composer-model-selector";
 import { ComposerToolbar } from "@/components/composer/composer-toolbar";
 import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
@@ -125,6 +126,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
                   performanceProbe={performanceProbe}
                 />
                 <CurrentActivity cancelling={cancelling ?? false} />
+                {!readonly && <TerminalApprovalCards sessionId={sessionId} />}
                 </div>
                 {!readonly && (
                   <ThreadPrimitive.ViewportFooter className="bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6">
@@ -213,7 +215,7 @@ const Composer = memo(function Composer() {
           </div>
           <ComposerToolbar
             add={<ThreadComposerAddMenu workspaceRoot={workspaceRoot} />}
-            config={<ModelSelector scope={{ sessionId, workspaceId }} locked={runLaunch} />}
+            config={<><ModelSelector scope={{ sessionId, workspaceId }} locked={runLaunch} /><TerminalPermissionSelector sessionId={sessionId} locked={runLaunch} /></>}
             status={<SessionContextUsage />}
             action={<ComposerAction />}
           />

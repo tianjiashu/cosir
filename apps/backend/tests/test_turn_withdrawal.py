@@ -7,18 +7,23 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-
 from app.core.context.context_store import ContextStore
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, notices_to_context
-from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
+from app.core.workflow.message_queue.message_bodies.run_launch import RunLaunch
 from app.core.workflow.message_queue.session_message import (
     BackgroundResultBody,
     DecisionBody,
     SessionMessage,
     UserInputBody,
 )
-from app.models.conversation_input import UserInputPresentation
-from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, UserMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import (
+    BackgroundWork,
+    ToolMessageMetadata,
+)
+from app.models.message_context.message_metadata.user_message_metadata import (
+    UserInputPresentation,
+    UserMessageMetadata,
+)
 from app.service import depends
 from app.service.conversation.turn_withdrawal_plan import WithdrawalPlan
 from app.storage.crud.run_crud import RunCrud
@@ -52,7 +57,8 @@ def _placeholder(call_id: str) -> tuple[dict, ToolMessageMetadata]:
         ToolMessageMetadata(
             status="pending",
             background=BackgroundWork(
-                run_id=1, label="t",
+                run_id=1,
+                label="t",
                 started_at="2026-01-01T00:00:00+00:00",
             ),
         ),
@@ -95,7 +101,13 @@ def history(isolated_storage, tmp_path):
     store = ContextStore()
     for sequence, (turn, message, metadata, message_id) in enumerate(rows, start=1):
         store.append(
-            session.id, run.id, message, sequence, metadata=metadata, message_id=message_id, turn=turn
+            session.id,
+            run.id,
+            message,
+            sequence,
+            metadata=metadata,
+            message_id=message_id,
+            turn=turn,
         )
     return SimpleNamespace(session_id=session.id, run_id=run.id, workspace_id=workspace.id)
 
@@ -181,9 +193,7 @@ def test_withdraw_gathers_every_side_effect_of_the_turn(history, side_effects) -
     # 这一回合的后台作业被撤销，更早回合的照常进行。
     assert side_effects.revoked == ["call-late"]
     assert (
-        command_results.complete(
-            history.session_id, "call-late", CommandConclusion({"ok": True})
-        )
+        command_results.complete(history.session_id, "call-late", CommandConclusion({"ok": True}))
         is False
     )
     # 队列：这一回合调用的结论与决定被删；更早调用的结论、排队的通知与输入保留；移出的 Session 级
@@ -271,7 +281,9 @@ def test_fork_cannot_cut_at_a_withdrawn_turn(history, side_effects) -> None:
 
     depends.get_turn_withdrawal_service().withdraw(history.session_id, 12)
     rows = SessionContextCrud().get(history.session_id, include_in_context=False)
-    source = ForkSource(session=depends.get_session_crud().get(history.session_id), rows=rows, runs=[])
+    source = ForkSource(
+        session=depends.get_session_crud().get(history.session_id), rows=rows, runs=[]
+    )
 
     assert any(r.turn == 2 and r.retained for r in rows)
     with pytest.raises(KeyError):
@@ -284,8 +296,8 @@ def test_cold_rebuild_is_not_resumable_once_the_last_turn_is_withdrawn(
 ) -> None:
     """可恢复是后端事实：cancelled 的 Run 撤回最后一个回合后，冷重建给出的 ``resumable`` 为假。"""
     from app.assistant_transport.projection.snapshot_rebuild import (
-    rebuild_snapshot,
-)
+        rebuild_snapshot,
+    )
 
     runs = RunCrud()
     run = runs.get(history.run_id)
@@ -306,16 +318,33 @@ def test_cold_rebuild_is_not_resumable_once_the_last_turn_is_withdrawn(
 def test_plan_withdraws_the_interrupted_draft_with_its_turn() -> None:
     """流式中途停止后撤回：被打断的草稿从不进上下文却照常显示，必须随回合一起移出，否则撤回后用户的话
     没了、半截回复还挂在线程里，之后的分叉还会把它复制过去。"""
-    from app.models.session.session_context import SessionContextRecord, run_last_turn_withdrawn
+    from app.models.message_context.session_context import (
+        SessionContextRecord,
+        run_last_turn_withdrawn,
+    )
 
-    def row(row_id: int, turn: int, message: dict, *, include: bool, metadata=None) -> SessionContextRecord:
+    def row(
+        row_id: int, turn: int, message: dict, *, include: bool, metadata=None
+    ) -> SessionContextRecord:
         return SessionContextRecord(
-            session_id=1, run_id=7, message=message, include_in_context=include,
-            sequence=row_id, turn=turn, metadata=metadata or {}, id=row_id,
+            session_id=1,
+            run_id=7,
+            message=message,
+            include_in_context=include,
+            sequence=row_id,
+            turn=turn,
+            metadata=metadata or {},
+            id=row_id,
         )
 
     rows = [
-        row(1, 1, {"role": "user", "content": "写一篇长文"}, include=True, metadata=_user("写一篇长文")),
+        row(
+            1,
+            1,
+            {"role": "user", "content": "写一篇长文"},
+            include=True,
+            metadata=_user("写一篇长文"),
+        ),
         row(2, 1, {"role": "assistant", "content": "## 半截"}, include=False),
     ]
 
@@ -353,22 +382,60 @@ def test_notices_about_withdrawn_calls_are_dropped_not_redelivered(history, side
 
 
 def test_plan_does_not_redeliver_session_notices_about_withdrawn_calls() -> None:
-    from app.models.message_metadata import NoticeEntry
-    from app.models.session.session_context import SessionContextRecord
+    from app.models.message_context.message_metadata.user_message_metadata import NoticeEntry
+    from app.models.message_context.session_context import SessionContextRecord
 
     notice = UserMessageMetadata(
         kind="notice",
         notices=[
-            NoticeEntry(notice_kind="decision_expired", content="late", tool_call_ids=["call-late"]),
-            NoticeEntry(notice_kind="decision_expired", content="early", tool_call_ids=["call-early"]),
+            NoticeEntry(
+                notice_kind="decision_expired", content="late", tool_call_ids=["call-late"]
+            ),
+            NoticeEntry(
+                notice_kind="decision_expired", content="early", tool_call_ids=["call-early"]
+            ),
             NoticeEntry(notice_kind="backend_restarted", content="restarted"),
         ],
     )
     rows = [
-        SessionContextRecord(session_id=1, run_id=7, message=_call("call-early"), include_in_context=True, sequence=1, turn=1, id=1),
-        SessionContextRecord(session_id=1, run_id=7, message={"role": "user", "content": "second"}, include_in_context=True, sequence=2, turn=2, metadata=_user("second"), id=2),
-        SessionContextRecord(session_id=1, run_id=7, message=_call("call-late"), include_in_context=True, sequence=3, turn=2, id=3),
-        SessionContextRecord(session_id=1, run_id=7, message={"role": "user", "content": "notice"}, include_in_context=True, sequence=4, turn=2, metadata=notice, id=4),
+        SessionContextRecord(
+            session_id=1,
+            run_id=7,
+            message=_call("call-early"),
+            include_in_context=True,
+            sequence=1,
+            turn=1,
+            id=1,
+        ),
+        SessionContextRecord(
+            session_id=1,
+            run_id=7,
+            message={"role": "user", "content": "second"},
+            include_in_context=True,
+            sequence=2,
+            turn=2,
+            metadata=_user("second"),
+            id=2,
+        ),
+        SessionContextRecord(
+            session_id=1,
+            run_id=7,
+            message=_call("call-late"),
+            include_in_context=True,
+            sequence=3,
+            turn=2,
+            id=3,
+        ),
+        SessionContextRecord(
+            session_id=1,
+            run_id=7,
+            message={"role": "user", "content": "notice"},
+            include_in_context=True,
+            sequence=4,
+            turn=2,
+            metadata=notice,
+            id=4,
+        ),
     ]
 
     plan = WithdrawalPlan.plan_withdrawal(rows, from_turn=2)

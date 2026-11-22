@@ -5,7 +5,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.api.schemas.response.SessionResponse import SessionResponse
-from app.core.workflow.message_queue.message_bodies.user_input import RunLaunch
+from app.core.workflow.message_queue.message_bodies.run_launch import RunLaunch
 from app.models.session.session_extra import SessionExtra, SessionFork
 from app.models.session.session_kind import SessionType
 from app.models.session.session_record import SessionRecord

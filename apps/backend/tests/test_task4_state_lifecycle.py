@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-
 from app.assistant_transport.service.conversation_state_service import (
     ConversationStateService,
 )
@@ -16,11 +15,16 @@ from app.assistant_transport.stream.session_sse_stream import SessionSseStream
 from app.core.events import RunStatusChangedEvent
 from app.core.workflow.run_failure import run_failure_message, run_terminal_error
 from app.core.workflow.run_ledger import RunLedger
-from app.models.conversation_input import UserInputPresentation
-from app.models.message_metadata import SystemMessageMetadata, UserMessageMetadata
+from app.models.message_context.message_metadata.system_message_metadata import (
+    SystemMessageMetadata,
+)
+from app.models.message_context.message_metadata.user_message_metadata import (
+    UserInputPresentation,
+    UserMessageMetadata,
+)
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.run.run_record import RunRecord
 from app.models.run.run_status import RunStatus, RunTransition
-from app.models.session.session_context import SessionContextRecord
 from app.models.session.session_record import SessionRecord
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
@@ -334,8 +338,8 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
             return [run]
 
     service = _make_state_service(CanonicalSources(), CanonicalSources(), CanonicalSources())
-    session_runtime_spaces.get_or_create(7).get_working_snapshot(lambda:
-        {
+    session_runtime_spaces.get_or_create(7).get_working_snapshot(
+        lambda: {
             "title": "session",
             "messages": [
                 {
@@ -545,14 +549,23 @@ def test_publish_drops_noop_mutations_so_duplicate_terminal_events_send_nothing(
     sources = _RunSources("running")
     service = _make_state_service(sources, sources, sources)
     service.apply_planned(
-        ToolCallCreatedEvent(session_id=7, run_id=2, turn=1, tool_call_id="t1", tool_name="read_file")
+        ToolCallCreatedEvent(
+            session_id=7, run_id=2, turn=1, tool_call_id="t1", tool_name="read_file"
+        )
     )
 
     def finished() -> object:
         return terminal_event(
-            ToolObservation(tool_name="read_file", status="success", content="ok",
-                            display_data={"kind": "read-file-meta", "path": "a.txt"}),
-            session_id=7, run_id=2, step_id="step-1", tool_call_id="t1",
+            ToolObservation(
+                tool_name="read_file",
+                status="success",
+                content="ok",
+                display_data={"kind": "read-file-meta", "path": "a.txt"},
+            ),
+            session_id=7,
+            run_id=2,
+            step_id="step-1",
+            tool_call_id="t1",
         )
 
     assert service.apply_planned(finished()).mutations
@@ -562,17 +575,23 @@ def test_publish_drops_noop_mutations_so_duplicate_terminal_events_send_nothing(
 def test_result_without_display_data_keeps_the_placeholder_preview() -> None:
     """与持久化侧 ``merged_onto`` 同一规则：决定重放的结果不带展示数据时卡片保留占位预览，不闪成空。"""
     from app.core.events import ToolCallCreatedEvent, ToolCallStatusChangedEvent
-    from app.models.message_metadata import ToolMessageMetadata
+    from app.models.message_context.message_metadata.tool_message_metadata import (
+        ToolMessageMetadata,
+    )
 
     sources = _RunSources("running")
     service = _make_state_service(sources, sources, sources)
     service.apply_planned(
-        ToolCallCreatedEvent(session_id=7, run_id=2, turn=1, tool_call_id="t1", tool_name="read_file")
+        ToolCallCreatedEvent(
+            session_id=7, run_id=2, turn=1, tool_call_id="t1", tool_name="read_file"
+        )
     )
     preview = {"kind": "read-file-meta", "path": "a.txt"}
 
     def status(result: ToolMessageMetadata) -> None:
-        service.apply_planned(ToolCallStatusChangedEvent(session_id=7, run_id=2, tool_call_id="t1", result=result))
+        service.apply_planned(
+            ToolCallStatusChangedEvent(session_id=7, run_id=2, tool_call_id="t1", result=result)
+        )
 
     status(ToolMessageMetadata(status="running", display_data=preview))
     status(ToolMessageMetadata(status="completed"))

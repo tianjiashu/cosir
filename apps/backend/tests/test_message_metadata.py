@@ -1,15 +1,18 @@
 """角色 metadata 的存储边界与实时/冷重建一致性。"""
 
 import pytest
-from pydantic import ValidationError
-
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
 )
 from app.core.events import ToolCallStatusChangedEvent
-from app.models.message_metadata import BackgroundWork, ToolMessageMetadata, parse_message_metadata
-from app.models.session.session_context import SessionContextRecord
+from app.models.message_context.message_metadata.base.message_metadata_base import MessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import (
+    BackgroundWork,
+    ToolMessageMetadata,
+)
+from app.models.message_context.session_context import SessionContextRecord
+from pydantic import ValidationError
 
 
 @pytest.mark.parametrize(
@@ -17,10 +20,14 @@ from app.models.session.session_context import SessionContextRecord
     [
         (
             {"role": "system", "content": "system"},
-            {"prompt_sources": {"reply_language": {"language": {"fingerprint": "fp", "text": "rules"}}}},
+            {
+                "prompt_sources": {
+                    "reply_language": {"language": {"fingerprint": "fp", "text": "rules"}}
+                }
+            },
         ),
         ({"role": "developer", "content": "policy"}, {}),
-        ({"role": "user", "content": "internal notice"}, {"kind": "notice"}),
+        ({"role": "user", "content": "internal notice"}, {"kind": "notice", "notices": []}),
         (
             {"role": "user", "content": "resolved text"},
             {"kind": "user_input", "presentation": {"text": "visible text"}},
@@ -54,7 +61,7 @@ def test_role_metadata_round_trip_without_polluting_sdk_message(message, metadat
         sequence=1,
         include_in_context=True,
         message=message,
-        metadata=parse_message_metadata(message["role"], metadata),
+        metadata=MessageMetadata.parse(message["role"], metadata),
         turn=1,
     )
     restored = SessionContextRecord._from_model(record._to_model())
@@ -78,7 +85,7 @@ def test_role_metadata_round_trip_without_polluting_sdk_message(message, metadat
 )
 def test_storage_boundary_rejects_role_mismatch_and_obsolete_shapes(role, metadata):
     with pytest.raises(ValidationError):
-        parse_message_metadata(role, metadata)
+        MessageMetadata.parse(role, metadata)
 
 
 def _running_state(part: dict) -> dict:
@@ -161,14 +168,18 @@ def test_live_and_cold_tool_results_share_persisted_fields(metadata, monkeypatch
     initial["status"] = "running"
     # 结果带展示数据时取代旧值；不带时表示「不变」（``merged_onto``），旧值只可能来自已有结果行
     # （HITL / 后台占位），冷重建也会读到它，所以这里只在结果带展示数据时预置旧值。
-    initial["display_data"] = {"kind": "read-file-meta", "path": "old.txt"} if metadata.display_data else None
+    initial["display_data"] = (
+        {"kind": "read-file-meta", "path": "old.txt"} if metadata.display_data else None
+    )
     initial["error"] = "old error"
     state = _running_state(initial)
     event = ToolCallStatusChangedEvent(
         session_id=1,
         run_id=1,
         tool_call_id="call-1",
-        result=ToolMessageMetadata(status=metadata.status, error=metadata.error, display_data=metadata.display_data),
+        result=ToolMessageMetadata(
+            status=metadata.status, error=metadata.error, display_data=metadata.display_data
+        ),
     )
     for mutation in plan_event(event, state, {}):
         initial[mutation.path[-1]] = mutation.value
@@ -197,7 +208,9 @@ def test_final_tool_metadata_uses_authoritative_terminal_output():
         session_id=1,
         run_id=1,
         tool_call_id="call-1",
-        result=ToolMessageMetadata(status="completed", display_data={"kind": "terminal-result", "output": "truncated"}),
+        result=ToolMessageMetadata(
+            status="completed", display_data={"kind": "terminal-result", "output": "truncated"}
+        ),
     )
     for mutation in plan_event(event, state, {}):
         part[mutation.path[-1]] = mutation.value
@@ -217,5 +230,8 @@ def test_merged_onto_takes_new_status_and_keeps_previous_payload() -> None:
     merged = ToolMessageMetadata(status="cancelled", error="已取消").merged_onto(previous)
 
     assert merged == ToolMessageMetadata(
-        status="cancelled", error="已取消", display_data={"kind": "terminal-result"}, background=work
+        status="cancelled",
+        error="已取消",
+        display_data={"kind": "terminal-result"},
+        background=work,
     )

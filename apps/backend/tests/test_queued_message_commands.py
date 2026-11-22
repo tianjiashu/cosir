@@ -12,7 +12,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
 from app.assistant_transport.service import assistant_transport_service as service_module
 from app.assistant_transport.service.assistant_transport_service import (
     AssistantTransportService,
@@ -24,7 +23,7 @@ from app.core.workflow.message_queue.session_message import (
     UserInputBody,
 )
 from app.core.workflow.message_queue.session_message_queue import SessionMessageQueue
-from app.models.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.session.session_command_errors import SessionCommandConflictError
 
 _LAUNCH = RunLaunch(model_config_id="test/m5")

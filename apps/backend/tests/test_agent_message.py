@@ -19,11 +19,14 @@ from app.assistant_transport.state.conversation_state_snapshot import validate_s
 from app.core.events import InputConsumedEvent
 from app.core.tool.multi_agent import agent_message as agent_message_module
 from app.core.workflow.message_queue.session_message import AgentMessageBody, RunLaunch
-from app.models.conversation_input import MessageSource, UserInputPresentation
 from app.models.errors.input_errors import UserInputRejectedError
-from app.models.message_metadata import UserMessageMetadata
+from app.models.message_context.conversation_input import MessageSource
+from app.models.message_context.message_metadata.user_message_metadata import (
+    UserInputPresentation,
+    UserMessageMetadata,
+)
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.run.run_record import RunRecord
-from app.models.session.session_context import SessionContextRecord
 from app.models.session.session_record import SessionRecord
 
 _SOURCE = MessageSource(session_id=4, name='主会话 "A"')
@@ -80,9 +83,7 @@ def test_prepare_carries_launch_and_rejects_empty_text(monkeypatch: pytest.Monke
     message = agent_message_module.prepare_agent_message(
         "继续",
         source=_SOURCE,
-        agent_id="child_a",
-        model_config_id="test/m3",
-        reasoning_effort="high",
+        launch=RunLaunch(agent_id="child_a", model_config_id="test/m3", reasoning_effort="high"),
     )
 
     assert message.kind == "agent_message"
@@ -93,7 +94,9 @@ def test_prepare_carries_launch_and_rejects_empty_text(monkeypatch: pytest.Monke
     assert body.launch.reasoning_effort == "high"
     with pytest.raises(UserInputRejectedError):
         agent_message_module.prepare_agent_message(
-            "  ", source=_SOURCE, agent_id="child_a", model_config_id="test/m3"
+            "  ",
+            source=_SOURCE,
+            launch=RunLaunch(agent_id="child_a", model_config_id="test/m3"),
         )
 
 

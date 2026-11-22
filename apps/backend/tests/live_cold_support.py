@@ -14,9 +14,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, ConfigDict
-from sqlalchemy import update
-
 from app.config.configuration import get_tool_registry
 from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_surface
 from app.core.tool.results.tool_awaiting_decision import tool_awaiting_decision
@@ -31,7 +28,8 @@ from app.core.workflow.message_queue.session_message import (
     SessionMessage,
     UserInputBody,
 )
-from app.models.conversation_input import MessageSource, UserInputPresentation
+from app.models.message_context.conversation_input import MessageSource
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.run.run_record import RunRecord
 from app.models.session.session_record import SessionRecord
 from app.service import depends
@@ -41,6 +39,8 @@ from app.storage.store_engines import main_db_factory
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.tool_handler.terminal import execute_terminal
 from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import update
 from tests.model_config_fixtures import create_model_config
 from tests.sdk_fixtures import sdk_events
 

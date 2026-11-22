@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.workflow.decision_expiry import expire_decisions_after_run
-from app.models.message_metadata import ToolMessageMetadata
+from app.core.workflow.user_decision.decision_expiry import expire_decisions_after_run
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.session.session_command_errors import SessionCommandConflictError
-from app.models.session.session_context import SessionContextRecord
 from app.service import depends
 from app.service.conversation import tool_decision_service
 
@@ -32,16 +32,28 @@ def asked(tmp_path: Path, isolated_storage, monkeypatch: pytest.MonkeyPatch):
     ]
     crud.create(
         SessionContextRecord(
-            session_id=session.id, run_id=run.id, include_in_context=True, sequence=1, turn=1,
+            session_id=session.id,
+            run_id=run.id,
+            include_in_context=True,
+            sequence=1,
+            turn=1,
             message={"role": "assistant", "content": None, "tool_calls": calls},
         )
     )
     for sequence, call in enumerate(calls, start=2):
         crud.create(
             SessionContextRecord(
-                session_id=session.id, run_id=run.id, include_in_context=True, sequence=sequence,
-                turn=1, metadata=ToolMessageMetadata(status="pending", display_data={"kind": "probe"}),
-                message={"role": "tool", "tool_call_id": call["id"], "content": "awaiting decision"},
+                session_id=session.id,
+                run_id=run.id,
+                include_in_context=True,
+                sequence=sequence,
+                turn=1,
+                metadata=ToolMessageMetadata(status="pending", display_data={"kind": "probe"}),
+                message={
+                    "role": "tool",
+                    "tool_call_id": call["id"],
+                    "content": "awaiting decision",
+                },
             )
         )
     return session.id

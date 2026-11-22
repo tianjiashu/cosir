@@ -316,17 +316,6 @@ def test_only_user_sessions_without_a_run_are_unstarted() -> None:
     assert not record(SessionType.DELEGATED).unstarted
 
 
-def test_fill_empty_title_only_names_untitled_sessions(storage, tmp_path) -> None:
-    # 标题兜底只写给还没有标题的 Session：已有标题（含支线生成的）不被首条输入的摘要覆盖。
-    service = get_workspace_service()
-    workspace = service.create_workspace("ws", str(_make_dir(tmp_path, "ws_title")))
-    session = service.get_or_create_unstarted_session(workspace.id)
-
-    assert get_session_crud().fill_empty_title(session.id, "first input")
-    assert not get_session_crud().fill_empty_title(session.id, "second input")
-    assert get_session_crud().get(session.id).title == "first input"
-
-
 def test_delete_workspace_removes_record(storage, tmp_path) -> None:
     # 目的：验证 delete_workspace 级联删除 session 并移除 workspace
     # 记录。潜在缺陷：记录残留或事务未提交。

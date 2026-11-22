@@ -11,11 +11,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from app.core.workflow.message_queue.session_message import DecisionBody
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.session.session_command_errors import SessionCommandConflictError
-from app.models.session.session_context import SessionContextRecord
 from app.service import depends
 from app.service.conversation import tool_decision_service as module
 
@@ -91,7 +90,9 @@ def test_claimed_call_is_no_longer_awaiting(awaiting) -> None:
     assert _queued_decisions(awaiting.session_id) == []
 
 
-def test_concurrent_submissions_enqueue_exactly_one(awaiting, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_concurrent_submissions_enqueue_exactly_one(
+    awaiting, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """两次决定同时提交：判定与入队在一个写事务里，后到的一方看到已提交。"""
     queue = depends.get_session_message_queue()
     original = queue.pending_nowait

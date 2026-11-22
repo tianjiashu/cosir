@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.events import RunStatusChangedEvent
@@ -16,7 +15,9 @@ from app.core.workflow.execution_state.react_execution_state import ReactExecuti
 from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
 from app.core.workflow.run_failure import run_failure_message
 from app.core.workflow.run_ledger import RunLedger
-from app.models.message_metadata import SystemMessageMetadata
+from app.models.message_context.message_metadata.system_message_metadata import (
+    SystemMessageMetadata,
+)
 from app.models.run.run_status import RunStatus, RunTransition
 from app.service.recover_service import RecoverService
 from tests.model_config_fixtures import model_config_record, model_configs
@@ -234,7 +235,9 @@ def test_create_run_commits_inbox_and_current_run_before_projector(request, monk
         UserInputBody,
     )
     from app.core.workflow.message_queue.session_message_queue import SessionMessageQueue
-    from app.models.conversation_input import UserInputPresentation
+    from app.models.message_context.message_metadata.user_message_metadata import (
+        UserInputPresentation,
+    )
 
     store = request.getfixturevalue("canonical_store")
     events = []

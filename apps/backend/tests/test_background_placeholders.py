@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.assistant_transport.state.conversation_state_snapshot import _validate_part
 from app.core.tool.execute.tool_terminal_projection import terminal_event
@@ -16,8 +15,11 @@ from app.core.tool.schemas import RunInBackground, ToolObservation
 from app.core.workflow.execution_state.tool_batch import ToolBatch
 from app.core.workflow.message_queue.session_message import BackgroundResultBody
 from app.core.workflow.node_helper import tool_observation_projection as projection_module
-from app.models.message_metadata import BackgroundWork, ToolMessageMetadata
-from app.models.session.session_context import SessionContextRecord
+from app.models.message_context.message_metadata.tool_message_metadata import (
+    BackgroundWork,
+    ToolMessageMetadata,
+)
+from app.models.message_context.session_context import SessionContextRecord
 from app.service import depends
 from app.tools.tool_handler.terminal.command_job import CommandConclusion
 from tests.command_job_fakes import FakeCommandJob

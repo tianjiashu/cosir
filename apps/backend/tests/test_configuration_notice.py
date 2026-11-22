@@ -2,8 +2,8 @@
 
 覆盖：没变化不说；文档只发 diff（diff 不比全文短时发全文）；改回去不说；不适用的来源不比较；新来源告知一次；
 目录只报增删改（含从「不可用」恢复）；Skill 更新提醒重新加载；基准取上下文里最近一条通知（没有就取系统行），
-撤回移出通知后回退；工作区指令文件每次驱动定位一次；投影缓存按文件签名重读。prepare_input 的接线见
-``_reconcile_configuration``；节点其余判定的单测用替身上下文并关掉对账。
+撤回移出通知后回退；工作区指令文件每次驱动定位一次；投影缓存按文件签名重读。每次请求前的接线见
+``request_notices``；节点其余判定的单测用替身上下文并关掉对账。
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from app.core.agents.define_agents import main_agent
 from app.core.context.context_entry import ContextEntry
 from app.core.context.prompt_sources.cache import ProjectionCache
@@ -22,7 +21,7 @@ from app.core.context.prompt_sources.sources.deferred_tools import UNAVAILABLE_K
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.tool.schemas.tool_names import TOOL_SEARCH
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, notices_to_context
-from app.models.message_metadata import (
+from app.models.message_context.message_metadata.system_message_metadata import (
     PromptSourceBaseline,
     PromptSourceEntry,
     SystemMessageMetadata,

@@ -3,12 +3,11 @@
 import json
 
 import pytest
-
 from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
 )
-from app.models.message_metadata import ToolMessageMetadata
-from app.models.session.session_context import (
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.session_context import (
     SessionContextRecord,
 )
 

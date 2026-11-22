@@ -4,12 +4,11 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 import app.assistant_transport.service.user_input_service as user_input_module
+import pytest
 from app.assistant_transport.service.user_input_service import UserInputService
-from app.core.capsules.capsule_grammar import FileCapsule, serialize_capsule
 from app.models.errors.input_errors import UserInputRejectedError
+from app.models.message_context.capsules.grammar.file_capsule import FileCapsule
 from app.models.run.run_command import RunCommand
 from tests.model_config_fixtures import model_config_record, model_configs
 
@@ -26,9 +25,7 @@ def _service(monkeypatch: pytest.MonkeyPatch, workspace_root: Path) -> UserInput
     monkeypatch.setattr(
         user_input_module,
         "get_model_config_service",
-        lambda: model_configs(
-            lambda _id: model_config_record(model_name="m", context_window_k=8)
-        ),
+        lambda: model_configs(lambda _id: model_config_record(model_name="m", context_window_k=8)),
     )
     monkeypatch.setattr(
         user_input_module,
@@ -154,7 +151,7 @@ def test_file_capsule_attribute_xml_escaping_round_trips(workspace: Path, monkey
     path = workspace / 'a & b "q".md'
     path.write_text("hi", encoding="utf-8")
 
-    text = f"看 {serialize_capsule(FileCapsule(path=str(path)))}"
+    text = f"看 {FileCapsule(path=str(path)).serialize()}"
     body = _prepare(_service(monkeypatch, workspace), text)
 
     assert body.text == f'看 <file path="{workspace}/a &amp; b &quot;q&quot;.md" />'
@@ -169,9 +166,7 @@ def test_ref_capsule_accepts_workspace_relative_path(workspace: Path, monkeypatc
     target.parent.mkdir()
     target.write_text("x", encoding="utf-8")
 
-    body = _prepare(
-        _service(monkeypatch, workspace), '检查 <ref path="src/a.py" lines="12-14" />'
-    )
+    body = _prepare(_service(monkeypatch, workspace), '检查 <ref path="src/a.py" lines="12-14" />')
 
     assert body.text == '检查 <ref path="src/a.py" lines="12-14" />'
 
@@ -261,5 +256,3 @@ def test_capsule_only_input_is_not_empty(workspace: Path, monkeypatch) -> None:
     body = _prepare(_service(monkeypatch, workspace), f'<file path="{path}" />')
 
     assert body.text == f'<file path="{path}" />'
-
-

@@ -10,14 +10,13 @@ import threading
 from types import SimpleNamespace
 
 import pytest
-
 from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
 from app.core.tool.multi_agent.session_tool_scope import main_agent_tool_surface
 from app.core.workflow import workflow
 from app.core.workflow.branch import session_title
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.message_queue.session_message import RunLaunch, SessionMessage, UserInputBody
-from app.models.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.service import depends
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces as spaces
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
@@ -257,7 +256,7 @@ async def test_stopped_children_do_not_wake_the_deriver(derived, stop):
 
     assert _runs(child_id)[-1].end_reason == f"{stop}_cancelled"
     assert [run.final_output for run in _runs(derived.parent.id)] == ["parent saw 0 reports"]
-    assert _pending_kinds(derived.parent.id) == (["system_notice"] if stop == "user" else [])
+    assert _pending_kinds(derived.parent.id) == (["notice"] if stop == "user" else [])
 
 
 async def test_runs_the_user_opens_in_the_child_are_not_reported(derived):

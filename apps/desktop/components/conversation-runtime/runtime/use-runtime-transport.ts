@@ -1,3 +1,4 @@
+import { useTerminalPermissionStore, selectedTerminalPermission } from "@/lib/terminal/permission-selection";
 import { useCallback, useMemo, useRef } from "react";
 
 import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
@@ -14,6 +15,7 @@ import { useSessionAssistantTransportRuntime } from "@/lib/assistant/transport/u
 import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attachment-adapter";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
+import { sessionDisplayTitle } from "@/lib/session-title/session-display-title";
 
 /**
  * 创建 Assistant Transport runtime，并集中承载只属于发送的策略：命令组装（运行期配置锁定）与命令被拒后的
@@ -50,7 +52,7 @@ export function useRuntimeTransport(
     });
     const fallback = "网络异常，消息可能已送达，请先查看对话再决定是否重发";
     if (await recoverRejectedCommands(context.sessionId, commands) === "away") {
-      notify.error(`发送失败，内容已放回「${state.title}」的输入框`, { error, fallback });
+      notify.error(`发送失败，内容已放回「${sessionDisplayTitle(state.title)}」的输入框`, { error, fallback });
       return;
     }
     void showErrorDialog({ title: "发送失败", message: userErrorMessage(error, fallback) });
@@ -71,6 +73,7 @@ export function useRuntimeTransport(
       const launch = runLaunch ?? {
         modelConfigId: preferred?.modelConfigId ?? null,
         reasoningEffort: preferred?.reasoningEffort ?? null,
+        terminalPermissionMode: selectedTerminalPermission(useTerminalPermissionStore.getState(), context.sessionId, state),
       };
       // 正文里的胶囊标签就是机器可读的指针，命令原样发送，不在前端改写 parts。
       const message = command.message as SessionMessageRequest["message"];
@@ -81,6 +84,7 @@ export function useRuntimeTransport(
         message,
         modelConfigId: launch.modelConfigId,
         reasoningEffort: launch.reasoningEffort,
+        terminalPermissionMode: launch.terminalPermissionMode,
       };
       void frontendLog("INFO", "assistant_session_command_prepared", "Session 命令已准备发送", {
         traceId: context.traceId,

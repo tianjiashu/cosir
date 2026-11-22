@@ -48,7 +48,7 @@ function stageBinary() {
     throw new Error(`未找到构建产物：${sourcePath}`);
   }
   fs.mkdirSync(stagingRoot, { recursive: true });
-  for (const staleName of ["terminal-worker", "terminal-worker.exe"]) {
+  for (const staleName of ["terminal-worker", "terminal-worker.exe", "cosir-bwrap"]) {
     const stalePath = path.join(stagingRoot, staleName);
     if (stalePath !== destinationPath && fs.existsSync(stalePath)) {
       fs.unlinkSync(stalePath);
@@ -58,6 +58,13 @@ function stageBinary() {
   if (process.platform !== "win32") {
     fs.chmodSync(destinationPath, 0o755);
   }
+  const linux = targetTriple ? targetTriple.includes("linux") : process.platform === "linux";
+  if (linux) {
+    const bundled = path.join(releaseRoot, "cosir-bwrap");
+    fs.copyFileSync(bundled, path.join(stagingRoot, "cosir-bwrap"));
+    fs.chmodSync(path.join(stagingRoot, "cosir-bwrap"), 0o755);
+  }
+  fs.cpSync(path.join(repositoryRoot, "apps", "terminal-worker", "vendor"), path.join(stagingRoot, "third-party"), { recursive: true });
   console.log(`已 staging Terminal Worker：${destinationPath}`);
 }
 

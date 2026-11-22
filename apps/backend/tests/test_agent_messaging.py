@@ -10,7 +10,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from app.core.tool.schemas import ToolExecutionContext
 from app.core.tool.session_management import addressing, session_send
 from app.models.session.session_record import SessionRecord
@@ -141,7 +140,7 @@ def test_child_tells_its_parent_without_waiting(env, tmp_path) -> None:
     assert env.enqueued == [(_PARENT, "agent-message:根因找到了")]
     [prepared] = env.prepared
     assert prepared["source"].session_id == _CHILD
-    assert (prepared["agent_id"], prepared["model_config_id"]) == ("main_agent", "test/m3")
+    assert (prepared["launch"].agent_id, prepared["launch"].model_config_id) == ("main_agent", "test/m3")
     assert not command_results.live_background(_CHILD)
 
 
@@ -192,7 +191,7 @@ def test_target_without_first_run_inherits_its_queued_launch(env, tmp_path, monk
         RunLaunch,
         SessionMessage,
     )
-    from app.models.conversation_input import MessageSource
+    from app.models.message_context.conversation_input import MessageSource
 
     target = _session(30, current_run_id=None)
     monkeypatch.setitem(_SESSIONS, target.id, target)
@@ -214,7 +213,7 @@ def test_target_without_first_run_inherits_its_queued_launch(env, tmp_path, monk
         )
     )
     assert _send(_PARENT, target.id, "hi", tmp_path).status == "success"
-    assert env.prepared[0]["model_config_id"] == "test/m7"
+    assert env.prepared[0]["launch"].model_config_id == "test/m7"
 
 
 @pytest.mark.parametrize(
@@ -244,8 +243,8 @@ def test_new_manual_fork_uses_frozen_launch_without_source_session(env, tmp_path
         lambda: SimpleNamespace(pending_nowait=lambda _: []),
     )
     assert _send(_PARENT, 51, "continue the branch", tmp_path).status == "success"
-    assert env.prepared[-1]["model_config_id"] == "test/m8"
-    assert env.prepared[-1]["reasoning_effort"] == "low"
+    assert env.prepared[-1]["launch"].model_config_id == "test/m8"
+    assert env.prepared[-1]["launch"].reasoning_effort == "low"
 
 
 def test_deleted_fork_model_is_rejected_before_enqueue(

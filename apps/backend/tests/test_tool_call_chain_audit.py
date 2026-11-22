@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from app.assistant_transport.projection.snapshot_rebuild import (
     pair_tool_parts,
     rebuild_snapshot,
@@ -24,7 +23,7 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.tool_registry import ToolRegistry
-from app.models.session.session_context import SessionContextRecord
+from app.models.message_context.session_context import SessionContextRecord
 from app.models.session.session_extra import SessionExtra
 from app.tools.tool_handler.read_file import ReadFileTool
 

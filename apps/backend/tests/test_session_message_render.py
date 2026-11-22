@@ -3,7 +3,7 @@
 import re
 
 from app.core.workflow.message_queue.session_message import RunLaunch, UserInputBody
-from app.models.conversation_input import UserInputPresentation
+from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 
 
 def _user_input(text: str, *image_paths: str) -> UserInputBody:

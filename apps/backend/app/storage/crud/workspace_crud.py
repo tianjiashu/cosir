@@ -14,7 +14,7 @@
 from sqlalchemy import asc, delete, select
 from sqlalchemy.orm import Session as DbSession
 
-from app.models import WorkspaceRecord
+from app.models.workspace_record import WorkspaceRecord
 from app.storage.model.workspace_model import WorkspaceModel
 from app.storage.store_engines import main_db_factory
 from app.utils.datetime_utils import to_text, utc_now
