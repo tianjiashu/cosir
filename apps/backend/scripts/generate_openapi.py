@@ -1,8 +1,8 @@
 """导出 FastAPI 应用的 OpenAPI schema 为静态 JSON 资产。
 
 本脚本在后端装配完成后，从 ``app.api.app`` 取出模块级 FastAPI 单例，调用其
-``openapi()`` 方法生成与代码实时同步的 OpenAPI 文档，落盘到仓库级
-``docs/api/openapi.json``。前端同学可离线查阅，亦可喂给 ``openapi-typescript``
+``openapi()`` 方法生成与代码实时同步的 OpenAPI 文档，落盘到后端仓库内的
+``apps/backend/api/openapi.json``。前端同学可离线查阅，亦可喂给 ``openapi-typescript``
 等工具自动生成 TS 客户端类型，直接 ``import`` 接口契约，避免手工对齐漂移。
 
 用法::
@@ -27,9 +27,8 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-# 仓库根 = apps/backend 的上两级（apps -> coding-agent）。
-REPO_ROOT = BACKEND_ROOT.parents[1]
-DEFAULT_OUT = REPO_ROOT / "docs" / "api" / "openapi.json"
+# 契约唯一副本：随后端源码管理，`apps/backend/api/openapi.json`。
+DEFAULT_OUT = BACKEND_ROOT / "api" / "openapi.json"
 
 
 def export_openapi(out_path: Path) -> Path:
