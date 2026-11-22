@@ -51,14 +51,15 @@ class RunMailbox:
             self._heap.clear()
             self._seen.clear()
 
-    def post(self, message: SessionMessage) -> None:
-        """投递一条外部队列行的副本；同一行在本次执行内只收一次。"""
+    def post(self, message: SessionMessage) -> bool:
+        """投递外部队列副本，返回是否首次接收；重复投递不能再次触发输入接管。"""
         row_id = cast(int, message.id)
         with self._lock:
             if row_id in self._seen:
-                return
+                return False
             self._seen.add(row_id)
             self._push(message)
+            return True
 
     def notify(self, notice: NoticeBody) -> None:
         """投递一条本次执行产生的通知（没有队列行，不需要确认）。"""
@@ -68,9 +69,9 @@ class RunMailbox:
     def take_notices(self) -> list[SessionMessage]:
         """按投递顺序取出全部通知（两种来源都在内），其余消息顺序不变。"""
         with self._lock:
-            notices = sorted(entry for entry in self._heap if entry[2].kind == "system_notice")
+            notices = sorted(entry for entry in self._heap if entry[2].kind == "notice")
             if notices:
-                self._heap = [entry for entry in self._heap if entry[2].kind != "system_notice"]
+                self._heap = [entry for entry in self._heap if entry[2].kind != "notice"]
                 heapq.heapify(self._heap)
             return [entry[2] for entry in notices]
 
@@ -101,6 +102,11 @@ class RunMailbox:
         """是否有能推进这个活动 Run 的消息（``SessionMessage.wakes``）；挂起前据此决定直接继续还是挂起。"""
         with self._lock:
             return any(entry[2].wakes(run_id) for entry in self._heap)
+
+    def has_user_input(self) -> bool:
+        """已投递且尚未处理的立即用户输入接替旧模型批次；Agent 消息不具有此语义。"""
+        with self._lock:
+            return any(entry[2].kind == "user_input" for entry in self._heap)
 
     def _push(self, message: SessionMessage) -> None:
         heapq.heappush(self._heap, (type(message.body).PRIORITY, next(self._order), message))

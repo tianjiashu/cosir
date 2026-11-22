@@ -17,7 +17,9 @@ from app.core.workflow.cancel.run_cancellation_registry import (
 )
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
 from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
-from app.models import RunRecord, SessionRecord, WorkspaceRecord
+from app.models.run.run_record import RunRecord
+from app.models.session.session_record import SessionRecord
+from app.models.workspace_record import WorkspaceRecord
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
 if TYPE_CHECKING:
