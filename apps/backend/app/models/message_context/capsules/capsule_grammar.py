@@ -67,41 +67,6 @@ class Segment:
 
         return "".join(segment.serialize() for segment in segments)
 
-    @classmethod
-    def plain_text(cls, text: str) -> str:
-        """展示用纯文本投影：胶囊换成可读名称，普通文本原样。"""
-
-        parts: list[str] = []
-        for segment in cls.parse(text):
-            if isinstance(segment, TextSegment):
-                parts.append(segment.text)
-            elif isinstance(segment, CapsuleSegment):
-                parts.append(cls._display_name(segment.capsule))
-            else:
-                raise TypeError(f"unsupported segment: {type(segment).__name__}")
-        return "".join(parts)
-
-    @staticmethod
-    def _display_name(capsule: Capsule) -> str:
-        if isinstance(capsule, FileCapsule):
-            return Segment._basename(capsule.path)
-        if isinstance(capsule, RefCapsule):
-            if capsule.lines is not None:
-                locator = f":{capsule.lines}"
-            elif capsule.page is not None:
-                locator = f" (p.{capsule.page})"
-            else:
-                locator = ""
-            return f"{capsule.path or '工作区'}{locator}"
-        if isinstance(capsule, SkillCapsule):
-            return capsule.name
-        raise TypeError(f"unsupported capsule: {type(capsule).__name__}")
-
-    @staticmethod
-    def _basename(path: str) -> str:
-        trimmed = path.rstrip("/\\")
-        return trimmed.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] or trimmed or path
-
     @staticmethod
     def unescape_attribute(value: str) -> str:
         """还原标签属性的 XML 转义；``&amp;`` 最后还原（与 ``Capsule._escape_attribute`` 对应）。"""
