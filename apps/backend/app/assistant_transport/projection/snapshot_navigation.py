@@ -15,7 +15,7 @@ from app.assistant_transport.state.conversation_state_part import (
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.assistant_transport.state.message_identity import reply_id
-from app.models.enums.run_status import TERMINAL_RUN_STATUSES
+from app.models.run.run_status import TERMINAL_RUN_STATUSES
 
 
 def message(

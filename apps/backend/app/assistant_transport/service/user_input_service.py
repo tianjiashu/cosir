@@ -14,21 +14,20 @@ from collections import Counter
 from pathlib import Path
 
 from app.config.logging.logger import log
-from app.core.capsules.capsule_grammar import (
-    Capsule,
-    CapsuleSegment,
-    CapsuleSegmentLike,
-    FileCapsule,
-    RefCapsule,
-    SkillCapsule,
-    parse_capsules,
-    serialize_segments,
-)
 from app.core.workflow.message_queue.session_message import RunLaunch, UserInputBody
-from app.models import RunCommand
-from app.models.conversation_input import UserInputPresentation
 from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.errors.input_errors import UserInputRejectedError
+from app.models.message_context.capsules.capsule_grammar import (
+    CapsuleSegment,
+    Segment,
+)
+from app.models.message_context.capsules.grammar.capsule import Capsule
+from app.models.message_context.capsules.grammar.file_capsule import FileCapsule
+from app.models.message_context.capsules.grammar.ref_capsule import RefCapsule
+from app.models.message_context.capsules.grammar.skill_capsule import SkillCapsule
+from app.models.message_context.conversation_input import UserInputPresentation
+from app.models.run.run_command import RunCommand
+from app.models.terminal_permissions import TerminalPermissionMode
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.configuration.skills.catalog import SkillCatalog
 from app.service.configuration.skills.configuration import SkillConfigurationError
@@ -48,6 +47,7 @@ class UserInputService:
         model_config_id: str,
         reasoning_effort: ReasoningEffort | None,
         agent_id: str,
+        terminal_permission_mode: TerminalPermissionMode,
     ) -> UserInputBody:
         """校验模型能力与胶囊指针，组装成携带发起配置的用户输入消息体。
 
@@ -67,7 +67,7 @@ class UserInputService:
                 "IMAGE_NOT_SUPPORTED", "当前模型不支持图片输入，请更换模型或移除图片"
             )
         segments = self._validated_segments(command.text, session.workspace_id)
-        text = serialize_segments(segments)
+        text = Segment.serialize_all(segments)
         image_paths = self._resolve_image_assets(session.workspace_id, command.image_asset_ids)
         counts = Counter(
             segment.capsule.kind for segment in segments if isinstance(segment, CapsuleSegment)
@@ -91,11 +91,12 @@ class UserInputService:
                 agent_id=agent_id,
                 model_config_id=model_config_id,
                 reasoning_effort=reasoning_effort,
+                terminal_permission_mode=terminal_permission_mode,
             ),
         )
 
     @classmethod
-    def _validated_segments(cls, text: str, workspace_id: int) -> list[CapsuleSegmentLike]:
+    def _validated_segments(cls, text: str, workspace_id: int) -> list[Segment]:
         """校验正文里的胶囊并补全 Skill 路径。
 
         语法不合法的标签已被解析器当普通文本保留，不在这里拒绝。
@@ -105,7 +106,7 @@ class UserInputService:
             CapsuleSegment(capsule=cls._validate_capsule(segment.capsule, workspace_root))
             if isinstance(segment, CapsuleSegment)
             else segment
-            for segment in parse_capsules(text)
+            for segment in Segment.parse(text)
         ]
 
     @classmethod
@@ -116,7 +117,11 @@ class UserInputService:
         if isinstance(capsule, RefCapsule):
             cls._check_workspace_ref(capsule.path, workspace_root)
             return capsule
-        return SkillCapsule(name=capsule.name, path=cls._skill_file(capsule.name, workspace_root))
+        if isinstance(capsule, SkillCapsule):
+            return SkillCapsule(
+                name=capsule.name, path=cls._skill_file(capsule.name, workspace_root)
+            )
+        raise TypeError(f"unsupported capsule: {type(capsule).__name__}")
 
     @staticmethod
     def _check_local_file(path: str) -> None:

@@ -9,8 +9,8 @@ from app.assistant_transport.state.conversation_state_part import (
     ConversationStatePart,
 )
 from app.core.workflow.message_queue.session_message import Delivery
-from app.models.run_record import RunError
-from app.models.run_usage import RunUsage
+from app.models.run.run_record import RunError
+from app.models.run.run_usage import RunUsage
 
 MessageRole = Literal["user", "assistant"]
 

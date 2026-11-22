@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
+from typing import Literal
 
 from sqlalchemy.orm import Session as DbSession
 
@@ -21,13 +23,15 @@ from app.assistant_transport.request import DecisionRequest, SendMessageRequest
 from app.assistant_transport.state.snapshot_window import HistoryPage
 from app.assistant_transport.stream.session_sse_stream import SessionSseStream
 from app.config.logging.logger import log
-from app.core.workflow.message_queue.dispatch_policy import send_delivery
+from app.core.tool.terminal_approval import terminal_approvals
 from app.core.workflow.message_queue.session_message import (
+    AgentMessageBody,
     RunLaunch,
     SessionMessage,
     UserInputBody,
 )
-from app.models.errors.session_command_errors import SessionCommandConflictError
+from app.models.session.session_command_errors import SessionCommandConflictError
+from app.models.terminal_permissions import TerminalPermissionMode
 from app.service import depends as service_depends
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.storage.store_engines import main_db_factory
@@ -48,8 +52,7 @@ class AssistantTransportService:
 
     async def send(self, session_id: int, request: SendMessageRequest) -> None:
         """发送：Session 有活动 Run（含挂起）时排队（``next_run``），空闲时立即处理（``immediate``）；
-        挂起的 Run 在等用户回答提问时也立即处理——消息唤醒它，提问作废（规则见
-        ``dispatch_policy.send_delivery``）。
+        等用户回答提问或此页面有终端审批时立即处理；Actor 负责投递新输入并收敛旧等待。
 
         排队消息在当前 Run 结束后每个 Run 一条依次处理，用户可在队列里改为立即发送或删除；只在等
         后台结果的挂起，排队不唤醒 Run。判定阶段与入队在 Session 闸门内完成，actor 不会在两者
@@ -75,20 +78,62 @@ class AssistantTransportService:
             else initial.agent_id
             if initial
             else "main_agent",
+            terminal_permission_mode=request.terminalPermissionMode,
         )
         space = await asyncio.to_thread(session_runtime_spaces.get_or_create, session_id)
-        async with space.async_operation():
-            phase = await space.actor.phase()
-            delivery = send_delivery(
-                phase,
-                awaits_user_reply=phase == "suspended"
-                and await asyncio.to_thread(
-                    service_depends.get_tool_decision_service().awaits_user_reply, session_id
-                ),
-            )
+        async with self.terminal_permission_operation(session_id, request.terminalPermissionMode):
+            delivery = await space.actor.user_input_delivery()
             await asyncio.to_thread(
-                session_runtime_spaces.enqueue, session_id, SessionMessage.of(body, delivery=delivery)
+                session_runtime_spaces.enqueue,
+                session_id,
+                SessionMessage.of(body, delivery=delivery),
             )
+            if delivery == "immediate":
+                await space.actor.accept_immediate_input()
+
+    @asynccontextmanager
+    async def terminal_permission_operation(
+        self, session_id: int, mode: TerminalPermissionMode
+    ) -> AsyncIterator[None]:
+        """切换和输入准入共用所有权树闸门；检查与入队之间不释放，旧权限不能趁隙启动。"""
+        ids = await asyncio.to_thread(self._sessions.collect_session_tree_ids, session_id)
+        async with AsyncExitStack() as stack:
+            spaces = {
+                i: await asyncio.to_thread(session_runtime_spaces.get_or_create, i)
+                for i in sorted(ids)
+            }
+            for space in spaces.values():
+                await stack.enter_async_context(space.async_operation())
+            if ids != await asyncio.to_thread(self._sessions.collect_session_tree_ids, session_id):
+                raise SessionCommandConflictError(
+                    "TERMINAL_PERMISSION_BUSY", "会话工作已变化，请重试"
+                )
+            current = await asyncio.to_thread(self._sessions.require_current_run, session_id)
+            if current is not None and current.terminal_permission_mode != mode:
+                for i, space in spaces.items():
+                    queued = await asyncio.to_thread(self._queue.pending_nowait, i)
+                    inherited = await asyncio.to_thread(self._sessions.require_current_run, i)
+                    old_queue = any(
+                        (
+                            m.body.launch.terminal_permission_mode != mode
+                            if isinstance(m.body, UserInputBody | AgentMessageBody)
+                            else m.wakes(None)
+                            and inherited is not None
+                            and inherited.terminal_permission_mode != mode
+                        )
+                        for m in queued
+                    )
+                    if (
+                        await space.actor.phase() != "idle"
+                        or command_results.has_work(i)
+                        or terminal_approvals.has_work(i)
+                        or old_queue
+                    ):
+                        raise SessionCommandConflictError(
+                            "TERMINAL_PERMISSION_BUSY",
+                            "请先停止当前运行、子 Agent 和后台命令，并处理旧权限的排队消息，再切换终端权限",
+                        )
+            yield
 
     async def send_queued_now(self, session_id: int, message_id: int) -> None:
         """把一条排队中的用户输入改为立即处理：撤回原行，以 ``immediate`` 重新入队（同一事务）。
@@ -101,7 +146,10 @@ class AssistantTransportService:
             SessionCommandConflictError: ``MESSAGE_CONSUMED``（消息已不在队列中，或不是用户输入）。
             KeyError: Session 不存在。
         """
-        await asyncio.to_thread(self._send_queued_now, session_id, message_id)
+        space = await asyncio.to_thread(session_runtime_spaces.get_or_create, session_id)
+        async with space.async_operation():
+            await asyncio.to_thread(self._send_queued_now, session_id, message_id)
+            await space.actor.accept_immediate_input()
         await asyncio.to_thread(self._states.refresh_queued_messages, session_id)
 
     def _send_queued_now(self, session_id: int, message_id: int) -> None:
@@ -116,7 +164,11 @@ class AssistantTransportService:
             "queued_message_sent_now",
             extra={
                 "msg": "排队消息已改为立即处理",
-                "data": {"session_id": session_id, "message_id": message_id, "new_message_id": new_id},
+                "data": {
+                    "session_id": session_id,
+                    "message_id": message_id,
+                    "new_message_id": new_id,
+                },
             },
         )
 
@@ -137,14 +189,21 @@ class AssistantTransportService:
             self._withdraw_user_input(db, session_id, message_id)
         log.info(
             "queued_message_deleted",
-            extra={"msg": "排队消息已删除", "data": {"session_id": session_id, "message_id": message_id}},
+            extra={
+                "msg": "排队消息已删除",
+                "data": {"session_id": session_id, "message_id": message_id},
+            },
         )
 
-    def _withdraw_user_input(self, db: DbSession, session_id: int, message_id: int) -> SessionMessage:
+    def _withdraw_user_input(
+        self, db: DbSession, session_id: int, message_id: int
+    ) -> SessionMessage:
         """在调用方事务内撤回一条排队中的用户输入；不是用户输入时抛错，事务回滚、行保留。"""
         queued = self._queue.withdraw(db, session_id, message_id)
         if queued is None or not isinstance(queued.body, UserInputBody):
-            raise SessionCommandConflictError("MESSAGE_CONSUMED", "这条消息已不在队列中", retryable=False)
+            raise SessionCommandConflictError(
+                "MESSAGE_CONSUMED", "这条消息已不在队列中", retryable=False
+            )
         return queued
 
     async def withdraw(self, session_id: int, message_id: int) -> None:
@@ -165,12 +224,24 @@ class AssistantTransportService:
         space = await asyncio.to_thread(session_runtime_spaces.get_or_create, session_id)
         async with space.async_operation():
             if await space.actor.phase() != "idle":
-                raise SessionCommandConflictError("RUN_NOT_STOPPED", "当前运行尚未停止，请停止后再撤回")
+                raise SessionCommandConflictError(
+                    "RUN_NOT_STOPPED", "当前运行尚未停止，请停止后再撤回"
+                )
             await asyncio.to_thread(
                 service_depends.get_turn_withdrawal_service().withdraw, session_id, message_id
             )
         # 移出的行要从前端消失：按 canonical 记录重建并发布整份快照。
         await asyncio.to_thread(self._states.republish_from_canonical, session_id)
+
+    async def decide_terminal(
+        self, session_id: int, request_id: str, decision: Literal["approve", "reject"]
+    ) -> None:
+        """与新输入共用展示会话闸门，直接裁决原调用；不入队、不新开 Run。"""
+        space = await asyncio.to_thread(session_runtime_spaces.get_or_create, session_id)
+        async with space.async_operation():
+            # 入队成功后的 HTTP 调用可能已断开；批准同样先交给 Actor 投递已提交输入。
+            await space.actor.accept_immediate_input()
+            await asyncio.to_thread(terminal_approvals.decide, session_id, request_id, decision)
 
     async def resume(self, session_id: int) -> None:
         """最新 Run 为 cancelled / failed 时从 prepare_input 续跑。
@@ -195,6 +266,7 @@ class AssistantTransportService:
         """
         await asyncio.to_thread(self._sessions.get_session, session_id)
         space = await asyncio.to_thread(session_runtime_spaces.get_or_create, session_id)
+        terminal_approvals.cancel_session(session_id, displayed=True)
         await space.actor.cancel("user")
 
     def cancel_tool_call(self, session_id: int, tool_call_id: str) -> None:
@@ -212,6 +284,8 @@ class AssistantTransportService:
                 已标记过取消，或 Session 当前没有执行者）。
         """
         self._sessions.get_session(session_id)
+        if terminal_approvals.cancel_call(session_id, tool_call_id):
+            return
         driving = session_runtime_spaces.get_or_create(session_id).actor.driving
         if not command_results.request_cancel(session_id, tool_call_id, driving=driving):
             raise SessionCommandConflictError(

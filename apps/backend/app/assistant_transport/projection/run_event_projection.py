@@ -23,13 +23,13 @@ from app.assistant_transport.state.conversation_state_snapshot import Conversati
 from app.config.logging.logger import log
 from app.core.events import RunInitializedEvent, RunResultUpdatedEvent, RunStatusChangedEvent
 from app.core.workflow.execution_state.run_usage_stats import RunUsageStats
-from app.models.enums.run_status import (
+from app.models.run.run_status import (
     RESUMABLE_RUN_STATUSES,
     TERMINAL_RUN_STATUSES,
     RunStatus,
     RunTransition,
 )
-from app.models.run_usage import RunUsage
+from app.models.run.run_usage import RunUsage
 from app.utils.datetime_utils import from_text, to_text
 
 
@@ -102,7 +102,9 @@ def plan_run_initialized(
                 error=None,
                 usage=None,
                 contextWindowTotal=event.context_window_total,
-                launch=run_launch_snapshot(event.model_config_id, event.reasoning_effort),
+                launch=run_launch_snapshot(
+                    event.model_config_id, event.reasoning_effort, event.terminal_permission_mode
+                ),
             ),
         )
     ]

@@ -38,8 +38,9 @@ from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
 from app.core.events import RunStatusChangedEvent, ToolCallStatusChangedEvent, WorkflowEvent
+from app.core.tool.terminal_approval import terminal_approvals
 from app.core.workflow.message_queue.session_message import UserInputBody
-from app.models.enums.run_status import RunStatus
+from app.models.run.run_status import RunStatus
 from app.session_runtime.session_runtime_space import SessionRuntimeSpace
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.tool_handler.terminal.command_results import command_results
@@ -124,7 +125,9 @@ class ConversationStateService:
         """
 
         try:
-            self._refresh(session_id, {"queued_messages": lambda _state: self._queued_messages(session_id)})
+            self._refresh(
+                session_id, {"queued_messages": lambda _state: self._queued_messages(session_id)}
+            )
         except Exception as exc:
             log.exception(
                 "queued_projection_refresh_failed",
@@ -139,7 +142,15 @@ class ConversationStateService:
         """会话变化通知入口：由 ``TerminalSessionRuntime.notify_changed`` 经终端副作用执行器调用
         （非 PTY 读线程、锁外），任意线程可调。条目在写入工作副本时按字段校验（见 ``_refresh``）。"""
 
-        self._refresh(session_id, {"terminal_sessions": lambda _state: self._terminal_sessions(session_id)})
+        self._refresh(
+            session_id, {"terminal_sessions": lambda _state: self._terminal_sessions(session_id)}
+        )
+
+    def refresh_terminal_approvals(self, session_id: int) -> None:
+        """重投影尚未决的执行批准；重启时自然为空。"""
+        self._refresh(
+            session_id, {"terminal_approvals": lambda _state: terminal_approvals.views(session_id)}
+        )
 
     def refresh_background_results(self, session_id: int) -> None:
         """后台结果变化入口：看板与前台等待各自有变化时一并发出（同一帧）；由登记表的通知线程调用。"""
@@ -171,14 +182,18 @@ class ConversationStateService:
             mutations = tuple(
                 mutation
                 for key, produce in producers.items()
-                if (mutation := ConversationStateMutation("set", (key,), produce(state))).changes(state)
+                if (mutation := ConversationStateMutation("set", (key,), produce(state))).changes(
+                    state
+                )
             )
             if not mutations:
                 return
             for mutation in mutations:
                 mutation.apply_to(state)
             self._validate_or_discard(space, state, mutations)
-            self._publish(TransportFrame(session_id=session_id, kind="mutation", mutations=mutations))
+            self._publish(
+                TransportFrame(session_id=session_id, kind="mutation", mutations=mutations)
+            )
 
     @staticmethod
     def _queued_messages(session_id: int) -> list[ConversationQueuedMessage]:
@@ -244,12 +259,16 @@ class ConversationStateService:
             if isinstance(event, ToolCallStatusChangedEvent):
                 background = self._background_tasks(session_id, state)
                 deliverables = project_session_deliverables(state["messages"])
-                apply((
-                    ConversationStateMutation("set", ("background_tasks",), background),
-                    ConversationStateMutation("set", ("deliverables",), deliverables),
-                ))
+                apply(
+                    (
+                        ConversationStateMutation("set", ("background_tasks",), background),
+                        ConversationStateMutation("set", ("deliverables",), deliverables),
+                    )
+                )
             self._validate_or_discard(space, state, mutations)
-            change = TransportFrame(session_id=session_id, kind="mutation", mutations=tuple(mutations))
+            change = TransportFrame(
+                session_id=session_id, kind="mutation", mutations=tuple(mutations)
+            )
             if mutations:
                 self._publish(change)
             if isinstance(event, RunStatusChangedEvent):
@@ -418,6 +437,7 @@ class ConversationStateService:
             state["terminal_sessions"] = self._terminal_sessions(session_id)
             state["background_tasks"] = self._background_tasks(session_id, state)
             state["foreground_waits"] = command_results.foreground_calls(session_id)
+            state["terminal_approvals"] = terminal_approvals.views(session_id)
             state["deliverables"] = project_session_deliverables(state["messages"])
         except Exception as exc:
             log.exception(

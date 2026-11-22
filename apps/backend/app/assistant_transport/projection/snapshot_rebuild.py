@@ -44,25 +44,26 @@ from app.assistant_transport.state.conversation_state_snapshot import (
 )
 from app.assistant_transport.state.message_identity import reply_id, user_message_id
 from app.core.context.final_reply import CommittedResponse, final_reply_sequences
+from app.core.context.turn_visibility import is_turn_input, is_visible_reply
 from app.core.llm_provider.message_codec import display_arguments
 from app.core.tool.presentation import ToolPresentation
-from app.models.conversation_input import MessageSource, UserInputPresentation
-from app.models.enums.run_status import (
-    RESUMABLE_RUN_STATUSES,
-    TERMINAL_RUN_STATUSES,
-)
-from app.models.message_metadata import (
-    TURN_INPUT_KINDS,
+from app.models.message_context.conversation_input import MessageSource, UserInputPresentation
+from app.models.message_context.message_metadata.assistant_message_metadata import (
     AssistantMessageMetadata,
-    ToolMessageMetadata,
-    UserMessageMetadata,
 )
-from app.models.run_record import RunError, RunRecord
-from app.models.session_context import (
+from app.models.message_context.message_metadata.base.message_kinds import TURN_INPUT_KINDS
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
+from app.models.message_context.session_context import (
     SessionContextRecord,
     run_last_turn_withdrawn,
 )
-from app.models.session_record import SessionRecord
+from app.models.run.run_record import RunError, RunRecord
+from app.models.run.run_status import (
+    RESUMABLE_RUN_STATUSES,
+    TERMINAL_RUN_STATUSES,
+)
+from app.models.session.session_record import SessionRecord
 from app.utils.datetime_utils import to_text
 from app.utils.message_content import content_to_text
 
@@ -169,7 +170,9 @@ def rebuild_snapshot(
     run_groups = {
         run_id: sorted(rows, key=attrgetter("sequence"))
         for run_id, rows in groupby(
-            sorted((row for row in context_rows if row.run_id is not None), key=attrgetter("run_id")),
+            sorted(
+                (row for row in context_rows if row.run_id is not None), key=attrgetter("run_id")
+            ),
             key=attrgetter("run_id"),
         )
     }
@@ -180,7 +183,10 @@ def rebuild_snapshot(
     for run in runs:
         rows = run_groups.get(run.id, [])
         run_messages = _turn_messages(
-            rows, presentations, inherited=False, final_sequences=_final_sequences(run, rows, reply_tools)
+            rows,
+            presentations,
+            inherited=False,
+            final_sequences=_final_sequences(run, rows, reply_tools),
         )
         messages.extend(run_messages)
         last_reply = next((m for m in reversed(run_messages) if m["role"] == "assistant"), None)
@@ -212,7 +218,9 @@ def rebuild_snapshot(
                 error=error,
                 usage=run.usage,
                 contextWindowTotal=run.context_window_total,
-                launch=run_launch_snapshot(run.model_config_id, run.reasoning_effort),
+                launch=run_launch_snapshot(
+                    run.model_config_id, run.reasoning_effort, run.terminal_permission_mode
+                ),
             )
     fork = session.extra.fork
     if fork:
@@ -221,7 +229,9 @@ def rebuild_snapshot(
             "sourceTitle": fork.source_title,
             "sessionType": cast(ForkKind, session.session_type),
             "initialLaunch": run_launch_snapshot(
-                fork.initial_launch.model_config_id, fork.initial_launch.reasoning_effort
+                fork.initial_launch.model_config_id,
+                fork.initial_launch.reasoning_effort,
+                fork.initial_launch.terminal_permission_mode,
             ),
         }
     return snapshot
@@ -236,15 +246,24 @@ def _final_sequences(
     committed = [
         row
         for row in rows
-        if row.project_to_transport and row.include_in_context and row.message["role"] == "assistant"
+        if row.project_to_transport
+        and row.include_in_context
+        and row.message["role"] == "assistant"
     ]
     sequences = final_reply_sequences(
-        [CommittedResponse.from_message(row.sequence, row.turn, row.message) for row in committed], reply_tools
+        [CommittedResponse.from_message(row.sequence, row.turn, row.message) for row in committed],
+        reply_tools,
     )
     if not sequences:
         return frozenset()
-    texts = "".join(content_to_text(row.message.get("content")) for row in committed if row.sequence in sequences)
-    if not is_final_reply(run.status, cast(AssistantMessageMetadata, committed[-1].metadata).finish_reason, texts):
+    texts = "".join(
+        content_to_text(row.message.get("content"))
+        for row in committed
+        if row.sequence in sequences
+    )
+    if not is_final_reply(
+        run.status, cast(AssistantMessageMetadata, committed[-1].metadata).finish_reason, texts
+    ):
         return frozenset()
     return frozenset(sequences)
 
@@ -273,7 +292,18 @@ def _turn_messages(
         turns.setdefault(row.turn, []).append(row)
     turn_messages: list[ConversationStateMessage] = []
     for turn, turn_rows in turns.items():
-        opener = turn_rows[0]
+        # 运行通知可以先于可见输入；回合的展示起点取第一条可见行。
+        opener = next(
+            (
+                row
+                for row in turn_rows
+                if is_turn_input(row.message, row.metadata, row.project_to_transport)
+                or (row.project_to_transport and is_visible_reply(row.message))
+            ),
+            None,
+        )
+        if opener is None:
+            continue
         opener_metadata = opener.metadata
         opened_by_input = (
             opener.project_to_transport
@@ -298,8 +328,8 @@ def _turn_messages(
                 )
             )
         reply = message(reply_id(turn), "assistant", [], turn=turn, inherited=inherited)
-        for row in turn_rows[1:] if opened_by_input else turn_rows:
-            if not row.project_to_transport:
+        for row in turn_rows:
+            if (opened_by_input and row is opener) or not row.project_to_transport:
                 continue
             row_message = row.message
             if row_message["role"] == "user":

@@ -1,7 +1,7 @@
 """回合输入（用户输入、Agent 消息）展示 parts 的构造与消费投影。"""
 
 from collections.abc import Sequence
-from typing import cast
+from pathlib import Path
 
 from app.assistant_transport.projection.snapshot_navigation import (
     iter_parts,
@@ -14,14 +14,27 @@ from app.assistant_transport.state.conversation_state_part import (
     ConversationStateAgentMessagePart,
     ConversationStateImagePart,
     ConversationStateMessageSource,
+    ConversationStateReport,
     ConversationStateTextPart,
 )
 from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
 from app.assistant_transport.state.message_identity import reply_id, user_message_id
 from app.core.events import InputConsumedEvent
-from app.models.conversation_input import MessageSource, UserInputPresentation, image_asset_id
+from app.models.message_context.conversation_input import (
+    MessageSource,
+    UserInputPresentation,
+)
 
 UserInputPart = ConversationStateTextPart | ConversationStateImagePart
+
+
+def image_asset_id(path: str) -> str:
+    """从已发布图片的 workspace 相对路径推导资源 id（文件名去掉扩展名）。
+
+    附件存储固定为 ``<asset_id>.<ext>``；展示投影必须用同一规则推导 id，否则同一份展示绑定在
+    「能不能渲染」上会得到两种结论。
+    """
+    return Path(path).name.split(".", 1)[0]
 
 
 def build_presentation_parts(presentation: UserInputPresentation) -> list[UserInputPart]:
@@ -32,9 +45,11 @@ def build_presentation_parts(presentation: UserInputPresentation) -> list[UserIn
 
     parts: list[UserInputPart] = []
     if presentation.text:
-        parts.append({"type": "text", "text": presentation.text, "status": "completed"})
+        parts.append(
+            ConversationStateTextPart(type="text", text=presentation.text, status="completed")
+        )
     parts.extend(
-        {"type": "image", "image": f"cosir-attachment://{image_asset_id(path)}"}
+        ConversationStateImagePart(type="image", image=f"cosir-attachment://{image_asset_id(path)}")
         for path in presentation.image_paths
     )
     return parts
@@ -50,32 +65,35 @@ def build_turn_input(
     """
     if source is None:
         return build_presentation_parts(presentation), None
-    text: UserInputPart = {"type": "text", "text": presentation.text, "status": "completed"}
-    return [text], wire_source(source)
+    parts: list[UserInputPart] = [
+        ConversationStateTextPart(type="text", text=presentation.text, status="completed")
+    ]
+    return parts, wire_source(source)
 
 
 def wire_source(source: MessageSource) -> ConversationStateMessageSource:
     """领域来源 → wire 来源；开回合的消息与途中来信共用，两处展示一致。"""
     report = source.report
-    return {
-        "sessionId": source.session_id,
-        "name": source.name,
-        "report": None
+    wire_report = (
+        None
         if report is None
-        else {"status": report.status, "intermediate": report.intermediate},
-    }
+        else ConversationStateReport(status=report.status, intermediate=report.intermediate)
+    )
+    return ConversationStateMessageSource(
+        sessionId=source.session_id, name=source.name, report=wire_report
+    )
 
 
 def build_agent_message_part(
     message_id: int, presentation: UserInputPresentation, source: MessageSource
 ) -> ConversationStateAgentMessagePart:
     """途中到达的 Agent 消息；消费投影与全量重建共用。纯文本的理由同 ``build_turn_input``。"""
-    return {
-        "type": "agent-message",
-        "id": user_message_id(message_id),
-        "text": presentation.text,
-        "source": wire_source(source),
-    }
+    return ConversationStateAgentMessagePart(
+        type="agent-message",
+        id=user_message_id(message_id),
+        text=presentation.text,
+        source=wire_source(source),
+    )
 
 
 def plan_input_consumed(
@@ -103,15 +121,14 @@ def plan_input_consumed(
     tracked = track_turn(state, event.turn)
     existing = reply_index(state, event.turn)
     if existing is not None:
+        # 不开回合的输入只会是途中来信（用户输入总开回合），必带来源。
+        assert event.source is not None
         return [
             *tracked,
             ConversationStateMutation(
                 "set",
                 ("messages", existing, "parts", len(messages[existing]["parts"])),
-                # 不开回合的输入只会是途中来信（用户输入总开回合），必带来源。
-                build_agent_message_part(
-                    event.message_id, event.presentation, cast(MessageSource, event.source)
-                ),
+                build_agent_message_part(event.message_id, event.presentation, event.source),
             ),
         ]
     queued = state["queued_messages"]

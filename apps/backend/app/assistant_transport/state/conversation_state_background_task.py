@@ -24,7 +24,7 @@ from app.assistant_transport.state.wire_shape import (
     require_one_of,
     require_str,
 )
-from app.models.message_metadata import BackgroundWork
+from app.models.message_context.message_metadata.tool_message_metadata import BackgroundWork
 
 # ``settling``：工作已不在登记表里，但占位行还没落定——结论已到、等下一个模型步并入，或撤销已出队、
 # 结算还没写完（收回早于占位写入时，actor 在驱动释放后结算）。两者都会落到 ``completed`` /

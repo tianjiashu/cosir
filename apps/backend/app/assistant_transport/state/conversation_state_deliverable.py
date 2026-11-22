@@ -18,7 +18,7 @@ from app.assistant_transport.state.wire_shape import (
     require_str,
 )
 from app.models.deliverable import Deliverable, DeliveredDirectory, DeliveredFile
-from app.models.file_kind import FileKind
+from app.models.enums.file_kind import FileKind
 
 _KINDS: frozenset[str] = frozenset(get_args(FileKind))
 _FIELDS_BY_TYPE: dict[str, frozenset[str]] = {

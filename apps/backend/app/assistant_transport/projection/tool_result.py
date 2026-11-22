@@ -12,7 +12,7 @@ from app.assistant_transport.state.conversation_state_part import (
     ConversationDeliverable,
 )
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.models.message_metadata import ToolMessageMetadata
+from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
 
 
 class ToolResultFields(TypedDict):

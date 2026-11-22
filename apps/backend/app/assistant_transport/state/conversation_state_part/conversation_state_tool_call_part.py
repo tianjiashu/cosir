@@ -8,7 +8,7 @@ from typing_extensions import TypedDict
 
 from app.core.tool.presentation import ToolPresentation
 from app.models.enums.tool_call_status import ToolCallEventStatus
-from app.models.file_kind import FileKind
+from app.models.enums.file_kind import FileKind
 
 # 与事件侧共用同一事实来源，避免两处字面量漂移。
 ToolCallStatus = ToolCallEventStatus

@@ -14,6 +14,7 @@ from typing import NoReturn
 
 from fastapi import Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict
 
 from app.app import app
 from app.assistant_transport.request import DecisionRequest, SendMessageRequest
@@ -21,7 +22,8 @@ from app.assistant_transport.service.assistant_transport_service import Assistan
 from app.assistant_transport.state.snapshot_window import HistoryPage
 from app.config.logging.logger import log
 from app.models.errors.input_errors import UserInputRejectedError
-from app.models.errors.session_command_errors import SessionCommandConflictError
+from app.models.session.session_command_errors import SessionCommandConflictError
+from app.models.terminal_permissions import TerminalPermissionMode
 from app.service.attachment.image_normalizer import ImageNormalizationError
 from app.service.depends import get_assistant_transport_service
 
@@ -96,7 +98,10 @@ async def _accept(
             },
         )
         _raise_transport_error(
-            409, "SESSION_STATE_CONFLICT", "当前会话状态不允许执行该操作，请刷新后重试", retryable=True
+            409,
+            "SESSION_STATE_CONFLICT",
+            "当前会话状态不允许执行该操作，请刷新后重试",
+            retryable=True,
         )
     log.info(
         "session_command_accepted",
@@ -128,7 +133,9 @@ async def send_queued_message_now(
     """把排队中的用户消息改为立即处理：运行中并入当前 Run，挂起时唤醒，空闲时开新 Run（已并入时
     409 ``MESSAGE_CONSUMED``）。"""
 
-    return await _accept(session_id, "send_queued_now", service.send_queued_now(session_id, message_id))
+    return await _accept(
+        session_id, "send_queued_now", service.send_queued_now(session_id, message_id)
+    )
 
 
 @app.delete("/sessions/{session_id}/queued-messages/{message_id}")
@@ -163,6 +170,22 @@ async def resume_session(
     ``RUN_NOT_RESUMABLE``。"""
 
     return await _accept(session_id, "resume", service.resume(session_id))
+
+
+@app.post("/sessions/{session_id}/terminal-approvals/{request_id}/decision")
+async def terminal_decision(
+    session_id: int,
+    request_id: str,
+    request: DecisionRequest,
+    service: AssistantTransportService = Depends(get_assistant_transport_service),
+) -> JSONResponse:
+    """批准当前进程内的一条确定终端命令；旧请求返回 409。"""
+
+    return await _accept(
+        session_id,
+        "terminal_approval",
+        service.decide_terminal(session_id, request_id, request.decision),
+    )
 
 
 @app.post("/sessions/{session_id}/tool-calls/{tool_call_id}/decision")
@@ -270,3 +293,23 @@ async def cancel_tool_call(
         "cancel_tool_call",
         asyncio.to_thread(service.cancel_tool_call, session_id, tool_call_id),
     )
+
+
+class TerminalModeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: TerminalPermissionMode
+
+
+@app.post("/sessions/{session_id}/terminal-permission")
+async def check_terminal_permission(
+    session_id: int,
+    request: TerminalModeRequest,
+    service: AssistantTransportService = Depends(get_assistant_transport_service),
+) -> JSONResponse:
+    """选择器的静止检查；实际权限随下一次发起配置冻结。"""
+
+    async def check() -> None:
+        async with service.terminal_permission_operation(session_id, request.mode):
+            pass
+
+    return await _accept(session_id, "terminal_permission", check())

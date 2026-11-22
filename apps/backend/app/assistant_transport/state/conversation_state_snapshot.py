@@ -42,6 +42,10 @@ from app.assistant_transport.state.conversation_state_part import (
     TextPartStatus,
     ToolCallStatus,
 )
+from app.assistant_transport.state.conversation_state_terminal_approval import (
+    ConversationTerminalApproval,
+    validate_terminal_approvals,
+)
 from app.assistant_transport.state.conversation_state_terminal_session import (
     ConversationTerminalSession,
     validate_terminal_sessions,
@@ -61,12 +65,13 @@ from app.config.constant import Constant
 from app.core.events.model_activity_event import ModelActivityPhase
 from app.core.tool.presentation import ToolPresentation
 from app.core.workflow.message_queue.session_message import Delivery
-from app.models.enums.run_status import (
+from app.models.run.run_record import RunError
+from app.models.run.run_status import (
     TERMINAL_RUN_STATUSES,
     RunStatus,
 )
-from app.models.run_record import RunError
-from app.models.run_usage import RunUsage
+from app.models.run.run_usage import RunUsage
+from app.models.terminal_permissions import TerminalPermissionMode
 
 _RUN_STATUSES = frozenset({status.value for status in RunStatus})
 _TERMINAL_RUN_STATUS_VALUES = frozenset({status.value for status in TERMINAL_RUN_STATUSES})
@@ -79,6 +84,7 @@ _TEXT_PART_STATUSES = frozenset(get_args(TextPartStatus))
 
 ForkKind = Literal["user_fork", "agent_fork"]
 _FORK_KINDS = frozenset(get_args(ForkKind))
+_TERMINAL_PERMISSION_MODES = frozenset(get_args(TerminalPermissionMode))
 
 
 class ConversationStateFork(TypedDict):
@@ -118,6 +124,7 @@ class ConversationStateSnapshot(TypedDict):
     terminal_sessions: list[ConversationTerminalSession]
     background_tasks: list[ConversationBackgroundTask]
     foreground_waits: list[str]
+    terminal_approvals: list[ConversationTerminalApproval]
     deliverables: list[ConversationDeliverable]
 
 
@@ -132,6 +139,7 @@ def empty_snapshot(title: str = "新会话") -> ConversationStateSnapshot:
         terminal_sessions=[],
         background_tasks=[],
         foreground_waits=[],
+        terminal_approvals=[],
         deliverables=[],
         queued_messages=[],
     )
@@ -155,6 +163,7 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
     validate_terminal_sessions(snapshot["terminal_sessions"])
     validate_background_tasks(snapshot["background_tasks"])
     validate_foreground_waits(snapshot["foreground_waits"])
+    validate_terminal_approvals(snapshot["terminal_approvals"])
     validate_session_deliverables(snapshot["deliverables"])
 
 
@@ -317,6 +326,11 @@ def _validate_launch(value: object) -> None:
     launch = as_shape(value, ConversationStateLaunch, "snapshot launch")
     require_str(launch["modelConfigId"], "snapshot launch modelConfigId", nullable=True)
     require_str(launch["reasoningEffort"], "snapshot launch reasoningEffort", nullable=True)
+    require_one_of(
+        launch["terminalPermissionMode"],
+        _TERMINAL_PERMISSION_MODES,
+        "snapshot terminal permission mode",
+    )
 
 
 def _validate_usage(value: object) -> None:
@@ -407,5 +421,6 @@ _INDEPENDENT_FIELD_VALIDATORS: dict[str, Callable[[object], None]] = {
     "terminal_sessions": validate_terminal_sessions,
     "background_tasks": validate_background_tasks,
     "foreground_waits": validate_foreground_waits,
+    "terminal_approvals": validate_terminal_approvals,
     "deliverables": validate_session_deliverables,
 }
