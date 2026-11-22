@@ -110,6 +110,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Linux sandbox dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcap-dev pkg-config
+
       # 进程归属（Windows Job Object / POSIX 进程组与会话）各平台各有实现，都要在自己的平台上跑。
       - name: Cargo test
         run: cargo test --package cosir-terminal-worker
@@ -141,7 +145,7 @@ jobs:
       - name: Install zsh
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends zsh libcap-dev pkg-config
           audit() { zsh -fc 'autoload -U compaudit; compaudit' 2>/dev/null || true; }
           insecure=$(audit)
           echo "compaudit 不安全目录：${insecure:-无}"
@@ -234,7 +238,7 @@ jobs:
       - name: Desktop E2E (host)
         if: success() || failure()
         working-directory: apps/desktop
-        run: npm run build && npx playwright test -c playwright.desktop.config.ts desktop-smoke window-frame
+        run: npm run build && npx playwright test -c playwright.desktop.config.ts desktop-smoke window-frame terminal-permissions local-control-identity
 
       # 内置浏览器引擎在 Windows 上仍有未查清的失败（未摆上面板的标签 Page.captureScreenshot 无响应、iframe 点击与
       # body 滚动结果不同），不在本门禁的待办范围内：Windows 上照跑并保留产物、但不挡合并，查清后去掉 continue-on-error。

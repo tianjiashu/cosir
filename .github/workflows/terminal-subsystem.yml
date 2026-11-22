@@ -84,6 +84,10 @@ jobs:
         with:
           components: clippy
 
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcap-dev pkg-config
+
       - name: Clippy (deny warnings)
         run: cargo clippy --package cosir-terminal-worker --all-targets -- -D warnings
 
