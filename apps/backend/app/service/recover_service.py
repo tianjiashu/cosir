@@ -20,6 +20,7 @@ from app.storage.store_engines import main_db_factory
 
 # 重启后告诉 Agent 发生了什么：后台工作与终端会话都不跨重启。
 INTERRUPTED_NOTICE = (
+    "Interrupted commands may have made file changes before their audit completed. "
     "The backend restarted. All interactive terminal sessions you opened before are gone, "
     "background commands were stopped, delegated child agents and forks that were still "
     "working were stopped and will not report, and unfinished tool calls were interrupted. "
