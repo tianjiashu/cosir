@@ -511,7 +511,7 @@ class TestAppDbSubcommands:
         parser = qad.build_parser()
         sub = next(a for a in parser._actions if isinstance(a, __import__("argparse")._SubParsersAction))
         assert "attachments" not in sub.choices
-        assert "child-tasks" in sub.choices  # 相邻子命令仍在，排除“整块误删”
+        assert "child-sessions" in sub.choices  # 相邻子命令仍在，排除“整块误删”
 
     # 目的：随 schema 演进移除的子命令必须从参数面消失，替代子命令必须在位。
     # 潜在缺陷：子命令面再次与 schema 漂移（旧命令误导排查者，或替代命令漏注册）。
@@ -521,11 +521,11 @@ class TestAppDbSubcommands:
             a for a in parser._actions
             if isinstance(a, __import__("argparse")._SubParsersAction)
         )
-        for legacy in ("providers", "models", "sessions", "delegations", "commands", "model-configs"):
+        for legacy in ("providers", "models", "tasks", "delegations", "commands", "model-configs"):
             assert legacy not in sub.choices
         for current in (
-            "child-tasks",
-            "tasks",
+            "child-sessions",
+            "sessions",
             "runs",
             "stuck",
         ):
@@ -675,9 +675,9 @@ REAL_DB = _real_db()
 APPDB_SUBCOMMANDS: list[list[str]] = [
     ["schema", "--no-columns"],
     ["workspaces"],
-    ["tasks", "--limit", "5"],
+    ["sessions", "--limit", "5"],
     ["runs", "--limit", "5"],
-    ["child-tasks"],
+    ["child-sessions"],
     ["stuck"],
 ]
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """log-triage CLI 与其查询模块的独立单元测试。
 
-覆盖：参数校验、渲染、schema、agent_facts（含委派子任务视图）、snapshots、
+覆盖：参数校验、渲染、schema、agent_facts（含委派子会话视图）、snapshots、
 query_logs 的查询构造与边界。业务库用后端 ORM 建表（见 ``app_db_fixture``），不触碰真实库。
 """
 
@@ -22,8 +22,8 @@ import query_app_db as qad  # noqa: E402
 import query_logs as ql  # noqa: E402
 from app_db_fixture import (  # noqa: E402
     add_run,
-    add_task,
-    add_task_message,
+    add_session,
+    add_session_message,
     add_workspace,
     create_app_db,
 )
@@ -31,22 +31,22 @@ from appdb_agent_facts import (  # noqa: E402
     ACTIVE_RUN_STATUSES,
     RUN_STATUSES,
     TERMINAL_RUN_STATUSES,
-    list_child_tasks,
+    list_child_sessions,
     recent_runs,
-    recent_tasks,
+    recent_sessions,
     recent_workspaces,
 )
 from appdb_schema import database_overview, table_detail  # noqa: E402
-from appdb_snapshots import run_snapshot, task_snapshot  # noqa: E402
+from appdb_snapshots import run_snapshot, session_snapshot  # noqa: E402
 
 
 @pytest.fixture()
 def con(tmp_path: Path) -> sqlite3.Connection:
     connection = create_app_db(tmp_path / "app.sqlite3")
-    add_workspace(connection, name="ws1", root_path="/tmp/ws1")
-    add_task(connection, title="t1")
-    add_run(connection, task_id=1, end_reason="done", final_output="o", usage_json="{}")
-    connection.execute("UPDATE tasks SET current_run_id = 1 WHERE id = 1")
+    add_workspace(connection, name="ws1", root_path="/tmp/ws1")  # noqa: S108 - 测试占位路径
+    add_session(connection, title="t1")
+    add_run(connection, session_id=1, end_reason="done", final_output="o", usage_json="{}")
+    connection.execute("UPDATE sessions SET current_run_id = 1 WHERE id = 1")
     connection.commit()
     yield connection
     connection.close()
@@ -130,7 +130,7 @@ class TestSaveOutput:
 class TestDispatch:
     # 目的：未知命令抛 ValueError。潜在缺陷：静默返回 None。
     def test_unknown_command(self, con: sqlite3.Connection) -> None:
-        args = qad.build_parser().parse_args(["tasks"])
+        args = qad.build_parser().parse_args(["sessions"])
         args.command = "nope"
         with pytest.raises(ValueError):
             qad.dispatch(con, args)
@@ -146,7 +146,7 @@ class TestSchema:
     def test_overview(self, con: sqlite3.Connection) -> None:
         out = database_overview(con, include_columns=False)
         names = {t["table"] for t in out["tables"]}
-        assert {"tasks", "workspaces", "conversation_runs", "conversation_task_contexts", "task_messages"} <= names
+        assert {"sessions", "workspaces", "runs", "session_contexts", "session_messages"} <= names
         assert "model_configs" not in names
         assert all("columns" not in t for t in out["tables"])
 
@@ -163,12 +163,12 @@ class TestSchema:
 
 
 class TestAgentFacts:
-    # 目的：状态常量与后端 ConversationRunStatus 一致（无 pending），活动态 + 终态 = 全集。
+    # 目的：状态常量与后端 RunStatus 一致（无 pending），活动态 + 终态 = 全集。
     # 潜在缺陷：skill 的状态白名单与后端漂移，stuck 漏报或 runs --status 拒绝合法值。
     def test_run_status_constants_match_backend(self) -> None:
-        from app.models.enums.conversation_run_status import ConversationRunStatus
+        from app.models.enums.run_status import RunStatus
 
-        assert set(RUN_STATUSES) == {status.value for status in ConversationRunStatus}
+        assert set(RUN_STATUSES) == {status.value for status in RunStatus}
         assert set(ACTIVE_RUN_STATUSES) | set(TERMINAL_RUN_STATUSES) == set(RUN_STATUSES)
         assert not set(ACTIVE_RUN_STATUSES) & set(TERMINAL_RUN_STATUSES)
 
@@ -182,22 +182,22 @@ class TestAgentFacts:
 
     # 目的：recent_runs contains 能按模型 id 搜索。潜在缺陷：搜索面漏掉模型列。
     def test_recent_runs_contains_model(self, con: sqlite3.Connection) -> None:
-        add_run(con, task_id=1, model_config_id="other/gpt")
+        add_run(con, session_id=1, model_config_id="other/gpt")
         assert [r["id"] for r in recent_runs(con, limit=10, contains="deepseek")] == [1]
 
-    # 目的：recent_tasks 附带当前 run 状态与模型 id。潜在缺陷：JOIN 口径错导致状态/模型缺失。
-    def test_tasks_join_current_run(self, con: sqlite3.Connection) -> None:
-        rows = recent_tasks(con, limit=10)
+    # 目的：recent_sessions 附带当前 run 状态与模型 id。潜在缺陷：JOIN 口径错导致状态/模型缺失。
+    def test_sessions_join_current_run(self, con: sqlite3.Connection) -> None:
+        rows = recent_sessions(con, limit=10)
         row = next(item for item in rows if item["id"] == 1)
         assert row["current_run_status"] == "completed"
         assert row["current_model_config_id"] == "deepseek/deepseek-flash"
-        assert "tool_schemas" not in row
+        assert "tool_surface" not in row
 
-    # 目的：recent_tasks contains 对 LIKE 通配符转义，% 不扩大匹配面。潜在缺陷：未转义导致通配。
-    def test_tasks_contains_escapes_wildcard(self, con: sqlite3.Connection) -> None:
-        add_task(con, title="abc")
-        add_task(con, title="a%c")
-        rows = recent_tasks(con, limit=10, contains="%")
+    # 目的：recent_sessions contains 对 LIKE 通配符转义，% 不扩大匹配面。潜在缺陷：未转义导致通配。
+    def test_sessions_contains_escapes_wildcard(self, con: sqlite3.Connection) -> None:
+        add_session(con, title="abc")
+        add_session(con, title="a%c")
+        rows = recent_sessions(con, limit=10, contains="%")
         assert [r["title"] for r in rows] == ["a%c"]
 
     # 目的：workspaces 按 id 降序、limit 生效。潜在缺陷：排序错。
@@ -208,24 +208,24 @@ class TestAgentFacts:
 
 
 # --------------------------------------------------------------------------- #
-# appdb_agent_facts：委派子任务视图
+# appdb_agent_facts：委派子会话视图
 # --------------------------------------------------------------------------- #
 
 
-class TestChildTasks:
-    # 目的：child-tasks 只返回 parent_task_id 命中的子任务，不含父任务自身。潜在缺陷：把父任务当子任务返回。
-    def test_child_tasks_filter(self, con: sqlite3.Connection) -> None:
-        add_task(con, title="child", task_type="agent_task", parent_task_id=1, derivation_depth=1)
-        add_task(con, title="root")
-        rows = list_child_tasks(con, limit=10, parent_task_id=1)
+class TestChildSessions:
+    # 目的：child-sessions 只返回 parent_session_id 命中的子会话，不含父会话自身。潜在缺陷：把父会话当子会话返回。
+    def test_child_sessions_filter(self, con: sqlite3.Connection) -> None:
+        add_session(con, title="child", session_type="agent_task", parent_session_id=1, derivation_depth=1)
+        add_session(con, title="root")
+        rows = list_child_sessions(con, limit=10, parent_session_id=1)
         assert [r["id"] for r in rows] == [2]
         assert rows[0]["derivation_depth"] == 1
 
-    # 目的：省略 parent_task_id 时返回所有子任务（parent_task_id 非空）。潜在缺陷：把根任务当子任务。
-    def test_child_tasks_all_when_parent_omitted(self, con: sqlite3.Connection) -> None:
-        add_task(con, title="child", task_type="agent_task", parent_task_id=1)
-        add_task(con, title="root")
-        assert [r["id"] for r in list_child_tasks(con, limit=10)] == [2]
+    # 目的：省略 parent_session_id 时返回所有子会话（parent_session_id 非空）。潜在缺陷：把根会话当子会话。
+    def test_child_sessions_all_when_parent_omitted(self, con: sqlite3.Connection) -> None:
+        add_session(con, title="child", session_type="agent_task", parent_session_id=1)
+        add_session(con, title="root")
+        assert [r["id"] for r in list_child_sessions(con, limit=10)] == [2]
 
 
 # --------------------------------------------------------------------------- #
@@ -234,32 +234,32 @@ class TestChildTasks:
 
 
 class TestSnapshots:
-    # 目的：task_snapshot 不存在的 task 抛 ValueError。潜在缺陷：返回 None 泄漏到渲染层。
-    def test_task_not_found(self, con: sqlite3.Connection) -> None:
+    # 目的：session_snapshot 不存在的 session 抛 ValueError。潜在缺陷：返回 None 泄漏到渲染层。
+    def test_session_not_found(self, con: sqlite3.Connection) -> None:
         with pytest.raises(ValueError):
-            task_snapshot(con, task_id=999, limit=10)
+            session_snapshot(con, session_id=999, limit=10)
 
-    # 目的：task_snapshot 聚合结构含全部关键块，task 行不带整份 tool_schemas。潜在缺陷：缺失 key 导致渲染崩溃。
-    def test_task_snapshot_shape(self, con: sqlite3.Connection) -> None:
-        snap = task_snapshot(con, task_id=1, limit=10)
+    # 目的：session_snapshot 聚合结构含全部关键块，session 行不带整份 tool_surface。潜在缺陷：缺失 key 导致渲染崩溃。
+    def test_session_snapshot_shape(self, con: sqlite3.Connection) -> None:
+        snap = session_snapshot(con, session_id=1, limit=10)
         assert set(snap) == {
-            "task",
+            "session",
             "workspace",
             "runs",
-            "child_tasks",
+            "child_sessions",
             "queued_messages",
             "context",
         }
-        assert "tool_schemas" not in snap["task"]
+        assert "tool_surface" not in snap["session"]
 
-    # 目的：task 快照列出本 Task 外部队列积压（种类/投递方式），不带正文，不串到其它 Task。
+    # 目的：session 快照列出本 Session 外部队列积压（种类/投递方式），不带正文，不串到其它 Session。
     # 潜在缺陷：排队消息看不到，「发了没反应」无从排查；或正文泄漏到快照。
-    def test_task_snapshot_queued_messages(self, con: sqlite3.Connection) -> None:
-        add_task(con, title="other")
-        add_task_message(con, task_id=1, kind="user_input", delivery="next_run", payload={"text": "secret"})
-        add_task_message(con, task_id=1, kind="system_notice", delivery="immediate")
-        add_task_message(con, task_id=2)
-        queued = task_snapshot(con, task_id=1, limit=10)["queued_messages"]
+    def test_session_snapshot_queued_messages(self, con: sqlite3.Connection) -> None:
+        add_session(con, title="other")
+        add_session_message(con, session_id=1, kind="user_input", delivery="next_run", payload={"text": "secret"})
+        add_session_message(con, session_id=1, kind="system_notice", delivery="immediate")
+        add_session_message(con, session_id=2)
+        queued = session_snapshot(con, session_id=1, limit=10)["queued_messages"]
         assert [(q["kind"], q["delivery"]) for q in queued] == [
             ("user_input", "next_run"),
             ("system_notice", "immediate"),
@@ -271,14 +271,14 @@ class TestSnapshots:
         with pytest.raises(ValueError):
             run_snapshot(con, run_id=999, limit=10)
 
-    # 目的：run_snapshot 的 task_id 从 run 行取，指向缺失任务时不崩溃，且 run 行带模型 id。
+    # 目的：run_snapshot 的 session_id 从 run 行取，指向缺失会话时不崩溃，且 run 行带模型 id。
     # 潜在缺陷：孤儿 run 触发异常，或模型路由线索丢失。
     def test_run_snapshot_orphan_run(self, con: sqlite3.Connection) -> None:
-        add_run(con, task_id=777, model_config_id="conn/m")
+        add_run(con, session_id=777, model_config_id="conn/m")
         snap = run_snapshot(con, run_id=2, limit=10)
         assert snap["run"]["id"] == 2
         assert snap["run"]["model_config_id"] == "conn/m"
-        assert snap["task"] is None
+        assert snap["session"] is None
 
 
 # --------------------------------------------------------------------------- #

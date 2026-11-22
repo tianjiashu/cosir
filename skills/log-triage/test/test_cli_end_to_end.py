@@ -21,8 +21,8 @@ import query_logs as ql  # noqa: E402
 from app_db_fixture import (  # noqa: E402
     add_context,
     add_run,
-    add_task,
-    add_task_message,
+    add_session,
+    add_session_message,
     add_workspace,
     assistant_message,
     create_app_db,
@@ -32,36 +32,45 @@ from app_db_fixture import (  # noqa: E402
 
 
 def _build_app_db(path: Path) -> None:
-    """一个 Task 两个 Run：run 1 完成，run 2 挂起在后台命令上；外加一条排队消息。"""
+    """一个 Session 两个 Run：run 1 完成，run 2 挂起在后台命令上；外加一条排队消息。"""
 
     con = create_app_db(path)
-    add_workspace(con, name="ws1", root_path="/tmp/ws1")
-    add_task(con, title="中文任务😀")
-    add_run(con, task_id=1, end_reason="done", final_output="o", usage_json="{}")
-    add_run(con, task_id=1, status="suspended")
-    con.execute("UPDATE tasks SET current_run_id = 2 WHERE id = 1")
+    add_workspace(con, name="ws1", root_path="/tmp/ws1")  # noqa: S108 - 测试占位路径
+    add_session(con, title="中文会话😀")
+    add_run(con, session_id=1, end_reason="done", final_output="o", usage_json="{}")
+    add_run(con, session_id=1, status="suspended")
+    con.execute("UPDATE sessions SET current_run_id = 2 WHERE id = 1")
     con.commit()
-    add_context(con, task_id=1, run_id=1, sequence=1, message=user_message("hello 世界"), metadata={"kind": "user_input"})
     add_context(
-        con, task_id=1, run_id=1, sequence=2,
+        con, session_id=1, run_id=1, sequence=1,
+        message=user_message("hello 世界"), metadata={"kind": "user_input"},
+    )
+    add_context(
+        con, session_id=1, run_id=1, sequence=2,
         message=assistant_message("", ("c1", "read_file", {"path": "a.py"}), ("c2", "web_search", {"q": "x"})),
         metadata={"model": "deepseek-flash", "finish_reason": "tool_calls", "usage": {"total_tokens": 9}},
     )
-    add_context(con, task_id=1, run_id=1, sequence=3, message=tool_message("c1", "print(1)"), metadata={"status": "completed"})
+    add_context(
+        con, session_id=1, run_id=1, sequence=3,
+        message=tool_message("c1", "print(1)"), metadata={"status": "completed"},
+    )
     # c2 没有结果行：调用后进程被强杀。
     add_context(
-        con, task_id=1, run_id=2, sequence=4, turn=2,
+        con, session_id=1, run_id=2, sequence=4, turn=2,
         message=assistant_message("", ("c3", "execute_terminal", {"command": "sleep 100"})),
         metadata={"finish_reason": "tool_calls"},
     )
     add_context(
-        con, task_id=1, run_id=2, sequence=5, turn=2,
+        con, session_id=1, run_id=2, sequence=5, turn=2,
         message=tool_message("c3", "running in background"),
         metadata={"status": "pending", "background": {"label": "sleep"}},
     )
     # 被中断的流式回复：不进上下文。
-    add_context(con, task_id=1, run_id=2, sequence=6, turn=2, message=assistant_message("半截回复"), include_in_context=0)
-    add_task_message(con, task_id=1, kind="user_input", delivery="next_run")
+    add_context(
+        con, session_id=1, run_id=2, sequence=6, turn=2,
+        message=assistant_message("半截回复"), include_in_context=0,
+    )
+    add_session_message(con, session_id=1, kind="user_input", delivery="next_run")
     con.close()
 
 
@@ -82,17 +91,17 @@ def _json(cmd: list[str], db: str, capsys: pytest.CaptureFixture[str]) -> object
 APP_SUBCOMMANDS = [
     ["schema", "--no-columns"],
     ["workspaces"],
-    ["tasks", "--limit", "5"],
-    ["tasks", "--contains", "中文"],
+    ["sessions", "--limit", "5"],
+    ["sessions", "--contains", "中文"],
     ["runs", "--status", "completed"],
     ["runs", "--status", "suspended"],
     ["run", "1"],
-    ["task", "1"],
+    ["session", "1"],
     ["messages", "1"],
     ["messages", "1", "--in-context-only"],
     ["tools", "1"],
     ["tools", "1", "--failures-only"],
-    ["child-tasks"],
+    ["child-sessions"],
     ["stuck"],
 ]
 
@@ -138,27 +147,27 @@ class TestAppDbCli:
         assert (rows["c3"]["run_id"], rows["c3"]["turn"]) == (2, 2)
         assert _json(["tools", "1", "--run-id", "2"], app_db, capsys)[0]["tool_call_id"] == "c3"
 
-    # 目的：stuck 报出挂起的 run、指向它的 task、未结算的后台占位与排队积压。潜在缺陷：任一类漏报。
+    # 目的：stuck 报出挂起的 run、指向它的 session、未结算的后台占位与排队积压。潜在缺陷：任一类漏报。
     def test_stuck(self, app_db: str, capsys: pytest.CaptureFixture[str]) -> None:
         out = _json(["stuck"], app_db, capsys)
         assert [r["id"] for r in out["active_runs"]] == [2]
-        assert [t["id"] for t in out["tasks_with_active_run"]] == [1]
+        assert [t["id"] for t in out["sessions_with_active_run"]] == [1]
         [placeholder] = out["open_tool_placeholders"]
         assert placeholder["tool_call_id"] == "c3"
         assert placeholder["is_background"] == 1
         assert placeholder["run_status"] == "suspended"
         [queued] = out["queued_messages"]
-        assert (queued["task_id"], queued["queued"], queued["kinds"]) == (1, 1, "user_input")
+        assert (queued["session_id"], queued["queued"], queued["kinds"]) == (1, 1, "user_input")
 
     # 目的：缺库文件返回码为 1 且错误文本清晰。潜在缺陷：FileNotFoundError 外泄堆栈。
     def test_missing_db_file(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-        rc = qad.main(["tasks", "--db", str(tmp_path / "nope.sqlite3")])
+        rc = qad.main(["sessions", "--db", str(tmp_path / "nope.sqlite3")])
         assert rc == 1
         assert "not found" in capsys.readouterr().err
 
     # 目的：非法 limit 返回码 1（用户错误）。潜在缺陷：limit=0 静默通过。
     def test_invalid_limit(self, app_db: str, capsys: pytest.CaptureFixture[str]) -> None:
-        rc = qad.main(["tasks", "--limit", "0", "--db", app_db])
+        rc = qad.main(["sessions", "--limit", "0", "--db", app_db])
         assert rc == 1
         assert "limit" in capsys.readouterr().err
 
@@ -167,29 +176,41 @@ class TestAppDbCli:
         self, app_db: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         out = tmp_path / "out.json"
-        rc = qad.main(["tasks", "--db", app_db, "--format", "json", "--save", str(out)])
+        rc = qad.main(["sessions", "--db", app_db, "--format", "json", "--save", str(out)])
         assert rc == 0
         assert json.loads(out.read_text(encoding="utf-8"))
-        rc2 = qad.main(["tasks", "--db", app_db, "--format", "json", "--save", str(out)])
+        rc2 = qad.main(["sessions", "--db", app_db, "--format", "json", "--save", str(out)])
         assert rc2 == 1
-        rc3 = qad.main(["tasks", "--db", app_db, "--format", "json", "--save", str(out), "--force"])
+        rc3 = qad.main(["sessions", "--db", app_db, "--format", "json", "--save", str(out), "--force"])
         assert rc3 == 0
 
     # 目的：中文与表情符号能正常渲染（GBK 控制台不崩）。潜在缺陷：UnicodeEncodeError。
     def test_unicode_output(self, app_db: str, capsys: pytest.CaptureFixture[str]) -> None:
-        rc = qad.main(["tasks", "--db", app_db])
+        rc = qad.main(["sessions", "--db", app_db])
         captured = capsys.readouterr()
         assert rc == 0
-        assert "中文任务" in captured.out
+        assert "中文会话" in captured.out
 
 
 @pytest.fixture()
 def log_file(tmp_path: Path) -> str:
     p = tmp_path / "backend-2026-09-13.log"
     rows = [
-        {"ts": "2026-09-13T10:00:00.000Z", "level": "INFO", "logger": "l", "trace_id": "t1", "caller": "c", "event": "evt_a", "msg": "msg 中文😀", "data": {"k": 1}, "error": None, "truncated": False},
-        {"ts": "2026-09-13T10:01:00.000Z", "level": "ERROR", "logger": "l", "trace_id": "t1", "caller": "c", "event": "evt_b", "msg": "boom", "data": {}, "error": {"type": "X"}, "truncated": True},
-        {"ts": "2026-09-13T10:02:00.000Z", "level": "WARNING", "logger": "l", "trace_id": "t2", "caller": "c", "event": "evt_c", "msg": "warn", "data": {}, "error": None, "truncated": False},
+        {
+            "ts": "2026-09-13T10:00:00.000Z", "level": "INFO", "logger": "l", "trace_id": "t1",
+            "caller": "c", "event": "evt_a", "msg": "msg 中文😀", "data": {"k": 1},
+            "error": None, "truncated": False,
+        },
+        {
+            "ts": "2026-09-13T10:01:00.000Z", "level": "ERROR", "logger": "l", "trace_id": "t1",
+            "caller": "c", "event": "evt_b", "msg": "boom", "data": {}, "error": {"type": "X"},
+            "truncated": True,
+        },
+        {
+            "ts": "2026-09-13T10:02:00.000Z", "level": "WARNING", "logger": "l", "trace_id": "t2",
+            "caller": "c", "event": "evt_c", "msg": "warn", "data": {}, "error": None,
+            "truncated": False,
+        },
     ]
     p.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
     return str(p)

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """业务库会话上下文回放查询（log-triage skill 内置）。
 
-单一职责：只读解析 ``conversation_task_contexts`` 的消息行，产出两类排障视图——「逐条消息回放」与
+单一职责：只读解析 ``session_contexts`` 的消息行，产出两类排障视图——「逐条消息回放」与
 「工具调用 / 结果配对汇总」，使 Agent 行为问题（答非所问、工具参数错、工具失败、上下文缺口）可以在
 不启动服务的情况下复盘。
 
 职责边界：
-- 负责：按 task / run 读取消息行、解析 ``message_json`` 与 ``metadata_json``、按 ``tool_call_id``
+- 负责：按 session / run 读取消息行、解析 ``message_json`` 与 ``metadata_json``、按 ``tool_call_id``
   配对调用与结果、汇总上下文计数。
-- 不负责：run 生命周期状态与委派子任务（见 ``appdb_agent_facts``）、渲染与截断（见 CLI 入口）。
+- 不负责：run 生命周期状态与委派子会话（见 ``appdb_agent_facts``）、渲染与截断（见 CLI 入口）。
 
 数据结构事实（随后端 ``ContextEntry`` 同步）：
 
@@ -16,11 +16,11 @@
   assistant 的工具调用在 ``tool_calls[]``（``{id, type, function: {name, arguments}}``，
   ``arguments`` 是 JSON 字符串）；tool 消息带 ``tool_call_id`` 与文本 ``content``。
 - ``metadata_json`` 按角色是不同结构：user 行带 ``kind``（``user_input`` / ``agent_message`` /
-  ``notice`` / ``background_result`` / ``user_decision`` / ``tool_image`` 等）；assistant 行带
+  ``notice`` / ``decision`` / ``background_result`` / ``tool_image`` 等）；assistant 行带
   ``model`` / ``finish_reason`` / ``usage``；tool 行带卡片状态 ``status``（pending / running /
   completed / failed / cancelled）、``error`` 与后台工作记录 ``background``。
 - ``include_in_context=0`` 的行不进模型上下文：流式中或被中断的回复、撤回的回合都是这样。
-- ``tool_call_id`` 在 Task 内唯一（后端冲突时改写厂商 id），所以按 id 配对即可，不必带 run。
+- ``tool_call_id`` 在 Session 内唯一（后端冲突时改写厂商 id），所以按 id 配对即可，不必带 run。
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from appdb_readonly import query_rows, require_tables, safe_json
 from sqlite_values import as_bool, bool_true_sql
 
 _COLUMNS = (
-    "id, task_id, run_id, sequence, turn, include_in_context, project_to_transport, "
+    "id, session_id, run_id, sequence, turn, include_in_context, project_to_transport, "
     "metadata_json, message_json"
 )
 
@@ -41,18 +41,18 @@ _COLUMNS = (
 def list_messages(
     connection: sqlite3.Connection,
     *,
-    task_id: int,
+    session_id: int,
     run_id: int | None = None,
     limit: int,
     order: str = "asc",
     in_context_only: bool = False,
 ) -> list[dict[str, Any]]:
-    """按 ``sequence`` 回放某任务（或某次运行）的上下文消息。
+    """按 ``sequence`` 回放某会话（或某次运行）的上下文消息。
 
     参数:
         connection: 只读 SQLite 连接。
-        task_id: 任务标识。
-        run_id: 可选运行过滤；为 None 时返回该任务全部运行的消息（含继承来的、``run_id`` 为空的行）。
+        session_id: 会话标识。
+        run_id: 可选运行过滤；为 None 时返回该会话全部运行的消息（含继承来的、``run_id`` 为空的行）。
         limit: 最大返回行数。
         order: ``asc``（升序回放，默认）或 ``desc``（最近的在前）。
         in_context_only: 只返回进模型上下文的行（排除流式 / 中断的回复与撤回的回合）。
@@ -63,15 +63,15 @@ def list_messages(
         ``text`` / ``tool_calls`` / ``usage`` / ``error``。
 
     异常:
-        ValueError: ``conversation_task_contexts`` 表缺失，或 ``order`` 非法。
+        ValueError: ``session_contexts`` 表缺失，或 ``order`` 非法。
         sqlite3.Error: 查询失败。
     """
 
-    require_tables(connection, "conversation_task_contexts")
+    require_tables(connection, "session_contexts")
     if order not in ("asc", "desc"):
         raise ValueError("order must be asc or desc")
-    where = ["task_id = ?"]
-    params: list[Any] = [task_id]
+    where = ["session_id = ?"]
+    params: list[Any] = [session_id]
     if run_id is not None:
         where.append("run_id = ?")
         params.append(run_id)
@@ -80,7 +80,7 @@ def list_messages(
         where.append(bool_true_sql("include_in_context"))
     direction = "ASC" if order == "asc" else "DESC"
     sql = (
-        f"SELECT {_COLUMNS} FROM conversation_task_contexts WHERE "  # noqa: S608 - 列名为常量
+        f"SELECT {_COLUMNS} FROM session_contexts WHERE "  # noqa: S608 - 列名为常量
         + " AND ".join(where)
         + f" ORDER BY sequence {direction} LIMIT ?"
     )
@@ -91,7 +91,7 @@ def list_messages(
 def summarize_tool_calls(
     connection: sqlite3.Connection,
     *,
-    task_id: int,
+    session_id: int,
     run_id: int | None = None,
     contains: str = "",
     failures_only: bool = False,
@@ -109,11 +109,11 @@ def summarize_tool_calls(
 
     参数:
         connection: 只读 SQLite 连接。
-        task_id: 任务标识。
+        session_id: 会话标识。
         run_id: 可选运行过滤（按发起调用的 assistant 行所属 run）。
         contains: 可选关键字，匹配工具名 / 参数 / 结果文本。
         failures_only: 只返回 ``failed`` 的调用。
-        limit: 最大返回条数；作用于产出条目，SQL 需要全量扫描该 task 的消息行才能配对。
+        limit: 最大返回条数；作用于产出条目，SQL 需要全量扫描该 session 的消息行才能配对。
 
     返回:
         工具调用汇总列表，按请求顺序；每项含 ``tool_call_id`` / ``tool_name`` / ``status`` /
@@ -121,16 +121,16 @@ def summarize_tool_calls(
         ``request_sequence`` / ``result_sequence``。
 
     异常:
-        ValueError: ``conversation_task_contexts`` 表缺失。
+        ValueError: ``session_contexts`` 表缺失。
         sqlite3.Error: 查询失败。
     """
 
-    require_tables(connection, "conversation_task_contexts")
+    require_tables(connection, "session_contexts")
     rows = query_rows(
         connection,
-        f"SELECT {_COLUMNS} FROM conversation_task_contexts "  # noqa: S608 - 列名为常量
-        "WHERE task_id = ? ORDER BY sequence ASC",
-        (task_id,),
+        f"SELECT {_COLUMNS} FROM session_contexts "  # noqa: S608 - 列名为常量
+        "WHERE session_id = ? ORDER BY sequence ASC",
+        (session_id,),
     )
     calls: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -174,8 +174,8 @@ def summarize_tool_calls(
     return selected[:limit]
 
 
-def context_statistics(connection: sqlite3.Connection, *, task_id: int) -> dict[str, Any]:
-    """汇总某任务的上下文规模与构成。
+def context_statistics(connection: sqlite3.Connection, *, session_id: int) -> dict[str, Any]:
+    """汇总某会话的上下文规模与构成。
 
     返回:
         ``{"total", "in_context", "excluded", "runs", "turns", "by_role", "by_user_kind"}``：
@@ -183,16 +183,16 @@ def context_statistics(connection: sqlite3.Connection, *, task_id: int) -> dict[
         按角色分组的条数，以及 user 行按 metadata ``kind`` 分组的条数。
 
     异常:
-        ValueError: ``conversation_task_contexts`` 表缺失。
+        ValueError: ``session_contexts`` 表缺失。
         sqlite3.Error: 查询失败。
     """
 
-    require_tables(connection, "conversation_task_contexts")
+    require_tables(connection, "session_contexts")
     rows = query_rows(
         connection,
         "SELECT run_id, turn, include_in_context, metadata_json, message_json "
-        "FROM conversation_task_contexts WHERE task_id = ?",
-        (task_id,),
+        "FROM session_contexts WHERE session_id = ?",
+        (session_id,),
     )
     by_role: dict[str, int] = {}
     by_user_kind: dict[str, int] = {}

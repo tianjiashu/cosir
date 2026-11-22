@@ -246,10 +246,11 @@ def write_output_file(
     if output_path.exists() and not force:
         raise FileExistsError(f"output file already exists: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_format == "json":
-        content = json.dumps(entries, ensure_ascii=False, indent=2)
-    else:
-        content = render_text(entries)
+    content = (
+        json.dumps(entries, ensure_ascii=False, indent=2)
+        if output_format == "json"
+        else render_text(entries)
+    )
     output_path.write_text(content + "\n", encoding="utf-8")
 
 

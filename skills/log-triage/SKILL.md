@@ -4,7 +4,7 @@ description: |
   Use when investigating or root-causing problems in the local coding-agent desktop project:
   bugs, exceptions, crashes, hangs, stuck runs, missing UI updates, tool failures,
   unexpected Agent behavior, or requests to "看日志排查", "看本地日志文件", "不启动服务直连数据库",
-  "查 task/run/conversation_runs/conversation_task_contexts", "trace 在哪",
+  "查 session/run/runs/session_contexts", "trace 在哪",
   "app.sqlite3", "frontend.log", "backend.bootstate.json", "Agent 回放", or "复现问题".
 allowed-tools: Read,Write,Bash
 ---
@@ -23,7 +23,7 @@ allowed-tools: Read,Write,Bash
 | 标识 | 是什么 | 产生点 | 落盘/可见位置 | 查询通道 |
 |------|--------|--------|----------------|----------|
 | **链路 trace_id**（32 位小写 hex） | 唯一能**跨前端与后端日志**串起一条请求的键 | 前端 `apps/desktop/lib/logging/trace-id.ts:newTraceId()`（`crypto.getRandomValues` 128-bit）；后端缺失时由 `new_trace_id()`（`uuid4().hex`）补生成 | 后端固定 JSONL 文件日志 `backend-*.log` 的 `trace_id`；前端 `frontend-*.log` 的 `trace_id` | `query_logs.py trace <ID>` |
-| **run_id / task_id**（整数） | 业务事实主键：一次 Agent 执行 = 一个 run | `conversation_runs.id` / `tasks.id` | `<数据根>/.cosir/storage/app.sqlite3` | `query_app_db.py` |
+| **run_id / session_id**（整数） | 业务事实主键：一次 Agent 执行 = 一个 run，run 属于一个会话 | `runs.id` / `sessions.id` | `<数据根>/.cosir/storage/app.sqlite3` | `query_app_db.py` |
 
 **链路 trace_id 的前后端同源链路（照此反查）**：
 `frontendLog(..., { traceId })` 把同一 id 写进前端日志 → `lib/http/client.ts:requestRaw` 以
@@ -34,7 +34,7 @@ allowed-tools: Read,Write,Bash
 
 **实战要点**：
 - 前后端日志中的 32 位 hex 是链路 trace_id，用 `query_logs.py trace` 反查。
-- 排查 Agent 行为/状态一律用整数 `task_id` / `run_id` 走 `query_app_db.py`；不要拿它当 trace_id，反之亦然。
+- 排查 Agent 行为/状态一律用整数 `session_id` / `run_id` 走 `query_app_db.py`；不要拿它当 trace_id，反之亦然。
 - 两条链路可同时存在但数值无关，不要用其中一条去校验另一条。
 
 ---
@@ -49,9 +49,10 @@ allowed-tools: Read,Write,Bash
 > ⚠️ **历史布局残留**：Windows 旧的 `%APPDATA%\com.cosir.desktop\.cosir\`、
 > macOS 旧的 `~/Library/Application Support/com.cosir.desktop/.cosir/` 可能仍留在磁盘上
 > （含一份**早已停止更新**的 `app.sqlite3` 与日志）。它们是布局变更前的产物，**不是**当前数据根；
-> 若脚本默认查到的库表仍是 `conversation_commands` / `delegations` / `models` / `providers`，
-> 说明命中了残留目录——按 §3「已从 schema 移除」处理，并改用 `--db` / `--log-file` 显式指向
-> `<用户主目录>/.cosir/`。
+> 若脚本默认查到的库表仍是 `tasks` / `conversation_runs` / `conversation_task_contexts` /
+> `task_messages`（Task→Session 改名前的旧库）或更早的 `conversation_commands` / `delegations` /
+> `models` / `providers`，说明命中了残留目录——按 §3「已从 schema 移除」处理，并改用 `--db` /
+> `--log-file` 显式指向 `<用户主目录>/.cosir/`。
 
 **所有运行期数据都在 `<数据根>/.cosir/` 下**（日志、业务库、配置、runtime）。
 
@@ -114,9 +115,11 @@ except Exception:
 
 - `event` = `record.msg` 的**首个空白分隔 token**，必须匹配 `^[a-z][a-z0-9_]*$`，否则落为 `log_event`（`query_logs.py --event-prefix` 查的就是它）。
 - `msg` = `extra["msg"]`（由 `install_msg_relocation` 在 `makeRecord` 阶段重定位到 `display_message`）；缺失时回退为 `event`。
-- `data` = `extra["data"]` 与其余未保留 extra 字段**合并**后统一脱敏；单字段文本上限 **2000 字符**，超限追加 `[TRUNCATED:n]` 并把 `truncated` 置 true。
-- `trace_id` 由 `LogContextFilter` 自动回填，**不要手动传**；`task_id`/`run_id` 等业务 id 放 `extra["data"]`。
-- 子进程工具的日志经 `SubprocessQueueHandler` 回传父进程统一落盘，不另开日志文件。
+- `data` = `extra["data"]` 与其余未保留 extra 字段**合并**；单字段文本上限 **2000 字符**（`Constant.LogRecord.MAX_LOG_TEXT_LENGTH`），超限追加 `[TRUNCATED:n]` 并把 `truncated` 置 true。**后端日志不做脱敏**——写日志时自己不要放 Key / Token / 完整请求正文。
+- `trace_id` 由 `LogContextFilter` 自动回填，**不要手动传**；`session_id`/`run_id` 等业务 id 放 `extra["data"]`。
+- 工具都在后端进程内执行，日志直接落同一份 `backend-*.log`；唯一的子进程（Terminal Worker）不自己写日志，
+  stderr 由 `tools/terminal_runtime/worker_client.py:_drain_stderr` 逐行回收为 `terminal_worker_stderr`
+  事件（限长、去掉控制序列），同样进 `backend-*.log`。
 
 > **异常信息会落盘，但被截断。** `MappedLogRecord._extract_error`
 > （`app/models/mapped_log_record.py`）会把 `exc_info` 渲染成
@@ -141,7 +144,7 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 });
 ```
 
-- 前端日志与后端日志**同为同一套字段的同构结构**（`logger=coding_agent.frontend`、`caller=desktop.frontend`）；`event` 必须 snake_case，且宿主侧 `log.write`（`electron/main/ipc.ts`）强制 `trace_id` 为 32 位小写 hex。
+- 前端日志与后端日志**同为同一套字段的同构结构**（`logger=coding_agent.frontend`、`caller=desktop.frontend`）；`event` 必须 snake_case，且宿主侧 `log.write`（`electron/main/ipc.ts`）强制 `trace_id` 为 32 位小写 hex，字段集限定为 ts/level/logger/trace_id/caller/event/msg/data/error/truncated。
 - `error` 只保留 `type`，message 固定为「客户端请求失败（错误正文已省略）」。
 - 落盘经宿主 `window.cosirHost.log.write`；纯浏览器 `vite dev` 没有宿主，只写控制台与内存环形缓冲，**不会落盘**。
 
@@ -154,30 +157,35 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 | 表 | 承载事实 | 典型症状 / 排查点 |
 |----|----------|-------------------|
 | `workspaces` | 工作区身份与根路径 | 路径越界、找不到文件、工作区切换异常 |
-| `tasks` | 任务身份、`task_type`（`user` / `user_fork` / `agent_fork` / `agent_task`）、委派关系 `parent_task_id`（只有委派子任务 `agent_task` 写；fork 的来源记在 `extra.fork.source_task_id`）、`derivation_depth`、`current_run_id`、`extra`（严格结构：`fork` / `deriving_call_id`）、固化的 `tool_schemas` | 任务列表状态不对、委派链路、fork 来源、工具面不对 |
-| `conversation_runs` | **Run 生命周期唯一事实源**：`status` / `end_reason` / `error_json` / `final_output` / `usage_json` / `context_window_total` / `agent_id` / `model_config_id`（形如「连接 id/模型名」，模型名直接读它）/ `options`（冻结的发起配置）/ `execution_data`（执行状态：步数、下一节点、工具批次） | 一直转圈、失败原因、用量与成本、模型路由错、挂起不醒 |
-| `conversation_task_contexts` | **上下文消息**：`message_json`（OpenAI SDK 请求消息）/ `metadata_json`（按角色：user 行的 `kind`、assistant 行的 `model` / `finish_reason` / `usage`、tool 行的卡片 `status` / `error` / `background`）/ `sequence` / `turn` / `run_id`（继承来的行为空）/ `include_in_context` / `project_to_transport` | Agent 回放、工具调用与结果、上下文缺口、工具状态不符、撤回 |
-| `task_messages` | **外部队列**：还没并入上下文的消息，`kind`（`user_input` / `agent_message` / `system_notice` / `background_result` / `user_decision`）/ `delivery`（`immediate` / `next_run`）/ `payload` | 消息发了没反应、排队不处理、汇报没到、审批决定没生效 |
+| `sessions` | 会话身份、`session_type`（`user` / `user_fork` / `agent_fork` / `delegated`）、委派关系 `parent_session_id`（只有委派子会话 `delegated` 写；fork 的来源记在 `extra.fork.source_session_id`）、`derivation_depth`、`current_run_id`、`extra`（严格结构：`fork` / `deriving_call_id` / `writable_root`）、创建时固化的工具面 `tool_surface` | 会话列表状态不对、委派链路、fork 来源、工具面不对 |
+| `runs` | **Run 生命周期唯一事实源**：`status` / `end_reason` / `error_json` / `final_output` / `usage_json` / `context_window_total` / `agent_id` / `model_config_id`（形如「连接 id/模型名」，模型名直接读它）/ `reasoning_effort` / `terminal_permission_mode`（`request_approval` / `full_access`，新增列）/ `extra.status_history`（状态迁移历史，只供观测页读）/ `execution_data`（执行状态：步数、下一节点、工具批次） | 一直转圈、失败原因、用量与成本、模型路由错、挂起不醒、终端授权口径 |
+| `session_contexts` | **上下文消息**：`message_json`（OpenAI SDK 请求消息）/ `metadata_json`（按角色：user 行的 `kind`、assistant 行的 `model` / `finish_reason` / `usage`、tool 行的卡片 `status` / `error` / `background`）/ `sequence` / `turn` / `run_id`（继承来的行为空）/ `message_id`（并入时来自队列行 id）/ `include_in_context` / `project_to_transport` | Agent 回放、工具调用与结果、上下文缺口、工具状态不符、撤回 |
+| `session_messages` | **外部队列**：还没并入上下文的消息，`kind`（`user_input` / `agent_message` / `system_notice` / `background_result` / `user_decision`）/ `delivery`（`immediate` / `next_run`）/ `payload` / `project_to_transport` | 消息发了没反应、排队不处理、汇报没到、审批决定没生效 |
 
 **模型配置不在库里**：事实源是系统级 `<数据根>/.cosir/config/models.json`（连接与模型两层，**含明文 Key，不要整份读出或贴出**）；要核对某个 Run 用的模型，看它的 `model_config_id` 再到这个文件里找同名连接与模型。
 
 **已从 schema 移除、不要再查**：`model_configs` / `providers` / `models`（模型配置改为 `config/models.json`）、
 `agent_team_runs`（Agent Team 已移除；旧库里可能还残留这张空表）、`delegations`、`conversation_commands`、
-`terminal_sessions`、`attachment_assets`（附件改为纯文件系统，落 workspace 的 `.cosir/Attachment/`）；更早的
-`turn_id` / `turns` / `turn_messages` / `runtime_events`。已删的列：`tasks.parent_run_id` /
-`tasks.context_window_total`、`conversation_runs.input_text`、`conversation_task_contexts.is_streaming` /
-`transport_metadata_json` / `tool_call_id`。查这些会报 `table not found` / `no such column`（`require_tables`
-会连带列出库内真实表名），按 schema 漂移处理，先确认是旧库还是脚本落后于后端。
+`terminal_sessions`、`attachment_assets`（附件改为纯文件系统，落 workspace 的 `.cosir/Attachment/`）；
+以及 Task→Session 改名前的 `tasks` / `conversation_runs` / `conversation_task_contexts` / `task_messages`
+（现在是 `sessions` / `runs` / `session_contexts` / `session_messages`）；更早的
+`turn_id` / `turns` / `turn_messages` / `runtime_events`。已删 / 改名的列：`sessions.tool_schemas`（→ `tool_surface`）、
+`sessions.parent_task_id`（→ `parent_session_id`）、`sessions.task_type`（→ `session_type`）、`runs.task_id`
+（→ `session_id`）、`runs.input_text`、`runs.options`（冻结配置拆进 `reasoning_effort` / `terminal_permission_mode`
+与 `extra`）、`session_contexts.task_id`（→ `session_id`）、`session_contexts.is_streaming` /
+`transport_metadata_json` / `tool_call_id`（工具调用 id 现在只在 `message_json` 里）。查这些会报
+`table not found` / `no such column`（`require_tables` 会连带列出库内真实表名），按 schema 漂移处理，
+先确认是旧库还是脚本落后于后端。
 
 **状态词表（唯一事实源）**：
 
-- Run：`running` / `suspended` / `completed` / `failed` / `cancelled`，没有 `pending`（Run 直接以 running 创建）。合法迁移在 `apps/backend/app/models/enums/conversation_run_status.py:RunTransition`：`running → suspended`（等后台结果或用户决定）、`suspended → running`（唤醒）、`running → completed | failed`、`running | suspended → cancelled`、`cancelled | failed → running`（用户恢复）。`suspended` 是正常等待，不等于卡死；后端重启会把遗留的 `running` 收敛为 `cancelled`（`end_reason=runtime_restarted`）。
+- Run：`running` / `suspended` / `completed` / `failed` / `cancelled`，没有 `pending`（Run 直接以 running 创建）。合法迁移在 `apps/backend/app/models/enums/run_status.py:RunTransition`：`running → suspended`（等后台结果或用户决定）、`suspended → running`（唤醒）、`running → completed | failed`、`running | suspended → cancelled`、`cancelled | failed → running`（用户恢复）。`suspended` 是正常等待，不等于卡死；后端重启会把遗留的 `running` 收敛为 `cancelled`（`end_reason=runtime_restarted`）。
 - 工具卡片状态：tool 行 `metadata_json.status` 取 `pending / running / completed / failed / cancelled`。
-  **判读口径**：`pending` 带 `background` 是后台命令还在跑；`pending` 不带 `background` 是等用户决定（HITL，目前只有 `ask_user`；决定并入时同一事务推到 `completed`）；`running` 是工具正在执行（准入通过后由执行器发出，执行中进程被强杀会残留）；Run 被取消或重启收敛时残留占位会被推到 `cancelled`。没有 tool 行的调用（`tools` 里显示 `no_result`）通常意味着进程被强杀后没再启动。`tool_call_id` 在 Task 内唯一，`tools` 子命令按它配对。
+  **判读口径**：`pending` 带 `background` 是后台命令还在跑；`pending` 不带 `background` 是等用户决定（HITL，目前只有 `ask_user`；决定并入时同一事务推到 `completed`）；`running` 是工具正在执行（准入通过后由执行器发出，执行中进程被强杀会残留）；Run 被取消或重启收敛时残留占位会被推到 `cancelled`。没有 tool 行的调用（`tools` 里显示 `no_result`）通常意味着进程被强杀后没再启动。`tool_call_id` 在 Session 内唯一，`tools` 子命令按它配对。
 - 消息角色：`system` / `user` / `assistant` / `tool`（OpenAI SDK 格式）。assistant 的工具调用在 `message_json.tool_calls[]`（`{id, type, function: {name, arguments}}`，`arguments` 是 JSON 字符串）；工具结果是 tool 消息的 `content` + `tool_call_id`。所有输入进模型时都是 user 角色，来源看 `metadata_json.kind`。
 
 **边界提醒**：`app.sqlite3`（业务事实）与固定 JSONL 日志文件（诊断旁路）职责分离，不要拿日志判断 Run
-状态——**Run 状态只看 `conversation_runs`**；Run 的执行状态（步数、下一节点、工具批次）在它的 `execution_data` 列，没有独立的 checkpoint 库。
+状态——**Run 状态只看 `runs`**；Run 的执行状态（步数、下一节点、工具批次）在它的 `execution_data` 列，没有独立的 checkpoint 库。
 
 ---
 
@@ -186,7 +194,7 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 ### 阶段 A — 收集症状与入口
 
 1. 问清/确认：问题现象、最早出现时机、是否必现、用户手头有什么（报错文本、截图、某个 id）。
-2. 若有 id，先按 §0 判定类型：链路 trace_id → 日志脚本；run_id/task_id → 业务库脚本。
+2. 若有 id，先按 §0 判定类型：链路 trace_id → 日志脚本；run_id/session_id → 业务库脚本。
 3. 若只有现象没有 id：用 `query_logs.py recent --errors-only` 与 `query_app_db.py stuck` 反查最近的异常与未收敛记录，再向用户确认时间点。
 4. **先用 `Read` / 代码确认相关模块的真实位置**，不要凭记忆猜路径或表名。
 
@@ -200,7 +208,7 @@ await frontendLog("ERROR", "http_request_failed", "前端 HTTP 请求失败", {
 - **前端相关**（UI 卡死/报错/不更新/白屏）：直接 `Read <数据根>/.cosir/logs/frontend-YYYY-MM-DD.log`，
   按时间倒序看 ERROR/WARNING，关注 `context.trace_id`、`event`、`data`；宿主级问题看 `desktop-*.log`。
 
-- **后端相关**（API 报错/任务失败/工具执行异常）：
+- **后端相关**（API 报错/会话失败/工具执行异常）：
 
 ```bash
 # 按链路 trace 拉完整链路（已知链路 trace_id 时首选，按时间升序）
@@ -219,13 +227,13 @@ uv run --project apps/backend python skills/log-triage/scripts/query_logs.py rec
 ```bash
 # 先确认库与 schema 没漂移
 uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py schema --no-columns
-# 任务 / 运行
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tasks --limit 20
+# 会话 / 运行
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py sessions --limit 20
 uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py runs --limit 20 --status running
-# 单个 task / run 完整排障快照（任务/运行/消息/工具/委派/排队消息一次拿全）
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py task <TASK_ID> --limit 30
+# 单个 session / run 完整排障快照（会话/运行/消息/工具/委派/排队消息一次拿全）
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py session <SESSION_ID> --limit 30
 uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py run <RUN_ID> --format json
-# 未收敛体检（活跃 run / 指向活跃 run 的 task / 未结算的工具占位 / 排队消息）
+# 未收敛体检（活跃 run / 指向活跃 run 的 session / 未结算的工具占位 / 排队消息）
 uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py stuck
 ```
 
@@ -233,20 +241,20 @@ uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py s
 
 ```bash
 # 工具调用与结果的配对汇总（排查「模型给错参数」「工具一直失败」的首选视图）
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tools <TASK_ID> --limit 50
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tools <TASK_ID> --failures-only
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tools <TASK_ID> --contains "search_files"
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tools <SESSION_ID> --limit 50
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tools <SESSION_ID> --failures-only
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py tools <SESSION_ID> --contains "search_files"
 # 逐条回放上下文消息（角色、输入种类、正文、工具调用、用量与工具卡片状态）
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py messages <TASK_ID> --limit 50
-uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py messages <TASK_ID> --run-id <RUN_ID> --in-context-only
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py messages <SESSION_ID> --limit 50
+uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py messages <SESSION_ID> --run-id <RUN_ID> --in-context-only
 ```
 
 ### 阶段 C — 交叉验证（关键）
 
 - **同一条链路两边印证**：带链路 trace_id 的问题，应在后端 JSONL 日志文件与前端日志里都能找到同一 `trace_id` 的记录；只有一侧有 → 说明另一侧观测缺失（进入阶段 D）。
 - **同一时间两种坐标对齐**：日志 `ts`（UTC RFC3339 毫秒）与业务库 `created_at` / `updated_at` /
-  `sequence` 对齐；`conversation_task_contexts.sequence` 是 task 内全局插入序，用它排列执行时间线，而不是靠时间戳猜测顺序。
-- **状态不要只看日志**：日志显示请求成功 ≠ 业务状态正确。以 `conversation_runs.status` / `end_reason` /
+  `sequence` 对齐；`session_contexts.sequence` 是 Session 内全局插入序，用它排列执行时间线，而不是靠时间戳猜测顺序。
+- **状态不要只看日志**：日志显示请求成功 ≠ 业务状态正确。以 `runs.status` / `end_reason` /
   `error_json`、tool 行的 `metadata_json.status` 为准；日志是旁路，
   不是事实源。
 - **工具结局两处对齐**：卡片状态（tool 行 `metadata_json.status` / `error`）与模型看到的结果正文
@@ -257,7 +265,7 @@ uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py m
 当信息不足以定位根因（日志只有事件名、无关键入参、关键分支无记录）时：
 
 1. **补日志**（遵循项目《通用日志开发规范》与 AGENTS.md 日志章节）：
-   - 必须带**上下文**：`extra["data"]` 中放 task_id / run_id / 路径 / 命令 / 重试状态等定位字段。
+   - 必须带**上下文**：`extra["data"]` 中放 session_id / run_id / 路径 / 命令 / 重试状态等定位字段。
    - 异常路径必须写 error 日志；**堆栈会随 `error.type` / `error.message` / `error.stack` 落盘并按单字段 2000 字符截断（见 §2）**，但截断可能丢掉最深帧，因此仍要把「异常类型之外的因果」显式写进 `data`。
    - 外部依赖调用记：目标、操作名、耗时、状态码、失败原因。
    - **绝不输出 secret / 敏感信息**（API Key、Token、Cookie、手机号、身份证、完整请求正文）。
@@ -286,7 +294,7 @@ uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py m
 ## 5. 纪律（不可违反）
 
 - **日志优先于猜想**：任何「可能是 X」的假设，先去日志/业务库里找证据。
-- **两类标识必区分**（见 §0）：链路 trace_id 可跨前后端日志反查；业务排查用 run_id/task_id。拿错标识查错通道 = 白查。
+- **两类标识必区分**（见 §0）：链路 trace_id 可跨前后端日志反查；业务排查用 run_id/session_id。拿错标识查错通道 = 白查。
 - **日志不是事实源**：Run / 工具调用等权威状态在业务库（文件变更集能力已整体移除，勿再按该心智排查）；日志只做旁路印证。
 - **复现优先自己来**：pytest > 起后端调 API > 请用户前端复现。能自己复现就别打扰用户。
 - **补日志要合规**：上下文 + 分级 + 不泄密、禁止空 catch；堆栈会落盘但被截断（见 §2），关键因果仍要写进 `data`。
@@ -308,13 +316,13 @@ uv run --project apps/backend python skills/log-triage/scripts/query_logs.py tra
 # 下同：uv run --project apps/backend python skills/log-triage/scripts/query_app_db.py <子命令>
 schema      [--table T] [--no-columns]                        # 真实表清单/行数/列
 workspaces  [--limit N]
-tasks       [--workspace-id I] [--contains T] [--limit N]
-runs        [--task-id I] [--status S] [--contains T] [--limit N]
+sessions    [--workspace-id I] [--contains T] [--limit N]
+runs        [--session-id I] [--status S] [--contains T] [--limit N]
 run         <RUN_ID> [--limit N]                              # run 排障快照
-task        <TASK_ID> [--limit N]                             # task 排障快照
-messages    <TASK_ID> [--run-id I] [--order asc|desc] [--in-context-only] [--limit N]
-tools       <TASK_ID> [--run-id I] [--contains T] [--failures-only] [--limit N]
-child-tasks [--parent-task-id I] [--limit N]                  # 委派子任务
+session     <SESSION_ID> [--limit N]                          # session 排障快照
+messages    <SESSION_ID> [--run-id I] [--order asc|desc] [--in-context-only] [--limit N]
+tools       <SESSION_ID> [--run-id I] [--contains T] [--failures-only] [--limit N]
+child-sessions [--parent-session-id I] [--limit N]            # 委派子会话
 stuck       [--limit N]                                       # 活跃 run / 未结算占位 / 排队消息
 # 日志共享选项：--log-file PATH  --format text|json  --save FILE  --force
 
@@ -334,8 +342,13 @@ stuck       [--limit N]                                       # 活跃 run / 未
 > `--format json` 给出未经截断的完整字段（文本模式会压缩长文本），排查细节优先用 json。
 >
 > **维护说明（双份副本风险）**：仓库 `skills/log-triage/` 是受版本管理的**唯一源**；
-> 运行时从用户级目录加载（Windows `%USERPROFILE%\.codebuddy\skills\log-triage\`）。
-> 修改任一文件后必须同步 `SKILL.md` 与 `scripts/` 到用户级目录，否则 `use_skill` 加载到的仍是旧版本。
+> 实际加载位置有两处，按用途同步：
+> - 开发期由 CodeBuddy 从用户级目录加载：Windows `%USERPROFILE%\.codebuddy\skills\log-triage\`、
+>   macOS/Linux `~/.codebuddy/skills/log-triage/`；
+> - cosir 应用自身的内置/导入 Skill 归系统级 `<数据根>/.cosir/skills/log-triage/`（cosir 专属），
+>   共享目录 `~/.agents/skills/log-triage/`（Codex 等工具也读）。目录规则见
+>   `apps/backend/app/service/configuration/skills/skill_root.py`。
+> 修改任一文件后必须同步 `SKILL.md` 与 `scripts/` 到实际加载的那份，否则 `use_skill` 加载到的仍是旧版本。
 > `test/` 只服务仓库内回归，运行时不需要，**不随安装副本同步**。
 > `appdb_*.py` 各查询模块必须随 `apps/backend/app/storage/model` 的表结构演进同步更新。
 >

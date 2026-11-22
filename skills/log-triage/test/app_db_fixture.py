@@ -20,9 +20,8 @@ _BACKEND = Path(__file__).resolve().parents[3] / "apps" / "backend"
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-from sqlalchemy import create_engine  # noqa: E402
-
 from app.storage.store_engines import initialize_app_schema  # noqa: E402
+from sqlalchemy import create_engine  # noqa: E402
 
 _TS = "2026-01-01T00:00:00"
 
@@ -53,35 +52,40 @@ def _insert(connection: sqlite3.Connection, table: str, values: dict[str, Any]) 
 
 
 def add_workspace(connection: sqlite3.Connection, **values: Any) -> int:
-    return _insert(connection, "workspaces", {"name": "ws", "root_path": "/tmp/ws", **values})
-
-
-def add_task(connection: sqlite3.Connection, *, workspace_id: int = 1, **values: Any) -> int:
     return _insert(
         connection,
-        "tasks",
-        {"workspace_id": workspace_id, "title": "task", "tool_schemas": "[]", **values},
+        "workspaces",
+        {"name": "ws", "root_path": "/tmp/ws", **values},  # noqa: S108 - 测试占位路径
+    )
+
+
+def add_session(connection: sqlite3.Connection, *, workspace_id: int = 1, **values: Any) -> int:
+    return _insert(
+        connection,
+        "sessions",
+        {"workspace_id": workspace_id, "title": "session", "tool_surface": json.dumps({}), **values},
     )
 
 
 def add_run(
     connection: sqlite3.Connection,
     *,
-    task_id: int,
+    session_id: int,
     status: str = "completed",
     model_config_id: str = "deepseek/deepseek-flash",
     **values: Any,
 ) -> int:
     return _insert(
         connection,
-        "conversation_runs",
+        "runs",
         {
-            "task_id": task_id,
+            "session_id": session_id,
             "status": status,
             "model_config_id": model_config_id,
             "agent_id": "main",
             "execution_data": "{}",
-            "options": "{}",
+            "terminal_permission_mode": "request_approval",
+            "extra": "{}",
             **values,
         },
     )
@@ -90,7 +94,7 @@ def add_run(
 def add_context(
     connection: sqlite3.Connection,
     *,
-    task_id: int,
+    session_id: int,
     run_id: int | None,
     sequence: int,
     message: dict[str, Any] | str,
@@ -103,9 +107,9 @@ def add_context(
 
     return _insert(
         connection,
-        "conversation_task_contexts",
+        "session_contexts",
         {
-            "task_id": task_id,
+            "session_id": session_id,
             "run_id": run_id,
             "sequence": sequence,
             "turn": turn,
@@ -117,10 +121,10 @@ def add_context(
     )
 
 
-def add_task_message(
+def add_session_message(
     connection: sqlite3.Connection,
     *,
-    task_id: int,
+    session_id: int,
     kind: str = "user_input",
     delivery: str = "next_run",
     payload: dict[str, Any] | None = None,
@@ -128,9 +132,9 @@ def add_task_message(
 ) -> int:
     return _insert(
         connection,
-        "task_messages",
+        "session_messages",
         {
-            "task_id": task_id,
+            "session_id": session_id,
             "kind": kind,
             "delivery": delivery,
             "payload": json.dumps(payload or {}),

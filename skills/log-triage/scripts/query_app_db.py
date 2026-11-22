@@ -26,16 +26,16 @@ from typing import Any
 
 import triage_paths as paths
 from appdb_agent_facts import (
-    list_child_tasks,
+    list_child_sessions,
     recent_runs,
-    recent_tasks,
+    recent_sessions,
     recent_workspaces,
 )
 from appdb_context import list_messages, summarize_tool_calls
 from appdb_health import find_unsettled
 from appdb_readonly import list_tables, open_readonly, resolve_db_path
 from appdb_schema import database_overview, table_detail
-from appdb_snapshots import run_snapshot, task_snapshot
+from appdb_snapshots import run_snapshot, session_snapshot
 
 _DEFAULT_LIMIT = 50
 _MAX_LIMIT = 10000
@@ -74,16 +74,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_options(workspaces)
     _add_limit(workspaces)
 
-    tasks = subparsers.add_parser("tasks", help="列出任务及其当前运行状态。")
-    _add_common_options(tasks)
-    _add_limit(tasks)
-    tasks.add_argument("--workspace-id", type=int, default=None)
-    tasks.add_argument("--contains", default="", help="按标题或任务 id 模糊搜索。")
+    sessions = subparsers.add_parser("sessions", help="列出会话及其当前运行状态。")
+    _add_common_options(sessions)
+    _add_limit(sessions)
+    sessions.add_argument("--workspace-id", type=int, default=None)
+    sessions.add_argument("--contains", default="", help="按标题或会话 id 模糊搜索。")
 
     runs = subparsers.add_parser("runs", help="列出运行（一次 Agent 执行）。")
     _add_common_options(runs)
     _add_limit(runs)
-    runs.add_argument("--task-id", type=int, default=None)
+    runs.add_argument("--session-id", type=int, default=None)
     runs.add_argument("--status", default="", help="running/suspended/completed/failed/cancelled。")
     runs.add_argument("--contains", default="", help="按输入/终态原因/最终回复/错误模糊搜索。")
 
@@ -92,15 +92,15 @@ def build_parser() -> argparse.ArgumentParser:
     _add_limit(run)
     run.add_argument("run_id", type=int)
 
-    task = subparsers.add_parser("task", help="查看单个任务的排障快照。")
-    _add_common_options(task)
-    _add_limit(task)
-    task.add_argument("task_id", type=int)
+    session = subparsers.add_parser("session", help="查看单个会话的排障快照。")
+    _add_common_options(session)
+    _add_limit(session)
+    session.add_argument("session_id", type=int)
 
     messages = subparsers.add_parser("messages", help="按顺序回放会话上下文消息。")
     _add_common_options(messages)
     _add_limit(messages)
-    messages.add_argument("task_id", type=int)
+    messages.add_argument("session_id", type=int)
     messages.add_argument("--run-id", type=int, default=None)
     messages.add_argument("--order", choices=_ORDERS, default="asc")
     messages.add_argument(
@@ -110,17 +110,17 @@ def build_parser() -> argparse.ArgumentParser:
     tools = subparsers.add_parser("tools", help="汇总工具调用与结果的配对结局。")
     _add_common_options(tools)
     _add_limit(tools)
-    tools.add_argument("task_id", type=int)
+    tools.add_argument("session_id", type=int)
     tools.add_argument("--run-id", type=int, default=None)
     tools.add_argument("--contains", default="", help="按工具名/参数/结果模糊搜索。")
     tools.add_argument("--failures-only", action="store_true", help="只显示 failed 的调用。")
 
-    child_tasks = subparsers.add_parser("child-tasks", help="列出委派产生的子任务。")
-    _add_common_options(child_tasks)
-    _add_limit(child_tasks)
-    child_tasks.add_argument("--parent-task-id", type=int, default=None)
+    child_sessions = subparsers.add_parser("child-sessions", help="列出委派产生的子会话。")
+    _add_common_options(child_sessions)
+    _add_limit(child_sessions)
+    child_sessions.add_argument("--parent-session-id", type=int, default=None)
 
-    stuck = subparsers.add_parser("stuck", help="体检未收敛的 run / task / 工具占位与排队消息。")
+    stuck = subparsers.add_parser("stuck", help="体检未收敛的 run / session / 工具占位与排队消息。")
     _add_common_options(stuck)
     _add_limit(stuck)
 
@@ -217,21 +217,21 @@ def dispatch(connection: sqlite3.Connection, args: argparse.Namespace) -> Any:
             else database_overview(connection, include_columns=not args.no_columns)
         ),
         "workspaces": lambda: recent_workspaces(connection, limit=limit),
-        "tasks": lambda: recent_tasks(
+        "sessions": lambda: recent_sessions(
             connection, limit=limit, workspace_id=args.workspace_id, contains=args.contains.strip()
         ),
         "runs": lambda: recent_runs(
             connection,
             limit=limit,
-            task_id=args.task_id,
+            session_id=args.session_id,
             status=args.status.strip(),
             contains=args.contains.strip(),
         ),
         "run": lambda: run_snapshot(connection, run_id=args.run_id, limit=limit),
-        "task": lambda: task_snapshot(connection, task_id=args.task_id, limit=limit),
+        "session": lambda: session_snapshot(connection, session_id=args.session_id, limit=limit),
         "messages": lambda: list_messages(
             connection,
-            task_id=args.task_id,
+            session_id=args.session_id,
             run_id=args.run_id,
             limit=limit,
             order=args.order,
@@ -239,14 +239,14 @@ def dispatch(connection: sqlite3.Connection, args: argparse.Namespace) -> Any:
         ),
         "tools": lambda: summarize_tool_calls(
             connection,
-            task_id=args.task_id,
+            session_id=args.session_id,
             run_id=args.run_id,
             contains=args.contains.strip(),
             failures_only=args.failures_only,
             limit=limit,
         ),
-        "child-tasks": lambda: list_child_tasks(
-            connection, limit=limit, parent_task_id=args.parent_task_id
+        "child-sessions": lambda: list_child_sessions(
+            connection, limit=limit, parent_session_id=args.parent_session_id
         ),
         "stuck": lambda: find_unsettled(connection, limit=limit),
     }

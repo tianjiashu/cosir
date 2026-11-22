@@ -24,8 +24,8 @@ if str(SCRIPTS) not in sys.path:
 from app_db_fixture import (  # noqa: E402
     add_context,
     add_run,
-    add_task,
-    add_task_message,
+    add_session,
+    add_session_message,
     add_workspace,
     assistant_message,
     create_app_db,
@@ -194,13 +194,13 @@ class TestBoolSqlEquivalence:
 
 @pytest.fixture()
 def con(tmp_path: Path) -> sqlite3.Connection:
-    """task 1 下两个 run：run 1 completed，run 2 running。"""
+    """session 1 下两个 run：run 1 completed，run 2 running。"""
 
     connection = create_app_db(tmp_path / "app.sqlite3")
-    add_workspace(connection, name="ws1", root_path="/tmp/ws1")
-    add_task(connection, title="t1")
-    add_run(connection, task_id=1, status="completed")
-    add_run(connection, task_id=1, status="running")
+    add_workspace(connection, name="ws1", root_path="/tmp/ws1")  # noqa: S108 - 测试占位路径
+    add_session(connection, title="t1")
+    add_run(connection, session_id=1, status="completed")
+    add_run(connection, session_id=1, status="running")
     yield connection
     connection.close()
 
@@ -217,7 +217,7 @@ def _add(
 ) -> None:
     add_context(
         con,
-        task_id=1,
+        session_id=1,
         run_id=run,
         sequence=seq,
         message=message,
@@ -240,15 +240,15 @@ class TestListMessagesInContextFilter:
     @pytest.mark.parametrize("stored", ["false", "no", "FALSE", "0", "", 0])
     def test_falsey_is_excluded(self, con: sqlite3.Connection, stored: object) -> None:
         _add(con, 1, assistant_message("draft"), in_context=stored)
-        assert list_messages(con, task_id=1, limit=50, in_context_only=True) == []
-        shown = list_messages(con, task_id=1, limit=50)
+        assert list_messages(con, session_id=1, limit=50, in_context_only=True) == []
+        shown = list_messages(con, session_id=1, limit=50)
         assert shown[0]["include_in_context"] is False
 
     # 目的：真值（'true'/'1'/1）保留且显示为 True。潜在缺陷：TEXT 'true' 被误删。
     @pytest.mark.parametrize("stored", ["true", "TRUE", "1", 1])
     def test_truthy_is_kept(self, con: sqlite3.Connection, stored: object) -> None:
         _add(con, 1, user_message("keep-me"), {"kind": "user_input"}, in_context=stored)
-        rows = list_messages(con, task_id=1, limit=50, in_context_only=True)
+        rows = list_messages(con, session_id=1, limit=50, in_context_only=True)
         assert len(rows) == 1
         assert rows[0]["include_in_context"] is True
         assert rows[0]["kind"] == "user_input"
@@ -259,14 +259,14 @@ class TestListMessagesInContextFilter:
         self, con: sqlite3.Connection, stored: object
     ) -> None:
         _add(con, 1, user_message("x"), in_context=stored)
-        shown = list_messages(con, task_id=1, limit=50)
-        filtered = list_messages(con, task_id=1, limit=50, in_context_only=True)
+        shown = list_messages(con, session_id=1, limit=50)
+        filtered = list_messages(con, session_id=1, limit=50, in_context_only=True)
         assert len(filtered) == (1 if shown[0]["include_in_context"] else 0)
 
     # 目的：非法 order 抛 ValueError。潜在缺陷：静默接受导致 SQL 拼接。
     def test_invalid_order_raises(self, con: sqlite3.Connection) -> None:
         with pytest.raises(ValueError):
-            list_messages(con, task_id=1, limit=10, order="sideways")
+            list_messages(con, session_id=1, limit=10, order="sideways")
 
     # 目的：缺表抛带表清单的 ValueError。潜在缺陷：抛出裸 OperationalError。
     def test_missing_table_raises_value_error(self) -> None:
@@ -274,7 +274,7 @@ class TestListMessagesInContextFilter:
         bare.row_factory = sqlite3.Row
         try:
             with pytest.raises(ValueError) as excinfo:
-                list_messages(bare, task_id=1, limit=10)
+                list_messages(bare, session_id=1, limit=10)
             assert "table not found" in str(excinfo.value)
             assert "tables in this database" in str(excinfo.value)
         finally:
@@ -285,7 +285,7 @@ class TestListMessagesInContextFilter:
         _add(con, 1, user_message("real"))
         for seq in range(2, 7):
             _add(con, seq, assistant_message(f"draft{seq}"), in_context=0)
-        rows = list_messages(con, task_id=1, limit=5, order="desc", in_context_only=True)
+        rows = list_messages(con, session_id=1, limit=5, order="desc", in_context_only=True)
         assert [r["text"] for r in rows] == ["real"]
 
     # 目的：run_id 过滤；不带 run_id 时含继承来的 run_id 为空的行。潜在缺陷：run 过滤失效或继承行被丢。
@@ -293,8 +293,8 @@ class TestListMessagesInContextFilter:
         _add(con, 1, user_message("inherited"), run=None)
         _add(con, 2, user_message("r1"), run=1)
         _add(con, 3, user_message("r2"), run=2)
-        assert [r["text"] for r in list_messages(con, task_id=1, run_id=2, limit=10)] == ["r2"]
-        assert len(list_messages(con, task_id=1, limit=10)) == 3
+        assert [r["text"] for r in list_messages(con, session_id=1, run_id=2, limit=10)] == ["r2"]
+        assert len(list_messages(con, session_id=1, limit=10)) == 3
 
     # 目的：多段 content 只拼文本段，assistant 行带 finish_reason 与 usage，tool 行带卡片状态与错误。
     # 潜在缺陷：多模态消息正文丢失，或角色专属 metadata 串到别的角色。
@@ -302,7 +302,7 @@ class TestListMessagesInContextFilter:
         _add(con, 1, {"role": "user", "content": [{"type": "text", "text": "看图"}, {"type": "image_url", "image_url": {"url": "x"}}]}, {"kind": "user_input"})
         _add(con, 2, assistant_message("", ("c1", "read_file", "{not json")), {"finish_reason": "tool_calls", "usage": {"total_tokens": 3}})
         _add(con, 3, tool_message("c1", "boom"), {"status": "failed", "error": "文件不存在"})
-        user, assistant, tool = list_messages(con, task_id=1, limit=10)
+        user, assistant, tool = list_messages(con, session_id=1, limit=10)
         assert user["text"] == "看图"
         assert (assistant["kind"], assistant["usage"]) == ("tool_calls", {"total_tokens": 3})
         assert assistant["tool_calls"] == [{"id": "c1", "name": "read_file", "args": "{not json"}]
@@ -322,7 +322,7 @@ class TestContextStatistics:
         _add(con, 1, assistant_message("d"), in_context="false")
         _add(con, 2, assistant_message("d"), in_context=" 1 ")
         _add(con, 3, user_message("h"), {"kind": "user_input"}, in_context="true")
-        stats = context_statistics(con, task_id=1)
+        stats = context_statistics(con, session_id=1)
         assert (stats["total"], stats["in_context"], stats["excluded"]) == (3, 2, 1)
 
     # 目的：runs / turns 去重计数，继承行（run_id 为空）不算 run；user 行按 kind 分组。
@@ -332,7 +332,7 @@ class TestContextStatistics:
         _add(con, 3, user_message("<system_notice>"), {"kind": "notice"}, run=2, turn=2)
         _add(con, 4, user_message("from agent"), {"kind": "agent_message"}, run=2, turn=3)
         _add(con, 5, assistant_message("ok"), run=2, turn=3)
-        stats = context_statistics(con, task_id=1)
+        stats = context_statistics(con, session_id=1)
         assert (stats["runs"], stats["turns"]) == (2, 3)
         assert stats["by_role"] == {"user": 4, "assistant": 1}
         assert stats["by_user_kind"] == {"user_input": 2, "notice": 1, "agent_message": 1}
@@ -340,7 +340,7 @@ class TestContextStatistics:
     # 目的：损坏 message_json 归为 unknown 且不抛。潜在缺陷：JSON 解析失败导致异常。
     def test_corrupt_json_is_unknown_role(self, con: sqlite3.Connection) -> None:
         _add(con, 1, "{not json")
-        assert context_statistics(con, task_id=1)["by_role"] == {"unknown": 1}
+        assert context_statistics(con, session_id=1)["by_role"] == {"unknown": 1}
 
 
 # --------------------------------------------------------------------------- #
@@ -374,26 +374,26 @@ class TestFindUnsettled:
         [row] = find_unsettled(con, limit=50)["open_tool_placeholders"]
         assert (row["tool_call_id"], row["is_background"]) == ("bg", 1)
 
-    # 目的：排队消息按 Task 汇总条数与种类。潜在缺陷：「发了没反应」时看不到外部队列积压。
+    # 目的：排队消息按 Session 汇总条数与种类。潜在缺陷：「发了没反应」时看不到外部队列积压。
     def test_queued_messages_grouped_by_task(self, con: sqlite3.Connection) -> None:
-        add_task(con, title="t2")
-        add_task_message(con, task_id=1, kind="user_input")
-        add_task_message(con, task_id=1, kind="background_result", delivery="immediate")
-        add_task_message(con, task_id=2, kind="system_notice")
-        queued = {q["task_id"]: q for q in find_unsettled(con, limit=50)["queued_messages"]}
+        add_session(con, title="t2")
+        add_session_message(con, session_id=1, kind="user_input")
+        add_session_message(con, session_id=1, kind="background_result", delivery="immediate")
+        add_session_message(con, session_id=2, kind="system_notice")
+        queued = {q["session_id"]: q for q in find_unsettled(con, limit=50)["queued_messages"]}
         assert queued[1]["queued"] == 2
         assert set(queued[1]["kinds"].split(",")) == {"user_input", "background_result"}
         assert (queued[2]["title"], queued[2]["queued"]) == ("t2", 1)
 
-    # 目的：活动 run（running/suspended）列出、终态不列；current_run_id 指向活动 run 的 task 列出。
+    # 目的：活动 run（running/suspended）列出、终态不列；current_run_id 指向活动 run 的 session 列出。
     def test_active_runs_listed(self, con: sqlite3.Connection) -> None:
-        add_run(con, task_id=1, status="suspended")
-        add_run(con, task_id=1, status="cancelled")
-        con.execute("UPDATE tasks SET current_run_id = 3 WHERE id = 1")
+        add_run(con, session_id=1, status="suspended")
+        add_run(con, session_id=1, status="cancelled")
+        con.execute("UPDATE sessions SET current_run_id = 3 WHERE id = 1")
         con.commit()
         result = find_unsettled(con, limit=50)
         assert {r["id"] for r in result["active_runs"]} == {2, 3}
-        assert [(t["id"], t["current_run_status"]) for t in result["tasks_with_active_run"]] == [(1, "suspended")]
+        assert [(t["id"], t["current_run_status"]) for t in result["sessions_with_active_run"]] == [(1, "suspended")]
 
     # 目的：stuck 缺表必须抛带清单的 ValueError。潜在缺陷：裸 OperationalError。
     def test_missing_table_raises(self) -> None:
@@ -412,7 +412,7 @@ class TestFindUnsettled:
 
 
 class TestToolCallPairing:
-    """工具调用与结果按 tool_call_id 配对（id 在 Task 内唯一）。"""
+    """工具调用与结果按 tool_call_id 配对（id 在 Session 内唯一）。"""
 
     # 目的：无 id / 空 id 的调用不产条目，同一消息里有 id 的调用照常产出。潜在缺陷：无 id 调用被渲染成永久缺结果。
     def test_idless_and_empty_id_skipped(self, con: sqlite3.Connection) -> None:
@@ -420,13 +420,13 @@ class TestToolCallPairing:
         message["tool_calls"].insert(0, {"type": "function", "function": {"name": "no_id", "arguments": "{}"}})
         _add(con, 1, message)
         _add(con, 2, tool_message("c1", "r"), {"status": "completed"})
-        rows = summarize_tool_calls(con, task_id=1, limit=50)
+        rows = summarize_tool_calls(con, session_id=1, limit=50)
         assert [(r["tool_call_id"], r["tool_name"], r["status"]) for r in rows] == [("c1", "ok", "completed")]
 
     # 目的：只有调用无结果 => no_result，result_sequence 为 None；与 pending 占位区分。潜在缺陷：缺结果被说成在等待。
     def test_no_result_when_missing(self, con: sqlite3.Connection) -> None:
         _add(con, 1, assistant_message("", ("p1", "p", {"x": 1})), turn=3)
-        [row] = summarize_tool_calls(con, task_id=1, limit=50)
+        [row] = summarize_tool_calls(con, session_id=1, limit=50)
         assert (row["status"], row["result_sequence"], row["background"], row["error"]) == ("no_result", None, None, "")
         assert (row["args"], row["run_id"], row["turn"], row["request_sequence"]) == ({"x": 1}, 1, 3, 1)
 
@@ -436,7 +436,7 @@ class TestToolCallPairing:
         _add(con, 2, tool_message("a", "bg"), {"status": "pending", "background": {"label": "build"}})
         _add(con, 3, tool_message("b", ""), {"status": "cancelled"})
         _add(con, 4, tool_message("c", "plain"))
-        rows = {r["tool_call_id"]: r for r in summarize_tool_calls(con, task_id=1, limit=50)}
+        rows = {r["tool_call_id"]: r for r in summarize_tool_calls(con, session_id=1, limit=50)}
         assert (rows["a"]["status"], rows["a"]["background"]) == ("pending", {"label": "build"})
         assert rows["b"]["status"] == "cancelled"
         assert (rows["c"]["status"], rows["c"]["result_sequence"]) == ("completed", 4)
@@ -446,7 +446,7 @@ class TestToolCallPairing:
         _add(con, 1, tool_message("ghost", "orphan"), {"status": "completed"})
         _add(con, 2, tool_message("lc", "early"), {"status": "completed"})
         _add(con, 3, assistant_message("", ("lc", "lc", {})))
-        [row] = summarize_tool_calls(con, task_id=1, limit=50)
+        [row] = summarize_tool_calls(con, session_id=1, limit=50)
         assert (row["tool_call_id"], row["status"]) == ("lc", "no_result")
 
     # 目的：run_id 只筛发起调用的 assistant 行，结果行可在别的 run 并入（后台结果在新 Run 回投）。
@@ -455,7 +455,7 @@ class TestToolCallPairing:
         _add(con, 1, assistant_message("", ("r1", "first", {})), run=1)
         _add(con, 2, assistant_message("", ("r2", "second", {})), run=2)
         _add(con, 3, tool_message("r1", "late"), {"status": "completed"}, run=2)
-        [row] = summarize_tool_calls(con, task_id=1, run_id=1, limit=50)
+        [row] = summarize_tool_calls(con, session_id=1, run_id=1, limit=50)
         assert (row["tool_call_id"], row["status"], row["result_summary"]) == ("r1", "completed", "late")
 
     # 目的：failed 带 error 文本；failures_only 只留 failed，cancelled / pending / no_result 不算失败。
@@ -465,24 +465,24 @@ class TestToolCallPairing:
         _add(con, 3, tool_message("bad", "error: x"), {"status": "failed", "error": "权限不足"})
         _add(con, 4, tool_message("cx", ""), {"status": "cancelled"})
         _add(con, 5, tool_message("hold", ""), {"status": "pending"})
-        rows = summarize_tool_calls(con, task_id=1, limit=50, failures_only=True)
+        rows = summarize_tool_calls(con, session_id=1, limit=50, failures_only=True)
         assert [(r["tool_call_id"], r["error"]) for r in rows] == [("bad", "权限不足")]
 
     # 目的：limit 作用于产出条目数而非 SQL 行。潜在缺陷：limit 下推导致配对不完整。
     def test_limit_counts_entries(self, con: sqlite3.Connection) -> None:
         for i in range(5):
             _add(con, 10 + i, assistant_message("", (f"c{i}", "t", {})))
-        assert len(summarize_tool_calls(con, task_id=1, limit=2)) == 2
+        assert len(summarize_tool_calls(con, session_id=1, limit=2)) == 2
 
     # 目的：contains 匹配工具名/参数/结果，忽略大小写；非法 JSON 参数原样保留。潜在缺陷：命中面过窄或解析异常。
     def test_contains_match(self, con: sqlite3.Connection) -> None:
         _add(con, 1, assistant_message("", ("s1", "Search_Content", {"q": "Hello"}), ("s2", "raw", "{oops")))
         _add(con, 2, tool_message("s1", "found"), {"status": "completed"})
-        assert len(summarize_tool_calls(con, task_id=1, limit=50, contains="search")) == 1
-        assert len(summarize_tool_calls(con, task_id=1, limit=50, contains="hello")) == 1
-        assert len(summarize_tool_calls(con, task_id=1, limit=50, contains="FOUND")) == 1
-        assert summarize_tool_calls(con, task_id=1, limit=50, contains="nomatch") == []
-        [raw] = summarize_tool_calls(con, task_id=1, limit=50, contains="raw")
+        assert len(summarize_tool_calls(con, session_id=1, limit=50, contains="search")) == 1
+        assert len(summarize_tool_calls(con, session_id=1, limit=50, contains="hello")) == 1
+        assert len(summarize_tool_calls(con, session_id=1, limit=50, contains="FOUND")) == 1
+        assert summarize_tool_calls(con, session_id=1, limit=50, contains="nomatch") == []
+        [raw] = summarize_tool_calls(con, session_id=1, limit=50, contains="raw")
         assert raw["args"] == "{oops"
 
 
