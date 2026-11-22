@@ -29,11 +29,15 @@ from openai.types.shared_params import ResponseFormatJSONObject
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
-from app.core.capsules import capsule_grammar
 from app.core.events import SessionTitleUpdatedEvent
 from app.core.llm_provider.openai_model import usage_from_response
 from app.core.workflow.node_helper.common import _message_context, emit
-from app.models.session_kind import USER_FACING_SESSION_TYPES
+from app.models.message_context.capsules.capsule_grammar import TextSegment, parse_capsules
+from app.models.message_context.capsules.grammar.capsule import Capsule
+from app.models.message_context.capsules.grammar.file_capsule import FileCapsule
+from app.models.message_context.capsules.grammar.ref_capsule import RefCapsule
+from app.models.message_context.capsules.grammar.skill_capsule import SkillCapsule
+from app.models.session.session_kind import USER_FACING_SESSION_TYPES
 from app.service import depends as service_depends
 from app.utils.datetime_utils import SESSION_TITLE_LIMIT, preview
 from app.utils.message_content import content_to_text
@@ -55,7 +59,7 @@ def name_untitled(rc: RuntimeContext, text: str) -> None:
     """
     if rc.session.title:
         return
-    title = preview(capsule_grammar.plain_text(text), limit=SESSION_TITLE_LIMIT) or "新会话"
+    title = preview(_plain_text(text), limit=SESSION_TITLE_LIMIT) or "新会话"
     if not service_depends.get_session_service().fill_empty_title(rc.session.id, title):
         return
     # 同步缓存的记录：随后启动的支线把它当作「当前标题」交给模型。
@@ -138,7 +142,9 @@ async def _generate(rc: RuntimeContext, messages: list[ChatCompletionMessagePara
                 },
             )
             return
-        await asyncio.to_thread(service_depends.get_session_service().update_title, rc.session.id, title)
+        await asyncio.to_thread(
+            service_depends.get_session_service().update_title, rc.session.id, title
+        )
     except asyncio.CancelledError:
         raise
     except KeyError:
@@ -196,12 +202,10 @@ def _plain_text_messages(
             continue
         content = message["content"]
         if isinstance(content, str):
-            text_content: str | list[ChatCompletionContentPartParam] = capsule_grammar.plain_text(content)
+            text_content: str | list[ChatCompletionContentPartParam] = _plain_text(content)
         else:
             text_content = [
-                ChatCompletionContentPartTextParam(
-                    type="text", text=capsule_grammar.plain_text(part["text"])
-                )
+                ChatCompletionContentPartTextParam(type="text", text=_plain_text(part["text"]))
                 if part["type"] == "text"
                 else part
                 for part in content
@@ -213,6 +217,36 @@ def _plain_text_messages(
             )
         )
     return projected
+
+
+def _plain_text(text: str) -> str:
+    """展示/标题用的纯文本投影：胶囊换成可读名称，普通文本原样。"""
+
+    return "".join(
+        segment.text if isinstance(segment, TextSegment) else _capsule_plain_text(segment.capsule)
+        for segment in parse_capsules(text)
+    )
+
+
+def _capsule_plain_text(capsule: Capsule) -> str:
+    if isinstance(capsule, FileCapsule):
+        return _basename(capsule.path)
+    if isinstance(capsule, RefCapsule):
+        if capsule.lines is not None:
+            locator = f":{capsule.lines}"
+        elif capsule.page is not None:
+            locator = f" (p.{capsule.page})"
+        else:
+            locator = ""
+        return f"{capsule.path or '工作区'}{locator}"
+    if isinstance(capsule, SkillCapsule):
+        return capsule.name
+    raise TypeError(f"unsupported capsule: {type(capsule).__name__}")
+
+
+def _basename(path: str) -> str:
+    trimmed = path.rstrip("/\\")
+    return trimmed.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] or trimmed or path
 
 
 def _instruction(current_title: str) -> str:
