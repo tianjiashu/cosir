@@ -16,7 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.file_kind import FileKind
+from app.models.enums.file_kind import FileKind
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 # WHATWG 的 forbidden host code points（主机里出现即解析失败）；控制字符与空格另行判断。

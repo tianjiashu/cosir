@@ -1,22 +1,8 @@
-"""业务层 model 定义。
+"""跨层共用的数据契约：持久化记录的值对象（``*_record``）、枚举、领域异常，以及随上下文与工具结果
+落库的结构化事实。ORM 映射在 ``storage/model``；一律从子模块导入，本包与子包都不导出名字。
 
-本包只承载与编排无关、与服务无关的值对象（dataclass / 枚举），一个文件一个
-model，文件名与 model 相关。不承载服务、适配或 node_helper 逻辑。
+摆放判据：一个领域有 4 个以上契约、边界清楚，就成子目录（``session/``、``run/``、``message_context/``），文件名保留领域
+前缀；跨领域的留在根目录；只属于某个领域的枚举与异常跟着领域走，跨领域的才进 ``enums/``、``errors/``。
+规则与只有一处使用方的契约不放这里，放在使用方旁边（如撤回范围在 ``service/conversation``、
+Run 失败码在 ``core/workflow``）。
 """
-
-from app.models.enums.run_status import RunStatus
-from app.models.run_command import RunCommand
-from app.models.run_record import RunError, RunRecord
-from app.models.run_usage import RunUsage
-from app.models.session_record import SessionRecord
-from app.models.workspace_record import WorkspaceRecord
-
-__all__ = [
-    "RunCommand",
-    "RunError",
-    "RunRecord",
-    "RunStatus",
-    "RunUsage",
-    "SessionRecord",
-    "WorkspaceRecord",
-]
