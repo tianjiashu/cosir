@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
-import app.tools.tool_handler.read_image as read_image_module
+import app.tools.tool_handler.file.read_image as read_image_module
 from app.config.constant import Constant
 from app.core.agents.define_agents import main_agent
 from app.core.tool.schemas import TOOL_READ_IMAGE, ToolExecutionContext
@@ -16,7 +16,7 @@ from app.core.tool.schemas.model_tool_schema import strict_parameters_schema
 from app.core.tool.validation.arguments import validate_tool_arguments
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.attachment.image_normalizer import ImageNormalizationError
-from app.tools.tool_handler.read_image import ReadImageTool
+from app.tools.tool_handler.file.read_image import ReadImageTool
 from app.tools.tool_models import ReadImageArgs
 from tests.builtin_agent_fixtures import builtin_child_profile
 

@@ -119,7 +119,6 @@ def _running_state() -> ConversationStateSnapshot:
         launch={
             "modelConfigId": None,
             "reasoningEffort": None,
-            "terminalPermissionMode": "request_approval",
         },
     )
     return state

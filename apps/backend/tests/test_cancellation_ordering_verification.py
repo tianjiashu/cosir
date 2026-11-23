@@ -32,7 +32,6 @@ from app.core.events import (
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
 )
-from app.core.file_access.knowledge import FileKnowledge
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.schemas import (
     ToolCall,
@@ -183,7 +182,8 @@ def _project_cancelled_via_real_path(
         "step-1",
         None,
         RequestTools(schemas=(), admitted=frozenset({"execute_terminal"})),
-        FileKnowledge(),
+        (),
+        (),
     )
     assert len(captured) == 1
     return captured[0]

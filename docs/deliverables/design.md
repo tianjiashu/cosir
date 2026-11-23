@@ -83,7 +83,7 @@ After presenting, do not restate the contents in your reply. Give the key takeaw
 
 ### 4.1 交付记录：交付时观察，现状现读
 
-**记录是持久化事实，不是展示数据。** 交付记录挂在工具结果行的强类型 metadata 上：`ToolMessageMetadata.deliverables`（`tuple[Deliverable, ...] | None`），值对象与 `BackgroundWork` 并列放在 `models/message_metadata.py`，随 fork、撤回、删除自动跟随。这个工具的 `display_data` 为空，不存两份。展示数据按契约只给前端（`tool_observation.py:37`），而侧栏清单与以后的读取凭据都是后端要读的事实，所以不能放在那里。名字用 `deliverables` 而不是 `delivery`：后者在仓里已经指消息的投递时机（`SessionMessage.delivery`），同一个词不指两个概念。
+**记录是持久化事实，不是展示数据。** 交付记录挂在工具结果行的强类型 metadata 上：`ToolMessageMetadata.deliverables`（`tuple[Deliverable, ...] | None`），值对象与 `BackgroundWork` 并列放在 `models/message_context/message_metadata.py`，随 fork、撤回、删除自动跟随。这个工具的 `display_data` 为空，不存两份。展示数据按契约只给前端（`tool_observation.py:37`），而侧栏清单与以后的读取凭据都是后端要读的事实，所以不能放在那里。名字用 `deliverables` 而不是 `delivery`：后者在仓里已经指消息的投递时机（`SessionMessage.delivery`），同一个词不指两个概念。
 
 ```text
 Deliverable（按 type 判别）

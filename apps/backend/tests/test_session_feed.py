@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from app.api.session_feed_api import session_feed_stream
-from app.core.tool.terminal_approval import TerminalApprovalRegistry
+from app.core.tool.terminal_approval.registry import TerminalApprovalRegistry
 from app.models.session.session_kind import SessionType
 from app.models.session.session_status import SessionStatus
 from app.service.session import session_feed as session_feed_module
@@ -99,9 +99,8 @@ async def test_pending_terminal_approvals_count_as_awaiting_on_the_display_sessi
         command="ls",
         shell="zsh",
         cwd=str(Path.cwd()),
-        network=False,
-        write_roots=(),
-        justification="",
+        intent="",
+        origin_title="测试会话",
     )
     assert feed.statuses() == {1: SessionStatus("running", 2), 2: SessionStatus("running", 0)}
 
@@ -110,7 +109,7 @@ async def test_pending_terminal_approvals_count_as_awaiting_on_the_display_sessi
     await asyncio.sleep(0)
     assert subscription.take().statuses == {1: SessionStatus("running", 2)}
 
-    registry.cancel(request)
+    registry.cancel(request, "call_cancelled")
     feed.publish_status(1)
     await asyncio.sleep(0)
     assert subscription.take().statuses == {1: SessionStatus("running", 1)}

@@ -240,6 +240,7 @@ def test_snapshot_rejects_a_source_on_assistant_messages() -> None:
         "background_tasks": [],
         "foreground_waits": [],
         "deliverables": [],
+        "terminal_permission_mode": "request_approval",
         "queued_messages": [],
     }
     with pytest.raises(ValueError, match="only user messages carry a source"):

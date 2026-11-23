@@ -26,7 +26,6 @@ from typing import Any
 import pytest
 from app.assistant_transport.projection.event_projection import plan_event
 from app.core.events import ToolCallStatusChangedEvent
-from app.core.file_access.knowledge import FileKnowledge
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.execute import tool_terminal_projection
 from app.core.tool.execute.tool_executor import ToolExecutor
@@ -335,7 +334,8 @@ def test_terminal_projection_runs_only_after_pipeline_settles(
         "step-1",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
 
     assert observation.status == "cancelled"

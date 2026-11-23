@@ -4,7 +4,7 @@ import type { TransportState } from "../../lib/assistant/contract";
 import { seedState } from "./transport-fixtures";
 import { API_ORIGIN as origin } from "./e2e-env";
 
-const LAUNCH = { terminalPermissionMode: "request_approval" as const, modelConfigId: null, reasoningEffort: null };
+const LAUNCH = { modelConfigId: null, reasoningEffort: null };
 
 /** 子会话的一轮：任务说明是父 Agent 发来的 Agent 消息，不是用户说的话。 */
 const snapshot: TransportState = {
@@ -23,7 +23,7 @@ const snapshot: TransportState = {
   ],
   messageOffset: 0,
   activity: {modelActivity: null, turn: 1, resumable: false, status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
-  terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [],
+  terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [], terminal_permission_mode: "request_approval" as const,
 };
 
 test.beforeEach(async ({ request }) => {

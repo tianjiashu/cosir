@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
-from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.edit_file import EditFileTool
-from app.tools.tool_handler.file_edit.text_match import TextMatchError, replace_exact
+from app.tools.tool_handler.file.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.file.edit_file import EditFileTool
+from app.tools.tool_handler.file.file_edit.text_match import TextMatchError, replace_exact
 from tests.file_knowledge_support import with_workspace_reads
 
 

@@ -4,7 +4,7 @@ import type { TransportState } from "../../lib/assistant/contract";
 import { readState, seedState } from "./transport-fixtures";
 import { API_ORIGIN, OUTPUT_DIR } from "./e2e-env";
 
-const emptyState = (): TransportState => ({ title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [] });
+const emptyState = (): TransportState => ({ title: "测试对话", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [], terminal_permission_mode: "request_approval" as const });
 
 test.beforeEach(async ({ request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);

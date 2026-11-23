@@ -15,20 +15,20 @@ import logging
 from pathlib import Path
 from time import monotonic
 
-from app.tools.tool_handler.search.file_walker import iter_files
-from app.tools.tool_handler.search.gitignore_rules import (
+from app.tools.tool_handler.file.search.file_walker import iter_files
+from app.tools.tool_handler.file.search.gitignore_rules import (
     GitignoreMatcher,
     build_gitwildmatch_spec,
     load_gitignore_rules,
 )
-from app.tools.tool_handler.search.ignore_rules import (
+from app.tools.tool_handler.file.search.ignore_rules import (
     IGNORE_FILE_NAME,
     CompositeIgnoreMatcher,
     ignore_file_path,
     load_fileignore_rules,
     load_search_ignore_rules,
 )
-from app.tools.tool_handler.search.scope import SearchScope
+from app.tools.tool_handler.file.search.scope import SearchScope
 
 
 def _write_ignore_file(workspace: Path, content: str) -> Path:

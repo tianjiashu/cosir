@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
-from app.models.deliverable import DeliveredUrl
+from app.models.deliverable_file import DeliveredUrl
 from app.models.message_context.message_metadata.base.message_metadata_base import (
     EmptyMessageMetadata,
 )

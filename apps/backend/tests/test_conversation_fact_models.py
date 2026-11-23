@@ -190,7 +190,7 @@ def test_run_service_prepares_new_command_for_model_and_persistence(monkeypatch,
     service = _input_service(monkeypatch, tmp_path)
     command = RunCommand(text=f'请阅读 <file path="{attachment_path}" />')
 
-    prepared = service.prepare(7, command, "test/m3", None, "main_agent", "request_approval")
+    prepared = service.prepare(7, command, "test/m3", None, "main_agent")
 
     # 模型正文与展示正文是同一份规范化胶囊文本。
     assert prepared.text == command.text
@@ -203,7 +203,7 @@ def test_prepare_returns_a_user_input_body_for_the_caller_to_queue(monkeypatch, 
     service = _input_service(monkeypatch, tmp_path)
 
     body = service.prepare(
-        7, RunCommand(text="检查项目"), "test/m3", None, "main_agent", "request_approval"
+        7, RunCommand(text="检查项目"), "test/m3", None, "main_agent"
     )
 
     assert isinstance(body, UserInputBody)
@@ -219,7 +219,6 @@ def test_input_preparation_keeps_run_options_out_of_message(monkeypatch, tmp_pat
         "test/m3",
         "high",
         "main_agent",
-        "request_approval",
     )
     assert queued.launch.reasoning_effort == "high"
     assert queued.launch.model_config_id == "test/m3"
@@ -246,7 +245,7 @@ def test_prepare_maps_missing_model_config_to_input_rejection(monkeypatch, tmp_p
 
     with pytest.raises(UserInputRejectedError) as caught:
         service.prepare(
-            7, RunCommand(text="你好"), "test/m3", None, "main_agent", "request_approval"
+            7, RunCommand(text="你好"), "test/m3", None, "main_agent"
         )
 
     assert caught.value.code == "MODEL_CONFIG_UNAVAILABLE"

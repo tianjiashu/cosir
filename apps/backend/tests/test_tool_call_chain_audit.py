@@ -25,7 +25,7 @@ from app.core.tool.schemas.request_tools import RequestTools
 from app.core.tool.tool_registry import ToolRegistry
 from app.models.message_context.session_context import SessionContextRecord
 from app.models.session.session_extra import SessionExtra
-from app.tools.tool_handler.read_file import ReadFileTool
+from app.tools.tool_handler.file.read_file import ReadFileTool
 
 # ============================================================================
 # 共享装配
@@ -335,7 +335,12 @@ def test_t4_rebuild_snapshot_materializes_all_tool_results(
         terminal_permission_mode="request_approval",
     )
     session = SimpleNamespace(
-        id=7, title="session", current_run_id=1, context_window_total=None, extra=SessionExtra()
+        id=7,
+        title="session",
+        current_run_id=1,
+        context_window_total=None,
+        extra=SessionExtra(),
+        terminal_permission_mode="request_approval",
     )
     rows = [
         _ai_row(

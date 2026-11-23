@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.core.file_access.knowledge import FileKnowledge
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.schemas import AwaitMessages, ToolCall, ToolObservation
@@ -93,7 +92,7 @@ def test_streaming_preview_includes_denied_registered_tool(monkeypatch) -> None:
 def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -> None:
     received = []
 
-    def run_call(_rc, call, _step_id, _loop, _admitted, _knowledge):
+    def run_call(_rc, call, _step_id, _loop, _admitted, _visible, _batch):
         received.append(call)
         return ToolObservation(
             tool_name="read_file", status="success", tool_call_id="call-1", content="ok"
@@ -109,7 +108,7 @@ def test_tools_node_passes_raw_arguments_and_records_observations(monkeypatch) -
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
-        tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge)
+        tools_node, "_message_context", lambda: SimpleNamespace(visible_tool_facts=tuple)
     )
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
@@ -129,7 +128,7 @@ def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
     """tools 节点把注册调用交给执行器，由门禁拒绝本轮禁用工具。"""
     received = []
 
-    def run_call(_rc, call, _step_id, _loop, _admitted, _knowledge):
+    def run_call(_rc, call, _step_id, _loop, _admitted, _visible, _batch):
         received.append(call)
         return ToolObservation(
             tool_name=call.tool_name, status="success", tool_call_id=call.call_id
@@ -149,7 +148,7 @@ def test_tools_node_hands_banned_registered_call_to_batch(monkeypatch) -> None:
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
-        tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge)
+        tools_node, "_message_context", lambda: SimpleNamespace(visible_tool_facts=tuple)
     )
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
@@ -267,7 +266,7 @@ def test_tools_node_projects_only_terminal_when_executor_never_starts(monkeypatc
 def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
     """挂起由工具声明：同批其它调用照常执行与闭合，任一观察带 suspend 即整批挂起。"""
 
-    def run_call(_rc, call, _step_id, _loop, _admitted, _knowledge):
+    def run_call(_rc, call, _step_id, _loop, _admitted, _visible, _batch):
         waiting = AwaitMessages() if call.call_id == "call-2" else None
         return ToolObservation(
             tool_name="read_file", status="success", tool_call_id=call.call_id, waiting=waiting
@@ -279,7 +278,7 @@ def test_any_suspending_call_marks_the_whole_batch(monkeypatch) -> None:
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
-        tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge)
+        tools_node, "_message_context", lambda: SimpleNamespace(visible_tool_facts=tuple)
     )
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
@@ -469,7 +468,7 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
     """tools 节点不解析参数：残缺 JSON 原样交给执行器，由准入门禁形成错误观察。"""
     called = []
 
-    def run_call(_rc, call, _step_id, _loop, _admitted, _knowledge):
+    def run_call(_rc, call, _step_id, _loop, _admitted, _visible, _batch):
         called.append(call)
         return ToolObservation(
             tool_name=call.tool_name, status="success", tool_call_id=call.call_id
@@ -485,7 +484,7 @@ def test_malformed_json_reaches_executor_unparsed(monkeypatch) -> None:
     )
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
-        tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge)
+        tools_node, "_message_context", lambda: SimpleNamespace(visible_tool_facts=tuple)
     )
     install_runtime_singletons(runtime)
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
@@ -559,7 +558,7 @@ def test_new_user_input_closes_remaining_calls_without_replaying_or_changing_run
         runtime.mailbox.post(message)
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
-        tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge)
+        tools_node, "_message_context", lambda: SimpleNamespace(visible_tool_facts=tuple)
     )
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
     monkeypatch.setattr(tools_node, "emit", events.append)
@@ -592,7 +591,7 @@ def test_background_notice_does_not_supersede_a_tool_batch(monkeypatch):
 
     monkeypatch.setattr(tools_node, "_runtime_context", lambda: runtime)
     monkeypatch.setattr(
-        tools_node, "_message_context", lambda: SimpleNamespace(file_knowledge=FileKnowledge)
+        tools_node, "_message_context", lambda: SimpleNamespace(visible_tool_facts=tuple)
     )
     monkeypatch.setattr(tools_node, "_execute_call", run_call)
     asyncio.run(tools_node._tools_node(_state(ToolBatch(calls=[_raw("first"), _raw("second")]))))

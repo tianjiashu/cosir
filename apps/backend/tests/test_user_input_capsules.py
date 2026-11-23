@@ -41,7 +41,7 @@ def _service(monkeypatch: pytest.MonkeyPatch, workspace_root: Path) -> UserInput
 
 def _prepare(service: UserInputService, text: str):
     return service.prepare(
-        _SESSION_ID, RunCommand(text=text), "test/m1", None, "main_agent", "request_approval"
+        _SESSION_ID, RunCommand(text=text), "test/m1", None, "main_agent"
     )
 
 

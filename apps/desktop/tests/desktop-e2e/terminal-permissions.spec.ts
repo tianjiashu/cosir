@@ -34,9 +34,9 @@ test("approves the exact command, runs it in Rust and switches the next run to f
       event({ role: "assistant", content: body.tools ? content : "Sandbox test" }, null);
       event({}, "stop");
     } else {
-      const args = { intent: "验证终端权限", command: `printf verified > ${quote(path.join(outside, reject ? "rejected.txt" : full ? "full.txt" : "approved.txt"))}`,
+      const args = { intent: full ? "验证终端权限" : "写入工作区外的临时目录以验证终端权限", command: `printf verified > ${quote(path.join(outside, reject ? "rejected.txt" : full ? "full.txt" : "approved.txt"))}`,
         shell: "auto", background: false, timeout: null, workdir: null,
-        permissions: full ? null : { network: false, write_roots: [outside] }, justification: full ? "" : "本次测试需要写入工作区外的临时目录" };
+        escalate_sandbox: full ? null : true };
       event({ role: "assistant", tool_calls: [{ index: 0, id: callId, type: "function", function: { name: "execute_terminal", arguments: JSON.stringify(args) } }] }, null);
       event({}, "tool_calls");
     }
@@ -64,7 +64,8 @@ test("approves the exact command, runs it in Rust and switches the next run to f
     await expect(card).toBeVisible({ timeout: 30_000 });
     expect(fs.existsSync(path.join(outside, "approved.txt"))).toBe(false);
     await expect(card).toContainText(outside);
-    await expect(page.getByLabel("终端权限")).toBeDisabled();
+    // 权限归会话、随时可切（下一条命令生效），运行中不再锁定选择器。
+    await expect(page.getByLabel("终端权限")).toBeEnabled();
     const snapshot = await attachFirstFrame(base, session);
     const requestId = snapshot.terminal_approvals[0].id;
     // 原生 HTTP 客户端不受 CORS 限制，仍必须无法代替用户批准。
@@ -86,7 +87,7 @@ test("approves the exact command, runs it in Rust and switches the next run to f
     await expect(page.getByText("Full access verified.", { exact: true })).toBeVisible();
     await expect(card).toHaveCount(0);
     const after = await attachFirstFrame(base, session);
-    expect(after.activity?.launch.terminalPermissionMode).toBe("full_access");
+    expect(after.terminal_permission_mode).toBe("full_access");
     await expect(page.getByLabel("终端权限")).toBeEnabled();
     await page.getByLabel("终端权限").selectOption("request_approval");
     await expect(page.getByLabel("终端权限")).toHaveValue("request_approval");

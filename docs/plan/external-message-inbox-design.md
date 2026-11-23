@@ -76,7 +76,7 @@ class ExternalMessageBody(EnqueuedMessageBody):
 - **渲染**：`<external_message channel="lark" from="张三" ref="...">` 加转义后的正文，与 Agent 消息同一套边界做法（`agent_message.py:67`）；不单写读法：消息协议前言的通用规则已说明它不是用户的指令，来源看属性。
 - **并入时机**一律 `immediate`：驱动中下一次模型请求前并入，空闲时随下一次推进（或按唤醒范围开出的新 Run）并入。
 - **发起配置**：外部消息不携带 `RunLaunch`，不算开启回合的输入（不进 `LAUNCH_INPUT_BODIES`）；凭它开新 Run 时继承当前 Run 的配置，Task 还没有 Run 时不动（`next_action` 现有规则）。
-- **回合**：沿用 Agent 消息的规则——作为新 Run 的第一条输入到达时开启回合，途中到达时是当前回复的一段。开回合的判定只在 `RuntimeMessageContextManager._opens_turn`，届时把 `external_message` 加入 `TURN_INPUT_KINDS`（`models/message_metadata.py:34`）。外部消息开启的回合不能撤回（撤回目标只认用户输入，现状不变）。
+- **回合**：沿用 Agent 消息的规则——作为新 Run 的第一条输入到达时开启回合，途中到达时是当前回复的一段。开回合的判定只在 `RuntimeMessageContextManager._opens_turn`，届时把 `external_message` 加入 `TURN_INPUT_KINDS`（`models/message_context/message_metadata.py:34`）。外部消息开启的回合不能撤回（撤回目标只认用户输入，现状不变）。
 - **登记处**：按 `message_bodies/__init__.py` 的约定，新类型同时进 `MessageBody`、`MODEL_INPUT_BODIES` 与 `_BODY_OF_KIND`，`TaskMessageKind` 与 context metadata 的 `MessageKind` 各加一项。
 
 ## 5. 入口：服务层是收件口，HTTP 是一种通道

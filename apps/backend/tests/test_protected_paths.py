@@ -13,10 +13,10 @@ import pytest
 
 from app.core.permission.protected_paths import ProtectedPaths
 from app.core.tool.schemas import ToolExecutionContext
-from app.tools.tool_handler.find_files import FindFilesTool
-from app.tools.tool_handler.read_file import ReadFileTool
-from app.tools.tool_handler.search_content import SearchContentTool
-from app.tools.tool_handler.write_file import WriteFileTool
+from app.tools.tool_handler.file.find_files import FindFilesTool
+from app.tools.tool_handler.file.read_file import ReadFileTool
+from app.tools.tool_handler.file.search_content import SearchContentTool
+from app.tools.tool_handler.file.write_file import WriteFileTool
 from app.utils.path import system_cosir as paths
 
 MARKER = "sk-protected-marker"

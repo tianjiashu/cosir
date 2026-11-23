@@ -9,7 +9,7 @@ import pytest
 from app.assistant_transport.projection.tool_result import project_tool_result
 from app.core.agents.define_agents import main_agent
 from app.core.tool.handler.offer_next_step import OfferNextStepTool
-from app.models.deliverable import DeliveredDirectory, DeliveredFile, DeliveredUrl
+from app.models.deliverable_file import DeliveredDirectory, DeliveredFile, DeliveredUrl
 from app.models.message_context.message_metadata.tool_message_metadata import (
     ToolMessageMetadata,
     ToolResultFacts,

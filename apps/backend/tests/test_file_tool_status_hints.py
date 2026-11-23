@@ -7,8 +7,8 @@ import pytest
 from app.core.tool.results.tool_error import STATUS_HINT_MAX_LENGTH
 from app.core.tool.schemas import ToolExecutionContext
 from app.tools.mcp.failure import _STATUS_HINTS, MCPFailureKind
-from app.tools.tool_handler.edit_file import EditFileTool
-from app.tools.tool_handler.write_file import WriteFileTool
+from app.tools.tool_handler.file.edit_file import EditFileTool
+from app.tools.tool_handler.file.write_file import WriteFileTool
 from tests.file_knowledge_support import with_read_files
 
 

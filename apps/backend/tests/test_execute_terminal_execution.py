@@ -58,7 +58,7 @@ class _Command:
 @pytest.fixture(autouse=True)
 def mock_sandbox_capability(monkeypatch):
     monkeypatch.setattr(
-        terminal_module, "probe_sandbox", lambda _: type("Capability", (), {"supported": True})()
+        terminal_module, "worker_sandbox", lambda: type("Capability", (), {"supported": True})()
     )
 
 
@@ -378,8 +378,8 @@ def _lines_totalling(chars: int) -> str:
 @pytest.mark.parametrize(
     "output_chars",
     [
-        ExecuteTerminalTool.model_output_budget(audit=True) - 40,  # 刚好不溢出
-        ExecuteTerminalTool.model_output_budget(audit=True) + 40,  # 刚好溢出
+        ExecuteTerminalTool.model_output_budget() - 40,  # 刚好不溢出
+        ExecuteTerminalTool.model_output_budget() + 40,  # 刚好溢出
         200_000,  # 远超预算
     ],
 )
@@ -424,7 +424,7 @@ def test_model_text_fits_the_channel_once_whatever_the_ending(
     assert len(content) <= Constant.Tools.MAX_OUTPUT_CHARS
     assert content.startswith(result.end_marker())
     artifacts = tmp_path / ".cosir" / "tool-artifacts"
-    overflowed = output_chars > ExecuteTerminalTool.model_output_budget(audit=True)
+    overflowed = output_chars > ExecuteTerminalTool.model_output_budget()
     if overflowed:
         [log] = list(artifacts.iterdir())  # 只有命令自己的完整日志，没有兜底写的副本
         assert log.read_text(encoding="utf-8") == text

@@ -102,8 +102,6 @@ def open_sources(monkeypatch):
     """未了结事项的另外两个事实来源：后台命令与派生 Session，默认都没有。"""
     from app.core.workflow.notices import drive_notices as module
 
-    # 此文件验证既有驱动通知，终端权限通知由 test_terminal_permissions 单独验证。
-    monkeypatch.setattr(module, "_terminal_permissions", lambda _rc, _context: None)
     sources = SimpleNamespace(commands=[], derived=[])
     monkeypatch.setattr(
         module, "background_commands", lambda: SimpleNamespace(pending=lambda _id: sources.commands)

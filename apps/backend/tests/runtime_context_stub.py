@@ -17,7 +17,6 @@ from typing import Any
 import pytest
 
 from app.config import configuration
-from app.core.file_access.knowledge import FileKnowledge
 from app.core.tool.schemas.request_tools import RequestTools
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.run_mailbox import RunMailbox
@@ -178,6 +177,6 @@ async def run_batch(rc: Any, calls: list[Any]) -> list[Any]:
             for call in calls
         ]
     )
-    with execution_scope(rc, SimpleNamespace(file_knowledge=FileKnowledge)):
+    with execution_scope(rc, SimpleNamespace(visible_tool_facts=tuple)):
         patch = await _tools_node(ReactExecutionState(step_count=1, batch=batch))
     return patch["batch"].observations

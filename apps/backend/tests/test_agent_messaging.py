@@ -77,6 +77,8 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         lambda: SimpleNamespace(
             get_session=_SESSIONS.__getitem__,
             require_current_run=current,
+            # 这些用例不测权限：都算同一棵所有权树，``session_send`` 不按终端权限拦。
+            ownership_root_id=lambda _id: 1,
         ),
     )
     monkeypatch.setattr(

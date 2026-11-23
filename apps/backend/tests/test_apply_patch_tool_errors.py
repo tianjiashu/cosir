@@ -3,9 +3,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.core.tool.schemas import ToolExecutionContext
-from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.file_edit.patch_apply import PatchApplyError
-from app.tools.tool_handler.file_edit.patch_diff import FileDiffResult
+from app.tools.tool_handler.file.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.file.file_edit.patch_apply import PatchApplyError
+from app.tools.tool_handler.file.file_edit.patch_diff import FileDiffResult
 from tests.file_knowledge_support import with_workspace_reads
 
 
@@ -40,19 +40,19 @@ def test_invalid_diff_reports_tool_specific_guidance(tmp_path: Path) -> None:
 def test_success_returns_success_without_repeating_the_patch(monkeypatch, tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("new\n", encoding="utf-8")
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.prepare_patch",
+        "app.tools.tool_handler.file.apply_patch_tool.prepare_patch",
         lambda _operations, _resolver: ({}, []),
     )
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.apply_all_with_diff",
+        "app.tools.tool_handler.file.apply_patch_tool.apply_all_with_diff",
         lambda _operations, _resolver, _targets: [],
     )
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.check_source_syntax",
+        "app.tools.tool_handler.file.apply_patch_tool.check_source_syntax",
         lambda _path, _content: SimpleNamespace(has_error=False),
     )
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.build_file_change_display_data",
+        "app.tools.tool_handler.file.apply_patch_tool.build_file_change_display_data",
         lambda _results: {"kind": "file-changes"},
     )
     observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=_valid_patch())
@@ -67,7 +67,7 @@ def test_apply_failure_guides_regenerating_the_diff(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.prepare_patch",
+        "app.tools.tool_handler.file.apply_patch_tool.prepare_patch",
         lambda _operations, _resolver: ({}, []),
     )
 
@@ -80,7 +80,7 @@ def test_apply_failure_guides_regenerating_the_diff(
             raise PatchApplyError("file is locked", applied=[]) from cause
 
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.apply_all_with_diff", fail_apply
+        "app.tools.tool_handler.file.apply_patch_tool.apply_all_with_diff", fail_apply
     )
     observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=_valid_patch())
 
@@ -90,7 +90,7 @@ def test_apply_failure_guides_regenerating_the_diff(
 
 def test_partial_apply_failure_forbids_replaying_the_diff(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.prepare_patch",
+        "app.tools.tool_handler.file.apply_patch_tool.prepare_patch",
         lambda _operations, _resolver: ({}, []),
     )
 
@@ -104,7 +104,7 @@ def test_partial_apply_failure_forbids_replaying_the_diff(monkeypatch, tmp_path:
             ) from cause
 
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.apply_all_with_diff",
+        "app.tools.tool_handler.file.apply_patch_tool.apply_all_with_diff",
         fail_after_partial_apply,
     )
     observation = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=_valid_patch())
@@ -170,7 +170,7 @@ def test_apply_patch_failures_carry_distinct_status_hints(monkeypatch, tmp_path:
     bad = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch="not a diff")
     assert bad.display_data == {"status_hint": "补丁格式错误"}
     monkeypatch.setattr(
-        "app.tools.tool_handler.apply_patch_tool.prepare_patch",
+        "app.tools.tool_handler.file.apply_patch_tool.prepare_patch",
         lambda _operations, _resolver: ({}, ["a.txt: context does not match"]),
     )
     invalid = ApplyPatchTool().execute(with_workspace_reads(_context(tmp_path)), patch=_valid_patch())

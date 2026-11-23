@@ -12,9 +12,9 @@ import { API_ORIGIN as origin } from "./e2e-env";
 const SESSION_ID = 4501;
 const PAIRS = 160;
 const OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 };
-const LAUNCH = { terminalPermissionMode: "request_approval" as const, modelConfigId: null, reasoningEffort: null };
+const LAUNCH = { modelConfigId: null, reasoningEffort: null };
 
-type SeedState = Omit<TransportState, "messageOffset" | "terminal_sessions" | "background_tasks" | "foreground_waits" | "terminal_approvals" | "deliverables">;
+type SeedState = Omit<TransportState, "messageOffset" | "terminal_sessions" | "background_tasks" | "foreground_waits" | "terminal_approvals" | "deliverables" | "terminal_permission_mode">;
 
 function longConversation(pairs = PAIRS): SeedState {
   const messages: TransportState["messages"] = [];

@@ -97,7 +97,6 @@ class _Ledger:
             end_reason=None,
             model_config_id=launch.model_config_id,
             reasoning_effort=launch.reasoning_effort,
-            terminal_permission_mode=launch.terminal_permission_mode,
         )
         self.runs[run.id] = run
         self.current = run
@@ -252,15 +251,9 @@ async def chain(monkeypatch):
         command,
         model_config_id,
         _reasoning_effort,
-        agent_id,
-        *,
-        terminal_permission_mode: UserInputBody(
+        agent_id: UserInputBody(
             text=command.text,
-            launch=RunLaunch(
-                agent_id=agent_id,
-                model_config_id=model_config_id,
-                terminal_permission_mode=terminal_permission_mode,
-            ),
+            launch=RunLaunch(agent_id=agent_id, model_config_id=model_config_id),
             presentation=UserInputPresentation(text=command.text),
         )
     )
@@ -287,7 +280,6 @@ def _send_request(text: str):
         {
             "message": {"role": "user", "parts": [{"type": "text", "text": text}]},
             "modelConfigId": "test/m1",
-            "terminalPermissionMode": "request_approval",
         }
     )
 

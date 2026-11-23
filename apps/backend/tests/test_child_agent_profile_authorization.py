@@ -37,6 +37,9 @@ async def test_session_send_rejects_main_profile_before_creating_run(
     """历史 child Session 若绑定主 Agent，follow-up 入口不得创建新 Run。"""
 
     class _SessionService:
+        def ownership_root_id(self, _session_id: int) -> int:
+            return 7
+
         def get_session(self, session_id: int) -> SimpleNamespace:
             return SimpleNamespace(
                 id=session_id,
@@ -108,6 +111,7 @@ def test_session_send_to_a_fork_reuses_its_own_launch_without_profiles(
         lambda: SimpleNamespace(
             get_session=lambda session_id: fork_session if session_id == 41 else parent_session,
             require_current_run=lambda _: run,
+            ownership_root_id=lambda _id: 7,
         ),
     )
     monkeypatch.setattr(session_send, "get_workspace_service", lambda: None)

@@ -137,8 +137,7 @@ def test_platform_args_descriptions_are_english_complete_and_non_redundant(
         "timeout",
         "workdir",
         "background",
-        "permissions",
-        "justification",
+        "escalate_sandbox",
     }
     for name, schema in properties.items():
         description = str(schema["description"])

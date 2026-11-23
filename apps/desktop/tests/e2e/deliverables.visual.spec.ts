@@ -14,7 +14,7 @@ import { stubWorkspaceFiles, type StubFile } from "./workspace-files-stubs";
  */
 const SESSION_ID = 42;
 const ROOT = "C:/demo";
-const LAUNCH = { terminalPermissionMode: "request_approval" as const, modelConfigId: "demo/demo-model", reasoningEffort: null };
+const LAUNCH = { modelConfigId: "demo/demo-model", reasoningEffort: null };
 
 const file = (workspacePath: string | null, absolutePath: string, size: number, caption: string | null = null): TransportDeliverable =>
   ({ type: "file", key: absolutePath, caption, workspacePath, absolutePath, kind: "text", size, width: null, height: null });

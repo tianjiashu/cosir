@@ -141,7 +141,9 @@ def test_tool_layer_lists_only_the_file_tools_the_agent_has():
     assert "search_content" not in out
     assert "find_files" not in out
     assert "You can also read or edit through execute_terminal." in out
-    assert "Read the current file in an earlier model step" in out
+    # 终端读到的不算已读：说明里必须点名文件工具读取，免得模型 cat 之后直接改文件被拒。
+    assert "read it with read_file in an earlier model step" in out
+    assert "execute_terminal output does not count as a read" in out
     assert "parallel tool calls in one response" in out
 
 

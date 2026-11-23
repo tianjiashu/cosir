@@ -411,8 +411,9 @@ function wireState(sessionId, state = states.get(sessionId)) {
     terminal_sessions: (terminalSessions.get(sessionId) ?? []).map((session) => session.entry),
     background_tasks: backgroundTasks.get(sessionId) ?? [],
     foreground_waits: (foregroundWaits.get(sessionId) ?? []).map((entry) => entry.toolCallId),
-   
     deliverables: sessionDeliverables(state.messages),
+    // 会话的终端权限（后端投影自 sessions 表）；种子没写时与新会话默认一致。
+    terminal_permission_mode: state.terminal_permission_mode ?? "request_approval",
   };
 }
 

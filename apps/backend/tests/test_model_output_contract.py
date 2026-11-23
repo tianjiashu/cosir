@@ -7,7 +7,6 @@ from typing import Any
 
 import app.core.workflow.node_helper.model_stream_state_machine as streaming_module
 import pytest
-from app.core.file_access.knowledge import FileKnowledge
 from app.core.llm_provider.message_codec import assistant_message
 from app.core.workflow.execution_state.react_execution_state import ReactExecutionState
 from app.core.workflow.execution_state.react_route import ReactRoute
@@ -84,7 +83,7 @@ class _ModelHarness:
 
         self.runtime_context = SimpleNamespace(
             load_message=lambda: [],
-            file_knowledge=FileKnowledge,
+            visible_tool_facts=tuple,
             add_message=add_message,
             save_model_response=save_model_response,
             abandon_model_response=lambda: None,

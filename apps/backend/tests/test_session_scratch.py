@@ -15,9 +15,9 @@ from app.core.context import system_prompt_builder as spb
 from app.core.permission.protected_paths import ProtectedPaths
 from app.core.tool.schemas import ToolExecutionContext
 from app.service.session import session_scratch
-from app.tools.tool_handler.read_file import ReadFileTool
-from app.tools.tool_handler.security.path_resolver import PathResolver
-from app.tools.tool_handler.write_file import WriteFileTool
+from app.tools.tool_handler.file.read_file import ReadFileTool
+from app.tools.file_system.path_resolver import PathResolver
+from app.tools.tool_handler.file.write_file import WriteFileTool
 from app.utils.path import system_cosir as paths
 
 MARKER = "sk-protected-marker"

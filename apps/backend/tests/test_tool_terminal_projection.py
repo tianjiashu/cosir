@@ -35,7 +35,6 @@ from app.core.events import (
     ToolCallRuntimeUpdateEvent,
     ToolCallStatusChangedEvent,
 )
-from app.core.file_access.knowledge import FileKnowledge
 from app.core.tool.execute import tool_executor as tool_executor_module
 from app.core.tool.execute import tool_terminal_projection as projection_module
 from app.core.tool.execute.tool_executor import ToolExecutor
@@ -58,7 +57,7 @@ from app.core.workflow.node_helper.common import execution_scope
 from app.core.workflow.nodes import tools_node
 from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
-from app.tools.tool_handler.read_file import ReadFileTool
+from app.tools.tool_handler.file.read_file import ReadFileTool
 from pydantic import BaseModel, ConfigDict
 from tests.runtime_context_stub import admitting, runtime_stub
 from tests.tool_executor_fakes import emit_running
@@ -525,7 +524,8 @@ def test_success_emits_running_then_completed(
         "step-1",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
 
     assert observation.status == "success"
@@ -574,7 +574,8 @@ def test_running_is_emitted_only_after_admission(
         "s",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
 
     assert seen_during_handler == [["running"]]
@@ -597,7 +598,8 @@ def test_unknown_tool_emits_failed_without_running(
         "s",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
 
     assert observation.status == "error"
@@ -625,7 +627,8 @@ def test_profile_denied_tool_emits_failed_without_running(
         "s",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
 
     assert observation.status == "error"
@@ -649,7 +652,8 @@ def test_invalid_arguments_emit_failed_without_running(
         "s",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
 
     assert observation.status == "error"
@@ -677,7 +681,8 @@ def test_denied_calls_emit_failure_without_running(
             "s",
             _NO_LOOP,
             rc.request_tools(None),
-            FileKnowledge(),
+            (),
+        (),
         )
 
     assert [(e.tool_call_id, e.status) for e in recorder.events] == [
@@ -718,7 +723,8 @@ def test_execute_call_specializes_context_per_call(
         "s",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
 
     assert received == ["call-a"]
@@ -759,7 +765,8 @@ def test_malformed_display_data_still_emits_failed_terminal(
         "s",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
 
     assert observation.status == "error"
@@ -790,7 +797,8 @@ def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
             "s",
             _NO_LOOP,
             rc.request_tools(None),
-            FileKnowledge(),
+            (),
+        (),
         )
 
     assert observation.status == "success"
@@ -839,7 +847,8 @@ def test_executor_exception_becomes_error_observation_and_failed_terminal(
             "s",
             _NO_LOOP,
             rc.request_tools(None),
-            FileKnowledge(),
+            (),
+        (),
         )
 
     assert observation.status == "error"
@@ -873,7 +882,8 @@ def test_executor_exception_after_start_closes_running_card(
         "s",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
 
     assert observation.content.startswith(
@@ -894,7 +904,8 @@ def test_executor_exception_emits_failure(monkeypatch: pytest.MonkeyPatch, tmp_p
         "s",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
 
     assert observation.status == "error"
@@ -947,7 +958,8 @@ def test_suspending_tool_still_closes_its_call_in_the_same_step(
         "s",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
 
     assert observation.status == "success"
@@ -1083,7 +1095,8 @@ def test_concurrent_calls_project_each_call_independently(
             "s",
             _NO_LOOP,
             rc.request_tools(None),
-            FileKnowledge(),
+            (),
+        (),
         )
 
     threads = [threading.Thread(target=run, args=(i,)) for i in range(4)]
@@ -1120,7 +1133,8 @@ def test_mixed_batch_distinct_statuses_do_not_cross_talk(
         "s",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
     tools_node._execute_call(
         rc,
@@ -1128,7 +1142,8 @@ def test_mixed_batch_distinct_statuses_do_not_cross_talk(
         "s",
         _NO_LOOP,
         rc.request_tools(None),
-        FileKnowledge(),
+        (),
+        (),
     )
 
     assert recorder.statuses("call-good") == ["running", "completed"]

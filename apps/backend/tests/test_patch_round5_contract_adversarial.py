@@ -34,8 +34,8 @@ import pathlib
 import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
-from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.file_edit import (
+from app.tools.tool_handler.file.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.file.file_edit import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
@@ -1100,7 +1100,7 @@ def test_atomic_write_leaves_no_temp_file_when_it_fails(tmp_path: pathlib.Path) 
 # output, so a model cannot round-trip the numbered listing back into a file.
 # Defect type: guard too weak to detect the pollution it exists for.
 def test_line_number_pollution_guard_flags_numbered_content() -> None:
-    from app.tools.tool_handler.file_edit.line_numbered import looks_like_line_numbered
+    from app.tools.tool_handler.file.file_edit.line_numbered import looks_like_line_numbered
 
     # read_file renders lines as f"{line_number}| {line}" (no padding), so the guard must
     # catch exactly that shape.

@@ -10,8 +10,8 @@ from app.core.permission.writable_root import WritableRootError, absolute, narro
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.session.session_extra import SessionExtra
 from app.models.session.session_kind import SessionType
-from app.tools.tool_handler.security.path_resolver import PathResolver
-from app.tools.tool_handler.write_file import WriteFileTool
+from app.tools.file_system.path_resolver import PathResolver
+from app.tools.tool_handler.file.write_file import WriteFileTool
 
 
 @pytest.fixture

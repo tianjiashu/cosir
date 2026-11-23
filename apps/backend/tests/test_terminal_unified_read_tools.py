@@ -78,7 +78,7 @@ def _context(
         workspace_root=tmp_path,
         run_id=1,
         tool_call_id=tool_call_id,
-        terminal_permission_mode="full_access",
+        read_terminal_mode=lambda: "full_access",
     )
 
 

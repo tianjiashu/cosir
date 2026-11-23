@@ -4,7 +4,7 @@ import type { TransportMessagePart, TransportState } from "@/lib/assistant/contr
 import { API_ORIGIN } from "./e2e-env";
 
 /** E2E 共用的 Session 视角 snapshot 构造器，与 tests/e2e/test-server.mjs 的契约一致。 */
-const LAUNCH = { terminalPermissionMode: "request_approval" as const, modelConfigId: null, reasoningEffort: null };
+const LAUNCH = { modelConfigId: null, reasoningEffort: null };
 
 /** 一个已完成回合的快照；第一个参数是回合号（回复 id 按它编码）。 */
 export function completedState(
@@ -22,12 +22,12 @@ export function completedState(
       { id: `assistant-turn-${turn}`, role: "assistant", parts: assistantParts, turn, inherited: false, outcome, source: null },
     ],
     messageOffset: 0, activity: { modelActivity: null, turn, resumable: false, ...activityOutcome, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
-    terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [], terminal_permission_mode: "request_approval" as const,
   };
 }
 
 /** 种子 state 可省略进程内事实（终端会话、看板、前台等待）与 `messageOffset`：模拟后端注入它们，并按历史窗口裁剪。 */
-type ProcessFacts = "terminal_sessions" | "background_tasks" | "foreground_waits" | "terminal_approvals" | "deliverables" | "messageOffset";
+type ProcessFacts = "terminal_sessions" | "background_tasks" | "foreground_waits" | "terminal_approvals" | "deliverables" | "messageOffset" | "terminal_permission_mode";
 type SeedState = Omit<TransportState, ProcessFacts> & Partial<Pick<TransportState, ProcessFacts>>;
 
 /** 让模拟后端持有这份 state：attach 首帧与 `readState` 读到的是同一份事实。 */

@@ -12,7 +12,7 @@ import { stubWorkspaceFiles, type StubFile } from "./workspace-files-stubs";
  */
 
 const SESSION_ID = 42;
-const LAUNCH = { terminalPermissionMode: "request_approval" as const, modelConfigId: "demo/demo-model", reasoningEffort: null };
+const LAUNCH = { modelConfigId: "demo/demo-model", reasoningEffort: null };
 const ROOT = "C:/demo";
 
 const file = (workspacePath: string | null, absolutePath: string, caption: string | null = null, size = 1229) =>

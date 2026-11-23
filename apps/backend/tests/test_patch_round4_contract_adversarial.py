@@ -30,8 +30,8 @@ import pathlib
 import pytest
 
 from app.core.tool.schemas import ToolExecutionContext
-from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.file_edit import (
+from app.tools.tool_handler.file.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.file.file_edit import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
@@ -669,7 +669,7 @@ def test_syntax_stage_resolution_failure_is_skipped_not_raised(
     tmp_path: pathlib.Path,
     monkeypatch,
 ) -> None:
-    from app.tools.tool_handler.security.path_resolver import PathResolver
+    from app.tools.file_system.path_resolver import PathResolver
 
     (tmp_path / "m.py").write_bytes(b"def f():\n    return 1\n")
     patch = _section("m.py", "@@ -2,1 +2,1 @@", "-    return 1", "+    return 2") + "\n"

@@ -167,6 +167,7 @@ def skip_request_reconcile(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(request_notices, "_configuration_changed", lambda: None)
     monkeypatch.setattr(request_notices, "_read_files_changed", lambda: None)
+    monkeypatch.setattr(request_notices, "_terminal_permissions", lambda: None)
 
 
 @pytest.fixture(autouse=True)
@@ -199,8 +200,10 @@ def reopen_background_registry() -> Iterator[None]:
 
     from app.core.events.event_sink import set_event_sink
     from app.core.tool.background_commands import set_background_commands
+    from app.core.tool.file_change_notices import set_file_change_notices
     from app.core.tool.external_tools import set_external_tools
     from app.service import depends
+    from app.tools.file_system.read_changes import read_changes
     from app.tools.mcp.mcp_tools import MCPExternalTools
     from app.tools.tool_handler.terminal.command_results import command_results
 
@@ -209,6 +212,7 @@ def reopen_background_registry() -> Iterator[None]:
     command_results.open()
     # 不经 lifespan 的用例也会走到 core 的后台命令端口（静止判定、wait_messages、收回）。
     set_background_commands(command_results)
+    set_file_change_notices(read_changes)
     # 系统提示词的延迟工具目录与准入门禁都经这个端口；配置目录已隔离到用例临时目录，目录为空。
     set_external_tools(MCPExternalTools())
     # 不经 lifespan 的用例同样经事件出口交出事件：每次按名取投影器，用例替换

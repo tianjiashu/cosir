@@ -2,11 +2,11 @@
 
 > 状态：设计稿，未实施（2026-11-14）。只记需求、设计与契约，实施计划由实现方另出。
 > 对标：Claude Code 的 `AskUserQuestion`（工具描述、参数说明与回执原文见根目录 [`claude-code-system-prompt.md`](../../claude-code-system-prompt.md) 的 AskUserQuestion 一节）。
-> 关联：[`agent-permission-sandbox-design.md`](agent-permission-sandbox-design.md) §6——越界审查拒绝后，模型用本工具向用户征得许可；本工具与沙箱无关，可以先交付。
+> 关联：[`agent-permission-sandbox-design.md`](agent-permission-sandbox-design.md)：执行越界的审批不经本工具（原调用内等待放行，见该稿 §14）。
 
 ## 1. 要什么
 
-**完成标准**：模型被一个真正属于用户的决定卡住时（澄清需求、几个方案选一个、确认取舍、征得越界许可），调用 `ask_user` 弹出提问卡片；用户点选或填写后，回答作为结构化消息交给模型，同一个 Run 接着干。用户也可以不理卡片、直接发消息，旧提问作废，按新消息处理。
+**完成标准**：模型被一个真正属于用户的决定卡住时（澄清需求、几个方案选一个、确认取舍），调用 `ask_user` 弹出提问卡片；用户点选或填写后，回答作为结构化消息交给模型，同一个 Run 接着干。用户也可以不理卡片、直接发消息，旧提问作废，按新消息处理。
 
 **最不想看到**：
 
@@ -150,7 +150,6 @@ The user answered: "<question>"="<answer>", "<question>"="<answer>". Read the an
 
 - 工具描述见 §2，它本身就包含「什么时候不该问」。
 - 系统提示词同时加入 Claude Code 的「信息够了就动手；权衡时给建议，而不是罗列选项」一句（根目录 `claude-code-prompt-checklist.md` 第 4 项），免得提问被滥用。
-- 沙箱落地后，越界审查拒绝的观察会引导模型「确需这样做，用 `ask_user` 向用户说明风险、征得许可后重试」（沙箱稿 §6.2）。本工具不感知这个用途。
 
 ## 8. 展示契约
 
@@ -164,7 +163,7 @@ The user answered: "<question>"="<answer>", "<question>"="<answer>". Read the an
 - **提问超时**：Claude Code 可配，cosir 没有需求。
 - **子 Agent 冒泡**：子 Agent 拿不到本工具。
 - **带图片的提问**：以后需要时另行设计。
-- **专门的权限审批工具**：征得许可只是提问的一种用途。
+- **执行审批**：不是提问，在原调用内等待放行（沙箱稿 §14）。
 
 ## 10. 验收
 

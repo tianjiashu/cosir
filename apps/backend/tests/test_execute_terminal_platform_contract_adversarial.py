@@ -24,7 +24,6 @@ from pydantic import BaseModel
 
 from app.core.tool.tool_registry import ToolRegistry
 from app.core.tool.validation.arguments import validate_tool_arguments
-from app.tools.shell.file_access.command_effects import CommandEffects
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
 from app.tools.tool_models.terminal.execute_terminal_args import (
     MacExecuteTerminalArgs,
@@ -40,23 +39,6 @@ _SHELLS_MODULE = "app.tools.shell.host_shells"
 
 # execute 的形参必须是「args_model 字段 + 执行链注入的 execution_context / output_sink」。
 _EXECUTION_INJECTED_PARAMS = {"execution_context", "output_sink"}
-
-
-@pytest.mark.parametrize(
-    ("shell", "command"),
-    [("cmd", 'type "a file.txt"'), ("powershell", 'Get-Content -LiteralPath "a file.txt"')],
-)
-def test_windows_literal_reads_bind_the_source(shell: str, command: str, tmp_path: Path) -> None:
-    effects = CommandEffects.analyze(command, tmp_path, shell)
-    assert effects.read is not None and not effects.writes
-    assert effects.read.path == tmp_path / "a file.txt"
-
-
-@pytest.mark.parametrize("shell", ["cmd", "powershell"])
-def test_windows_redirection_checks_a_literal_write_target(shell: str, tmp_path: Path) -> None:
-    effects = CommandEffects.analyze('echo data > "a file.txt"', tmp_path, shell)
-    [target] = effects.writes
-    assert target.action == "overwrite" and target.path == tmp_path / "a file.txt"
 
 
 # ----------------------------------------------------------------------
@@ -384,8 +366,7 @@ def test_all_field_descriptions_are_nonempty_english_and_stop_with_period(
         "timeout",
         "workdir",
         "background",
-        "permissions",
-        "justification",
+        "escalate_sandbox",
     }
     for name, schema in properties.items():
         description = str(schema["description"])
@@ -633,8 +614,7 @@ def test_resolver_result_is_usable_as_args_model_directly() -> None:
         "timeout": None,
         "workdir": None,
         "background": None,
-        "permissions": None,
-        "justification": "",
+        "escalate_sandbox": None,
     }
 
 

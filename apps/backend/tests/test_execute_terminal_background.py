@@ -14,15 +14,15 @@ from typing import Any
 
 import pytest
 
-from app.core.file_access.write_attribution import write_attribution
 from app.core.tool.schemas import ToolExecutionContext
-from app.models.file_access.file_version import FileVersion
+from app.tools.file_system.facts.file_version import FileVersion
+from app.tools.file_system.write_attribution import write_attribution
 from app.tools.terminal_runtime.command.command_output import CommandOutput as _CommandOutput
 from app.tools.terminal_runtime.command.local_backend import LocalExecutionBackend
 from app.tools.terminal_runtime.permissions.policy import TerminalExecutionPolicy
+from app.tools.tool_handler.file.write_file import WriteFileTool
 from app.tools.tool_handler.terminal.command_results import CommandResultRegistry, command_results
 from app.tools.tool_handler.terminal.execute_terminal import ExecuteTerminalTool
-from app.tools.tool_handler.write_file import WriteFileTool
 from tests.file_knowledge_support import with_read_files
 from tests.live_cold_support import registered
 from tests.terminal_test_support import requires_terminal_worker
@@ -62,7 +62,7 @@ def _context(tmp_path: Path, tool_call_id: str) -> ToolExecutionContext:
         workspace_root=tmp_path,
         run_id=1,
         tool_call_id=tool_call_id,
-        terminal_permission_mode="full_access",
+        read_terminal_mode=lambda: "full_access",
     )
 
 
@@ -248,119 +248,27 @@ def test_foreground_cancel_retains_real_output(tmp_path) -> None:
         observation = result.result(timeout=5)
     assert observation.status == "cancelled"
     assert "before-cancel" in observation.display_data["output"]
-    assert observation.facts.file_facts.terminal_audit.changes[0].operation == "created"
 
 
-def test_terminal_reads_unlock_literal_writes_only_after_delivery(tmp_path) -> None:
-    source = tmp_path / "a file.txt"
-    source.write_text("first\nsecond\n", encoding="utf-8")
-    context = _context(tmp_path, "read-before-write")
-    tool = ExecuteTerminalTool()
-
-    combined = tool.execute(
-        command=(
-            'target=other.txt; printf other > "$target"; '
-            "cat 'a file.txt'; echo replacement > 'a file.txt'"
-        ),
-        execution_context=context,
-    )
-    assert combined.display_data == {"status_hint": "需先读取"}
-    assert source.read_text() == "first\nsecond\n"
-    assert not (tmp_path / "other.txt").exists()
-
-    first_page = tool.execute(command="head -n 1 'a file.txt'", execution_context=context)
-    context.file_knowledge.observe(first_page.facts.file_facts)
-    overwrite = tool.execute(command="echo replacement > 'a file.txt'", execution_context=context)
-    assert overwrite.display_data == {"status_hint": "需读全文"}
-
-    read = tool.execute(command="cat 'a file.txt'", execution_context=context)
-    context.file_knowledge.observe(read.facts.file_facts)
-    overwrite = tool.execute(command="echo replacement > 'a file.txt'", execution_context=context)
-    assert overwrite.status == "success"
-    [change] = overwrite.facts.file_facts.terminal_audit.changes
-    assert (change.path, change.operation, change.recognized, change.previously_read) == (
-        "a file.txt",
-        "modified",
-        True,
-        True,
-    )
-    assert source.read_text() == "replacement\n"
-    assert tool.execute(command="rm 'a file.txt'", execution_context=context).display_data == {
-        "status_hint": "文件已变化",
-    }
-
-
-def test_unrecognized_write_runs_and_reports_the_actual_change(tmp_path) -> None:
-    target = tmp_path / "original.txt"
-    target.write_text("before\n", encoding="utf-8")
-    context = _context(tmp_path, "complex-write")
-    tool = ExecuteTerminalTool()
-    command = 'target=original.txt; printf after > "$target"'
-
-    result = tool.execute(command=command, execution_context=context)
-    assert result.status == "success"
-    assert "unrecognized target, no prior read of the original version" in result.content
-    audit = result.facts.file_facts.terminal_audit
-    assert audit.complete and audit.total_changes == 1
-    [change] = audit.changes
-    assert not change.recognized and change.previously_read is False
-    assert target.read_text() == "after"
-    # 审计看到的变化记到本会话名下：别的会话读过这个文件时，变化通知据此写明修改者。
-    writer = write_attribution.writer_of(target.resolve(), FileVersion.of(target))
-    assert writer is not None and (writer.session_id, writer.confirmed) == (_SESSION_ID, False)
-
-
-def test_background_reservation_lasts_until_command_settles(tmp_path, delivered) -> None:
+def test_terminal_is_opaque_to_the_file_system(tmp_path) -> None:
+    """终端不建立也不推进已读资格：读写都照常执行，不交文件事实；改了读过的文件当场提醒并登记写入者，
+    之后的文件工具仍按磁盘版本判断。"""
     target = tmp_path / "file.txt"
     target.write_text("original", encoding="utf-8")
-    command_context = with_read_files(_context(tmp_path, "live-write"), "file.txt")
-    edit_context = with_read_files(_context(tmp_path, "concurrent-edit"), "file.txt")
-    marker = tmp_path / "ready"
-    result = ExecuteTerminalTool().execute(
-        command="touch ready; while [ ! -f continue ]; do sleep 0.02; done; echo done > file.txt",
-        background=True,
-        execution_context=command_context,
-    )
-    assert result.background
-    _wait_for(marker.exists)
-    assert WriteFileTool().execute("file.txt", "new", edit_context).display_data == {
-        "status_hint": "正在修改"
-    }
+    context = with_read_files(_context(tmp_path, "opaque"), "file.txt")
+    tool = ExecuteTerminalTool()
 
-    (tmp_path / "continue").touch()
-    _wait_for(lambda: len(delivered) == 1)
-    assert target.read_text() == "done\n"
-    assert "modified: 'file.txt' (recognized target)" in str(delivered[0][2]["output"])
-    assert WriteFileTool().execute("file.txt", "new", edit_context).display_data == {
+    read = tool.execute(command="cat file.txt", execution_context=context)
+    assert read.status == "success" and read.facts is None
+    assert "changed or removed files you read earlier" not in read.content
+    write = tool.execute(command="echo changed > file.txt", execution_context=context)
+    assert write.status == "success" and write.facts is None
+    assert target.read_text() == "changed\n"
+    assert "changed or removed files you read earlier" in write.content and "file.txt" in write.content
+    writer = write_attribution.writer_of(target.resolve(), FileVersion.of(target))
+    assert writer is not None and (writer.session_id, writer.by_command) == (_SESSION_ID, True)
+
+    # 读过的版本已经不是磁盘上的了：文件工具照写前版本检查拒绝，模型要先重读。
+    assert WriteFileTool().execute("file.txt", "new", context).display_data == {
         "status_hint": "文件已变化"
     }
-
-
-def test_background_reports_observed_files_before_completion(
-    tmp_path, delivered, monkeypatch
-) -> None:
-    from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
-    from app.tools.terminal_runtime.command import file_audit
-
-    notices = []
-    monkeypatch.setattr(file_audit, "_INTERVAL", 0.03)
-    monkeypatch.setattr(
-        session_runtime_spaces, "enqueue", lambda session, message: notices.append(message)
-    )
-    result = ExecuteTerminalTool().execute(
-        command='target=dynamic.txt; printf data > "$target"; while [ ! -f finish ]; do sleep 0.02; done',
-        background=True,
-        execution_context=_context(tmp_path, "report-while-running"),
-    )
-    assert result.background
-    _wait_for(lambda: bool(notices))
-    notice = notices[0].body
-    assert notice.wake_scope() == "none" and not notice.answered_calls()
-    assert (
-        "report-while-running" in notice.content
-        and "'dynamic.txt' (unrecognized target)" in notice.content
-    )
-    assert delivered == []
-    (tmp_path / "finish").touch()
-    _wait_for(lambda: bool(delivered))
-    assert "created: 'dynamic.txt' (unrecognized target)" in str(delivered[0][2]["output"])

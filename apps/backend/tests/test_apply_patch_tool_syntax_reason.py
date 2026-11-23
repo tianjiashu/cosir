@@ -19,8 +19,8 @@ from pathlib import Path
 
 import pytest
 
-from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.file_edit.syntax_check import SyntaxDiagnostic
+from app.tools.tool_handler.file.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.file.file_edit.syntax_check import SyntaxDiagnostic
 from tests.file_knowledge_support import with_workspace_reads
 
 
@@ -128,6 +128,7 @@ def test_returned_literals_in_source_are_ascii() -> None:
         / "app"
         / "tools"
         / "tool_handler"
+        / "file"
         / "apply_patch_tool.py"
     ).read_text(encoding="utf-8")
     tree = ast.parse(source)

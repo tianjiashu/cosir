@@ -48,6 +48,7 @@ def test_rebuild_empty_session_returns_valid_empty_snapshot() -> None:
         "background_tasks": [],
         "foreground_waits": [],
         "deliverables": [],
+        "terminal_permission_mode": "request_approval",
         "queued_messages": [],
     }
 
@@ -171,6 +172,7 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
         "background_tasks": [],
         "foreground_waits": [],
         "deliverables": [],
+        "terminal_permission_mode": "request_approval",
         "queued_messages": [],
     }
 
@@ -206,6 +208,7 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
         "background_tasks": [],
         "foreground_waits": [],
         "deliverables": [],
+        "terminal_permission_mode": "request_approval",
         "queued_messages": [],
     }
 

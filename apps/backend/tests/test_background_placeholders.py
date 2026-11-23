@@ -321,7 +321,7 @@ def test_real_parent_stop_persists_output_without_waking_agent(stored, tmp_path)
             workspace_root=tmp_path,
             step_id="test",
             tool_call_id="call-bg",
-            terminal_permission_mode="full_access",
+            read_terminal_mode=lambda: "full_access",
         ),
     )
     try:

@@ -21,8 +21,8 @@ const models = [model("c/first"), model("c/session"), model("c/last"), model("c/
 const scope = { sessionId: 5, workspaceId: 9 };
 const noFacts = { lastLaunch: null, inheritedLaunch: null };
 const facts = {
-  lastLaunch: { terminalPermissionMode: "request_approval" as const, modelConfigId: "c/last", reasoningEffort: "max" },
-  inheritedLaunch: { terminalPermissionMode: "request_approval" as const, modelConfigId: "c/fork", reasoningEffort: "low" },
+  lastLaunch: { modelConfigId: "c/last", reasoningEffort: "max" },
+  inheritedLaunch: { modelConfigId: "c/fork", reasoningEffort: "low" },
 };
 
 describe("model selection store", () => {

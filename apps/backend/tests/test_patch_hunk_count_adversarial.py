@@ -31,8 +31,8 @@ from unidiff.constants import RE_HUNK_HEADER
 from unidiff.errors import UnidiffParseError
 
 from app.core.tool.schemas import ToolExecutionContext
-from app.tools.tool_handler.apply_patch_tool import ApplyPatchTool
-from app.tools.tool_handler.file_edit import (
+from app.tools.tool_handler.file.apply_patch_tool import ApplyPatchTool
+from app.tools.tool_handler.file.file_edit import (
     parse_git_unified_diff,
     parse_git_unified_diff_detailed,
 )
@@ -47,7 +47,7 @@ LEGACY_COUNT_REJECTION = "hunk line counts do not match"
 def _hunk_count_diagnostics(section: str, section_index: int) -> list[str]:
     """测试侧视图：解析层现在「按正文重算计数」，本函数返回重算时产出的提示列表。"""
 
-    module = pytest.importorskip("app.tools.tool_handler.file_edit.patch_parser")
+    module = pytest.importorskip("app.tools.tool_handler.file.file_edit.patch_parser")
     return module._recompute_hunk_counts(section, section_index)[1]
 
 
