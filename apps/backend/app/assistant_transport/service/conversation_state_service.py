@@ -38,7 +38,8 @@ from app.assistant_transport.stream.subscriber import Subscriber
 from app.config.configuration import get_tool_registry
 from app.config.logging.logger import log
 from app.core.events import RunStatusChangedEvent, ToolCallStatusChangedEvent, WorkflowEvent
-from app.core.tool.terminal_approval import terminal_approvals
+from app.core.tool.terminal_approval.registry import terminal_approvals
+from app.models.terminal_permissions import TerminalPermissionMode
 from app.core.workflow.message_queue.session_message import UserInputBody
 from app.models.run.run_status import RunStatus
 from app.session_runtime.session_runtime_space import SessionRuntimeSpace
@@ -151,6 +152,10 @@ class ConversationStateService:
         self._refresh(
             session_id, {"terminal_approvals": lambda _state: terminal_approvals.views(session_id)}
         )
+
+    def refresh_terminal_permission(self, session_id: int, mode: TerminalPermissionMode) -> None:
+        """会话终端权限切换后投影新值（事实已写库，未物化的快照重建时自会读到）。"""
+        self._refresh(session_id, {"terminal_permission_mode": lambda _state: mode})
 
     def refresh_background_results(self, session_id: int) -> None:
         """后台结果变化入口：看板与前台等待各自有变化时一并发出（同一帧）；由登记表的通知线程调用。"""

@@ -180,7 +180,7 @@ def rebuild_snapshot(
         )
     }
     inherited_rows = [row for row in context_rows if row.run_id is None and row.sequence > 0]
-    snapshot = empty_snapshot(session.title)
+    snapshot = empty_snapshot(session.title, session.terminal_permission_mode)
     messages = snapshot["messages"]
     messages.extend(_turn_messages(inherited_rows, presentations, inherited=True))
     for run in runs:
@@ -221,9 +221,7 @@ def rebuild_snapshot(
                 error=error,
                 usage=run.usage,
                 contextWindowTotal=run.context_window_total,
-                launch=run_launch_snapshot(
-                    run.model_config_id, run.reasoning_effort, run.terminal_permission_mode
-                ),
+                launch=run_launch_snapshot(run.model_config_id, run.reasoning_effort),
             )
     fork = session.extra.fork
     if fork:
@@ -232,9 +230,7 @@ def rebuild_snapshot(
             "sourceTitle": fork.source_title,
             "sessionType": cast(ForkKind, session.session_type),
             "initialLaunch": run_launch_snapshot(
-                fork.initial_launch.model_config_id,
-                fork.initial_launch.reasoning_effort,
-                fork.initial_launch.terminal_permission_mode,
+                fork.initial_launch.model_config_id, fork.initial_launch.reasoning_effort
             ),
         }
     return snapshot

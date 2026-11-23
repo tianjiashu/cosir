@@ -6,7 +6,6 @@ from app.core.events.model_activity_event import ModelActivityPhase
 from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.run.run_record import RunError
 from app.models.run.run_usage import RunUsage
-from app.models.terminal_permissions import TerminalPermissionMode
 
 
 class ModelActivity(TypedDict):
@@ -30,19 +29,12 @@ class ConversationStateLaunch(TypedDict):
 
     modelConfigId: str | None
     reasoningEffort: str | None
-    terminalPermissionMode: TerminalPermissionMode
 
 
 def run_launch_snapshot(
-    model_config_id: str | None,
-    reasoning_effort: ReasoningEffort | None,
-    terminal_permission_mode: TerminalPermissionMode,
+    model_config_id: str | None, reasoning_effort: ReasoningEffort | None
 ) -> ConversationStateLaunch:
-    return ConversationStateLaunch(
-        modelConfigId=model_config_id,
-        reasoningEffort=reasoning_effort,
-        terminalPermissionMode=terminal_permission_mode,
-    )
+    return ConversationStateLaunch(modelConfigId=model_config_id, reasoningEffort=reasoning_effort)
 
 
 class ConversationStateActivity(TypedDict):

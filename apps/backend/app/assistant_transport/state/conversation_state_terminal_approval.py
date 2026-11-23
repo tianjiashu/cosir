@@ -18,13 +18,14 @@ class ConversationTerminalApproval(TypedDict):
     shell: str
     cwd: str
     intent: str
+    originTitle: str
 
 
 def validate_terminal_approvals(value: object) -> None:
     seen: set[str] = set()
     for item in require_list(value, "terminal approvals"):
         row = as_shape(item, ConversationTerminalApproval, "terminal approval")
-        for field in ("id", "toolCallId", "command", "shell", "cwd", "intent"):
+        for field in ("id", "toolCallId", "command", "shell", "cwd", "intent", "originTitle"):
             require_str(row[field], f"terminal approval {field}")
         require_int(row["originSessionId"], "terminal approval origin", minimum=1)
         if not row["id"] or row["id"] in seen:

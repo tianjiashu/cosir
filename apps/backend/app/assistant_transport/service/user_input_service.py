@@ -27,7 +27,6 @@ from app.models.message_context.capsules.grammar.ref_capsule import RefCapsule
 from app.models.message_context.capsules.grammar.skill_capsule import SkillCapsule
 from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.run.run_command import RunCommand
-from app.models.terminal_permissions import TerminalPermissionMode
 from app.service.attachment.attachment_service import AttachmentService
 from app.service.configuration.skills.catalog import SkillCatalog
 from app.service.configuration.skills.configuration import SkillConfigurationError
@@ -47,7 +46,6 @@ class UserInputService:
         model_config_id: str,
         reasoning_effort: ReasoningEffort | None,
         agent_id: str,
-        terminal_permission_mode: TerminalPermissionMode,
     ) -> UserInputBody:
         """校验模型能力与胶囊指针，组装成携带发起配置的用户输入消息体。
 
@@ -91,7 +89,6 @@ class UserInputService:
                 agent_id=agent_id,
                 model_config_id=model_config_id,
                 reasoning_effort=reasoning_effort,
-                terminal_permission_mode=terminal_permission_mode,
             ),
         )
 

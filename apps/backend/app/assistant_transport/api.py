@@ -301,15 +301,18 @@ class TerminalModeRequest(BaseModel):
 
 
 @app.post("/sessions/{session_id}/terminal-permission")
-async def check_terminal_permission(
+async def set_terminal_permission(
     session_id: int,
     request: TerminalModeRequest,
     service: AssistantTransportService = Depends(get_assistant_transport_service),
 ) -> JSONResponse:
-    """选择器的静止检查；实际权限随下一次发起配置冻结。"""
+    """切换会话的终端权限：随时可切，Agent 的下一条命令生效；新值经 snapshot 投影。
 
-    async def check() -> None:
-        async with service.terminal_permission_operation(session_id, request.mode):
-            pass
+    409 ``TERMINAL_SANDBOX_UNAVAILABLE``：本机确定不支持沙箱时不能选请求批准。
+    """
 
-    return await _accept(session_id, "terminal_permission", check())
+    return await _accept(
+        session_id,
+        "terminal_permission",
+        asyncio.to_thread(service.set_terminal_permission, session_id, request.mode),
+    )

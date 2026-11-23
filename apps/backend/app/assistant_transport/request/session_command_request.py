@@ -16,7 +16,6 @@ from app.assistant_transport.request.assistant_user_message import (
 )
 from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.run.run_command import RunCommand
-from app.models.terminal_permissions import TerminalPermissionMode
 
 
 class SendMessageRequest(BaseModel):
@@ -31,7 +30,6 @@ class SendMessageRequest(BaseModel):
     # 模型名由后端配置事实读取，请求只携带配置身份。
     modelConfigId: str = Field(min_length=1)
     reasoningEffort: ReasoningEffort | None = None
-    terminalPermissionMode: TerminalPermissionMode
 
     def to_run_command(self) -> RunCommand:
         """text part 按出现顺序用换行连成胶囊正文；图片只携带已上传附件 id。"""

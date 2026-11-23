@@ -108,6 +108,8 @@ class ConversationStateSnapshot(TypedDict):
     二者见 ``refresh_background_results``。
     ``deliverables`` 是会话交付清单（侧栏「产出」卡），由工作副本的工具 part 派生，见
     ``project_session_deliverables``。
+    ``terminal_permission_mode`` 投影自 ``sessions.terminal_permission_mode``（会话的终端权限，随时可切、
+    下一条命令生效），选择器只读它。
 
     ``messageOffset`` 是 ``messages`` 之前还有多少条消息没带上；
     后端工作副本始终是完整历史（恒为 0），
@@ -126,12 +128,16 @@ class ConversationStateSnapshot(TypedDict):
     foreground_waits: list[str]
     terminal_approvals: list[ConversationTerminalApproval]
     deliverables: list[ConversationDeliverable]
+    terminal_permission_mode: TerminalPermissionMode
 
 
-def empty_snapshot(title: str = "") -> ConversationStateSnapshot:
+def empty_snapshot(
+    title: str = "", terminal_permission_mode: TerminalPermissionMode = "request_approval"
+) -> ConversationStateSnapshot:
     """返回新 Session 的空 snapshot 基线；``title`` 投影自 ``sessions.title``，还没起名时为空。"""
 
     return ConversationStateSnapshot(
+        terminal_permission_mode=terminal_permission_mode,
         title=title,
         messages=[],
         messageOffset=0,
@@ -165,6 +171,11 @@ def validate_snapshot(state: ConversationStateSnapshot) -> None:
     validate_foreground_waits(snapshot["foreground_waits"])
     validate_terminal_approvals(snapshot["terminal_approvals"])
     validate_session_deliverables(snapshot["deliverables"])
+    _validate_terminal_permission_mode(snapshot["terminal_permission_mode"])
+
+
+def _validate_terminal_permission_mode(value: object) -> None:
+    require_one_of(value, _TERMINAL_PERMISSION_MODES, "snapshot terminal permission mode")
 
 
 def validate_mutated(
@@ -326,11 +337,6 @@ def _validate_launch(value: object) -> None:
     launch = as_shape(value, ConversationStateLaunch, "snapshot launch")
     require_str(launch["modelConfigId"], "snapshot launch modelConfigId", nullable=True)
     require_str(launch["reasoningEffort"], "snapshot launch reasoningEffort", nullable=True)
-    require_one_of(
-        launch["terminalPermissionMode"],
-        _TERMINAL_PERMISSION_MODES,
-        "snapshot terminal permission mode",
-    )
 
 
 def _validate_usage(value: object) -> None:
@@ -423,4 +429,5 @@ _INDEPENDENT_FIELD_VALIDATORS: dict[str, Callable[[object], None]] = {
     "foreground_waits": validate_foreground_waits,
     "terminal_approvals": validate_terminal_approvals,
     "deliverables": validate_session_deliverables,
+    "terminal_permission_mode": _validate_terminal_permission_mode,
 }
