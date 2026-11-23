@@ -4,7 +4,7 @@ import { MessagePrimitive, useAuiState, useScrollLock } from "@assistant-ui/reac
 import { CallRow } from "@/components/conversation/tools/call-row";
 import { DeliverablesCard } from "@/components/conversation/tools/reply-presentation/deliverables-card";
 import { NextStepCard } from "@/components/conversation/tools/reply-presentation/next-step-card";
-import { readNextStep } from "@/components/conversation/tools/reply-presentation/reply-presentation-display";
+import { NextStepTrace } from "@/components/conversation/tools/reply-presentation/next-step-trace";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
 import type { TransportActivity, TransportOutcome } from "@/lib/assistant/contract";
@@ -93,12 +93,10 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
   // 停止是界面暂态，布局层拿不到：有运行中的活动段就让它说「正在停止…」，没有（正在输出旁白）才单独出一行。
   const stopping = cancelling && phase !== "settled";
   const stoppingSegment = stopping ? layout.blocks.find((block): block is ActivityGroup => block.kind === "activity" && block.live !== null)?.key : undefined;
-  // 下一步建议只在「会话最后一条回复、Run 正常完成」时有效：用户发了任何消息、或又有新回复，它就过期。
+  // 下一步建议只在「会话最后一条回复、Run 正常完成」时可点：用户发了任何消息、或又有新回复，它就过期，
+  // 已落定的回合留过期痕迹；运行中与挂起时都不画，免得先出痕迹再换成卡片。
   const isLast = useAuiState((state) => state.message.isLast);
-  const nextStep = useMemo(
-    () => (layout.nextStep && isLast && interactive && outcome?.status === "completed" ? readNextStep(layout.nextStep.part.display_data) : null),
-    [layout.nextStep, isLast, interactive, outcome?.status],
-  );
+  const nextStepActionable = isLast && interactive && outcome?.status === "completed";
 
   return (
     <div ref={root}
@@ -126,7 +124,9 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
       {stopping && stoppingSegment === undefined && <div className={CURRENT_ACTIVITY_SLOT}><ActivityStatus feedback={STOPPING_FEEDBACK} /></div>}
       {stopped && <p data-slot="partial-reply" className="text-muted-foreground text-2sm">{answerText.trim() ? "回复可能尚未完成。" : "尚未生成回复。"}</p>}
       <ArtifactZone inherited={inherited} sessionId={sessionId} artifacts={layout.artifacts} interactive={interactive} sessionCancelling={cancelling} />
-      {nextStep && <NextStepCard offer={nextStep} sessionId={sessionId} />}
+      {layout.nextStep && phase === "settled" && (nextStepActionable
+        ? <NextStepCard offer={layout.nextStep.offer} sessionId={sessionId} />
+        : <NextStepTrace offer={layout.nextStep.offer} toolCallId={layout.nextStep.part.toolCallId} sessionId={sessionId} />)}
       <TurnError />
       {!layout.intro && <div>
         <TurnFooter

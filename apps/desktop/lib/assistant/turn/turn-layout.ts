@@ -4,6 +4,7 @@ import { callImages, type CallImage } from "../tools/call-images";
 import { readFileChanges, type FileChange } from "../tools/file-changes";
 import { collectDeliverableBatches, type DeliverablesBatch } from "./deliverable-layout";
 import type { TransportActivity, TransportAgentMessagePart, TransportMessagePart, TransportOutcome, TransportTextPart, TransportToolCallPart } from "../contract";
+import { readNextStepOffer, type NextStepOffer } from "../tools/next-step-offer";
 import { toolHeading, toolVerb } from "../tools/tool-catalog";
 import { toolResultSignal } from "../tools/tool-result-signals";
 
@@ -77,10 +78,11 @@ export type TurnLayout = {
    */
   artifacts: ArtifactCard[];
   /**
-   * 这一回合最后一次成功的 `offer_next_step`（同一回合多次调用只认最后一次）。这里只说「有这个建议」；
-   * 是否还有效（会话最后一条回复、Run 正常完成）由回合组件按消息位置与结局判断，不存状态。
+   * 这一回合最后一次成功的 `offer_next_step`（同一回合多次调用只认最后一次），展示数据在这里解析一次。这里只说
+   * 「有这个建议」；画成可点卡片还是过期痕迹（会话最后一条回复、Run 正常完成才可点）由回合组件按消息位置与结局
+   * 判断，不存状态。
    */
-  nextStep: { index: number; part: TransportToolCallPart } | null;
+  nextStep: { index: number; part: TransportToolCallPart; offer: NextStepOffer } | null;
   answer: AnswerItem[];
   hasFinalReply: boolean;
   defaultProcessOpen: boolean;
@@ -180,7 +182,13 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
       if (visibleCall(part)) { group.calls.push(item); items.push(item); }
       const kind = part.display_data?.kind;
       if (kind === CHANGES_KIND) changes.push(item);
-      else if (kind === NEXT_STEP_KIND) nextStep = previous?.nextStep?.part === part ? previous.nextStep : { index, part };
+      else if (kind === NEXT_STEP_KIND) {
+        if (previous?.nextStep?.part === part) nextStep = previous.nextStep;
+        else {
+          const offer = readNextStepOffer(part.display_data);
+          if (offer) nextStep = { index, part, offer };
+        }
+      }
       else if (STANDALONE_ARTIFACT_KINDS.includes(kind as StandaloneArtifactKind)) {
         const old = previousArtifacts.get(index);
         artifacts.push(old?.part === part ? old : { kind: kind as StandaloneArtifactKind, index, part });

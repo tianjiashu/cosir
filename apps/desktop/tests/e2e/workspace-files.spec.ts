@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { readState, seedState } from "./transport-fixtures";
+import { completedState, readState, seedState } from "./transport-fixtures";
 import { API_ORIGIN } from "./e2e-env";
 
 const entry = (path: string, kind = "file") => ({
@@ -208,11 +208,17 @@ test("Markdown、图片和 PDF.js 离线阅读器", async ({ page }) => {
   await page.getByRole("navigation", { name: "文档大纲" }).getByRole("button", { name: "Workspace preview" }).click();
   await expect(surface.getByRole("button", { name: "添加选区到对话", exact: true })).toBeVisible();
   await surface.getByRole("button", { name: "查看预览", exact: true }).click();
-  // 铺满：面板占满对话区、主区隐藏；还原后回到停靠宽度。
+  // 铺满：面板占满对话区、主区隐藏，够宽时目录与正文并排；还原后回到停靠宽度。
+  // 铺满与还原不得卸载重挂面板内容：同一个预览节点一直在（重挂会丢阅读状态，宽度观察也会失效）。
+  const reading = surface.getByRole("heading", { name: "Workspace preview" });
+  await reading.evaluate((node) => node.setAttribute("data-mount-probe", ""));
   await surface.getByRole("button", { name: "铺满文件面板", exact: true }).click();
   await expect(page.getByRole("main")).toBeHidden();
+  await expect(surface.getByLabel("搜索工作区文件名")).toBeVisible();
+  await expect(reading).toBeVisible();
   await surface.getByRole("button", { name: "还原文件面板", exact: true }).click();
   await expect(page.getByRole("main")).toBeVisible();
+  await expect(surface.locator("[data-mount-probe]")).toHaveCount(1);
   await surface.getByRole("button", { name: "切换目录面板", exact: true }).click();
   await surface.getByText("photo.png", { exact: true }).click();
   await expect(surface.getByRole("img", { name: "photo.png" })).toBeVisible();
@@ -675,19 +681,22 @@ test("链接指向不存在的文件：不留坏标签，提到的文件名改�
       return route.fulfill({ status: 404, json: { detail: { code: "FILE_NOT_FOUND", message: "文件不存在" } } });
     return route.fallback();
   });
-  await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
-  const state = await readState(request, 42);
-  state.messages[1].parts = [{
-    type: "text" as const,
+  await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: 42 } });
+  await seedState(request, 42, completedState(1, {
+    id: "user-files",
+    parts: [{ type: "text", text: "查看相关文件", status: "completed" }],
+  }, [{
+    type: "text",
     text: "会话核心在 `session.ts`，入口见 [main](main.py)，旧文件 [gone](src/gone.ts)。",
-    status: "completed" as const,
-  }];
-  await seedState(request, 42, state);
+    status: "completed",
+    finalReply: true,
+  }]));
   await page.goto("/sessions/42");
   const message = page.locator('main [data-index="1"]');
   const surface = page.getByTestId("workspace-files-surface");
 
   // 裸文件名只提供显式查找入口，不探测根目录。
+  await message.locator('[data-slot="workspace-file-mention"]').hover();
   await message.getByRole("button", { name: "查找文件 session.ts" }).click();
   await expect(surface.getByRole("textbox", { name: "搜索工作区文件名" })).toHaveValue("session.ts");
   await expect(surface.getByRole("tab", { name: "session.ts" })).toHaveCount(0);
@@ -701,10 +710,7 @@ test("链接指向不存在的文件：不留坏标签，提到的文件名改�
   await message.getByRole("link", { name: "main" }).click();
   await expect(surface.getByRole("tab", { name: "main.py", exact: true })).toHaveAttribute("aria-selected", "true");
   mainDeleted = true;
-  // 刷新等同文件监听报告变化：重新读取文件信息后得到「不存在」。
-  await surface.getByRole("button", { name: "切换目录面板", exact: true }).click();
-  await surface.getByRole("button", { name: "刷新工作区文件", exact: true }).click();
-  await surface.getByRole("button", { name: "切换目录面板", exact: true }).click();
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(surface.getByText("文件不存在", { exact: true })).toBeVisible();
   await expect(surface.getByRole("button", { name: "查找同名文件" })).toBeVisible();
   await expect(surface.getByRole("button", { name: "重新读取" })).toHaveCount(0);

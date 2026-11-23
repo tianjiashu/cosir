@@ -265,7 +265,8 @@ test("连续 Run 的 context meter 是 Session 级且每个 Run 都保留 usage 
 
   await input.fill("usage-regression-first");
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  await expect(contextMeter).toContainText("上下文 1%");
+  // 配置行里只显示占用环，百分比在读屏名称与悬停弹层里。
+  await expect(contextMeter).toHaveAttribute("aria-label", "上下文 1%");
   await expect(page.getByTestId("run-usage-display")).toContainText("1.5k tokens");
   const cacheMissRow = page.locator("dt").filter({ hasText: "缓存未命中" }).locator("xpath=following-sibling::dd[1]");
   // 用量在 Run 运行中就已显示，但脚注要到落定才插入诊断操作，用量随之横移：先等落定再悬停，不然会悬停到空处。
@@ -289,7 +290,7 @@ test("连续 Run 的 context meter 是 Session 级且每个 Run 都保留 usage 
   await expect(page.locator('[data-slot="turn"]').last()).toHaveAttribute("data-phase", "settled");
   await input.fill("usage-regression-second");
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  await expect(contextMeter).toContainText("上下文 2%");
+  await expect(contextMeter).toHaveAttribute("aria-label", "上下文 2%");
   await expect(page.getByTestId("run-usage-display").last()).toContainText("2.5k tokens");
   await expect(page.getByTestId("run-usage-display")).toHaveCount(2);
   await expect(page.getByTestId("run-usage-display").first()).toContainText("1.5k tokens");

@@ -147,7 +147,7 @@ describe("回复呈现工具", () => {
   const present = (id: string, paths: string[]) => call(id, { toolName: "present_deliverables", presentation: "quiet", deliverables: paths.map((path) => deliveredFile(path)) });
   const files = present("files", ["a.md"]);
   const offer = (id: string, ask: string, overrides: Partial<TransportToolCallPart> = {}) =>
-    call(id, { toolName: "offer_next_step", presentation: "quiet", display_data: { kind: "next-step", ask, replies: ["好"] }, ...overrides });
+    call(id, { toolName: "offer_next_step", presentation: "quiet", display_data: { kind: "next-step", ask, replies: ["好"], recap: "做完了。" }, ...overrides });
 
   // 目的：卡片就是这两个工具的呈现；潜在缺陷：静默调用又在过程里多出一行，或交付卡随过程折叠消失。
   it("交付卡是回合里的块、过程收起也常显；建议单独给出；两者都不在过程里留调用行", () => {
@@ -191,6 +191,9 @@ describe("回复呈现工具", () => {
     // 失败的静默调用照常露出，让人看得到出了问题。
     expect(layout.process.items).toHaveLength(1);
     expect(projectTurn([text("完", true)], "settled", outcome("completed")).nextStep).toBeNull();
+    // 展示数据形状不对（缺回顾）时不算建议，卡片与痕迹都不画。
+    const malformed = offer("o4", "问", { display_data: { kind: "next-step", ask: "问", replies: ["好"] } });
+    expect(projectTurn([malformed, text("完", true)], "settled", outcome("completed")).nextStep).toBeNull();
   });
 
   it("正文流式追加时建议对象保持同一引用", () => {

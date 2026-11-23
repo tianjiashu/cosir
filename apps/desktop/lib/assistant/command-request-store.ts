@@ -2,8 +2,11 @@ import { create } from "zustand";
 import type { TransportActivity } from "./contract";
 import type { SessionStatus } from "@/lib/session-status/session-status-store";
 
-/** 一种操作一个槽位：同一调用的停止、转后台和决定是三件事，互不占用，后端的并发裁决不靠前端串行。 */
-export type CommandTarget = "session" | `stop:${string}` | `background:${string}` | `decision:${string}`;
+/**
+ * 一种操作一个槽位：同一调用的停止、转后台和决定是三件事，互不占用，后端的并发裁决不靠前端串行。
+ * 终端批准按批准请求 id 寻址（`approval:`）：它显示在页面所属会话上，调用 id 只在来源会话内唯一。
+ */
+export type CommandTarget = "session" | `stop:${string}` | `background:${string}` | `decision:${string}` | `approval:${string}`;
 export type CommandRequest = {
   token: object;
   phase: "sending" | "syncing";
@@ -13,6 +16,7 @@ type Requests = Record<number, Partial<Record<CommandTarget, CommandRequest>>>;
 
 /**
  * 跨界面的命令暂态，不是执行事实：同一命令在对话、看板、面板上共用一个「进行中」，切换视图不清除。
+ * 「进行中」要能结束：请求一律有时限，由 `session-commands` 的占位入口（`runSlotCommand`）施加，超时按结果未知结算、可重试。
  *
  * 只有 Session 停止需要对账：它的按钮一直在，要知道何时不再显示「停止中」。前端看不到 Run，对账只看
  * 当前活动是否离开活动态；增量帧里停下与新 Run 开出总在不同帧，只有订阅断开重连拿到的完整快照会把
@@ -30,6 +34,7 @@ function stopSettled(activity: TransportActivity | null): boolean {
 export const stopTarget = (id: string): CommandTarget => `stop:${id}`;
 export const backgroundTarget = (id: string): CommandTarget => `background:${id}`;
 export const decisionTarget = (id: string): CommandTarget => `decision:${id}`;
+export const approvalTarget = (id: string): CommandTarget => `approval:${id}`;
 
 export function useCommandRequest(sessionId: number, target: CommandTarget): CommandRequest | undefined {
   return useCommandRequests((state) => state.sessions[sessionId]?.[target]);

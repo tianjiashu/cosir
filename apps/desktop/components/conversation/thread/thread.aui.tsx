@@ -15,9 +15,11 @@ import {
 import { StopButton } from "@/components/conversation-runtime/stop-button";
 import { SessionContextUsage } from "@/components/conversation-runtime/usage-display";
 import { ComposerAddMenu } from "@/components/composer/add-menu/add-menu";
-import { TerminalPermissionSelector, TerminalApprovalCards } from "@/components/terminal/terminal-permissions";
+import { TerminalPermissionSelector } from "@/components/terminal/terminal-permission-selector";
+import { TerminalApprovalCards } from "@/components/conversation/tools/awaiting/terminal-approval-card";
 import { ModelSelector } from "@/components/composer/composer-model-selector";
 import { ComposerToolbar } from "@/components/composer/composer-toolbar";
+import { ComposerConfigBar } from "@/components/composer/composer-config-bar";
 import { ComposerFeedback, ComposerFeedbackProvider } from "@/components/composer/composer-feedback";
 import { RenderErrorCard } from "@/components/render-isolation/render-error-card";
 import { RenderIsolationBoundary } from "@/components/render-isolation/render-isolation-boundary";
@@ -201,26 +203,31 @@ const Composer = memo(function Composer() {
   return (
     <ComposerInsertionProvider>
       <ComposerFeedbackProvider>
-        <ComposerPrimitive.Root className={COMPOSER_SURFACE_CLASS_NAME}>
-          <div className="min-h-0 min-w-0 w-full">
-            <ComposerImageAttachments />
-            <InlineComposerInput
-              persistSessionDraft
-              placeholder={COMPOSER_PLACEHOLDER}
-              className={COMPOSER_EDITOR_CLASS_NAME}
-              autoFocus
-              submitDisabled={cancelling}
-              aria-label="消息输入"
+        {/* 收窄判断的容器包住输入框与框外配置行：按对话区自己的宽度让位，不按窗口（停靠面板会让对话区变窄而窗口不变）。 */}
+        <div className="@container flex min-w-0 flex-col gap-1.5">
+          <ComposerPrimitive.Root className={COMPOSER_SURFACE_CLASS_NAME}>
+            <div className="min-h-0 min-w-0 w-full">
+              <ComposerImageAttachments />
+              <InlineComposerInput
+                persistSessionDraft
+                placeholder={COMPOSER_PLACEHOLDER}
+                className={COMPOSER_EDITOR_CLASS_NAME}
+                autoFocus
+                submitDisabled={cancelling}
+                aria-label="消息输入"
+              />
+            </div>
+            <ComposerToolbar
+              add={<ThreadComposerAddMenu workspaceRoot={workspaceRoot} />}
+              action={<ComposerAction />}
             />
-          </div>
-          <ComposerToolbar
-            add={<ThreadComposerAddMenu workspaceRoot={workspaceRoot} />}
+            <ComposerFeedback />
+          </ComposerPrimitive.Root>
+          <ComposerConfigBar
             config={<><ModelSelector scope={{ sessionId, workspaceId }} locked={runLaunch} /><TerminalPermissionSelector sessionId={sessionId} /></>}
             status={<SessionContextUsage />}
-            action={<ComposerAction />}
           />
-          <ComposerFeedback />
-        </ComposerPrimitive.Root>
+        </div>
       </ComposerFeedbackProvider>
     </ComposerInsertionProvider>
   );

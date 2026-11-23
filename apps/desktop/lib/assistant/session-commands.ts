@@ -18,10 +18,13 @@ import { jsonRequestInit, requestOk, type HttpRequestInit } from "@/lib/http/cli
 import { HttpError } from "@/lib/http/http-error";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { backgroundTarget, beginCommand, decisionTarget, finishCommand, stopTarget, type CommandTarget } from "@/lib/assistant/command-request-store";
+import { approvalTarget, backgroundTarget, beginCommand, decisionTarget, finishCommand, stopTarget, type CommandTarget } from "@/lib/assistant/command-request-store";
 import { newTraceId } from "@/lib/logging/trace-id";
 
-/** 停止、取消与转后台都幂等（重复投递后端回 409 或照常受理），超时后可以放心重试。 */
+/**
+ * 占用命令暂态槽位的命令（停止、转后台、决定、批准）都幂等：重复投递后端回 409 或照常受理，超时后可以放心重试。
+ * 时限只在 {@link runSlotCommand} 一处施加。
+ */
 const IDEMPOTENT_COMMAND_TIMEOUT_MS = 15_000;
 
 /**
@@ -79,8 +82,13 @@ export function setTerminalPermission(sessionId: number, mode: TerminalPermissio
   return postSessionCommand(`/sessions/${sessionId}/terminal-permission`, { mode });
 }
 
-export function decideTerminalApproval(sessionId: number, requestId: string, decision: "approve" | "reject"): Promise<void> {
-  return postSessionCommand(`/sessions/${sessionId}/terminal-approvals/${encodeURIComponent(requestId)}/decision`, { decision });
+/**
+ * 对页面上一条终端批准作出决定（`sessionId` 是显示批准的会话，不一定是发起命令的会话）。进行中状态在
+ * command-request-store 的 `approval:` 槽位，卡片切走再回来不丢；已决定或已作废时 409，卡片随 snapshot 消失。
+ */
+export async function decideTerminalApproval(sessionId: number, requestId: string, decision: "approve" | "reject"): Promise<void> {
+  const path = `/sessions/${sessionId}/terminal-approvals/${encodeURIComponent(requestId)}/decision`;
+  await runSlotCommand(sessionId, approvalTarget(requestId), "提交批准", (init) => postSessionCommand(path, { decision }, init));
 }
 
 function queuedMessagePath(sessionId: number, messageId: string): string {
@@ -117,26 +125,41 @@ export function resumeSession(sessionId: number, init?: CommandInit): Promise<vo
 }
 
 /** 对一次等待决定的工具调用作出决定（按工具调用寻址，与具体工具无关）；后续输出经 Session 长订阅到达。 */
-export function submitToolDecision(
+export async function submitToolDecision(
   sessionId: number,
   toolCallId: string,
   decision: ToolDecision,
   init?: CommandInit,
 ): Promise<void> {
-  return submitDecisionRequest(sessionId, toolCallId, decision, init);
+  const path = `/sessions/${sessionId}/tool-calls/${encodeURIComponent(toolCallId)}/decision`;
+  await runSlotCommand(sessionId, decisionTarget(toolCallId), "提交决定", (bounded) => postSessionCommand(path, decision, bounded), init);
 }
 
-async function submitDecisionRequest(sessionId: number, toolCallId: string, decision: ToolDecision, init?: CommandInit): Promise<void> {
-  const target = decisionTarget(toolCallId);
+/**
+ * 占用命令暂态槽位的请求骨架：开始 → 发送（统一施加 {@link IDEMPOTENT_COMMAND_TIMEOUT_MS}）→ 结算。
+ *
+ * 槽位的不变量是「进行中不重复发送、结果未知时可以重试」，请求必须有界：一直不返回的请求会让槽位永远停在
+ * 进行中、按钮永远锁住，所以时限在这里施加，不交给各命令自己记得。同一槽位已有请求在途时不发送，返回
+ * `false`；后端拒绝（HttpError）释放槽位，其余失败（网络、超时）标为待确认、可重试。失败结算后原样抛出，
+ * 由调用方决定怎么呈现。
+ */
+async function runSlotCommand(
+  sessionId: number,
+  target: CommandTarget,
+  action: string,
+  send: (init: HttpRequestInit) => Promise<void>,
+  init: CommandInit = {},
+): Promise<boolean> {
   const request = beginCommand(sessionId, target);
-  if (!request) return;
+  if (!request) return false;
   try {
-    await postSessionCommand(`/sessions/${sessionId}/tool-calls/${encodeURIComponent(toolCallId)}/decision`, decision, init);
-    finishCommand(sessionId, target, request, "accepted");
+    await send({ ...init, timeoutMs: IDEMPOTENT_COMMAND_TIMEOUT_MS });
   } catch (error) {
-    finishCommand(sessionId, target, request, error instanceof HttpError ? "rejected" : "unknown", commandFailureMessage(error, "提交决定"));
+    finishCommand(sessionId, target, request, error instanceof HttpError ? "rejected" : "unknown", commandFailureMessage(error, action));
     throw error;
   }
+  finishCommand(sessionId, target, request, "accepted");
+  return true;
 }
 
 /**
@@ -164,14 +187,10 @@ export type CancelSessionResult =
  * 停成什么状态一律以 Session 长订阅里的 `activity` 为准，这里不判断「有没有可停止的对象」。
  */
 export async function cancelSession(sessionId: number): Promise<CancelSessionResult> {
-  const request = beginCommand(sessionId, "session");
-  if (!request) return { accepted: true };
   try {
-    await requestOk(`/sessions/${sessionId}/cancel`, { method: "POST", timeoutMs: IDEMPOTENT_COMMAND_TIMEOUT_MS });
-    finishCommand(sessionId, "session", request, "accepted");
+    await runSlotCommand(sessionId, "session", "停止请求", (init) => postSessionCommand(`/sessions/${sessionId}/cancel`, undefined, init));
     return { accepted: true };
   } catch (error) {
-    finishCommand(sessionId, "session", request, error instanceof HttpError ? "rejected" : "unknown", commandFailureMessage(error, "停止请求"));
     return {
       accepted: false,
       reason: error instanceof HttpError ? "rejected" : "network",
@@ -194,20 +213,16 @@ async function postCallCommand(
   action: string,
 ): Promise<string | null> {
   const url = `/sessions/${sessionId}/tool-calls/${encodeURIComponent(toolCallId)}/${path}`;
-  const request = beginCommand(sessionId, target);
-  if (!request) return null;
   const traceId = newTraceId();
-  void frontendLog("INFO", "assistant_tool_call_command_requested", "用户对工具调用发起命令", { traceId, data: { sessionId, toolCallId, action: path } });
   let failure: string | null = null;
   try {
-    await requestOk(url, { method: "POST", traceId, timeoutMs: IDEMPOTENT_COMMAND_TIMEOUT_MS });
-    finishCommand(sessionId, target, request, "accepted");
+    const sent = await runSlotCommand(sessionId, target, action, (init) => {
+      void frontendLog("INFO", "assistant_tool_call_command_requested", "用户对工具调用发起命令", { traceId, data: { sessionId, toolCallId, action: path } });
+      return postSessionCommand(url, undefined, init);
+    }, { traceId });
+    if (!sent) return null;
   } catch (error) {
-    if (isConflict(error)) finishCommand(sessionId, target, request, "rejected");
-    else {
-      failure = commandFailureMessage(error, action);
-      finishCommand(sessionId, target, request, error instanceof HttpError ? "rejected" : "unknown", failure);
-    }
+    if (!isConflict(error)) failure = commandFailureMessage(error, action);
   }
   void frontendLog(failure ? "WARNING" : "INFO", "assistant_tool_call_command_result", "工具调用命令已返回", { traceId, data: { sessionId, toolCallId, action: path, failed: failure !== null } });
   return failure;

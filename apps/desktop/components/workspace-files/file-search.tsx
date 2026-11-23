@@ -140,7 +140,7 @@ export function FileSearch({
             ))}
           </ul>
           <p>
-            检查目录权限或链接目标后，可使用顶部刷新重新读取目录，或重新搜索。
+            检查目录权限或链接目标后，可在搜索框按 Enter 重新搜索。
           </p>
           <Button
             size="sm"

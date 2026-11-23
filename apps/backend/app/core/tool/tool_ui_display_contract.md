@@ -80,7 +80,7 @@
 | agent-configuration-draft | status=draft、agent_id、role、description、system_prompt；保存和编辑属于 Workbench，遵守调用方只读限制 |
 | user-question | questions[{question,header,options[{label,description,preview?}],multi_select}]（参数原样）；作答后补 decision（approve / reject）、answers{问题原文: label 或自由文字，多选为列表}、annotations{问题原文: {notes}}；全部跳过只有 decision=reject；作废（未作答）不补字段，状态为 cancelled |
 | deliverables | note（这批交付的说明，去空白后为空即 null，长度上限在参数模型）：卡片顶部的一两句话，按纯文本显示；一次调用一张卡，交付项读 part 上的交付记录，不在这里 |
-| next-step | ask、replies[1–2]：回复下方的一个问题与按钮，第一个是推荐；不是等待中的决定，后端不登记，点按钮即替用户发出标签原文；前端只在会话最后一条正常完成的回复上显示，同一回合只认最后一次 |
+| next-step | ask、replies[1–2]、recap：回复下方的回顾、一个问题与按钮，第一个是推荐；不是等待中的决定，后端不登记，点按钮即替用户发出标签原文；只在会话最后一条正常完成的回复上可点，其余已落定的回合（之后有了新消息、Run 停止或失败、分叉继承）留一行可展开的痕迹（问题；展开为回顾与只读选项），运行中与挂起时不显示；同一回合只认最后一次 |
 | mcp-tool-result | server_name/tool_name（服务与原工具名）/scope（system / workspace）/images（结果图片的附件 asset id，卡片显示缩略图） |
 | skill-content | action=list: skills[{name,description,scope}]；action=load: skill_name/resource_path/scope，正文只进模型上下文 |
 

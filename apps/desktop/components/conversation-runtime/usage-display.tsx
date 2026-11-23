@@ -10,6 +10,7 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { COMPOSER_CONFIG_BUTTON_CLASS_NAME } from "@/components/composer/composer-surface";
 import { cn } from "@/lib/utils";
 import type { TransportUsage } from "@/lib/assistant/contract";
 import { latestMeasuredContextUsage } from "@/lib/assistant/transport/transport-state-operations";
@@ -188,7 +189,7 @@ export function SessionContextUsage(): ReactElement {
               : `${presentation.label}，${statusLabel(presentation.status)}`}
             data-tone={presentation.tone}
             className={cn(
-              "inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-xs transition-colors",
+              COMPOSER_CONFIG_BUTTON_CLASS_NAME,
               triggerToneClass(presentation.tone),
               presentation.tone === "critical" || presentation.tone === "warning" ? "font-medium" : null,
             )}
@@ -198,9 +199,8 @@ export function SessionContextUsage(): ReactElement {
         {presentation.status === "unknown"
           ? <GaugeIcon className="size-3.5" aria-hidden="true" />
           : <UsageRing percent={percent} tone={presentation.tone} />}
-        <span className="hidden @lg:inline">{presentation.label}</span>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 max-w-[calc(100vw-1rem)]">
+      <PopoverContent align="end" className="w-64 max-w-[calc(100vw-1rem)]">
         <PopoverHeader>
           <PopoverTitle>上下文窗口</PopoverTitle>
           <PopoverDescription>{presentation.detail}</PopoverDescription>
@@ -276,7 +276,7 @@ export function RunUsageDisplay({ usage, running, visible }: {
       >
         {text}
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64">
+      <PopoverContent align="end" className="w-64">
         <PopoverHeader>
           <PopoverTitle>本轮用量</PopoverTitle>
         </PopoverHeader>

@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { SparklesIcon } from "lucide-react";
 import { useAuiState } from "@assistant-ui/react";
 
 import {
@@ -14,6 +13,8 @@ import {
   type ModelOption,
 } from "@/components/model/model-selector";
 import { ModelAvailability } from "@/components/model/model-availability";
+import { COMPOSER_CONFIG_BUTTON_CLASS_NAME } from "@/components/composer/composer-surface";
+import { cn } from "@/lib/utils";
 import type { TransportRunLaunch } from "@/lib/assistant/contract";
 import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-state-operations";
 import { RUN_LAUNCH_LOCKED_HINT } from "@/lib/assistant/run-launch";
@@ -86,17 +87,16 @@ function SelectorView({
       >
         <ModelSelectorTrigger
           variant="ghost"
-          size="sm"
-          className="min-w-0 max-w-full @lg:max-w-60"
+          indicator={false}
+          className={cn(COMPOSER_CONFIG_BUTTON_CLASS_NAME, "min-w-0 shrink max-w-full @lg:max-w-60")}
           aria-label="选择模型"
           disabled={disabled}
         >
-          <SparklesIcon className="text-muted-foreground size-3.5 shrink-0" />
           <ModelSelectorValue className="min-w-0" />
         </ModelSelectorTrigger>
         <ModelSelectorContent
           side="top"
-          align="start"
+          align="end"
           searchable
           className="w-72"
         >

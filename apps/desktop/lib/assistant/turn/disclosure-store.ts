@@ -9,10 +9,11 @@ import { create } from "zustand";
  * 覆盖只在用户点过之后才存在。
  *
  * 键：`process:{messageId}`（过程区）、`call:{toolCallId}`（调用行与后台看板条目：同一次调用的详情）、
- * `activity:{messageId}:{intervalKey}`（工具区间）、`user:{messageId}`（长用户消息的「显示全部」）。Session 删除时
+ * `activity:{messageId}:{intervalKey}`（工具区间）、`user:{messageId}`（长用户消息的「显示全部」）、
+ * `next-step:{toolCallId}`（过期的下一步建议）。Session 删除时
  * `clearSession` 整桶丢掉。
  */
-export type DisclosureKey = `terminal-reader:${string}` | `terminal-command:${string}` | `process:${string}` | `call:${string}` | `activity:${string}:${string}` | `agent:${string}` | `file:${string}:${string}` | `user:${string}`;
+export type DisclosureKey = `terminal-reader:${string}` | `terminal-command:${string}` | `process:${string}` | `call:${string}` | `activity:${string}:${string}` | `agent:${string}` | `file:${string}:${string}` | `user:${string}` | `next-step:${string}`;
 
 export const activityKey = (messageId: string, intervalKey: string): DisclosureKey => `activity:${messageId}:${intervalKey}`;
 export const agentKey = (messageId: string): DisclosureKey => `agent:${messageId}`;
@@ -21,6 +22,7 @@ export const fileKey = (messageId: string, path: string): DisclosureKey => `file
 
 export const processKey = (messageId: string): DisclosureKey => `process:${messageId}`;
 export const callKey = (toolCallId: string): DisclosureKey => `call:${toolCallId}`;
+export const nextStepKey = (toolCallId: string): DisclosureKey => `next-step:${toolCallId}`;
 
 type Overrides = Readonly<Record<string, boolean>>;
 

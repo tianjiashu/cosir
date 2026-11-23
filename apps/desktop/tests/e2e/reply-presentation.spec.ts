@@ -35,7 +35,7 @@ const OFFER: TransportMessagePart = {
   type: "tool-call", toolCallId: "call-offer", toolName: "offer_next_step", presentation: "quiet",
   args: { ask: "要把同样的修复应用到移动端吗？", replies: ["好，应用", "先不用"] },
   status: "completed", error: null, awaitingUser: false,
-  display_data: { kind: "next-step", ask: "要把同样的修复应用到移动端吗？", replies: ["好，应用", "先不用"] },
+  display_data: { kind: "next-step", ask: "要把同样的修复应用到移动端吗？", replies: ["好，应用", "先不用"], recap: "桌面端的修复已合入，测试通过；移动端还没改。" },
 };
 
 function deliveredState(): TransportState {
@@ -124,10 +124,11 @@ test("没有桌面宿主时没有次按钮，工作区外的非网页文件不�
   await expect(capsule(page, "report.md").getByRole("button")).toBeEnabled();
 });
 
-test("点下一步建议的按钮就是替用户发出标签原文，发出后建议消失", async ({ page, request }) => {
+test("点下一步建议的按钮就是替用户发出标签原文，发出后卡片不再可点", async ({ page, request }) => {
   await open(page, request, deliveredState());
 
   const offer = page.locator('[data-slot="next-step-card"]');
+  await expect(offer.locator('[data-slot="next-step-recap"]')).toHaveText("桌面端的修复已合入，测试通过；移动端还没改。");
   await expect(offer).toContainText("要把同样的修复应用到移动端吗？");
   await expect(offer.getByRole("button")).toHaveText(["好，应用", "先不用"]);
 
@@ -136,7 +137,8 @@ test("点下一步建议的按钮就是替用户发出标签原文，发出后�
   await expect(offer).toHaveCount(0);
 });
 
-test("建议只挂在最后一条回复上：之后又有回合时不再显示，交付物卡片仍在", async ({ page, request }) => {
+// 潜在缺陷：过期建议整个消失、没有痕迹，或痕迹里还留着能点的按钮。
+test("建议只在最后一条回复上可点：之后又有回合时留一行痕迹，展开看回顾与只读选项，交付物卡片仍在", async ({ page, request }) => {
   const first = deliveredState();
   const second = completedState(2, { id: "u-2", parts: [{ type: "text", text: "再看看别的", status: "completed" }] }, [
     { type: "text", text: "看过了。", status: "completed", finalReply: true },
@@ -147,6 +149,16 @@ test("建议只挂在最后一条回复上：之后又有回合时不再显示�
   await expect(page.getByText("看过了。")).toBeVisible();
   await expect(page.locator('[data-slot="deliverables-card"]')).toBeVisible();
   await expect(page.locator('[data-slot="next-step-card"]')).toHaveCount(0);
+  const trace = page.locator('[data-slot="next-step-trace"]');
+  await expect(trace).toHaveCount(1);
+  const toggle = trace.locator('[data-slot="next-step-trace-toggle"]');
+  await expect(toggle).toHaveText("要把同样的修复应用到移动端吗？");
+  await expect(trace.locator('[data-slot="next-step-trace-body"]')).toHaveCount(0);
+  await toggle.click();
+  const body = trace.locator('[data-slot="next-step-trace-body"]');
+  await expect(body).toContainText("桌面端的修复已合入，测试通过；移动端还没改。");
+  await expect(body.locator("li")).toHaveText(["好，应用", "先不用"]);
+  await expect(trace.getByRole("button")).toHaveCount(1);
 });
 
 /** 只有交付物、没有建议的一个回合。 */

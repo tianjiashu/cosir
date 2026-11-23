@@ -523,7 +523,7 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
   await expect(page.getByText("忽略失败", { exact: true })).toBeVisible();
   await expect(src).toBeVisible();
   await page.unroute("**/files/visibility");
-  // 请求已启动时通过设置 API 更新；点击刷新收敛版本，旧请求迟到不得重新展示。
+  // 搜索期间从外部修改忽略设置，窗口重新聚焦后应读取新版本，并丢弃迟到的旧结果。
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -559,9 +559,7 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
   await request.patch(api, {
     data: { paths: ["src/main.py", "src/loop"], ignored: true },
   });
-  await surface
-    .getByRole("button", { name: "刷新工作区文件", exact: true })
-    .click();
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(
     surface.getByText("没有匹配的文件", { exact: true }),
   ).toBeVisible();
@@ -581,9 +579,7 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
   await request.patch(api, {
     data: { paths: ["src/main.py", "src/loop"], ignored: false },
   });
-  await surface
-    .getByRole("button", { name: "刷新工作区文件", exact: true })
-    .click();
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(
     surface.getByRole("treeitem", { name: "main.py", exact: true }),
   ).toBeVisible();

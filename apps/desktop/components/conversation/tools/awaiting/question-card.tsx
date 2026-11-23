@@ -22,13 +22,11 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import type { CallViewContext } from "../call-view";
-import { AwaitingFrame } from "./awaiting-frame";
+import { AwaitingFooter, AwaitingFrame, AwaitingHeader } from "./awaiting-frame";
 
 const CHOICE_CLASS = "accent-primary mt-0.5 size-4 shrink-0 cursor-pointer focus-ring";
 /** 选项行：整行可点，行间以分隔线隔开；选中行带底色。 */
 const OPTION_ROW_CLASS = "border-border/60 flex min-w-0 cursor-pointer items-start gap-3 border-t px-4 py-2.5 hover:bg-muted/50 has-checked:bg-muted/60";
-/** 页头色带与卡片边框同一个信息蓝：问题是卡片的标题，选项区用普通底色，读起来不像一整块告警。 */
-const HEADER_CLASS = "flex min-w-0 items-start gap-3 bg-[color-mix(in_oklab,var(--info)_7%,transparent)] px-4 py-3";
 
 /** 提交各题草稿：答了的题作为回答，一题都没答就是全部跳过。结果随 snapshot 回推，卡片收成一行调用。 */
 async function submitAnswers(sessionId: number, toolCallId: string, questions: UserQuestion[]): Promise<void> {
@@ -159,18 +157,18 @@ export function QuestionCard({ sessionId, toolCallId, toolName, args, artifact, 
   const notesOpen = notesRequested || draft.notes !== "";
 
   return (
-    <AwaitingFrame toolCallId={toolCallId} title={title} className="bg-background max-w-[40rem] overflow-hidden p-0">
+    <AwaitingFrame title={title}>
       <div data-slot="question-card" className="flex min-w-0 flex-col" onKeyDown={interactive ? onKeyDown : undefined}>
-        <div className={HEADER_CLASS}>
-          <div className="min-w-0 flex-1">
-            <div className="text-info flex items-center gap-1.5 text-xs">
-              <ToolIcon name={toolIconName(toolName)} className="size-3.5" aria-hidden="true" />
+        <AwaitingHeader
+          icon={<ToolIcon name={toolIconName(toolName)} className="size-3.5" aria-hidden="true" />}
+          eyebrow={(
+            <>
               <span data-slot="question-header" className="truncate">{question.header}</span>
               {question.multiSelect && <span className="text-muted-foreground shrink-0">· 可多选</span>}
-            </div>
-            <p className="text-chat mt-1 leading-6 font-semibold break-words">{question.question}</p>
-          </div>
-          {questions.length > 1 && (
+            </>
+          )}
+          title={question.question}
+          aside={questions.length > 1 && (
             <div className="text-muted-foreground flex shrink-0 items-center gap-0.5">
               <Button type="button" size="icon-xs" variant="ghost" aria-label="上一题" disabled={index === 0} onClick={() => setQuestionIndex(sessionId, toolCallId, index - 1)}>
                 <ChevronLeftIcon />
@@ -181,7 +179,7 @@ export function QuestionCard({ sessionId, toolCallId, toolName, args, artifact, 
               </Button>
             </div>
           )}
-        </div>
+        />
         {interactive ? (
           <>
             <QuestionForm
@@ -204,7 +202,7 @@ export function QuestionCard({ sessionId, toolCallId, toolName, args, artifact, 
                 />
               </div>
             )}
-            <div className="border-border/60 flex items-center gap-1.5 border-t px-4 py-2.5">
+            <AwaitingFooter>
               {!notesOpen && (
                 <button type="button" className="text-muted-foreground hover:text-foreground focus-ring rounded-sm" onClick={() => setNotesRequested(true)}>
                   添加批注
@@ -216,7 +214,7 @@ export function QuestionCard({ sessionId, toolCallId, toolName, args, artifact, 
                 {submitting ? "提交中…" : last ? "提交" : "下一题"}
                 {!submitting && <Kbd className="bg-transparent text-current opacity-70">{shortcutLabel("questionSubmit")}</Kbd>}
               </Button>
-            </div>
+            </AwaitingFooter>
           </>
         ) : <QuestionPreview question={question} />}
       </div>

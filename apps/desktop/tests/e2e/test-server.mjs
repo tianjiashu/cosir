@@ -412,6 +412,8 @@ function wireState(sessionId, state = states.get(sessionId)) {
     background_tasks: backgroundTasks.get(sessionId) ?? [],
     foreground_waits: (foregroundWaits.get(sessionId) ?? []).map((entry) => entry.toolCallId),
     deliverables: sessionDeliverables(state.messages),
+    // 页面上等用户决定的终端批准（后端为进程内登记表）；种子没写时为空。
+    terminal_approvals: state.terminal_approvals ?? [],
     // 会话的终端权限（后端投影自 sessions 表）；种子没写时与新会话默认一致。
     terminal_permission_mode: state.terminal_permission_mode ?? "request_approval",
   };
@@ -1231,6 +1233,38 @@ const server = createServer(async (req, res) => {
       ...part, status: "completed", awaitingUser: false,
       display_data: { ...part.display_data, decision: body.decision, ...(body.data ?? {}) },
     })));
+    jsonResponse(res, 200, {});
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/terminal/sandbox") {
+    // 本机沙箱能力是机器级事实；模拟后端按「支持」回答，「请求批准」可选。
+    jsonResponse(res, 200, { supported: true, reason: "", settled: true });
+    return;
+  }
+  const permissionRoute = url.pathname.match(/^\/sessions\/(\d+)\/terminal-permission$/);
+  if (req.method === "POST" && permissionRoute) {
+    // 与后端一致：权限是会话事实，随时可切，新值经 snapshot 推回。
+    const sessionId = Number(permissionRoute[1]);
+    const body = await readJson(req);
+    telemetry.requestBodies.push({ ...body, sessionId, terminalPermission: true });
+    const state = states.get(sessionId);
+    if (state) commit(sessionId, { ...state, terminal_permission_mode: body.mode });
+    jsonResponse(res, 200, {});
+    return;
+  }
+  const approvalRoute = url.pathname.match(/^\/sessions\/(\d+)\/terminal-approvals\/([^/]+)\/decision$/);
+  if (req.method === "POST" && approvalRoute) {
+    // 与后端一致：只认页面上仍在等待的批准（否则 409 `TERMINAL_APPROVAL_EXPIRED`），决定后从页面移除。
+    const sessionId = Number(approvalRoute[1]);
+    const requestId = decodeURIComponent(approvalRoute[2]);
+    const body = await readJson(req);
+    telemetry.requestBodies.push({ ...body, sessionId, approvalId: requestId });
+    const state = states.get(sessionId);
+    if (!state?.terminal_approvals?.some((approval) => approval.id === requestId)) {
+      jsonResponse(res, 409, { error: { code: "TERMINAL_APPROVAL_EXPIRED", message: "这次终端批准已失效", retryable: false } });
+      return;
+    }
+    commit(sessionId, { ...state, terminal_approvals: state.terminal_approvals.filter((approval) => approval.id !== requestId) });
     jsonResponse(res, 200, {});
     return;
   }

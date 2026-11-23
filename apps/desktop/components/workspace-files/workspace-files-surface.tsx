@@ -3,12 +3,10 @@ import { useElementSize } from "@/hooks/use-element-size";
 import { useBrowserVisibility } from "@/lib/workspace-files/visibility";
 import { FileBrowserMenu, IgnoredItemsDialog } from "./ignored-items-dialog";
 import { useLayoutEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import {
   FolderTreeIcon,
   Maximize2Icon,
   Minimize2Icon,
-  RefreshCwIcon,
   SearchIcon,
   XIcon,
 } from "lucide-react";
@@ -25,7 +23,6 @@ import {
   useFilesStore,
 } from "@/lib/workspace-files/workspace-files-store";
 import { useWatchedPaths } from "@/lib/workspace-files/file-watch-store";
-import { queryKeys } from "@/lib/query/query-keys";
 import { FileTree } from "./file-tree";
 import { FileSearch } from "./file-search";
 import { FilePreview } from "./file-preview";
@@ -60,7 +57,6 @@ export function WorkspaceFilesSurface({
   const files = useFilesStore((s) => workspaceFiles(s.byWorkspace, workspaceId));
   const patch = useFilesStore((s) => s.patch);
   const opener = useOpenWorkspacePath();
-  const client = useQueryClient();
   // 文件名搜索的文字与已提交的请求都在工作区会话里：用户可从文件名提及显式发起查找。
   const query = files.searchText;
   const searchRequest = files.searchRequest;
@@ -202,18 +198,6 @@ export function WorkspaceFilesSurface({
                       </InputGroupAddon>
                     )}
                   </InputGroup>
-                  <TooltipIconButton
-                    tooltip="刷新工作区文件"
-                    aria-label="刷新工作区文件"
-                    className="size-8"
-                    onClick={() =>
-                      void client.invalidateQueries({
-                        queryKey: queryKeys.files(workspaceId),
-                      })
-                    }
-                  >
-                    <RefreshCwIcon />
-                  </TooltipIconButton>
                   <FileBrowserMenu onManage={() => setManageIgnored(true)} />
                 </form>
                 {query.trim() && searchRequest ? (

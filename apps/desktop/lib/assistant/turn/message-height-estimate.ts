@@ -1,6 +1,7 @@
 import { CAPSULE_HEIGHT, deliverableRows, type DeliverablesBatch } from "./deliverable-layout";
 import type { TransportOutcome, TransportToolCallPart } from "../contract";
-import { resolveDisclosure, processKey, activityKey, agentKey, userMessageKey } from "./disclosure-store";
+import type { NextStepOffer } from "../tools/next-step-offer";
+import { resolveDisclosure, processKey, activityKey, agentKey, userMessageKey, nextStepKey } from "./disclosure-store";
 import { USER_MESSAGE_CLAMP_HEIGHT, USER_MESSAGE_TOGGLE_HEIGHT } from "./user-message-clamp";
 import type { ThreadMessage } from "@assistant-ui/react";
 
@@ -128,6 +129,16 @@ function deliverablesHeight(card: DeliverablesBatch): number {
   return sections.reduce((sum, height) => sum + height, 0) + Math.max(0, sections.length - 1) * CAPSULE_ROW_GAP;
 }
 
+// 下一步建议：已落定的回合按过期痕迹计（一行 `leading-6`，展开为回顾与选项列表，块间 `gap-2`）。最后一条回复
+// 上是可点的卡片，估算拿不到消息位置，按痕迹计、由首次测量修正——只有这一条行会差。
+const NEXT_STEP_ROW = 24;
+const NEXT_STEP_GAP = 8;
+function nextStepHeight(offer: NextStepOffer, open: boolean): number {
+  if (!open) return NEXT_STEP_ROW;
+  return NEXT_STEP_ROW + NEXT_STEP_GAP + textLines(offer.recap, NOTE_LINE_UNITS) * NOTE_LINE_HEIGHT
+    + NEXT_STEP_GAP + offer.replies.length * NEXT_STEP_ROW;
+}
+
 /** 等你操作的调用就地画成卡片：提问卡片随当前那一题的选项数变化，其余等待卡是固定的一两行。 */
 function awaitingHeight(part: TransportToolCallPart, sessionId?: number): number {
   const display = readUserQuestionDisplay(part.display_data);
@@ -172,6 +183,10 @@ function assistantHeight(message: ThreadMessage, sessionId?: number): number {
     const cards = layout.artifacts.map((card) => card.kind === "changes" ? CHANGES_CARD_CHROME + card.files.length * CHANGES_FILE_ROW
       : STANDALONE_ARTIFACT_CARD);
     blocks.push(cards.reduce((sum, height) => sum + height, 0) + (cards.length - 1) * ARTIFACT_GAP);
+  }
+  if (layout.nextStep && layout.phase === "settled") {
+    const key = nextStepKey(layout.nextStep.part.toolCallId);
+    blocks.push(nextStepHeight(layout.nextStep.offer, sessionId !== undefined && resolveDisclosure(sessionId, key, false)));
   }
   if (layout.intro) return ROW_GAP + blocks.reduce((sum, block) => sum + block, 0) + Math.max(0, blocks.length - 1) * ZONE_GAP;
   return ROW_GAP + ASSISTANT_CHROME + blocks.reduce((sum, block) => sum + block + ZONE_GAP, 0);

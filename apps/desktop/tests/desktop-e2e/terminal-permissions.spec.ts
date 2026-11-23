@@ -57,7 +57,7 @@ test("approves the exact command, runs it in Rust and switches the next run to f
     expect(models.status, await models.clone().text()).toBe(200);
     const model = (await models.json()).models[0].config_id;
     await page.goto(`app://cosir/sessions/${session}`);
-    await expect(page.getByLabel("终端权限")).toHaveValue("request_approval");
+    await expect(page.getByRole("button", { name: "终端权限：请求批准" })).toBeVisible();
     await page.getByLabel("消息输入").fill("request-test");
     await page.getByLabel("消息输入").press("Enter");
     const card = page.getByRole("region", { name: "终端执行批准" });
@@ -65,7 +65,7 @@ test("approves the exact command, runs it in Rust and switches the next run to f
     expect(fs.existsSync(path.join(outside, "approved.txt"))).toBe(false);
     await expect(card).toContainText(outside);
     // 权限归会话、随时可切（下一条命令生效），运行中不再锁定选择器。
-    await expect(page.getByLabel("终端权限")).toBeEnabled();
+    await expect(page.getByRole("button", { name: "终端权限：请求批准" })).toBeEnabled();
     const snapshot = await attachFirstFrame(base, session);
     const requestId = snapshot.terminal_approvals[0].id;
     // 原生 HTTP 客户端不受 CORS 限制，仍必须无法代替用户批准。
@@ -78,9 +78,9 @@ test("approves the exact command, runs it in Rust and switches the next run to f
     expect(fs.readFileSync(path.join(outside, "approved.txt"), "utf8")).toBe("verified");
     const duplicate = await desktopFetch(`${base}/sessions/${session}/terminal-approvals/${requestId}/decision`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ decision: "approve" }) });
     expect(duplicate.status).toBe(409);
-    await expect(page.getByLabel("终端权限")).toBeEnabled();
-    await page.getByLabel("终端权限").selectOption("full_access");
-    await expect(page.getByLabel("终端权限")).toHaveValue("full_access");
+    await page.getByRole("button", { name: "终端权限：请求批准" }).click();
+    await page.getByRole("option", { name: /完全访问权限/ }).click();
+    await expect(page.getByRole("button", { name: "终端权限：完全访问权限" })).toBeVisible();
     await page.getByLabel("消息输入").fill("full-test");
     await page.getByLabel("消息输入").press("Enter");
     await expect.poll(() => fs.existsSync(path.join(outside, "full.txt"))).toBe(true);
@@ -88,9 +88,9 @@ test("approves the exact command, runs it in Rust and switches the next run to f
     await expect(card).toHaveCount(0);
     const after = await attachFirstFrame(base, session);
     expect(after.terminal_permission_mode).toBe("full_access");
-    await expect(page.getByLabel("终端权限")).toBeEnabled();
-    await page.getByLabel("终端权限").selectOption("request_approval");
-    await expect(page.getByLabel("终端权限")).toHaveValue("request_approval");
+    await page.getByRole("button", { name: "终端权限：完全访问权限" }).click();
+    await page.getByRole("option", { name: /请求批准/ }).click();
+    await expect(page.getByRole("button", { name: "终端权限：请求批准" })).toBeVisible();
     await page.getByLabel("消息输入").fill("reject-test");
     await page.getByLabel("消息输入").press("Enter");
     await expect(card).toBeVisible();

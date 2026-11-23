@@ -270,6 +270,7 @@ def test_offer_next_step_returns_at_once_without_waiting() -> None:
     observation = OfferNextStepTool().execute(
         ask=" 要我把这个修复也应用到移动端吗？ ",
         replies=["好，应用", " 先不用 ", "好，应用"],
+        recap=" 桌面端的修复已合入，测试通过；移动端还没改。 ",
         execution_context=_context(Path(".")),
     )
 
@@ -280,16 +281,27 @@ def test_offer_next_step_returns_at_once_without_waiting() -> None:
         "kind": "next-step",
         "ask": "要我把这个修复也应用到移动端吗？",
         "replies": ["好，应用", "先不用"],
+        "recap": "桌面端的修复已合入，测试通过；移动端还没改。",
     }
 
 
+# 潜在缺陷：空白或超长的回顾被截断后照样显示，丢掉「还没做完的」那半句。
 @pytest.mark.parametrize(
-    ("ask", "replies"),
-    [("   ", ["好"]), ("继续吗？", ["  "]), ("继续吗？", ["x" * 25]), ("问" * 101, ["好"])],
+    ("ask", "replies", "recap"),
+    [
+        ("   ", ["好"], "做完了。"),
+        ("继续吗？", ["  "], "做完了。"),
+        ("继续吗？", ["x" * 25], "做完了。"),
+        ("问" * 101, ["好"], "做完了。"),
+        ("继续吗？", ["好"], "   "),
+        ("继续吗？", ["好"], "回" * 301),
+    ],
 )
-def test_offer_next_step_rejects_labels_it_cannot_send_back(ask: str, replies: list[str]) -> None:
+def test_offer_next_step_rejects_what_it_cannot_show_whole(
+    ask: str, replies: list[str], recap: str
+) -> None:
     observation = OfferNextStepTool().execute(
-        ask=ask, replies=replies, execution_context=_context(Path("."))
+        ask=ask, replies=replies, recap=recap, execution_context=_context(Path("."))
     )
 
     assert observation.status == "error"

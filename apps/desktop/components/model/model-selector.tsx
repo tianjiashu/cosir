@@ -198,12 +198,16 @@ const modelSelectorTriggerVariants = cva(
 type ModelSelectorTriggerProps = ComponentPropsWithoutRef<
   typeof PopoverTrigger
 > &
-  VariantProps<typeof modelSelectorTriggerVariants>;
+  VariantProps<typeof modelSelectorTriggerVariants> & {
+    /** 行尾的下拉箭头。表单里保留；输入框配置行的按钮是淡色短词，不带箭头。 */
+    indicator?: boolean;
+  };
 
 function ModelSelectorTrigger({
   className,
   variant,
   size,
+  indicator = true,
   children,
   onKeyDown,
   ...props
@@ -231,7 +235,7 @@ function ModelSelectorTrigger({
       {...props}
     >
       {children ?? <ModelSelectorValue />}
-      <ChevronDownIcon className="size-4 opacity-50" />
+      {indicator && <ChevronDownIcon className="size-4 opacity-50" />}
     </PopoverTrigger>
   );
 }

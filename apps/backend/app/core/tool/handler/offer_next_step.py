@@ -1,14 +1,19 @@
-"""offer_next_step 工具：Agent 做完事后，把留给用户的一个决定做成回复下方的按钮。
+"""offer_next_step 工具：Agent 做完事后，把留给用户的一个决定做成回复下方的按钮，并附一段回顾。
 
 与 ``ask_user`` 的分工：``ask_user`` 是「被卡住、等回答」，登记等待并挂起 Run；本工具是「做完了、给个
 建议」，当场成功返回——不登记等待、不挂起、不产生任何后端事实，只有展示数据。按钮何时有效不存
 状态：前端只在「这是会话最后一个回合且 Run 正常完成」时画出来，用户发了任何消息它就不再是最后一个
-回合；点按钮就是替用户发出标签原文这条普通消息，后端不知道它来自按钮。
+回合；点按钮就是替用户发出标签原文这条普通消息，后端不知道它来自按钮。过期后前端留一行可展开的痕迹
+（同样由位置与结局推出），回顾让这行痕迹脱离当时的上下文也读得懂。
+
+回顾（``recap``）必填：它是一条行为约束而不只是展示——每次给建议前都要交代现在成立什么、还有什么没做
+或没验证；可选的话模型会省掉它。
 """
 
 
 from app.core.tool.handler.next_step.offer_next_step_args import (
     NEXT_STEP_ASK_MAX,
+    NEXT_STEP_RECAP_MAX,
     NEXT_STEP_REPLY_MAX,
     OfferNextStepArgs,
 )
@@ -26,9 +31,11 @@ from app.core.tool.tool_base import HandlerBase
 
 class OfferNextStepTool(HandlerBase):
     name: str = TOOL_OFFER_NEXT_STEP
-    # 改写自 Claude Code 桌面端 ``wrap_up`` 的工具描述：只留「一个问题加按钮」，去掉回顾与应用内动作。
+    # 改写自 Claude Code 桌面端 ``wrap_up`` 的工具描述：保留「回顾 + 一个问题加按钮」，去掉应用内动作；
+    # 只在留下决定时调用，不是每个回合的收尾。
     description: str = (
-        "Offer the user one next step as buttons under your reply. Call it when your work this "
+        "Offer the user one next step as buttons under your reply, with a short recap of where "
+        "the work stands. Call it when your work this "
         "turn is done and it leaves the user a decision to make or an obvious follow-up to "
         "start: a choice of approach, or a go-ahead to act on what you found. Skip it when "
         "nothing is pending, for short answers, and for plain conversation. Most replies need "
@@ -44,22 +51,26 @@ class OfferNextStepTool(HandlerBase):
     group = TOOL_GROUP_REPLY_PRESENTATION
 
     def execute(
-        self, ask: str, replies: list[str], execution_context: ToolExecutionContext
+        self, ask: str, replies: list[str], recap: str, execution_context: ToolExecutionContext
     ) -> ToolObservation:
-        # 去掉空白与重复；过长时拒绝而不是截断：标签会原样作为用户的话发回来。
+        # 去掉空白与重复；过长时拒绝而不是截断：标签会原样作为用户的话发回来，回顾截断会丢掉「没做完的」。
         question = ask.strip()
+        summary = recap.strip()
         labels = list(dict.fromkeys(label.strip() for label in replies if label.strip()))
         if (
             not question
             or len(question) > NEXT_STEP_ASK_MAX
             or not labels
             or any(len(label) > NEXT_STEP_REPLY_MAX for label in labels)
+            or not summary
+            or len(summary) > NEXT_STEP_RECAP_MAX
         ):
             return tool_error(
                 self.name,
                 (
                     f"nothing was offered: `ask` must be 1-{NEXT_STEP_ASK_MAX} characters and "
-                    f"each reply a label of 1-{NEXT_STEP_REPLY_MAX} characters."
+                    f"each reply a label of 1-{NEXT_STEP_REPLY_MAX} characters, and `recap` "
+                    f"1-{NEXT_STEP_RECAP_MAX} characters."
                 ),
                 tool_call_id=execution_context.tool_call_id,
                 status_hint="参数无效",
@@ -67,7 +78,12 @@ class OfferNextStepTool(HandlerBase):
         return tool_success(
             self.name,
             "Offered. Now write your full answer to the user; do not repeat the question in it.",
-            display_data={"kind": "next-step", "ask": question, "replies": labels},
+            display_data={
+                "kind": "next-step",
+                "ask": question,
+                "replies": labels,
+                "recap": summary,
+            },
         )
 
     def to_definition(self) -> ToolDefinition:

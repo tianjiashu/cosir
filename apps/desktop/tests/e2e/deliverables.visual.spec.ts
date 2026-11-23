@@ -38,7 +38,7 @@ function state(deliverables: TransportDeliverable[], withOffer = false): Transpo
   const offer: TransportMessagePart = {
     type: "tool-call", toolCallId: "call-offer", toolName: "offer_next_step", presentation: "quiet",
     args: { ask: "要导出成 PDF 吗？", replies: ["好，导出", "先不用"] }, status: "completed", error: null, awaitingUser: false,
-    display_data: { kind: "next-step", ask: "要导出成 PDF 吗？", replies: ["好，导出", "先不用"] },
+    display_data: { kind: "next-step", ask: "要导出成 PDF 吗？", replies: ["好，导出", "先不用"], recap: "报告已写好并交付，还没导出 PDF。" },
   };
   const base = completedState(1, { id: "u-1", parts: [{ type: "text", text: "整理成报告", status: "completed" }] }, [
     present, ...(withOffer ? [offer] : []), { type: "text", text: "报告整理好了，结论在第 2 节。", status: "completed", finalReply: true },

@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronRightIcon, FilePlusIcon, FolderOpenIcon, MessageSquareQuoteIcon, PlusIcon, PuzzleIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { FilePlusIcon, FolderOpenIcon, MessageSquareQuoteIcon, PlusIcon, PuzzleIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Command, CommandItem, CommandList } from "@/components/ui/command";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandList } from "@/components/ui/command";
+import { Popover, PopoverTrigger } from "@/components/ui/popover";
 import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
 import { useComposerFeedback } from "@/components/composer/composer-feedback";
 import { insertCapsules, useComposerInsertion } from "@/components/composer/composer-insertion-context";
 import { COMPOSER_ICON_BUTTON_CLASS_NAME } from "@/components/composer/composer-surface";
+import { ComposerMenuContent, ComposerMenuRow } from "@/components/composer/composer-menu";
 import { FavoritePromptManager } from "@/components/composer/favorite-prompt-manager";
 import { useComposerFiles } from "@/components/composer/use-composer-files";
 import { desktopHost } from "@/lib/desktop-host";
@@ -53,7 +54,7 @@ export function ComposerAddMenu({ images, workspaceRoot, workspaceId, disabled =
   const insertion = useComposerInsertion();
   const feedback = useComposerFeedback();
   const addFiles = useComposerFiles(images);
-  // 第一层没有输入框：键盘焦点放在 cmdk 根节点上，方向键与回车才生效；从二级页返回时同样要放回来。
+  // 打开时的焦点由 `ComposerMenuContent` 交给菜单；从二级页返回第一层时（第一层没有输入框）由这里放回 cmdk 根节点。
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (open && page === "root") rootRef.current?.focus();
@@ -107,14 +108,14 @@ export function ComposerAddMenu({ images, workspaceRoot, workspaceId, disabled =
             </Button>
           }
         />
-        <PopoverContent align="start" side="top" sideOffset={6} initialFocus={rootRef} className="w-80 gap-0 rounded-xl p-0 shadow-lg">
+        <ComposerMenuContent>
           {page === "root" && (
             <Command ref={rootRef} aria-label="添加" className="outline-none">
               <CommandList className="p-1">
-                <AddMenuRow icon={<FilePlusIcon />} title="文件或图片" description="图片随消息发送，其他文件以引用插入" onSelect={() => void pick(false)} />
-                <AddMenuRow icon={<FolderOpenIcon />} title="文件夹" description="以引用插入，Agent 按需读取" onSelect={() => void pick(true)} />
-                <AddMenuRow icon={<PuzzleIcon />} title="Skill" description="让 Agent 按 Skill 的步骤做" drill onSelect={() => setPage("skills")} />
-                <AddMenuRow icon={<MessageSquareQuoteIcon />} title="常用提示词" description="插入保存过的提示词" drill onSelect={() => setPage("prompts")} />
+                <ComposerMenuRow icon={<FilePlusIcon />} title="文件或图片" description="图片随消息发送，其他文件以引用插入" onSelect={() => void pick(false)} />
+                <ComposerMenuRow icon={<FolderOpenIcon />} title="文件夹" description="以引用插入，Agent 按需读取" onSelect={() => void pick(true)} />
+                <ComposerMenuRow icon={<PuzzleIcon />} title="Skill" description="让 Agent 按 Skill 的步骤做" drill onSelect={() => setPage("skills")} />
+                <ComposerMenuRow icon={<MessageSquareQuoteIcon />} title="常用提示词" description="插入保存过的提示词" drill onSelect={() => setPage("prompts")} />
               </CommandList>
             </Command>
           )}
@@ -129,29 +130,9 @@ export function ComposerAddMenu({ images, workspaceRoot, workspaceId, disabled =
               }}
             />
           )}
-        </PopoverContent>
+        </ComposerMenuContent>
       </Popover>
       <FavoritePromptManager open={managerOpen} onOpenChange={setManagerOpen} />
     </>
-  );
-}
-
-/** 第一层的一行：图标、名称与一句说明；`drill` 表示进入二级页，行尾带箭头。 */
-function AddMenuRow({ icon, title, description, drill = false, onSelect }: {
-  icon: ReactNode;
-  title: string;
-  description: string;
-  drill?: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <CommandItem value={title} onSelect={onSelect} className="gap-2.5 rounded-lg px-2.5 py-2 [&>svg:last-child]:hidden [&_svg]:size-4">
-      <span className="text-muted-foreground shrink-0">{icon}</span>
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="text-sm">{title}</span>
-        <span className="text-muted-foreground truncate text-xs">{description}</span>
-      </span>
-      {drill && <ChevronRightIcon className="text-muted-foreground shrink-0" aria-hidden="true" />}
-    </CommandItem>
   );
 }
