@@ -29,7 +29,6 @@ from app.models.run.run_record import RunRecord
 from app.models.run.run_status import RunStatus
 from app.models.session.session_kind import SessionType
 from app.models.session.session_record import SessionRecord
-from app.models.terminal_permissions import TerminalPermissionMode
 from app.service.depends import (
     get_session_message_queue,
     get_session_service,
@@ -85,6 +84,12 @@ class SessionSendTool(HandlerBase):
         if isinstance(target, ToolObservation):
             return target
         sender = self._session_service.get_session(execution_context.session_id)
+        if self._outranks_sender(target, execution_context):
+            return tool_error(
+                self.name,
+                f"Session {session_id} has broader terminal permissions than yours, so it cannot take "
+                "messages from you. Ask the user if that session should do this.",
+            )
         try:
             with session_runtime_spaces.get_or_create(session_id).operation():
                 current = self._session_service.require_current_run(target.id)
@@ -122,6 +127,20 @@ class SessionSendTool(HandlerBase):
             },
         )
 
+    def _outranks_sender(self, target: SessionRecord, context: ToolExecutionContext) -> bool:
+        """收件方的终端权限比发送方宽，且不在同一棵所有权树里：拒绝，免得借它之手越过自己的权限。
+
+        同一棵树里（派生方与它的子 Agent）不受限：子 Agent 的有效权限从不超过祖先，用户对整棵树给的是
+        根会话的权限；派生汇报本来也不走这里。
+        """
+        sessions = self._session_service
+        if sessions.ownership_root_id(target.id) == sessions.ownership_root_id(context.session_id):
+            return False
+        return (
+            context.terminal_permission_mode == "request_approval"
+            and sessions.effective_terminal_mode(target.id) == "full_access"
+        )
+
     @staticmethod
     def _effect(current: RunRecord | None) -> dict[str, str]:
         """消息在收件方那里的去向：immediate 的 Agent 消息并入运行中的驱动、唤醒挂起的 Run，空闲时开新 Run。"""
@@ -142,15 +161,6 @@ class SessionSendTool(HandlerBase):
             first = PendingMessages.of(get_session_message_queue().pending_nowait(target.id)).next_input()
             if first is not None:
                 launch = cast(LaunchInputBody, first.body).launch
-                if target.session_type == SessionType.DELEGATED:
-                    return launch.model_copy(
-                        update={
-                            "terminal_permission_mode": self._child_terminal_mode(
-                                launch.terminal_permission_mode,
-                                execution_context.terminal_permission_mode,
-                            )
-                        }
-                    )
                 return launch
             initial = RunLaunch.from_fork(target)
             if initial is not None:
@@ -209,22 +219,6 @@ class SessionSendTool(HandlerBase):
             model_config_id=current_profile.model_config_id
             or cast(str, current_run.model_config_id),
             reasoning_effort=reasoning_effort,
-            terminal_permission_mode=self._child_terminal_mode(
-                current_run.terminal_permission_mode,
-                execution_context.terminal_permission_mode,
-            ),
-        )
-
-    @staticmethod
-    def _child_terminal_mode(
-        recipient_mode: TerminalPermissionMode,
-        sender_mode: TerminalPermissionMode,
-    ) -> TerminalPermissionMode:
-        """消息不能超出发送方权限；所有权祖先上限由 RunLedger 在新建 Run 时收口。"""
-        return (
-            "request_approval"
-            if "request_approval" in (recipient_mode, sender_mode)
-            else "full_access"
         )
 
     def to_definition(self) -> ToolDefinition:

@@ -191,6 +191,8 @@ class DelegateTaskTool(HandlerBase):
                 ),
                 tool_surface=freeze_tool_surface(child_final_session_tools),
                 derivation_depth=depth,
+                # 子 Agent 取父会话此刻的有效权限；之后父会话降权，经所有权祖先上限立即对它生效。
+                terminal_permission_mode=execution_context.terminal_permission_mode,
             )
 
             reasoning_effort = (
@@ -213,7 +215,6 @@ class DelegateTaskTool(HandlerBase):
                         agent_id=child_agent_id,
                         model_config_id=model_config_id,
                         reasoning_effort=reasoning_effort,
-                        terminal_permission_mode=parent_run.terminal_permission_mode,
                     ),
                 ),
             )

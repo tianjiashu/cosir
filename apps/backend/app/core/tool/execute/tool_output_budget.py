@@ -27,6 +27,7 @@ from uuid import uuid4
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.core.tool.schemas import ToolExecutionContext, ToolObservation
+from app.models.message_context.message_metadata.tool_message_metadata import ToolResultFacts
 from app.utils.atomic_write import atomic_write_text
 from app.utils.path.workspace_cosir import workspace_tool_artifact_dir
 
@@ -203,11 +204,10 @@ class ToolOutputBudget:
 
         # 超限：先把完整原文落盘，再把模型可见正文截断为「头 + 标记 + 尾」。
         artifact_path = self._write_artifact(normalized_observation, execution_context)
-        # File tools page their own text. If the generic budget still removes
-        # text, discard read evidence whose source spans are no longer known.
-        facts = normalized_observation.facts
-        if facts is not None and facts.file_facts is not None and facts.file_facts.reads:
-            facts = facts.model_copy(update={"file_facts": facts.file_facts.without_reads()})
+        # 截断是 core 的事实，记在结果事实上；文件系统据此不认这次结果里的读取证据（行号已不是模型所见）。
+        facts = (normalized_observation.facts or ToolResultFacts()).model_copy(
+            update={"content_truncated": True}
+        )
         return replace(
             normalized_observation, content=self._truncate_content(content, artifact_path), facts=facts,
         )
