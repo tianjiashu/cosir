@@ -123,7 +123,6 @@ class Constant:
         RUN_FAILURE_CODE_GRAPH_ALREADY_FINISHED: str = "graph_already_finished"
         # 后端重启导致本轮对话中断。
         RUN_FAILURE_CODE_BACKEND_RESTARTED: str = "backend_restarted"
-        # 该 Run 正在等待用户决定，却被不带决定的续跑拉去跑模型（会静默丢掉待决请求）。
         # 未知 code 的统一兜底用户文案。
         DEFAULT_MESSAGE: str = "对话运行失败，请重试或查看日志"
 
@@ -146,10 +145,6 @@ class Constant:
 
         # Provider 归一化后表示「正常结束、无需续写」的 finish_reason 集合。
         NORMAL_FINISH_REASONS: frozenset[str] = frozenset({"stop", "end", "end_turn"})
-        # 工具参数非法时，回传给模型的参数预览截断字符数。
-        INVALID_TOOL_ARGS_PREVIEW_CHARS: int = 500
-        # 单次工具调用错误累计展示的字符预算上限。
-        INVALID_TOOL_CALL_TOTAL_BUDGET_CHARS: int = 2000
         # 结构化输出阶段的模型请求总次数上限，包含首次请求与后续重试。
         STRUCTURED_OUTPUT_MAX_ATTEMPTS: int = 4
         # 已完成 Run 的结构化支线失败原因；不改变 Run 生命周期状态。
@@ -334,13 +329,6 @@ class Constant:
 
         # workdir 字符白名单：挡住命令注入式 workdir（含 ``;|&$()`` 等注入字符直接拒绝）。
         WORKDIR_SAFE_RE: re.Pattern[str] = re.compile(r"^[A-Za-z0-9/\\:_\-.~ +=@,]+$")
-        # 解释器 ``-c/-e/-r/-Command`` 代码串提取正则（跨多行，引号内非贪婪捕获）。
-        INTERPRETER_CODE_RE: re.Pattern[str] = re.compile(
-            r"\b(?:python(?:[0-9.]*)?|node(?:js)?|ruby|perl|php|bash|sh|zsh|fish|pwsh|powershell)\s+"
-            r"(?:-[cer]\b|-Command\b)\s*"
-            r"(['\"])(.*?)(?<!\\)\1",
-            re.IGNORECASE | re.DOTALL,
-        )
         # 工具结果进入模型通道的 content 字符上限（超出由 ``ToolOutputBudget`` 截断）。
         MAX_OUTPUT_CHARS: int = 20_000
         # 列表型结果（search_content 输出行、find_files 文件）单次最多返回几条：约等于 ``MAX_OUTPUT_CHARS``
