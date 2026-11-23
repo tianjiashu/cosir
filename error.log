@@ -1,0 +1,10 @@
+[2026-11-23T03:57:13.326895+00:00] startup: base_url=https://chatgpt.com/backend-api path_style=wham
+[2026-11-23T03:57:13.327158+00:00] auth: mode=ChatGPT account_id=83ba6f4c-ebda-4e57-b5d5-5ec4de9aa6a8
+[2026-11-23T03:57:13.327421+00:00] auth: set ChatGPT-Account-Id header: 83ba6f4c-ebda-4e57-b5d5-5ec4de9aa6a8
+[2026-11-23T03:57:13.336555+00:00] env: parsed HTTP GitHub origin => tianjiashu/cosir
+[2026-11-23T03:57:26.759730+00:00] startup: base_url=https://chatgpt.com/backend-api path_style=wham
+[2026-11-23T03:57:26.759979+00:00] auth: mode=ChatGPT account_id=83ba6f4c-ebda-4e57-b5d5-5ec4de9aa6a8
+[2026-11-23T03:57:26.760030+00:00] auth: set ChatGPT-Account-Id header: 83ba6f4c-ebda-4e57-b5d5-5ec4de9aa6a8
+[2026-11-23T03:57:26.769406+00:00] env: parsed HTTP GitHub origin => tianjiashu/cosir
+[2026-11-23T03:57:29.289380+00:00] env: status=400 Bad Request content-type=application/json
+[2026-11-23T03:57:29.791968+00:00] env: status=200 OK content-type=application/json
