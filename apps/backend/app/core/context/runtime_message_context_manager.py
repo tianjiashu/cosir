@@ -1,14 +1,14 @@
 """Session context 的唯一运行时协调入口：SDK 负责模型聚合，本层负责 working copy、序号、回合与
 协议闭合。
 
-行级持久化（追加、原地替换、固定系统提示词）经 ``ContextStore``，本层不直接碰存储。每一行所属的
+行级持久化（追加、原地替换）经 ``ContextStore``，本层不直接碰存储；固定系统提示词由物化方生成或恢复后
+交来，配置变化的对账在 ``request_notices``。每一行所属的
 回合在这里写入时判定一次（:meth:`_opens_turn`），快照分组、实时投影与 fork 切点都读这个事实。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Literal, cast
 
 from openai.lib.streaming.chat import ParsedChatCompletionSnapshot
@@ -17,20 +17,15 @@ from openai.types.chat import (
     ChatCompletionMessageParam,
     ParsedFunctionToolCall,
 )
-from openai.types.shared_params import FunctionDefinition
 from sqlalchemy.orm import Session as DbSession
 
 from app.config.logging.logger import log
-from app.core.agents.agent_runtime_config import AgentRuntimeConfig
-from app.core.context import SystemPromptBuilder
 from app.core.context.context_entry import ContextEntry
 from app.core.context.context_store import (
     SESSION_SYSTEM_PROMPT_SEQUENCE,
     ContextStore,
 )
 from app.core.context.final_reply import CommittedResponse, final_reply_sequences
-from app.core.context.prompt_sources.source import SourceContext
-from app.core.context.prompt_sources.view import PromptSourceView
 from app.core.context.tool_call_closure import (
     ContextProtocolError,
     ToolCallClosurePlan,
@@ -39,9 +34,7 @@ from app.core.context.tool_call_closure import (
 )
 from app.core.context.turn_visibility import is_turn_input, is_visible_reply
 from app.core.context.vision_input import resolve_messages_for_model
-from app.core.file_access.knowledge import FileKnowledge
 from app.core.llm_provider.message_codec import assistant_message
-from app.core.workflow.message_queue.message_bodies.notice import NoticeBody
 from app.models.external_tool import ExternalToolDefinition
 from app.models.message_context.message_metadata.assistant_message_metadata import (
     AssistantMessageMetadata,
@@ -63,10 +56,7 @@ from app.models.message_context.session_context import (
     SessionContextRecord,
 )
 from app.models.run.run_record import RunRecord
-from app.models.workspace_record import WorkspaceRecord
 from app.utils.message_content import content_to_text
-from app.utils.path.system_cosir import session_scratch_dir
-from app.utils.workspace_instruction import find_workspace_instruction_file
 
 
 @dataclass
@@ -79,62 +69,29 @@ class RuntimeMessageContextManager:
     """
 
     current_session_id: int
-    # 只用其身份与执行资源（角色、提示词）构建 Session 首个系统提示词。
-    agent: AgentRuntimeConfig
-    # Session 固化的工具名（``SessionRuntimeSpace.session_tool_names``），决定首个系统提示词的
-    # 工具目录层与工作方式层。
-    tool_names: tuple[str, ...]
-    # 行级持久化边界：追加、原地替换、序号与 Session 固定系统提示词都经它读写。
+    # 行级持久化边界：追加、原地替换与序号都经它读写。
     context_store: ContextStore
-    # 工作区记录：系统提示词取 ``root_path``，模型请求的附件解析取 ``id``。必填——缺工作区
-    # 会生成一份没有工作区事实的系统提示词并被持久化成 Session 固定前缀，属于不可逆的静默降级。
-    workspace: WorkspaceRecord
-    # Session 的可写根事实，只在首次生成系统提示词时用。
-    writable_root: str | None = None
-    # Session 能延迟加载的内置工具定义（``SessionRuntimeSpace.session_deferred_schemas``），进延迟工具目录。
-    deferred_tools: tuple[FunctionDefinition, ...] = ()
+    # 模型请求的附件解析按工作区定位（:meth:`load_message`）。
+    workspace_id: int
+    # Session 固定系统提示词（seq 0），不参与压缩，每次模型调用都位于消息前缀。由物化方交来：已有 Session
+    # 恢复首次持久化的原文，新 Session 先生成并写库（``SessionRuntimeSpace``），本层不知道提示词怎么来。
+    system_entry: ContextEntry
     current_run_id: int | None = None
-    # 固定持久化的 Session system prompt，不参与压缩；每次模型调用均位于消息前缀。
-    _system_entry: ContextEntry | None = field(default=None, init=False)
     _entries: list[ContextEntry] = field(default_factory=list, init=False)
     # 从持久化 context 恢复序号；每条新消息在成功落库后占用一个序号。
     _message_sequence: int = field(default=0, init=False)
     # 当前模型调用正在流式写入的响应行身份（``include_in_context`` 仍为 False）。
-    # 只用于「同一次调用持续替换同一行」；提交或开始下一次调用即清空。
+    # 只用于「同一次调用持续替换同一行」；提交、放弃或绑定新 Run 时清空。
     _draft_response: ContextEntry | None = field(default=None, init=False)
-    # Session 内已用的调用 id，与本次响应按 SDK 位置冻结的规范 id（生命周期同 ``_draft_response``）。
+    # Session 内已用的调用 id：每次 begin_run 从库重建，之后随冻结的新 id 增长，不随响应清空。
     _used_call_ids: set[str] = field(default_factory=set, init=False)
+    # 本次响应按 SDK 位置冻结的规范 id：首帧写库前就开始记录，与 ``_draft_response`` 同时清空。
     _response_call_ids: dict[int, str] = field(default_factory=dict, init=False)
     # 回合判定的写入期状态（见 :meth:`_opens_turn`）：Session 已用的最大回合号、本 Run 当前回合（还没写
     # 任何行时为 None）、本 Run 是否已有可见内容（开回合的输入或可见回复）。
     _max_turn: int = field(default=0, init=False)
     _run_turn: int | None = field(default=None, init=False)
     _run_shown: bool = field(default=False, init=False)
-    # 本次驱动定位到的工作区指令文件（见 ``SourceContext.workspace_instruction``）；每次 begin_run 重新定位。
-    _workspace_instruction: tuple[Path, Path] | None = field(default=None, init=False)
-
-    def __post_init__(self) -> None:
-        """恢复 Session 固定系统提示词；其余消息由 :meth:`begin_run` 加载。
-
-        新 Session 使用当前配置构建并持久化完整 system prompt，连同生成它时各配置来源的指纹；已有
-        Session 始终恢复首次持久化的内容，因此配置变化不会改写历史 Session 的模型消息前缀。
-        """
-        store = self.context_store
-        self._system_entry = store.get_system_prompt(self.current_session_id)
-        if self._system_entry is None:
-            prompt = SystemPromptBuilder.build(
-                self.agent,
-                self.workspace.root_path,
-                self.tool_names,
-                self.writable_root,
-                session_scratch_dir(self.current_session_id),
-                deferred_tools=self.deferred_tools,
-            )
-            self._system_entry = store.create_system_prompt(
-                self.current_session_id,
-                {"role": "system", "content": prompt.text},
-                SystemMessageMetadata(prompt_sources=prompt.baseline),
-            )
 
     def begin_run(self, run: RunRecord) -> None:
         """绑定当前 Run，并从数据库重建内存消息列表与序号。
@@ -166,9 +123,6 @@ class RuntimeMessageContextManager:
             is_turn_input(r.message, r.metadata, r.project_to_transport)
             or is_visible_reply(r.message)
             for r in written
-        )
-        self._workspace_instruction = find_workspace_instruction_file(
-            Path(self.workspace.root_path)
         )
 
     @property
@@ -360,52 +314,13 @@ class RuntimeMessageContextManager:
         """Agent 当前看到的配置：上下文里最近一条配置变化通知记下的，没有就是系统提示词生成时的。
 
         取自上下文而不是进程内记忆（与 ``drive_notices`` 同一做法）：撤回移出通知后基准随之回退，分叉随
-        系统行与通知行继承，重启后照样成立。内存列表倒序扫描，每步一次的成本可以忽略。
+        系统行与通知行继承，重启后照样成立。内存列表倒序扫描，每步一次的成本可以忽略。对账在
+        ``request_notices``。
         """
         latest = self.latest_notice("configuration_changed")
         if latest is not None and latest[1].prompt_sources is not None:
             return latest[1].prompt_sources
-        metadata = cast(ContextEntry, self._system_entry).metadata
-        return cast(SystemMessageMetadata, metadata).prompt_sources
-
-    def configuration_change_notice(self, agent: AgentRuntimeConfig) -> NoticeBody | None:
-        """对账配置：当前配置相对 Agent 已看到的基准有变化时返回净差异通知，没有变化时返回 ``None``。
-
-        系统提示词创建时固化，之后子 Agent、MCP、Skill、AGENTS.md、Agent 预设或回复语言再变，Agent
-        都看不到；这里说明变了什么，并把告知后的全部条目随通知落库，成为下一次对账的基准。生成提示词、
-        记下基准、对账都在本对象：三者必须用同一份投影与同一套适用规则。
-
-        - prepare_input 在每次模型请求前调用，而不是只在驱动开始时：运行中改了 AGENTS.md，下一步就该
-          生效。读盘的来源按文件签名缓存（``prompt_sources.cache``），签名没变时只是几次 stat；工作区
-          指令文件每次驱动定位一次（见 ``SourceContext.workspace_instruction``）。
-        - 通知不唤醒、不开新 Run（``NOTICE_WAKE_SCOPES``）：空闲的 Session 等下次推进时再对账，到时只说
-          净差异，改了又改回去就什么都不说。
-        - 子 Agent、分叉 Session 走同一条路：哪些来源适用由 Session 固化的工具名与传入的 Agent 决定，
-          不按 Session 类型区分。
-
-        参数:
-            agent: 本次驱动装配时解析的 Agent（``RuntimeContext.agent``）；驱动中途改了预设，下一次驱动
-                （挂起后唤醒、恢复或新 Run）才会告知。
-
-        副作用:
-            经各来源读取配置；不写库，通知由 prepare_input 与本批其余通知一起写入，写入后就是新的基准。
-        """
-
-        view = PromptSourceView.collect(
-            SourceContext(
-                self.workspace.root_path,
-                frozenset(self.tool_names),
-                agent,
-                self._workspace_instruction,
-                self.deferred_tools,
-            )
-        )
-        content = view.describe_changes(self.prompt_source_baseline)
-        if not content:
-            return None
-        return NoticeBody(
-            content=content, notice_kind="configuration_changed", prompt_sources=view.baseline()
-        )
+        return cast(SystemMessageMetadata, self.system_entry.metadata).prompt_sources
 
     def latest_notice(self, notice_kind: str) -> tuple[int | None, NoticeEntry] | None:
         """上下文里最近一条 ``notice_kind`` 通知与它所在行的 Run（继承行为 ``None``）。
@@ -437,15 +352,13 @@ class RuntimeMessageContextManager:
         """上下文里 ``tool_search`` 加载过的内置延迟工具名；定义取 Session 工具面固化的那一份。"""
         return {name for facts in self._tool_facts() for name in facts.loaded_builtin_tools or ()}
 
-    def file_knowledge(self) -> FileKnowledge:
-        """从模型请求使用的同一批有效消息重建文件读取证据。"""
-        knowledge = FileKnowledge()
-        for entry in self._effective_entries():
-            if isinstance(entry.metadata, ToolMessageMetadata | UserMessageMetadata) and (
-                file_facts := entry.metadata.file_facts
-            ):
-                knowledge.observe(file_facts)
-        return knowledge
+    def visible_tool_facts(self) -> tuple[ToolResultFacts, ...]:
+        """模型请求使用的同一批有效消息里的结果事实（上下文顺序）：原样交给工具层，core 不解读。"""
+        return tuple(
+            entry.metadata.facts
+            for entry in self._effective_entries()
+            if isinstance(entry.metadata, ToolMessageMetadata) and entry.metadata.facts is not None
+        )
 
     def _tool_facts(self) -> list[ToolResultFacts]:
         return [
@@ -454,7 +367,7 @@ class RuntimeMessageContextManager:
             if isinstance(entry.metadata, ToolMessageMetadata) and entry.metadata.facts is not None
         ]
 
-    def find_tool_call(
+    def _find_tool_call(
         self, tool_call_id: str
     ) -> ChatCompletionMessageFunctionToolCallParam | None:
         """在纳入上下文的 assistant 消息里按身份找回一次工具调用（含名称与原始参数）。
@@ -486,7 +399,7 @@ class RuntimeMessageContextManager:
                 or not metadata.awaiting_decision
             ):
                 continue
-            call = self.find_tool_call(entry.message["tool_call_id"])
+            call = self._find_tool_call(entry.message["tool_call_id"])
             if call is not None:
                 calls.append((call["id"], call["function"]["name"]))
         return calls
@@ -661,7 +574,7 @@ class RuntimeMessageContextManager:
             self._log_protocol_error(error)
             raise
 
-    def close_unclosed_tool_calls(self) -> None:
+    def _close_unclosed_tool_calls(self) -> None:
         """按全部批次恢复模型协议顺序；只为真实调用补中断占位，不重放工具。
 
         先完成整段配对校验，避免遇到孤儿时已经写入部分占位。已落库结果紧跟所属调用，
@@ -724,10 +637,10 @@ class RuntimeMessageContextManager:
             命中图片附件时读文件并 base64 编码，属于阻塞 IO；调用方必须放到工作线程执行
             （``asyncio.to_thread``），不得在事件循环里直接调用。
         """
-        self.close_unclosed_tool_calls()
+        self._close_unclosed_tool_calls()
         return resolve_messages_for_model(
             [entry.message for entry in self._effective_entries()],
-            workspace_id=self.workspace.id,
+            workspace_id=self.workspace_id,
         )
 
     def final_reply(self, reply_tools: frozenset[str]) -> tuple[list[int], str]:
@@ -758,6 +671,4 @@ class RuntimeMessageContextManager:
     def _effective_entries(self) -> list[ContextEntry]:
         """返回 system、历史和当前 run 条目的有序列表。"""
 
-        if self._system_entry is None:
-            raise RuntimeError("system entry is not initialized")
-        return [self._system_entry, *self._entries]
+        return [self.system_entry, *self._entries]

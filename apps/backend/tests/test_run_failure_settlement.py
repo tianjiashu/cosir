@@ -136,20 +136,20 @@ def _error_mutation_values(
 def test_failure_code_for_classifies_timeout() -> None:
     """超时异常归类为模型超时码。"""
 
-    assert run_driver._failure_code_for(_TimeoutFailure()) == ErrorKind.MODEL_TIMEOUT.value
+    assert run_driver.RunDriver._failure_code_for(_TimeoutFailure()) == ErrorKind.MODEL_TIMEOUT.value
 
 
 def test_failure_code_for_classifies_connection_error() -> None:
     """连接失败归类为网络错误，而不是笼统的图执行失败。"""
 
-    assert run_driver._failure_code_for(_ConnectFailure()) == ErrorKind.MODEL_NETWORK_ERROR.value
+    assert run_driver.RunDriver._failure_code_for(_ConnectFailure()) == ErrorKind.MODEL_NETWORK_ERROR.value
 
 
 def test_failure_code_for_falls_back_to_graph_failed() -> None:
     """无法归类为模型错误的异常使用中性兜底 code，而不是猜测成模型问题。"""
 
     assert (
-        run_driver._failure_code_for(RuntimeError("node exploded"))
+        run_driver.RunDriver._failure_code_for(RuntimeError("node exploded"))
         == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
     )
 
@@ -162,7 +162,7 @@ def test_failure_code_for_honours_workflow_failure_code() -> None:
     )
 
     assert (
-        run_driver._failure_code_for(failure)
+        run_driver.RunDriver._failure_code_for(failure)
         == Constant.Run.RUN_FAILURE_CODE_MODEL_CONFIG_UNAVAILABLE
     )
 

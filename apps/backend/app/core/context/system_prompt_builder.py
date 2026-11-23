@@ -370,8 +370,10 @@ class SystemPromptBuilder:
             if TOOL_EXECUTE_TERMINAL in tools:
                 sentence += (
                     f" You can also read or edit through {TOOL_EXECUTE_TERMINAL}. "
-                    "Read the current file in an earlier model step before modifying it. "
-                    "Read the full file before replacing all its contents."
+                    f"Before modifying a file with a file tool, read it with {TOOL_READ_FILE} in an "
+                    "earlier model step, and read the full file before replacing all its contents; "
+                    f"{TOOL_EXECUTE_TERMINAL} output does not count as a read, so read a file again "
+                    "after a command changed it."
                 )
             lines.append(sentence)
         # 用户输入里的胶囊怎么读（语法在消息协议里，用法按工具裁剪在这里）。

@@ -2,14 +2,15 @@
 
 覆盖：没变化不说；文档只发 diff（diff 不比全文短时发全文）；改回去不说；不适用的来源不比较；新来源告知一次；
 目录只报增删改（含从「不可用」恢复）；Skill 更新提醒重新加载；基准取上下文里最近一条通知（没有就取系统行），
-撤回移出通知后回退；工作区指令文件每次驱动定位一次；投影缓存按文件签名重读。每次请求前的接线见
-``request_notices``；节点其余判定的单测用替身上下文并关掉对账。
+撤回移出通知后回退；工作区指令文件每次驱动定位一次；投影缓存按文件签名重读。对账经
+``request_notices`` 的真实接线、替身 rc 与上下文。
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from app.core.agents.define_agents import main_agent
@@ -19,7 +20,9 @@ from app.core.context.prompt_sources.registry import DEFERRED_TOOLS, SKILLS
 from app.core.context.prompt_sources.source import ItemDiff, SourceItem, text_change
 from app.core.context.prompt_sources.sources.deferred_tools import UNAVAILABLE_KEY
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
+from app.core.context.system_prompt_builder import SystemPromptBuilder
 from app.core.tool.schemas.tool_names import TOOL_SEARCH
+from app.core.workflow.notices import request_notices
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, notices_to_context
 from app.models.message_context.message_metadata.system_message_metadata import (
     PromptSourceBaseline,
@@ -47,31 +50,49 @@ def workspace(tmp_path: Path) -> Path:
 
 
 _AGENT = main_agent(system_prompt="Main preset.")
+_LOCATE_NOW = object()
 
 
-def _manager(
-    workspace: Path, baseline: PromptSourceBaseline, tool_names: tuple[str, ...] = ()
-) -> RuntimeMessageContextManager:
-    """只装配对账要用的字段；基准放在系统行上，工作区指令文件按「驱动开始时」定位一次。"""
+def _manager(baseline: PromptSourceBaseline) -> RuntimeMessageContextManager:
+    """只装配基准要用的字段：基准放在系统行上。"""
     manager = object.__new__(RuntimeMessageContextManager)
-    manager.workspace = SimpleNamespace(root_path=str(workspace))
-    manager.tool_names = tool_names
     manager._entries = []
-    manager._system_entry = ContextEntry(
+    manager.system_entry = ContextEntry(
         {"role": "system", "content": "system"},
         None,
         0,
         metadata=SystemMessageMetadata(prompt_sources=baseline),
         turn=0,
     )
-    manager._workspace_instruction = find_workspace_instruction_file(workspace)
     return manager
+
+
+def _reconcile(
+    context: RuntimeMessageContextManager,
+    workspace: Path,
+    tool_names: tuple[str, ...] = (),
+    instruction: tuple[Path, Path] | None | object = _LOCATE_NOW,
+) -> NoticeBody | None:
+    """走 ``request_notices`` 的真实对账；``instruction`` 缺省时现定位，模拟「驱动开始时定位一次」。"""
+    rc = SimpleNamespace(
+        workspace=SimpleNamespace(root_path=str(workspace)),
+        session_space=SimpleNamespace(session_tool_names=tool_names, session_deferred_schemas=()),
+        agent=_AGENT,
+        workspace_instruction=find_workspace_instruction_file(workspace)
+        if instruction is _LOCATE_NOW
+        else instruction,
+    )
+    with (
+        mock.patch.object(request_notices, "_runtime_context", lambda: rc),
+        mock.patch.object(request_notices, "_message_context", lambda: context),
+    ):
+        return request_notices._configuration_changed()
 
 
 def configuration_change_notice(
     workspace: Path, baseline: PromptSourceBaseline, tool_names: tuple[str, ...] = ()
 ) -> NoticeBody | None:
-    return _manager(workspace, baseline, tool_names).configuration_change_notice(_AGENT)
+    return _reconcile(_manager(baseline), workspace, tool_names)
 
 
 def _write_agents_md(workspace: Path, text: str) -> None:
@@ -164,14 +185,15 @@ def test_agents_md_location_is_fixed_within_a_drive(workspace: Path) -> None:
 
     _write_agents_md(workspace, "rule v1")
     baseline = _baseline_now(workspace)
-    manager = _manager(workspace, baseline)
+    manager = _manager(baseline)
+    located = find_workspace_instruction_file(workspace)
     (workspace / "AGENTS.md").unlink()
     (workspace / "agents.md").write_text("rule v1", encoding="utf-8")
     # 大小写不敏感的文件系统上两者是同一个文件；只在区分大小写时验证「沿用定位」。
     if not (workspace / "AGENTS.md").exists():
-        assert manager.configuration_change_notice(_AGENT) is not None  # 定位到的文件没了
+        assert _reconcile(manager, workspace, instruction=located) is not None  # 定位到的文件没了
     _write_agents_md(workspace, "rule version 2")
-    notice = manager.configuration_change_notice(_AGENT)
+    notice = _reconcile(manager, workspace, instruction=located)
     assert notice is not None and "rule version 2" in notice.content
 
 
@@ -266,7 +288,7 @@ def _notice_entry(baseline: PromptSourceBaseline | None, sequence: int) -> Conte
 def test_baseline_falls_back_to_the_system_prompt_then_follows_notices(workspace: Path) -> None:
     system = {"reply_language": {"language": _entry("a")}}
     later = {"reply_language": {"language": _entry("b")}}
-    manager = _manager(workspace, system)
+    manager = _manager(system)
     manager._entries = [_notice_entry(None, 1)]
 
     # 上下文里没有配置变化通知：基准是系统提示词生成时的。
@@ -331,12 +353,23 @@ def test_skill_edit_is_seen_without_waiting(tmp_path: Path, workspace: Path, mon
 
 
 def _sqlite_manager(store, run) -> RuntimeMessageContextManager:
+    """同 ``SessionRuntimeSpace.get_context_manager``：有系统行就恢复，没有就生成一次。"""
+    session_id = store.session.id
+    system_entry = store.context.get_system_prompt(session_id)
+    if system_entry is None:
+        prompt = SystemPromptBuilder.build(
+            _AGENT, store.workspace.root_path, (), None, paths.session_scratch_dir(session_id)
+        )
+        system_entry = store.context.create_system_prompt(
+            session_id,
+            {"role": "system", "content": prompt.text},
+            SystemMessageMetadata(prompt_sources=prompt.baseline),
+        )
     context = RuntimeMessageContextManager(
-        current_session_id=store.session.id,
-        agent=_AGENT,
-        tool_names=(),
+        current_session_id=session_id,
         context_store=store.context,
-        workspace=store.workspace,
+        workspace_id=store.workspace.id,
+        system_entry=system_entry,
     )
     context.begin_run(run)
     return context
@@ -352,10 +385,10 @@ def test_baseline_round_trips_and_withdrawal_reverts_it(canonical_store) -> None
     run = store.runs.create(store.session.id, status="running")
 
     first = _sqlite_manager(store, run)
-    assert first.configuration_change_notice(_AGENT) is None
+    assert _reconcile(first, workspace) is None
 
     _write_agents_md(workspace, _LONG_RULES + "\nnew rule")
-    notice = first.configuration_change_notice(_AGENT)
+    notice = _reconcile(first, workspace)
     assert notice is not None and "+new rule" in notice.content
     other = NoticeBody(content="tools", notice_kind="tool_availability", banned_tools=[])
     message, metadata = notices_to_context([other, notice])
@@ -364,9 +397,9 @@ def test_baseline_round_trips_and_withdrawal_reverts_it(canonical_store) -> None
     assert first.prompt_source_baseline == notice.prompt_sources
 
     # 重启后（新的管理器从库重建）基准仍是告知后的：不再重复同一条变化。
-    assert _sqlite_manager(store, run).configuration_change_notice(_AGENT) is None
+    assert _reconcile(_sqlite_manager(store, run), workspace) is None
 
     with store.factory.begin() as db:
         store.contexts.exclude_rows(store.session.id, frozenset({row_id}), db)
-    again = _sqlite_manager(store, run).configuration_change_notice(_AGENT)
+    again = _reconcile(_sqlite_manager(store, run), workspace)
     assert again is not None and "+new rule" in again.content

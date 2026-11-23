@@ -738,7 +738,7 @@ def test_runtime_controls_ignore_inherited_tool_and_scopes_pair_reused_ids(fork_
     manager._used_call_ids = set()
     manager._response_call_ids = {}
     manager._entries = s.context.entries_in_context(child.id)
-    assert manager.find_tool_call("reused") is None
+    assert manager._find_tool_call("reused") is None
     assert manager.tool_result_metadata("reused") is None
     with pytest.raises(KeyError):
         manager.update_tool_result_metadata("reused", ToolMessageMetadata(status="completed"))

@@ -58,14 +58,12 @@ def _runtime_manager(context_store: _RecordingContextStore) -> RuntimeMessageCon
     manager._used_call_ids = set()
     manager._response_call_ids = {}
     manager.current_session_id = 7
-    manager.agent_profile = SimpleNamespace()
-    manager.workspace = SimpleNamespace(id=7, root_path="")
+    manager.workspace_id = 7
     manager.context_store = context_store
     manager.current_run_id = 11
-    manager._system_entry = None
     manager._entries = []
     manager._message_sequence = 1
-    manager._system_entry = ContextEntry(
+    manager.system_entry = ContextEntry(
         {"role": "system", "content": "system"},
         None,
         -1,

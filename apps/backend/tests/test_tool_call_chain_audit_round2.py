@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import json
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -343,11 +342,10 @@ def _memory_manager(
 
     manager._response_call_ids = {}
     manager.current_session_id = _SESSION_ID
-    manager.agent_profile = SimpleNamespace()
-    manager.workspace = SimpleNamespace(id=7, root_path="")
+    manager.workspace_id = 7
     manager.context_store = context_store
     manager.current_run_id = _RUN_ID
-    manager._system_entry = ContextEntry(
+    manager.system_entry = ContextEntry(
         {"role": "system", "content": "system"},
         None,
         -1,

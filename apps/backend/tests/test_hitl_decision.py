@@ -408,8 +408,8 @@ def test_context_finds_call_and_updates_only_tool_result_metadata() -> None:
         ContextEntry({"role": "user", "content": "later"}, 2, 5, turn=1),
     ]
 
-    assert manager.find_tool_call("call-hitl") == _CALL
-    assert manager.find_tool_call("missing") is None
+    assert manager._find_tool_call("call-hitl") == _CALL
+    assert manager._find_tool_call("missing") is None
 
     written = manager.update_tool_result_metadata(
         "call-hitl", ToolMessageMetadata(status="completed")

@@ -34,7 +34,7 @@ class SourceContext:
     ``tool_names`` 决定一类来源在这个 Session 里有没有（没有委派工具就没有子 Agent 目录）；
     ``agent`` 只取身份与预设正文。``workspace_instruction`` 是定位好的 ``(相对路径, 绝对路径)``：定位要
     逐层扫目录（浅层没有 AGENTS.md 的大工作区要扫到第 4 层，实测可达数十毫秒），所以由调用方决定多久
-    定位一次——建提示词时现定位，对账时每次驱动定位一次（``RuntimeMessageContextManager.begin_run``）。
+    定位一次——建提示词时现定位，对账时每次驱动定位一次（``RuntimeContext.workspace_instruction``）。
     文件内容仍每步按签名校验；只有「新增或删掉 AGENTS.md 文件本身」要等到下一次驱动。
     """
 

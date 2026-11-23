@@ -159,8 +159,8 @@ class RunDriver:
             run.session_id, context.claimed_decisions(run.session_id), INTERRUPTED_HINT
         )
 
-
-    def _failure_code_for(self,exc: BaseException) -> str:
+    @staticmethod
+    def _failure_code_for(exc: BaseException) -> str:
         """把异常归类为 Run 失败 code。
 
         上下文完整性错误用本地 code，不归因于模型服务；``WorkflowRunFailure`` 已自带 code，不二次

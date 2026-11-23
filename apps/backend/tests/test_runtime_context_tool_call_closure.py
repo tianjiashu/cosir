@@ -18,7 +18,6 @@ from app.assistant_transport.projection.snapshot_rebuild import (
     rebuild_snapshot,
 )
 from app.assistant_transport.state.conversation_state_snapshot import validate_snapshot
-from app.core.agents.agent_profile import AgentProfile
 from app.core.context.context_entry import ContextEntry
 from app.core.context.context_store import ContextStore
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
@@ -177,12 +176,11 @@ def _manager(
 
     manager._response_call_ids = {}
     manager.current_session_id = session_id
-    manager.agent_profile = cast(AgentProfile, SimpleNamespace())
-    manager.workspace = SimpleNamespace(id=7, root_path="")
+    manager.workspace_id = 7
     # 假服务按协议实现 append，不继承真实 service 类型。
     manager.context_store = cast(ContextStore, context_store)
     manager.current_run_id = current_run_id
-    manager._system_entry = ContextEntry(
+    manager.system_entry = ContextEntry(
         {"role": "system", "content": "system"},
         None,
         -1,

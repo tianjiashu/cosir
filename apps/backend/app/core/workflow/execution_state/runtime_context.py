@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from app.core.events import EventSink
@@ -64,6 +65,9 @@ class RuntimeContext:
     # 本次驱动起的标题支线（``branch.session_title``）；复用 ``model``，由 workflow 在关闭 client 前
     # 收尾。「本 Run 是否起过」看执行状态 ``title_requested``，不看这个字段。
     title_branch: asyncio.Task[None] | None = None
+    # 本次驱动定位到的工作区指令文件 ``(相对路径, 绝对路径)``，配置对账用（见 ``SourceContext``）：定位要
+    # 逐层扫目录，所以每次驱动只定位一次，由 workflow 在驱动开始时写入。
+    workspace_instruction: tuple[Path, Path] | None = None
 
     @classmethod
     def for_run(

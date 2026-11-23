@@ -49,6 +49,8 @@ from app.service.depends import get_session_service, get_workspace_service
 if TYPE_CHECKING:
     from app.assistant_transport.state.conversation_state_snapshot import ConversationStateSnapshot
     from app.core.agents.agent_runtime_config import AgentRuntimeConfig
+    from app.core.context.context_entry import ContextEntry
+    from app.core.context.context_store import ContextStore
     from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
     from app.core.session_actor import SessionActor
     from app.models.session.session_record import SessionRecord
@@ -292,8 +294,8 @@ class SessionRuntimeSpace:
             agent: 首次装配必需（用于构建 Session 首个系统提示词）；之后可复用已保留的运行时配置。
 
         返回:
-            已创建或已缓存的 ``RuntimeMessageContextManager`` 实例。该 manager 恢复 Session 已持久化的
-            固定系统提示词；当前 profile 只用于首次创建 Session 提示词。
+            已创建或已缓存的 ``RuntimeMessageContextManager`` 实例，带着 Session 已持久化的固定系统提示词；
+            还没有时由 :meth:`_create_system_prompt` 用当前 Agent 生成一次。
 
         异常:
             RuntimeError: 首次装配没有 Agent 运行时配置。
@@ -328,14 +330,42 @@ class SessionRuntimeSpace:
                     raise RuntimeError("首次装配 Session context 必须提供 Agent 运行时配置")
                 from app.core.context.context_store import ContextStore
 
+                store = ContextStore()
                 manager = RuntimeMessageContextManager(
                     current_session_id=self.current_task.id,
-                    agent=self.agent,
-                    tool_names=self.session_tool_names,
-                    deferred_tools=self.session_deferred_schemas,
-                    workspace=self.current_workspace,
-                    writable_root=self.current_task.extra.writable_root,
-                    context_store=ContextStore(),
+                    context_store=store,
+                    workspace_id=self.current_workspace.id,
+                    system_entry=store.get_system_prompt(self.current_task.id)
+                    or self._create_system_prompt(store, self.agent),
                 )
                 self._context_manager = _weak_ref(manager)
             return manager
+
+    def _create_system_prompt(
+        self, store: ContextStore, agent: AgentRuntimeConfig
+    ) -> ContextEntry:
+        """按 Session 固化的工具面生成首个系统提示词并写库，连同各配置来源的指纹（配置对账的初始基准）。
+
+        只在 Session 还没有系统行时调用；之后始终恢复这份原文，配置变化不改写模型消息前缀。提示词与
+        工具面同属 Session 创建时固化的事实，所以由持有工具面的本对象生成。
+        """
+        from app.core.context.system_prompt_builder import SystemPromptBuilder
+        from app.models.message_context.message_metadata.system_message_metadata import (
+            SystemMessageMetadata,
+        )
+        from app.utils.path.system_cosir import session_scratch_dir
+
+        session = self.current_task
+        prompt = SystemPromptBuilder.build(
+            agent,
+            self.current_workspace.root_path,
+            self.session_tool_names,
+            session.extra.writable_root,
+            session_scratch_dir(session.id),
+            deferred_tools=self.session_deferred_schemas,
+        )
+        return store.create_system_prompt(
+            session.id,
+            {"role": "system", "content": prompt.text},
+            SystemMessageMetadata(prompt_sources=prompt.baseline),
+        )

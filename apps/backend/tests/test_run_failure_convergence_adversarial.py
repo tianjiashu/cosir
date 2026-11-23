@@ -2,7 +2,7 @@
 
 本模块**不**重复既有正向契约测试，而是从对抗视角攻击本次修复声称的四条不变量：
 
-1. 落定链路（``run_driver.RunDriver.drive`` / ``run_driver._failure_code_for``）在
+1. 落定链路（``run_driver.RunDriver.drive`` / ``run_driver.RunDriver._failure_code_for``）在
    「落定自身失败」「Run 已被别处落终态」「异常是 ``BaseException`` 子类」「异常文本不可
    读」等边界下都必须保证：**Run 先落 failed 再抛原异常**，且不得替换/掩盖原始异常。
 2. 分类器 ``classify_model_failure`` **只按异常类型名**识别传输层失败（超时 / 连接）：
@@ -601,7 +601,7 @@ def test_failure_code_for_ignores_exception_text() -> None:
             raise RuntimeError("__str__ exploded")
 
     assert (
-            run_driver._failure_code_for(_BoomClassifier())
+            run_driver.RunDriver._failure_code_for(_BoomClassifier())
             == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
     )
 
@@ -610,7 +610,7 @@ def test_failure_code_for_returns_graph_failed_for_value_error() -> None:
     """``model_config_id`` 缺失一类 ``ValueError`` 走中性兜底，不伪装成模型错误。"""
 
     assert (
-            run_driver._failure_code_for(ValueError("Conversation Run model_config_id is required"))
+            run_driver.RunDriver._failure_code_for(ValueError("Conversation Run model_config_id is required"))
             == Constant.Run.RUN_FAILURE_CODE_GRAPH_FAILED
     )
 
@@ -621,7 +621,7 @@ def test_failure_code_for_reads_exception_chain() -> None:
     wrapped = RuntimeError("langchain wrapper")
     wrapped.__cause__ = TimeoutError("underlying timeout")
 
-    assert run_driver._failure_code_for(wrapped) == ErrorKind.MODEL_TIMEOUT.value
+    assert run_driver.RunDriver._failure_code_for(wrapped) == ErrorKind.MODEL_TIMEOUT.value
 
 
 # --------------------------------------------------------------------------------------

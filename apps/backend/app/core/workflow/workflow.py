@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from app.core.llm_provider.model_factory import resolve_chat_model
 from app.core.workflow.branch import session_title
 from app.core.workflow.execution_state.react_route import ReactRoute
@@ -15,6 +17,7 @@ from app.core.workflow.nodes.structured_output_node import _structured_output_no
 from app.core.workflow.nodes.tools_node import _tools_node
 from app.core.workflow.notices.drive_notices import drive_notices
 from app.service import depends as service_depends
+from app.utils.workspace_instruction import find_workspace_instruction_file
 
 
 class ReactLikeWorkflow:
@@ -61,6 +64,7 @@ class ReactLikeWorkflow:
         """从 ``prepare_input`` 进入，循环节点直到 END；调用方不传恢复模式。"""
         context = rc.session_space.get_context_manager(agent=rc.agent)
         context.begin_run(rc.run)
+        rc.workspace_instruction = find_workspace_instruction_file(Path(rc.workspace.root_path))
         # 推导要读重建后的上下文；mailbox 已在驱动开始时重置，投进的通知随本次驱动写入或丢弃。
         for notice in drive_notices(rc, context):
             rc.mailbox.notify(notice)

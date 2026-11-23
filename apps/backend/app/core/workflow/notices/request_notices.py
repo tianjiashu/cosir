@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.core.context.prompt_sources.source import SourceContext
+from app.core.context.prompt_sources.view import PromptSourceView
 from app.core.permission.writable_root import absolute as absolute_writable_root
 from app.core.tool.file_change_notices import file_change_notices
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody
@@ -32,8 +34,33 @@ def request_notices(step_id: str) -> list[NoticeBody]:
 
 
 def _configuration_changed() -> NoticeBody | None:
-    """Agent 看到的配置变了就给一条净差异通知（基准见 ``configuration_change_notice``）。"""
-    return _message_context().configuration_change_notice(_runtime_context().agent)
+    """当前配置相对 Agent 已看到的基准有变化时给一条净差异通知；告知后的全部条目随通知落库成为新基准。
+
+    系统提示词创建时固化，之后子 Agent、MCP、Skill、AGENTS.md、Agent 预设或回复语言再变，Agent 都看不到。
+    投影与提示词生成同源（``PromptSourceView``），基准取自上下文（``prompt_source_baseline``）。
+
+    - 每次请求前对账而不是只在驱动开始时：运行中改了 AGENTS.md，下一步就该生效。读盘的来源按文件签名
+      缓存（``prompt_sources.cache``），签名没变时只是几次 stat；工作区指令文件每次驱动定位一次。
+    - 不唤醒、不开新 Run（``NOTICE_WAKE_SCOPES``）：空闲的 Session 等下次推进时再对账，只说净差异。
+    - 子 Agent、分叉 Session 走同一条路：哪些来源适用由 Session 固化的工具名与本次驱动的 Agent 决定；
+      驱动中途改了预设，下一次驱动才会告知。
+    """
+    rc = _runtime_context()
+    view = PromptSourceView.collect(
+        SourceContext(
+            rc.workspace.root_path,
+            frozenset(rc.session_space.session_tool_names),
+            rc.agent,
+            rc.workspace_instruction,
+            rc.session_space.session_deferred_schemas,
+        )
+    )
+    content = view.describe_changes(_message_context().prompt_source_baseline)
+    if not content:
+        return None
+    return NoticeBody(
+        content=content, notice_kind="configuration_changed", prompt_sources=view.baseline()
+    )
 
 
 def _read_files_changed() -> NoticeBody | None:
