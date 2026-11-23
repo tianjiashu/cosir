@@ -12,8 +12,8 @@ from collections.abc import Callable
 from typing import Any, ClassVar
 
 from app.core.tool.schemas import ToolDefinition, ToolExecutionContext, ToolObservation
-from app.core.tool.tool_base import HandlerBase
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_BROWSER
+from app.core.tool.tool_base import HandlerBase
 from app.tools.browser_runtime.browser_call import call_browser
 from app.tools.host.errors import HostCallError
 from app.tools.tool_handler.browser.errors import browser_error_observation

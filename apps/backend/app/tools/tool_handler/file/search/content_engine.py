@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
-from app.tools.tool_handler.search.errors import (
+from app.tools.file_system.facts.file_version import FileVersion
+from app.tools.tool_handler.file.search.errors import (
     InvalidSearchPattern,
 )
-from app.tools.tool_handler.search.result import ContentSearchPage, SearchMatch
-from app.tools.tool_handler.search.scope import SearchScope
+from app.tools.tool_handler.file.search.result import ContentSearchPage, SearchMatch
+from app.tools.tool_handler.file.search.scope import SearchScope
 
 MAX_SEARCH_LINE_BYTES = 1024 * 1024
 
@@ -42,14 +44,15 @@ def search_content(
     for file_path in scope.iter_files(file_glob):
         scope.check_cancel_and_timeout()
         try:
-            lines = _read_lines(file_path,scope)
+            read = _read_lines(file_path, scope)
         except (OSError, UnicodeDecodeError):
             skipped_files += 1
             continue
-        if lines is None:
+        if read is None:
             skipped_files += 1
             continue
 
+        lines, version = read
         scanned_files += 1
         hits: list[int] = []
         for index, line in enumerate(lines, start=1):
@@ -70,6 +73,9 @@ def search_content(
                         line_number=line_number,
                         content=lines[line_number - 1],
                         is_match=line_number in hit_set,
+                        source_path=str(file_path),
+                        version=version,
+                        total_lines=len(lines),
                     )
                 )
 
@@ -86,10 +92,11 @@ def search_content(
 def _read_lines(
     file_path: Path,
     scope: SearchScope,
-) -> list[str] | None:
+) -> tuple[list[str], FileVersion | None] | None:
     """按行读取 UTF-8 文本；二进制或超长单行返回 None。"""
 
     with file_path.open("rb") as file:
+        version = FileVersion.from_stat(os.fstat(file.fileno()))
         sample = file.read(4096)
         if b"\x00" in sample:
             return None
@@ -105,4 +112,4 @@ def _read_lines(
             if line.endswith("\r"):
                 line = line[:-1]
             lines.append(line)
-        return lines
+        return lines, version if FileVersion.of(file_path) == version else None

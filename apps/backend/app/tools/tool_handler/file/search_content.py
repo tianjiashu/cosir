@@ -14,21 +14,23 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.tool_base import HandlerBase
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_SEARCH
+from app.core.tool.tool_base import HandlerBase
 from app.tools.display.filesystem_display import (
     build_content_search_display_data,
 )
-from app.tools.tool_handler.search.content_engine import search_content
-from app.tools.tool_handler.search.errors import (
+from app.tools.file_system.facts.file_facts import FileFacts
+from app.tools.file_system.facts.file_read import FileRead
+from app.tools.file_system.path_resolver import PathResolver
+from app.tools.tool_handler.file.search.content_engine import search_content
+from app.tools.tool_handler.file.search.errors import (
     InvalidSearchPattern,
     SearchCancelled,
     SearchPathNotFound,
     SearchPathUnreadable,
     SearchTimedOut,
 )
-from app.tools.tool_handler.search.scope import SearchScope
-from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.tool_handler.file.search.scope import SearchScope
 from app.tools.tool_models.search_content_args import SearchContentArgs
 
 SEARCH_CONTENT_DESCRIPTION = (
@@ -51,7 +53,6 @@ class SearchContentTool(HandlerBase):
     timeout_seconds = 5.0
     group = TOOL_GROUP_SEARCH
 
-
     def execute(
         self,
         pattern: str,
@@ -70,7 +71,10 @@ class SearchContentTool(HandlerBase):
             return tool_error(self.name, path_error, status_hint="搜索失败")
         try:
             scope = SearchScope.from_path(
-                workspace_root, resolved_path, execution_context.session_id, time.monotonic() + self.timeout_seconds
+                workspace_root,
+                resolved_path,
+                execution_context.session_id,
+                time.monotonic() + self.timeout_seconds,
             )
             page = search_content(
                 scope,
@@ -104,8 +108,7 @@ class SearchContentTool(HandlerBase):
         except SearchPathUnreadable as exc:
             return tool_error(
                 self.name,
-                f"could not search path: {exc}. "
-                "Provide a readable file or directory path.",
+                f"could not search path: {exc}. " "Provide a readable file or directory path.",
             )
 
         content = _format_content(page.matches)
@@ -116,9 +119,22 @@ class SearchContentTool(HandlerBase):
             )
         if not content:
             content = "No matches found."
+        reads = tuple(
+            dict.fromkeys(
+                FileRead(
+                    path=row.source_path,
+                    version=row.version,
+                    lines=((row.line_number, row.line_number),),
+                    total_lines=row.total_lines,
+                )
+                for row in page.matches
+                if row.version is not None
+            )
+        )
         return tool_success(
             tool_name=self.name,
             content=content,
+            facts=FileFacts(reads=reads).as_result() if reads else None,
             display_data=build_content_search_display_data(
                 pattern=pattern,
                 path=path,

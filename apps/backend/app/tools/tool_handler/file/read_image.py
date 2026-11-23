@@ -16,14 +16,14 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.tool_base import HandlerBase
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_SEARCH
+from app.core.tool.tool_base import HandlerBase
 from app.service.attachment.attachment_service import AttachmentService, SavedImage
 from app.service.attachment.image_normalizer import ImageNormalizationError
 from app.tools.display.image_display import (
     build_read_image_display_data,
 )
-from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.file_system.path_resolver import PathResolver
 from app.tools.tool_models import ReadImageArgs
 
 _MB = 1024 * 1024

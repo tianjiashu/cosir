@@ -14,23 +14,27 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.tool_base import HandlerBase
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_FILE_EDIT
+from app.core.tool.tool_base import HandlerBase
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
+from app.models.message_context.message_metadata.tool_message_metadata import ToolResultFacts
 from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
-from app.tools.tool_handler.file_edit.patch_apply import (
+from app.tools.file_system.facts.file_facts import FileFacts
+from app.tools.file_system.path_resolver import PathResolver
+from app.tools.file_system.write_attribution import write_attribution
+from app.tools.file_system.write_policy import WriteRefused, file_write_policy
+from app.tools.tool_handler.file.file_edit.patch_apply import (
     PatchApplyError,
     apply_all_with_diff,
-    validate_all,
+    prepare_patch,
 )
-from app.tools.tool_handler.file_edit.patch_parser import (
+from app.tools.tool_handler.file.file_edit.patch_diff import FileDiffResult
+from app.tools.tool_handler.file.file_edit.patch_parser import (
     parse_git_unified_diff_detailed,
 )
-from app.tools.tool_handler.file_edit.syntax_check import SyntaxDiagnostic, check_source_syntax
-from app.tools.tool_handler.file_observations import file_observations
-from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.tool_handler.file.file_edit.syntax_check import SyntaxDiagnostic, check_source_syntax
 from app.tools.tool_models.apply_patch_args import ApplyPatchArgs
 
 
@@ -48,6 +52,7 @@ class ApplyPatchTool(HandlerBase):
 
     name = TOOL_APPLY_PATCH
     description = (
+        "Read every target file before applying a patch. "
         "Apply a Git-style unified diff to modify the contents of existing UTF-8 "
         "text files inside the active workspace. It only changes existing files: "
         "it cannot create, delete, or move files, so use 'write_file' to create or "
@@ -59,9 +64,9 @@ class ApplyPatchTool(HandlerBase):
     group = TOOL_GROUP_FILE_EDIT
 
     def execute(
-            self,
-            execution_context: ToolExecutionContext,
-            patch: str,
+        self,
+        execution_context: ToolExecutionContext,
+        patch: str,
     ) -> ToolObservation:
         """完成格式、路径与内容校验后应用补丁 hunk。
 
@@ -103,9 +108,11 @@ class ApplyPatchTool(HandlerBase):
             )
         operations = outcome.operations
         resolver = PathResolver(
-            execution_context.workspace_root, execution_context.writable_root, execution_context.scratch_dir
+            execution_context.workspace_root,
+            execution_context.writable_root,
+            execution_context.scratch_dir,
         )
-        validation_errors = validate_all(operations, resolver)
+        targets, validation_errors = prepare_patch(operations, resolver)
         if validation_errors:
             return tool_error(
                 tool_name=self.name,
@@ -123,7 +130,12 @@ class ApplyPatchTool(HandlerBase):
         if cancellation_registry.is_cancelled(execution_context.session_id):
             return tool_cancelled(tool_name=self.name)
         try:
-            results = apply_all_with_diff(operations, resolver)
+            with file_write_policy.reserve(
+                tuple(targets.values()), execution_context
+            ):
+                results = apply_all_with_diff(operations, resolver, targets)
+        except WriteRefused as exc:
+            return tool_error(self.name, str(exc), status_hint=exc.hint)
         except PatchApplyError as exc:
             if exc.applied:
                 # 已写入的文件是真实发生的改动：随错误一起交给界面，调用行与汇总的增删数都算上它。
@@ -136,6 +148,7 @@ class ApplyPatchTool(HandlerBase):
                     ),
                     status_hint="部分已写入",
                     partial_display=build_file_change_display_data(exc.applied),
+                    facts=self._mutation_facts(exc.applied, execution_context.session_id),
                 )
             return tool_error(
                 tool_name=self.name,
@@ -153,7 +166,6 @@ class ApplyPatchTool(HandlerBase):
             resolved, error = resolver.resolve_for_write(result.path)
             if resolved is None or error:
                 continue
-            file_observations.record(execution_context.session_id, resolved)
             check = check_source_syntax(str(resolved), result.after)
             if check.has_error:
                 diagnostics.extend(check.diagnostics)
@@ -162,12 +174,22 @@ class ApplyPatchTool(HandlerBase):
             tool_name=self.name,
             content=content,
             display_data=display_data,
+            facts=self._mutation_facts(results, execution_context.session_id),
         )
 
+    @staticmethod
+    def _mutation_facts(results: list[FileDiffResult], session_id: int) -> ToolResultFacts:
+        """已写成的变更（含失败前已应用的那几个）：登记写入者后交给 core。"""
+        written = FileFacts(
+            mutations=tuple(result.mutation for result in results if result.mutation is not None)
+        )
+        write_attribution.record(session_id, written)
+        return written.as_result()
+
     def _build_content(
-            self,
-            count_repairs: list[str],
-            diagnostics: list[SyntaxDiagnostic],
+        self,
+        count_repairs: list[str],
+        diagnostics: list[SyntaxDiagnostic],
     ) -> str | None:
         """拼装成功观察的模型可见 `content`。
 

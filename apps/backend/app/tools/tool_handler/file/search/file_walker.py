@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from app.core.permission.protected_paths import ProtectedPaths
-from app.tools.tool_handler.search.ignore_matcher import IgnoreMatcher
+from app.tools.tool_handler.file.search.ignore_matcher import IgnoreMatcher
 from app.utils.path.windows_reparse_point import (
     is_windows_directory_reparse_point,
 )

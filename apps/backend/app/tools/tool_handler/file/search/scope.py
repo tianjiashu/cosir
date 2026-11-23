@@ -10,14 +10,14 @@ from pathlib import Path
 from typing import Literal
 
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
-from app.tools.tool_handler.search.errors import (
+from app.tools.tool_handler.file.search.errors import (
     SearchCancelled,
     SearchPathNotFound,
     SearchPathUnreadable,
     SearchTimedOut,
 )
-from app.tools.tool_handler.search.file_walker import iter_files
-from app.tools.tool_handler.search.ignore_rules import load_search_ignore_rules
+from app.tools.tool_handler.file.search.file_walker import iter_files
+from app.tools.tool_handler.file.search.ignore_rules import load_search_ignore_rules
 
 ScopeKind = Literal["file", "directory"]
 

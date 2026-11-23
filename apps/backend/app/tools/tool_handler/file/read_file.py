@@ -26,13 +26,15 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.tool_base import HandlerBase
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_SEARCH
+from app.core.tool.tool_base import HandlerBase
 from app.tools.display.filesystem_display import (
     build_read_file_display_data,
 )
-from app.tools.tool_handler.file_observations import file_observations
-from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.file_system.facts.file_facts import FileFacts
+from app.tools.file_system.facts.file_read import FileRead
+from app.tools.file_system.facts.file_version import FileVersion
+from app.tools.file_system.path_resolver import PathResolver
 from app.tools.tool_models import ReadFileArgs
 from app.tools.tool_models.text_read_result import TextReadResult
 
@@ -148,6 +150,7 @@ class ReadFileTool(HandlerBase):
                 self.name, f"could not read the file: {error}.", status_hint="路径无效"
             )
 
+        version = FileVersion.of(resolved)
         result = self._read_text_page(resolved, offset, limit)
         if result.error:
             return tool_error(
@@ -156,8 +159,21 @@ class ReadFileTool(HandlerBase):
                 status_hint="无法读取",
             )
 
-        # 读一段也算看过（与 Claude Code 一致）：write_file 据此放行覆盖。
-        file_observations.record(execution_context.session_id, resolved)
+        reads = ()
+        if (
+            version is not None
+            and FileVersion.of(resolved) == version
+            and (result.end_line is not None or result.total_lines == 0)
+        ):
+            reads = (
+                FileRead(
+                    path=str(resolved),
+                    version=version,
+                    whole=result.total_lines == 0,
+                    lines=result.complete_line_ranges,
+                    total_lines=result.total_lines,
+                ),
+            )
         normalized_offset, _ = self._normalize_read_pagination(offset, limit)
         # 展示契约（tool_ui_display_contract.md 3.1）：读到文件尾渲染为 ``L<start>-END``，
         # 空文件与 offset 越界也算读到尾。
@@ -165,6 +181,7 @@ class ReadFileTool(HandlerBase):
         return tool_success(
             tool_name=self.name,
             content=result.content,
+            facts=FileFacts(reads=reads).as_result() if reads else None,
             display_data=build_read_file_display_data(
                 path,
                 start_line=normalized_offset,
@@ -336,6 +353,9 @@ class ReadFileTool(HandlerBase):
                 truncated=truncated,
             ),
             total_lines=total_lines,
+            complete_line_ranges=tuple(
+                (number, number) for number, line in selected if len(line) <= self.max_line_chars
+            ),
             file_size=self._safe_file_size(path),
             next_offset=next_offset,
             end_line=end_line,

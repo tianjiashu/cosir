@@ -22,13 +22,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.config.logging.logger import log
-from app.tools.tool_handler.search.gitignore_rules import (
+from app.tools.tool_handler.file.search.gitignore_rules import (
     GitignoreMatcher,
     build_gitwildmatch_spec,
     load_gitignore_rules,
     valid_rule_lines,
 )
-from app.tools.tool_handler.search.ignore_matcher import IgnoreMatcher
+from app.tools.tool_handler.file.search.ignore_matcher import IgnoreMatcher
 from app.utils.path.workspace_cosir import workspace_cosir_dir
 
 IGNORE_FILE_NAME: str = ".fileignore"

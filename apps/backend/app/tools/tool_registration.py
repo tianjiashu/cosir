@@ -15,25 +15,25 @@ from app.core.tool.multi_agent.fork_session import build_fork_session_definition
 from app.core.tool.multi_agent.propose_agent_configuration import (
     build_propose_agent_configuration_definition,
 )
+from app.core.tool.session_management.session_list import build_session_list_definition
+from app.core.tool.session_management.session_read import build_session_read_definition
 from app.core.tool.session_management.session_send import (
     build_session_send_definition,
 )
-from app.core.tool.session_management.session_list import build_session_list_definition
-from app.core.tool.session_management.session_read import build_session_read_definition
 from app.core.tool.session_management.session_stop import build_session_stop_definition
 from app.core.tool.tool_registry import ToolRegistry
-from app.tools.tool_handler.apply_patch_tool import build_apply_patch_definition
 from app.tools.tool_handler.browser import build_browser_definitions
-from app.tools.tool_handler.edit_file import build_edit_file_definition
-from app.tools.tool_handler.find_files import build_find_files_definition
+from app.tools.tool_handler.file.apply_patch_tool import build_apply_patch_definition
+from app.tools.tool_handler.file.edit_file import build_edit_file_definition
+from app.tools.tool_handler.file.find_files import build_find_files_definition
+from app.tools.tool_handler.file.read_file import build_read_file_definition
+from app.tools.tool_handler.file.read_image import ReadImageTool
+from app.tools.tool_handler.file.search_content import build_search_content_definition
+from app.tools.tool_handler.file.write_file import build_write_file_definition
 from app.tools.tool_handler.present_deliverables import build_present_deliverables_definition
-from app.tools.tool_handler.read_file import build_read_file_definition
-from app.tools.tool_handler.read_image import ReadImageTool
-from app.tools.tool_handler.search_content import build_search_content_definition
 from app.tools.tool_handler.skill_tool import build_skill_definition
 from app.tools.tool_handler.terminal import build_terminal_definitions
 from app.tools.tool_handler.terminal.execute_terminal import build_execute_terminal_definition
-from app.tools.tool_handler.write_file import build_write_file_definition
 
 
 def build_tool_registry() -> ToolRegistry:

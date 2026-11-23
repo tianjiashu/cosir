@@ -12,8 +12,8 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.tool_base import HandlerBase
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_SKILL
+from app.core.tool.tool_base import HandlerBase
 from app.service.configuration.skills.catalog import SkillCatalog, SkillLoadError
 from app.service.configuration.skills.configuration import SkillConfigurationError
 from app.tools.display.skill_display import (

@@ -13,20 +13,20 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.tool_base import HandlerBase
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_SEARCH
+from app.core.tool.tool_base import HandlerBase
 from app.tools.display.filesystem_display import (
     build_file_search_display_data,
 )
-from app.tools.tool_handler.search.errors import (
+from app.tools.file_system.path_resolver import PathResolver
+from app.tools.tool_handler.file.search.errors import (
     SearchCancelled,
     SearchPathNotFound,
     SearchPathUnreadable,
     SearchTimedOut,
 )
-from app.tools.tool_handler.search.filename_engine import find_files
-from app.tools.tool_handler.search.scope import SearchScope
-from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.tool_handler.file.search.filename_engine import find_files
+from app.tools.tool_handler.file.search.scope import SearchScope
 from app.tools.tool_models.find_files_args import FindFilesArgs
 
 FIND_FILES_DESCRIPTION = (

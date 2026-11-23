@@ -147,6 +147,7 @@ class ProcessTerminalWorker:
         cwd: str,
         on_event: WorkerEventCallback,
         extra_env: Mapping[str, str] | None = None,
+        policy: dict[str, object],
     ) -> None:
         """以执行模式启动 worker（一条一次性命令：管道、无 stdin）并等待握手。
 
@@ -162,6 +163,7 @@ class ProcessTerminalWorker:
                 "program": program,
                 "args": list(args),
                 "raw_args": raw_args,
+                "policy": policy,
                 "cwd": cwd,
             },
             "exec",

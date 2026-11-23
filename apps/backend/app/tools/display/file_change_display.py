@@ -13,7 +13,7 @@ import re
 from typing import Any
 
 from app.config.constant import Constant
-from app.tools.tool_handler.file_edit.patch_diff import (
+from app.tools.tool_handler.file.file_edit.patch_diff import (
     FileDiffResult,
     count_diff_lines,
     format_git_diff,

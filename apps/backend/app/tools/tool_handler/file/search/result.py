@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from app.tools.file_system.facts.file_version import FileVersion
+
 
 @dataclass(frozen=True)
 class SearchMatch:
@@ -11,6 +13,9 @@ class SearchMatch:
     line_number: int
     content: str
     is_match: bool
+    source_path: str = ""
+    version: FileVersion | None = None
+    total_lines: int | None = None
 
 
 @dataclass(frozen=True)

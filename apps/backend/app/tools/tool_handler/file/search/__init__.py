@@ -4,8 +4,8 @@
 文件/目录 scope 与目录遍历原语。engine 只返回结构化结果，不关心工具权限或观察构造。
 """
 
-from app.tools.tool_handler.search.content_engine import search_content
-from app.tools.tool_handler.search.filename_engine import find_files
-from app.tools.tool_handler.search.scope import SearchScope
+from app.tools.tool_handler.file.search.content_engine import search_content
+from app.tools.tool_handler.file.search.filename_engine import find_files
+from app.tools.tool_handler.file.search.scope import SearchScope
 
 __all__ = ["SearchScope", "find_files", "search_content"]

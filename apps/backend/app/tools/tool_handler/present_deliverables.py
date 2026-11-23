@@ -23,12 +23,12 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.tool_base import HandlerBase
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_REPLY_PRESENTATION
-from app.models.deliverable import Deliverable, DeliveredDirectory, DeliveredFile, DeliveredUrl
-from app.models.tool_result_facts import ToolResultFacts
+from app.core.tool.tool_base import HandlerBase
+from app.models.deliverable_file import Deliverable, DeliveredDirectory, DeliveredFile, DeliveredUrl
+from app.models.message_context.message_metadata.tool_message_metadata import ToolResultFacts
 from app.service.workspace_files.content.file_content import inspect_file
-from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.file_system.path_resolver import PathResolver
 from app.tools.tool_models import PresentDeliverablesArgs
 from app.utils.path.file_identity import RootDirectory, canonical_path
 

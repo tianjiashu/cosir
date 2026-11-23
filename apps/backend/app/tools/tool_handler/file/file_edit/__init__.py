@@ -4,18 +4,18 @@
 三个工具共用。
 """
 
-from app.tools.tool_handler.file_edit.patch_apply import (
+from app.tools.tool_handler.file.file_edit.patch_apply import (
     PatchApplyError,
     apply_all_with_diff,
-    validate_all,
+    prepare_patch,
 )
-from app.tools.tool_handler.file_edit.patch_diff import (
+from app.tools.tool_handler.file.file_edit.patch_diff import (
     FileDiffResult,
     count_diff_lines,
     format_git_diff,
     format_unified_diff,
 )
-from app.tools.tool_handler.file_edit.patch_parser import (
+from app.tools.tool_handler.file.file_edit.patch_parser import (
     Hunk,
     HunkLine,
     PatchOperation,
@@ -37,5 +37,5 @@ __all__ = [
     "format_unified_diff",
     "parse_git_unified_diff",
     "parse_git_unified_diff_detailed",
-    "validate_all",
+    "prepare_patch",
 ]

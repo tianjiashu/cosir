@@ -23,6 +23,7 @@ from app.tools.shell.host_shells import find_shell
 from app.tools.terminal_runtime.command.command_output import CommandOutput
 from app.tools.terminal_runtime.command.execution_result import ExecutionResult
 from app.tools.terminal_runtime.errors import TerminalWorkerUnavailableError
+from app.tools.terminal_runtime.permissions.policy import TerminalExecutionPolicy
 from app.tools.terminal_runtime.worker_client import ProcessTerminalWorker
 from app.utils.host_platform import is_windows
 
@@ -102,6 +103,8 @@ class LocalExecutionBackend:
         output: CommandOutput,
         shell: str = "auto",
         extra_env: Mapping[str, str] | None = None,
+        *,
+        policy: TerminalExecutionPolicy,
     ) -> ExecutionResult:
         """在宿主机同步执行一条命令并把输出交给 ``output``。
 
@@ -139,6 +142,7 @@ class LocalExecutionBackend:
                 cwd=cwd,
                 on_event=lambda event: _observe(event, output, outcome),
                 extra_env=extra_env,
+                policy=policy.model_dump(mode="json"),
             )
         except TerminalWorkerUnavailableError as exc:
             return _start_failed(str(exc))
@@ -209,9 +213,7 @@ def _result(
     return ExecutionResult(end="worker_failed", failure=detail)
 
 
-def _observe(
-    event: Mapping[str, object], output: CommandOutput, outcome: _Outcome
-) -> None:
+def _observe(event: Mapping[str, object], output: CommandOutput, outcome: _Outcome) -> None:
     """worker 读线程里的事件回调：输出进收集点，结局记进 ``outcome``。``exit`` 是最后一个事件。"""
     kind = event.get("type")
     if kind == "output":

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from fnmatch import fnmatchcase
 
-from app.tools.tool_handler.search.result import FileSearchMatch, FileSearchPage
-from app.tools.tool_handler.search.scope import SearchScope
+from app.tools.tool_handler.file.search.result import FileSearchMatch, FileSearchPage
+from app.tools.tool_handler.file.search.scope import SearchScope
 
 
 def find_files(

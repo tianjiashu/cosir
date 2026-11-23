@@ -52,7 +52,6 @@ class TerminalReadTool(HandlerBase):
         *,
         execution_context: ToolExecutionContext,
     ) -> ToolObservation:
-
         def action() -> ToolObservation:
             terminal = find_terminal(execution_context.session_id, terminal_id)
             result = terminal.read(

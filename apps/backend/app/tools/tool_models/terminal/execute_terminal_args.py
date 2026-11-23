@@ -50,10 +50,19 @@ _BACKGROUND_DESCRIPTION = (
     "Use wait_messages only for background work that will finish on its own."
 )
 
-# 命令一眼看不懂是终端独有的问题，所以意图的这句补充只写在这里。
+# 沙箱升级只对这一条命令有效：一次给足网络与工作区外写入，模型不必猜命令会写哪些目录（缓存、全局
+# 安装）；控制目录与系统数据的保护不随升级解除。只在请求批准模式下需要用户批准。
+_ESCALATE_DESCRIPTION = (
+    "true runs this command with IP network (including localhost and listening ports) and write "
+    "access outside its writable root. In request-approval mode the user must approve this exact "
+    "command first. Cosir data and control directories stay protected; this never disables the sandbox."
+)
+
+# 命令一眼看不懂、申请升级都是终端独有的，所以意图的这两句补充只写在这里；审批卡也显示意图。
 _INTENT_GUIDANCE = (
     "When the command is hard to read at a glance (pipes, unusual flags, an inline script), say "
-    "what the whole command achieves, not just its first step."
+    "what the whole command achieves, not just its first step. When escalating the sandbox, also say "
+    "why it needs network or writes outside the writable root: the user approves from this."
 )
 
 # 只写语义与取值范围；「长会话调大并转后台」是选用决策，在工具描述里说一次。
@@ -70,6 +79,7 @@ class WindowsExecuteTerminalArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
+    escalate_sandbox: bool | None = Field(default=None, description=_ESCALATE_DESCRIPTION)
     intent: str = intent_field(_INTENT_GUIDANCE)
     shell: WindowsExecuteTerminalShell = Field(
         default="auto",
@@ -90,7 +100,7 @@ class WindowsExecuteTerminalArgs(BaseModel):
     workdir: str | None = Field(
         default=None,
         description=(
-            "Directory to run in, e.g. C:\\repo\\src or src: absolute inside the workspace, or "
+            "Directory to run in, e.g. C:\\repo\\src or src: absolute, or "
             "relative to the workspace root. Omitted, the command runs in the workspace root, or in "
             "this session's writable root when it was given one. It must already exist."
         ),
@@ -103,6 +113,7 @@ class MacExecuteTerminalArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
+    escalate_sandbox: bool | None = Field(default=None, description=_ESCALATE_DESCRIPTION)
     intent: str = intent_field(_INTENT_GUIDANCE)
     shell: MacExecuteTerminalShell = Field(
         default="auto",
@@ -125,7 +136,7 @@ class MacExecuteTerminalArgs(BaseModel):
     workdir: str | None = Field(
         default=None,
         description=(
-            "Directory to run in, e.g. /Users/me/repo/src or src: absolute inside the workspace, "
+            "Directory to run in, e.g. /Users/me/repo/src or src: absolute, "
             "or relative to the workspace root. Omitted, the command runs in the workspace root, or in "
             "this session's writable root when it was given one. It must already exist."
         ),

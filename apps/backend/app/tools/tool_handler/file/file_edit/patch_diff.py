@@ -12,6 +12,8 @@ diff 与结构化 diff 统计，供工具成功观察回显。
 import difflib
 from dataclasses import dataclass
 
+from app.tools.file_system.facts.file_mutation import FileMutation
+
 
 @dataclass(frozen=True)
 class FileDiffResult:
@@ -37,6 +39,7 @@ class FileDiffResult:
     status: str
     before: str
     after: str
+    mutation: FileMutation | None = None
 
 
 def _to_diff_lines(text: str) -> list[str]:

@@ -47,7 +47,11 @@ class CommandJob:
 
     @classmethod
     def start_in_thread(
-        cls, work: Callable[[], CommandConclusion], *, wake: Callable[[], None], name: str,
+        cls,
+        work: Callable[[], CommandConclusion],
+        *,
+        wake: Callable[[], None],
+        name: str,
     ) -> CommandJob:
         """把阻塞函数 ``work`` 放到自己的线程里执行；``wake`` 在撤销时调用、负责停下命令。线程名用于排查。"""
         job = cls(wake)
@@ -83,9 +87,13 @@ class CommandJob:
         try:
             conclusion = work()
         except Exception as exc:
-            log.exception("terminal_command_job_failed", extra={
-                "msg": "终端命令作业异常", "data": {"thread": threading.current_thread().name},
-            })
+            log.exception(
+                "terminal_command_job_failed",
+                extra={
+                    "msg": "终端命令作业异常",
+                    "data": {"thread": threading.current_thread().name},
+                },
+            )
             conclusion = CommandConclusion({"end_reason": "failed", "error": str(exc)})
         with self._lock:
             self._conclusion = conclusion
@@ -96,7 +104,10 @@ class CommandJob:
             try:
                 callback(conclusion)
             except Exception:
-                log.exception("terminal_command_job_callback_failed", extra={
-                    "msg": "终端命令结论回调失败",
-                    "data": {"thread": threading.current_thread().name},
-                })
+                log.exception(
+                    "terminal_command_job_callback_failed",
+                    extra={
+                        "msg": "终端命令结论回调失败",
+                        "data": {"thread": threading.current_thread().name},
+                    },
+                )

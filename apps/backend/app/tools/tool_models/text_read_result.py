@@ -22,4 +22,5 @@ class TextReadResult:
     file_size: int = 0
     next_offset: int | None = None
     truncated: bool = False
+    complete_line_ranges: tuple[tuple[int, int], ...] = ()
     error: str = ""

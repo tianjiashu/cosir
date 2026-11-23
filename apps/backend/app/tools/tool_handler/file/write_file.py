@@ -2,7 +2,7 @@
 
 本模块只承载 write_file 这一个工具。写盘经由 ``app.utils.atomic_write`` 做原子写
 并保留目标文件既有 BOM/CRLF；落盘前做行号污染门禁（拒绝把 read_file 的带行号
-输出回写）；覆盖已有文件前要求本 Session 看过它且之后没被改过（``file_observations``），
+输出回写）；覆盖已有文件前要求本 Session 看过它且之后没被改过，
 成功后返回文件变更展示数据。落盘后的语法检查只在发现问题时通过
 success content 提供简短警告，不改变写入成功状态。
 
@@ -11,8 +11,6 @@ success content 提供简短警告，不改变写入成功状态。
 - 执行逻辑只提供文件修改前后的事实元数据；diff 展示投影由 ``file_change_display`` 收口。
 - 语法检查委托 ``guard.syntax_check``（多语言单一来源），不内联校验。
 """
-
-from pathlib import Path
 
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import (
@@ -26,17 +24,24 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
-from app.core.tool.tool_base import HandlerBase
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_FILE_EDIT
+from app.core.tool.tool_base import HandlerBase
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.tools.display.file_change_display import (
     build_file_change_display_data,
 )
-from app.tools.tool_handler.file_edit.line_numbered import looks_like_line_numbered
-from app.tools.tool_handler.file_edit.patch_diff import FileDiffResult
-from app.tools.tool_handler.file_edit.syntax_check import check_source_syntax, format_syntax_reason
-from app.tools.tool_handler.file_observations import file_observations
-from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.file_system.facts.file_facts import FileFacts
+from app.tools.file_system.facts.file_mutation import FileMutation
+from app.tools.file_system.facts.file_version import FileVersion
+from app.tools.file_system.path_resolver import PathResolver
+from app.tools.file_system.write_attribution import write_attribution
+from app.tools.file_system.write_policy import WriteRefused, WriteTarget, file_write_policy
+from app.tools.tool_handler.file.file_edit.line_numbered import looks_like_line_numbered
+from app.tools.tool_handler.file.file_edit.patch_diff import FileDiffResult
+from app.tools.tool_handler.file.file_edit.syntax_check import (
+    check_source_syntax,
+    format_syntax_reason,
+)
 from app.tools.tool_models.write_file_args import WriteFileArgs
 from app.utils.atomic_write import atomic_write_text
 
@@ -62,13 +67,12 @@ class WriteFileTool(HandlerBase):
     description = (
         "Writes a file in the workspace, overwriting it if one exists.\n"
         "\n"
-        "When to use: creating a new file, or fully replacing one you've already read with "
-        "read_file. Overwriting an existing file you haven't read will fail. For partial "
+        "When to use: creating a new file, or fully replacing one whose current contents you've fully read. "
+        "Overwriting an existing file you haven't read will fail. For partial "
         "changes, use edit_file instead."
     )
     args_model = WriteFileArgs
     group = TOOL_GROUP_FILE_EDIT
-
 
     def __init__(self) -> None:
         """初始化 write_file 工具实例。
@@ -110,7 +114,9 @@ class WriteFileTool(HandlerBase):
             可能创建父目录并原子写入目标文件。
         """
         resolver = PathResolver(
-            execution_context.workspace_root, execution_context.writable_root, execution_context.scratch_dir
+            execution_context.workspace_root,
+            execution_context.writable_root,
+            execution_context.scratch_dir,
         )
         device_error = resolver.blocked_device_reason(path)
         if device_error:
@@ -135,43 +141,40 @@ class WriteFileTool(HandlerBase):
             )
         existed = resolved.exists()
         original = ""
-        if existed:
-            refusal = file_observations.overwrite_refusal(execution_context.session_id, resolved)
-            if refusal:
-                return tool_error(
-                    self.name, f"could not write the file: {refusal.reason}.", status_hint=refusal.status_hint
-                )
-            try:
-                original = Path(resolved).read_text(encoding="utf-8", errors="replace")
-            except OSError as exc:
-                return tool_error(
-                    self.name,
-                    f"{os_error_message(exc, 'read the file')}. "
-                    "Make the existing file readable, then call write_file again.",
-                    status_hint="无法读取",
-                )
-
+        before = FileVersion.of(resolved)
+        action = "modify" if existed else "create"
+        target = WriteTarget(resolved, action, before, whole=existed)
         try:
-            if cancellation_registry.is_cancelled(execution_context.session_id):
-                return tool_cancelled(
-                    tool_name=self.name,
+            with file_write_policy.reserve(
+                (target,), execution_context
+            ):
+                if existed:
+                    original = resolved.read_text(encoding="utf-8", errors="replace")
+                if cancellation_registry.is_cancelled(execution_context.session_id):
+                    return tool_cancelled(tool_name=self.name)
+                atomic_write_text(
+                    resolved, content, containment_root=resolver.write_containment(resolved)
                 )
-            atomic_write_text(
-                resolved,
-                content,
-                containment_root=resolver.write_containment(resolved),
-            )
+                written = FileFacts(
+                    mutations=(
+                        FileMutation(
+                            path=str(resolved),
+                            operation=action,
+                            before=before,
+                            after=FileVersion.of(resolved),
+                            whole=True,
+                        ),
+                    )
+                )
+                write_attribution.record(execution_context.session_id, written)
+                facts = written.as_result()
+        except WriteRefused as exc:
+            return tool_error(self.name, str(exc), status_hint=exc.hint)
         except OSError as exc:
             return tool_error(
-                tool_name=self.name,
-                content=(
-                    f"{os_error_message(exc, 'write the file')}. "
-                    "Make the target writable, then call write_file again."
-                ),
-                status_hint="无法写入",
+                self.name, os_error_message(exc, "write the file"), status_hint="无法写入"
             )
 
-        file_observations.record(execution_context.session_id, resolved)
         status = "modified" if existed else "added"
         snapshot = FileDiffResult(path=path, status=status, before=original, after=content)
         display_data = build_file_change_display_data([snapshot])
@@ -181,17 +184,16 @@ class WriteFileTool(HandlerBase):
         if result.has_error:
             return tool_success(
                 tool_name=self.name,
-                content=(
-                    "success\nsyntax warning:\n"
-                    + format_syntax_reason(result)
-                ),
+                content=("success\nsyntax warning:\n" + format_syntax_reason(result)),
                 display_data=display_data,
+                facts=facts,
             )
 
         return tool_success(
             tool_name=self.name,
             content=None,
             display_data=display_data,
+            facts=facts,
         )
 
     def to_definition(self) -> ToolDefinition:

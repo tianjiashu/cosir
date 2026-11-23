@@ -105,6 +105,7 @@ class TerminalObservationResult:
     wait_result: dict[str, object] | None = None
     # Agent 填入提示符的那一行命令（只有 write 有）；展示数据投影为 ``input_summary``。
     prefilled: str | None = None
+    visible_rows: tuple[Line, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -180,6 +181,9 @@ def render_observation(
         screen=screen,
         wait_result=wait_result,
         prefilled=prefilled,
+        visible_rows=tuple((int(number), value) for row in rendered.body
+                           for number, _, value in (row.partition(_SEPARATOR),))
+        if facts.kind == "command" and not screen else (),
     )
 
 

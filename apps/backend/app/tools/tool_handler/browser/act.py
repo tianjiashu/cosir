@@ -9,9 +9,9 @@ from app.core.tool.schemas import (
     ToolExecutionContext,
     ToolObservation,
 )
+from app.tools.file_system.path_resolver import PathResolver
 from app.tools.tool_handler.browser.browser_tool import BrowserTool
 from app.tools.tool_handler.browser.rendering import act_observation
-from app.tools.tool_handler.security.path_resolver import PathResolver
 from app.tools.tool_models import BrowserActArgs
 
 

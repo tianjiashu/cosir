@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.tools.tool_handler.file_edit.patch_diff import FileDiffResult
-from app.tools.tool_handler.file_edit.patch_parser import Hunk, PatchOperation
-from app.tools.tool_handler.file_edit.text_match import TextMatchError, replace_exact
-from app.tools.tool_handler.security.path_resolver import PathResolver
+from app.tools.file_system.facts.file_mutation import FileMutation
+from app.tools.file_system.facts.file_version import FileVersion
+from app.tools.file_system.path_resolver import PathResolver
+from app.tools.file_system.write_policy import WriteTarget
+from app.tools.tool_handler.file.file_edit.patch_diff import FileDiffResult
+from app.tools.tool_handler.file.file_edit.patch_parser import Hunk, PatchOperation
+from app.tools.tool_handler.file.file_edit.text_match import TextMatchError, replace_exact
 from app.utils.atomic_write import atomic_write_text
 
 
@@ -19,7 +22,7 @@ class PatchApplyError(RuntimeError):
         self.applied = applied
 
 
-def _resolve_patch_path(resolver: PathResolver, path: str) -> tuple[Path | None, str]:
+def resolve_patch_path(resolver: PathResolver, path: str) -> tuple[Path | None, str]:
     """Resolve a parser-validated workspace-relative path and block devices."""
 
     device_error = resolver.blocked_device_reason(path)
@@ -111,16 +114,20 @@ def _apply_hunks(content: str, operation: PatchOperation) -> str:
     return content
 
 
-def validate_all(operations: list[PatchOperation], resolver: PathResolver) -> list[str]:
-    """Validate every target and simulate every hunk without changing files."""
+def prepare_patch(
+    operations: list[PatchOperation], resolver: PathResolver,
+) -> tuple[dict[str, WriteTarget], list[str]]:
+    """解析并校验补丁的各个目标，保留校验时的路径与版本供写入检查。"""
 
     errors: list[str] = []
+    targets: dict[str, WriteTarget] = {}
     for operation in operations:
-        resolved, error = _resolve_patch_path(resolver, operation.file_path)
+        resolved, error = resolve_patch_path(resolver, operation.file_path)
         if resolved is None:
             errors.append(f"{operation.file_path}: {error}")
             continue
-        if not resolved.is_file():
+        version = FileVersion.of(resolved)
+        if version is None:
             errors.append(f"{operation.file_path}: target is not an existing regular file")
             continue
         try:
@@ -135,26 +142,32 @@ def validate_all(operations: list[PatchOperation], resolver: PathResolver) -> li
             _apply_hunks(original, operation)
         except (RuntimeError, ValueError) as exc:
             errors.append(str(exc))
-    return errors
+        targets[operation.file_path] = WriteTarget(resolved, "modify", version)
+    return targets, errors
 
 
 def apply_all_with_diff(
     operations: list[PatchOperation],
     resolver: PathResolver,
+    targets: dict[str, WriteTarget],
 ) -> list[FileDiffResult]:
     """Apply validated updates in order and return the before/after text for display."""
 
     results: list[FileDiffResult] = []
     for operation in operations:
         try:
-            resolved, error = _resolve_patch_path(resolver, operation.file_path)
+            resolved, error = resolve_patch_path(resolver, operation.file_path)
             if resolved is None:
                 raise RuntimeError(f"{operation.file_path}: {error}")
+            planned = targets[operation.file_path]
+            version = FileVersion.of(resolved)
+            if resolved != planned.path or version != planned.version:
+                raise RuntimeError(f"{operation.file_path}: target changed since validation")
             before = _normalize_text(resolved.read_bytes().decode("utf-8"))
             after = _apply_hunks(before, operation)
             current, current_error = resolver.resolve_for_write(operation.file_path)
-            if current is None or current_error or current != resolved:
-                raise RuntimeError(f"{operation.file_path}: path changed before mutation")
+            if current is None or current_error or current != resolved or FileVersion.of(current) != version:
+                raise RuntimeError(f"{operation.file_path}: target changed before mutation")
             atomic_write_text(
                 resolved,
                 after,
@@ -166,6 +179,9 @@ def apply_all_with_diff(
                     status="modified",
                     before=before,
                     after=after,
+                    mutation=FileMutation(
+                        path=str(resolved), operation="modify", before=version, after=FileVersion.of(resolved),
+                    ),
                 )
             )
         except (OSError, RuntimeError, UnicodeDecodeError) as exc:

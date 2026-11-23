@@ -64,8 +64,8 @@ from app.core.tool.schemas import TOOL_EXECUTE_TERMINAL
 from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.message_queue.session_message import BackgroundResultBody, SessionMessage
-from app.models.enums.run_status import ACTIVE_RUN_STATUSES
-from app.models.message_metadata import BackgroundWork
+from app.models.message_context.message_metadata.tool_message_metadata import BackgroundWork
+from app.models.run.run_status import ACTIVE_RUN_STATUSES
 from app.tools.tool_handler.terminal.command_job import CommandConclusion, CommandJob
 
 BackgroundMode = Literal["foreground", "background"]
@@ -132,19 +132,30 @@ class CommandResultRegistry:
         """
         mode: BackgroundMode = "background" if detached is None else "foreground"
         work = BackgroundWork(label=label, started_at=_now(), run_id=run_id)
-        data = {"session_id": session_id, "run_id": run_id, "tool_call_id": tool_call_id, "mode": mode}
+        data = {
+            "session_id": session_id,
+            "run_id": run_id,
+            "tool_call_id": tool_call_id,
+            "mode": mode,
+        }
         with self._lock:
             if (session_id, tool_call_id) in self._entries:
                 raise ValueError(f"background result already registered: {tool_call_id}")
             rejected: DropReason | None = (
-                "shutdown" if self._closed
-                else "parent" if cancellation_registry.reason(session_id) == "parent"
+                "shutdown"
+                if self._closed
+                else "parent"
+                if cancellation_registry.reason(session_id) == "parent"
                 else None
             )
             if rejected is None:
                 self._entries[session_id, tool_call_id] = _Entry(
-                    session_id=session_id, work=work, job=job, mode=mode,
-                    stop_requested=False, detached=detached,
+                    session_id=session_id,
+                    work=work,
+                    job=job,
+                    mode=mode,
+                    stop_requested=False,
+                    detached=detached,
                 )
                 pending = sum(entry.session_id == session_id for entry in self._entries.values())
         if rejected is not None:
@@ -182,16 +193,20 @@ class CommandResultRegistry:
             entry = self._entries.get((session_id, tool_call_id))
             if entry is None:
                 return driving and tool_call_cancellation_registry.mark_cancelled(
-                    session_id, tool_call_id,
+                    session_id,
+                    tool_call_id,
                 )
             if entry.stop_requested:
                 return False
             entry.stop_requested = True
         entry.job.cancel()
-        log.info("background_result_stop_requested", extra={
-            "msg": "已请求停止，等待作业交付结论",
-            "data": {"session_id": session_id, "tool_call_id": tool_call_id},
-        })
+        log.info(
+            "background_result_stop_requested",
+            extra={
+                "msg": "已请求停止，等待作业交付结论",
+                "data": {"session_id": session_id, "tool_call_id": tool_call_id},
+            },
+        )
         return True
 
     def complete(self, session_id: int, tool_call_id: str, conclusion: CommandConclusion) -> bool:
@@ -226,13 +241,16 @@ class CommandResultRegistry:
             )
             return False
         finally:
-            with self._lock:
-                self._delivering[session_id] -= 1
-                if not self._delivering[session_id]:
-                    del self._delivering[session_id]
-                self._settled.notify_all()
+            self._finish_delivery(session_id)
             self._notify(session_id)
         return True
+
+    def _finish_delivery(self, session_id: int) -> None:
+        with self._lock:
+            self._delivering[session_id] -= 1
+            if not self._delivering[session_id]:
+                del self._delivering[session_id]
+            self._settled.notify_all()
 
     def settle_foreground(self, session_id: int, tool_call_id: str) -> ForegroundOutcome:
         """前台等待正常结束：仍是前台则出队（结论作为工具结果返回，不投递），返回 ``settled``。
@@ -324,7 +342,8 @@ class CommandResultRegistry:
 
         with self._lock:
             return [
-                entry.work.label for entry in self._entries.values()
+                entry.work.label
+                for entry in self._entries.values()
                 if entry.session_id == session_id and entry.mode == "background"
             ]
 
@@ -415,6 +434,7 @@ class CommandResultRegistry:
 
     def _deliver_on_done(self, session_id: int, tool_call_id: str, job: CommandJob) -> None:
         """订阅后台条目的结论并回投；须在锁外调用（结论已到时立即回调 :meth:`complete`）。"""
+
         def deliver(conclusion: CommandConclusion) -> None:
             self.complete(session_id, tool_call_id, conclusion)
 
@@ -451,13 +471,19 @@ class CommandResultRegistry:
                     "background_result_cancel_failed",
                     extra={"msg": "撤销后台结果时停止作业失败", "data": data},
                 )
-            log.info("background_result_dropped", extra={
-                "msg": "撤销后台结果", "data": {**data, "reason": reason},
-            })
+            log.info(
+                "background_result_dropped",
+                extra={
+                    "msg": "撤销后台结果",
+                    "data": {**data, "reason": reason},
+                },
+            )
 
     @staticmethod
     def _enqueue_cancel_receipt(
-        session_id: int, tool_call_id: str, conclusion: CommandConclusion,
+        session_id: int,
+        tool_call_id: str,
+        conclusion: CommandConclusion,
     ) -> None:
         """单停的回执：交给 Session 当前的活动 Run（不论是哪个 Run 登记的），但不开新 Run——用户刚停掉
         一项工作，不该因此让 Agent 自己动起来。
@@ -471,13 +497,22 @@ class CommandResultRegistry:
         current = get_session_service().require_current_run(session_id)
         if current is None or current.status not in ACTIVE_RUN_STATUSES:
             cancel_placeholders(
-                session_id, [tool_call_id], hint, displays={tool_call_id: conclusion.display_data},
+                session_id,
+                [tool_call_id],
+                hint,
+                displays={tool_call_id: conclusion.display_data},
             )
-        CommandResultRegistry._enqueue_result(session_id, tool_call_id, conclusion, starts_run=False)
+        CommandResultRegistry._enqueue_result(
+            session_id, tool_call_id, conclusion, starts_run=False
+        )
 
     @staticmethod
     def _enqueue_result(
-        session_id: int, tool_call_id: str, conclusion: CommandConclusion, *, starts_run: bool = True,
+        session_id: int,
+        tool_call_id: str,
+        conclusion: CommandConclusion,
+        *,
+        starts_run: bool = True,
     ) -> None:
         """把结论作为 ``background_result`` 写进 Session 的外部队列。
 
@@ -493,7 +528,8 @@ class CommandResultRegistry:
             tool_result=json.dumps(conclusion.result, ensure_ascii=False),
             placeholder_display_data=conclusion.display_data,
             placeholder_status="cancelled" if conclusion.cancel_hint else "completed",
-            placeholder_error=conclusion.cancel_hint, starts_run=starts_run,
+            placeholder_error=conclusion.cancel_hint,
+            starts_run=starts_run,
             ended_at=_now(),
         )
         session_runtime_spaces.enqueue(session_id, SessionMessage.of(body))
