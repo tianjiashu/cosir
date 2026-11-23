@@ -10,7 +10,6 @@ from app.core.workflow.message_queue.message_bodies.base import (
     WakeScope,
 )
 from app.core.workflow.message_queue.message_bodies.rendering import escape_tag, render_time
-from app.models.file_access.file_facts import FileFacts
 from app.models.message_context.message_metadata.user_message_metadata import UserMessageMetadata
 
 
@@ -46,7 +45,6 @@ class BackgroundResultBody(EnqueuedMessageBody):
     placeholder_status: Literal["completed", "cancelled"] = "completed"
     placeholder_error: str | None = None
     placeholder_display_data: dict[str, object] | None = None
-    file_facts: FileFacts | None = None
     # 结论产生并回投的时刻，随队列持久化；消费可能晚得多，不能届时重取墙钟。
     ended_at: str
 
@@ -61,7 +59,5 @@ class BackgroundResultBody(EnqueuedMessageBody):
         )
         return (
             ChatCompletionUserMessageParam(role="user", content=content),
-            UserMessageMetadata(
-                kind="background_result", tool_call_id=self.tool_call_id, file_facts=self.file_facts
-            ),
+            UserMessageMetadata(kind="background_result", tool_call_id=self.tool_call_id),
         )

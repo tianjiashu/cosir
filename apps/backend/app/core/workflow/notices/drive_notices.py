@@ -1,4 +1,4 @@
-"""驱动开始时推导的通知：Run 级（终端权限、工具准入、未了结事项）与回合级（用户已停止）。
+"""驱动开始时推导的通知：Run 级（工具准入、未了结事项）与回合级（用户已停止）。
 
 同一驱动里模型的上下文是连续的，只有新 Run、唤醒、恢复时它才可能记不清这些事，所以只在驱动开始时推导；
 驱动中途开启的回合里，它们要么没变，要么是模型自己刚做的（中途会变的见 ``request_notices``）。
@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import cast
 
 from app.config.constant import Constant
@@ -44,7 +43,6 @@ _USER_STOPPED = (
 def drive_notices(rc: RuntimeContext, context: RuntimeMessageContextManager) -> list[NoticeBody]:
     """本次驱动开始时应投递的通知；调用方在 ``begin_run`` 之后调用（要读重建后的上下文）。"""
     notices = [
-        _terminal_permissions(rc, context),
         _user_stopped(rc),
         _tool_availability(rc, context),
         _open_items(rc, context),
@@ -197,30 +195,3 @@ def _names(tools: frozenset[str]) -> str:
     """工具名排序后逗号分隔：同一集合跨进程生成同一文本，保住前缀缓存。"""
 
     return ", ".join(sorted(tools))
-
-
-def _terminal_permissions(
-    rc: RuntimeContext, context: RuntimeMessageContextManager
-) -> NoticeBody | None:
-    """从冻结的 Run 重推终端权限，沿用上下文基准而不是进程内已告知标志。"""
-    mode = rc.run.terminal_permission_mode
-    latest = context.latest_notice("terminal_permissions")
-    if latest is not None and latest[0] == rc.run.id:
-        return None
-    root = rc.workspace.root_path
-    writable = rc.session.extra.writable_root
-    path = str(Path(root) / writable) if writable else root
-    content = (
-        f"Terminal permissions for this Run: {mode}. Base writable root: {path}. "
-        "Your session scratch is also writable. "
-        + (
-            "Commands run with the current OS user permissions without a terminal sandbox. "
-            if mode == "full_access"
-            else "Commands run in an OS sandbox with IP networking off. Request permissions.network and/or "
-            "permissions.write_roots plus a justification on execute_terminal before starting commands "
-            "that need them; the user must approve this exact command. The Cosir control directory stays protected. "
-        )
-        + "Approval never automatically reruns a failed command. Check partial effects before retrying. "
-        "This mode affects Agent commands only; file tools, browser, MCP and user terminals have their own boundaries."
-    )
-    return NoticeBody(notice_kind="terminal_permissions", content=content, metadata={"mode": mode})

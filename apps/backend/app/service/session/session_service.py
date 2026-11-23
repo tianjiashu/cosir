@@ -18,6 +18,7 @@ from app.core.workflow.message_queue.session_message import SessionMessage
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.models.run.run_record import RunRecord
 from app.models.run.run_status import ACTIVE_RUN_STATUSES
+from app.models.session.session_command_errors import SessionCommandConflictError
 from app.models.session.session_extra import SessionExtra, SessionFork
 from app.models.session.session_fork_errors import SessionForkConflictError
 from app.models.session.session_kind import (
@@ -27,12 +28,17 @@ from app.models.session.session_kind import (
 )
 from app.models.session.session_record import SessionRecord
 from app.models.session.session_tool_surface import SessionToolSurface
+from app.models.terminal_permissions import TerminalPermissionMode
 from app.service import depends as service_depends
 from app.service.session.fork_source import ForkCut, ForkSource
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.session_runtime.workspace_operation_registry import workspace_operations
 from app.storage.store_engines import main_db_factory
 from app.storage.write_transaction import begin_immediate
+from app.tools.terminal_runtime.permissions.policy import (
+    default_terminal_permission_mode,
+    worker_sandbox,
+)
 
 _T = TypeVar("_T")
 
@@ -74,6 +80,7 @@ class SessionService:
         extra: SessionExtra | None = None,
         tool_surface: SessionToolSurface | None = None,
         derivation_depth: int = 0,
+        terminal_permission_mode: TerminalPermissionMode | None = None,
     ) -> SessionRecord:
         """创建 Session 并固化它的工具面。
 
@@ -85,6 +92,8 @@ class SessionService:
             parent_session_id: 委派子 Session 的父 Session 标识。
             db: 传入时加入调用方事务。
             derivation_depth: 派生深度（见 ``core.tool.multi_agent.derivation.child_depth``）。
+            terminal_permission_mode: 会话的终端权限；``None`` 取本机默认（见
+                ``default_terminal_permission_mode``）。委派子 Agent 由派生方传入它当时的有效权限。
         """
 
         frozen = tool_surface or SessionToolSurface()
@@ -97,6 +106,7 @@ class SessionService:
             tool_surface=frozen,
             db=db,
             derivation_depth=derivation_depth,
+            terminal_permission_mode=terminal_permission_mode or default_terminal_permission_mode(),
         )
         log.info(
             "session_tool_schemas_frozen",
@@ -363,6 +373,9 @@ class SessionService:
                     tool_surface=source.tool_surface.model_copy(deep=True),
                     db=db,
                     derivation_depth=depth,
+                    # 分支是独立会话：取来源此刻的权限，之后各自切换（分叉不是所有权）。来源都是面向用户的
+                    # 会话、没有所有权祖先，它自己的权限就是有效权限。
+                    terminal_permission_mode=source.terminal_permission_mode,
                 )
                 count = fork_source.copy_before(fork_cut, target, self._session_context_crud, db)
                 identity = fork_source.identity_notice(target)
@@ -585,6 +598,67 @@ class SessionService:
         self.finalize_deleted_session_spaces(deleted)
         return deleted
 
+    def effective_terminal_mode(self, session_id: int) -> TerminalPermissionMode:
+        """Agent 命令实际使用的终端权限：本会话与所有权祖先中最严的那个，每条命令启动时现读。
+
+        降权因此立即对整棵所有权子树（委派的子 Agent）生效，不需要等它们静止；已启动的命令沿用启动时的
+        策略。分叉不在所有权树里，不受来源后来的切换影响。
+
+        异常:
+            KeyError: 会话不存在。
+        """
+        session = self.get_session(session_id)
+        while True:
+            if session.terminal_permission_mode == "request_approval":
+                return "request_approval"
+            if session.parent_session_id is None:
+                return session.terminal_permission_mode
+            session = self.get_session(session.parent_session_id)
+
+    def set_terminal_permission_mode(self, session_id: int, mode: TerminalPermissionMode) -> None:
+        """用户切换会话的终端权限：随时可切，下一条命令生效；快照随即投影新值。
+
+        异常:
+            KeyError: 会话不存在。
+            SessionCommandConflictError: ``TERMINAL_SANDBOX_UNAVAILABLE``（本机确定不支持沙箱时不能选请求批准，
+                否则之后每条终端命令都会失败）。
+        """
+        capability = worker_sandbox()
+        if mode == "request_approval" and capability.settled and not capability.supported:
+            raise SessionCommandConflictError(
+                "TERMINAL_SANDBOX_UNAVAILABLE", f"本机不支持终端沙箱：{capability.reason}"
+            )
+        self._session.set_terminal_permission_mode(session_id, mode)
+        self._state.refresh_terminal_permission(session_id, mode)
+        log.info(
+            "session_terminal_permission_changed",
+            extra={
+                "msg": "会话终端权限已切换",
+                "data": {"session_id": session_id, "mode": mode},
+            },
+        )
+
+    def ownership_root_id(self, session_id: int) -> int:
+        """沿 ``parent_session_id`` 向上到所有权树的根（委派子 Agent 的根是最初的面向用户的会话）。"""
+        session = self.get_session(session_id)
+        while session.parent_session_id is not None:
+            session = self.get_session(session.parent_session_id)
+        return session.id
+
+    def display_session_id(self, session_id: int) -> int:
+        """这个会话的东西显示在哪个会话页上：它自己，或沿所有权向上最近的面向用户的会话（子 Agent 没有界面）。
+
+        异常:
+            KeyError: 会话不存在。
+            ValueError: 一路到根都没有面向用户的会话（数据损坏）。
+        """
+        session = self.get_session(session_id)
+        while session.session_type not in USER_FACING_SESSION_TYPES:
+            if session.parent_session_id is None:
+                raise ValueError(f"会话 {session_id} 没有可显示的用户会话")
+            session = self.get_session(session.parent_session_id)
+        return session.id
+
     def collect_session_tree_ids(self, root_session_id: int) -> set[int]:
         """收集会话树（根会话及沿 ``parent_session_id`` 递归的全部子 Session）的 id 集合；
         删除前先停止这些 Session 的执行。"""
@@ -650,9 +724,9 @@ class SessionService:
         # 临时目录同样发后即忘：后台线程删除，残留由启动对账补回收（见 ``session_scratch``）。
         remove_session_scratch(session_ids)
         for session_id in session_ids:
-            from app.core.tool.terminal_approval import terminal_approvals
+            from app.core.tool.terminal_approval.registry import terminal_approvals
 
-            terminal_approvals.cancel_session(session_id)
+            terminal_approvals.cancel_originated(session_id, "deleted")
             command_results.drop_session(session_id)
         self._unload_deleted_session_spaces(set(session_ids))
 

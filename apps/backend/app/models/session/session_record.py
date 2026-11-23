@@ -14,6 +14,7 @@ from typing import cast
 from app.models.session.session_extra import SessionExtra, SessionFork
 from app.models.session.session_kind import SessionType
 from app.models.session.session_tool_surface import SessionToolSurface
+from app.models.terminal_permissions import TerminalPermissionMode
 from app.storage.model.session_model import SessionModel
 from app.utils.datetime_utils import from_text, to_text
 
@@ -34,6 +35,8 @@ class SessionRecord:
     current_run_id: int | None = None
     # 派生深度（见 ``models.session.session_kind``）；创建后不变，所以缓存在运行时空间里的记录也可信。
     derivation_depth: int = 0
+    # 会话自己的终端权限；执行时用的有效权限还要扣除所有权祖先（见 ``SessionService.effective_terminal_mode``）。
+    terminal_permission_mode: TerminalPermissionMode = "request_approval"
 
     @property
     def unstarted(self) -> bool:
@@ -122,6 +125,7 @@ class SessionRecord:
             parent_session_id=row.parent_session_id,
             current_run_id=row.current_run_id,
             derivation_depth=row.derivation_depth,
+            terminal_permission_mode=cast(TerminalPermissionMode, row.terminal_permission_mode),
         )
 
     def to_model(self) -> SessionModel:
@@ -136,6 +140,7 @@ class SessionRecord:
             "parent_session_id": self.parent_session_id,
             "current_run_id": self.current_run_id,
             "derivation_depth": self.derivation_depth,
+            "terminal_permission_mode": self.terminal_permission_mode,
             "created_at": to_text(self.created_at),
             "updated_at": to_text(self.updated_at),
         }

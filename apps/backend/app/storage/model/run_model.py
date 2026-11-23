@@ -24,10 +24,6 @@ class RunModel(StorageBase):
         Index("idx_runs_session_created", "session_id", "created_at"),
         Index("idx_runs_status", "status"),
         CheckConstraint(
-            "terminal_permission_mode IN ('request_approval', 'full_access')",
-            name="ck_runs_terminal_permission_mode",
-        ),
-        CheckConstraint(
             "status IN ({})".format(", ".join(repr(status.value) for status in RunStatus)),
             name="ck_runs_status",
         ),
@@ -48,9 +44,6 @@ class RunModel(StorageBase):
     context_window_total: Mapped[int | None] = mapped_column(Integer)
     # 本 Run 选定的推理强度；None 表示交给 Agent 偏好与模型默认值。
     reasoning_effort: Mapped[str | None] = mapped_column(String(8))
-    terminal_permission_mode: Mapped[str] = mapped_column(
-        String(24), nullable=False, default="request_approval"
-    )
     end_reason: Mapped[str | None] = mapped_column(Text)
     final_output: Mapped[str | None] = mapped_column(Text)
     usage_json: Mapped[str | None] = mapped_column(Text)

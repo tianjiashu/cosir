@@ -21,7 +21,7 @@ from dataclasses import dataclass, field, replace
 from threading import Lock
 
 from app.config.logging.logger import log
-from app.core.tool.terminal_approval import terminal_approvals
+from app.core.tool.terminal_approval.registry import terminal_approvals
 from app.models.session.session_kind import USER_FACING_SESSION_TYPES, SessionType
 from app.models.session.session_status import SessionStatus
 from app.storage.crud.session_crud import SessionCrud

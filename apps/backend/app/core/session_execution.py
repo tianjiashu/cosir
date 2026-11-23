@@ -118,6 +118,7 @@ class SessionExecution:
         session.cancel()
         await asyncio.gather(session, return_exceptions=True)
         self._task = self._run = None
+        self._mailbox.reset()
         cancellation_registry.consume(self.session_id)
 
     async def _drive(
@@ -147,6 +148,9 @@ class SessionExecution:
                 },
             )
         self._task = self._run = None
+        # mailbox 只属于一次驱动：未确认的消息仍在外部队列里，残留副本留着只会误导驱动之外的读取方
+        # （如批准登记时「页面上有没有新输入」的判定）。
+        self._mailbox.reset()
         reason = cancellation_registry.consume(self.session_id)
         await self._on_released(run, reason)
 

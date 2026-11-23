@@ -17,7 +17,6 @@ from app.core.workflow.execution_state.react_execution_state import ReactExecuti
 from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.run.run_extra import RunExtra
 from app.models.run.run_usage import RunUsage
-from app.models.terminal_permissions import TerminalPermissionMode
 from app.utils.datetime_utils import from_text, to_text
 
 if TYPE_CHECKING:
@@ -49,7 +48,6 @@ class RunRecord:
     model_config_id: str | None = None
     context_window_total: int | None = None
     reasoning_effort: ReasoningEffort | None = None
-    terminal_permission_mode: TerminalPermissionMode = "request_approval"
     usage: RunUsage | None = None
     error: RunError | None = None
     extra: RunExtra = field(default_factory=RunExtra)
@@ -83,7 +81,6 @@ class RunRecord:
             "model_config_id": self.model_config_id,
             "context_window_total": self.context_window_total,
             "reasoning_effort": self.reasoning_effort,
-            "terminal_permission_mode": self.terminal_permission_mode,
             "usage": self.usage,
             "error": self.error,
             "extra": self.extra.model_dump(mode="json"),
@@ -112,7 +109,6 @@ class RunRecord:
             context_window_total=row.context_window_total,
             # 取值由表约束 ``ck_runs_reasoning_effort`` 守住，读出时不再校验。
             reasoning_effort=cast("ReasoningEffort | None", row.reasoning_effort),
-            terminal_permission_mode=cast(TerminalPermissionMode, row.terminal_permission_mode),
             usage=(json.loads(row.usage_json) if row.usage_json is not None else None),
             error=(json.loads(row.error_json) if row.error_json is not None else None),
             extra=RunExtra.model_validate(row.extra),
@@ -133,7 +129,6 @@ class RunRecord:
             "model_config_id": self.model_config_id,
             "context_window_total": self.context_window_total,
             "reasoning_effort": self.reasoning_effort,
-            "terminal_permission_mode": self.terminal_permission_mode,
             "usage_json": json.dumps(
                 self.usage, ensure_ascii=False, sort_keys=True, allow_nan=False
             ),

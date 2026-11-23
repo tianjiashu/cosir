@@ -27,7 +27,6 @@ NoticeKind = Literal[
     "decision_expired",
     "open_items",
     "configuration_changed",
-    "terminal_file_changes",
     "terminal_permissions",
     "read_files_changed",
 ]
@@ -60,7 +59,6 @@ NOTICE_LEVELS: dict[NoticeKind, NoticeLevel] = {
     "tool_availability": "run",
     "open_items": "run",
     "configuration_changed": "run",
-    "terminal_file_changes": "session",
     "terminal_permissions": "run",
     "read_files_changed": "run",
     "user_cancelled": "turn",
@@ -79,7 +77,6 @@ NOTICE_WAKE_SCOPES: dict[NoticeKind, WakeScope] = {
     "tool_availability": "none",
     "open_items": "none",
     "configuration_changed": "none",
-    "terminal_file_changes": "none",
     "terminal_permissions": "none",
     "read_files_changed": "none",
     "user_cancelled": "none",

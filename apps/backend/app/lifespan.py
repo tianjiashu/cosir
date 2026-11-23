@@ -41,7 +41,8 @@ from app.core.agents.agent_profile_config import ensure_system_agent_config_dir
 from app.core.events.event_sink import set_event_sink
 from app.core.tool.background_commands import set_background_commands
 from app.core.tool.external_tools import set_external_tools
-from app.core.tool.terminal_approval import terminal_approvals
+from app.core.tool.file_change_notices import set_file_change_notices
+from app.core.tool.terminal_approval.registry import terminal_approvals
 from app.service.configuration import file_store
 from app.service.depends import (
     close_service_dependencies,
@@ -54,6 +55,7 @@ from app.service.depends import (
 )
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.browser_runtime.tab_reclaim import schedule_tab_reclaim
+from app.tools.file_system.read_changes import read_changes
 from app.tools.mcp.mcp_tools import MCPExternalTools
 from app.tools.tool_handler.terminal.command_results import command_results
 from app.tools.tool_registration import build_tool_registry
@@ -197,6 +199,8 @@ async def _lifespan_impl(_app: FastAPI) -> AsyncIterator[None]:
     command_results.open()
     # core 经端口问后台命令（静止判定、wait_messages、收回）；core 不导入工具层。
     set_background_commands(command_results)
+    # core 经端口问读过的文件有没有变化；文件系统归工具层。
+    set_file_change_notices(read_changes)
     # core 经端口问延迟工具的目录与执行；目前唯一的来源是 MCP。
     set_external_tools(MCPExternalTools())
     # core 交出的执行事件由 Transport 投影；core 不导入 ``assistant_transport``。

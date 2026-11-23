@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, Integer, Text, text
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.session.session_kind import SessionType
@@ -31,6 +31,11 @@ class SessionModel(StorageBase):
     derivation_depth: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0"), default=0
     )
+    # 会话的终端权限（会话树的安全策略，不是每条消息的发起配置）：Agent 每条命令启动时按本会话与所有权
+    # 祖先中最严的那个执行（``SessionService.effective_terminal_mode``）。
+    terminal_permission_mode: Mapped[str] = mapped_column(
+        String(24), nullable=False, server_default=text("'request_approval'"), default="request_approval"
+    )
     current_run_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("runs.id", ondelete="SET NULL"),
@@ -39,4 +44,8 @@ class SessionModel(StorageBase):
     )
     __table_args__ = (
         Index("idx_sessions_parent_session_id", "parent_session_id"),
+        CheckConstraint(
+            "terminal_permission_mode IN ('request_approval', 'full_access')",
+            name="ck_sessions_terminal_permission_mode",
+        ),
     )

@@ -46,7 +46,8 @@ from app.core.session_execution import SessionExecution
 from app.core.session_recall import SessionRecall
 from app.core.tool.multi_agent import derived_report
 from app.core.tool.placeholder_settlement import RUN_STOPPED_HINT
-from app.core.tool.terminal_approval import terminal_approvals
+from app.core.tool.terminal_approval import yielding as terminal_approval_yielding
+from app.core.tool.terminal_approval.registry import terminal_approvals
 from app.core.workflow.cancel.run_cancellation_registry import (
     CancelReason,
     cancel_end_reason,
@@ -302,7 +303,7 @@ class SessionActor:
         if self.driving and not self._execution.stopping:
             self._deliver(immediate)
         elif any(m.kind == "user_input" for m in immediate):
-            terminal_approvals.supersede(self.session_id)
+            terminal_approval_yielding.supersede(self.session_id)
 
     def _deliver(self, messages: list[SessionMessage]) -> None:
         """首次投递用户输入后撤销旧审批；HTTP 接管和常驻 loop 共用此真实投递边界。"""
@@ -312,7 +313,7 @@ class SessionActor:
                 user_ids.append(message.id)
         if not user_ids:
             return
-        terminal_approvals.supersede(self.session_id)
+        terminal_approval_yielding.supersede(self.session_id)
         log.info(
             "user_input_taken_over",
             extra={
@@ -540,7 +541,7 @@ class SessionActor:
         initial = PendingMessages.of(pending).initial(fresh_run=fresh_run)
         self._execution.start(run, initial, preceding_run)
         if any(m.kind == "user_input" for m in initial):
-            terminal_approvals.supersede(self.session_id)
+            terminal_approval_yielding.supersede(self.session_id)
 
 
     async def _after_drive(self, run: RunRecord, reason: CancelReason | None) -> None:

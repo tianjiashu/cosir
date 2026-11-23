@@ -23,7 +23,6 @@ from app.models.run.run_extra import RunExtra, RunStatusChange
 from app.models.run.run_record import RunError, RunRecord
 from app.models.run.run_status import RunStatus
 from app.models.run.run_usage import RunUsage
-from app.models.terminal_permissions import TerminalPermissionMode
 from app.storage.model.run_model import RunModel
 from app.storage.store_engines import main_db_factory
 from app.utils.datetime_utils import to_text, utc_now
@@ -126,7 +125,6 @@ class RunCrud:
         model_config_id: str | None = None,
         context_window_total: int | None = None,
         reasoning_effort: ReasoningEffort | None = None,
-        terminal_permission_mode: TerminalPermissionMode = "request_approval",
         usage: RunUsage | None = None,
         error: RunError | None = None,
         db: DbSession | None = None,
@@ -141,7 +139,6 @@ class RunCrud:
                 model_config_id=model_config_id,
                 context_window_total=context_window_total,
                 reasoning_effort=reasoning_effort,
-                terminal_permission_mode=terminal_permission_mode,
                 usage=usage,
                 error=error,
             )
@@ -154,7 +151,6 @@ class RunCrud:
                 model_config_id=model_config_id,
                 context_window_total=context_window_total,
                 reasoning_effort=reasoning_effort,
-                terminal_permission_mode=terminal_permission_mode,
                 usage=usage,
                 error=error,
             )
@@ -169,7 +165,6 @@ class RunCrud:
         model_config_id: str | None,
         context_window_total: int | None,
         reasoning_effort: ReasoningEffort | None,
-        terminal_permission_mode: TerminalPermissionMode,
         usage: RunUsage | None,
         error: RunError | None,
     ) -> RunRecord:
@@ -213,7 +208,6 @@ class RunCrud:
             model_config_id=model_config_id,
             context_window_total=context_window_total,
             reasoning_effort=reasoning_effort,
-            terminal_permission_mode=terminal_permission_mode,
             execution_data=ReactExecutionState().model_dump(mode="json"),
             usage_json=_serialize_typed_json(usage),
             error_json=_serialize_typed_json(error),

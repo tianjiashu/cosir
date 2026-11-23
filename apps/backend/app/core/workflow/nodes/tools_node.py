@@ -17,8 +17,6 @@ from typing import Any
 
 from app.config.configuration import get_tool_executor, get_tool_registry
 from app.config.logging.logger import log
-from app.core.file_access.knowledge import FileKnowledge
-from app.core.file_access.write_attribution import write_attribution
 from app.core.tool.execute.tool_terminal_projection import terminal_event
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
@@ -29,6 +27,8 @@ from app.core.workflow.execution_state.react_route import ReactRoute
 from app.core.workflow.execution_state.runtime_context import RuntimeContext
 from app.core.workflow.node_helper.common import _message_context, _runtime_context, emit
 from app.models.enums.error_kind import ErrorKind
+from app.models.message_context.message_metadata.tool_message_metadata import ToolResultFacts
+from app.service import depends as service_depends
 
 
 async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
@@ -69,7 +69,8 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
         # 准入与发出这次请求时的工具集同源；整批共用一份，批内调用的结果不改变本批准入。
         context = _message_context()
         request_tools = rc.request_tools(context)
-        knowledge = context.file_knowledge()
+        visible = context.visible_tool_facts()
+        batch_facts: list[ToolResultFacts] = []
         observations = []
         for call in calls:
             if rc.mailbox.has_user_input():
@@ -89,13 +90,12 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
                 step_id,
                 loop,
                 request_tools,
-                knowledge,
+                visible,
+                tuple(batch_facts),
             )
             observations.append(observation)
-            file_facts = observation.facts.file_facts if observation.facts is not None else None
-            if file_facts is not None:
-                knowledge.observe(file_facts, include_reads=False)
-                write_attribution.record(rc.session.id, file_facts)
+            if observation.facts is not None:
+                batch_facts.append(observation.facts)
     log.info(
         "tools_node_completed",
         extra={
@@ -158,7 +158,8 @@ def _execute_call(
     step_id: str,
     loop: asyncio.AbstractEventLoop,
     request_tools: RequestTools,
-    knowledge: FileKnowledge,
+    visible_facts: tuple[ToolResultFacts, ...],
+    batch_facts: tuple[ToolResultFacts, ...],
 ) -> ToolObservation:
     """执行单个调用并发终态；未知工具名也交给执行器，由准入门禁产出稳定观察。
 
@@ -176,8 +177,12 @@ def _execute_call(
         tool_call_id=call.call_id,
         writable_subpath=rc.session.extra.writable_root,
         request_tools=request_tools,
-        file_knowledge=knowledge,
-        terminal_permission_mode=rc.run.terminal_permission_mode,
+        visible_facts=visible_facts,
+        batch_facts=batch_facts,
+        # 启动命令时现读：用户随时切换终端权限，降权立即对下一条命令生效。
+        read_terminal_mode=lambda: service_depends.get_session_service().effective_terminal_mode(
+            rc.session.id
+        ),
     )
     try:
         observation = get_tool_executor().execute(

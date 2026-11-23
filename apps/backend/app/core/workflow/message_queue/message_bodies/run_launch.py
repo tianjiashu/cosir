@@ -1,6 +1,7 @@
-"""能交接新 Run 的输入（用户输入与 Agent 消息）共用的发起配置。
+"""能交接新 Run 的输入（用户输入与 Agent 消息）共用的发起配置：Agent、模型与推理强度。
 
-Run 期间锁定；只在消息交接新 Run 时生效，并入运行中的 Run 或唤醒挂起的 Run 时不看它。
+Run 期间锁定；只在消息交接新 Run 时生效，并入运行中的 Run 或唤醒挂起的 Run 时不看它。终端权限不在这里：
+它是会话树的安全策略、归 Session（``SessionRecord.terminal_permission_mode``），不随消息携带。
 """
 
 from typing import TYPE_CHECKING
@@ -8,7 +9,6 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict
 
 from app.models.enums.reasoning_effort import ReasoningEffort
-from app.models.terminal_permissions import TerminalPermissionMode
 
 if TYPE_CHECKING:
     from app.models.run.run_record import RunRecord
@@ -23,7 +23,6 @@ class RunLaunch(BaseModel):
     agent_id: str = "main_agent"
     model_config_id: str
     reasoning_effort: ReasoningEffort | None = None
-    terminal_permission_mode: TerminalPermissionMode = "request_approval"
 
     @classmethod
     def from_run(cls, run: "RunRecord | None") -> "RunLaunch | None":
@@ -38,7 +37,6 @@ class RunLaunch(BaseModel):
             agent_id=run.agent_id,
             model_config_id=run.model_config_id,
             reasoning_effort=run.reasoning_effort,
-            terminal_permission_mode=run.terminal_permission_mode,
         )
 
     @classmethod
@@ -58,5 +56,4 @@ class RunLaunch(BaseModel):
             agent_id=launch.agent_id,
             model_config_id=launch.model_config_id,
             reasoning_effort=launch.reasoning_effort,
-            terminal_permission_mode=launch.terminal_permission_mode,
         )

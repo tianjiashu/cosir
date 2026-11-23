@@ -24,6 +24,7 @@ from app.models.session.session_kind import (
 from app.models.session.session_record import SessionRecord
 from app.models.session.session_status import SessionStatus
 from app.models.session.session_tool_surface import SessionToolSurface
+from app.models.terminal_permissions import TerminalPermissionMode
 from app.storage.crud.session_context_crud import SessionContextCrud
 from app.storage.model.run_model import RunModel
 from app.storage.model.session_context_model import SessionContextModel
@@ -81,6 +82,7 @@ class SessionCrud:
             extra: SessionExtra | None = None,
             tool_surface: SessionToolSurface | None = None,
             derivation_depth: int = 0,
+            terminal_permission_mode: TerminalPermissionMode = "request_approval",
     ) -> SessionRecord:
         """新建一条 session 记录并落库。
 
@@ -122,6 +124,7 @@ class SessionCrud:
                     extra,
                     tool_surface,
                     derivation_depth,
+                    terminal_permission_mode,
                 )
         return self._build_and_flush(
             db,
@@ -132,6 +135,7 @@ class SessionCrud:
             extra,
             tool_surface,
             derivation_depth,
+            terminal_permission_mode,
         )
 
     def _build_and_flush(
@@ -144,6 +148,7 @@ class SessionCrud:
             extra: SessionExtra | None,
             tool_surface: SessionToolSurface | None = None,
             derivation_depth: int = 0,
+            terminal_permission_mode: TerminalPermissionMode = "request_approval",
     ) -> SessionRecord:
         """在给定会话中构造并 flush 一条 session 记录。
 
@@ -172,6 +177,7 @@ class SessionCrud:
             tool_surface=(tool_surface or SessionToolSurface()).model_dump(mode="json"),
             current_run_id=None,
             derivation_depth=derivation_depth,
+            terminal_permission_mode=terminal_permission_mode,
         )
         db.add(model)
         db.flush()
@@ -382,6 +388,21 @@ class SessionCrud:
             if not result.rowcount:
                 raise KeyError(session_id)
         return self.get(session_id)
+
+    def set_terminal_permission_mode(self, session_id: int, mode: TerminalPermissionMode) -> None:
+        """改写会话的终端权限；不刷新 ``updated_at``（同标题：侧栏按它排序）。
+
+        异常:
+            KeyError: Session 不存在。
+        """
+        with self._db_factory.begin() as db:
+            result = db.execute(
+                update(SessionModel)
+                .where(SessionModel.id == session_id)
+                .values(terminal_permission_mode=mode, updated_at=SessionModel.updated_at)
+            )
+            if not result.rowcount:
+                raise KeyError(session_id)
 
     def update_title(self, session_id: int, title: str) -> bool:
         """改写 Session 标题，返回是否真的变了；刻意不刷新 ``updated_at``：侧栏按它排序，改名不该让对话换位置。

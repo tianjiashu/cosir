@@ -10,6 +10,15 @@ from app.models.message_context.message_metadata.base.message_kinds import (
 )
 from app.models.message_context.message_metadata.base.message_metadata_base import MessageMetadata
 from app.models.message_context.message_metadata.system_message_metadata import PromptSourceBaseline
+from app.models.terminal_permissions import TerminalPermissionMode
+
+
+class TerminalPermissionBaseline(BaseModel):
+    """终端权限通知告知时的有效权限与可写根：任一变化就再告知一次。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    mode: TerminalPermissionMode
+    writable_root: str
 
 
 class NoticeEntry(BaseModel):
@@ -35,6 +44,8 @@ class NoticeEntry(BaseModel):
     # 读过的文件变化通知：告知时全部「读过但已变化」的文件，不透明，只有文件系统解读
     # （``app/tools/file_system/read_changes``）。
     stale_reads: list[dict[str, JsonValue]] | None = None
+    # 终端权限通知：告知时的有效权限与可写根（见 ``notices.request_notices``）。
+    terminal_permission: TerminalPermissionBaseline | None = None
 
 
 class UserInputPresentation(BaseModel):
