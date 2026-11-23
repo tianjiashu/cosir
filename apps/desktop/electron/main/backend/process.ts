@@ -48,7 +48,8 @@ export function spawnBackend({ runtime, port, bootstateFile, dataDir, consoleLog
       CODING_AGENT_HOST_TOKEN: hostToken,
       CODING_AGENT_API_TOKEN: apiToken,
       CODING_AGENT_BACKEND_CODE_ROOT: runtime.backendDir,
-      CODING_AGENT_CONTROL_CODE_ROOTS: JSON.stringify([runtime.backendDir, __dirname, app.getAppPath(), frontendDir()].filter((root) => fs.existsSync(root)).map((root) => fs.realpathSync(path.resolve(root)))),
+      // 宿主会在沙箱外运行的程序：沙箱升级可写 `/`，这些目录必须仍只读（宿主可执行文件所在的包也在内）。
+      CODING_AGENT_CONTROL_CODE_ROOTS: JSON.stringify([runtime.backendDir, __dirname, app.getAppPath(), frontendDir(), hostExecutableRoot()].filter((root) => fs.existsSync(root)).map((root) => fs.realpathSync(path.resolve(root)))),
     },
   });
   forwardConsole(child.stdout, consoleLogFile, "stdout");
@@ -108,4 +109,9 @@ function killTree(pid: number): void {
 
 function delay(ms: number): Promise<false> {
   return new Promise((resolve) => setTimeout(() => resolve(false), ms));
+}
+
+/** 宿主可执行文件所在的整个程序包：macOS 是 `.app`（`Contents/MacOS/<name>` 往上三级），其他平台是可执行文件所在目录。 */
+function hostExecutableRoot(): string {
+  return process.platform === "darwin" ? path.resolve(process.execPath, "../../..") : path.dirname(process.execPath);
 }

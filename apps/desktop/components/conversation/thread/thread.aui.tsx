@@ -215,7 +215,7 @@ const Composer = memo(function Composer() {
           </div>
           <ComposerToolbar
             add={<ThreadComposerAddMenu workspaceRoot={workspaceRoot} />}
-            config={<><ModelSelector scope={{ sessionId, workspaceId }} locked={runLaunch} /><TerminalPermissionSelector sessionId={sessionId} locked={runLaunch} /></>}
+            config={<><ModelSelector scope={{ sessionId, workspaceId }} locked={runLaunch} /><TerminalPermissionSelector sessionId={sessionId} /></>}
             status={<SessionContextUsage />}
             action={<ComposerAction />}
           />

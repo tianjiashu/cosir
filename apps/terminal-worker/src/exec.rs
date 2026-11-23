@@ -8,7 +8,7 @@
 //! `exit.reason`。
 
 use std::io::{self, Read};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -50,6 +50,7 @@ pub fn run(
     args: Vec<String>,
     raw_args: bool,
     cwd: String,
+    policy: crate::sandbox::ExecutionPolicy,
 ) -> anyhow::Result<()> {
     // 先握手再启动：启动失败（找不到程序、cwd 不存在）是这条命令的结果，要经已确认身份的连接
     // 报给后端，而不是让后端以为 worker 本身起不来。
@@ -59,7 +60,7 @@ pub fn run(
         mode: "exec",
         pty: None,
     })?;
-    let (child, containment, reader) = match spawn(&program, &args, raw_args, &cwd) {
+    let (child, containment, reader) = match spawn(&program, &args, raw_args, &cwd, &policy) {
         Ok(spawned) => spawned,
         Err(error) => {
             output.send(&WorkerEvent::Exit {
@@ -86,8 +87,10 @@ fn spawn(
     args: &[String],
     raw_args: bool,
     cwd: &str,
+    policy: &crate::sandbox::ExecutionPolicy,
 ) -> anyhow::Result<(Child, Containment, io::PipeReader)> {
-    let mut command = Command::new(program);
+    let mut command =
+        crate::sandbox::command(program, if policy.full_access { &[] } else { args }, policy)?;
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -105,7 +108,9 @@ fn spawn(
         if raw_args {
             anyhow::bail!("raw_args is only meaningful on Windows");
         }
-        command.args(args);
+        if policy.full_access {
+            command.args(args);
+        }
     }
     #[cfg(unix)]
     {
@@ -331,6 +336,9 @@ fn spawn_child_watcher(mut child: Child, sender: Sender<InternalEvent>) -> Optio
 
 #[cfg(all(test, unix))]
 mod tests {
+    fn full_policy() -> crate::sandbox::ExecutionPolicy {
+        serde_json::from_value(serde_json::json!({"full_access":true,"network":true,"writable_roots":[],"writable_exceptions":[],"denied_read":[],"readable_exceptions":[],"readonly_roots":[]})).unwrap()
+    }
     use super::spawn;
     use crate::exit_watch::{wait_exit, ChildExit};
     use std::io::Read;
@@ -343,8 +351,14 @@ mod tests {
     /// 与 drive 同一顺序：观察退出 → 清理 → 回收。
     fn run_to_end(script: &str) -> (String, ChildExit, std::time::Duration) {
         let started = Instant::now();
-        let (mut child, mut containment, mut reader) =
-            spawn("/bin/sh", &["-c".into(), script.into()], false, "/").expect("spawn");
+        let (mut child, mut containment, mut reader) = spawn(
+            "/bin/sh",
+            &["-c".into(), script.into()],
+            false,
+            "/",
+            &full_policy(),
+        )
+        .expect("spawn");
         let status = wait_exit(child.id()).expect("wait");
         containment.terminate().expect("cleanup");
         child.wait().expect("reap");
@@ -430,7 +444,7 @@ mod tests {
 
     #[test]
     fn spawn_failure_is_an_error_not_a_panic() {
-        assert!(spawn("/no/such/program", &[], false, "/").is_err());
-        assert!(spawn("/bin/sh", &[], true, "/").is_err());
+        assert!(spawn("/no/such/program", &[], false, "/", &full_policy()).is_err());
+        assert!(spawn("/bin/sh", &[], true, "/", &full_policy()).is_err());
     }
 }

@@ -150,12 +150,11 @@ export type TransportTerminalRunStatus = Extract<TransportRunStatus, "completed"
  * `modelConfigId` 是「连接 id/模型名」；模型从配置文件删除后仍是原 id，在目录里查不到即视为已删除。
  */
 export type TerminalPermissionMode = "request_approval" | "full_access";
-export type TerminalApproval = { id: string; originSessionId: number; toolCallId: string; command: string; shell: string; cwd: string; network: boolean; writeRoots: string[]; justification: string };
+export type TerminalApproval = { id: string; originSessionId: number; originTitle: string; toolCallId: string; command: string; shell: string; cwd: string; intent: string };
 
 export type TransportRunLaunch = {
   modelConfigId: string | null;
   reasoningEffort: string | null;
-  terminalPermissionMode: TerminalPermissionMode;
 };
 
 /**
@@ -341,4 +340,6 @@ export type TransportState = {
   terminal_approvals: TerminalApproval[];
   /** 会话交付清单（必填，可为空数组）：后端从完整历史投影，按 key 去重、最近在前；侧栏「产出」卡读它。 */
   deliverables: TransportDeliverable[];
+  /** 会话的终端权限，投影自 `sessions.terminal_permission_mode`：随时可切、Agent 下一条命令生效；选择器只读它。 */
+  terminal_permission_mode: TerminalPermissionMode;
 };

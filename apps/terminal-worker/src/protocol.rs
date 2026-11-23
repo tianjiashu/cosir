@@ -29,6 +29,7 @@ pub enum ControlFrame {
         args: Vec<String>,
         raw_args: bool,
         cwd: String,
+        policy: Box<crate::sandbox::ExecutionPolicy>,
     },
     Write {
         input: TerminalInput,
@@ -237,7 +238,7 @@ mod tests {
     #[test]
     fn reads_start_exec_frame_and_rejects_the_old_start_name() {
         let parsed = read_control_frame(&mut Cursor::new(frame(
-            br#"{"type":"start_exec","program":"/bin/sh","args":["-c","echo hi"],"raw_args":false,"cwd":"/tmp"}"#,
+            br#"{"type":"start_exec","policy":{"full_access":true,"network":true,"writable_roots":[],"writable_exceptions":[],"denied_read":[],"readable_exceptions":[],"readonly_roots":[]},"program":"/bin/sh","args":["-c","echo hi"],"raw_args":false,"cwd":"/tmp"}"#,
         )))
         .expect("valid frame")
         .expect("one frame");
@@ -247,6 +248,7 @@ mod tests {
                 args,
                 raw_args,
                 cwd,
+                ..
             } => {
                 assert_eq!(program, "/bin/sh");
                 assert_eq!(args, vec!["-c", "echo hi"]);

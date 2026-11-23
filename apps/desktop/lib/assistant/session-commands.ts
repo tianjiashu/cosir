@@ -1,3 +1,4 @@
+import type { TerminalPermissionMode } from "@/lib/assistant/contract";
 /**
  * Session 级业务命令客户端：发送、排队消息的立即发送 / 删除（编辑排队消息即删除后放回输入框，不是独立命令）、
  * 撤回（编辑即撤回后放回输入框，不是独立命令）、恢复、用户决定、停止 Session，以及按 `tool_call_id` 寻址的
@@ -37,7 +38,6 @@ export type SessionMessageRequest = {
   message: SessionUserMessage;
   modelConfigId: string;
   reasoningEffort: string | null;
-  terminalPermissionMode: "request_approval" | "full_access";
 };
 
 /**
@@ -72,6 +72,11 @@ export function sendSessionMessage(
   init?: CommandInit,
 ): Promise<void> {
   return postSessionCommand(`/sessions/${sessionId}/messages`, request, init);
+}
+
+/** 切换会话的终端权限：随时可切，下一条命令生效；新值经 snapshot 推回（409 `TERMINAL_SANDBOX_UNAVAILABLE`）。 */
+export function setTerminalPermission(sessionId: number, mode: TerminalPermissionMode): Promise<void> {
+  return postSessionCommand(`/sessions/${sessionId}/terminal-permission`, { mode });
 }
 
 export function decideTerminalApproval(sessionId: number, requestId: string, decision: "approve" | "reject"): Promise<void> {

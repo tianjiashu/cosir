@@ -6,6 +6,7 @@ mod io;
 mod lifecycle;
 mod protocol;
 mod pty;
+mod sandbox;
 mod session;
 mod shell_integration;
 mod terminal_screen;
@@ -20,6 +21,9 @@ fn main() {
 }
 
 fn run() -> anyhow::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--probe-sandbox") {
+        return sandbox::probe();
+    }
     let mut args = std::env::args_os().skip(1);
     let mut stdio = false;
     let mut instance_id = None;

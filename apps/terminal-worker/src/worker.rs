@@ -41,7 +41,8 @@ pub fn run(instance_id: String) -> anyhow::Result<()> {
             args,
             raw_args,
             cwd,
-        }) => crate::exec::run(instance_id, output, program, args, raw_args, cwd),
+            policy,
+        }) => crate::exec::run(instance_id, output, program, args, raw_args, cwd, *policy),
         Some(_) => anyhow::bail!("first terminal worker frame must be start_session or start_exec"),
     }
 }

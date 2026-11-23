@@ -1,4 +1,3 @@
-import { useTerminalPermissionStore, selectedTerminalPermission } from "@/lib/terminal/permission-selection";
 import { useCallback, useMemo, useRef } from "react";
 
 import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
@@ -73,7 +72,6 @@ export function useRuntimeTransport(
       const launch = runLaunch ?? {
         modelConfigId: preferred?.modelConfigId ?? null,
         reasoningEffort: preferred?.reasoningEffort ?? null,
-        terminalPermissionMode: selectedTerminalPermission(useTerminalPermissionStore.getState(), context.sessionId, state),
       };
       // 正文里的胶囊标签就是机器可读的指针，命令原样发送，不在前端改写 parts。
       const message = command.message as SessionMessageRequest["message"];
@@ -84,7 +82,6 @@ export function useRuntimeTransport(
         message,
         modelConfigId: launch.modelConfigId,
         reasoningEffort: launch.reasoningEffort,
-        terminalPermissionMode: launch.terminalPermissionMode,
       };
       void frontendLog("INFO", "assistant_session_command_prepared", "Session 命令已准备发送", {
         traceId: context.traceId,

@@ -15,7 +15,7 @@
 //! 首进程的组长 / 会话首进程身份由启动保证（`process_group(0)`、portable-pty 的 `setsid`，失败则
 //! 启动失败），不再复查。
 //!
-//! 主动 `setsid` 脱离会话的进程（守护化）不在范围内，留给沙箱。Windows 两种模式都用 Job Object
+//! 主动脱组/守护化不在本模块范围内；Linux 受限命令由 bwrap PID namespace 收尾，macOS 不承诺回收主动脱组进程。Windows 两种模式都用 Job Object
 //! （`KILL_ON_JOB_CLOSE`），挂入后的子孙都在作业里，结束作业即可；挂入发生在启动之后，其间的
 //! 短竞态接受。
 //!
