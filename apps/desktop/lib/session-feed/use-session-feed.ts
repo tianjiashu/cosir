@@ -23,7 +23,7 @@ export type SessionFeedCatalogHandlers = {
 /**
  * 应用级唯一的 Session 推送连接（`GET /session-feed/stream`），在 `AppLayout` 挂一次。送两类事实：
  *
- * - 状态：后端在 Run 开始与状态迁移、工具调用状态迁移（等你操作的增减）时推送变化，并每隔一段时间
+ * - 状态：后端在 Run 开始与状态迁移、工具调用状态迁移（在等你的增减）、已读变化时推送变化，并每隔一段时间
  *   重发整表兜住漏掉的变化；写进 `session-status-store`。
  * - 目录失效：目录的写入方（建删工作区与 Session、改标题、开新 Run）提交后推送，交给目录重读。目录
  *   只从这里得知后端的变化（含后台会话 的分叉与标题）。断开期间漏掉的失效不会重发，所以重连后
@@ -115,14 +115,17 @@ export function parseSessionFeedFrame(value: unknown): SessionFeedFrame {
     const sessionId = Number(key);
     if (!isPositiveInteger(sessionId)) throw new Error("session feed frame session id is invalid");
     if (typeof entry !== "object" || entry === null) throw new Error("session feed frame entry is invalid");
-    const { executionStatus, awaitingUserCalls } = entry as Record<string, unknown>;
+    const { executionStatus, awaitingDecisions, awaitingApprovals, unread } = entry as Record<string, unknown>;
     if (executionStatus !== null && typeof executionStatus !== "string") throw new Error("session feed frame status is invalid");
-    if (typeof awaitingUserCalls !== "number" || !Number.isInteger(awaitingUserCalls) || awaitingUserCalls < 0) {
-      throw new Error("session feed frame awaitingUserCalls is invalid");
-    }
-    sessions[sessionId] = { executionStatus, awaitingUserCalls };
+    if (!isCount(awaitingDecisions) || !isCount(awaitingApprovals)) throw new Error("session feed frame awaiting counts are invalid");
+    if (typeof unread !== "boolean") throw new Error("session feed frame unread is invalid");
+    sessions[sessionId] = { executionStatus, awaitingDecisions, awaitingApprovals, unread };
   }
   return { type: frame.type, sessions };
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 function isPositiveInteger(value: unknown): value is number {

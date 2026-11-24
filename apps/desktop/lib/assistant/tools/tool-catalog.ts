@@ -147,7 +147,7 @@ export const TOOL_CATALOG: Record<string, ToolCatalogEntry> = {
   delegate_task: { verb: "委派任务", icon: "users", target: (args) => str(args.agent_name) ?? str(args.child_agent_id) },
   fork_session: { verb: "分叉会话", icon: "git-fork", target: (args) => str(args.title) },
   session_send: { verb: "发送消息", icon: "send", target: sessionRef },
-  session_list: { verb: "列出派生会话", icon: "users" },
+  session_list: { verb: "列出会话", icon: "users" },
   session_read: { verb: "查看会话进度", icon: "info", target: sessionRef },
   session_stop: { verb: "停止会话", icon: "x", target: sessionRef },
   wait_messages: { verb: "等待结果", icon: "clock" },

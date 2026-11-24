@@ -9,7 +9,6 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 from PIL import Image
-from watchdog.events import FileModifiedEvent
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -18,10 +17,8 @@ from app.parent_watch import install_parent_watch_from_env
 from app.service.depends import (
     close_service_dependencies,
     get_workspace_crud,
-    get_workspace_file_watcher,
     get_workspace_files_service,
 )
-from app.service.workspace_files.file_watch import WorkspaceFileWatcher
 from app.storage.store_engines import init_storage
 from app.utils.path import system_cosir as paths
 
@@ -45,7 +42,7 @@ async def fixture_lifespan(_app: FastAPI):
         )
         Image.new("RGB", (4100, 4100), "teal").save(root / "media" / "huge.png")
         (root / "large.txt").write_text("中文😀 line\n" * 350000, encoding="utf-8")
-        # 隔离 storage 到临时目录，避免触碰生产数据库；watcher 与 api 共享同一 service 单例。
+        # 隔离 storage 到临时目录，避免触碰生产数据库；各接口共享同一 service 单例。
         storage_dir = Path(tempfile.mkdtemp(prefix="cosir-files-e2e-storage-"))
         paths.override(
             DATABASE_FILE=storage_dir / "app.sqlite3",
@@ -56,28 +53,39 @@ async def fixture_lifespan(_app: FastAPI):
         # 经 health 暴露给 spec，由它把浏览器请求的 id 映射到这里。
         workspace = get_workspace_crud().create("demo", str(root))
         files = get_workspace_files_service()
-        watcher = WorkspaceFileWatcher()
         app.dependency_overrides[get_workspace_files_service] = lambda: files
-        app.dependency_overrides[get_workspace_file_watcher] = lambda: watcher
         app.state.fixture_root = root
         app.state.fixture_workspace_id = workspace.id
-        app.state.fixture_watcher = watcher
         yield
-        watcher.close()
         files.close()
         app.dependency_overrides.clear()
         close_service_dependencies()
 
 
-def deliver_change(path: Path) -> None:
-    """替操作系统送一次目录变化事件，走真实的路由与推送链路。
+class WatchConnections:
+    """数正在进行的 ``/files/watch`` 连接：E2E 据此断言「没有登记就没有连接」。
 
-    原生事件的投递时限由操作系统决定、不做保证（macOS 的 fseventsd 满载时会迟到十几秒或丢失），
-    E2E 要验证的是「后端推 changed → 前端刷新 → 界面更新」，不能押在机器负载上。原生登记与路由
-    的正确性由后端 ``test_workspace_files.py`` 的注册、路由测试守住。系统报出的是真实路径，这里同样先解析。
+    变化由后端按周期 stat 比对得出（``WatchedPaths``），是确定性的，夹具写完文件不必再替系统送事件；
+    客户端断开时流式响应结束，下游调用返回即计数减一。
     """
-    path = path.parent.resolve() / path.name
-    app.state.fixture_watcher.changed(app.state.fixture_workspace_id, FileModifiedEvent(str(path)))
+
+    active = 0
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or not scope["path"].endswith("/files/watch"):
+            await self.app(scope, receive, send)
+            return
+        WatchConnections.active += 1
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            WatchConnections.active -= 1
+
+
+app.add_middleware(WatchConnections)
 
 
 @app.post("/__test__/files/update")
@@ -87,7 +95,6 @@ def update_file():
     replacement = root / "src" / "new.py"
     replacement.write_text("print('after update')\n", encoding="utf-8")
     replacement.replace(root / "src" / "main.py")
-    deliver_change(root / "src" / "main.py")
     return {"updated": True}
 
 
@@ -95,21 +102,18 @@ def update_file():
 def update_image():
     root = app.state.fixture_root
     Image.new("RGB", (40, 30), "blue").save(root / "media" / "deep" / "photo.png")
-    deliver_change(root / "media" / "deep" / "photo.png")
     return {"updated": True}
 
 
 @app.post("/__test__/files/delete")
 def delete_file():
     (app.state.fixture_root / "src" / "main.py").unlink()
-    deliver_change(app.state.fixture_root / "src" / "main.py")
     return {"deleted": True}
 
 
 @app.get("/__test__/files/watch-status")
 def watch_status():
-    watcher = app.state.fixture_watcher
-    return {"subscriptions": len(watcher._subscribers), "watches": len(watcher._registrations)}
+    return {"subscriptions": WatchConnections.active}
 
 
 @app.post("/__test__/files/link-fixture")

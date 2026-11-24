@@ -89,10 +89,38 @@ test("整块选中取 Markdown 源文；表格只选两行时带上表头重组�
 });
 
 test("代码只选一行：保留围栏与语言", async ({ page }) => {
-  // 代码高亮完成后一行会拆成多个词元，按行元素拖选。
-  await dragSelectElement(page, page.locator('[data-role="assistant"] [data-streamdown="code-block"] pre > code > span').nth(1));
+  // 代码高亮完成后一行会拆成多个词元，按行元素拖选。高亮是异步的，词元出现后代码块还可能再重绘一次：
+  // 等这一行的元素连续 300ms 不被替换再拖，否则选区落到重绘前的结构上（曾选进上一行，或元素已脱离文档）。
+  const line = page.locator('[data-role="assistant"] [data-streamdown="code-block"] pre > code > span').nth(1);
+  await expect(line.locator("span[style]").first()).toBeVisible();
+  await expect.poll(() => line.evaluate((element) => new Promise((settle) => setTimeout(() => settle(element.isConnected), 300)))).toBe(true);
+  await dragSelectElement(page, line);
   await quote(page, "");
   expect((await send(page)).quotes[0]?.text).toBe("```ts\nconst b = 2;\n```");
+});
+
+// 目的：浮条与批注卡不盖住正往下读的内容；潜在缺陷：浮层出在选区下方挡住后文，或只能靠回车提交。
+test("浮条在选区第一行上方，批注卡原位展开；发送按钮与回车一样能添加", async ({ page }) => {
+  await select(page, "第一项", "第三项");
+  const firstLine = await page.locator('[data-role="assistant"] li').first().boundingBox();
+  const bar = page.locator('[data-slot="selection-toolbar"]');
+  // 弹层从下方滑入（data-side=top 时起点下移 8px）：等入场动画结束再量位置。
+  const settled = () => bar.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)));
+  await expect(bar).toContainText(/⌘L|Ctrl\+L/);
+  await settled();
+  expect((await bar.boundingBox())!.y + (await bar.boundingBox())!.height).toBeLessThanOrEqual(firstLine!.y);
+  await page.screenshot({ path: test.info().outputPath("selection-toolbar.png") });
+
+  await page.getByRole("button", { name: "摘录", exact: true }).click();
+  await expect(page.getByLabel("写批注")).toBeVisible();
+  await settled();
+  const card = await bar.boundingBox();
+  expect(card!.y + card!.height).toBeLessThanOrEqual(firstLine!.y);
+  await page.getByLabel("写批注").fill("按钮提交");
+  await page.screenshot({ path: test.info().outputPath("selection-comment-card.png") });
+  await page.getByRole("button", { name: "添加到输入框" }).click();
+  await expect(page.getByLabel("写批注")).toHaveCount(0);
+  expect((await send(page)).quotes).toEqual([{ text: "1. 第一项\n2. 第二项\n3. 第三项", note: "按钮提交" }]);
 });
 
 test("Esc 放弃：不加摘录", async ({ page }) => {

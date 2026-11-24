@@ -6,6 +6,7 @@ import "katex/dist/katex.min.css";
 
 import { useThemeState, type ThemeState } from "@/lib/theme/theme-preference";
 import { codeHighlightPlugin } from "./code-highlight-plugin";
+import { rehypeRemoteImageLinks } from "./remote-image-links";
 
 /**
  * 所有 Markdown 渲染面共用的 Streamdown 插件配置（流式的 `MarkdownText` 与整篇渲染的 `StaticMarkdown`）。
@@ -26,11 +27,12 @@ export const markdownPlugins = {
  * 链接的安全边界就是这一步加上链接打开入口（`components/links`）：清洗去掉 `javascript:`、`file:` 等
  * 协议，相对地址原样保留；是否可打开、打开到哪由 `resolveLink` 判定。不用 Streamdown 默认的
  * rehype-harden：它把相对地址改写成以 `/` 开头的路径（`../a.md` 变成 `/a.md`），丢掉相对关系，
- * 而它额外的协议拦截已由打开入口覆盖。
+ * 而它额外的协议拦截已由打开入口覆盖。网站图片换成链接（`remote-image-links.ts`），界面不直接请求网站。
  */
 export const markdownRehypePlugins = [
   defaultRehypePlugins.raw,
   defaultRehypePlugins.sanitize,
+  rehypeRemoteImageLinks,
 ] as NonNullable<StreamdownProps["rehypePlugins"]>;
 
 type ResolvedTheme = ThemeState["resolvedTheme"];

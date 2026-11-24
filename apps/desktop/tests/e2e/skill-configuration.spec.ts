@@ -67,7 +67,7 @@ test("工作区 Skills 页按身份分卡：摘要、覆盖关系、导入落点
 
   // 本工作区两节（空的专属一节也在，告诉用户往哪放），节标题自带作用域；继承来的系统级空专属目录不列。
   await expect(page.getByText(".cosir/skills", { exact: true })).toBeVisible();
-  await expect(page.getByText("还没有。用右上角「导入」放进来，只有 cosir 使用。")).toBeVisible();
+  await expect(page.getByText("还没有。用右上角「导入」放进来。")).toBeVisible();
   await expect(page.getByText(".agents/skills", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "本工作区 · cosir 专属" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "系统级 · 共享" })).toBeVisible();
@@ -82,9 +82,9 @@ test("工作区 Skills 页按身份分卡：摘要、覆盖关系、导入落点
   await expect(page.getByRole("switch", { name: "停用 Skill review" })).toHaveCount(1);
   await expect(page.getByText("1 个无法加载")).toHaveCount(1);
 
-  // 导入菜单写明落在专属目录、其他工具看不到。
+  // 导入菜单只列来源；落点与「谁能看到」由 cosir 专属分组标题交代，菜单不重复。
   await page.getByRole("button", { name: "导入" }).click();
-  await expect(page.getByText("导入到 .cosir/skills · 只有 cosir 使用，Codex 等看不到")).toBeVisible();
+  await expect(page.getByText(/Codex 等看不到/)).toHaveCount(0);
   await expect(page.getByRole("menuitem", { name: "ZIP 压缩包…" })).toBeVisible();
   await page.keyboard.press("Escape");
 
@@ -154,7 +154,6 @@ test("Skill 详情：文件夹默认收起、可展开，正文里的相对链�
   const detail = {
     ...skill("report-kit", { scope: "system", kind: "cosir" }),
     content: "# 复盘\n\n写法见 [写法说明](references/style.md)，运行 `scripts/build.py`，不存在的 [旧文件](references/gone.md)。\n",
-    location: "~/.cosir/skills/report-kit",
     also_at: [],
     directory: "/home/me/.cosir/skills/report-kit",
     metadata: {},
@@ -172,6 +171,10 @@ test("Skill 详情：文件夹默认收起、可展开，正文里的相对链�
     return route.fulfill({ json: { path, content: path === "references/style.md" ? "# 写法\n\n短句。\n" : "print('build')\n" } });
   });
   await page.goto("/configuration/skills/report-kit");
+  // 作用域、位置与「谁能看到」只在列表的分组标题里交代，详情页头不重复；没有其他副本时也不提「同一份」。
+  await expect(page.getByRole("heading", { name: "report-kit" })).toBeVisible();
+  await expect(page.getByText("只有 cosir 使用")).toHaveCount(0);
+  await expect(page.getByText(/同一份也在/)).toHaveCount(0);
 
   const files = page.getByRole("navigation", { name: "Skill 文件" });
   // 默认收起：只看到文件夹与文件数，里面的文件不显示。

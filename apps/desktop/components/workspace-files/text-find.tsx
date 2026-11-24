@@ -9,7 +9,7 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 import type { FindDirection, FindResult } from "@/lib/find/next-match";
 import { useDomFind } from "@/lib/find/use-dom-find";
 import { useReadingCommand } from "@/lib/workspace-files/reading-commands";
-import { useStreamedSearch } from "./use-streamed-search";
+import { useStreamedSearch } from "@/lib/workspace-files/use-streamed-search";
 
 /**
  * 文本阅读器的查找：就地查当前显示的内容，源码视图交给只读编辑器（`TextViewerHandle.find`），Markdown 渲染

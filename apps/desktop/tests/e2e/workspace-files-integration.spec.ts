@@ -309,6 +309,55 @@ test("引用：胶囊标签粘贴、普通消息发送、重载历史后撤回�
   await expect(user.locator("[data-workspace-reference]")).toHaveCount(3);
 });
 
+// 目的：@ 候选边搜边显示，回车选中的就是看得见的那一条。潜在缺陷：搜索没扫完（还没收到 complete）时候选被藏在
+// 「搜索中…」后面，回车却插入了看不见的文件。夹具只替换搜索响应：一批命中、complete=false 后流就结束，
+// 前端停在进行中，与大工作区里「先命中、很久才扫完」的真实时序（name_search 每 0.25 秒交一批）相同。
+test("引用：@ 搜索未完成时已命中的候选可见，回车选中的就是它", async ({ page, request }) => {
+  await request.post(`${API_ORIGIN}/__test__/reset`);
+  await referenceWorkspace(page);
+  await page.route("**/files/search", (route) =>
+    route.fulfill({
+      contentType: "application/x-ndjson",
+      body: JSON.stringify({
+        entries: [{ path: "src/main.py", name: "main.py", kind: "file", symlink: false, hint: null }],
+        skipped: 0,
+        skipped_reasons: {},
+        complete: false,
+        next_offset: null,
+      }) + "\n",
+    }),
+  );
+  const input = page.getByLabel("消息输入");
+  await input.fill("@main");
+  const candidates = page.getByRole("listbox", { name: "工作区引用候选" });
+  await expect(candidates.getByRole("option", { name: "src/main.py", exact: true })).toBeVisible();
+  await expect(candidates).not.toContainText("搜索中");
+  await page.keyboard.press("Enter");
+  await expect(input.locator("[data-workspace-reference]")).toHaveCount(1);
+});
+
+// 目的：@ 候选只属于当前输入。潜在缺陷：打字后 200ms 防抖窗口内，列表里还是上一个查询的结果，回车把刚打的
+// `@mainx` 换成了 main.py（mainx 什么都不匹配）。真实后端、逐字输入（不用 fill 整体替换，也不用虚拟时钟）。
+test("引用：@ 改了查询后立即回车不会插入上一个查询的文件，等新结果出来后按新结果选", async ({ page, request }) => {
+  await request.post(`${API_ORIGIN}/__test__/reset`);
+  await referenceWorkspace(page);
+  const input = page.getByLabel("消息输入");
+  const candidates = page.getByRole("listbox", { name: "工作区引用候选" });
+  await input.click();
+  await page.keyboard.type("@main", { delay: 60 });
+  await expect(candidates.getByRole("option", { name: "src/main.py", exact: true })).toBeVisible();
+  await page.keyboard.type("x");
+  await page.keyboard.press("Enter");
+  await expect(input.locator("[data-workspace-reference]")).toHaveCount(0);
+  await expect(input).toContainText("@mainx");
+  await expect(candidates).toContainText("没有匹配项");
+  // 正常路径：退回到 @main、等新结果出来再回车，插入的是新结果。
+  await page.keyboard.press("Backspace");
+  await expect(candidates.getByRole("option", { name: "src/main.py", exact: true })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(input.locator("[data-workspace-reference]")).toHaveCount(1);
+});
+
 test("引用：Session 混合草稿切换后恢复附件并可移除", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
   await request.post(`${API_ORIGIN}/__test__/seed-session`, {
@@ -555,7 +604,6 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
   await backend.api.patch(api, {
     data: { paths: ["src/main.py", "src/loop"], ignored: true },
   });
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(
     surface.getByText("没有匹配的文件", { exact: true }),
   ).toBeVisible();
@@ -575,7 +623,6 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
   await backend.api.patch(api, {
     data: { paths: ["src/main.py", "src/loop"], ignored: false },
   });
-  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
   await expect(
     surface.getByRole("treeitem", { name: "main.py", exact: true }),
   ).toBeVisible();

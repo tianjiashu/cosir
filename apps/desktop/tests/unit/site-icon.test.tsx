@@ -14,9 +14,12 @@ describe("brandIconPath", () => {
 });
 
 describe("WebPageIcon", () => {
-  it("always has something to show before any favicon arrives", () => {
+  // 目的：渲染链接不联网；潜在缺陷：模型写的主机名一显示就被请求 favicon。
+  it("draws every link icon offline, with no image to fetch", () => {
     for (const url of ["https://github.com/a", "https://unknown.example", "http://localhost:3000", "http://10.0.0.8", "mailto:a@b.c", "about:blank"]) {
-      expect(renderToStaticMarkup(<WebPageIcon url={url} />)).toContain("<svg");
+      const html = renderToStaticMarkup(<WebPageIcon url={url} />);
+      expect(html).toContain("<svg");
+      expect(html).not.toContain("<img");
     }
   });
 });

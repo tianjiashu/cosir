@@ -383,7 +383,6 @@ def test_detail_lists_files_metadata_and_location_for_disabled_skills_too(client
 
     assert detail["enabled"] is False
     assert detail["content"] == "# Ticket\n\n运行 scripts/run.py\n"
-    assert detail["location"] == "~/.agents/skills/ticket"
     assert detail["directory"] == str(directory.resolve())
     assert detail["metadata"] == {
         "license": "MIT",

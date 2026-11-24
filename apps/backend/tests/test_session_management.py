@@ -1,8 +1,10 @@
-"""会话管理工具（``core/tool/session_management``）：进度投影、尾部读取、派生树寻址与列表、``session_stop`` 的判定。"""
+"""会话管理工具（``core/tool/session_management``）：进度投影、尾部读取、工作区寻址与两段列表、
+``session_stop`` 的判定。"""
 
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -103,6 +105,8 @@ def _project(
         "waiting_on": [],
         "steps": 8,
         "now": _START + timedelta(minutes=2, seconds=5),
+        # 默认读者是 _session() 的派生方：它会汇报给读者。
+        "reader_id": 1,
     }
     facts.update(overrides)
     return SessionProgress.from_facts(_session(), run, rows, **facts)
@@ -318,7 +322,10 @@ class _Actor:
 
 
 class _SessionCrud:
-    """派生树：1 是调用方，2 是它委派的子 Agent，7 是 2 委派的孙辈，8 是 2 分叉出的孙辈；5、9 与 1 无关。"""
+    """派生树：1 是调用方，2 是它委派的子 Agent，7 是 2 委派的孙辈，8 是 2 分叉出的孙辈；5、9 与 1 无关。
+
+    侧栏按最近活动排在前面的顺序即插入顺序；12 是还没开始的新会话页，11 在另一个工作区。
+    """
 
     def __init__(self) -> None:
         self.sessions = {
@@ -328,6 +335,8 @@ class _SessionCrud:
             8: _fork(8, source=2),
             5: _user_session(5),
             9: _session(9, deriver=5),
+            12: _user_session(12, started=False),
+            11: replace(_user_session(11), workspace_id=2),
         }
 
     def get(self, session_id: int) -> SessionRecord:
@@ -345,14 +354,22 @@ class _SessionCrud:
     ) -> list[SessionRecord]:
         return [s for s in self.sessions.values() if s.session_type == session_type]
 
+    def list_by_workspace(self, workspace_id: int) -> list[SessionRecord]:
+        return [
+            s
+            for s in self.sessions.values()
+            if s.workspace_id == workspace_id and s.session_type != SessionType.DELEGATED
+        ]
 
-def _user_session(session_id: int) -> SessionRecord:
+
+def _user_session(session_id: int, *, started: bool = True) -> SessionRecord:
     return SessionRecord(
         id=session_id,
         workspace_id=1,
         title=f"会话{session_id}",
         created_at=_START,
         updated_at=_START,
+        current_run_id=3 if started else None,
     )
 
 
@@ -448,41 +465,91 @@ def test_stop_never_skips_a_level(monkeypatch) -> None:
         assert actor.reasons == []
 
 
-def test_read_reaches_the_whole_tree_but_not_beyond(monkeypatch) -> None:
+def test_read_and_send_reach_the_whole_workspace(monkeypatch) -> None:
     service = _tree_service()
     monkeypatch.setattr(addressing, "get_session_service", lambda: service)
 
-    for target in (2, 7, 8):
+    for target in (2, 7, 8, 5, 9):
         assert isinstance(
-            addressing.find_readable_session("session_read", target, _context()), SessionRecord
+            addressing.find_workspace_session("session_read", target, _context()), SessionRecord
         )
-    refused = addressing.find_readable_session("session_read", 9, _context())
-    assert refused.status == "error"
+    for target, hint in ((11, "in another workspace"), (1, "your own session")):
+        refused = addressing.find_workspace_session("session_read", target, _context())
+        assert refused.status == "error" and hint in str(refused.content)
 
 
-def test_list_indents_the_tree_and_marks_what_you_may_do(monkeypatch) -> None:
+def _list(monkeypatch, caller: int = 1) -> list[str]:
     service = _tree_service()
     monkeypatch.setattr(session_list, "get_session_service", lambda: service)
     monkeypatch.setattr(
         SessionProgress,
         "read",
-        classmethod(lambda cls, session, *, steps: _project(_run("running"), [])),
+        classmethod(
+            lambda cls, session, *, steps, reader_id: replace(
+                _project(_run("running"), []), session_id=session.id
+            )
+        ),
     )
-    # 投影用同一个假 Session；这里只看树形、派生方与标注。
+    # 这里只看分段、树形、派生方与标注。
     monkeypatch.setattr(
         SessionProgress,
         "summary_line",
-        lambda self, *, derived_by=None: f"line(derived_by={derived_by})",
+        lambda self, *, derived_by=None: f"#{self.session_id}(derived_by={derived_by})",
     )
+    return SessionListTool().execute(execution_context=_context(caller)).content.splitlines()
 
-    lines = SessionListTool().execute(execution_context=_context()).content.splitlines()
+
+def test_list_shows_the_tree_then_the_other_conversations(monkeypatch) -> None:
+    lines = _list(monkeypatch)
 
     assert lines[0].startswith("Your derivation tree")
-    assert lines[1:] == [
-        "line(derived_by=None) [read, stop]",
-        "  line(derived_by=2) [read]",
-        "  line(derived_by=2) [read]",
+    assert lines[1:4] == [
+        "#2(derived_by=None) [read, stop]",
+        "  #7(derived_by=2) [read]",
+        "  #8(derived_by=2) [read]",
     ]
-    assert SessionListTool().execute(execution_context=_context(5)).content.splitlines()[1:] == [
-        "line(derived_by=None) [read, stop]",
-    ]
+    # 第二段：自己、树里已列的分叉 8、新会话页 12、别的工作区的 11 与子 Agent 9 都不在。
+    assert lines[4] == ""
+    assert lines[5].startswith("Other conversations in this workspace")
+    assert lines[6:] == ["#5(derived_by=None) [read]"]
+
+
+def test_list_from_a_child_agent_marks_who_derived_it(monkeypatch) -> None:
+    lines = _list(monkeypatch, caller=2)
+
+    assert lines[1:3] == ["#7(derived_by=None) [read, stop]", "#8(derived_by=None) [read, stop]"]
+    assert lines[-2:] == ["#1(derived_by=None); it derived you [read]", "#5(derived_by=None) [read]"]
+
+
+def test_list_caps_the_other_conversations(monkeypatch) -> None:
+    monkeypatch.setattr(session_list, "_OTHERS_LIMIT", 1)
+
+    lines = _list(monkeypatch, caller=2)
+
+    assert lines[-2:] == ["#1(derived_by=None); it derived you [read]", "1 older conversation(s) not shown."]
+
+
+def test_read_says_report_only_to_the_direct_deriver() -> None:
+    """孙辈只汇报给它自己的派生方、侧栏会话不汇报：对它们说「去等」会让读者一直等。"""
+    report = "next: it reports back to you when this run ends"
+    ask = "next: it does not report to you; if you need its result, ask it with session_send"
+    assert report in _project(_run("running"), [], reader_id=1).render()
+    for reader in (2, 5):
+        rendered = _project(_run("running"), [], reader_id=reader).render()
+        assert ask in rendered and report not in rendered
+    assert ask not in _project(_run("completed"), [], reader_id=5).render()
+
+
+def test_progress_labels_every_session_type_and_untitled() -> None:
+    progress = SessionProgress.from_facts(
+        replace(_user_session(5), title=""),
+        _run("completed"),
+        [],
+        queued=0,
+        waiting_on=[],
+        steps=0,
+        now=_START,
+        reader_id=1,
+    )
+    assert progress.name == "(untitled)"
+    assert progress.kind == "conversation"

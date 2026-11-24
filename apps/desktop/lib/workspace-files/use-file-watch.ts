@@ -5,7 +5,10 @@ import { queryKeys } from "@/lib/query/query-keys";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 
-/** 每次重连先重新读取；不依赖文件系统事件完整重放，端口换代会取消旧请求。 */
+/**
+ * 一个工作区的文件变化订阅：后端按周期比对登记的路径，连上（`ready`）与每次变化（`changed`）都整体重读该工作区的
+ * 文件查询；重连同样先重读，不依赖变化的完整重放。端口换代会取消旧请求。
+ */
 export function useFileWatch(id: number, paths: string[]) {
   const client = useQueryClient();
   const backend = useBackendRuntime();
@@ -24,13 +27,9 @@ export function useFileWatch(id: number, paths: string[]) {
           "watch",
           { paths: JSON.parse(pathKey) },
           controller.signal,
-          (event) => {
-            if (event.type === "closed") {
-              controller.abort();
-              return;
-            }
+          () => {
             attempts = 0;
-            if (event.type !== "heartbeat") refresh();
+            refresh();
           },
         );
         if (!controller.signal.aborted) throw new Error("文件监听连接已断开");
@@ -49,11 +48,9 @@ export function useFileWatch(id: number, paths: string[]) {
       }
     };
     void connect();
-    window.addEventListener("focus", refresh);
     return () => {
       controller.abort();
       clearTimeout(timer);
-      window.removeEventListener("focus", refresh);
     };
   }, [id, pathKey, client, backend]);
 }

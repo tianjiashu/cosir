@@ -107,7 +107,7 @@ test("系统配置中心从 configuration 路由打开并支持配置编辑", as
 
   await page.getByRole("button", { name: "编辑 reviewer" }).click();
   await expect(page.getByText("保存后从下一次 Run 开始生效，当前运行中的 Run 不会被改写。", { exact: true })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "返回子 Agent 列表" })).toHaveText("返回子 Agent 列表");
+  await expect(page.getByRole("button", { name: "子 Agent 列表" })).toBeVisible();
   await expect(page.getByText("允许的工具组", { exact: true })).toBeVisible();
   await expect(page.getByRole("checkbox", { name: "文件" })).toBeChecked();
   // 交互终端仍不可授予；子 Agent 工具与其它可配置分组一样可以勾选。

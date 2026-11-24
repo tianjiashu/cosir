@@ -94,6 +94,20 @@ async def fork_session(
     return SessionResponse.from_record(target)
 
 
+@app.post("/sessions/{session_id}/read")
+async def mark_session_read(
+    session_id: int,
+    session_service: SessionService = Depends(get_session_service),
+) -> dict[str, object]:
+    """用户看过了这个会话的结果：清掉侧栏的未读标记（规则见 ``SessionService.mark_result_read``）。"""
+
+    try:
+        session_service.mark_result_read(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="session not found") from exc
+    return {}
+
+
 @app.delete("/sessions/{session_id}")
 async def delete_session(
     session_id: int,

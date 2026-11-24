@@ -3,13 +3,13 @@ import { Loader2Icon, SaveIcon } from "lucide-react";
 import { MarkdownEditor } from "@/components/markdown-editor/markdown-editor";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/kbd";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { useConfigurationDocument, type ConfigurationDocumentAdapter } from "@/components/configuration/documents/use-configuration-document";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import type { InstructionDocument } from "@/lib/api/configuration";
 import { estimateMarkdownTokens } from "@/lib/markdown-token-estimate";
-import { shortcutLabel, useAppHotkey } from "@/lib/keyboard/shortcuts";
+import { useAppHotkey, withShortcut } from "@/lib/keyboard/shortcuts";
 
 type MarkdownConfigurationPanelProps = {
   adapter: ConfigurationDocumentAdapter<InstructionDocument>;
@@ -68,11 +68,14 @@ export function MarkdownConfigurationPanel({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={save} disabled={state.saving || blocked}>
-            {state.saving ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}
-            {saveLabel}
-            <Kbd aria-hidden="true" className="text-primary-foreground/70 h-auto bg-transparent px-0">{shortcutLabel("saveConfiguration")}</Kbd>
-          </Button>
+          {/* 组合键只在悬停提示里出现，按钮上不常驻。 */}
+          <Tooltip>
+            <TooltipTrigger render={<Button onClick={save} disabled={state.saving || blocked} />}>
+              {state.saving ? <Loader2Icon className="animate-spin" /> : <SaveIcon />}
+              {saveLabel}
+            </TooltipTrigger>
+            <TooltipContent>{withShortcut(saveLabel, "saveConfiguration")}</TooltipContent>
+          </Tooltip>
         </div>
       </div>
     </div>

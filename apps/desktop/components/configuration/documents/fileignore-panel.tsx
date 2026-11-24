@@ -4,12 +4,12 @@ import { useConfigurationDocument } from "@/components/configuration/documents/u
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Kbd } from "@/components/ui/kbd";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Textarea } from "@/components/ui/textarea";
 import { getWorkspaceFileIgnoreConfiguration, updateWorkspaceFileIgnoreConfiguration } from "@/lib/api/configuration";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { shortcutLabel, useAppHotkey } from "@/lib/keyboard/shortcuts";
+import { useAppHotkey, withShortcut } from "@/lib/keyboard/shortcuts";
 import { queryKeys } from "@/lib/query/query-keys";
 
 /** 工作区配置的「.fileignore」标签：纯文本编辑，规则语法与上限由后端校验。 */
@@ -40,10 +40,12 @@ export function FileIgnorePanel({ workspaceId }: { workspaceId: number }) {
         />
         <div className="mt-4 flex items-center justify-end gap-2 border-t pt-4">
           {state.dirty && <span className="text-muted-foreground mr-auto text-xs">有未保存更改</span>}
-          <Button onClick={state.save} disabled={state.saving}>
-            {state.saving ? <><Loader2Icon className="animate-spin" />保存中…</> : <><SaveIcon />保存 .fileignore</>}
-            <Kbd aria-hidden="true" className="text-primary-foreground/70 h-auto bg-transparent px-0">{shortcutLabel("saveConfiguration")}</Kbd>
-          </Button>
+          <Tooltip>
+            <TooltipTrigger render={<Button onClick={state.save} disabled={state.saving} />}>
+              {state.saving ? <><Loader2Icon className="animate-spin" />保存中…</> : <><SaveIcon />保存 .fileignore</>}
+            </TooltipTrigger>
+            <TooltipContent>{withShortcut("保存 .fileignore", "saveConfiguration")}</TooltipContent>
+          </Tooltip>
         </div>
       </Card>
     </div>

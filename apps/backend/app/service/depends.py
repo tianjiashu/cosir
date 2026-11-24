@@ -39,7 +39,6 @@ if TYPE_CHECKING:
     from app.service.session.session_feed import SessionFeed
     from app.service.session.session_service import SessionService
     from app.service.workspace.workspace_service import WorkspaceService
-    from app.service.workspace_files.file_watch import WorkspaceFileWatcher
     from app.service.workspace_files.workspace_files_service import WorkspaceFilesService
     from app.storage.crud.run_crud import RunCrud
     from app.storage.crud.session_context_crud import SessionContextCrud
@@ -266,14 +265,6 @@ def get_session_feed() -> SessionFeed:
 
 
 @_process_singleton
-def get_workspace_file_watcher() -> WorkspaceFileWatcher:
-    """监听器按订阅启动，由依赖关闭入口释放。"""
-    from app.service.workspace_files.file_watch import WorkspaceFileWatcher
-
-    return WorkspaceFileWatcher()
-
-
-@_process_singleton
 def get_workspace_service() -> WorkspaceService:
     """Return the process-local WorkspaceService singleton.
 
@@ -414,15 +405,12 @@ def reset_service_dependencies() -> None:
         无。
 
     副作用:
-        先关闭持有外部资源的单例（文件监听、终端、MCP 连接池），再清空登记表里的全部单例；测试切换
+        先关闭持有外部资源的单例（文件目录快照、终端、MCP 连接池），再清空登记表里的全部单例；测试切换
         storage 路径后应调用。
     """
 
     from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
-    if get_workspace_file_watcher.cache_info().currsize:
-        get_workspace_file_watcher().close()
-    get_workspace_file_watcher.cache_clear()
     if get_workspace_files_service.cache_info().currsize:
         get_workspace_files_service().close()
     get_workspace_files_service.cache_clear()

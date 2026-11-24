@@ -6,7 +6,6 @@ import { ConfigListSection } from "@/components/configuration/config-list-sectio
 import { MCPServerEditor } from "@/components/configuration/mcp/mcp-server-editor";
 import { MCPServerRow } from "@/components/configuration/mcp/mcp-server-row";
 import { useMCPServerTests } from "@/components/configuration/mcp/use-mcp-server-tests";
-import { Button } from "@/components/ui/button";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { saveMCPServers, type MCPServer, type MCPServerConfiguration } from "@/lib/api/extensions";
@@ -17,6 +16,7 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { invalidateMcpServers } from "@/lib/query/extension-invalidation";
 import { queryKeys } from "@/lib/query/query-keys";
 import { mcpServersQueryOptions } from "@/lib/query/query-options";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 
 // 测试进展的键：已保存的服务按名称，编辑框里的草稿单独一个（与同名的已保存服务互不覆盖）。
 const DRAFT_KEY = "draft";
@@ -134,21 +134,26 @@ export function MCPConfigurationPanel({ workspaceId }: { workspaceId: number | n
   return (
     <section className="space-y-5" aria-labelledby="mcp-configuration-heading">
       <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 space-y-1">
+        {/* 作用域说明只在悬停时出现：页头只留标题与操作。 */}
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <h2 id="mcp-configuration-heading" className="text-lg font-semibold">MCP 服务</h2>
-          <p className="text-muted-foreground flex items-center gap-1.5 text-sm">
-            <span>{workspaceId === null ? "所有工作区共用；测试时会启动服务并读取它提供的工具。" : "只在本工作区可用，stdio 服务在工作区根目录运行；与系统级同名时本工作区的优先。"}</span>
-            {workspaceId !== null && (
-              <Tooltip>
-                <TooltipTrigger aria-label="配置文件说明" className="hover:text-foreground focus-ring rounded-sm"><InfoIcon className="size-3.5" /></TooltipTrigger>
-                <TooltipContent>配置文件在工作区的 .cosir/config/mcp_servers.json，可能随代码提交，Agent 也能读到；令牌等凭据请写成 {"${变量名}"}，值在本机填写。</TooltipContent>
-              </Tooltip>
-            )}
-          </p>
+          <Tooltip>
+            <TooltipTrigger aria-label="MCP 服务说明" className="text-muted-foreground hover:text-foreground focus-ring rounded-sm"><InfoIcon className="size-3.5" /></TooltipTrigger>
+            <TooltipContent className="max-w-80 flex-col items-start gap-1">
+              {workspaceId === null ? (
+                <span>所有工作区共用；测试时会启动服务并读取它提供的工具。</span>
+              ) : (
+                <>
+                  <span>只在本工作区可用，stdio 服务在工作区根目录运行；与系统级同名时本工作区的优先。</span>
+                  <span>配置文件在工作区的 .cosir/config/mcp_servers.json，可能随代码提交，Agent 也能读到；令牌等凭据请写成 {"${变量名}"}，值在本机填写。</span>
+                </>
+              )}
+            </TooltipContent>
+          </Tooltip>
         </div>
-        <div className="flex shrink-0 gap-2">
-          <Button variant="outline" size="sm" onClick={() => testServers(testable)} disabled={testable.length === 0}><WrenchIcon />全部测试</Button>
-          <Button size="sm" onClick={() => openEditor(null)} disabled={!serversQuery.data || busy}><PlusIcon />添加服务</Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <TooltipIconButton tooltip="全部测试" className="size-7" onClick={() => testServers(testable)} disabled={testable.length === 0}><WrenchIcon /></TooltipIconButton>
+          <TooltipIconButton tooltip="添加服务" className="size-7" onClick={() => openEditor(null)} disabled={!serversQuery.data || busy}><PlusIcon /></TooltipIconButton>
         </div>
       </header>
 

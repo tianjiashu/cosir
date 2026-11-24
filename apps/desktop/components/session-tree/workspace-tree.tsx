@@ -3,6 +3,7 @@ import { Tree, type NodeApi, type TreeApi } from "react-arborist";
 
 import { useElementSize } from "@/hooks/use-element-size";
 import type { WorkspaceSession } from "@/lib/api/workspaces";
+import { sessionAttention } from "@/lib/session-status/session-attention";
 import { type SessionStatus, useSessionStatusStore } from "@/lib/session-status/session-status-store";
 import { buildWorkspaceTreeModel, SESSION_PAGE_SIZE, sessionTreeNodeId, workspaceTreeNodeId, type SessionSidebarNode, type WorkspaceSidebarNode, type WorkspaceTreeSource } from "./workspace-tree-model";
 import { WorkspaceTreeActionsContext, WorkspaceTreeNode, WorkspaceTreeRow } from "./workspace-tree-row";
@@ -21,17 +22,15 @@ type WorkspaceTreeProps = {
 };
 
 const ROW_HEIGHT = 32;
-/** 这些执行状态的会话必须留在侧栏可见范围内；有事等你操作的会话无论 Run 处于什么状态都必须可见。 */
-const MUST_SHOW_STATUSES = new Set(["running", "suspended"]);
-
 /**
- * 状态表里「必须可见」的 Session id，拼成稳定的字符串供订阅：状态推送每帧都会来，侧栏只在这个集合真的变了
- * 时才重建模型，别的 Session 的工具状态变化不牵动整棵树。
+ * 状态表里「必须可见」的 Session id——侧栏上有提醒的会话（在等你、进行中、没看过的结果，见 `sessionAttention`）
+ * 不能被折叠到「更多」里。拼成稳定的字符串供订阅：状态推送每帧都会来，侧栏只在这个集合真的变了时才重建模型，
+ * 别的 Session 的工具状态变化不牵动整棵树。
  */
 function mustShowKey(sessions: Readonly<Record<number, SessionStatus>>): string {
   const ids: number[] = [];
-  for (const [sessionId, { executionStatus, awaitingUserCalls }] of Object.entries(sessions)) {
-    if (awaitingUserCalls > 0 || (executionStatus !== null && MUST_SHOW_STATUSES.has(executionStatus))) ids.push(Number(sessionId));
+  for (const [sessionId, status] of Object.entries(sessions)) {
+    if (sessionAttention(status)) ids.push(Number(sessionId));
   }
   return ids.sort((left, right) => left - right).join(",");
 }

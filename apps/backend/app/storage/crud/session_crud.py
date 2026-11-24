@@ -39,9 +39,11 @@ class SessionCrud:
     不承担跨表编排与业务规则；所有方法通过共享的主库 db 工厂访问数据库。
     """
 
-    _CURRENT_RUN_STATUS = select(SessionModel.id, RunModel.status).outerjoin(
-        RunModel, SessionModel.current_run_id == RunModel.id
-    )
+    # 结果是否已读存在 extra 里（``SessionExtra.result_unread``），按 JSON 路径读写，不整体反序列化。
+    _RESULT_UNREAD = func.json_extract(SessionModel.extra, "$.result_unread")
+    _CURRENT_RUN_STATUS = select(
+        SessionModel.id, RunModel.status, _RESULT_UNREAD.label("unread")
+    ).outerjoin(RunModel, SessionModel.current_run_id == RunModel.id)
     # 部分索引只收录 pending 行：整表对账只读当下在等的那几行。
     _AWAITING_COUNTS = (
         select(SessionContextModel.session_id, func.count())
@@ -332,7 +334,7 @@ class SessionCrud:
         return SessionRecord.from_model(row)
 
     def get_status(self, session_id: int) -> SessionStatus:
-        """单个 Session 的状态；两项在同一个读事务里读，避免指针、状态与等待数来自不同读取时刻。
+        """单个 Session 的状态；几项在同一个读事务里读，避免指针、状态与等待数来自不同读取时刻。
 
         异常:
             KeyError: Session 不存在。
@@ -346,7 +348,7 @@ class SessionCrud:
             awaiting = db.execute(
                 self._AWAITING_COUNTS.where(SessionContextModel.session_id == session_id)
             ).one_or_none()
-        return SessionStatus(row.status, awaiting[1] if awaiting else 0)
+        return SessionStatus(row.status, awaiting[1] if awaiting else 0, 0, bool(row.unread))
 
     def list_statuses(self) -> dict[int, SessionStatus]:
         """全部 Session（含委派子会话）的状态，供状态推送的整表帧与周期对账；同一个读事务。"""
@@ -354,9 +356,38 @@ class SessionCrud:
             executions = db.execute(self._CURRENT_RUN_STATUS).tuples().all()
             awaiting = dict(db.execute(self._AWAITING_COUNTS).tuples().all())
         return {
-            session_id: SessionStatus(status, awaiting.get(session_id, 0))
-            for session_id, status in executions
+            session_id: SessionStatus(status, awaiting.get(session_id, 0), 0, bool(unread))
+            for session_id, status, unread in executions
         }
+
+    def set_result_unread(self, session_id: int, unread: bool) -> bool:
+        """改写 ``SessionExtra.result_unread``，返回是否真的变了（没变不写库，调用方据此决定要不要推送）。
+
+        按 JSON 路径原地改写，不读出 extra 再整体写回：落定点与已读命令可能和改挂 fork 来源同时写 extra。
+        不刷新 ``updated_at``（同标题：侧栏按它排序）。extra 由 ``create`` 恒写为对象，不会是 NULL。
+
+        异常:
+            KeyError: Session 不存在。
+        """
+        with self._db_factory.begin() as db:
+            result = db.execute(
+                update(SessionModel)
+                .where(
+                    SessionModel.id == session_id,
+                    func.coalesce(self._RESULT_UNREAD, 0) != int(unread),
+                )
+                .values(
+                    extra=func.json_set(
+                        SessionModel.extra, "$.result_unread", func.json("true" if unread else "false")
+                    ),
+                    updated_at=SessionModel.updated_at,
+                )
+            )
+            if result.rowcount:
+                return True
+            if db.scalar(select(SessionModel.id).where(SessionModel.id == session_id)) is None:
+                raise KeyError(session_id)
+            return False
 
     def set_current_run_id(
             self,

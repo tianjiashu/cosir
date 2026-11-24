@@ -1,11 +1,10 @@
 import type { ReactNode } from "react";
 
 import { NewConversationBackdrop } from "@/components/new-conversation/backdrop";
-import { NewConversationKeyHints } from "@/components/new-conversation/key-hints";
 import { WorkspacePicker, type WorkspacePickerProps } from "@/components/new-conversation/workspace-picker";
 
 /**
- * 新会话页的版面：点阵背景、标题区（工作区选择器 + 「想做什么？」）、输入框、键位提示，上下留白 2:3。
+ * 新会话页的版面：点阵背景、标题区（工作区选择器 + 「想做什么？」）与输入框，上下留白 2:3。
  *
  * 版面只在这里，中间那一格由调用方放进来：新会话页就是未开始的会话，放的是它的输入框（经
  * `EmptyThreadFrameContext` 交给线程，加载时是同形状的骨架）；`/` 还没解析到会话时放占位或提示（`NewConversation`）。
@@ -25,7 +24,6 @@ export function NewConversationFrame({ children, ...picker }: WorkspacePickerPro
             <span className="shrink-0">想做什么？</span>
           </h1>
           {children}
-          <NewConversationKeyHints />
         </div>
       </div>
     </NewConversationBackdrop>

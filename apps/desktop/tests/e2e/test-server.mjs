@@ -56,6 +56,7 @@ const telemetry = {
 function resetTestState() {
   testGeneration += 1;
   lastPublishedStatus.clear();
+  unreadSessions.clear();
   for (const res of statusSubscribers) writeStatusFrame(res, { type: "full", sessions: {} });
   sessions.clear();
   states.clear();
@@ -439,22 +440,37 @@ function publish(sessionId, frame) {
 
 /** 落定新的 Session 状态：结构变化以 full 帧推送（前端对 full 与 mutation 同一语义收敛）。 */
 function commit(sessionId, state) {
+  markUnreadOnSettle(sessionId, states.get(sessionId)?.activity?.status, state.activity?.status);
   states.set(sessionId, state);
   publish(sessionId, { session_id: sessionId, kind: "full", mutations: [], state: wireState(sessionId) });
   publishSessionStatus(sessionId);
 }
 
 /**
- * 模拟后端 `/session-feed/stream` 的订阅者。与后端一样：执行状态取当前活动的状态；等你操作的调用数
- * 数快照里 `awaitingUser` 的工具 part（后端数等待占位行，与 Run 状态无关）；目录的写入（建删 Session）
+ * 模拟后端 `/session-feed/stream` 的订阅者。与后端一样：执行状态取当前活动的状态；等你回答的调用数
+ * 数快照里 `awaitingUser` 的工具 part（后端数等待占位行，与 Run 状态无关），等你批准的数快照里的终端批准；
+ * 侧栏会话的 Run 从活动落定为完成或失败时记未读，`POST /sessions/{id}/read` 清掉；目录的写入（建删 Session）
  * 提交后推送目录失效，前端只据此重读目录。
  */
 const statusSubscribers = new Set();
+const unreadSessions = new Set();
 const executionStatus = (sessionId) => states.get(sessionId)?.activity?.status ?? null;
-const awaitingUserCalls = (sessionId) => (states.get(sessionId)?.messages ?? [])
+const awaitingDecisions = (sessionId) => (states.get(sessionId)?.messages ?? [])
   .flatMap((message) => message.parts ?? [])
   .filter((part) => part.type === "tool-call" && part.awaitingUser).length;
-const sessionStatus = (sessionId) => ({ executionStatus: executionStatus(sessionId), awaitingUserCalls: awaitingUserCalls(sessionId) });
+const awaitingApprovals = (sessionId) => (states.get(sessionId)?.terminal_approvals ?? []).length;
+const sessionStatus = (sessionId) => ({
+  executionStatus: executionStatus(sessionId),
+  awaitingDecisions: awaitingDecisions(sessionId),
+  awaitingApprovals: awaitingApprovals(sessionId),
+  unread: unreadSessions.has(sessionId),
+});
+
+function markUnreadOnSettle(sessionId, before, after) {
+  if (!["running", "suspended"].includes(before) || !["completed", "failed"].includes(after)) return;
+  if (sessions.get(sessionId)?.session_type === "delegated") return;
+  unreadSessions.add(sessionId);
+}
 
 function writeStatusFrame(res, frame) {
   res.write(`${JSON.stringify(frame)}\n`);
@@ -888,6 +904,14 @@ const server = createServer(async (req, res) => {
       publishCatalog();
     }
     jsonResponse(res, 200, sessionResponse(session));
+    return;
+  }
+  const readRoute = url.pathname.match(/^\/sessions\/(\d+)\/read$/);
+  if (req.method === "POST" && readRoute) {
+    const sessionId = Number(readRoute[1]);
+    unreadSessions.delete(sessionId);
+    publishSessionStatus(sessionId);
+    jsonResponse(res, 200, {});
     return;
   }
   if (req.method === "DELETE" && /^\/sessions\/\d+$/.test(url.pathname)) {

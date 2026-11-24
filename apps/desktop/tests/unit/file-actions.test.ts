@@ -7,10 +7,12 @@ const electron = vi.hoisted(() => ({
   openPath: vi.fn<(target: string) => Promise<string>>(),
   showItemInFolder: vi.fn(),
   createThumbnailFromPath: vi.fn(),
+  showMessageBox: vi.fn<() => Promise<{ response: number }>>(),
 }));
 vi.mock("electron", () => ({
   shell: { openPath: electron.openPath, showItemInFolder: electron.showItemInFolder },
   nativeImage: { createThumbnailFromPath: electron.createThumbnailFromPath },
+  dialog: { showMessageBox: electron.showMessageBox },
 }));
 const window = vi.hoisted(() => ({ previewFile: vi.fn(), showMainWindow: vi.fn() }));
 vi.mock("@/electron/main/window", () => ({ showMainWindow: window.showMainWindow, getMainWindow: () => ({ previewFile: window.previewFile }) }));
@@ -41,11 +43,34 @@ describe("文件出口的入参", () => {
 });
 
 describe("文件出口", () => {
+  // 打开前要看文件本身（是否可运行），入参校验保证路径存在，这里用真实文件。
+  const existing = (name: string) => {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "file-actions-")), name);
+    fs.writeFileSync(file, "x");
+    return file;
+  };
+
   it("系统打不开时把原因告诉用户", async () => {
     electron.openPath.mockResolvedValueOnce("");
-    await openExternally("/w/a.docx");
+    await openExternally(existing("a.docx"));
+    expect(electron.showMessageBox).not.toHaveBeenCalled();
     electron.openPath.mockResolvedValueOnce("没有可以打开它的应用");
-    await expect(openExternally("/w/a.xyz")).rejects.toThrow("无法用系统应用打开：没有可以打开它的应用");
+    await expect(openExternally(existing("a.xyz"))).rejects.toThrow("无法用系统应用打开：没有可以打开它的应用");
+  });
+
+  // 潜在缺陷：模型写的脚本作为交付物，用户点「用系统应用打开」以为是查看，一点就运行了，或确认被跳过。
+  it("可运行的文件先由宿主确认：默认在文件夹中显示，选「仍然运行」才打开，取消什么都不做", async () => {
+    const script = existing(process.platform === "win32" ? "run.bat" : "run.sh");
+    electron.showMessageBox.mockResolvedValueOnce({ response: 0 });
+    await openExternally(script);
+    expect(electron.showItemInFolder).toHaveBeenCalledWith(script);
+    electron.showMessageBox.mockResolvedValueOnce({ response: 2 });
+    await openExternally(script);
+    expect(electron.openPath).not.toHaveBeenCalled();
+    electron.showMessageBox.mockResolvedValueOnce({ response: 1 });
+    electron.openPath.mockResolvedValueOnce("");
+    await openExternally(script);
+    expect(electron.openPath).toHaveBeenCalledWith(script);
   });
 
   // 潜在缺陷：主窗口隐藏时快速查看开在其他应用后面，用户看不到。

@@ -1,8 +1,10 @@
-import { TextQuoteIcon } from "lucide-react";
+import { CornerDownLeftIcon, TextQuoteIcon } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { Popover, PopoverContent } from "@/components/ui/popover";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { useReferenceBridge } from "@/components/workspace-references/reference-bridge";
 import { quoteHeadline } from "@/lib/assistant/capsules";
 import { isImeComposing } from "@/lib/keyboard/ime";
@@ -15,7 +17,8 @@ import type { TextSelectionState } from "./use-text-selection";
 const PENDING_HIGHLIGHT = "cosir-selection-pending";
 
 /**
- * 「选中 → 对话」的浮条：选区确定后在选区末端出现「摘录」；点它或按 Cmd+L 展开评论框，回车把摘录连同批注
+ * 「选中 → 对话」的浮条：选区确定后在选区第一行上方、与选区起点对齐出现「摘录」（放在下方会盖住正往下读的内容，上方放不下时
+ * 由弹层自动翻到下方）；点它或按 Cmd+L 在原位展开评论框，回车或发送按钮把摘录连同批注
  * （`note`）经 `reference-bridge` 加进当前会话输入框上方的摘录条，Esc 放弃。对话回复与文件阅读器共用，各界面只
  * 提供选区来源（`useDomSelectionSource` 或编辑器选区）。
  *
@@ -76,40 +79,51 @@ export function SelectionToolbar({ state, workspaceId, source }: {
     >
       <PopoverContent
         anchor={pending.anchor}
-        side="bottom"
-        align="end"
+        side="top"
+        align="start"
+        sideOffset={8}
         initialFocus={commenting}
         finalFocus={false}
-        className={commenting ? "w-80 gap-2 p-2.5" : "w-auto p-1"}
+        className={commenting ? "w-96 gap-2.5 rounded-2xl p-3 shadow-lg" : "w-auto flex-row items-center gap-0.5 rounded-2xl p-1 shadow-lg"}
         data-slot="selection-toolbar"
       >
         {commenting ? (
           <>
-            <div className="text-muted-foreground line-clamp-2 border-l-2 pl-2 text-xs">{quoteHeadline(pending.quote.text)}</div>
-            <textarea
-              aria-label="写批注"
-              rows={2}
-              value={note}
-              placeholder="写批注（回车添加到输入框，Esc 取消）"
-              className="placeholder:text-muted-foreground min-h-12 w-full resize-none bg-transparent text-sm outline-none"
-              onChange={(event) => setNote(event.target.value)}
-              onKeyDown={onKeyDown}
-              onCompositionStart={() => { composing.current = true; }}
-              onCompositionEnd={() => { composing.current = false; }}
-            />
+            <div className="text-muted-foreground line-clamp-2 border-l-2 pl-2.5 text-xs leading-relaxed">{quoteHeadline(pending.quote.text)}</div>
+            <div className="flex items-end gap-2">
+              {/* 随内容长高，到约 5 行后滚动；回车提交、Esc 关闭是通用约定，不写进提示。 */}
+              <textarea
+                aria-label="写批注"
+                rows={1}
+                value={note}
+                placeholder="写批注（可留空）"
+                className="placeholder:text-muted-foreground field-sizing-content max-h-32 min-h-8 flex-1 resize-none bg-transparent py-1.5 text-sm outline-none"
+                onChange={(event) => setNote(event.target.value)}
+                onKeyDown={onKeyDown}
+                onCompositionStart={() => { composing.current = true; }}
+                onCompositionEnd={() => { composing.current = false; }}
+              />
+              {/* 批注可留空：只加摘录也是一次完整的添加，按钮始终可用。图标用回车符（与回车提交一致）、浅色样式：
+                  深色圆形上箭头只代表输入框的「发给 Agent」，这里只是放进输入框，不能长得一样。 */}
+              <TooltipIconButton tooltip="添加到输入框（↵）" aria-label="添加到输入框" variant="secondary" className="size-8 shrink-0" onClick={submit}>
+                <CornerDownLeftIcon />
+              </TooltipIconButton>
+            </div>
           </>
         ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1.5 px-2 text-xs"
-            title={`摘录到对话（${shortcutLabel("addToChat")}）`}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={startComment}
-          >
-            <TextQuoteIcon className="size-3.5" />
-            摘录
-          </Button>
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 rounded-xl px-2.5 text-xs"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={startComment}
+            >
+              <TextQuoteIcon className="size-3.5" />
+              摘录
+            </Button>
+            <Kbd className="mr-1 bg-transparent">{shortcutLabel("addToChat")}</Kbd>
+          </>
         )}
       </PopoverContent>
     </Popover>

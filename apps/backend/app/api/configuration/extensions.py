@@ -311,7 +311,6 @@ def _read_skill(workspace_id: int | None, name: str) -> SkillDetailResponse:
         return SkillDetailResponse(
             **_skill_response(detail.info).model_dump(),
             content=detail.body,
-            location=detail.location,
             also_at=list(detail.also_at),
             directory=str(detail.directory),
             metadata=detail.metadata,

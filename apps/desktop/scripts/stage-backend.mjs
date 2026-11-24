@@ -111,8 +111,6 @@ const pyinstallerArgs = [
   buildRoot,
   "--collect-submodules",
   "app",
-  "--collect-submodules",
-  "watchdog.observers",
   entrypoint,
 ];
 run(actualPyinstallerPath, pyinstallerArgs, {

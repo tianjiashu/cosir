@@ -137,10 +137,8 @@ export function parseFindTextBatch(value: unknown): FindTextBatch {
   if (invalidFields.length) throw new SearchBatchContractError(invalidFields);
   return batch as FindTextBatch;
 }
-export type WatchEvent = {
-  type: "ready" | "changed" | "reconcile" | "heartbeat" | "closed";
-  polling?: boolean;
-};
+/** 文件变化推送：连上先来 `ready`，之后登记的路径每有变化来一次 `changed`；两者都让前端整体重读。 */
+export type WatchEvent = { type: "ready" | "changed" };
 const filesPath = (id: number, operation: string) =>
   `/workspaces/${id}/files/${operation}`;
 export function fileUrlPath(

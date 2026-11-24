@@ -583,15 +583,25 @@ class SessionActor:
             )
 
     async def _run_settled(self, run: RunRecord) -> None:
-        """Run 的唯一落定点（挂起不算）：被停下或失败时先收尾它留下的、等用户回应的决定，再交给派生
-        汇报（规则都在 ``derived_report``）。
+        """Run 的唯一落定点（挂起不算）：被停下或失败时先收尾它留下的、等用户回应的决定，记下有新结果
+        没看（规则在 ``SessionService.record_run_result``），再交给派生汇报（规则都在 ``derived_report``）。
 
-        两条落定路径（执行释放、挂起 Run 被取消）都经这里；两步各自失败只记录，不影响本 Session
+        两条落定路径（执行释放、挂起 Run 被取消）都经这里；各步各自失败只记录，不影响本 Session
         的结局与接续。
         """
         if run.status not in TERMINAL_RUN_STATUSES:
             return
         await self._expire_decisions(run)
+        try:
+            await asyncio.to_thread(self._sessions.record_run_result, run)
+        except Exception:
+            log.exception(
+                "run_result_unread_failed",
+                extra={
+                    "msg": "Run 落定后记下未读结果失败",
+                    "data": {"session_id": self.session_id, "run_id": run.id},
+                },
+            )
         try:
             await asyncio.to_thread(derived_report.report_settled, run)
         except Exception:

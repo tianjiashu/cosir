@@ -2,7 +2,7 @@ import type { ConfigurationScope } from "@/lib/api/configuration-scope";
 import type { SkillGroup, SkillRootKind } from "@/lib/api/extensions";
 
 /**
- * Skill 目录两种身份的称呼与「谁能看到」的说明：卡片标题、被覆盖提示与详情页页头共用这一份文案。
+ * Skill 目录两种身份的称呼与「谁能看到」的说明：卡片标题与被覆盖提示共用这一份文案。
  * 身份只对用户有意义（还有谁能看到、导入落在哪），对 Agent 两者平等。
  */
 export const SKILL_ROOT_COPY: Record<SkillRootKind, { name: string; audience: string }> = {
@@ -10,7 +10,7 @@ export const SKILL_ROOT_COPY: Record<SkillRootKind, { name: string; audience: st
   shared: { name: "共享", audience: "Codex、Cursor 等工具也读取；cosir 只启停，不改文件" },
 };
 
-/** 带作用域的称呼（本工作区 / 系统级 · 身份）：详情页页头与导入冲突弹窗不分页面一律带作用域。 */
+/** 带作用域的称呼（本工作区 / 系统级 · 身份）：导入冲突弹窗不分页面一律带作用域。 */
 export function scopedRootLabel(scope: ConfigurationScope, kind: SkillRootKind): string {
   return `${scope === "workspace" ? "本工作区" : "系统级"} · ${SKILL_ROOT_COPY[kind].name}`;
 }

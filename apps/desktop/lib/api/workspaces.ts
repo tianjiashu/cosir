@@ -58,5 +58,7 @@ export const deleteSession = (sessionId: number, options: DeleteSessionOptions =
     { method: "DELETE" },
   );
 };
+/** 你看过了这个会话的结果：清掉侧栏的未读标记；新状态经 Session 推送到达。 */
+export const markSessionRead = (sessionId: number) => postJson<Record<string, never>>(`/sessions/${sessionId}/read`, {});
 /** 从这条回复往后分叉：新 Session 继承到它为止的对话。 */
 export const forkSession = (sessionId: number, replyMessageId: string) => postJson<WorkspaceSession>(`/sessions/${sessionId}/fork`, { replyMessageId });

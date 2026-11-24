@@ -200,6 +200,48 @@
         }
       }
     },
+    "/sessions/{session_id}/read": {
+      "post": {
+        "summary": "Mark Session Read",
+        "description": "用户看过了这个会话的结果：清掉侧栏的未读标记（规则见 ``SessionService.mark_result_read``）。",
+        "operationId": "mark_session_read_sessions__session_id__read_post",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Mark Session Read Sessions  Session Id  Read Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/session-feed/stream": {
       "get": {
         "summary": "Session Feed Stream",
@@ -869,6 +911,7 @@
     "/workspaces/{workspace_id}/files/watch": {
       "post": {
         "summary": "Watch",
+        "description": "推送登记路径的变化：连上先推 ``ready``（前端整体重读），之后每有变化推一次 ``changed``。\n\n基准在 ``ready`` 之前取好（``WatchedPaths`` 构造时），前端重读与比对之间不漏变化；客户端断开时 Starlette\n取消这个协程，没有需要释放的登记。",
         "operationId": "watch_workspaces__workspace_id__files_watch_post",
         "parameters": [
           {
@@ -3904,9 +3947,9 @@
     },
     "/sessions/{session_id}/terminal-permission": {
       "post": {
-        "summary": "Check Terminal Permission",
-        "description": "选择器的静止检查；实际权限随下一次发起配置冻结。",
-        "operationId": "check_terminal_permission_sessions__session_id__terminal_permission_post",
+        "summary": "Set Terminal Permission",
+        "description": "切换会话的终端权限：随时可切，Agent 的下一条命令生效；新值经 snapshot 投影。\n\n409 ``TERMINAL_SANDBOX_UNAVAILABLE``：本机确定不支持沙箱时不能选请求批准。",
+        "operationId": "set_terminal_permission_sessions__session_id__terminal_permission_post",
         "parameters": [
           {
             "name": "session_id",
@@ -6730,6 +6773,11 @@
             "type": "string",
             "title": "Reason",
             "default": ""
+          },
+          "settled": {
+            "type": "boolean",
+            "title": "Settled",
+            "default": false
           }
         },
         "type": "object",
@@ -6789,22 +6837,13 @@
               }
             ],
             "title": "Reasoningeffort"
-          },
-          "terminalPermissionMode": {
-            "type": "string",
-            "enum": [
-              "request_approval",
-              "full_access"
-            ],
-            "title": "Terminalpermissionmode"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "message",
-          "modelConfigId",
-          "terminalPermissionMode"
+          "modelConfigId"
         ],
         "title": "SendMessageRequest",
         "description": "发送消息；并入时机不由请求决定：后端按 Session 是否有活动 Run 定排队还是立即处理。\n\n发起配置随消息携带，只在这条消息开新 Run 时生效（见 ``RunLaunch``）。"
@@ -6899,7 +6938,7 @@
           "updated_at"
         ],
         "title": "SessionResponse",
-        "description": "校验并序列化会话状态响应。\n\nSession 不绑定 Agent：本响应不含 agent_id，Agent 身份固化在各 Run 上。不下发 ``current_run_id``\n（后端的当前 Run 指针，对话界面的 Run 身份只在 snapshot 里供诊断），也不下发执行状态：\n界面的 Session 状态只来自 ``GET /session-feed/stream``，不在这里留第二个读取口。\n\n参数:\n    session_id: 会话标识。\n    workspace_id: 所属工作区标识。\n    title: 会话标题。\n    session_type: 会话类型，取值见 ``models.session_kind.SESSION_KINDS``：``\"user\"`` 为用户创建，\n        ``\"user_fork\"`` / ``\"agent_fork\"`` 区分分叉发起方，``\"delegated\"`` 为委派子会话。\n    parent_session_id: 父会话标识，委派子会话有值。\n    unstarted: 未开始的会话（``SessionRecord.unstarted``）：前端目录据此不把它放进侧栏、把它当作\n        所在工作区的新会话页。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
+        "description": "校验并序列化会话状态响应。\n\nSession 不绑定 Agent：本响应不含 agent_id，Agent 身份固化在各 Run 上。不下发 ``current_run_id``\n（后端的当前 Run 指针，对话界面的 Run 身份只在 snapshot 里供诊断），也不下发执行状态：\n界面的 Session 状态只来自 ``GET /session-feed/stream``，不在这里留第二个读取口。\n\n参数:\n    session_id: 会话标识。\n    workspace_id: 所属工作区标识。\n    title: 会话标题。\n    session_type: 会话类型，取值见 ``models.session.session_kind.SESSION_KINDS``：``\"user\"`` 为用户创建，\n        ``\"user_fork\"`` / ``\"agent_fork\"`` 区分分叉发起方，``\"delegated\"`` 为委派子会话。\n    parent_session_id: 父会话标识，委派子会话有值。\n    unstarted: 未开始的会话（``SessionRecord.unstarted``）：前端目录据此不把它放进侧栏、把它当作\n        所在工作区的新会话页。\n    created_at: 创建时间文本。\n    updated_at: 更新时间文本。\n\n返回:\n    Pydantic 响应模型。\n\n异常:\n    无。\n\n副作用:\n    无。"
       },
       "SessionResponseExtra": {
         "properties": {
@@ -7030,10 +7069,6 @@
             "type": "string",
             "title": "Content"
           },
-          "location": {
-            "type": "string",
-            "title": "Location"
-          },
           "also_at": {
             "items": {
               "type": "string"
@@ -7076,7 +7111,6 @@
           "manual_only",
           "has_scripts",
           "content",
-          "location",
           "also_at",
           "directory",
           "metadata",
@@ -7084,7 +7118,7 @@
           "files_truncated"
         ],
         "title": "SkillDetailResponse",
-        "description": "Skill 详情：正文、其余 frontmatter 字段、文件清单与位置。\n\n``location`` 给人看（``~/…``）；``directory`` 是真实目录的绝对路径，只给桌面宿主的「在文件夹中显示」。\n``also_at`` 是同一份 Skill（内容相同）的其他位置，多为软链或复制安装，列表里只列生效的这一条。\n``files_truncated`` 表示文件超过清单上限、只列出了前一部分。"
+        "description": "Skill 详情：正文、其余 frontmatter 字段、文件清单与位置。\n\n``directory`` 是真实目录的绝对路径，只给桌面宿主的「在文件夹中显示」。\n``also_at`` 是同一份 Skill（内容相同）的其他位置（给人看的 ``~/…``），多为软链或复制安装，列表里只列生效的这一条。\n``files_truncated`` 表示文件超过清单上限、只列出了前一部分。"
       },
       "SkillEntryResponse": {
         "properties": {

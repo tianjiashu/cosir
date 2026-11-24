@@ -1,18 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { nativeImage, shell } from "electron";
+import { dialog, nativeImage, shell, type MessageBoxOptions } from "electron";
 
 import { fileCapabilities } from "../../shared/file-capabilities";
 import { logDesktopEvent } from "../desktop-log";
 import { HostUserError } from "../host-user-error";
 import { showMainWindow, getMainWindow } from "../window";
+import { isLaunchable } from "./launchable-file";
 
 /**
  * 宿主对本机文件的系统操作：在文件管理器里显示、用默认应用打开、快速查看、取系统缩略图。只有宿主能调这些系统能力，
  * 所以归 main；入参在 `ipc.ts` 一处校验成存在的绝对路径后才到这里。
  *
- * 路径来自渲染进程（交付物记录、工作区文件信息），宿主不做后缀限制：`openExternally` 对 `.command`、`.app` 这类文件
- * 等同于执行。这是有意的产品决定（2026-11-14），随整体权限方案收口，记在 AGENTS 待办「安全与权限」。
+ * 路径来自渲染进程（交付物记录、工作区文件信息），宿主不核对来源：渲染进程本就持有后端身份，能让后端写出文件再交付，
+ * 核对来源挡不住它。真正要守的是「打开即运行」这个动作，见 `openExternally`。
  */
 
 /** 在系统文件管理器里显示并选中。 */
@@ -20,8 +21,32 @@ export function revealFile(target: string): void {
   shell.showItemInFolder(target);
 }
 
-/** 交给系统按默认应用打开；系统打不开（没有关联应用等）时把原因告诉用户。 */
+const LAUNCH_CHOICES = ["在文件夹中显示", "仍然运行", "取消"] as const;
+
+/**
+ * 可运行的文件先由用户在原生对话框里确认：交付物可能是模型写的脚本（被网页或外部内容诱导），用户点「用系统应用打开」
+ * 以为是查看，实际是运行。对话框归宿主，渲染进程绕不过；默认选项是在文件夹中显示。返回是否继续打开。
+ */
+async function confirmLaunch(target: string): Promise<boolean> {
+  const options: MessageBoxOptions = {
+    type: "warning",
+    message: `「${path.basename(target)}」是可运行的程序或脚本`,
+    detail: "用系统应用打开会直接运行它。只运行你确认来源可靠的文件。",
+    buttons: [...LAUNCH_CHOICES],
+    defaultId: 0,
+    cancelId: 2,
+    noLink: true,
+  };
+  const window = getMainWindow();
+  const { response } = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+  logDesktopEvent("INFO", "file_actions", "launchable_file_confirm", { extension: path.extname(target), choice: LAUNCH_CHOICES[response] ?? "取消" });
+  if (response === 0) revealFile(target);
+  return response === 1;
+}
+
+/** 交给系统按默认应用打开（可运行的文件先确认）；系统打不开（没有关联应用等）时把原因告诉用户。 */
 export async function openExternally(target: string): Promise<void> {
+  if (isLaunchable(target) && !(await confirmLaunch(target))) return;
   const failure = await shell.openPath(target);
   if (failure) throw new HostUserError(`无法用系统应用打开：${failure}`);
   logDesktopEvent("INFO", "file_actions", "file_opened_externally", { extension: path.extname(target) });

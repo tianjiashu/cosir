@@ -1,9 +1,9 @@
 import { useNavigate } from "react-router-dom";
 
-import { AWAITING_USER_LABEL, executionStatusPresentation } from "@/components/session-status/session-status-indicator";
+import { awaitingPresentation, executionStatusPresentation, toneTextClass } from "@/components/session-status/session-status-indicator";
 import { cancelSession } from "@/lib/assistant/session-commands";
 import { frontendLog } from "@/lib/logging/frontend-log";
-import { useSessionAwaitingUserCalls, useSessionExecutionStatus } from "@/lib/session-status/session-status-store";
+import { useSessionExecutionStatus, useSessionStatus } from "@/lib/session-status/session-status-store";
 import { cn } from "@/lib/utils";
 import { useWorkbenchActions } from "@/lib/workbench/workbench-context";
 import { useOpenSession } from "@/components/links/use-open-session";
@@ -14,14 +14,15 @@ import { readAgentSessionResultDisplay, readDelegationDisplay, readForkDisplay, 
 import { ToolStopButton, useStopRequest } from "../tool-stop-button";
 
 /**
- * 子会话此刻的状态：运行中、异常（失败、已停止、等待结果）或在等你操作。派生调用当场完成，`completed` 只表示
+ * 子会话此刻的状态：运行中、异常（失败、已停止、等待结果）或在等你（待审批、待回答）。派生调用当场完成，`completed` 只表示
  * 子会话已建好、任务说明已投递，调用行没有扫光——子会话还在跑只能由这里说；完成是常态，不说话。
  * 读会话状态推送而不是展示数据：展示数据是调用那一刻的快照，子 Run 之后还会变；推送还没到（null）时不显示，不猜。
  */
 function ChildSessionProblem({ childSessionId }: { childSessionId: number | undefined; }) {
-  const presentation = executionStatusPresentation(useSessionExecutionStatus(childSessionId));
-  const awaitingUser = useSessionAwaitingUserCalls(childSessionId) > 0;
-  if (awaitingUser) return <span className="text-info">{AWAITING_USER_LABEL}</span>;
+  const status = useSessionStatus(childSessionId);
+  const awaiting = awaitingPresentation(status);
+  const presentation = executionStatusPresentation(status?.executionStatus);
+  if (awaiting) return <span className={toneTextClass(awaiting.tone)}>{awaiting.label}</span>;
   if (!presentation) return null;
   return <span className={cn(presentation.tone === "destructive" && "text-destructive")}>{presentation.label}</span>;
 }

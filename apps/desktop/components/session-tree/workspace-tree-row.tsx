@@ -6,9 +6,8 @@ import "@/components/layout/sidebar/sidebar-interaction.css";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatRelativeTime } from "@/lib/format/relative-time";
 import { cn } from "@/lib/utils";
-import { AWAITING_USER_LABEL, SessionStatusMarker } from "@/components/session-status/session-status-indicator";
+import { attentionIsIcon, attentionPresentation, SessionStatusMarker, toneTextClass, useSessionAttention } from "@/components/session-status/session-status-indicator";
 import { SESSION_PAGE_SIZE, type SessionSidebarNode, type WorkspaceSidebarNode, type WorkspaceTreeSource } from "./workspace-tree-model";
-import { useSessionAwaitingUserCalls } from "@/lib/session-status/session-status-store";
 
 /**
  * 当前项由路由与工作区选择决定；树的键盘焦点不构成第二份导航状态。
@@ -210,14 +209,18 @@ function branchGuides(node: NodeApi<WorkspaceSidebarNode>): BranchGuide[] {
 
 function WorkspaceSessionRow({ node, style, item, actions }: Pick<NodeRendererProps<WorkspaceSidebarNode>, "node" | "style"> & { item: SessionSidebarNode; actions: ReactNode }) {
   const session = item.session;
-  const awaitingUser = useSessionAwaitingUserCalls(session.session_id) > 0;
+  // 选中的行就是正开着的会话：未读马上会被清掉，不在这一行闪一下。
+  const viewing = node.id === node.tree.props.selection;
+  const { attention, status } = useSessionAttention(session.session_id, viewing);
+  // 行尾写明的：要你动手的两类、进行中与失败；未读只用圆点和加粗，行尾留时间。
+  const tail = attention && status && attention !== "unread" ? attentionPresentation(attention, status) : null;
   const nested = node.level > ROOT_SESSION_LEVEL;
   // 嵌套行的 Fork 身份由层级表达；源会话已不在列表中、被提为顶层的 Fork 仍保留图标。Agent 用
   // `fork_session` 分出的对话无论在哪一层都标 Bot：它不是用户自己开的分支。
   const agentFork = session.session_type === "agent_fork";
   const showForkIcon = session.session_type === "user_fork" && !nested;
-  // 有事等你操作时暂停图标独占标记位（「等你操作优先」），身份图标让位，行尾同时写明。
-  const showMarkerIcon = (showForkIcon || agentFork) && !awaitingUser;
+  // 提醒是图标（在等你、进行中）时独占标记位，身份图标让位；是圆点（失败、未读）时压在身份图标角上。
+  const showMarkerIcon = (showForkIcon || agentFork) && !(attention && attentionIsIcon(attention));
   // 覆盖 react-arborist 按层级等距算出的 paddingLeft，只收紧 Fork 层。
   const paddingLeft = ROOT_SESSION_INDENT + (node.level - ROOT_SESSION_LEVEL) * FORK_INDENT;
   return (
@@ -229,10 +232,11 @@ function WorkspaceSessionRow({ node, style, item, actions }: Pick<NodeRendererPr
       <span className="workspace-tree-session-marker" style={{ flexBasis: SESSION_MARKER_WIDTH }} data-nested={nested || undefined}>
         {showMarkerIcon && showForkIcon && <GitForkIcon className="size-3.5 text-muted-foreground" aria-label="Fork 会话" />}
         {showMarkerIcon && agentFork && <BotIcon className="size-3.5 text-muted-foreground" aria-label="Agent 分出的对话" />}
-        <SessionStatusMarker sessionId={session.session_id} dotClassName={showMarkerIcon ? "absolute -top-0.5 right-0 size-1.5" : undefined} />
+        <SessionStatusMarker sessionId={session.session_id} viewing={viewing} dotClassName={showMarkerIcon ? "absolute -top-0.5 right-0 size-1.5" : undefined} />
       </span>
       <span className="flex min-w-0 flex-1 items-center gap-1">
-        <span className="workspace-tree-title min-w-0 truncate">{session.full_title}</span>
+        {/* 要你看一眼的（在等你、失败、未读）标题加粗，像邮件的未读；进行中不用你做什么，不加粗。 */}
+        <span className={cn("workspace-tree-title min-w-0 truncate", attention && attention !== "working" && "font-medium")}>{session.full_title}</span>
         {node.isInternal && (
           // 不进 Tab 序列：键盘用户以左右方向键展开 / 收起，与 workspace 行一致地交给 react-arborist。
           <button
@@ -249,8 +253,8 @@ function WorkspaceSessionRow({ node, style, item, actions }: Pick<NodeRendererPr
       </span>
       {/* 元信息与操作叠在同一尾栏格内，宽度取较宽者；操作显示时隐藏时间，标题不跳动。 */}
       <div className="workspace-tree-session-tail">
-        {awaitingUser
-          ? <span className="workspace-tree-time whitespace-nowrap text-2xs text-info">{AWAITING_USER_LABEL}</span>
+        {tail
+          ? <span className={cn("workspace-tree-time whitespace-nowrap text-2xs", toneTextClass(tail.tone))}>{tail.label}</span>
           : <time className="workspace-tree-time whitespace-nowrap text-2xs tabular-nums text-muted-foreground" dateTime={session.updated_at}>{formatRelativeTime(session.updated_at)}</time>}
         <div className="workspace-tree-actions" onClick={(event) => event.stopPropagation()}>{actions}</div>
       </div>

@@ -1,6 +1,9 @@
-"""派生 Session 的进度摘要：它此刻在做什么、最近几步做了什么，供 ``session_list`` / ``session_read`` 给模型看。
+"""同工作区一个 Session 的进度摘要：它此刻在做什么、最近几步做了什么，供 ``session_list`` / ``session_read``
+给模型看。
 
-为什么要单独一份投影：Run 状态只说「在跑」，派生方要决定等、追加指示还是停掉，需要知道它卡在哪一步。
+为什么要单独一份投影：Run 状态只说「在跑」，读者要决定等、追加指示还是停掉，需要知道它卡在哪一步。
+投影随读者而变：只有读者直接派生的 Session 落定时会汇报给读者（``derived_report`` 只报给 ``deriver_id()``），
+「会汇报给你、去等」的提示只能给它们，对孙辈和侧栏里的其他会话说了，读者会一直等下去。
 对照 Claude Code 的 ``list_events``（读整段原文、工具调用只剩名字、工具结果也计入条数），这里按「步」
 压缩：一条助手行连同它这批工具调用的结局算一步，输入行算一步，通知不算；不给推理原文与工具结果正文。
 
@@ -40,7 +43,13 @@ from app.utils.datetime_utils import utc_now
 _ROWS_PER_STEP = 6
 _TEXT_LIMIT = 160
 _ARGS_LIMIT = 100
-_KIND_LABELS = {SessionType.DELEGATED: "delegated child agent", SessionType.AGENT_FORK: "fork"}
+_KIND_LABELS = {
+    SessionType.USER: "conversation",
+    SessionType.USER_FORK: "conversation forked by the user",
+    SessionType.AGENT_FORK: "fork",
+    SessionType.DELEGATED: "delegated child agent",
+}
+_UNTITLED = "(untitled)"
 _CALL_STATUS = {
     "completed": "ok",
     "failed": "failed",
@@ -55,7 +64,7 @@ _END_REASONS = {
 
 @dataclass(frozen=True)
 class SessionProgress:
-    """一个派生 Session 此刻的进度摘要；``status`` 为 ``None`` 表示还没开出第一个 Run。"""
+    """一个 Session 此刻对某个读者的进度摘要；``status`` 为 ``None`` 表示还没开出第一个 Run。"""
 
     session_id: int
     name: str
@@ -72,10 +81,12 @@ class SessionProgress:
     # 活动中的 Run 由用户输入开启：用户正在侧栏或工作台直接和它对话，这次 Run 是用户的、不会汇报给派生方。
     # 只标注、不拦停止：派生方据此自己判断别去打扰。
     user_driven: bool = False
+    # 读者直接派生了它：它的 Run 落定时会汇报给读者。
+    reports_to_reader: bool = False
 
     @classmethod
-    def read(cls, session: SessionRecord, *, steps: int) -> SessionProgress:
-        """读取 ``session`` 的进度事实并投影；``steps`` 为 0 时只读「此刻」需要的最后几行。"""
+    def read(cls, session: SessionRecord, *, steps: int, reader_id: int) -> SessionProgress:
+        """读取 ``session`` 的进度事实并按读者 ``reader_id`` 投影；``steps`` 为 0 时只读「此刻」需要的最后几行。"""
         run = get_session_service().require_current_run(session.id)
         window = max(steps, 1) * _ROWS_PER_STEP
         rows = get_session_context_crud().list_recent_run_rows(session.id, window)
@@ -99,6 +110,7 @@ class SessionProgress:
             now=utc_now(),
             window_full=len(rows) == window,
             user_driven=user_driven,
+            reader_id=reader_id,
         )
 
     @classmethod
@@ -112,6 +124,7 @@ class SessionProgress:
         waiting_on: list[str],
         steps: int,
         now: datetime,
+        reader_id: int,
         window_full: bool = False,
         user_driven: bool = False,
     ) -> SessionProgress:
@@ -128,8 +141,8 @@ class SessionProgress:
         terminal = run is not None and run.status not in ACTIVE_RUN_STATUSES
         return cls(
             session_id=session.id,
-            name=session.title,
-            kind=_KIND_LABELS.get(session.session_type, session.session_type.value),
+            name=session.title or _UNTITLED,
+            kind=_KIND_LABELS[session.session_type],
             status=None if run is None else run.status,
             elapsed=None if run is None else cls._elapsed(run, now),
             now=cls._now_line(run, rows, results, last_assistant, waiting_on),
@@ -141,6 +154,7 @@ class SessionProgress:
             else None,
             earlier_hidden=steps > 0 and (len(entries) > steps or window_full),
             user_driven=user_driven,
+            reports_to_reader=session.derived_by(reader_id),
         )
 
     def summary_line(self, *, derived_by: int | None = None) -> str:
@@ -183,19 +197,21 @@ class SessionProgress:
             lines.extend(f"- {step}" for step in self.steps)
         if self.final_output:
             lines.extend(["final output:", self.final_output])
-        if self._reports_later():
+        if self._still_running():
             lines.append(
                 "next: it reports back to you when this run ends; to wait for it, use wait_messages "
                 "instead of reading again"
+                if self.reports_to_reader
+                else "next: it does not report to you; if you need its result, ask it with session_send"
             )
         return "\n".join(lines)
 
-    def _reports_later(self) -> bool:
-        """结果之后还会自己送到：Run 未开出或仍在活动，且不是用户的 Run。
+    def _still_running(self) -> bool:
+        """Run 未开出或仍在活动，且不是用户的 Run：结果还没出来，读者要知道接下来怎么拿到它。
 
         防轮询只靠这句固定提示、不记读取时间：模型反复读多半是怕错过结果，在它读完结果、决定下一步的
-        那一刻告诉它「会主动汇报」比写在工具描述里管用。用户的 Run 不汇报（``derived_report``），那时
-        提示「去等」会让它一直挂着，所以改由 ``user`` 一行说别等。
+        那一刻告诉它「会主动汇报」比写在工具描述里管用；不会汇报给读者的（孙辈、侧栏里的其他会话）改说
+        去要，否则读者会一直等。用户的 Run 不汇报（``derived_report``），由 ``user`` 一行说别等。
         """
         pending = self.status is None or self.status in ACTIVE_RUN_STATUSES
         return pending and not self.user_driven

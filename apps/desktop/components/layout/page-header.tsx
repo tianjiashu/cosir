@@ -19,13 +19,11 @@ export type Crumb = { label: string; to?: string };
  */
 export function PageHeader({
   crumbs,
-  status,
   actions,
   leading,
   className,
 }: {
   crumbs: Crumb[];
-  status?: ReactNode;
   actions?: ReactNode;
   /** 面包屑前的控件（侧栏隐藏时的侧栏开关）；作为本行拖动区的后代才能被点击。 */
   leading?: ReactNode;
@@ -55,7 +53,6 @@ export function PageHeader({
           })}
         </ol>
       </nav>
-      {status && <div className="flex shrink-0 items-center gap-1.5">{status}</div>}
       {actions && <div className="flex shrink-0 items-center gap-1">{actions}</div>}
     </header>
   );

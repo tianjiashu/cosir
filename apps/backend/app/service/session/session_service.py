@@ -17,7 +17,7 @@ from app.core.workflow.message_queue.message_bodies import ADVANCING_KINDS
 from app.core.workflow.message_queue.session_message import SessionMessage
 from app.models.errors.deletion_errors import DeletionBusyError
 from app.models.run.run_record import RunRecord
-from app.models.run.run_status import ACTIVE_RUN_STATUSES
+from app.models.run.run_status import ACTIVE_RUN_STATUSES, RunStatus
 from app.models.session.session_command_errors import SessionCommandConflictError
 from app.models.session.session_extra import SessionExtra, SessionFork
 from app.models.session.session_fork_errors import SessionForkConflictError
@@ -233,6 +233,36 @@ class SessionService:
         """
         if self._session.update_title(session_id, title):
             service_depends.get_session_feed().publish_session_catalog(session_id)
+
+    # 用户该来看的结局：被停止是用户自己做的（上游收回、删除也不给用户看），挂起还没有结局。
+    _RESULT_STATUSES = frozenset({RunStatus.COMPLETED.value, RunStatus.FAILED.value})
+
+    def record_run_result(self, run: RunRecord) -> None:
+        """Run 落定后记下侧栏会话有新结果没看（只由 ``SessionActor`` 的唯一落定点调用），变了才推送状态。
+
+        委派子 Agent 的结果汇报给派生方、不给用户看，不记。用户正开着这个会话时也照记：前端看到后
+        立刻发已读命令，「正在看」只有前端知道（会话页保活时订阅还在，但用户不一定在看）。
+
+        异常:
+            KeyError: Session 不存在（落定与删除交错）。
+        """
+        if run.status not in self._RESULT_STATUSES:
+            return
+        if self._session.get(run.session_id).session_type not in USER_FACING_SESSION_TYPES:
+            return
+        if self._session.set_result_unread(run.session_id, True):
+            service_depends.get_session_feed().publish_status(run.session_id)
+
+    def mark_result_read(self, session_id: int) -> None:
+        """用户看过了这个会话的结果（前端在会话页可见、窗口有焦点时发），变了才推送状态。
+
+        不进 Session 闸门：单个 JSON 字段原地改写，与调度、删除没有需要互斥的不变量。
+
+        异常:
+            KeyError: Session 不存在。
+        """
+        if self._session.set_result_unread(session_id, False):
+            service_depends.get_session_feed().publish_status(session_id)
 
     async def fork_session(
         self,

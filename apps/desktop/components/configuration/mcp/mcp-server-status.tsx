@@ -56,7 +56,7 @@ export function MCPServerStatusLine({
           </>
         )}
         {needsSignIn && !readOnly && !isTestInProgress(testState) && (
-          <Button variant="outline" size="xs" onClick={onAuthorize}><KeyRoundIcon />登录授权</Button>
+          <Button variant="ghost" size="xs" onClick={onAuthorize}><KeyRoundIcon />登录授权</Button>
         )}
       </div>
       {showResult && (

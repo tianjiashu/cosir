@@ -82,7 +82,7 @@ test("逐题作答：单选、多选加「其他」、批注、跳过，提交�
   await expect(card.locator('[data-slot="question-header"]')).toHaveText("存储");
   await expect(card.locator('[data-slot="question-position"]')).toHaveText("1 / 3");
   await expect(card.getByText(STORE)).toBeVisible();
-  const next = card.getByRole("button", { name: /^下一题/ }).last();
+  const next = card.getByRole("button", { name: "下一题", exact: true });
   await expect(next).toBeDisabled();
   // 卡片就是「等你操作」的全部表达：下面不再另有一行状态。
   await expect(page.getByText("等待你的操作", { exact: true })).toHaveCount(0);
@@ -105,12 +105,12 @@ test("逐题作答：单选、多选加「其他」、批注、跳过，提交�
   await page.locator('[data-slot="awaiting-card"]').screenshot({ path: `${OUTPUT_DIR}/ask-user-card.png`, animations: "disabled" });
 
   // 翻回上一题：草稿还在。
-  await card.getByRole("button", { name: "上一题" }).click();
+  await card.getByRole("button", { name: "翻到上一题" }).click();
   await expect(card.getByLabel(/HttpOnly Cookie/)).toBeChecked();
   await expect(card.getByLabel("批注", { exact: true })).toHaveValue("沿用现有会话中间件");
-  await card.getByRole("button", { name: "下一题", exact: true }).click();
+  await card.getByRole("button", { name: "翻到下一题" }).click();
   await expect(card.getByLabel("其他回答")).toHaveValue("管理员强制下线");
-  await card.getByRole("button", { name: /^下一题/ }).last().click();
+  await card.getByRole("button", { name: "下一题", exact: true }).click();
 
   // 第三题：最后一题的主按钮是「提交」；跳过它，照样提交前两题。
   await expect(card.locator('[data-slot="question-position"]')).toHaveText("3 / 3");
@@ -185,7 +185,7 @@ test("挂着提问点停止：卡片收敛成一行「已停止」，不再能�
   expect(await decisions(request)).toEqual([]);
 });
 
-test("输入框只有一个按钮位：空着是停止，打字变发送；页头在等你操作时不再显示「等待结果」", async ({ page, request }) => {
+test("输入框只有一个按钮位：空着是停止，打字变发送；侧栏写明待回答而不是进行中", async ({ page, request }) => {
   await openQuestion(page, request);
   const stop = page.getByRole("button", { name: "停止", exact: true });
   const send = page.getByRole("button", { name: "发送", exact: true });
@@ -196,6 +196,7 @@ test("输入框只有一个按钮位：空着是停止，打字变发送；页�
   await expect(send).toBeVisible();
   await expect(stop).toHaveCount(0);
 
-  await expect(page.getByText("等你操作").first()).toBeVisible();
-  await expect(page.getByText("等待结果", { exact: true })).toHaveCount(0);
+  const sidebar = page.getByRole("tree");
+  await expect(sidebar.getByRole("img", { name: "待回答" })).toBeVisible();
+  await expect(sidebar.getByRole("img", { name: /进行中/ })).toHaveCount(0);
 });

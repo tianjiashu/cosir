@@ -1,10 +1,14 @@
-"""Session 的持久化附属数据：分叉来源与派生调用，不承载执行生命周期。"""
+"""Session 的持久化附属数据：分叉来源、派生调用与结果是否已读，不承载执行生命周期。"""
 
 from pydantic import BaseModel, ConfigDict
 
 from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.run.run_record import RunRecord
-from app.models.session.session_kind import FORK_SESSION_TYPES, SessionType
+from app.models.session.session_kind import (
+    FORK_SESSION_TYPES,
+    USER_FACING_SESSION_TYPES,
+    SessionType,
+)
 
 # Agent 派生出的 Session：记下派生它的那次工具调用（撤回那一回合时据此收回）。
 _AGENT_DERIVED_TYPES = frozenset({SessionType.DELEGATED, SessionType.AGENT_FORK})
@@ -53,6 +57,10 @@ class SessionExtra(BaseModel):
     # 可写根：相对工作区根的 POSIX 路径，``None`` 为整个工作区。创建时定、之后不变；派生时只能收窄，
     # 手动分叉原样继承（规则与消费方见 ``core.permission.writable_root``）。
     writable_root: str | None = None
+    # 侧栏会话最近一次落定的结果（完成或失败）用户还没看过。只由 Run 的落定点置真、用户的已读命令清掉，
+    # 两处都按 JSON 路径原地改写（``SessionCrud.set_result_unread``），不整体改写 extra。委派子 Agent 的结果
+    # 汇报给派生方、不给用户看，所以只有侧栏会话会带。
+    result_unread: bool = False
 
     def validate_session_type(self, session_type: SessionType) -> None:
         """在持久化读取边界一次校验类型与附属数据，错误数据直接失败。"""
@@ -64,3 +72,5 @@ class SessionExtra(BaseModel):
         # 用户新建的会话恒为整个工作区；可写根只来自派生或从已收窄的会话分叉。
         if self.writable_root is not None and session_type is SessionType.USER:
             raise ValueError(f"{session_type} carries invalid writable root")
+        if self.result_unread and session_type not in USER_FACING_SESSION_TYPES:
+            raise ValueError(f"{session_type} carries invalid unread result")

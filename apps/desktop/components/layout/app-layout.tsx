@@ -31,7 +31,6 @@ import { useWorkspaceCatalog, type WorkspaceCatalog } from "@/components/layout/
 import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { configurationPath, resolveConfigurationTab, SYSTEM_CONFIGURATION_TABS, WORKSPACE_CONFIGURATION_TABS } from "@/components/configuration/configuration-tabs";
 import { SessionPage } from "@/components/session/session-page";
-import { SessionStatusBadges } from "@/components/session-status/session-status-indicator";
 import { StatusDot } from "@/components/ui/status-dot";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
@@ -52,6 +51,7 @@ import { WorkbenchProvider } from "@/lib/workbench/workbench-context";
 import { SIDEBAR_WIDTH, useLayoutPreferences } from "@/lib/layout/preferences";
 import { cn } from "@/lib/utils";
 import { useSessionFeed } from "@/lib/session-feed/use-session-feed";
+import { useMarkSessionRead } from "@/lib/session-status/use-mark-session-read";
 import { sessionDisplayTitle } from "@/lib/session-title/session-display-title";
 
 /** 路由表上每个子路由通过 handle 声明自己属于哪个区域（见 src/router.tsx）。 */
@@ -114,7 +114,6 @@ export function AppLayout() {
   const arrived = (location.state as NewConversationRouteState | null)?.session;
   const focusedSession = catalog.activeSession ?? (arrived?.session_id === focusedSessionId ? arrived : undefined);
   useSessionFeed({ onWorkspacesChanged: catalog.load, onWorkspaceSessionsChanged: catalog.refreshWorkspaceSessions });
-  const activeSessionId = catalog.activeSession?.session_id;
   useUnsavedRouteGuard();
   // 工作台显示聚焦会话所在工作区的桶（无会话时为选中工作区）；归属尚在加载时暂不显示，不销毁任何内容。
   const workbenchWorkspace = catalog.workspaces.find((workspace) => workspace.workspace_id === catalog.activeSessionWorkspaceId);
@@ -248,6 +247,8 @@ export function AppLayout() {
   }, [catalog.activeSession?.title, catalog.activeWorkspace?.name, catalog.workspaces, conversationPath, focusedUnstarted, params.skillName, params.tab, routeSessionId, section, workspaceConfigurationId]);
 
   const showSessionLayer = section === "conversation" && routeSessionId !== null;
+  // 正显示的会话页有未读结果时告诉后端看过了（切到配置页时会话页保活，但你不在看它）。
+  useMarkSessionRead(showSessionLayer ? routeSessionId : null);
   const outletContext = useMemo<AppOutletContext>(() => ({ catalog, actions }), [actions, catalog]);
 
   // 侧栏开关只有一份状态，同一时刻只渲染在此刻左上角那一行：侧栏可见（停靠或抽屉）时在侧栏头部，否则在页面头部。
@@ -328,7 +329,6 @@ export function AppLayout() {
           <PageHeader
             leading={sidebarOpen ? undefined : sidebarControls}
             crumbs={crumbs}
-            status={showSessionLayer && activeSessionId != null ? <SessionStatusBadges sessionId={activeSessionId} /> : undefined}
             actions={(
               <>
                 {conversationSessionId !== null && (

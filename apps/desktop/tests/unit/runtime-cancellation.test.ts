@@ -55,8 +55,8 @@ describe("跨界面的请求生命周期", () => {
 
   it("全局 Session 终态能收尾卡片已卸载的子 Session 停止", () => {
     const request = beginCommand(1, "session")!;
-    reconcileSessionStatuses({ 1: { executionStatus: "completed", awaitingUserCalls: 0 } });
-    reconcileSessionStatuses({ 1: { executionStatus: "running", awaitingUserCalls: 0 } });
+    reconcileSessionStatuses({ 1: { executionStatus: "completed", awaitingDecisions: 0, awaitingApprovals: 0, unread: false } });
+    reconcileSessionStatuses({ 1: { executionStatus: "running", awaitingDecisions: 0, awaitingApprovals: 0, unread: false } });
     finishCommand(1, "session", request, "accepted");
     expect(current()?.session).toBeUndefined();
   });
@@ -74,7 +74,7 @@ describe("跨界面的请求生命周期", () => {
     reconcileCommands(1, activity(7, "running"));
     const stop = beginCommand(1, "session")!;
     finishCommand(1, "session", stop, "accepted");
-    reconcileSessionStatuses({ 1: { executionStatus: "cancelled", awaitingUserCalls: 0 } });
+    reconcileSessionStatuses({ 1: { executionStatus: "cancelled", awaitingDecisions: 0, awaitingApprovals: 0, unread: false } });
     expect(current()?.session?.phase).toBe("syncing");
     markSessionRequestsUnsynced();
     expect(current()?.session?.error).toBeNull();
@@ -95,7 +95,7 @@ describe("跨界面的请求生命周期", () => {
     const stop = beginCommand(1, "session")!;
     finishCommand(1, "session", stop, "accepted");
     expect(current()?.session?.phase).toBe("syncing");
-    reconcileSessionStatuses({ 1: { executionStatus: "completed", awaitingUserCalls: 0 } });
+    reconcileSessionStatuses({ 1: { executionStatus: "completed", awaitingDecisions: 0, awaitingApprovals: 0, unread: false } });
     expect(current()?.session).toBeUndefined();
   });
 });

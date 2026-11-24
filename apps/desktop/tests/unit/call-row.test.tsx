@@ -10,7 +10,9 @@ const awaitingCalls = vi.hoisted(() => new Map<number, number>());
 vi.mock("@/lib/session-status/session-status-store", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/session-status/session-status-store")>(),
   useSessionExecutionStatus: (sessionId: number | null | undefined) => (sessionId == null ? null : sessionStatuses.get(sessionId) ?? null),
-  useSessionAwaitingUserCalls: (sessionId: number | null | undefined) => (sessionId == null ? 0 : awaitingCalls.get(sessionId) ?? 0),
+  useSessionStatus: (sessionId: number | null | undefined) => (sessionId == null || !sessionStatuses.has(sessionId) ? null : {
+    executionStatus: sessionStatuses.get(sessionId) ?? null, awaitingDecisions: awaitingCalls.get(sessionId) ?? 0, awaitingApprovals: 0, unread: false,
+  }),
 }));
 
 // 开合与前台等待同样读 store：换成可控的表（终端卡片在展开体里，去留操作看前台等待）。
@@ -216,11 +218,11 @@ describe("CallRow kind 视图", () => {
     expect(html).toContain(label);
   });
 
-  it("子会话有事等你操作时，不论它的 Run 怎样，调用行都写明等你操作", () => {
+  it("子会话在等你回答时，不论它的 Run 怎样，调用行都写明待回答", () => {
     sessionStatuses.set(501, "completed");
     awaitingCalls.set(501, 1);
     const html = render({ display_data: { kind: "delegation-result", title: "审查代码", child_session_id: 501 } });
-    expect(html).toContain("等你操作");
+    expect(html).toContain("待回答");
     expect(html).not.toContain("已完成");
   });
 

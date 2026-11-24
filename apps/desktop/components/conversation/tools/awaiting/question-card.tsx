@@ -4,7 +4,7 @@ import { useCallback, useState, type KeyboardEvent } from "react";
 import { ToolIcon } from "@/components/conversation/tools/tool-icons";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Kbd } from "@/components/ui/kbd";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Textarea } from "@/components/ui/textarea";
 import { commandPending, decisionTarget, useCommandRequest } from "@/lib/assistant/command-request-store";
 import { submitToolDecision } from "@/lib/assistant/session-commands";
@@ -17,7 +17,7 @@ import {
   clearQuestionDraft, setQuestionDraft, setQuestionIndex, useQuestionDraftStore, useQuestionProgress,
 } from "@/lib/assistant/turn/question-draft-store";
 import { HttpError } from "@/lib/http/http-error";
-import { matchesShortcut, shortcutLabel } from "@/lib/keyboard/shortcuts";
+import { matchesShortcut, withShortcut } from "@/lib/keyboard/shortcuts";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { cn } from "@/lib/utils";
@@ -170,11 +170,11 @@ export function QuestionCard({ sessionId, toolCallId, toolName, args, artifact, 
           title={question.question}
           aside={questions.length > 1 && (
             <div className="text-muted-foreground flex shrink-0 items-center gap-0.5">
-              <Button type="button" size="icon-xs" variant="ghost" aria-label="上一题" disabled={index === 0} onClick={() => setQuestionIndex(sessionId, toolCallId, index - 1)}>
+              <Button type="button" size="icon-xs" variant="ghost" aria-label="翻到上一题" disabled={index === 0} onClick={() => setQuestionIndex(sessionId, toolCallId, index - 1)}>
                 <ChevronLeftIcon />
               </Button>
               <span data-slot="question-position" className="px-0.5 tabular-nums">{index + 1} / {questions.length}</span>
-              <Button type="button" size="icon-xs" variant="ghost" aria-label="下一题" disabled={last} onClick={() => setQuestionIndex(sessionId, toolCallId, index + 1)}>
+              <Button type="button" size="icon-xs" variant="ghost" aria-label="翻到下一题" disabled={last} onClick={() => setQuestionIndex(sessionId, toolCallId, index + 1)}>
                 <ChevronRightIcon />
               </Button>
             </div>
@@ -210,10 +210,12 @@ export function QuestionCard({ sessionId, toolCallId, toolName, args, artifact, 
               )}
               <span className="flex-1" aria-hidden="true" />
               <Button type="button" size="sm" variant="outline" disabled={submitting} onClick={skip}>跳过</Button>
-              <Button type="button" size="sm" disabled={!answered || submitting} onClick={advance} className={cn(submitting && "cursor-progress")}>
-                {submitting ? "提交中…" : last ? "提交" : "下一题"}
-                {!submitting && <Kbd className="bg-transparent text-current opacity-70">{shortcutLabel("questionSubmit")}</Kbd>}
-              </Button>
+              <Tooltip>
+                <TooltipTrigger render={<Button type="button" size="sm" disabled={!answered || submitting} onClick={advance} className={cn(submitting && "cursor-progress")} />}>
+                  {submitting ? "提交中…" : last ? "提交" : "下一题"}
+                </TooltipTrigger>
+                <TooltipContent>{withShortcut(last ? "提交" : "下一题", "questionSubmit")}</TooltipContent>
+              </Tooltip>
             </AwaitingFooter>
           </>
         ) : <QuestionPreview question={question} />}

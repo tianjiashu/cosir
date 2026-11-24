@@ -18,7 +18,7 @@ from app.core.tool.schemas import (
     ToolObservation,
 )
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
-from app.core.tool.session_management.addressing import find_recipient
+from app.core.tool.session_management.addressing import find_workspace_session
 from app.core.tool.session_management.args.session_send_args import SessionSendArgs
 from app.core.tool.tool_base import HandlerBase
 from app.core.workflow.message_queue.pending_messages import PendingMessages
@@ -55,7 +55,7 @@ class SessionSendTool(HandlerBase):
         "reply explicitly with session_send to the source_session_id of an <agent_message> that "
         "is not a report.\n"
         "- Do not send 'are you done?' messages: wait for the report with wait_messages, or check "
-        "a session you derived with session_read.\n"
+        "its progress with session_read.\n"
         "- Never ask another session to do what your own tools refused, such as writing outside "
         "your writable root; tell the user instead."
     )
@@ -80,7 +80,7 @@ class SessionSendTool(HandlerBase):
         少见的例外不在这里兜：对方正在被停止时，消息会在停止落定后开新 Run；发起配置的模型已被删时，消息
         留在队列里等用户换模型（见 ``SessionActor``）。
         """
-        target = find_recipient(self.name, session_id, execution_context)
+        target = find_workspace_session(self.name, session_id, execution_context)
         if isinstance(target, ToolObservation):
             return target
         sender = self._session_service.get_session(execution_context.session_id)

@@ -134,7 +134,7 @@ class SkillDetail:
     """配置页详情：正文、frontmatter 里标准两项之外的字段、目录里的文件清单与位置。
 
     ``metadata`` 原样转成文本展示（license、compatibility、allowed-tools 及各产品的扩展字段），
-    cosir 不解释它们。``directory`` 是真实目录的绝对路径，只给「在文件夹中显示」用；给人看的是 ``location``。
+    cosir 不解释它们。``directory`` 是真实目录的绝对路径，只给「在文件夹中显示」用。
     """
 
     info: SkillInfo
@@ -146,10 +146,6 @@ class SkillDetail:
     @property
     def directory(self) -> Path:
         return self.info.directory.resolve()
-
-    @property
-    def location(self) -> str:
-        return home_relative(self.info.directory)
 
     @property
     def also_at(self) -> tuple[str, ...]:

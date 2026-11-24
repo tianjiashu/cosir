@@ -207,7 +207,7 @@ const Composer = memo(function Composer() {
       <ComposerFeedbackProvider>
         {/* 收窄判断的容器包住输入框与框外配置行：按对话区自己的宽度让位，不按窗口（停靠面板会让对话区变窄而窗口不变）。 */}
         <div className="@container flex min-w-0 flex-col gap-1.5">
-          <ComposerPrimitive.Root className={COMPOSER_SURFACE_CLASS_NAME}>
+          <ComposerPrimitive.Root data-slot="composer-surface" className={COMPOSER_SURFACE_CLASS_NAME}>
             <div className="min-h-0 min-w-0 w-full">
               <ComposerImageAttachments />
               <InlineComposerInput

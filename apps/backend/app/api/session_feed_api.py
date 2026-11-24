@@ -1,8 +1,9 @@
 """Session 推送（NDJSON 长连接）：Session 状态与侧栏目录失效。
 
 一条连接覆盖全部 Session 与工作区：侧栏同时显示多个工作区，按工作区分开会让连接数随之增长（本机
-HTTP/1.1 每个主机只有 6 条连接）。每个 Session 的状态值是 ``{executionStatus, awaitingUserCalls}``
-（执行状态与等你操作的调用数，见 ``app.models.session.session_status``）。帧：
+HTTP/1.1 每个主机只有 6 条连接）。每个 Session 的状态值是
+``{executionStatus, awaitingDecisions, awaitingApprovals, unread}``（执行状态、等你回答与等你批准的调用数、
+结果是否已读，见 ``app.models.session.session_status``）。帧：
 
 - ``full``：状态整表 ``{session_id: 值}``，连接建立时与每隔 ``_RECONCILE_SECONDS`` 各发一次，
   覆盖订阅与整表读取交错或投递失败漏掉的变化；
@@ -40,7 +41,9 @@ def _sessions(statuses: SessionStatuses) -> dict[str, dict[str, object]]:
     return {
         str(session_id): {
             "executionStatus": status.execution_status,
-            "awaitingUserCalls": status.awaiting_user_calls,
+            "awaitingDecisions": status.awaiting_decisions,
+            "awaitingApprovals": status.awaiting_approvals,
+            "unread": status.unread,
         }
         for session_id, status in statuses.items()
     }

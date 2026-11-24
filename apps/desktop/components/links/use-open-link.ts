@@ -122,8 +122,8 @@ export function useOpenLink(source: LinkSource, sessionId?: number | null): Link
           );
           return;
         }
-        openWeb(target.url, target.local).then(
-          (via) => log(target, { local: target.local, via }),
+        openWeb(target.url, target.reach === "local").then(
+          (via) => log(target, { reach: target.reach, via }),
           (error: unknown) => notify.error("无法打开链接", { error }),
         );
       },

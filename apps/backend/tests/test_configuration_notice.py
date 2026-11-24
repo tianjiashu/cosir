@@ -8,11 +8,13 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+
 from app.core.agents.define_agents import main_agent
 from app.core.context.context_entry import ContextEntry
 from app.core.context.prompt_sources.cache import ProjectionCache
@@ -22,8 +24,8 @@ from app.core.context.prompt_sources.sources.deferred_tools import UNAVAILABLE_K
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.context.system_prompt_builder import SystemPromptBuilder
 from app.core.tool.schemas.tool_names import TOOL_SEARCH
-from app.core.workflow.notices import request_notices
 from app.core.workflow.message_queue.message_bodies.notice import NoticeBody, notices_to_context
+from app.core.workflow.notices import request_notices
 from app.models.message_context.message_metadata.system_message_metadata import (
     PromptSourceBaseline,
     PromptSourceEntry,
@@ -327,10 +329,22 @@ def test_cache_drops_a_deleted_workspace(tmp_path: Path) -> None:
     assert loads == [1, 2]
 
 
+def test_signature_notices_a_rewrite_that_restores_mtime(tmp_path: Path) -> None:
+    """配置被同长改写后恢复了 mtime（如 ``cp -p`` 覆盖）也要重读：签名带 ctime，系统维护、改不回去。"""
+    target = tmp_path / "AGENTS.md"
+    target.write_text("old rules", encoding="utf-8")
+    before = target.stat()
+    signature = stat_signature([target])
+    target.write_text("new rules", encoding="utf-8")
+    os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    assert stat_signature([target]) != signature
+
+
 def test_signature_marks_missing_paths(tmp_path: Path) -> None:
     missing = tmp_path / "missing.json"
 
-    assert stat_signature([missing]) == ((str(missing), None, None),)
+    assert stat_signature([missing]) == ((str(missing), None, None, None),)
 
 
 def test_skill_edit_is_seen_without_waiting(tmp_path: Path, workspace: Path, monkeypatch) -> None:

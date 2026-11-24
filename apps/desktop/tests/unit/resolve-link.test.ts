@@ -49,26 +49,24 @@ describe("resolveLink", () => {
     expect(resolveLink("cosir-notes/a.md", repo)).toMatchObject({ path: "cosir-notes/a.md" });
   });
 
-  it("classifies web links and marks local and LAN servers", () => {
-    expect(resolveLink("https://example.com/a", repo)).toEqual({ kind: "web", url: "https://example.com/a", local: false, publicHost: "example.com" });
-    expect(resolveLink("http://localhost:5173/", repo)).toMatchObject({ local: true });
-    expect(resolveLink("http://127.0.0.1:8000", { workspaceRoot: null })).toMatchObject({ local: true });
-    expect(resolveLink("http://app.localhost", repo)).toMatchObject({ local: true });
-    expect(resolveLink("http://192.168.1.5:5173", repo)).toMatchObject({ local: true, publicHost: null });
-    expect(resolveLink("mailto:a@b.c", repo)).toMatchObject({ kind: "web", local: false });
+  it("classifies web links as public sites, local or LAN servers, or mail", () => {
+    expect(resolveLink("https://example.com/a", repo)).toEqual({ kind: "web", url: "https://example.com/a", reach: "public", host: "example.com" });
+    expect(resolveLink("http://localhost:5173/", repo)).toMatchObject({ reach: "local" });
+    expect(resolveLink("http://127.0.0.1:8000", { workspaceRoot: null })).toMatchObject({ reach: "local" });
+    expect(resolveLink("http://app.localhost", repo)).toMatchObject({ reach: "local" });
+    expect(resolveLink("http://192.168.1.5:5173", repo)).toMatchObject({ reach: "local", host: "192.168.1.5" });
+    expect(resolveLink("mailto:a@b.c", repo)).toMatchObject({ kind: "web", reach: "mail", host: null });
   });
 
-  it("only exposes a public host for sites that may be asked for an icon", () => {
-    const publicHost = (url: string) => (resolveLink(url, repo) as { publicHost: string | null }).publicHost;
-    expect(publicHost("https://GitHub.com/a")).toBe("github.com");
-    expect(publicHost("https://user:secret@example.com/a")).toBe("example.com");
-    expect(publicHost("https://fcbarcelona.com")).toBe("fcbarcelona.com");
-    expect(publicHost("https://8.8.8.8")).toBe("8.8.8.8");
+  it("treats only hosts that are certainly off the internet as local", () => {
+    const reach = (url: string) => (resolveLink(url, repo) as { reach: string }).reach;
+    expect((resolveLink("https://user:secret@GitHub.com/a", repo) as { host: string }).host).toBe("github.com");
+    for (const url of ["https://fcbarcelona.com", "https://8.8.8.8"]) expect(reach(url)).toBe("public");
     for (const url of [
       "http://localhost:5173", "http://127.0.0.1", "http://10.0.0.8", "http://172.20.1.1", "http://192.168.1.2",
-      "http://169.254.169.254", "http://[fd00::1]", "http://wiki/page", "http://printer.local", "mailto:a@b.c",
+      "http://169.254.169.254", "http://[fd00::1]", "http://wiki/page", "http://printer.local",
     ]) {
-      expect(publicHost(url)).toBeNull();
+      expect(reach(url)).toBe("local");
     }
   });
 

@@ -12,7 +12,6 @@ import { MarkdownLinkScope } from "@/components/links/markdown-links";
 import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { ReadonlyTextViewer, type TextViewerHandle } from "@/components/text-viewer/readonly-text-viewer";
 import { EditorFindScope } from "@/components/code-editor/editor-find-scope";
-import { Button } from "@/components/ui/button";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Switch } from "@/components/ui/switch";
@@ -25,18 +24,18 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
-import { SKILL_ROOT_COPY, scopedRootLabel } from "@/lib/skills/skill-directory";
 import { SKILL_ENTRY_FILE } from "@/lib/skills/skill-file-tree";
 import { cn } from "@/lib/utils";
 import { parentPath } from "@/lib/workspace-files/workspace-files-store";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 
 const LONG_DESCRIPTION_CHARS = 160;
 
 /**
  * Skill 详情页（`…/configuration/skills/:skillName`）。
  *
- * 用户打开它是为了决定「能不能放心启用」：它是什么（描述）、在哪、谁能看到（作用域、身份与位置）、会让 Agent 做什么
- * （正文与随附的脚本、参考文件）。所以页头放身份与操作，下面是「文件清单 + 阅读区」两栏，阅读区占满剩余高度、
+ * 用户打开它是为了决定「能不能放心启用」：它是什么（描述）、会让 Agent 做什么（正文与随附的脚本、参考文件）。
+ * 在哪、谁能看到由列表的分组标题交代（用户从那里点进来），这里不重复。所以页头放名称与操作，下面是「文件清单 + 阅读区」两栏，阅读区占满剩余高度、
  * 只有它自己滚动。全部内容只读：Skill 不在这里编辑或删除，要删用「在文件夹中显示」。
  */
 export function SkillDetailPage({ workspaceId, name }: { workspaceId: number | null; name: string }) {
@@ -84,24 +83,19 @@ export function SkillDetailPage({ workspaceId, name }: { workspaceId: number | n
               <Switch checked={skill.enabled} aria-label={`${skill.enabled ? "停用" : "启用"} Skill ${skill.name}`} disabled={actions.busy} onClick={() => actions.setEnabled([skill.name], !skill.enabled)} />
             )}
             {desktopHost && (
-              <Button variant="outline" size="sm" onClick={reveal}><FolderOpenIcon />在文件夹中显示</Button>
+              <TooltipIconButton tooltip="在文件夹中显示" className="size-7" onClick={reveal}><FolderOpenIcon /></TooltipIconButton>
             )}
           </div>
         </div>
-        <p className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 text-xs">
-          <span>{scopedRootLabel(skill.scope, skill.kind)}</span>
-          <span aria-hidden="true">·</span>
-          <code className="break-all">{skill.location}</code>
-          <span aria-hidden="true">—</span>
-          <span>{SKILL_ROOT_COPY[skill.kind].audience}</span>
-          {/* 软链或复制安装的同一份在列表里只列这一条；在文件夹里删除时几处会一起没，所以留个入口，悬停列出位置。 */}
-          {skill.also_at.length > 0 && (
+        {/* 软链或复制安装的同一份在列表里只列这一条；在文件夹里删除时几处会一起没，所以留个入口，悬停列出位置。 */}
+        {skill.also_at.length > 0 && (
+          <p className="text-muted-foreground text-xs">
             <Tooltip>
-              <TooltipTrigger className="hover:text-foreground focus-ring rounded-sm underline decoration-dotted underline-offset-2">· 同一份也在 {skill.also_at.length} 处</TooltipTrigger>
+              <TooltipTrigger className="hover:text-foreground focus-ring rounded-sm underline decoration-dotted underline-offset-2">同一份也在 {skill.also_at.length} 处</TooltipTrigger>
               <TooltipContent className="flex-col items-start font-mono">{skill.also_at.map((location) => <span key={location}>{location}</span>)}</TooltipContent>
             </Tooltip>
-          )}
-        </p>
+          </p>
+        )}
         <Description text={skill.description} />
         <SkillWarnings warnings={skill.warnings} />
         <Metadata metadata={skill.metadata} />

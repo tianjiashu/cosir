@@ -13,7 +13,7 @@ import {
   SearchBatchContractError,
   type SearchBatch,
 } from "@/lib/api/workspace-files";
-import { useStreamedSearch } from "./use-streamed-search";
+import { useStreamedSearch } from "@/lib/workspace-files/use-streamed-search";
 import { WorkspaceFileIcon } from "./file-icon";
 import { Button } from "@/components/ui/button";
 import { frontendLog } from "@/lib/logging/frontend-log";

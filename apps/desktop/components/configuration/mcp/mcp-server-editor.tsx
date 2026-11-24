@@ -224,7 +224,7 @@ function KeyValueRows({ label, itemLabel, addLabel, rows, onChange }: {
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-sm">{label}</span>
-        <Button type="button" variant="outline" size="sm" onClick={() => onChange([...rows, { name: "", value: "" }])}><PlusIcon />{addLabel}</Button>
+        <Button type="button" variant="ghost" size="sm" onClick={() => onChange([...rows, { name: "", value: "" }])}><PlusIcon />{addLabel}</Button>
       </div>
       {rows.map((row, index) => (
         <div key={index} className="grid gap-2 sm:grid-cols-[1fr_1.5fr_auto]">

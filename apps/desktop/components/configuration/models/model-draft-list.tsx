@@ -55,7 +55,7 @@ export function ModelDraftList({
           <ModelCapabilityFields value={bulk} onChange={setBulk} disabled={disabled} label="统一设置" />
           <Button
             size="xs"
-            variant="outline"
+            variant="ghost"
             disabled={disabled}
             onClick={() => {
               for (const draft of drafts) onChange(draft.model_name, bulk);

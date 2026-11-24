@@ -47,7 +47,7 @@ const test = base.extend<{ agent: Fixture }>({
         const after = state.activity?.status ?? null;
         if (after !== before) {
           for (const response of fixture.statusConnections) {
-            response.write(`${JSON.stringify({ type: "changed", sessions: { [id]: { executionStatus: after, awaitingUserCalls: 0 } } })}\n`);
+            response.write(`${JSON.stringify({ type: "changed", sessions: { [id]: { executionStatus: after, awaitingDecisions: 0, awaitingApprovals: 0, unread: false } } })}\n`);
           }
         }
       },
@@ -63,7 +63,7 @@ const test = base.extend<{ agent: Fixture }>({
         if (fixture.refuseStatus) { res.writeHead(503); res.end(); return; }
         res.writeHead(200, { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" });
         const sessions = Object.fromEntries([...fixture.states].map(([id, state]) => (
-          [id, { executionStatus: state.activity?.status ?? null, awaitingUserCalls: 0 }]
+          [id, { executionStatus: state.activity?.status ?? null, awaitingDecisions: 0, awaitingApprovals: 0, unread: false }]
         )));
         res.write(`${JSON.stringify({ type: "full", sessions })}\n`);
         fixture.statusConnections.add(res);

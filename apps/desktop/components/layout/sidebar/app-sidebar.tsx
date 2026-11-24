@@ -170,8 +170,9 @@ export function AppSidebar({
 
 /**
  * 侧栏的一级入口行。外观与会话树行同源：悬停 / 当前底色来自 `.sidebar-nav-item`，图标格与间距取树的
- * 标记列常量，所以入口图标、文字与工作区行在同一条竖线上。登记了快捷键的行在右侧常显组合键（文案取自
- * `shortcutLabel`，与实际绑定和平台一致：macOS「⌘N」、Windows「Ctrl+N」）；`aria-label` 只读名称，
+ * 标记列常量，所以入口图标、文字与工作区行在同一条竖线上。登记了快捷键的行在右侧放组合键（文案取自
+ * `shortcutLabel`，与实际绑定和平台一致：macOS「⌘N」、Windows「Ctrl+N」），平时透明、悬停或键盘聚焦这一行
+ * 时淡入：快捷键是给熟练用户的捷径，不常驻占视线；占位一直在，显示时行不跳动。`aria-label` 只读名称，
  * 组合键不进可访问名称。
  */
 function SidebarLink({ active, icon, label, shortcut, onClick }: {
@@ -184,7 +185,7 @@ function SidebarLink({ active, icon, label, shortcut, onClick }: {
   return (
     <button
       type="button"
-      className="sidebar-nav-item flex h-8 w-full shrink-0 items-center pr-2 text-sm"
+      className="sidebar-nav-item group/nav flex h-8 w-full shrink-0 items-center pr-2 text-sm"
       style={{ gap: SESSION_MARKER_GAP }}
       onClick={onClick}
       aria-label={label}
@@ -192,7 +193,7 @@ function SidebarLink({ active, icon, label, shortcut, onClick }: {
     >
       <span className="flex shrink-0 justify-center" style={{ width: SESSION_MARKER_WIDTH }}>{icon}</span>
       <span className="min-w-0 flex-1 truncate text-left">{label}</span>
-      {shortcut ? <kbd className="text-muted-foreground shrink-0 font-sans text-xs tracking-wide">{shortcutLabel(shortcut)}</kbd> : null}
+      {shortcut ? <kbd className="text-muted-foreground shrink-0 font-sans text-xs tracking-wide opacity-0 transition-opacity group-hover/nav:opacity-100 group-focus-visible/nav:opacity-100">{shortcutLabel(shortcut)}</kbd> : null}
     </button>
   );
 }

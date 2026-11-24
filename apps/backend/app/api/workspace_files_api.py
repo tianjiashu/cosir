@@ -3,12 +3,10 @@
 import asyncio
 import json
 import threading
-import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import contextmanager
 from typing import Annotated, TypeVar
 
-import anyio
 from fastapi import Depends, HTTPException, Query, Request
 from fastapi.responses import Response, StreamingResponse
 
@@ -23,16 +21,11 @@ from app.api.schemas.response.TextResponse import TextResponse
 from app.api.schemas.response.VisibilityChangeResponse import VisibilityChangeResponse
 from app.api.schemas.response.WorkspaceResourceResponse import WorkspaceResourceResponse
 from app.app import app
-from app.service.depends import get_workspace_file_watcher, get_workspace_files_service
-from app.service.workspace_files import (
-    FileConflictError,
-    WorkspaceFilesService,
-    WorkspaceFileWatcher,
-)
+from app.service.depends import get_workspace_files_service
+from app.service.workspace_files import FileConflictError, WatchedPaths, WorkspaceFilesService
 from app.service.workspace_files.content.image_preview import ImagePreview
 
 Files = Annotated[WorkspaceFilesService, Depends(get_workspace_files_service)]
-Watcher = Annotated[WorkspaceFileWatcher, Depends(get_workspace_file_watcher)]
 T = TypeVar("T")
 
 
@@ -211,37 +204,21 @@ async def search(
 
 
 @app.post("/workspaces/{workspace_id}/files/watch")
-async def watch(
-    workspace_id: int, payload: WatchRequest, request: Request, watcher: Watcher
-) -> StreamingResponse:
+async def watch(workspace_id: int, payload: WatchRequest, files: Files) -> StreamingResponse:
+    """推送登记路径的变化：连上先推 ``ready``（前端整体重读），之后每有变化推一次 ``changed``。
+
+    基准在 ``ready`` 之前取好（``WatchedPaths`` 构造时），前端重读与比对之间不漏变化；客户端断开时 Starlette
+    取消这个协程，没有需要释放的登记。
+    """
     with file_errors():
-        subscription = await anyio.to_thread.run_sync(
-            watcher.subscribe, workspace_id, payload.paths, asyncio.get_running_loop()
+        watched = await asyncio.to_thread(
+            WatchedPaths.for_request, files, workspace_id, payload.paths
         )
 
     async def stream() -> AsyncIterator[bytes]:
-        try:
-            yield line({"type": "ready", "polling": watcher.polling(subscription)})
-            last_reconcile = time.monotonic()
-            while not subscription.closed:
-                try:
-                    await asyncio.wait_for(subscription.changed.wait(), timeout=2)
-                    await asyncio.sleep(0.15)
-                    subscription.changed.clear()
-                    yield line({"type": "changed"})
-                except TimeoutError:
-                    # 周期失效也覆盖原生监听丢事件、目录删除重建、休眠恢复。
-                    polling = await asyncio.to_thread(watcher.polling, subscription)
-                    reconcile = polling or time.monotonic() - last_reconcile >= 15
-                    if reconcile:
-                        last_reconcile = time.monotonic()
-                    yield line(
-                        {"type": "reconcile" if reconcile else "heartbeat", "polling": polling}
-                    )
-            yield line({"type": "closed"})
-        finally:
-            with anyio.CancelScope(shield=True):
-                await anyio.to_thread.run_sync(watcher.unsubscribe, subscription)
+        yield line({"type": "ready"})
+        async for _ in watched.changes():
+            yield line({"type": "changed"})
 
     return StreamingResponse(
         stream(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"}

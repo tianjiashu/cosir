@@ -5,7 +5,7 @@ import { ExternalLinkRow, listDetail } from "./detail-parts";
 
 function siteOf(value: string): string {
   const target = resolveLink(value, { workspaceRoot: null });
-  return (target?.kind === "web" && target.publicHost) || value;
+  return (target?.kind === "web" && target.reach === "public" && target.host) || value;
 }
 
 const withUrl = (value: unknown) => readRecords(value).filter((item) => typeof item.url === "string" && item.url);

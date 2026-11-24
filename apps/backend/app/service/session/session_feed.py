@@ -1,9 +1,9 @@
 """Session 推送的进程内通道：侧栏、命令面板、页头与工作台标签共用一条连接，送两类事实。
 
-- **状态**：Session 状态是两项正交的事实（见 ``app.models.session.session_status``）：执行状态的事实源是
-  ``RunModel.status``（经 Session 当前 Run 指针读取），等你操作是 HITL 等待占位行与进程内等待的
-  终端批准（计在显示它的会话上）之和，两者只在这里合成。在 Run 开始、状态变化、工具调用状态迁移
-  或终端批准变化时现读并转发。
+- **状态**：Session 状态是几项正交的事实（见 ``app.models.session.session_status``）：执行状态的事实源是
+  ``RunModel.status``（经 Session 当前 Run 指针读取）；等你回答的是 HITL 等待占位行，等你批准的是进程内
+  等待的终端批准（计在显示它的会话上），后者只在这里合入；结果是否已读在 ``SessionExtra``。在 Run 开始、
+  状态变化、工具调用状态迁移、终端批准变化或已读变化时现读并转发。
 - **目录失效**：侧栏目录（工作区列表、各工作区的侧栏 Session）的写入方在提交后通知「这块目录变了」，
   前端据此重读目录接口。只推失效、不推内容：目录接口仍是唯一事实源，这里不复制目录投影。前端的
   目录刷新只来自这里（外加首次加载与重连后的整体重读），不再由页面事件推断，所以后台会话的
@@ -115,7 +115,7 @@ class SessionFeed:
         }
 
     def publish_status(self, session_id: int) -> None:
-        """Session 状态可能变化后调用（Run 开始或迁移、工具调用状态迁移、撤回回合）：现读该 Session 的
+        """Session 状态可能变化后调用（Run 开始或迁移、工具调用状态迁移、撤回回合、已读变化）：现读该 Session 的
         状态并投给全部订阅者。
 
         没有订阅者时不读库；Session 已被删除时不发（侧栏随目录失效移除它）。
@@ -159,10 +159,8 @@ class SessionFeed:
 
     @staticmethod
     def _with_approvals(status: SessionStatus, approvals: int) -> SessionStatus:
-        """库里读出的等待数只含 HITL 占位；在会话页上等批准的终端调用同样在等你，在这里合入。"""
-        if not approvals:
-            return status
-        return replace(status, awaiting_user_calls=status.awaiting_user_calls + approvals)
+        """库里读不到进程内等待的终端批准，在这里合入；它与 HITL 提问分开计数，界面分别显示待审批与待回答。"""
+        return replace(status, awaiting_approvals=approvals)
 
     def _snapshot(self) -> tuple[SessionFeedSubscription, ...]:
         with self._lock:

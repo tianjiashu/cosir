@@ -18,7 +18,6 @@ import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import {
   workspaceFiles,
-  parentPath,
   parentsOf,
   useFilesStore,
 } from "@/lib/workspace-files/workspace-files-store";
@@ -81,7 +80,7 @@ export function WorkspaceFilesSurface({
   const readingVisible = wide || !treeVisible;
   useWatchedPaths(workspaceId, [
     ...files.expanded,
-    ...files.tabs.map((tab) => parentPath(tab.path)),
+    ...files.tabs.map((tab) => tab.path),
   ]);
   const revealPath = () => {
     if (!files.active) return;

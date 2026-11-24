@@ -1,12 +1,10 @@
-"""文件浏览契约：磁盘事实、分页、链接、分段编码、取消和监听生命周期。"""
+"""文件浏览契约：磁盘事实、分页、链接、分段编码、取消和变化轮询。"""
 
 import asyncio
 import io
 import os
 import threading
-import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +18,7 @@ from app.service.workspace_files.content.file_content import (
 )
 from app.service.workspace_files.directory.directory_index import DirectoryIndex
 from app.service.workspace_files.file_models import FileConflictError, FileEntry
-from app.service.workspace_files.file_watch import WorkspaceFileWatcher
+from app.service.workspace_files.file_watch import WatchedPaths
 from app.service.workspace_files.search.text_search import search_text
 from tests.http_test_support import TRUSTED_HEADERS
 
@@ -220,175 +218,6 @@ def test_http_contract_and_resource_range(files, workspace_root):
         app.dependency_overrides.clear()
 
 
-class _RecordingObserver:
-    """替身观察器：只记下交给系统的注册，不碰操作系统的事件机制。
-
-    原生事件的投递时限由操作系统决定、不做保证（macOS 的 fseventsd 满载时可迟到十几秒或丢失），
-    测试只验证 cosir 自己的部分：注册了什么、何时释放、事件进来后通知了谁。
-    """
-
-    def __init__(self) -> None:
-        self.handlers: dict[str, object] = {}
-        self.schedules: list[str] = []
-        self.stopped = False
-        # 已退出的监听线程（按注册路径）：模拟根目录被删后 emitter 停止。
-        self.dead: set[str] = set()
-
-    @property
-    def emitters(self) -> list[SimpleNamespace]:
-        """每个注册一条监听线程（与 watchdog 一样以 ``watch`` 对应注册）。"""
-        return [
-            SimpleNamespace(watch=watch, is_alive=lambda w=watch: w not in self.dead)
-            for watch in self.handlers
-        ]
-
-    def start(self) -> None:
-        pass
-
-    def schedule(self, handler, path, recursive=False):
-        assert recursive is True
-        self.handlers[path] = handler
-        self.schedules.append(path)
-        return path
-
-    def unschedule(self, watch) -> None:
-        del self.handlers[watch]
-
-    def stop(self) -> None:
-        self.stopped = True
-
-    def join(self, timeout=None) -> None:
-        pass
-
-
-@pytest.fixture
-def recording_observer(monkeypatch):
-    from app.service.workspace_files import file_watch
-
-    observers: list[_RecordingObserver] = []
-
-    def make() -> _RecordingObserver:
-        observers.append(_RecordingObserver())
-        return observers[-1]
-
-    monkeypatch.setattr(file_watch, "Observer", make)
-    return observers
-
-
-class _Clock:
-    def __init__(self) -> None:
-        self.now = 1000.0
-
-    def __call__(self) -> float:
-        return self.now
-
-
-@pytest.mark.asyncio
-async def test_watch_registers_each_workspace_once_and_releases_when_idle(
-    files, workspace_root, recording_observer
-):
-    """展开目录不再注册：每个工作区只在根上注册一次递归监听；最后一个订阅离开满空闲期才释放。
-
-    前端展开目录是「先断旧连接、再建新连接」，空闲期内的重连不得触发重新注册（注册会冻住整个后端进程）。
-    """
-    from app.service.workspace_files.file_watch import IDLE_RELEASE_SECONDS
-
-    (workspace_root / "docs").mkdir()
-    (workspace_root / "docs" / "a.md").write_text("a")
-    clock = _Clock()
-    watcher = WorkspaceFileWatcher(clock)
-    loop = asyncio.get_running_loop()
-    root = files.root(1).resolve()
-    try:
-        first = watcher.subscribe(1, [""], loop)
-        observer = recording_observer[0]
-        assert observer.schedules == [str(root)]
-        assert first.paths == {root, root / ".cosir"}
-        watcher.unsubscribe(first)
-        expanded = watcher.subscribe(1, ["docs/a.md", "missing/b.md"], loop)
-        assert expanded.paths == {root, root / ".cosir", (workspace_root / "docs").resolve()}
-        assert observer.schedules == [str(root)] and watcher.polling(expanded) is False
-
-        watcher.unsubscribe(expanded)
-        clock.now += IDLE_RELEASE_SECONDS - 1
-        watcher.release_idle()
-        assert observer.handlers and not observer.stopped
-        clock.now += 1
-        watcher.release_idle()
-        assert observer.handlers == {} and observer.stopped and watcher._observer is None
-    finally:
-        watcher.close()
-
-
-@pytest.mark.asyncio
-async def test_watch_close_workspace_releases_registration_immediately(
-    files, workspace_root, isolated_storage, recording_observer
-):
-    """删除工作区立即释放它的注册（不等空闲期），关闭并通知它的订阅；其他工作区的注册与订阅不受影响。"""
-    other_root = workspace_root.parent / "other"
-    other_root.mkdir()
-    other_id = get_workspace_crud().create("other", str(other_root)).id
-    watcher = WorkspaceFileWatcher()
-    loop = asyncio.get_running_loop()
-    try:
-        first = watcher.subscribe(1, [""], loop)
-        other = watcher.subscribe(other_id, [""], loop)
-        observer = recording_observer[0]
-        assert set(observer.handlers) == {str(files.root(1).resolve()), str(other_root.resolve())}
-
-        watcher.close_workspace(1)
-        await asyncio.wait_for(first.changed.wait(), 1)
-        assert first.closed and not other.closed
-        assert set(observer.handlers) == {str(other_root.resolve())}
-        assert watcher._timers == {} and not observer.stopped
-
-        watcher.close_workspace(other_id)
-        assert observer.handlers == {} and observer.stopped and watcher._observer is None
-    finally:
-        watcher.close()
-
-
-@pytest.mark.asyncio
-async def test_watch_routes_events_to_matching_subscriptions(
-    files, workspace_root, recording_observer
-):
-    """事件按路径找关心它的订阅：所在目录或它本身在过滤集合里才通知；根目录被删时全部通知。"""
-    from watchdog.events import DirDeletedEvent, FileModifiedEvent, FileMovedEvent
-
-    (workspace_root / "docs").mkdir()
-    (workspace_root / "src" / "deep").mkdir(parents=True)
-    watcher = WorkspaceFileWatcher()
-    loop = asyncio.get_running_loop()
-    root = files.root(1).resolve()
-    docs = watcher.subscribe(1, ["docs"], loop)
-    src = watcher.subscribe(1, ["src"], loop)
-    handler = recording_observer[0].handlers[str(root)]
-
-    async def notified(*subs: object) -> None:
-        await asyncio.sleep(0)
-        assert {sub for sub in (docs, src) if sub.changed.is_set()} == set(subs)
-        docs.changed.clear()
-        src.changed.clear()
-
-    try:
-        handler.on_any_event(FileModifiedEvent(str(root / "docs" / "a.md")))
-        await notified(docs)
-        # 递归监听会送来任意深度的变化；没有订阅展开那一层就不推，免得整棵树的变动都触发重读。
-        handler.on_any_event(FileModifiedEvent(str(root / "src" / "deep" / "x.py")))
-        await notified()
-        handler.on_any_event(
-            FileMovedEvent(str(root / "docs" / "a.md"), str(root / "src" / "a.md"))
-        )
-        await notified(docs, src)
-        handler.on_any_event(FileModifiedEvent(str(root / ".cosir" / "browse.json")))
-        await notified(docs, src)
-        handler.on_any_event(DirDeletedEvent(str(root)))
-        await notified(docs, src)
-    finally:
-        watcher.close()
-    assert docs.closed and src.closed
-
-
 def test_opened_handle_rejects_link_swapped_after_resolution(files, workspace_root, monkeypatch):
     from app.service.workspace_files.content import file_handle
 
@@ -500,71 +329,6 @@ def test_search_pages_visit_every_result_with_bounded_windows(files, workspace_r
             break
     assert len(set(matches)) == 53
     assert all(path.read_bytes()[offset : offset + 6] == b"needle" for offset in matches)
-
-
-@pytest.mark.asyncio
-async def test_watch_degrades_when_emitter_dies_and_releases(files, monkeypatch):
-    from app.service.workspace_files import file_watch
-
-    class DeadEmitter:
-        def __init__(self, watch):
-            self.watch = watch
-
-        def is_alive(self):
-            return False
-
-    class FailedObserver:
-        def __init__(self):
-            self.emitters = []
-            self.stopped = False
-
-        def start(self):
-            pass
-
-        def schedule(self, handler, path, recursive):
-            self.emitters.append(DeadEmitter(path))
-            return path
-
-        def unschedule(self, path):
-            pass
-
-        def stop(self):
-            self.stopped = True
-
-        def join(self, timeout):
-            pass
-
-    observer = FailedObserver()
-    monkeypatch.setattr(file_watch, "Observer", lambda: observer)
-    watcher = WorkspaceFileWatcher()
-    sub = watcher.subscribe(1, [""], asyncio.get_running_loop())
-    assert watcher.polling(sub)
-    watcher.close()
-    assert observer.stopped
-    assert watcher._observer is None
-
-
-@pytest.mark.asyncio
-async def test_a_dead_watch_only_degrades_its_own_workspace(
-    files, workspace_root, isolated_storage, recording_observer
-):
-    """回归：一个工作区的监听线程退出（根目录被删时 FSEvents 实测如此），曾把所有工作区的订阅都判成轮询、且永不恢复。"""
-    other_root = workspace_root.parent / "other"
-    other_root.mkdir()
-    other_id = get_workspace_crud().create("other", str(other_root)).id
-    watcher = WorkspaceFileWatcher()
-    loop = asyncio.get_running_loop()
-    try:
-        healthy = watcher.subscribe(1, [""], loop)
-        broken = watcher.subscribe(other_id, [""], loop)
-        assert not watcher.polling(healthy) and not watcher.polling(broken)
-        recording_observer[0].dead.add(str(other_root.resolve()))
-        assert watcher.polling(broken)
-        assert not watcher.polling(healthy)
-        # 新来的订阅读的是同一个现场事实：坏掉的工作区一开始就是轮询。
-        assert watcher.polling(watcher.subscribe(other_id, [""], loop))
-    finally:
-        watcher.close()
 
 
 @pytest.mark.parametrize("encoding", ["utf-8", "utf-16-le", "utf-16-be", "gb18030"])
@@ -764,90 +528,106 @@ def test_previews_keep_exif_orientation(files, workspace_root):
         app.dependency_overrides.clear()
 
 
-def _dispatch_while_holding_watcher_lock(watcher, workspace_id, path, action):
-    """在持 ``watcher._lock`` 的线程里，等 watchdog 分发线程（真实观察器、持它自己的锁）进入 ``changed`` 后再做
-    ``action``——生产里注册、撤销、停止都是在持锁时调观察器方法。返回该线程是否在时限内完成。"""
-    from watchdog.events import FileModifiedEvent
+def test_watched_paths_report_entry_and_content_changes(files, workspace_root):
+    """目录的条目增删、文件的内容变化与原子替换都能比对出来；没有变化时不报，比对后基准随之更新。"""
+    (workspace_root / "docs").mkdir()
+    (workspace_root / "notes.md").write_text("a")
+    watched = WatchedPaths.for_request(files, 1, ["docs", "notes.md"])
+    root = files.root(1)
+    assert {root, root / "docs", root / "notes.md"} <= set(watched.paths)
+    assert watched.poll() is False
 
-    entered = threading.Event()
-    original = watcher.changed
+    (workspace_root / "docs" / "b.md").write_text("b")
+    assert watched.poll() is True
+    assert watched.poll() is False
 
-    def changed(workspace, event):
-        entered.set()
-        original(workspace, event)
+    (workspace_root / "notes.md").write_text("longer")
+    assert watched.poll() is True
 
-    watcher.changed = changed
-    done = threading.Event()
-
-    def holder():
-        with watcher._lock:
-            watch = watcher._registrations[workspace_id].watch
-            # 合成事件经观察器自己的事件队列走真实的分发线程，不依赖 FSEvents 的投递时延。
-            watcher._observer.event_queue.put((FileModifiedEvent(str(path)), watch))
-            assert entered.wait(5)
-            time.sleep(0.1)
-            action()
-        done.set()
-
-    threading.Thread(target=holder, daemon=True).start()
-    return done.wait(5)
+    replacement = workspace_root / "notes.tmp"
+    replacement.write_text("longer")
+    replacement.replace(workspace_root / "notes.md")
+    assert watched.poll() is True
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["register", "release"])
-async def test_watch_callback_never_waits_for_the_watcher_lock(
-    files, workspace_root, tmp_path, action
-):
-    """回归：分发线程持观察器锁调回调，我们持 watcher._lock 调 schedule / unschedule / stop。回调若拿锁，两个
-    线程互等、永久卡死（曾在自然时序下 15 次循环内复现）。"""
-    other = tmp_path / "other"
-    other.mkdir()
-    get_workspace_crud().create("other", str(other))
-    watcher = WorkspaceFileWatcher()
-    loop = asyncio.get_running_loop()
-    assert not watcher.polling(watcher.subscribe(1, [], loop))
+def test_watched_paths_wait_for_missing_paths_and_skip_invalid_ones(files, workspace_root):
+    """订阅时还不在的路径出现即通知；越界与写法非法的路径跳过，不影响其余路径。"""
+    outside = workspace_root.parent / "outside"
+    outside.mkdir()
+    (workspace_root / "escape").symlink_to(outside, target_is_directory=True)
+    watched = WatchedPaths.for_request(files, 1, ["out/new.md", "../x", "/abs", "escape"])
+    root = files.root(1)
+    assert set(watched.paths) == {
+        root,
+        root / ".cosir" / "file-browser.json",
+        root / "out" / "new.md",
+    }
+    (workspace_root / "out").mkdir()
+    (workspace_root / "out" / "new.md").write_text("new")
+    assert watched.poll() is True
 
-    def run() -> None:
-        if action == "register":
-            watcher.subscribe(2, [], loop)  # 第二个工作区首次订阅 → schedule
-        else:
-            watcher._release(1)  # 撤销最后一个注册 → unschedule + stop
 
-    finished = await asyncio.to_thread(
-        _dispatch_while_holding_watcher_lock, watcher, 1, workspace_root / "a.txt", run
-    )
-    # 卡死时锁永远不会放开，收尾的 close() 也会跟着卡住：只有完成了才收尾，失败时让测试立即报告。
-    assert finished, "持 watcher._lock 的线程与 watchdog 分发线程互等"
-    watcher.close()
+def test_watched_paths_follow_visibility_settings_and_root(files, workspace_root):
+    """浏览可见性配置变了目录树要重算；根目录被删时前端要重读出「工作区不在」，两者恒在盯着的集合里。"""
+    (workspace_root / "docs").mkdir()
+    watched = WatchedPaths.for_request(files, 1, [])
+    files.change_visibility(1, ["docs"], ignored=True)
+    assert watched.poll() is True
+    for child in sorted(workspace_root.rglob("*"), reverse=True):
+        child.rmdir() if child.is_dir() else child.unlink()
+    workspace_root.rmdir()
+    assert watched.poll() is True
 
 
 @pytest.mark.asyncio
-async def test_idle_release_does_not_drop_a_subscription_that_arrives_meanwhile(
-    files, recording_observer
-):
-    """回归：空闲释放选出工作区后若先放锁再撤销，这期间到来的订阅会随旧注册一起被撤掉、静默失去原生监听。"""
-    from app.service.workspace_files.file_watch import IDLE_RELEASE_SECONDS
+async def test_watched_paths_changes_yield_once_per_changed_period(files, workspace_root, monkeypatch):
+    """周期内的多次变化合并为一次产出。"""
+    from app.service.workspace_files import file_watch
 
-    clock = _Clock()
-    watcher = WorkspaceFileWatcher(clock)
-    loop = asyncio.get_running_loop()
-    watcher.unsubscribe(watcher.subscribe(1, [], loop))
-    clock.now += IDLE_RELEASE_SECONDS
-    arrived: list = []
-    subscriber = threading.Thread(target=lambda: arrived.append(watcher.subscribe(1, [], loop)))
-    original = watcher._release
+    monkeypatch.setattr(file_watch, "POLL_INTERVAL_SECONDS", 0.05)
+    watched = WatchedPaths.for_request(files, 1, [])
+    changes = watched.changes()
+    (workspace_root / "a.md").write_text("a")
+    (workspace_root / "b.md").write_text("b")
+    await asyncio.wait_for(anext(changes), 2)
+    pending = asyncio.ensure_future(anext(changes))
+    await asyncio.sleep(0.2)
+    assert not pending.done()
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    await changes.aclose()
 
-    def release(workspace_id):
-        # 撤销前让另一个线程来订阅，给它充足的时间。
-        subscriber.start()
-        subscriber.join(0.3)
-        original(workspace_id)
 
-    watcher._release = release
-    await asyncio.to_thread(watcher.release_idle)
-    watcher._release = original
-    await asyncio.to_thread(subscriber.join, 5)
-    assert len(arrived) == 1
-    assert not watcher.polling(arrived[0])
-    assert 1 in watcher._registrations, "新订阅到来后工作区的原生监听被撤掉了"
-    watcher.close()
+def test_watch_endpoint_rejects_missing_workspace(files):
+    app.dependency_overrides[get_workspace_files_service] = lambda: files
+    try:
+        client = TestClient(app, headers=TRUSTED_HEADERS)
+        response = client.post("/workspaces/99/files/watch", json={"paths": []})
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "WORKSPACE_NOT_FOUND"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("rewrite", ["restore_mtime", "cp_p"])
+def test_watched_paths_notice_rewrites_that_keep_mtime(files, workspace_root, rewrite):
+    """保留 mtime 的同长改写（改写后恢复 mtime、``cp -p`` 覆盖已有文件）同样通知：比对的就是文件面板的
+    版本 ``version_of``，ctime 由系统维护、改不回去。曾经只比 (inode, mtime, size)，这类写入不通知。"""
+    import subprocess
+
+    target = workspace_root / "report.md"
+    target.write_text("old report")
+    before = target.stat()
+    watched = WatchedPaths.for_request(files, 1, ["report.md"])
+    if rewrite == "restore_mtime":
+        target.write_text("new report")
+        os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))
+    else:
+        source = workspace_root.parent / "source.md"
+        source.write_text("new report")
+        os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+        subprocess.run(["cp", "-p", str(source), str(target)], check=True)
+    after = target.stat()
+    assert (after.st_ino, after.st_size, after.st_mtime_ns) == (before.st_ino, before.st_size, before.st_mtime_ns)
+    assert watched.poll() is True

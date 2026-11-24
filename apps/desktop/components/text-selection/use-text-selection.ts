@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 import type { QuoteCapsule } from "@/lib/assistant/capsules";
 
-/** 浮条锚点：选区末端的矩形，随滚动现算（floating-ui 的虚拟元素）。 */
+/** 浮条锚点：选区第一行的矩形（浮条放在它上方），随滚动现算（floating-ui 的虚拟元素）。 */
 export type SelectionAnchor = { getBoundingClientRect: () => DOMRect; contextElement?: Element };
 
 /** 一次已确定的选区：能换成的摘录与浮条锚点；`range` 只在 DOM 选区时有（评论框打开期间用它画替身高亮）。 */
@@ -99,8 +99,10 @@ export function useDomSelectionSource(
 function rangeAnchor(range: Range, host: HTMLElement): SelectionAnchor {
   return {
     getBoundingClientRect: () => {
-      const rects = range.getClientRects();
-      return rects.length ? rects[rects.length - 1] : range.getBoundingClientRect();
+      // 第一个有面积的矩形：选区从行首、元素边界起时，最前面常有一个零宽矩形（空文本节点、上一行末尾），
+      // 弹层会把它当成锚点已不可见而隐藏自己。
+      const first = [...range.getClientRects()].find((rect) => rect.width > 0 && rect.height > 0);
+      return first ?? range.getBoundingClientRect();
     },
     contextElement: host,
   };

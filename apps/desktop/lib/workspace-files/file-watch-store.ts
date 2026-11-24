@@ -26,9 +26,10 @@ function adjust(registrations: Registrations, workspaceId: number, paths: readon
 /**
  * 工作区文件监听的登记：「文件变了」的信号归工作区，各界面只声明要看哪些路径。
  *
- * 登记方有三类：文件面板（展开的目录、标签所在目录）、Markdown 引用的本地图片、会话订阅界面（已加载消息里工作区内
- * 的交付物）。`WorkspaceFileWatches`（挂在 AppLayout）为每个至少有一项登记的工作区维持一条监听连接，登记清零即
- * 关闭；后端订阅时对文件取父目录、对目录取自身，前端不必换算。只是界面状态，不持久化。
+ * 登记方有三类：文件面板（展开的目录、打开的标签）、Markdown 引用的本地图片、会话订阅界面（已加载消息里工作区内
+ * 的交付物）。登记的就是画面上读的那个路径：后端只比对登记的路径本身（目录看条目增删、文件看内容），登记父目录
+ * 感知不到文件内容的变化。`WorkspaceFileWatches`（挂在 AppLayout）为每个至少有一项登记的工作区维持一条连接，
+ * 登记清零即关闭。只是界面状态，不持久化。
  */
 export const useFileWatchStore = create<FileWatchState>()((set) => ({
   byWorkspace: {},

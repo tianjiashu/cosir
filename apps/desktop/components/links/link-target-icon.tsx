@@ -1,25 +1,17 @@
 import { FileIcon, FolderIcon, GlobeIcon, ImageIcon, MailIcon, MonitorIcon } from "lucide-react";
 
 import { resolveLink, type LinkTarget, type WebLink } from "@/lib/links/resolve-link";
-import { brandIconPath, useFaviconUrl } from "@/lib/links/site-icon";
+import { brandIconPath } from "@/lib/links/site-icon";
 import { cn } from "@/lib/utils";
 
-/** 跟随所在文字的字号，调用方可用 `size-*` 改写；子元素铺满，文件、站点、通用图标大小一致，加载前后不跳动。 */
+/** 跟随所在文字的字号，调用方可用 `size-*` 改写；子元素铺满，文件、站点、通用图标大小一致。 */
 const ICON_CLASS = "inline-flex size-[1em] shrink-0 align-[-0.125em] [&>*]:size-full";
 
-function SiteFavicon({ host }: { host: string }) {
-  const src = useFaviconUrl(host);
-  if (!src) return <GlobeIcon />;
-  // 保留原色：网站主要靠图标辨认。跨站图片读不到像素，黑色透明图标在深色背景上看不清时只能接受，文字仍可读。
-  return <img src={src} alt="" className="rounded-[3px]" />;
-}
-
 function WebIcon({ target }: { target: WebLink }) {
-  if (target.url.toLowerCase().startsWith("mailto:")) return <MailIcon />;
-  if (target.local) return <MonitorIcon />;
-  if (target.publicHost === null) return <GlobeIcon />;
-  const brandPath = brandIconPath(target.publicHost);
-  if (!brandPath) return <SiteFavicon host={target.publicHost} />;
+  if (target.reach === "mail") return <MailIcon />;
+  if (target.reach === "local") return <MonitorIcon />;
+  const brandPath = brandIconPath(target.host!);
+  if (!brandPath) return <GlobeIcon />;
   return <svg viewBox="0 0 24 24" fill="currentColor"><path d={brandPath} /></svg>;
 }
 

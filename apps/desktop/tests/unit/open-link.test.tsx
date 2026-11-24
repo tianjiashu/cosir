@@ -183,6 +183,19 @@ function renderMarkdown(text: string, options?: { documentDir?: string; webOnly?
 }
 
 describe("markdown links", () => {
+  // 目的：模型写的网站图片不由界面直接请求；潜在缺陷：一显示就把路径和参数送到对方站点，或被宿主拦成一块破图。
+  it("turns website images into links and leaves local images alone", () => {
+    const html = renderMarkdown('![图表](https://x.example.com/c.png?d=1) <img src="https://y.example.com/a.png"> [![徽章](https://img.example.com/b.svg)](https://example.com) ![本机](http://localhost:5173/a.png)');
+    expect(html).not.toMatch(/<img[^>]*example\.com/);
+    expect(html).toContain('href="https://x.example.com/c.png?d=1"');
+    expect(html).toContain("图片：图表");
+    expect(html).toContain("图片：y.example.com");
+    // 链接里的图片只留文字，不在链接里套链接。
+    expect(html).toContain("图片：徽章");
+    expect(html).not.toContain('href="https://img.example.com/b.svg"');
+    expect(html).toMatch(/<img[^>]*src="http:\/\/localhost:5173\/a.png"/);
+  });
+
   it("keeps relative hrefs intact through sanitizing and links them to the file panel", () => {
     const html = renderMarkdown("[a](src/a.ts#L42) [up](../up.md)", { documentDir: "docs/plan" });
     expect(html).toContain('href="src/a.ts#L42"');

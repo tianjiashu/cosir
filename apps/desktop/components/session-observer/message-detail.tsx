@@ -177,7 +177,7 @@ export function MessageDetail({
                   <Button
                     key={item.sequence}
                     size="sm"
-                    variant="outline"
+                    variant="link"
                     onClick={() => onLocate(item.sequence)}
                   >
                     {item.role === "assistant" ? "查看调用" : "查看记录"} #{item.sequence}
@@ -206,7 +206,7 @@ export function MessageDetail({
                         <Button
                           key={item.sequence}
                           size="sm"
-                          variant="outline"
+                          variant="link"
                           onClick={() => onLocate(item.sequence)}
                         >
                           查看结果 #{item.sequence}

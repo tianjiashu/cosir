@@ -1,4 +1,4 @@
-"""Session 推送：状态只在有订阅者时读库、同一 Session 只留最新值，终端批准计入显示它的会话；
+"""Session 推送：状态只在有订阅者时读库、同一 Session 只留最新值，终端批准单独计在显示它的会话上；
 目录失效按工作区去重、只收侧栏 Session；流先发整表，再分别发状态变化与目录失效。"""
 
 from __future__ import annotations
@@ -54,7 +54,9 @@ def _feed(
 
 
 def test_publish_without_subscribers_does_not_read() -> None:
-    feed, sessions = _feed({1: SessionStatus("running", 0)}, {1: _Session(7, SessionType.USER)})
+    feed, sessions = _feed(
+        {1: SessionStatus("running", 0, 0, False)}, {1: _Session(7, SessionType.USER)}
+    )
     feed.publish_status(1)
     feed.publish_session_catalog(1)
     assert sessions.status_reads == 0
@@ -63,11 +65,13 @@ def test_publish_without_subscribers_does_not_read() -> None:
 
 @pytest.mark.asyncio
 async def test_subscribers_get_the_latest_status_per_session() -> None:
-    feed, sessions = _feed({1: SessionStatus("running", 0), 2: SessionStatus(None, 0)})
+    feed, sessions = _feed(
+        {1: SessionStatus("running", 0, 0, False), 2: SessionStatus(None, 0, 0, False)}
+    )
     subscription = feed.subscribe(asyncio.get_running_loop())
 
     feed.publish_status(1)
-    sessions.statuses[1] = SessionStatus("completed", 1)
+    sessions.statuses[1] = SessionStatus("completed", 1, 0, False)
     feed.publish_status(1)
     feed.publish_status(2)
     feed.publish_status(99)  # 已删除的 Session 不发
@@ -75,7 +79,10 @@ async def test_subscribers_get_the_latest_status_per_session() -> None:
 
     assert subscription.changed.is_set()
     batch = subscription.take()
-    assert batch.statuses == {1: SessionStatus("completed", 1), 2: SessionStatus(None, 0)}
+    assert batch.statuses == {
+        1: SessionStatus("completed", 1, 0, False),
+        2: SessionStatus(None, 0, 0, False),
+    }
     assert not batch.catalog
     assert not subscription.changed.is_set()
 
@@ -86,10 +93,14 @@ async def test_subscribers_get_the_latest_status_per_session() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pending_terminal_approvals_count_as_awaiting_on_the_display_session(monkeypatch) -> None:
+async def test_pending_terminal_approvals_count_separately_on_the_display_session(
+    monkeypatch,
+) -> None:
     registry = TerminalApprovalRegistry()
     monkeypatch.setattr(session_feed_module, "terminal_approvals", registry)
-    feed, _ = _feed({1: SessionStatus("running", 1), 2: SessionStatus("running", 0)})
+    feed, _ = _feed(
+        {1: SessionStatus("running", 1, 0, False), 2: SessionStatus("running", 0, 0, False)}
+    )
     # 子 Agent 2 的批准冒泡到用户会话 1：计在显示它的会话上，不计在发起方。
     request = registry.request(  # noqa: S604 - 登记测试描述，不运行 shell
         origin_session_id=2,
@@ -102,18 +113,22 @@ async def test_pending_terminal_approvals_count_as_awaiting_on_the_display_sessi
         intent="",
         origin_title="测试会话",
     )
-    assert feed.statuses() == {1: SessionStatus("running", 2), 2: SessionStatus("running", 0)}
+    # 批准与 HITL 提问分开计数：会话 1 原有一个提问，现在另有一个批准。
+    assert feed.statuses() == {
+        1: SessionStatus("running", 1, 1, False),
+        2: SessionStatus("running", 0, 0, False),
+    }
 
     subscription = feed.subscribe(asyncio.get_running_loop())
     feed.publish_status(1)
     await asyncio.sleep(0)
-    assert subscription.take().statuses == {1: SessionStatus("running", 2)}
+    assert subscription.take().statuses == {1: SessionStatus("running", 1, 1, False)}
 
     registry.cancel(request, "call_cancelled")
     feed.publish_status(1)
     await asyncio.sleep(0)
-    assert subscription.take().statuses == {1: SessionStatus("running", 1)}
-    assert feed.statuses()[1] == SessionStatus("running", 1)
+    assert subscription.take().statuses == {1: SessionStatus("running", 1, 0, False)}
+    assert feed.statuses()[1] == SessionStatus("running", 1, 0, False)
     feed.unsubscribe(subscription)
 
 
@@ -149,7 +164,9 @@ async def test_catalog_changes_only_cover_sidebar_sessions_and_merge_per_workspa
 
 @pytest.mark.asyncio
 async def test_stream_starts_with_the_full_table_then_sends_changes() -> None:
-    feed, sessions = _feed({1: SessionStatus("running", 0), 2: SessionStatus("completed", 1)})
+    feed, sessions = _feed(
+        {1: SessionStatus("running", 0, 0, False), 2: SessionStatus("completed", 1, 0, True)}
+    )
     response = await session_feed_stream(feed)
     body = response.body_iterator
 
@@ -157,17 +174,34 @@ async def test_stream_starts_with_the_full_table_then_sends_changes() -> None:
     assert first == {
         "type": "full",
         "sessions": {
-            "1": {"executionStatus": "running", "awaitingUserCalls": 0},
-            "2": {"executionStatus": "completed", "awaitingUserCalls": 1},
+            "1": {
+                "executionStatus": "running",
+                "awaitingDecisions": 0,
+                "awaitingApprovals": 0,
+                "unread": False,
+            },
+            "2": {
+                "executionStatus": "completed",
+                "awaitingDecisions": 1,
+                "awaitingApprovals": 0,
+                "unread": True,
+            },
         },
     }
 
-    sessions.statuses[1] = SessionStatus("suspended", 1)
+    sessions.statuses[1] = SessionStatus("suspended", 1, 0, False)
     feed.publish_status(1)
     second = json.loads(await anext(body))
     assert second == {
         "type": "changed",
-        "sessions": {"1": {"executionStatus": "suspended", "awaitingUserCalls": 1}},
+        "sessions": {
+            "1": {
+                "executionStatus": "suspended",
+                "awaitingDecisions": 1,
+                "awaitingApprovals": 0,
+                "unread": False,
+            }
+        },
     }
 
     feed.publish_catalog(4, SessionType.USER)

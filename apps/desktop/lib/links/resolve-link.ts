@@ -12,10 +12,10 @@ export type WorkspaceLink = { kind: "workspace"; path: string; directory: boolea
 export type FilenameSearch = { kind: "filename-search"; query: string; lines?: LineRange };
 
 /**
- * 网页或邮件地址。`local` 表示本机或局域网主机（`isLocalNetworkHost`，开发服务、局域网设备）；`publicHost` 是
- * 公网主机名，只有它才可以对外取站点图标，本机、局域网与邮件地址为 null。
+ * 网页或邮件地址。`reach` 说地址落在哪：公网站点、本机或局域网主机（`isLocalNetworkHost`，开发服务、局域网设备，
+ * 在内置浏览器打开）、邮件地址。`host` 是小写主机名，邮件地址为 null。
  */
-export type WebLink = { kind: "web"; url: string; local: boolean; publicHost: string | null };
+export type WebLink = { kind: "web"; url: string; reach: "public" | "local" | "mail"; host: string | null };
 
 /**
  * 本机网页文件（`.html` / `.htm`，不带行号）：要看的是渲染结果，在所属 Session 的内置浏览器打开。`url` 是 file 地址、
@@ -238,7 +238,7 @@ function webLink(url: string): WebLink | null {
   } catch {
     return null;
   }
-  if (parsed.protocol === "mailto:") return { kind: "web", url, local: false, publicHost: null };
-  const local = isLocalNetworkHost(parsed.hostname);
-  return { kind: "web", url, local, publicHost: local ? null : parsed.hostname.toLowerCase() };
+  if (parsed.protocol === "mailto:") return { kind: "web", url, reach: "mail", host: null };
+  const host = parsed.hostname.toLowerCase();
+  return { kind: "web", url, reach: isLocalNetworkHost(host) ? "local" : "public", host };
 }

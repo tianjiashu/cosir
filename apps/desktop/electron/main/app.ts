@@ -6,7 +6,7 @@ import { HOST_CHANNEL } from "../shared/host-contract";
 import { applyDockIcon } from "./app-icon";
 import { installAppMenu } from "./app-menu";
 import { handleAppProtocol, registerAppScheme } from "./app-protocol";
-import { BackendRequestIdentity } from "./backend/request-identity";
+import { RendererRequestPolicy } from "./renderer-request-policy";
 import { BackendSupervisor } from "./backend/supervisor";
 import { BrowserHost } from "./browser/browser-host";
 import { configureBrowserSession, configureBrowserUserAgent } from "./browser/browser-partition";
@@ -80,7 +80,7 @@ function bootstrap(): void {
   void app.whenReady().then(() => {
     handleAppProtocol();
     restrictSessionPermissions();
-    new BackendRequestIdentity(() => supervisor.connectionIdentity(), () => getMainWindow()?.webContents.id,
+    new RendererRequestPolicy(() => supervisor.connectionIdentity(), () => getMainWindow()?.webContents.id,
       process.env.COSIR_RENDERER_URL ? new URL(process.env.COSIR_RENDERER_URL).origin : "app://cosir").install(rendererSession());
     configureBrowserSession(browser);
     registerHostIpc(supervisor, browser);

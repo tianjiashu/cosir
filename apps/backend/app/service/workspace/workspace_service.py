@@ -361,8 +361,8 @@ class WorkspaceService:
                         )
                     self._workspace.delete_in_db(db, workspace_id)
                 self._session_service.finalize_deleted_session_spaces(frozenset(deleted_session_ids))
-                if service_depends.get_workspace_file_watcher.cache_info().currsize:
-                    service_depends.get_workspace_file_watcher().close_workspace(workspace_id)
+                if service_depends.get_workspace_files_service.cache_info().currsize:
+                    service_depends.get_workspace_files_service().invalidate(workspace_id)
                 self._drop_workspace_config_scopes(workspace_record.root_path)
         except TimeoutError as exc:
             raise DeletionBusyError("workspace", workspace_id) from exc

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useStore } from "zustand";
-import { ChevronLeftIcon, Code2Icon, Loader2Icon, PlusIcon, SaveIcon, Settings2Icon, Trash2Icon } from "lucide-react";
+import { ArrowLeftIcon, Code2Icon, Loader2Icon, PlusIcon, SaveIcon, Settings2Icon, Trash2Icon } from "lucide-react";
 
 import { AgentConfigurationForm } from "@/components/configuration/agents/agent-configuration-form";
 import { Alert } from "@/components/ui/alert";
@@ -21,6 +21,7 @@ import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
 import { confirmDiscardUnsaved, useUnsavedChanges } from "@/lib/unsaved-changes";
 import { agentConfigurationsQueryOptions, toolGroupsQueryOptions } from "@/lib/query/query-options";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 
 /** 子 Agent 卡片上的模型名：目录就绪后找不到即视为已删除的配置；目录未就绪时只给编号，避免误报「未知」。 */
 function agentModelLabel(modelConfigId: string, catalog: ModelCatalog | null): string {
@@ -80,7 +81,12 @@ function AgentEditor({
     <Card>
       <CardHeader>
         <CardTitle>{initial ? "编辑子 Agent" : "新建子 Agent"}</CardTitle>
-        <CardAction><Button variant="outline" onClick={() => void leaveEditor(onClose)}><ChevronLeftIcon />返回子 Agent 列表</Button></CardAction>
+        <CardAction>
+          {/* 与 Skill 详情页的返回链接同一种轻样式；这里返回的是页内列表（未保存时先确认），不是路由，所以是按钮。 */}
+          <button type="button" className="text-muted-foreground hover:text-foreground focus-ring inline-flex items-center gap-1 rounded-sm text-xs" onClick={() => void leaveEditor(onClose)}>
+            <ArrowLeftIcon className="size-3.5" />子 Agent 列表
+          </button>
+        </CardAction>
       </CardHeader>
       <CardContent className="space-y-5">
         {mutation.isError && <Alert tone="destructive">{userErrorMessage(mutation.error, "保存失败，请重试")}</Alert>}
@@ -130,7 +136,7 @@ export function AgentConfigurationPanel({ workspaceId }: { workspaceId: number |
   }
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-end"><Button onClick={() => setEditing(null)}><PlusIcon />新建子 Agent</Button></div>
+      <div className="flex items-center justify-end"><TooltipIconButton tooltip="新建子 Agent" className="size-7" onClick={() => setEditing(null)}><PlusIcon /></TooltipIconButton></div>
       <div className="grid gap-3 xl:grid-cols-2">
         {agents.map((agent) => (
           <Card key={`${agent.source}:${agent.agent_id}`} className="p-4 transition-shadow hover:shadow-md">

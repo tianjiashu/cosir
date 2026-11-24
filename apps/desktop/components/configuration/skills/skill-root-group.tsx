@@ -59,7 +59,7 @@ export function SkillRootGroup({ group, skills, workspaceId, busy, effectiveLabe
       ) : (
         <p className="text-muted-foreground px-2 py-1.5 text-xs">
           {group.kind === "cosir"
-            ? "还没有。用右上角「导入」放进来，只有 cosir 使用。"
+            ? "还没有。用右上角「导入」放进来。"
             : "还没有。用 npx skills 或 Codex 等工具装到这里，装好后点「重新扫描」。"}
         </p>
       )}

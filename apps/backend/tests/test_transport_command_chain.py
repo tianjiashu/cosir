@@ -87,6 +87,8 @@ class _Ledger:
     def __init__(self) -> None:
         self.runs: dict[int, SimpleNamespace] = {}
         self.current: SimpleNamespace | None = None
+        # 落定点交给 ``SessionService.record_run_result`` 的 (run_id, status)；规则本身见投影测试。
+        self.results: list[tuple[int, str]] = []
 
     def create_run(self, session_id: int, launch: RunLaunch) -> SimpleNamespace:
         run = SimpleNamespace(
@@ -127,6 +129,9 @@ class _Ledger:
 
     def get_session(self, session_id: int) -> SimpleNamespace:
         return SimpleNamespace(id=session_id, extra=SessionExtra())
+
+    def record_run_result(self, run: SimpleNamespace) -> None:
+        self.results.append((run.id, run.status))
 
 
 class _Driver:
@@ -486,6 +491,21 @@ async def test_baseline_send_starts_a_run_and_cancel_stops_it(chain) -> None:
     await _finish(run.id, "cancelled")
     assert run.status == "cancelled"
     assert not cancellation_registry.is_cancelled(_SESSION_ID)
+
+
+async def test_every_settled_run_is_handed_to_the_unread_rule(chain) -> None:
+    """落定点把每个终态 Run 交给未读规则（完成与停止都交，由规则决定记不记）；挂起不算落定。"""
+    await chain.service.send(_SESSION_ID, _send_request("hello"))
+    await _settle()
+    run = chain.ledger.current
+    await _finish(run.id, "completed")
+    assert chain.ledger.results == [(run.id, "completed")]
+
+    suspended = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
+    suspended.status = "suspended"
+    await chain.service.cancel(_SESSION_ID)
+    await _settle()
+    assert chain.ledger.results == [(run.id, "completed"), (suspended.id, "cancelled")]
 
 
 async def test_baseline_resume_restarts_the_cancelled_run(chain) -> None:

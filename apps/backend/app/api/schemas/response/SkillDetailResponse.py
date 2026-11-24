@@ -16,13 +16,12 @@ class SkillFileResponse(BaseModel):
 class SkillDetailResponse(SkillInfoResponse):
     """Skill 详情：正文、其余 frontmatter 字段、文件清单与位置。
 
-    ``location`` 给人看（``~/…``）；``directory`` 是真实目录的绝对路径，只给桌面宿主的「在文件夹中显示」。
-    ``also_at`` 是同一份 Skill（内容相同）的其他位置，多为软链或复制安装，列表里只列生效的这一条。
+    ``directory`` 是真实目录的绝对路径，只给桌面宿主的「在文件夹中显示」。
+    ``also_at`` 是同一份 Skill（内容相同）的其他位置（给人看的 ``~/…``），多为软链或复制安装，列表里只列生效的这一条。
     ``files_truncated`` 表示文件超过清单上限、只列出了前一部分。
     """
 
     content: str
-    location: str
     also_at: list[str]
     directory: str
     metadata: dict[str, str]

@@ -19,6 +19,7 @@ import { queryKeys } from "@/lib/query/query-keys";
 import { diffSkillCatalogs } from "@/lib/skills/skill-catalog-diff";
 import { bulkToggleTargets, searchSkillGroups } from "@/lib/skills/skill-catalog-search";
 import { effectiveRootLabels } from "@/lib/skills/skill-directory";
+import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 
 /**
  * 一个作用域的 Skills 页：`skillName` 有值时显示这个 Skill 的详情页（路由 `…/configuration/skills/:skillName`），
@@ -56,7 +57,6 @@ function SkillCatalogPage({ workspaceId }: { workspaceId: number | null }) {
   const bulk = bulkToggleTargets(searched, pageScope);
   const hasSkills = groups.some((group) => group.skills.length > 0);
   const effectiveLabels = effectiveRootLabels(groups, pageScope);
-  const importLocation = groups.find((group) => group.scope === pageScope && group.kind === "cosir")?.location;
 
   // 一并失效输入框选择器与详情页：它们读的是同一批目录。
   async function rescan() {
@@ -75,11 +75,11 @@ function SkillCatalogPage({ workspaceId }: { workspaceId: number | null }) {
           <h2 id="skill-configuration-heading" className="text-lg font-semibold">Skills</h2>
           {catalogQuery.data && <AgentCatalogSummary view={catalogQuery.data} workspaceId={workspaceId} />}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button variant="outline" size="sm" disabled={catalogQuery.isFetching} onClick={() => void rescan()}>
-            <RefreshCwIcon className={catalogQuery.isFetching ? "animate-spin" : undefined} />重新扫描
-          </Button>
-          <SkillImportMenu workspaceId={workspaceId} location={importLocation} />
+        <div className="flex shrink-0 items-center gap-1">
+          <TooltipIconButton tooltip="重新扫描" className="size-7" disabled={catalogQuery.isFetching} onClick={() => void rescan()}>
+            <RefreshCwIcon className={catalogQuery.isFetching ? "animate-spin" : undefined} />
+          </TooltipIconButton>
+          <SkillImportMenu workspaceId={workspaceId} />
         </div>
       </header>
 
@@ -99,10 +99,10 @@ function SkillCatalogPage({ workspaceId }: { workspaceId: number | null }) {
               <Input className="pl-8 text-sm" aria-label="搜索 Skill" placeholder="搜索名称或描述…" value={query} onChange={(event) => setQuery(event.target.value)} />
             </div>
             {searching && bulk.enabled.length > 0 && (
-              <Button variant="outline" size="sm" disabled={actions.busy} onClick={() => actions.setEnabled(bulk.enabled, false)}>停用这 {bulk.enabled.length} 个</Button>
+              <Button variant="ghost" size="sm" disabled={actions.busy} onClick={() => actions.setEnabled(bulk.enabled, false)}>停用这 {bulk.enabled.length} 个</Button>
             )}
             {searching && bulk.disabled.length > 0 && (
-              <Button variant="outline" size="sm" disabled={actions.busy} onClick={() => actions.setEnabled(bulk.disabled, true)}>启用这 {bulk.disabled.length} 个</Button>
+              <Button variant="ghost" size="sm" disabled={actions.busy} onClick={() => actions.setEnabled(bulk.disabled, true)}>启用这 {bulk.disabled.length} 个</Button>
             )}
           </div>}
 

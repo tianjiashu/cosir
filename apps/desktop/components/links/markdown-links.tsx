@@ -26,8 +26,7 @@ const MarkdownLinkScopeContext = createContext<MarkdownLinkScopeValue | null>(nu
  * 就不重渲染，打开器换了（工作区信息晚于第一帧到达、所属会话变了）链接也不会跟着变——先到的消息里链接
  * 一直是纯文本，点击也一直用旧的打开器。context 的变化穿透任何一层缓存，只重渲染读它的链接。
  *
- * `documentDir` 只在文档里给出（相对打开器的根），相对链接按文档目录解析。`icons` 只在对话里开启：取站点
- * 图标要联网，打开一篇文档不应该为其中所有链接发请求。
+ * `documentDir` 只在文档里给出（相对打开器的根），相对链接按文档目录解析。`icons` 只在对话里开启。
  */
 export function MarkdownLinkScope({ opener, documentDir, icons = false, children }: {
   opener: LinkOpener;

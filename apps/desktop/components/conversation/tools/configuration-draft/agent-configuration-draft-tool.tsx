@@ -21,7 +21,7 @@ export function AgentConfigurationDraftTool({ artifact, sessionId, toolCallId, i
         <div className="truncate text-sm font-medium">{draft.agent_id}</div>
         <p className="text-muted-foreground truncate text-xs">{draft.role} · {draft.description} · {inherited ? "继承的配置提案" : <DraftSaveStatus workspaceId={actions?.workspaceId ?? null} sessionId={sessionId} toolCallId={toolCallId} />}</p>
       </div>
-      {canEdit && <div className="flex shrink-0 gap-1.5"><Button type="button" variant="outline" size="sm" className="h-7 gap-1.5 px-2" onClick={() => actions.openAgentConfigurationDraft({ sessionId, toolCallId, draft: { agent_id: draft.agent_id, role: draft.role, description: draft.description, system_prompt: draft.system_prompt } })}><PencilIcon className="size-3.5" />编辑配置</Button></div>}
+      {canEdit && <div className="flex shrink-0 gap-1.5"><Button type="button" variant="ghost" size="sm" className="h-7 gap-1.5 px-2" onClick={() => actions.openAgentConfigurationDraft({ sessionId, toolCallId, draft: { agent_id: draft.agent_id, role: draft.role, description: draft.description, system_prompt: draft.system_prompt } })}><PencilIcon className="size-3.5" />编辑配置</Button></div>}
     </div>
   );
 }

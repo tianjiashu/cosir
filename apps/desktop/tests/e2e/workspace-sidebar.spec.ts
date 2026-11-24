@@ -7,10 +7,12 @@ import { installFakeDesktopHost } from "./fake-desktop-host";
 const longTitle = "检查工作区会话列表中的超长中文标题与EnglishIdentifierWithoutSpaces".repeat(3);
 const workspaceName = "cosir-用于验证长名称的本地工作区";
 
-/** 状态推送的整表帧：每个 Session 的执行状态与等你操作的调用数（缺省 0）。 */
-function statusFrame(statuses: Record<number, string | null>, awaiting: Record<number, number> = {}) {
+type StatusExtra = Partial<{ awaitingDecisions: number; awaitingApprovals: number; unread: boolean }>;
+
+/** 状态推送的整表帧：每个 Session 的执行状态，另可给在等你的调用数与未读（缺省 0 与已读）。 */
+function statusFrame(statuses: Record<number, string | null>, extra: Record<number, StatusExtra> = {}) {
   const sessions = Object.fromEntries(Object.entries(statuses).map(([id, executionStatus]) => (
-    [id, { executionStatus, awaitingUserCalls: awaiting[Number(id)] ?? 0 }]
+    [id, { executionStatus, awaitingDecisions: 0, awaitingApprovals: 0, unread: false, ...extra[Number(id)] }]
   )));
   return `${JSON.stringify({ type: "full", sessions })}\n`;
 }
@@ -20,7 +22,7 @@ async function seedSidebar(
   request: APIRequestContext,
   theme: string,
   statuses: Record<number, string | null> = { 100: null, 101: "suspended", 102: "running" },
-  awaiting: Record<number, number> = {},
+  extra: Record<number, StatusExtra> = {},
 ) {
   await page.addInitScript((value) => {
     localStorage.clear();
@@ -39,7 +41,7 @@ async function seedSidebar(
   await page.route(`${origin}/workspaces/7/sessions`, (route) => route.fulfill({ json: sessions }));
   // 状态点只读状态推送：一帧整表即可（流结束后客户端重连，再拿到同一张表）。
   await page.route(`${origin}/session-feed/stream`, (route) => route.fulfill({
-    contentType: "application/x-ndjson", body: statusFrame(statuses, awaiting),
+    contentType: "application/x-ndjson", body: statusFrame(statuses, extra),
   }));
   // 只读展示夹具按浏览器隔离，避免其他测试重置共享内存服务时影响会话切换。
   for (const session of sessions) {
@@ -72,8 +74,8 @@ for (const theme of ["light", "dark"]) {
     await expect(selected).toHaveAttribute("aria-current", "page");
     await expect(workspace).toHaveAttribute("aria-selected", "false");
     await expect(page.locator("html")).toHaveCSS("color-scheme", theme);
-    await expect(other.getByRole("img", { name: "等待结果" })).toBeVisible();
-    await expect(row(page, "分支会话").getByRole("img", { name: "运行中" })).toBeVisible();
+    await expect(other.getByRole("img", { name: "进行中，在等后台结果" })).toBeVisible();
+    await expect(row(page, "分支会话").getByRole("img", { name: "进行中" })).toBeVisible();
 
     const title = selected.locator(".workspace-tree-title");
     // 当前会话只靠底色标出，不加粗；分组名与会话标题左对齐（图标格与状态标记列同宽）。
@@ -334,7 +336,7 @@ async function seedManySessions(
   request: APIRequestContext,
   count: number,
   statuses: Record<number, string | null> = {},
-  awaiting: Record<number, number> = {},
+  extra: Record<number, StatusExtra> = {},
 ) {
   await seedSidebar(page, request, "light");
   const many = Array.from({ length: count }, (_, index) => {
@@ -343,7 +345,7 @@ async function seedManySessions(
   });
   await page.route(`${origin}/workspaces/7/sessions`, (route) => route.fulfill({ json: many }));
   await page.route(`${origin}/session-feed/stream`, (route) => route.fulfill({
-    contentType: "application/x-ndjson", body: statusFrame(statuses, awaiting),
+    contentType: "application/x-ndjson", body: statusFrame(statuses, extra),
   }));
   for (const session of many) {
     await page.route(`${origin}/sessions/${session.session_id}`, (route) => route.fulfill({ json: session }));
@@ -383,24 +385,44 @@ test("运行中与打开过的会话留在可见范围内，离开后也不消�
   await expect(row(page, "批量会话 2")).toBeVisible();
 });
 
-test("有事等你操作时状态位与行尾都写明，Run 已完成也不例外；页头两项并列", async ({ page, request }) => {
-  await seedSidebar(page, request, "light", { 100: null, 101: "completed", 102: "running" }, { 101: 2 });
-  await page.goto("/sessions/101");
-  const waiting = row(page, "核对运行状态");
-  await expect(waiting.getByRole("img", { name: "等你操作 · 2" })).toBeVisible();
-  await expect(waiting).toContainText("等你操作");
-  // 没有待决事项的行照旧：运行中是圆点，行尾是相对时间。
-  await expect(row(page, "分支会话").getByRole("img", { name: "运行中" })).toBeVisible();
-  const header = page.locator("header");
-  await expect(header.getByText("等你操作 · 2")).toBeVisible();
-  await expect(header.getByText("已完成")).toHaveCount(0);
+test("在等你的两类分开写明，Run 已结束也不例外；页头不再显示状态", async ({ page, request }) => {
+  await seedSidebar(page, request, "light", { 100: "cancelled", 101: "completed", 102: "running" }, { 101: { awaitingApprovals: 2 }, 102: { awaitingDecisions: 1 } });
+  await page.goto("/sessions/100");
+  const approval = row(page, "核对运行状态");
+  await expect(approval.getByRole("img", { name: "待审批 · 2" })).toBeVisible();
+  await expect(approval.locator(".workspace-tree-time")).toHaveText("待审批 · 2");
+  await expect(approval.locator(".workspace-tree-title")).toHaveCSS("font-weight", "500");
+  // 待回答先于进行中：Run 在跑也写待回答；提醒是图标时 Fork 图标让位。
+  const answer = row(page, "分支会话");
+  await expect(answer.getByRole("img", { name: "待回答" })).toBeVisible();
+  await expect(answer.getByRole("img", { name: "Fork 会话" })).toHaveCount(0);
+  // 被停下的会话不留标记；页头只剩面包屑与操作。
+  await expect(row(page, longTitle).getByRole("img")).toHaveCount(0);
+  const header = page.locator("header").first();
+  await expect(header.getByText(/已停止|已完成|待审批|等你操作/)).toHaveCount(0);
 });
 
-test("有事等你操作的会话留在可见范围内，即使它的 Run 早已结束", async ({ page, request }) => {
-  await seedManySessions(page, request, 12, { 201: "completed" }, { 201: 1 });
+test("没看过的结果标圆点并加粗，打开即告诉后端看过了；正开着的会话不标", async ({ page, request }) => {
+  await seedSidebar(page, request, "light", { 100: "completed", 101: "failed", 102: "completed" }, { 100: { unread: true }, 101: { unread: true }, 102: { unread: true } });
+  const read = page.waitForRequest((sent) => sent.method() === "POST" && sent.url() === `${origin}/sessions/100/read`);
+  await page.goto("/sessions/100");
+  await read;
+  await expect(row(page, longTitle).getByRole("img")).toHaveCount(0);
+  const failed = row(page, "核对运行状态");
+  await expect(failed.getByRole("img", { name: "运行失败" })).toBeVisible();
+  await expect(failed.locator(".workspace-tree-time")).toHaveText("运行失败");
+  const unread = row(page, "分支会话");
+  // 未读只用圆点与加粗，行尾仍是时间。
+  await expect(unread.getByRole("img", { name: "有新结果" })).toBeVisible();
+  await expect(unread.locator(".workspace-tree-title")).toHaveCSS("font-weight", "500");
+  await expect(unread.locator("time")).toBeVisible();
+});
+
+test("在等你与没看过结果的会话留在可见范围内，即使它的 Run 早已结束", async ({ page, request }) => {
+  await seedManySessions(page, request, 12, { 200: "completed", 201: "completed" }, { 200: { unread: true }, 201: { awaitingDecisions: 1 } });
   await page.goto("/");
   await expect(row(page, "批量会话 1")).toBeVisible();
-  await expect(row(page, "批量会话 0")).toHaveCount(0);
+  await expect(row(page, "批量会话 0")).toBeVisible();
 });
 
 test("搜索打开命令面板；在新会话页的工作区选择器里新建工作区后在新工作区开始新会话", async ({ page, request }) => {

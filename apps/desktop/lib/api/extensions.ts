@@ -143,12 +143,11 @@ export type SkillCatalogView = {
 
 /**
  * Skill 详情：正文（已去掉 frontmatter）、其余 frontmatter 字段原样转文本、目录里的文件清单（限量，
- * `files_truncated` 表示没列全）。`location` 给人看；`also_at` 是同一份 Skill 的其他位置（软链或复制安装）；
+ * `files_truncated` 表示没列全）。`also_at` 是同一份 Skill 的其他位置（软链或复制安装，给人看）；
  * `directory` 是绝对路径，只给「在文件夹中显示」。
  */
 export type SkillDetail = Skill & {
   content: string;
-  location: string;
   also_at: string[];
   directory: string;
   metadata: Record<string, string>;

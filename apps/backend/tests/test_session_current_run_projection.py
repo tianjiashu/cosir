@@ -1,9 +1,13 @@
-"""Session 状态的读取投影：执行状态只认当前 Run 指针，等你操作只认等待占位行；Session 读取接口不携带状态。"""
+"""Session 状态的读取投影：执行状态只认当前 Run 指针，等你回答只认等待占位行，未读只认 extra 标记；
+Session 读取接口不携带状态。"""
 
 import asyncio
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.orm import sessionmaker
+
 from app.api.sessions_api import get_session
 from app.api.workspaces_api import list_workspace_sessions
 from app.models.message_context.message_metadata.tool_message_metadata import (
@@ -21,8 +25,6 @@ from app.storage.crud.workspace_crud import WorkspaceCrud
 from app.storage.engine_cache import create_sqlite_engine
 from app.storage.model.session_context_model import SessionContextModel
 from app.storage.store_engines import initialize_app_schema
-from sqlalchemy import text
-from sqlalchemy.orm import sessionmaker
 from tests.session_extra_fixtures import fork_extra
 
 
@@ -57,13 +59,13 @@ def test_status_follows_the_current_pointer_not_the_latest_run(store, status):
     current = store.runs.create(session.id, status=status)
     store.runs.create(session.id, status="completed")
     store.sessions.set_current_run_id(session.id, current.id)
-    assert store.sessions.get_status(session.id) == SessionStatus(status, 0)
-    assert store.sessions.list_statuses() == {session.id: SessionStatus(status, 0)}
+    assert store.sessions.get_status(session.id) == SessionStatus(status, 0, 0, False)
+    assert store.sessions.list_statuses() == {session.id: SessionStatus(status, 0, 0, False)}
 
 
 def test_no_run_and_missing_session(store):
     session = store.sessions.create(store.workspace.id, "未运行")
-    assert store.sessions.get_status(session.id) == SessionStatus(None, 0)
+    assert store.sessions.get_status(session.id) == SessionStatus(None, 0, 0, False)
     with pytest.raises(KeyError):
         store.sessions.get_status(session.id + 100)
 
@@ -116,8 +118,8 @@ def test_awaiting_user_counts_only_local_hitl_placeholders_still_in_context(stor
         store.contexts.create(row)
 
     assert [row.awaits_user for row in rows] == [True, True, False, False, False, False, False]
-    assert store.sessions.get_status(session.id) == SessionStatus("completed", 2)
-    assert store.sessions.list_statuses() == {session.id: SessionStatus("completed", 2)}
+    assert store.sessions.get_status(session.id) == SessionStatus("completed", 2, 0, False)
+    assert store.sessions.list_statuses() == {session.id: SessionStatus("completed", 2, 0, False)}
 
 
 def test_awaiting_user_queries_use_the_partial_index(store):
@@ -150,3 +152,67 @@ def test_session_responses_carry_no_execution_state(store):
     for response in [*records, asyncio.run(get_session(session.id, store.service))]:
         dumped = response.model_dump()
         assert "current_run_id" not in dumped and "execution_status" not in dumped
+
+
+def test_result_unread_is_rewritten_in_place_without_touching_other_extra(store):
+    """未读按 JSON 路径原地改写：fork 来源等其他附属数据不丢，侧栏排序用的 updated_at 不变；没变不写。"""
+    source = store.sessions.create(store.workspace.id, "来源")
+    session = store.sessions.create(
+        store.workspace.id, "分支", session_type="user_fork", extra=fork_extra(source.id)
+    )
+    before = store.sessions.get(session.id)
+    assert store.sessions.set_result_unread(session.id, True) is True
+    assert store.sessions.set_result_unread(session.id, True) is False
+    after = store.sessions.get(session.id)
+    assert after.extra == before.extra.model_copy(update={"result_unread": True})
+    assert after.updated_at == before.updated_at
+    assert store.sessions.get_status(session.id) == SessionStatus(None, 0, 0, True)
+    assert store.sessions.list_statuses()[session.id].unread is True
+    assert store.sessions.set_result_unread(session.id, False) is True
+    assert store.sessions.get_status(session.id).unread is False
+    with pytest.raises(KeyError):
+        store.sessions.set_result_unread(session.id + 100, False)
+
+
+@pytest.mark.parametrize(
+    ("session_type", "status", "unread"),
+    [
+        ("user", "completed", True),
+        ("user", "failed", True),
+        ("agent_fork", "completed", True),
+        # 用户自己停下的、还没结局的、委派子 Agent（结果汇报给派生方）都不算有新结果。
+        ("user", "cancelled", False),
+        ("user", "suspended", False),
+        ("delegated", "completed", False),
+    ],
+)
+def test_run_result_marks_only_results_meant_for_the_user(
+    store, monkeypatch, session_type, status, unread
+):
+    published = []
+    monkeypatch.setattr(
+        "app.service.depends.get_session_feed",
+        lambda: SimpleNamespace(publish_status=published.append),
+    )
+    parent = store.sessions.create(store.workspace.id, "父会话")
+    extra = None
+    if session_type == "agent_fork":
+        extra = SessionExtra(fork=fork_extra(parent.id).fork, deriving_call_id="call-1")
+    elif session_type == "delegated":
+        extra = SessionExtra(deriving_call_id="call-1")
+    session = store.sessions.create(
+        store.workspace.id,
+        "会话",
+        session_type=session_type,
+        parent_session_id=parent.id if session_type == "delegated" else None,
+        extra=extra,
+    )
+    run = store.runs.create(session.id, status=status)
+    store.service.record_run_result(run)
+    assert store.sessions.get_status(session.id).unread is unread
+    assert published == ([session.id] if unread else [])
+
+    store.service.mark_result_read(session.id)
+    store.service.mark_result_read(session.id)
+    assert store.sessions.get_status(session.id).unread is False
+    assert published == ([session.id, session.id] if unread else [])
