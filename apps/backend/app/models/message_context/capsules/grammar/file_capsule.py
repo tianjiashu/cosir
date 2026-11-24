@@ -1,7 +1,7 @@
 """本机文件附件的胶囊。"""
 
 from dataclasses import dataclass
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, Self
 
 from app.models.message_context.capsules.grammar.capsule import Capsule
 
@@ -12,3 +12,11 @@ class FileCapsule(Capsule):
 
     path: str
     kind: ClassVar[Literal["file"]] = "file"
+    REQUIRED: ClassVar[frozenset[str]] = frozenset({"path"})
+
+    @classmethod
+    def from_attributes(cls, attributes: dict[str, str]) -> Self | None:
+        return cls(path=attributes["path"]) if attributes["path"] else None
+
+    def serialize(self) -> str:
+        return self._tag(("path", self.path))

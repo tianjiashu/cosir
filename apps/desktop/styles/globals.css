@@ -33,9 +33,9 @@
   --text-3xs--line-height: 1;
   --text-2xs: 0.6875rem;
   --text-2xs--line-height: 1rem;
-  /* 回合里过程区的字号（设计 §5.9：调用行、区头 13px）：介于 xs 与 sm 之间，正文仍用 sm。 */
+  /* 对话正文字号（15px）：Markdown 正文排版取它（`styles/markdown.css` 的 --prose-font-size），气泡与提问卡片标题也用它。 */
   --text-chat: 0.9375rem;
-  --text-chat--line-height: 1.75rem;
+  --text-chat--line-height: var(--prose-line-height);
 
   --text-2sm: 0.8125rem;
   --text-2sm--line-height: 1.25rem;
@@ -150,6 +150,8 @@
   --terminal-pane-foreground: #27272a;
   --terminal-pane-cursor: #52525b;
   --terminal-pane-selection: #d4d4d8;
+  /* 网页内容与代码编辑器的选区色（终端选区仍是 --terminal-pane-selection）；半透明以透出底下的代码块底色。 */
+  --selection: color-mix(in oklab, var(--info) 24%, transparent);
   --skill-foreground: oklch(0.38 0.13 295);
   --skill-background: oklch(0.95 0.035 295);
   --skill-border: oklch(0.82 0.07 295);
@@ -195,6 +197,7 @@
   --terminal-pane-foreground: #e4e4e7;
   --terminal-pane-cursor: #a1a1aa;
   --terminal-pane-selection: #3f3f46;
+  --selection: color-mix(in oklab, var(--info) 34%, transparent);
   --skill-foreground: oklch(0.84 0.08 295);
   --skill-background: oklch(0.29 0.04 295);
   --skill-border: oklch(0.46 0.07 295);
@@ -342,6 +345,21 @@ body > :not(#root) > * {
 }
 ::highlight(cosir-find-current) {
   background-color: var(--find-match-current);
+}
+/* 全应用一个选区色。浏览器不给行内元素的内边距上选区色，选中的行内代码由 `useDomSelectionSource` 打上
+   data-selected、整块上色，否则代码块两侧留灰边。评论框打开期间原选区的替身同色（components/text-selection）。 */
+::selection {
+  background-color: var(--selection);
+}
+[data-streamdown="inline-code"][data-selected] {
+  background-color: var(--selection);
+}
+/* 整块已上色，里面的文字不再叠一层选区色（半透明叠加会更深）。 */
+[data-streamdown="inline-code"][data-selected]::selection {
+  background-color: transparent;
+}
+::highlight(cosir-selection-pending) {
+  background-color: var(--selection);
 }
 
 /* 与 Button / Input 一致的键盘焦点环；自绘控件统一使用，避免各自发明 ring 样式。 */

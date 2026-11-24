@@ -10,17 +10,14 @@ import { CAPSULE_HEIGHT } from "@/lib/assistant/turn/deliverable-layout";
 import { FILE_EXITS } from "@/lib/desktop-host/file-exits";
 import { formatByteSize } from "@/lib/format/byte-size";
 import { cn } from "@/lib/utils";
-import { DeliverableBadge, describeDeliverable } from "./deliverable-label";
-import { useDeliverableFile } from "./use-deliverable-file";
+import { DeliverableBadge, describeDeliverable } from "@/components/deliverables/deliverable-label";
+import { unavailableReason, useDeliverableFile } from "@/components/deliverables/use-deliverable-file";
 
 /** 高度取 `CAPSULE_HEIGHT`（与估高同一个数），不写在类名里。 */
 const CAPSULE_CLASS = "group/capsule bg-card relative inline-flex min-w-0 max-w-full items-center rounded-lg border shadow-xs hover:bg-muted focus-within:bg-muted";
 /** 已不存在、无法访问：虚线边框、没有投影与底色，悬停也不变灰（不可点）。 */
 const UNAVAILABLE_CLASS = "border-dashed bg-transparent shadow-none hover:bg-transparent";
 const FOCUS_CLASS = "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset";
-
-/** 读不到时大小一格的说法：已不存在与无法访问置灰、不可点；其余故障写「—」，仍可点，点开后由打开链路说明。 */
-const PROBLEM_TEXT = { gone: "已不存在", denied: "无法访问", unknown: "—" } as const;
 
 /**
  * 一枚交付物胶囊：容器里并列主按钮（角标、名称、大小）与次按钮（出口菜单），不嵌套按钮。
@@ -36,8 +33,10 @@ export function DeliverableCapsule({ deliverable, links }: { deliverable: Transp
   const recorded = describeDeliverable(deliverable);
   const { name, path, badge } = recorded;
   const file = useDeliverableFile(deliverable);
-  const unavailable = file.problem === "gone" || file.problem === "denied";
-  const meta = file.problem ? PROBLEM_TEXT[file.problem] : file.info ? formatByteSize(file.info.size) : recorded.meta;
+  const reason = unavailableReason(file);
+  const unavailable = reason !== null;
+  // 大小一格：打不开写原因，其余读取故障写「—」。
+  const meta = reason ?? (file.problem ? "—" : file.info ? formatByteSize(file.info.size) : recorded.meta);
   const target = unavailable ? null : links.resolveDeliverable(deliverable);
   const exits = !unavailable && deliverable.type !== "url" ? FILE_EXITS : [];
   const revealable = exits.length > 0;

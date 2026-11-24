@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/desktop-host", () => ({ desktopHost: { homeDir: "/home/u" } }));
 
 import { inlineCodeLink, resolvePathText, resolveLink, toWorkspacePath } from "@/lib/links/resolve-link";
 
@@ -143,4 +145,26 @@ it("distinguishes raw paths from URL addresses and carries document context", ()
   expect(resolveLink("./a%2541%23.md#L3", base)).toEqual(resolvePathText("./a%41#.md:3", base));
   expect(inlineCodeLink("./子目录/说明.md", base)).toMatchObject({ path: "docs/子目录/说明.md" });
   expect(inlineCodeLink("API.md:42", base)).toEqual({ kind: "filename-search", query: "API.md", lines: { start: 42, end: 42 } });
+});
+
+describe("home directory (~)", () => {
+  const home = { workspaceRoot: "/home/u/repo" };
+
+  it("expands a leading ~ before judging the workspace boundary", () => {
+    expect(toWorkspacePath("/home/u/repo", "~/repo/src/a.ts")).toBe("src/a.ts");
+    expect(toWorkspacePath("/home/u/repo", "~/.agents/skills/x/SKILL.md")).toBeNull();
+    expect(resolveLink("~/repo/src/a.ts#L3", home)).toEqual({ kind: "workspace", path: "src/a.ts", directory: false, lines: { start: 3, end: 3 } });
+    expect(resolveLink("~/.agents/skills/x/SKILL.md", home)).toBeNull();
+    expect(inlineCodeLink("~/.agents/skills/x/SKILL.md", home)).toBeNull();
+    expect(resolvePathText("~/repo/a.md:2", home)).toEqual({ kind: "workspace", path: "a.md", directory: false, lines: { start: 2, end: 2 } });
+  });
+
+  it("opens home html files as pages", () => {
+    expect(resolveLink("~/report.html", home)).toEqual({ kind: "page", url: "file:///home/u/report.html", path: "/home/u/report.html", workspace: null });
+  });
+
+  it("leaves other tilde forms relative", () => {
+    expect(toWorkspacePath("/home/u/repo", "~user/a.ts")).toBe("~user/a.ts");
+    expect(toWorkspacePath("/home/u/repo", "src/~/a.ts")).toBe("src/~/a.ts");
+  });
 });

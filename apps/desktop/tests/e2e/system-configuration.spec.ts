@@ -216,3 +216,35 @@ test("配置页各分类都不横向溢出：吸顶条铺满留白、贴边内�
     expect(overflow, `/configuration/${tab} 的内容区横向溢出`).toBe(0);
   }
 });
+
+test("子 Agent 保存期间的新编辑不随成功回执丢失：编辑器留着并仍算未保存", async ({ page }) => {
+  let agent: Record<string, unknown> = {
+    agent_id: "reviewer", role: "review", description: "original", system_prompt: "simple", allowed_tool_groups: [], max_steps: 100,
+    model_config_id: null, model_settings: {}, source: "user_file", path: ".cosir/agents/reviewer.json", deletable: true,
+    validation_status: "valid", validation_error: null, file_name: "reviewer.json",
+  };
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const submitted: string[] = [];
+  await page.route((url) => url.origin === API_ORIGIN && /^\/configuration\/agents(\/[^/]+)?$/.test(url.pathname), async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: [agent] });
+    const body = route.request().postDataJSON();
+    submitted.push(body.description);
+    await gate;
+    agent = { ...agent, ...body };
+    await route.fulfill({ json: agent });
+  });
+  await page.goto("/configuration/agents");
+  await page.getByRole("button", { name: "编辑 reviewer" }).click();
+  const description = page.getByPlaceholder("向主 Agent 说明这个子 Agent 负责什么");
+  await description.fill("first");
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await expect.poll(() => submitted).toEqual(["first"]);
+  await description.fill("second");
+  release();
+  await expect(page.getByText("已保存，之后的修改尚未保存", { exact: true })).toBeVisible();
+  await expect(description).toHaveValue("second");
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await expect.poll(() => submitted).toEqual(["first", "second"]);
+  await expect(description).toHaveCount(0);
+});

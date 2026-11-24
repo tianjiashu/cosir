@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { TransportToolCallPart } from "@/lib/assistant/contract";
-import { CAPSULES_PER_ROW, collectDeliverableBatches, deliverableGroups, deliverableRows, TILES_PER_ROW, workspaceDeliverablePaths } from "@/lib/assistant/turn/deliverable-layout";
-import type { TransportMessage } from "@/lib/assistant/contract";
+import { CAPSULES_PER_ROW, collectDeliverableBatches, deliverableGroups, deliverableRows, TILES_PER_ROW } from "@/lib/assistant/turn/deliverable-layout";
 import { deliveredDirectory, deliveredFile, deliveredUrl, toolCallPart } from "./transport-fixtures";
 
 const present = (id: string, deliverables?: TransportToolCallPart["deliverables"], status: TransportToolCallPart["status"] = "completed") =>
@@ -71,17 +70,5 @@ describe("collectDeliverableBatches", () => {
     }
     // 小图不放大。
     expect(single(deliveredFile("icon.png", { kind: "image", width: 200, height: 100 })).card?.size).toEqual({ width: 200, height: 100 });
-  });
-});
-
-// 目的：监听只登记画面上可能出现的卡片；潜在缺陷：目录、工作区外条目也被登记，或同一文件登记两次让集合抖动。
-describe("workspaceDeliverablePaths", () => {
-  it("只取已加载消息里工作区内的文件，排序去重", () => {
-    const message = (parts: TransportMessage["parts"]) => ({ id: "m", role: "assistant", parts, turn: 1, inherited: false, outcome: null }) as TransportMessage;
-    const messages = [
-      message([present("p1", [deliveredFile("b.md"), deliveredDirectory("dist"), deliveredFile(null, { absolutePath: "/x/y.md" })])]),
-      message([present("p2", [deliveredFile("a.png", { kind: "image" }), deliveredFile("b.md")]), { type: "text", text: "完" }]),
-    ];
-    expect(workspaceDeliverablePaths(messages)).toEqual(["a.png", "b.md"]);
   });
 });

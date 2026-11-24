@@ -4,6 +4,7 @@ import fixture from "@/lib/assistant/capsules/contract/capsule-grammar-cases.jso
 import {
   capsuleTextToPlainText,
   parseCapsules,
+  QUOTE_TEXT_MAX,
   serializeCapsule,
   type CapsuleSegment,
 } from "@/lib/assistant/capsules";
@@ -31,4 +32,8 @@ describe("胶囊文本语法", () => {
       expect(capsuleTextToPlainText(text)).toBe(text);
     });
   }
+
+  it("摘录上限与后端同值", () => {
+    expect(QUOTE_TEXT_MAX).toBe(fixture.limits.quoteTextMax);
+  });
 });

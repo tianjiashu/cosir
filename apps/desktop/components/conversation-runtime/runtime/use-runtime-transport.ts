@@ -12,6 +12,7 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import type { RuntimeSessionContext } from "@/components/conversation-runtime/runtime/runtime-types";
 import { useSessionAssistantTransportRuntime } from "@/lib/assistant/transport/use-session-assistant-transport-runtime";
 import { createAttachmentAdapter } from "@/lib/assistant/attachments/image-attachment-adapter";
+import { uploadPendingImages } from "@/lib/assistant/attachments/pending-images";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { sessionDisplayTitle } from "@/lib/session-title/session-display-title";
@@ -28,7 +29,7 @@ export function useRuntimeTransport(
   const catalogRef = useRef(catalog);
   catalogRef.current = catalog;
   const attachmentAdapter = useMemo(
-    () => context.workspaceId == null ? null : createAttachmentAdapter(context.workspaceId),
+    () => context.workspaceId == null ? null : createAttachmentAdapter(),
     [context.workspaceId],
   );
 
@@ -73,11 +74,12 @@ export function useRuntimeTransport(
         modelConfigId: preferred?.modelConfigId ?? null,
         reasoningEffort: preferred?.reasoningEffort ?? null,
       };
-      // 正文里的胶囊标签就是机器可读的指针，命令原样发送，不在前端改写 parts。
-      const message = command.message as SessionMessageRequest["message"];
       if (launch.modelConfigId === null) {
         throw new UserFacingError(runLaunch ? "当前运行的模型配置已删除，请停止后重新选择" : "请先选择模型后再发送");
       }
+      // 正文里的胶囊标签就是机器可读的指针，原样发送；只有待上传图片在这里上传、换成附件 locator。
+      const parts = await uploadPendingImages(context.workspaceId, command.message.parts, context.traceId);
+      const message = { ...command.message, parts } as SessionMessageRequest["message"];
       const request: SessionMessageRequest = {
         message,
         modelConfigId: launch.modelConfigId,
@@ -96,3 +98,4 @@ export function useRuntimeTransport(
     onError: handleSubmitError,
   });
 }
+

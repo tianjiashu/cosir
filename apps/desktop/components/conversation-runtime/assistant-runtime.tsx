@@ -3,7 +3,7 @@ import { useState } from "react";
 import { AssistantRuntimeErrorBoundary } from "@/components/conversation-runtime/runtime/assistant-runtime-error-boundary";
 import { AssistantRuntimeSession } from "@/components/conversation-runtime/runtime/assistant-runtime-session";
 import type { AssistantRuntimeProps } from "@/components/conversation-runtime/runtime/runtime-types";
-import { useSessionDeliverableWatch } from "@/components/conversation/tools/reply-presentation/use-session-deliverable-watch";
+import { useSessionDeliverableWatch } from "@/components/deliverables/use-session-deliverable-watch";
 
 export type { AssistantRuntimeProps } from "@/components/conversation-runtime/runtime/runtime-types";
 

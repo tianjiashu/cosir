@@ -5,13 +5,14 @@ import { FileChip, SkillChip } from "@/components/composer/token-chips";
 import { MarkdownText } from "@/components/markdown/markdown-text";
 import { StaticMarkdown } from "@/components/markdown/static-markdown";
 import { ReferenceChip } from "@/components/workspace-references/reference-chip";
+import { QuoteBlock } from "@/components/conversation/quotes/quote-block";
 import { userMessageSegments } from "@/lib/assistant/turn/user-message-segments";
 
 /**
  * 用户消息气泡内的正文与行内胶囊（图片除外，见 `UserMessageImages`）。
  *
- * 文件、引用、Skill 是正文里的胶囊标签，由 `userMessageSegments` 一处解析成与输入框同款的胶囊，
- * 发送前后外观一致。没有胶囊时整段走 `MarkdownText`，保留完整 Markdown 排版；有胶囊时按片段渲染，
+ * 文件、引用、Skill、摘录是正文里的胶囊标签，由 `userMessageSegments` 一处解析成与输入框同款的胶囊，
+ * 发送前后外观一致；摘录是块级引文（原文 + 批注），排在正文前。没有胶囊时整段走 `MarkdownText`，保留完整 Markdown 排版；有胶囊时按片段渲染，
  * 段落改为行内以便胶囊与文字同行（与输入框里的排版一致）。
  */
 export function UserMessageContent() {
@@ -27,7 +28,7 @@ export function UserMessageContent() {
     );
   }
   return (
-    <div className="aui-md leading-6">
+    <div>
       {segments.map((segment, index) => {
         switch (segment.type) {
           case "text":
@@ -42,6 +43,8 @@ export function UserMessageContent() {
             return <SkillChip key={index} name={segment.capsule.name} />;
           case "file":
             return <FileChip key={index} path={segment.capsule.path} />;
+          case "quote":
+            return <QuoteBlock key={index} capsule={segment.capsule} />;
         }
       })}
     </div>

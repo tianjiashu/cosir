@@ -1,10 +1,13 @@
 import { browserError } from "../errors";
-import { evaluate } from "./element";
 import type { BrowserOperation } from "../operation";
 
 const POLL_MS = 250;
 
-/** 等文字出现（`text`）或消失（`textGone`），都没有就是单纯暂停。按 `innerText` 判断，隐藏的元素不算在页面上。 */
+/**
+ * 等文字出现（`text`）或消失（`textGone`），都没有就是单纯暂停。每次检查读一次与快照相同的内容（`BrowserTab.mentions`）：
+ * 曾只查主文档的 `innerText`，iframe 与 Shadow DOM 里的文字快照看得见、等待却看不见，等消失会立即误报成功。
+ * 代价是大页面上一次读取可达约 1 秒（实测 9000 个元素），检查间隔随之变长；落定也是这样读的。
+ */
 export async function waitFor(
   session: BrowserOperation,
   target: { text?: string; textGone?: string },
@@ -20,8 +23,11 @@ export async function waitFor(
   const wanted = target.text !== undefined;
   while (Date.now() < deadline) {
     if (signal.aborted) throw signal.reason;
-    const found = await evaluate(session, `document.body && document.body.innerText.includes(${JSON.stringify(text)}) ? "found" : "absent"`);
-    if ((found === "found") === wanted) return;
+    // 页面被弹窗停住时读不到（`mentions` 为 null）：下一轮在这里报出，与动作循环同一条规则。
+    const paused = session.paused();
+    if (paused) throw paused;
+    const found = await session.mentions(text);
+    if (found !== null && found === wanted) return;
     await sleep(POLL_MS, signal);
   }
   const outcome = wanted ? `did not appear within ${seconds} seconds` : `is still on the page after ${seconds} seconds`;

@@ -190,6 +190,7 @@ export class BrowserOperation {
   resolveRef(ref: string): PageNode { return this.tab.resolveRef(ref); }
   frameOffset(cdpSessionId: string | undefined) { return this.tab.frames.offset(cdpSessionId, this.cdp); }
   settle(): Promise<void> { return this.tab.settle(this); }
+  mentions(text: string): Promise<boolean | null> { return this.tab.mentions(text); }
   geometry() { return readGeometry(this.cdp); }
   toInput(point: { x: number; y: number }) { return this.tab.emulation.toInput(point); }
   paused() { return this.tab.paused(); }

@@ -3,7 +3,7 @@ import type { Modifier } from "../params";
 import type { PageNode } from "../ref-registry";
 import { actionable, element, mutateOn, onNode } from "./element";
 import { modifierBits } from "./modifiers";
-import { CLEAR_FIELD } from "./page-functions";
+import { SELECT_CONTENTS } from "./page-functions";
 import type { BrowserOperation } from "../operation";
 
 /** CDP 键盘事件需要的字段；`text` 只给会产生字符的键（回车提交表单靠它）。单个字母与数字由 `keySpec` 现算。 */
@@ -33,7 +33,8 @@ export function isSupportedKey(key: string): boolean {
 /**
  * 聚焦字段（可先清空）后写入文字，可再按回车提交。默认一次写入（`insertText`：快，只触发 input 事件）；`keyByKey`
  * 时每个字符一次按键（keydown / keypress / input / keyup 照真实打字触发），给按键盘事件工作的控件（自动补全、
- * 掩码输入、验证码格子）。换行按回车键处理。
+ * 掩码输入、验证码格子）。换行按回车键处理。清空是先选中原有内容，由写入的文字原生替换；没有文字时按 Delete 删掉，
+ * 都经浏览器自己的编辑，页面收到的是真实的 beforeinput / input（见 `SELECT_CONTENTS`）。
  */
 export async function typeText(
   session: BrowserOperation,
@@ -44,8 +45,10 @@ export async function typeText(
   const node = await element(session, ref);
   await actionable(session, node, true);
   await focus(session, node);
-  if (options.clear) await mutateOn(session, node, CLEAR_FIELD);
-  if (options.keyByKey) {
+  if (options.clear) await mutateOn(session, node, SELECT_CONTENTS);
+  if (options.clear && text === "") {
+    await stroke(session, keySpec("Delete", false));
+  } else if (options.keyByKey) {
     for (const char of text) await stroke(session, charSpec(char));
   } else {
     await session.effect(() => session.cdp("Input.insertText", { text }));

@@ -5,7 +5,7 @@ import { API_ORIGIN as origin } from "./e2e-env";
 const terminal = (status: string) => ["completed", "failed", "cancelled"].includes(status);
 /** Session 视角 snapshot：一轮回复 + 当前活动；终态时结局写在回复上。 */
 function snapshot(turn: number | null, status = "completed", text = "阅读内容") {
-  if (turn === null) return { title: "子 Agent", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [] };
+  if (turn === null) return { title: "子 Agent", messages: [], messageOffset: 0, activity: null, terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [], terminal_permission_mode: "request_approval" };
   const ended = terminal(status);
   return {
     title: "子 Agent",
@@ -18,7 +18,7 @@ function snapshot(turn: number | null, status = "completed", text = "阅读内�
     messageOffset: 0,
     activity: {modelActivity: null, turn, resumable: status === "cancelled" || status === "failed", status, endReason: null, error: null, usage: null, contextWindowTotal: null,
       launch: { modelConfigId: "demo/demo-model", reasoningEffort: null }, startedAt: "2026-10-27T00:00:00.000Z" },
-    terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [],
+    terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [], terminal_permission_mode: "request_approval",
   };
 }
 type Snapshot = ReturnType<typeof snapshot>;

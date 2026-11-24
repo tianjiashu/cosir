@@ -4,27 +4,18 @@ import type {
   PendingAttachment,
 } from "@assistant-ui/core";
 
-import {
-  isSupportedImageFile,
-  uploadAttachment,
-  type UploadedAttachment,
-} from "./attachment-upload";
-import { LOCAL_IMAGE_LOCATOR_PREFIX } from "./attachment-locator";
+import { isSupportedImageFile } from "./attachment-upload";
+import { holdPendingImage } from "./pending-images";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
-import { frontendLog } from "@/lib/logging/frontend-log";
-import { notify } from "@/lib/notify";
-import { newTraceId, type TraceId } from "@/lib/logging/trace-id";
 
-const locatorFor = (assetId: string) => `${LOCAL_IMAGE_LOCATOR_PREFIX}${assetId}`;
-const uploadByDigest = new Map<string, Promise<UploadedAttachment>>();
-
-async function digestFile(file: File): Promise<string> {
-  const bytes = await file.arrayBuffer();
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
-}
-
-export function createAttachmentAdapter(workspaceId: number): AttachmentAdapter {
+/**
+ * 输入框的图片附件：只负责准入与把待发图片交给提交。
+ *
+ * 不在这里上传：assistant-ui 的 `send` 把上传放在输入框里等，上传中的消息就归属于随页面销毁的输入框，切走
+ * Session 后失败放不回原文、成功后草稿里又留着已发的图（见 `pending-images`）。这里把文件登记成待上传图片、
+ * 立即交出完整附件，消息随即离开输入框，上传由 Session 级的提交在 POST 前完成。
+ */
+export function createAttachmentAdapter(): AttachmentAdapter {
   return {
     // 完整历史图片使用 image/*；原始 File 的格式限制在 add 边界处理。
     accept: "image/*,.png,.jpg,.jpeg",
@@ -39,59 +30,20 @@ export function createAttachmentAdapter(workspaceId: number): AttachmentAdapter 
         status: { type: "requires-action", reason: "composer-send" },
       } satisfies PendingAttachment;
     },
-    /**
-     * 发送前把待发附件解析为完整附件；失败时在这里提示用户。
-     *
-     * assistant-ui 的 `composer.send()` 公共 API 不返回 Promise，调用方无法 await 到附件失败，
-     * 因此失败的唯一可靠观察点就是适配器本身：记录日志、toast 提示，再原样抛出让 assistant-ui
-     * 中止本次发送——它会把文本放回输入框、保留待发附件并解除发送中状态，用户可以直接重发。
-     * 上传有超时（attachment-upload），所以不会出现永不结束的发送状态。
-     */
     async send(attachment: PendingAttachment): Promise<CompleteAttachment> {
-      const traceId = newTraceId();
-      try {
-        return await resolveAttachment(workspaceId, attachment, traceId);
-      } catch (error) {
-        void frontendLog("ERROR", "composer_attachment_send_failed", "发送前附件解析失败，本次发送已中止", {
-          traceId,
-          data: { workspaceId, attachmentId: attachment.id, attachmentType: attachment.type },
-          error,
-        });
-        notify.error(`附件「${attachment.name}」发送失败`, { error, fallback: "附件上传失败，请重试" });
-        throw error;
-      }
+      return {
+        // UI 身份贯穿加入、移除与发送；待上传图片的地址只在 content 里。
+        id: attachment.id,
+        type: "image",
+        name: attachment.name,
+        contentType: attachment.contentType,
+        status: { type: "complete" },
+        content: [{ type: "image", image: holdPendingImage(attachment.file) }],
+      };
     },
     async remove() {
       // 图片是 workspace 级永久资源；移除动作只改变当前 Composer 的引用。
       // Run 编辑提交时会通过新的 image_asset_ids 重建 image_paths，不删除物理文件。
     },
-  };
-}
-
-async function resolveAttachment(
-  workspaceId: number,
-  attachment: PendingAttachment,
-  traceId: TraceId,
-): Promise<CompleteAttachment> {
-  const digest = await digestFile(attachment.file);
-  const cacheKey = `${workspaceId}:${digest}`;
-  let upload = uploadByDigest.get(cacheKey);
-  if (!upload) {
-    upload = uploadAttachment(workspaceId, attachment.file, traceId);
-    uploadByDigest.set(cacheKey, upload);
-    // 失败（含超时）的上传不能留在缓存里，否则重发会直接拿到同一个失败结果。
-    void upload.catch(() => {
-      if (uploadByDigest.get(cacheKey) === upload) uploadByDigest.delete(cacheKey);
-    });
-  }
-  const uploaded = await upload;
-  return {
-    // UI 身份贯穿加入、移除与发送；资源身份只在 content 的定位中。AUI 按同一 id 排除上传中被移除的图。
-    id: attachment.id,
-    type: "image",
-    name: uploaded.name,
-    contentType: uploaded.contentType,
-    status: { type: "complete" },
-    content: [{ type: "image", image: locatorFor(uploaded.id) }],
   };
 }

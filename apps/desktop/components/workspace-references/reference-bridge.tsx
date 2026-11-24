@@ -13,8 +13,8 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { refIsDirectory, refWorkspacePath } from "@/lib/workspace-references/ref-capsule";
 
-/** 输入框一侧收到的胶囊：在光标处插入这些标签，可再附一句预设提问。 */
-type Receiver = (capsules: Capsule[], question?: string) => void;
+/** 输入框一侧收到的胶囊：在光标处插入这些标签（摘录进输入框上方的摘录条）。 */
+type Receiver = (capsules: Capsule[]) => void;
 type Bridge = {
   target: string | null;
   workspaceId: number | null;
@@ -28,9 +28,9 @@ type Bridge = {
   /**
    * 唯一的添加边界：再次确认目标输入框仍在（可能刚切走），不在就提示；工作区引用逐条确认目标仍然
    * 存在（文件读一次文件信息、目录读一次目录页），不存在的引用逐条提示且不插入。本机文件与 Skill
-   * 由后端在发送时校验，这里不查。
+   * 由后端在发送时校验，摘录自带原文，都不查。
    */
-  add: (workspace: number, capsules: Capsule[], question?: string) => Promise<void>;
+  add: (workspace: number, capsules: Capsule[]) => Promise<void>;
 };
 const Context = createContext<Bridge | null>(null);
 export const ReferenceTargetScope = createContext<string | null>(null);
@@ -61,7 +61,7 @@ export function ReferenceBridgeProvider({
     };
   }, []);
   const add = useCallback(
-    async (workspace: number, capsules: Capsule[], question?: string) => {
+    async (workspace: number, capsules: Capsule[]) => {
       const destination = receivers.current.at(-1);
       if (
         !destination ||
@@ -89,7 +89,7 @@ export function ReferenceBridgeProvider({
           );
         }
       }
-      if (accepted.length) destination.callback(accepted, question);
+      if (accepted.length) destination.callback(accepted);
       if (failed.length) toast.error(failed.join("\n"), { duration: 8000 });
     },
     [],

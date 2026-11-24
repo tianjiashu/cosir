@@ -375,6 +375,19 @@ export class BrowserTab {
     return { ...read, text: content && buildPageText(content) };
   }
 
+  /**
+   * 页面上有没有这段文字（区分大小写的子串），范围就是快照读到的（子框架、Shadow DOM，隐藏的不算）：`wait_for` 据此判断，
+   * 等到的与快照里看到的是同一件事。只比页面文字本身——大纲条目的名字（按钮、链接、图片等控件的名字）与正文的
+   * 页面文字（被链接拆开的句子拼回一行）；不比展示行：那里的角色、ref、链接地址等快照语法不是页面上的字。
+   * 输入框里的值不算（与 `innerText` 一致）。本标签有待答弹窗时为 null（读不到）。
+   */
+  async mentions(text: string): Promise<boolean | null> {
+    const { content } = await this.read();
+    if (!content) return null;
+    const names = buildOutline(content, this.refs, { pageUrl: this.contents.getURL() }).entries.map((entry) => entry.name);
+    return [...names, ...buildPageText(content).lines.map((line) => line.plain)].some((words) => words.includes(text));
+  }
+
   private async read(): Promise<{ content: SnapshotDocument | null; document: number; dialog: BrowserDialog | null }> {
     this.assertAlive();
     if (this.dialogs.current) return { content: null, document: this.document, dialog: this.dialogs.current };

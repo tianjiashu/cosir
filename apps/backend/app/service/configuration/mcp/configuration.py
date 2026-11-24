@@ -92,7 +92,7 @@ class MCPServerConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_transport_configuration(self) -> MCPServerConfig:
-        """要求所选传输具备对应连接入口，且不引用宿主契约变量。
+        """要求所选传输具备对应连接入口、不带另一种传输的字段，且不引用宿主契约变量。
 
         url 整个来自变量时协议要等展开后才知道：展开出的配置会再经这里校验一次。
         """
@@ -107,8 +107,10 @@ class MCPServerConfig(BaseModel):
             and not self.url.casefold().startswith(("http://", "https://"))
         ):
             raise ValueError("HTTP MCP 服务 url 必须使用 http 或 https")
-        if self.transport == "stdio" and self.oauth is not None:
-            raise ValueError("stdio MCP 服务不使用 OAuth")
+        stray = self._fields_of_other_transport()
+        if stray:
+            kind = "stdio" if self.transport == "stdio" else "HTTP"
+            raise ValueError(f"{kind} MCP 服务不使用 {'、'.join(stray)}，请删除这些字段")
         reserved = sorted({ref.name for ref in self._references() if is_reserved(ref.name)})
         if reserved:
             raise ValueError(f"MCP 服务不能引用 cosir 内部变量：{', '.join(reserved)}")
@@ -170,6 +172,20 @@ class MCPServerConfig(BaseModel):
         if missing:
             raise MissingVariablesError(missing)
         return MCPServerConfig.model_validate(data, context={_EXPANDED: True})
+
+    def _fields_of_other_transport(self) -> list[str]:
+        """填了值、却属于另一种传输的字段。
+
+        每种传输只带自己的字段（stdio：command、args、env；HTTP：url、headers、oauth），所以展开、变量引用与连接
+        指纹都不必按传输挑字段：留着另一种传输的值，会让 HTTP 服务因为旧的 stdio 参数报缺变量，改了用不上的值也会
+        让「测试通过」失效。
+        """
+
+        if self.transport == "stdio":
+            present = {"url": bool(self.url), "headers": bool(self.headers), "oauth": self.oauth is not None}
+        else:
+            present = {"command": bool(self.command), "args": bool(self.args), "env": bool(self.env)}
+        return [name for name, filled in present.items() if filled]
 
     def _references(self) -> list[VariableReference]:
         texts = [self.command, *self.args, *self.env.values(), self.url, *self.headers.values()]

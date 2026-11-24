@@ -391,6 +391,24 @@ def test_mcp_configuration_requires_transport_specific_endpoint():
     assert config.url == "HTTPS://example.com/sse"
 
 
+@pytest.mark.parametrize(
+    ("fields", "field_label"),
+    [
+        ({"transport": "streamable_http", "url": "https://example.com/mcp", "command": "demo"}, "command"),
+        ({"transport": "sse", "url": "https://example.com/sse", "args": ["--label", "${UNSET}"]}, "args"),
+        ({"transport": "streamable_http", "url": "https://example.com/mcp", "env": {"KEY": "v"}}, "env"),
+        ({"command": "demo", "url": "https://example.com/mcp"}, "url"),
+        ({"command": "demo", "headers": {"Authorization": "x"}}, "headers"),
+        ({"command": "demo", "oauth": {"client_id": "a", "client_secret": "", "callback_port": None, "scope": ""}}, "oauth"),
+    ],
+)
+def test_mcp_configuration_rejects_fields_of_the_other_transport(fields, field_label):
+    """每种传输只带自己的字段：另一种传输的值不会被展开、算进变量引用或连接指纹，留着只会让配置看起来能用却报缺变量。"""
+
+    with pytest.raises(ValueError, match=field_label):
+        MCPServerConfig.model_validate({"name": "demo", **fields})
+
+
 def test_stdio_parameters_pass_explicit_environment_and_run_where_used(tmp_path, monkeypatch):
     """MCP 子进程只接收服务专属变量（SDK 另行补入默认白名单）；在哪个工作区里用就在哪运行。"""
 

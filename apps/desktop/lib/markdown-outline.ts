@@ -27,9 +27,12 @@ export function markdownOutline(text: string): OutlineHeading[] {
   return headings;
 }
 
-/** 带 `data-source-line` 的块级元素：选区的块级定位只认这些（行内元素不单独标）。 */
+/**
+ * 带 `data-source-line` 的块级元素：选区的块级定位只认这些（行内元素不单独标）。列表本身也标：摘录按最外层
+ * 带行号的块切源文（`renderedMarkdownExcerpt`），整张列表选中时要取到整段列表原文。
+ */
 const SOURCE_LINE_BLOCKS = new Set([
-  "p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "li", "table", "thead",
+  "p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "ul", "ol", "li", "table", "thead",
   "tbody", "tr", "td", "th", "hr",
 ]);
 

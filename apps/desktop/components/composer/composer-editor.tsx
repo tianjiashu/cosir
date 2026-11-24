@@ -2,7 +2,8 @@ import {
   ReferenceTargetScope,
   useReferenceBridge,
 } from "@/components/workspace-references/reference-bridge";
-import { serializeCapsule, parseCapsules, hasCapsules } from "@/lib/assistant/capsules";
+import { serializeCapsule, parseCapsules, hasCapsules, type QuoteCapsule } from "@/lib/assistant/capsules";
+import { splitQuoteCards } from "@/lib/assistant/composer/quote-cards";
 import { CapsuleToken } from "./extensions/capsule-token";
 import { ReferenceMention } from "@/components/workspace-references/reference-mention";
 
@@ -41,8 +42,14 @@ export const COMPOSER_EDITOR_CLASS_NAME =
 const SCROLL_FADE_CARET_MARGIN = { top: 24, bottom: 24, left: 5, right: 5 };
 
 type ComposerEditorProps = {
+  /** 编辑器里的正文（不含摘录：摘录画在卡片区，见 `quote-cards`）。 */
   value: string;
   onChange: (value: string) => void;
+  /**
+   * 别处加入或粘贴进来的摘录：交给卡片区的持有者合成正文，`rest` 是编辑器此刻的正文（受控值可能还没跟上刚才的输入）。
+   * 编辑器自己不拼摘录标签：拼在正文末尾会落进结尾的代码块，卡片就没了。
+   */
+  onAddQuotes: (quotes: readonly QuoteCapsule[], rest: string) => void;
   onSubmit: () => void;
   onExternalFiles: (files: readonly File[]) => void | Promise<void>;
   placeholder?: string;
@@ -83,6 +90,7 @@ const composerExtensions = [
 export function ComposerEditor({
   value,
   onChange,
+  onAddQuotes,
   onSubmit,
   onExternalFiles,
   placeholder,
@@ -104,6 +112,7 @@ export function ComposerEditor({
   const pendingInternalValueRef = useRef<string | null>(null);
   const propsRef = useRef({
     onChange,
+    onAddQuotes,
     onSubmit,
     onExternalFiles,
     active: !referenceBridge || referenceBridge.target === target,
@@ -112,6 +121,7 @@ export function ComposerEditor({
   });
   propsRef.current = {
     onChange,
+    onAddQuotes,
     onSubmit,
     onExternalFiles,
     active: !referenceBridge || referenceBridge.target === target,
@@ -200,7 +210,9 @@ export function ComposerEditor({
         const text = event.clipboardData?.getData("text/plain") ?? "";
         if (!hasCapsules(text)) return false;
         event.preventDefault();
-        editor?.chain().focus().insertContent(inlineComposerContent(text)).run();
+        const { quotes, rest } = splitQuoteCards(text);
+        if (rest) editor?.chain().focus().insertContent(inlineComposerContent(rest)).run();
+        appendQuoteCards(quotes);
         return true;
       },
     },
@@ -230,6 +242,12 @@ export function ComposerEditor({
     // 可编辑状态切换不是用户编辑，不能把尚未同步的文档回写到受控草稿。
     editor.setEditable(!disabled, false);
   }, [disabled, editor]);
+
+  /** 把摘录交给卡片区（排在最后）；不碰编辑器文档与焦点。 */
+  function appendQuoteCards(quotes: readonly QuoteCapsule[]) {
+    if (!editor || !quotes.length) return;
+    propsRef.current.onAddQuotes(quotes, serializeComposerDocument(editor.getJSON()));
+  }
 
   const insertCommand = useCallback(
     (command: Parameters<typeof insertionCommandContent>[0]) => {
@@ -265,11 +283,16 @@ export function ComposerEditor({
       referenceBridge.target !== target
     )
       return;
-    return referenceBridge.register(target, (capsules, question) => {
+    return referenceBridge.register(target, (added) => {
       if (!editor.isEditable) {
         showFeedback("输入框暂不可编辑，请稍后添加引用");
         return;
       }
+      // 摘录不插进编辑器、焦点不动：进卡片区（排在最后），其余照旧插在光标处。
+      const quotes = added.filter((capsule) => capsule.kind === "quote");
+      const capsules = added.filter((capsule) => capsule.kind !== "quote");
+      appendQuoteCards(quotes);
+      if (!capsules.length) return;
       const existing = new Set(
         parseCapsules(serializeComposerDocument(editor.getJSON())).flatMap(
           (segment) =>
@@ -282,13 +305,7 @@ export function ComposerEditor({
         existing.add(key);
         return true;
       });
-      const content = [
-        ...insertionCommandContent({ type: "insert-capsules", capsules: unique }),
-        ...insertionCommandContent({
-          type: "insert-text",
-          text: question ? ` ${question}` : "",
-        }),
-      ];
+      const content = insertionCommandContent({ type: "insert-capsules", capsules: unique });
       if (content.length > 0) {
         const position = resolveComposerInsertionPosition(
           hasCapturedSelectionRef.current,

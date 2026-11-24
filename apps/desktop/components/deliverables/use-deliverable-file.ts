@@ -11,6 +11,16 @@ export type DeliverableFileState = { info: FileInfo | null; problem: "gone" | "d
 
 const UNREAD: DeliverableFileState = { info: null, problem: null };
 
+const UNAVAILABLE_REASON = { gone: "已不存在", denied: "无法访问" } as const;
+
+/**
+ * 交付物打不开的原因：已不存在、无法访问时置灰、不可点（不用警示色，文件被移走是正常事）；其他读取故障返回 null、
+ * 仍可点，点开后由打开链路说明。展示交付物的界面（胶囊、图片方块与大图卡、侧栏「产出」）都按这一条判定，说法一致。
+ */
+export function unavailableReason(state: DeliverableFileState): string | null {
+  return state.problem === "gone" || state.problem === "denied" ? UNAVAILABLE_REASON[state.problem] : null;
+}
+
 /** 只有工作区内的文件现读；目录、网址与工作区外的条目沿用交付时的记录。 */
 function readablePath(deliverable: TransportDeliverable): string | null {
   return deliverable.type === "file" ? deliverable.workspacePath : null;

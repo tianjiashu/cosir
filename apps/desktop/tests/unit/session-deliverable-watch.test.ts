@@ -1,25 +1,26 @@
 import { describe, expect, it } from "vitest";
 
-import type { TransportMessagePart, TransportState } from "@/lib/assistant/contract";
-import { deliverableWatchKey } from "@/components/conversation/tools/reply-presentation/use-session-deliverable-watch";
-import { assistantMessage, deliveredFile, toolCallPart, transportState } from "./transport-fixtures";
+import type { TransportDeliverable } from "@/lib/assistant/contract";
+import { deliverableWatchKey } from "@/components/deliverables/use-session-deliverable-watch";
+import { deliveredDirectory, deliveredFile, transportState } from "./transport-fixtures";
 
-const present = (paths: string[]) =>
-  toolCallPart("p", "present_deliverables", { status: "completed", presentation: "quiet", deliverables: paths.map((path) => deliveredFile(path)) });
-const stateWith = (parts: TransportMessagePart[]): TransportState => transportState({ messages: [assistantMessage("assistant-turn-1", 1, parts)] });
-
-// 目的：会话登记的路径集合只在出现新交付物时变化；潜在缺陷：流式增量每帧都换快照，键跟着变，监听反复重连并整体失效文件查询。
+// 目的：监听的集合与侧栏「产出」同源（顶层会话清单），且只在清单变化时变；潜在缺陷：只看已加载消息，窗口外的
+// 早期交付物在侧栏显示过期状态；或流式增量每帧换快照，键跟着变，监听反复重连并整体失效文件查询。
 describe("deliverableWatchKey", () => {
-  it("正文流式追加时键不变，来了新交付物才变", () => {
-    const first = deliverableWatchKey(stateWith([present(["a.md"]), { type: "text", text: "写" }]));
-    const streamed = deliverableWatchKey(stateWith([present(["a.md"]), { type: "text", text: "写好了" }]));
-    expect(streamed).toBe(first);
-    expect(deliverableWatchKey(stateWith([present(["a.md", "b.md"])]))).not.toBe(first);
+  it("取顶层清单里工作区内的文件，排序去重，不看消息窗口", () => {
+    const deliverables: TransportDeliverable[] = [
+      deliveredFile("b.md"),
+      deliveredDirectory("dist"),
+      deliveredFile(null, { absolutePath: "/x/y.md" }),
+      deliveredFile("a.png", { kind: "image" }),
+    ];
+    expect(JSON.parse(deliverableWatchKey(transportState({ messages: [], deliverables })))).toEqual(["a.png", "b.md"]);
   });
 
-  it("同一个快照对象只计算一次", () => {
-    const state = stateWith([present(["a.md"])]);
-    expect(deliverableWatchKey(state)).toBe(deliverableWatchKey(state));
-    expect(JSON.parse(deliverableWatchKey(state))).toEqual(["a.md"]);
+  it("清单不变时换快照也是同一个键，清单变了才变", () => {
+    const deliverables = [deliveredFile("a.md")];
+    const first = deliverableWatchKey(transportState({ deliverables }));
+    expect(deliverableWatchKey(transportState({ title: "流式中", deliverables }))).toBe(first);
+    expect(deliverableWatchKey(transportState({ deliverables: [deliveredFile("a.md"), deliveredFile("b.md")] }))).not.toBe(first);
   });
 });

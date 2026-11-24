@@ -1,6 +1,13 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
 import type { Root, RootContent } from "mdast";
 
+/**
+ * 不识别 HTML 块（与后端 `Capsule._parser` 一致）：胶囊标签长得像 HTML，独占一行时会被当成 HTML 块，紧跟着的
+ * 围栏就不再是代码——摘录卡片排在正文开头（`quote-cards`），正文以代码开头时正是这样。两端规则不同会让同一段正文
+ * 前端认出胶囊、后端当字面量。行内 HTML 照常识别：它让标签属性里没转义的反引号不被当成行内代码（宽容读入）。
+ */
+const WITHOUT_HTML_BLOCKS = [{ disable: { null: ["htmlFlow"] } }];
+
 /** 用户代码是原文，不能把其中的附件或 Skill 示例激活。转换只作用于代码外文本。 */
 export function markdownSegments(
   text: string,
@@ -21,7 +28,7 @@ export function markdownSegments(
     if ("children" in node)
       for (const child of node.children) visit(child as RootContent);
   };
-  visit(fromMarkdown(text));
+  visit(fromMarkdown(text, { extensions: WITHOUT_HTML_BLOCKS }));
   const result: Array<{ text: string; literal: boolean }> = [];
   let cursor = 0;
   for (const [start, end] of ranges) {

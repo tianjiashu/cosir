@@ -32,8 +32,13 @@ export type OutlineEntry = {
   /** 稳定键：同一个节点在同一文档里每次都相同（无障碍节点 id 即 DOM 节点 id，实测）；文字行见模块说明。 */
   key: string;
   depth: number;
-  /** 一行的内容，不含缩进与列表符。 */
+  /** 一行的内容，不含缩进与列表符：角色、名字、ref、地址等快照语法都在里面，是给模型读的展示。 */
   text: string;
+  /**
+   * 这一行代表的页面文字本身（空白压成一个空格，不截断、不换引号）：元素的无障碍名字，文字行就是那段文字（拆成几行时
+   * 整段记在第一行）；没有名字为空串。`wait_for` 按它判断页面上有没有某段文字，不按 `text` 里的快照语法。
+   */
+  name: string;
   /** 上一层条目的下标，顶层为 -1：筛选视图据此带上祖先。 */
   parent: number;
   /** 与视口里看得见的区域相交（合并的文字行看其中任一段；没有布局的节点为 false，靠子孙带出来）。 */
@@ -70,8 +75,8 @@ export function buildOutline(document: SnapshotDocument, refs: RefRegistry, { pa
     const root = doc.nodes.find((node) => !node.parentId || !byId.has(node.parentId));
     const keyOf = (node: AXNode) => `${doc.sessionId ?? ""}:${node.nodeId}`;
     const inView = (node: AXNode) => node.backendDOMNodeId !== undefined && doc.inView.has(node.backendDOMNodeId);
-    const push = (key: string, text: string, depth: number, parent: number, visible: boolean): number => {
-      entries.push({ key, depth, text, parent, visible });
+    const push = (key: string, text: string, name: string, depth: number, parent: number, visible: boolean): number => {
+      entries.push({ key, depth, text, name, parent, visible });
       return entries.length - 1;
     };
 
@@ -80,16 +85,17 @@ export function buildOutline(document: SnapshotDocument, refs: RefRegistry, { pa
     const visit = (node: AXNode, depth: number, parent: number, inControl: boolean): void => {
       const role = stringValue(node.role);
       if (SKIPPED_ROLES.has(role)) return;
+      const fullName = collapse(stringValue(node.name));
       const name = clip(stringValue(node.name));
       if (isFrameRole(role)) {
         if (!isFrameNode(node)) return;
         const content = node.backendDOMNodeId === undefined ? undefined : doc.frames.get(node.backendDOMNodeId);
         const label = `iframe${name ? ` "${name}"` : ""}`;
         if (content) {
-          render(content, depth + 1, push(keyOf(node), label, depth, parent, inView(node)));
+          render(content, depth + 1, push(keyOf(node), label, fullName, depth, parent, inView(node)));
         } else {
           frames += 1;
-          push(keyOf(node), `${label} (${frameContentNote(content)})`, depth, parent, inView(node));
+          push(keyOf(node), `${label} (${frameContentNote(content)})`, fullName, depth, parent, inView(node));
         }
         return;
       }
@@ -109,7 +115,7 @@ export function buildOutline(document: SnapshotDocument, refs: RefRegistry, { pa
       if (url) line += ` url="${url.shown}"${url.cut ? " [url cut: click this ref to open it]" : ""}`;
       const value = clip(stringValue(node.value));
       if (value && value !== name) line += ` value="${value}"`;
-      visitChildren(node, depth + 1, push(keyOf(node), line, depth, parent, inView(node)), inControl || interactive);
+      visitChildren(node, depth + 1, push(keyOf(node), line, fullName, depth, parent, inView(node)), inControl || interactive);
     };
 
     const refOf = (backendNodeId: number, label: string) => refs.assign({ sessionId: doc.sessionId, backendNodeId }, label);
@@ -125,13 +131,14 @@ export function buildOutline(document: SnapshotDocument, refs: RefRegistry, { pa
       let firstText = "";
       const before = entries.length;
       const flush = () => {
-        const joined = flatten(text.map((item) => stringValue(item.name)).join(" "));
+        const raw = text.map((item) => stringValue(item.name)).join(" ");
+        const joined = flatten(raw);
         if (joined) {
           const key = `${keyOf(node)}/text${runs++}`;
           const visible = text.some(inView);
           if (firstLine < 0) { firstLine = entries.length; firstText = joined; }
           // 拆出的后续几行键带块号：第一块沿用原来的键，正文不长时与拆行前完全一样。
-          chunks(joined).forEach((chunk, index) => push(index === 0 ? key : `${key}.${index}`, `text "${chunk}"`, depth, parent, visible));
+          chunks(joined).forEach((chunk, index) => push(index === 0 ? key : `${key}.${index}`, `text "${chunk}"`, index === 0 ? collapse(raw) : "", depth, parent, visible));
         }
         text = [];
       };
@@ -184,9 +191,14 @@ function linkUrl(node: AXNode, pageUrl: string | undefined): { shown: string; cu
   return { shown: clip(shown, URL_MAX_CHARS), cut: flatten(shown).length > URL_MAX_CHARS };
 }
 
+/** 压成一行。 */
+function collapse(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 /** 压成一行、引号换成单引号（行里的值写在双引号里）。 */
 function flatten(text: string): string {
-  return text.replace(/\s+/g, " ").trim().replace(/"/g, "'");
+  return collapse(text).replace(/"/g, "'");
 }
 
 function clip(text: string, max = NAME_MAX_CHARS): string {

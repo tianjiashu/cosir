@@ -66,6 +66,36 @@ test("「+」新建后按序编号，切换标签不丢内容，有命令运行�
   await expect(screen(page, "term-3")).toContainText("term-3 $");
 });
 
+test("关闭请求在途时新建的终端：旧回执不收起面板、不清掉新终端的选中", async ({ page }) => {
+  await page.goto("/sessions/42");
+  const entry = page.getByRole("button", { name: /^终端，/ });
+  await entry.click();
+  await expect(screen(page, "term-1")).toContainText("term-1 $");
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let held!: () => void;
+  const holding = new Promise<void>((resolve) => (held = resolve));
+  let finished!: () => void;
+  const done = new Promise<void>((resolve) => (finished = resolve));
+  await page.route("**/sessions/42/terminal/sessions/term-1", async (route) => {
+    if (route.request().method() !== "DELETE") return route.continue();
+    held();
+    await gate;
+    await route.continue();
+    finished();
+  });
+  await panel(page).getByRole("button", { name: "关闭 终端", exact: true }).click();
+  await holding;
+  await panel(page).getByRole("button", { name: "新建终端", exact: true }).click();
+  await expect(screen(page, "term-2")).toContainText("term-2 $");
+  release();
+  await done;
+  await expect(panel(page).getByRole("tab")).toHaveText(["终端"]);
+  await expect(panel(page)).toBeVisible();
+  await expect(entry).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator('[data-terminal-session="term-2"]')).toHaveAttribute("data-active", "true");
+});
+
 test("关闭面板只收起：会话保持，重新打开画面仍在，不再新建", async ({ page }) => {
   await page.goto("/sessions/42");
   const entry = page.getByRole("button", { name: /^终端，/ });

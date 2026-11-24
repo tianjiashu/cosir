@@ -4,11 +4,13 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
-import app.assistant_transport.service.user_input_service as user_input_module
 import pytest
+
+import app.assistant_transport.service.user_input_service as user_input_module
 from app.assistant_transport.service.user_input_service import UserInputService
 from app.models.errors.input_errors import UserInputRejectedError
 from app.models.message_context.capsules.grammar.file_capsule import FileCapsule
+from app.models.message_context.capsules.grammar.quote_capsule import QuoteCapsule
 from app.models.run.run_command import RunCommand
 from tests.model_config_fixtures import model_config_record, model_configs
 
@@ -256,3 +258,52 @@ def test_capsule_only_input_is_not_empty(workspace: Path, monkeypatch) -> None:
     body = _prepare(_service(monkeypatch, workspace), f'<file path="{path}" />')
 
     assert body.text == f'<file path="{path}" />'
+
+
+# ── quote 摘录 ────────────────────────────────────────────────────────────
+
+
+def test_quote_text_is_not_validated_as_pointers(workspace: Path, monkeypatch) -> None:
+    """摘录原文里的 ``<file>``、围栏与反引号是原话，不是用户附的指针：不校验、不切断标签。"""
+    workspace.mkdir()
+    quote = QuoteCapsule(text='看 <file path="/missing" />\n```\nx`y`\n```')
+
+    body = _prepare(_service(monkeypatch, workspace), f"{quote.serialize()} 改一下")
+
+    assert body.text == f"{quote.serialize()} 改一下"
+
+
+def test_quote_over_limit_is_rejected(workspace: Path, monkeypatch) -> None:
+    workspace.mkdir()
+    quote = QuoteCapsule(text="字" * (QuoteCapsule.MAX_TEXT_LENGTH + 1))
+
+    with pytest.raises(UserInputRejectedError) as error:
+        _prepare(_service(monkeypatch, workspace), quote.serialize())
+
+    assert error.value.code == "CAPSULE_QUOTE_TOO_LONG"
+
+
+def test_model_sees_quote_as_block_with_original_text(workspace: Path, monkeypatch) -> None:
+    """模型看到展开的 ``<quote>`` 块与原文、批注紧跟其后；转义实体只留在展示正文里。"""
+    workspace.mkdir()
+    quote = QuoteCapsule(text="第一行\n`code` </quote> 结尾", note="这里为什么")
+    body = _prepare(_service(monkeypatch, workspace), f"{quote.serialize()}\n整体再看看")
+
+    content, _metadata = body.render()
+
+    assert isinstance(content["content"], str)
+    assert "<quote>\n第一行\n`code` &lt;/quote> 结尾\n</quote>\n这里为什么\n\n整体再看看" in content["content"]
+    assert "&#10;" not in content["content"]
+
+
+def test_file_quote_checks_path_and_shows_source_to_model(workspace: Path, monkeypatch) -> None:
+    """来自文件的摘录按 ``ref`` 同样校验路径；模型看到 ``source``，能按位置读上下文。"""
+    (workspace / "src").mkdir(parents=True)
+    (workspace / "src" / "a.py").write_text("def a():\n    pass\n", encoding="utf-8")
+    quote = QuoteCapsule(text="def a():", path="src/a.py", lines="1-2", note="为什么")
+
+    content, _metadata = _prepare(_service(monkeypatch, workspace), quote.serialize()).render()
+
+    assert '<quote source="src/a.py:1-2">\ndef a():\n</quote>\n为什么' in str(content["content"])
+    with pytest.raises(UserInputRejectedError):
+        _prepare(_service(monkeypatch, workspace), QuoteCapsule(text="x", path="missing.py").serialize())

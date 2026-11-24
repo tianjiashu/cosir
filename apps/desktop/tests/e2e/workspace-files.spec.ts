@@ -206,7 +206,8 @@ test("Markdown、图片和 PDF.js 离线阅读器", async ({ page }) => {
   await surface.getByRole("button", { name: "查看源码", exact: true }).click();
   await surface.getByRole("button", { name: "大纲", exact: true }).click();
   await page.getByRole("navigation", { name: "文档大纲" }).getByRole("button", { name: "Workspace preview" }).click();
-  await expect(surface.getByRole("button", { name: "添加选区到对话", exact: true })).toBeVisible();
+  // 大纲跳转只是定位，不算用户选区：「添加到对话」仍是添加整个文件。
+  await expect(surface.getByRole("button", { name: "添加文件到对话", exact: true })).toBeVisible();
   await surface.getByRole("button", { name: "查看预览", exact: true }).click();
   // 铺满：面板占满对话区、主区隐藏，够宽时目录与正文并排；还原后回到停靠宽度。
   // 铺满与还原不得卸载重挂面板内容：同一个预览节点一直在（重挂会丢阅读状态，宽度观察也会失效）。
@@ -658,11 +659,12 @@ test("对话正文的文件链接在文件面板打开并定位到行，外部�
   await message.getByRole("link", { name: "greet 定义" }).click();
   const editor = page.getByRole("textbox", { name: "只读文件 main.py" });
   await expect(editor).toBeVisible();
-  // 第 2–3 行被选中：Ctrl/Cmd+L 把选区添加到对话，胶囊带着这个行范围。
-  await expect(page.getByRole("button", { name: "添加选区到对话", exact: true })).toBeVisible();
+  // 第 2–3 行被选中：Ctrl/Cmd+L 打开摘录评论框，回车后输入框上方多一条带这个行范围的摘录。
+  await expect(page.getByRole("button", { name: "摘录选区到对话", exact: true })).toBeVisible();
   await editor.focus();
   await page.keyboard.press("ControlOrMeta+l");
-  await expect(page.getByRole("textbox", { name: "消息输入" })).toContainText("L2–3");
+  await page.getByLabel("写批注").press("Enter");
+  await expect(page.locator('[data-slot="composer-quotes"] [data-quote-bar]')).toContainText("main.py · L2–3");
 
   await message.getByRole("link", { name: "文档" }).click();
   const dialog = page.getByRole("dialog", { name: "打开外部链接？" });
@@ -735,7 +737,7 @@ test("Markdown 渲染与源码共用阅读位置，内容异步变高后仍停�
   await surface.getByRole("treeitem", { name: "README.md", exact: true }).click();
   const markdown = surface.locator(".aui-md");
   await expect(markdown).toContainText("第 120 段");
-  const host = markdown.locator("xpath=..");
+  const host = surface.locator('[data-slot="markdown-preview"]');
   // 渲染视图顶部的那一段（第一个底边在视口顶部之下的段落）。
   const renderedTop = () => host.evaluate((element) => {
     const top = element.getBoundingClientRect().top;

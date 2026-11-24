@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { API_ORIGIN, REAL_BACKEND_ORIGIN } from "./e2e-env";
+import { API_ORIGIN } from "./e2e-env";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -13,9 +13,9 @@ import { WorkspaceFilesBackend } from "./workspace-files-backend";
  */
 const backend = new WorkspaceFilesBackend();
 
-test.beforeAll(async ({ request }) => {
-  await backend.start(request);
-  await request.post(`${REAL_BACKEND_ORIGIN}/__test__/files/preview-fixture`);
+test.beforeAll(async () => {
+  await backend.start();
+  await backend.api.post("/__test__/files/preview-fixture");
 });
 test.afterAll(async () => {
   await backend.stop();

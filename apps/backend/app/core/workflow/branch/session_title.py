@@ -191,7 +191,8 @@ def _instruction(current_title: str) -> str:
             "Do not answer or continue the conversation above. Your only job now is to name it.",
             "Attachment pointers such as <file ... />, <ref ... /> and <skill ... /> in the"
             " conversation are references the user attached; they are not the topic and must not"
-            " appear in the title.",
+            " appear in the title. A <quote> block is text the user quoted from an earlier reply;"
+            " name the conversation after what the user asks about it, not after the quote.",
             (
                 "Write a short title that summarizes what the user wants in this conversation, "
                 "in the same language the user writes in, "

@@ -71,7 +71,7 @@ export function TerminalWorkbench({ sessionId }: { sessionId: number }) {
   }, [open]);
 
   const tabs = useMemo(() => terminalTabs(sessions ?? [], activeSessionId), [activeSessionId, sessions]);
-  const { creating, notice, createSession, closeTab } = useTerminalSessionActions(sessionId, sessions, tabs);
+  const { creating, notice, createSession, closeTab } = useTerminalSessionActions(sessionId, sessions);
 
   // 打开面板时没有活跃会话：等会话列表已知后自动新建一个默认 shell 终端（只在打开那一刻判定）。
   useEffect(() => {

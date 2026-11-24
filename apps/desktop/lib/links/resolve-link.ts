@@ -1,5 +1,6 @@
 import { isLocalNetworkHost } from "@/electron/shared/local-network-host";
 import type { TransportDeliverable } from "@/lib/assistant/contract";
+import { desktopHost } from "@/lib/desktop-host";
 import { fileExtension } from "@/lib/files/file-name";
 
 /** 行范围，1 起算、闭区间。 */
@@ -42,6 +43,9 @@ const SCHEME = /^[a-z][a-z\d+.-]*:/i;
 const LINE_FRAGMENT = /^L([1-9]\d*)(?:-L?([1-9]\d*))?$/;
 const LINE_SUFFIX = /:([1-9]\d*)(?::\d+)?$/;
 const PAGE_FILE = /\.html?$/i;
+const HOME_PREFIX = /^~(?:$|[\\/])/;
+/** 用户主目录（宿主给出）；没有宿主（浏览器开发）时不知道，`~` 路径一律不给链接。 */
+const HOME_DIR = desktopHost?.homeDir ?? null;
 
 /**
  * 把链接地址换算成可打开的目标；所有界面（对话正文、文件面板 Markdown、终端、工具卡片）共用这一套规则。
@@ -49,6 +53,7 @@ const PAGE_FILE = /\.html?$/i;
  * - 网页只认 http(s) 与 mailto；其余协议、协议相对地址返回 null，调用方渲染为纯文本。
  * - `#…` 是同一篇 Markdown 里的位置（脚注等），在原文里滚动过去，不离开页面。
  * - 工作区路径：相对路径、工作区内绝对路径；越出工作区返回 null。
+ * - 开头的 `~` 是用户主目录（与后端文件工具同一约定，见 `PathResolver`），先展开再按绝对路径判定。
  * - 本机网页文件（`.html` / `.htm` 且不带行号）：工作区内外的绝对路径都认，见 `PageLink`。
  * - 行号：规范写法是片段 `#L42` / `#L42-L60`（GitHub、VS Code 同款，也是提示词约定的写法）；同时容忍
  *   模型与编译器习惯的 `:42` / `:42:7` 后缀（列号不用）。以 `/` 结尾的是目录。
@@ -73,7 +78,8 @@ export function resolveLink(href: string, base: LinkBase): LinkTarget | null {
   }
   if (SCHEME.test(location) && !WINDOWS_DRIVE.test(location)) return null;
 
-  const path = decodePath(location);
+  const path = expandHome(decodePath(location));
+  if (path === null) return null;
   const workspace = workspaceTarget(path, base, lines);
   if (lines || !PAGE_FILE.test(path)) return workspace;
   const absolute = workspace ? `${base.workspaceRoot!.replace(/[\\/]+$/, "")}/${workspace.path}` : isAbsolute(path) ? path : null;
@@ -110,7 +116,8 @@ export function resolvePathText(text: string, base: LinkBase): WorkspaceLink | n
   if (base.workspaceRoot === null) return null;
   const raw = text.trim();
   const suffix = LINE_SUFFIX.exec(raw);
-  return workspaceTarget(suffix ? raw.slice(0, suffix.index) : raw, base, suffix ? lineRange(suffix[1]) : undefined);
+  const path = expandHome(suffix ? raw.slice(0, suffix.index) : raw);
+  return path === null ? null : workspaceTarget(path, base, suffix ? lineRange(suffix[1]) : undefined);
 }
 
 function workspaceTarget(decoded: string, base: LinkBase, lines?: LineRange): WorkspaceLink | null {
@@ -163,7 +170,7 @@ export function workspaceRootPattern(workspaceRoot: string): string {
  * 绝对路径；指向工作区外的绝对路径、`..` 越界或空路径返回 null，调用方据此不提供打开入口。
  */
 export function toWorkspacePath(workspaceRoot: string, rawPath: string): string | null {
-  const path = rawPath.trim().replace(/\\/g, "/");
+  const path = expandHome(rawPath.trim())?.replace(/\\/g, "/");
   if (!path) return null;
   const root = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
   let relative: string;
@@ -186,6 +193,15 @@ export function toWorkspacePath(workspaceRoot: string, rawPath: string): string 
     segments.push(segment);
   }
   return segments.length > 0 ? segments.join("/") : null;
+}
+
+/**
+ * 只展开开头的 `~` 与 `~/…`、`~\\…`；`~user`、环境变量写法不展开、照常当相对路径。不知道主目录时返回 null：
+ * `~` 路径绝不是工作区相对路径，宁可不给链接也不拼到工作区下（曾因此误报「工作区里没有」）。
+ */
+function expandHome(path: string): string | null {
+  if (!HOME_PREFIX.test(path)) return path;
+  return HOME_DIR === null ? null : `${HOME_DIR.replace(/[\\/]+$/, "")}/${path.slice(2)}`;
 }
 
 function isAbsolute(path: string): boolean {

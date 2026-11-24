@@ -14,6 +14,7 @@ from watchdog.events import FileModifiedEvent
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.app import app
+from app.parent_watch import install_parent_watch_from_env
 from app.service.depends import (
     close_service_dependencies,
     get_workspace_crud,
@@ -173,6 +174,24 @@ def preview_fixture():
     return {"ready": True}
 
 
+@app.post("/__test__/files/reading-fixture")
+def reading_fixture():
+    """按需在 reading/ 下放阅读视图样本（与 preview-fixture 同理，不进启动时的目录树）。
+
+    - ``turkish.md``：小写后长度会变的字符（``İ``）后面还有可查找的词。
+    - ``segmented.md``：超过整读上限、按 512 KiB 分段的 Markdown；第一段正好由 128 行注释填满，所以第二段
+      从第 129 行开始，标记段落在全文第 131 行、段内第 3 行。
+    """
+    root = app.state.fixture_root / "reading"
+    root.mkdir(exist_ok=True)
+    (root / "turkish.md").write_text("# Introduction\n\nİstanbul – budget\n", encoding="utf-8")
+    block = ("<!-- " + "x" * 4086 + " -->\n") * 128
+    (root / "segmented.md").write_text(
+        block + "# Second segment\n\nSegmentMarker\n\n" + block * 4, encoding="utf-8"
+    )
+    return {"ready": True}
+
+
 @app.get("/__test__/files/health")
 def health():
     # pid 让拉起方确认回应的是自己刚起的进程：端口被遗留的夹具占着时，新进程绑不上端口，旧进程却照样回应。
@@ -181,5 +200,8 @@ def health():
 
 app.router.lifespan_context = fixture_lifespan
 if __name__ == "__main__":
+    # 与生产后端同一条存活契约：拉起方（Playwright worker）的 stdin 管道一关就退出。worker 被强杀、整轮被中断时
+    # afterAll 来不及停它，没有这条它会留成孤儿、占着这个 slot 的端口，之后每一轮都报「端口被占」。
+    install_parent_watch_from_env()
     # 端口由 spec 按 E2E slot 传入（apps/desktop/tests/e2e/e2e-env.ts），并行运行各用各的。
     uvicorn.run(app, host="127.0.0.1", port=int(sys.argv[1]), log_level="warning")

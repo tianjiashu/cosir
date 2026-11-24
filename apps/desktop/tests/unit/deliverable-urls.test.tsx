@@ -5,7 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { describeDeliverable } from "@/components/conversation/tools/reply-presentation/deliverable-label";
+import { describeDeliverable } from "@/components/deliverables/deliverable-label";
 import { DeliverablesCard } from "@/components/conversation/tools/reply-presentation/deliverables-card";
 import { createQueryClient } from "@/lib/query/query-client";
 import { toolCallPart } from "./transport-fixtures";

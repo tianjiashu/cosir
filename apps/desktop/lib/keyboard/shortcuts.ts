@@ -93,6 +93,9 @@ export const SHORTCUTS = {
   toggleSidebar: { keys: "mod+b", label: "切换侧栏", scope: "global" },
   openConfiguration: { keys: "mod+comma", label: "打开系统配置", scope: "global" },
   commandPalette: { keys: "mod+k", label: "命令面板", scope: "global" },
+  // 与 Cursor 的「Add to Chat」一致：有选区时打开摘录评论框（`components/text-selection`）；文件阅读器里没有选区时
+  // 添加整个文件（阅读器在捕获阶段先接住，见 `reading-commands`）。
+  addToChat: { keys: "mod+l", label: "添加到对话", scope: "global" },
   // 与 VS Code 一致：所有平台都是 Ctrl+`（macOS 的 ⌘` 是系统切换窗口）。终端把它让给应用，不送入 shell。
   toggleTerminal: { keys: "ctrl+backquote", label: "切换终端", scope: "global" },
   // macOS 与 VS Code 的辅助侧栏一致；Windows 与 Linux 不用 Ctrl+Alt（Windows 上即 AltGr，Linux 桌面环境占用）。
@@ -114,9 +117,8 @@ export const SHORTCUTS = {
   markdownBulletList: { keys: "mod+shift+8", label: "无序列表", scope: "markdownEditor" },
   markdownQuote: { keys: "mod+shift+9", label: "引用", scope: "markdownEditor" },
 
-  // ---- 文件阅读器（`lib/workspace-files/reading-commands.ts`）；加到对话与 Cursor 的「Add to Chat」一致 ----
+  // ---- 文件阅读器（`lib/workspace-files/reading-commands.ts`） ----
   findInFile: { keys: "mod+f", label: "查找", scope: "fileReader" },
-  addToChat: { keys: "mod+l", label: "添加到对话", scope: "fileReader" },
 
   // ---- 独立文本面（观测页详情、Skill 详情、配置编辑器的源码；`components/code-editor/editor-find-scope.tsx`） ----
   findInText: { keys: "mod+f", label: "查找", scope: "textSurface" },

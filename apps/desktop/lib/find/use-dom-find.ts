@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
 
+import { findMatches } from "./find-matches";
 import { MAX_FIND_MATCHES, nextMatchIndex, type FindDirection, type FindResult } from "./next-match";
 
 const MATCHES = "cosir-find";
@@ -30,19 +31,18 @@ export function useDomFind(host: RefObject<HTMLElement | null>) {
       last.current = { term, anchor: 0 };
       return { index: -1, count: 0 };
     }
-    const needle = term.toLowerCase();
     const ranges: Range[] = [];
     const starts: number[] = [];
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let base = 0;
     for (let node = walker.nextNode(); node && ranges.length < MAX_FIND_MATCHES; node = walker.nextNode()) {
-      const text = (node.nodeValue ?? "").toLowerCase();
-      for (let at = text.indexOf(needle); at >= 0 && ranges.length < MAX_FIND_MATCHES; at = text.indexOf(needle, at + needle.length)) {
+      const text = node.nodeValue ?? "";
+      for (const { start, end } of findMatches(text, term, MAX_FIND_MATCHES - ranges.length)) {
         const range = document.createRange();
-        range.setStart(node, at);
-        range.setEnd(node, at + needle.length);
+        range.setStart(node, start);
+        range.setEnd(node, end);
         ranges.push(range);
-        starts.push(base + at);
+        starts.push(base + start);
       }
       base += text.length;
     }

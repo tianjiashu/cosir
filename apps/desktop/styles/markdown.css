@@ -15,6 +15,75 @@
 }
 
 /*
+ * 正文排版：所有 Markdown（对话回复与旁白、用户消息、Agent 来信、摘录、文件与配置预览、Skill 详情）的唯一来源。
+ *
+ * 规则：
+ * - `.aui-md` 只由两个渲染组件挂在根上（`MarkdownText`、`StaticMarkdown`），调用方只管宽度、留白与滚动，
+ *   不写字号、行高与块间距；与正文混排的非 Markdown 文字（气泡里的胶囊与批注）取下面的变量，不另定数值。
+ * - Streamdown 给元素自带 Tailwind 排版类（标题字号、列表 inside、li 内边距、根节点 space-y-4），这里统一压掉；
+ *   未分层样式才能胜过 utilities 层（见文件头）。
+ * - 虚拟列表的估高常量镜像这些数值（`lib/assistant/turn/message-height-estimate.ts`），改值时同步。
+ */
+:root {
+  --prose-font-size: var(--text-chat);
+  /* 15px 字号的 1.73 倍：中文正文读起来不挤，选区的行间缝也不至于太大。 */
+  --prose-line-height: 1.625rem;
+  --prose-gap: 0.75rem;
+}
+
+.aui-md {
+  font-size: var(--prose-font-size);
+  line-height: var(--prose-line-height);
+}
+
+/* 块间距：低优先级（:where），让标题、引文自己的上下边距可以覆盖它。 */
+:where(.aui-md) > :not(:last-child) {
+  margin-block-end: var(--prose-gap);
+}
+
+/* 标题按正文比例递减：最大的也只比正文大三分之一，回复里的标题是分段提示，不是页面大标题。 */
+.aui-md :is(h1, h2, h3, h4, h5, h6) {
+  margin-block: 1.25em 0.5em;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.aui-md h1 { font-size: 1.333em; }
+.aui-md h2 { font-size: 1.2em; }
+.aui-md h3 { font-size: 1.067em; }
+.aui-md :is(h4, h5, h6) { font-size: 1em; }
+/* 第一个块不留上边距（流式渲染里标题包在块容器里，要穿过一层）。 */
+.aui-md > :first-child:is(h1, h2, h3, h4, h5, h6),
+.aui-md > :first-child > :first-child:is(h1, h2, h3, h4, h5, h6) {
+  margin-block-start: 0;
+}
+
+/* 列表：悬挂缩进，折行与文字对齐；项距比块间距小一档。 */
+.aui-md :is(ol, ul) {
+  list-style-position: outside;
+  padding-inline-start: 1.5em;
+}
+.aui-md li {
+  padding-block: 0;
+}
+.aui-md li + li,
+.aui-md li > :is(ol, ul) {
+  margin-block-start: 0.25em;
+}
+
+/* 引文：次要文字色加细竖线，不用斜体（中文斜体是伪斜体）。 */
+.aui-md blockquote {
+  margin-block: 0;
+  border-inline-start-width: 2px;
+  padding-inline-start: 1em;
+  font-style: normal;
+}
+
+/* 行内代码随所在文字缩放（标题、表格里也协调）。 */
+.aui-md [data-streamdown="inline-code"] {
+  font-size: 0.875em;
+}
+
+/*
  * 链接是回复里可打开的对象：颜色只在这里定义，链接组件（components/links/markdown-links.tsx）不带颜色类，
  * 下划线只在悬停时出现。行内代码是字面内容，可打开的路径平时保持代码样式，悬停才提示能点；只改下划线、
  * 不改颜色，所以在用户气泡的反色背景上也无需特例。
@@ -267,9 +336,3 @@
   max-height: calc(100dvh - 2rem);
 }
 
-/* Conversation prose has its own reading scale; file/configuration previews retain their existing typography. */
-.aui-thread-root [data-slot="prose-part"] .aui-md,
-.aui-thread-root [data-slot="agent-message-body"] .aui-md {
-  font-size: var(--text-chat);
-  line-height: var(--text-chat--line-height);
-}

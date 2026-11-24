@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from app.models.message_context.capsules.capsule_grammar import (
     CapsuleSegment,
     Segment,
@@ -13,7 +14,9 @@ from app.models.message_context.capsules.capsule_grammar import (
 )
 from app.models.message_context.capsules.grammar.capsule import Capsule
 from app.models.message_context.capsules.grammar.file_capsule import FileCapsule
+from app.models.message_context.capsules.grammar.quote_capsule import QuoteCapsule
 from app.models.message_context.capsules.grammar.ref_capsule import RefCapsule
+from app.models.message_context.capsules.grammar.skill_capsule import SkillCapsule
 
 _FIXTURE = (
     Path(__file__).resolve().parents[2]
@@ -37,11 +40,22 @@ def _capsule_doc(capsule: Capsule) -> dict[str, object]:
             **({"lines": capsule.lines} if capsule.lines is not None else {}),
             **({"page": capsule.page} if capsule.page is not None else {}),
         }
-    return {
-        "kind": "skill",
-        "name": capsule.name,
-        **({"path": capsule.path} if capsule.path is not None else {}),
-    }
+    if isinstance(capsule, SkillCapsule):
+        return {
+            "kind": "skill",
+            "name": capsule.name,
+            **({"path": capsule.path} if capsule.path is not None else {}),
+        }
+    if isinstance(capsule, QuoteCapsule):
+        return {
+            "kind": "quote",
+            **({"path": capsule.path} if capsule.path is not None else {}),
+            **({"lines": capsule.lines} if capsule.lines is not None else {}),
+            **({"page": capsule.page} if capsule.page is not None else {}),
+            "text": capsule.text,
+            **({"note": capsule.note} if capsule.note is not None else {}),
+        }
+    raise TypeError(f"unsupported capsule: {type(capsule).__name__}")
 
 
 def _segment_doc(segment: Segment) -> dict[str, object]:
@@ -63,3 +77,7 @@ def test_capsule_case(case: dict[str, object]) -> None:
 @pytest.mark.parametrize("text", _CASES["notCapsules"])
 def test_invalid_capsule_stays_text(text: str) -> None:
     assert Segment.parse(text) == [TextSegment(text=text)]
+
+
+def test_quote_limit_matches_frontend() -> None:
+    assert _CASES["limits"]["quoteTextMax"] == QuoteCapsule.MAX_TEXT_LENGTH

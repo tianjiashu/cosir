@@ -226,6 +226,26 @@ describe("SessionTransportConnection 命令", () => {
     context.connection.stop();
   });
 
+  it("提交按点击顺序依次发出：前一条还在发（如上传图片）时后一条不抢先，前一条失败也不挡后一条", async () => {
+    const context = setup();
+    await ready(context);
+    const order: string[] = [];
+    let finishFirst!: () => void;
+    const first = context.connection.submit(command("first"), {
+      send: () => { order.push("first:start"); return new Promise<void>((_, reject) => { finishFirst = () => reject(new Error("upload failed")); }); },
+      onError: vi.fn(),
+    });
+    const second = context.connection.submit(command("second"), { send: async () => { order.push("second:start"); }, onError: vi.fn() });
+    await flush();
+    // 两条乐观消息都已出现，后一条还没发出。
+    expect(context.store().getSnapshot().pendingCommands).toHaveLength(2);
+    expect(order).toEqual(["first:start"]);
+    finishFirst();
+    await Promise.all([first, second]);
+    expect(order).toEqual(["first:start", "second:start"]);
+    context.connection.stop();
+  });
+
   it("乐观消息保留到 snapshot 出现该用户消息；HTTP 拒绝时收回并交给失败回调", async () => {
     const context = setup();
     const stream = await ready(context);
@@ -250,6 +270,7 @@ describe("SessionTransportConnection 命令", () => {
     let resolve!: () => void;
     const late = context.connection.submit(command("old"), { send: () => new Promise<void>((yes) => { resolve = yes; }), onError: vi.fn() });
     context.connection.stop();
+    await flush();
     resolve();
     await late;
     expect(context.fetchImpl).toHaveBeenCalledTimes(1);

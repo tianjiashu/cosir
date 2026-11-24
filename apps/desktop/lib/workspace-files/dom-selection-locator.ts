@@ -1,8 +1,5 @@
 import type { LineRange } from "@/lib/links/resolve-link";
 
-/** 渲染视图 / PDF 文本层里的一次选区：正文与 DOM Range（片段渲染后仍用它求源码定位）。 */
-export type DomTextSelection = { text: string; range: Range };
-
 /** 选区起点、终点最近的有源码行号的块级元素。 */
 function sourceLineBlock(node: Node, host: HTMLElement): HTMLElement | null {
   const element = node instanceof HTMLElement ? node : node.parentElement;
@@ -15,7 +12,7 @@ function sourceLineBlock(node: Node, host: HTMLElement): HTMLElement | null {
  *
  * 渲染时每个块级元素都带 `data-source-line` / `data-source-line-end`（见 `rehypeSourceLines`），
  * 选区跨块时取起点块的首行到终点块的末行。只做到块级精度：块内部分选中也会带上整块的行范围——
- * 正文是模型按路径重读的指针，多几行比丢行安全。选不出块（如流式渲染中的元素）时返回 null。
+ * 行号是摘录的位置（模型据此读上下文），多几行比丢行安全。选不出块（如流式渲染中的元素）时返回 null。
  */
 export function sourceLinesOfRange(range: Range, host: HTMLElement): LineRange | null {
   const start = sourceLineBlock(range.startContainer, host);

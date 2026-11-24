@@ -305,7 +305,7 @@ describe("formatSnapshot", () => {
 
   // 目的：act 之后只给变化，省上下文；潜在缺陷：没变的行也回传，或漏掉文字变化、移位与删除，模型以为页面没变。
   it("lists new, changed, moved and removed lines against the last delivered outline", () => {
-    const entry = (key: string, depth: number, text: string, parent: number) => ({ key, depth, text, parent, visible: true });
+    const entry = (key: string, depth: number, text: string, parent: number) => ({ key, depth, text, name: "", parent, visible: true });
     const before = { frames: 0, entries: [
       entry("a", 0, 'list "Cart"', -1),
       entry("b", 1, 'listitem "Apple"', 0),
@@ -436,6 +436,21 @@ describe("buildPageText", () => {
     ]);
     expect(text.lines.filter((line) => line.visible).map((line) => line.text)).toEqual(["# Web browser", "A web browser, see Safari."]);
     expect(text.frames).toBe(1);
+    // 页面文字不带这里加的记号（标题的 #、列表符、图片说明、未展开的 iframe）：`wait_for` 按它判断。
+    expect(text.lines.map((line) => line.plain)).toEqual(["Web browser", "A web browser, see Safari.", "Second line", "Item", "", "中文链接"]);
+  });
+
+  // 目的：`wait_for` 比的是页面文字；潜在缺陷：拿展示行比，链接地址、角色名、ref 这些快照语法被当成页面上的字。
+  it("keeps each outline entry's page words apart from the snapshot syntax", () => {
+    const page = doc([
+      node("1", "RootWebArea", { name: { value: "Title" }, childIds: ["a", "b", "t"] }),
+      node("a", "link", { parentId: "1", name: { value: "Reload" }, backendDOMNodeId: 10, properties: [{ name: "url", value: { value: "https://x.test/Loading" } }] }),
+      node("b", "button", { parentId: "1", name: { value: "Say \"hi\"" }, backendDOMNodeId: 11 }),
+      node("t", "StaticText", { parentId: "1", name: { value: "Done   now" }, backendDOMNodeId: 12 }),
+    ]);
+    const outline = buildOutline(page, new RefRegistry(), { pageUrl: "https://x.test/" });
+    expect(outline.entries.map((entry) => entry.text)).toEqual(['link "Reload" [ref=e1] url="/Loading"', "button \"Say 'hi'\" [ref=e2]", 'text "Done now"']);
+    expect(outline.entries.map((entry) => entry.name)).toEqual(["Reload", 'Say "hi"', "Done now"]);
   });
 
   // 目的：表格一行读成一行；潜在缺陷：单元格是块级、一格一行，数据表读不出哪个值属于哪一行；单元格里的段落把一行拆开。
@@ -453,6 +468,7 @@ describe("buildPageText", () => {
       node("t3", "StaticText", { parentId: "p2", name: { value: "subtitle" } }),
     ], { blocks: new Set([10, 11, 12, 13, 14, 15]) });
     expect(buildPageText(page).lines.map((line) => line.text)).toEqual(["1. | Title subtitle"]);
+    expect(buildPageText(page).lines.map((line) => line.plain)).toEqual(["1. Title subtitle"]);
     // 套着整张内层表格的外层行只是排版：照常断行，内层每行各成一行。
     const layout = doc([
       node("1", "RootWebArea", { childIds: ["o"] }),
@@ -484,10 +500,10 @@ describe("buildPageText", () => {
   // 目的：筛选与分页和大纲一致，命中行带上所在小节；潜在缺陷：只给孤零零的命中行，模型不知道它属于哪一节。
   it("filters by query or viewport with section headings, and pages by budget", () => {
     const text = { frames: 0, lines: [
-      { text: "# Pricing", visible: false, heading: true },
-      { text: "Free plan costs nothing", visible: false, heading: false },
-      { text: "# Support", visible: true, heading: true },
-      { text: "Email us", visible: true, heading: false },
+      { text: "# Pricing", plain: "Pricing", visible: false, heading: true },
+      { text: "Free plan costs nothing", plain: "Free plan costs nothing", visible: false, heading: false },
+      { text: "# Support", plain: "Support", visible: true, heading: true },
+      { text: "Email us", plain: "Email us", visible: true, heading: false },
     ] };
     expect(pageTextView(text, { find: "free" }).split("\n")).toEqual([
       "(showing lines matching \"free\", with their section headings: 2 of 4 lines)",
@@ -601,8 +617,10 @@ type Call = [string, Record<string, unknown>, string?];
  */
 function fakeSession(
   answers: Record<string, unknown> = {},
-  { scale = 1, dialogOn, initialDialog = null, dragData, fileChooser = null, shown = false, failOn }: {
+  { scale = 1, dialogOn, initialDialog = null, dragData, fileChooser = null, shown = false, failOn, pageText = "" }: {
     scale?: number;
+    /** 快照读到的页面文字（`mentions` 据此回答）。 */
+    pageText?: string;
     /** 这条命令失败（抛出给定的错误）：模拟 CDP 报节点不在、没有布局，或页面停住、超时。 */
     failOn?: { method: string; error: Error };
     /** 标签挂在面板上：动作前会画高亮（记进 `highlighted`）。 */
@@ -622,7 +640,7 @@ function fakeSession(
   const paused = () => (dialog ? new HostMethodError("DIALOG_OPEN", `the page is paused: it is showing a ${dialog.type} dialog (#${dialog.id})`) : null);
   const listeners = new Map<string, Set<(params: never) => void>>();
   let intercepting = false;
-  const capabilities: Pick<BrowserOperation, "cdp" | "resolveRef" | "frameOffset" | "on" | "settle" | "toInput" | "geometry" | "fileChooser" | "highlight" | "paused" | "dialog" | "answerDialog"> = {
+  const capabilities: Pick<BrowserOperation, "cdp" | "resolveRef" | "frameOffset" | "on" | "settle" | "mentions" | "toInput" | "geometry" | "fileChooser" | "highlight" | "paused" | "dialog" | "answerDialog"> = {
     cdp: async <T,>(method: string, params: Record<string, unknown> = {}, options: { browserSide?: boolean; sessionId?: string } = {}) => {
       // 与 `CdpSession` 的闸门一致：页面停着时只有浏览器进程作答的命令能回复。
       if (dialog && !options.browserSide) throw paused();
@@ -659,6 +677,15 @@ function fakeSession(
       return () => set.delete(handler);
     },
     settle: async () => undefined,
+    // 与 `BrowserTab.mentions` 一致：经同一道闸门读快照，本标签有弹窗时为 null；`dialogOn("mentions")` 模拟读取时弹出弹窗。
+    mentions: async (text) => {
+      if (dialog) throw paused();
+      if (dialogOn?.("mentions", {})) {
+        dialog = { id: 7, type: "confirm", message: "delete?", defaultText: "" };
+        return null;
+      }
+      return pageText.includes(text);
+    },
     toInput: ({ x, y }) => ({ x: x * scale, y: y * scale }),
     geometry: async () => ({ visual: { x: 0, y: 0, width: 100, height: 50 }, deviceRatio: 1, pageScale: 1, content: { width: 100, height: 50 } }),
     fileChooser: () => fileChooser,
@@ -725,7 +752,7 @@ describe("runActions", () => {
     expect(click).toMatchObject({ interruption: { code: "DIALOG_OPEN" } });
     expect(hovered.answered).toEqual([]);
 
-    const waiting = fakeSession({}, { dialogOn: (method) => method === "Runtime.evaluate" });
+    const waiting = fakeSession({}, { dialogOn: (method) => method === "mentions" });
     const wait = await run(waiting.session, { type: "wait_for", text: "Done", seconds: 1 });
     expect(wait).toMatchObject({ interruption: { code: "DIALOG_OPEN" } });
   });
@@ -750,6 +777,20 @@ describe("runActions", () => {
     expect(none).toMatchObject({ interruption: { code: "NO_DIALOG" } });
   });
 
+  // 目的：清空只选中原有内容，交给原生输入替换，不填字时按 Delete；潜在缺陷：在页面里改 value 再补发事件，React 不触发
+  // onChange，界面空了、应用状态还是旧值。
+  it("clears by selecting the contents, then replaces them with text or deletes them with Delete", async () => {
+    const type = (text: string): PageAction => ({ type: "type", ref: "e7", text, clear: true, submit: false, keyByKey: false });
+    const edits = (calls: Call[]) => calls.filter(([method, params]) => method === "Input.insertText" || method === "Input.dispatchKeyEvent"
+      || (method === "Runtime.callFunctionOn" && String(params.functionDeclaration).includes("this.select()"))).map(([method, params]) => method === "Input.dispatchKeyEvent" ? `${params.type} ${params.key}` : method);
+    const emptied = fakeSession();
+    await run(emptied.session, type(""));
+    expect(edits(emptied.calls)).toEqual(["Runtime.callFunctionOn", "keyDown Delete", "keyUp Delete"]);
+    const replaced = fakeSession();
+    await run(replaced.session, type("hi"));
+    expect(edits(replaced.calls)).toEqual(["Runtime.callFunctionOn", "Input.insertText"]);
+  });
+
   // 目的：稳定 ref 可能来自更早的快照；潜在缺陷：焦点落在已脱离文档的节点上，字输进别的元素。
   it("refuses refs whose element left the document", async () => {
     const { session, calls } = fakeSession({ isConnected: "detached" });
@@ -761,9 +802,9 @@ describe("runActions", () => {
   // 目的：页面改写了内置对象时页面函数会抛错；潜在缺陷：CDP 对页面异常不报错，只看返回值就把「抛错」当成「空串 =
   // 成功」——清空失败却按完成上报、字接在旧内容后面，滚动失败却不报到底。
   it("fails the action when a page function raises, and treats a non-string result as a host bug", async () => {
-    const raising = fakeSession({ "\"value\" in this": new TypeError("value is read-only") });
+    const raising = fakeSession({ "this.select()": new TypeError("select is not a function") });
     const outcome = await run(raising.session, { type: "type", ref: "e7", text: "hi", clear: true, submit: false, keyByKey: false });
-    expect(outcome).toMatchObject({ interruption: { code: "ACTION_FAILED", message: "the page raised an error: TypeError: value is read-only" } });
+    expect(outcome).toMatchObject({ interruption: { code: "ACTION_FAILED", message: "the page raised an error: TypeError: select is not a function" } });
     expect(raising.calls.some(([method]) => method === "Input.insertText")).toBe(false);
 
     const stuck = fakeSession({ scrollBy: new Error("blocked") });
@@ -973,10 +1014,10 @@ describe("runActions", () => {
   });
 
   it("waits for text to disappear and reports when it stays", async () => {
-    const gone = fakeSession({ innerText: "absent" });
+    const gone = fakeSession({}, { pageText: "Ready" });
     expect(await run(gone.session, { type: "wait_for", textGone: "Loading", seconds: 1 })).toMatchObject({ interruption: null });
 
-    const stays = fakeSession({ innerText: "found" });
+    const stays = fakeSession({}, { pageText: "Loading…" });
     const outcome = await run(stays.session, { type: "wait_for", textGone: "Loading", seconds: 0.3 });
     expect(outcome.interruption).toMatchObject({ code: "WAIT_TIMEOUT", message: 'the text "Loading" is still on the page after 0.3 seconds' });
   });

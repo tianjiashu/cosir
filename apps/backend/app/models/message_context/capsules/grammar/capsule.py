@@ -1,33 +1,49 @@
-"""用户消息里的胶囊指针：基类与三种形状，连同它们自身的代码区判定、枚举与序列化。"""
+"""用户消息里的胶囊：基类负责代码区判定、属性转义与规范写法，各形状在同目录子类里声明自己的属性。"""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import Any, ClassVar, Self
 
 from markdown_it import MarkdownIt
 from markdown_it.rules_inline import StateInline, backtick
 from markdown_it.token import Token
 
-if TYPE_CHECKING:
-    from app.models.message_context.capsules.grammar.file_capsule import FileCapsule
-    from app.models.message_context.capsules.grammar.ref_capsule import RefCapsule
-    from app.models.message_context.capsules.grammar.skill_capsule import SkillCapsule
+# 属性值的转义表（与前端 ``ATTRIBUTE_ESCAPES`` 同序）。除 XML 的四个实体外，换行、制表、反引号与 ``~``
+# 也转成数字实体：胶囊外的 Markdown 预扫描（``find_outside_code``）看不懂标签，属性值里的这些字符会和
+# 标签外的文本配对成围栏、缩进代码或行内代码，把标签切断。转义后任何属性值都是单行、不含代码标记，
+# 摘录这样携带整段 Markdown 的胶囊才能安全放进正文。``&`` 必须最先转义、最后还原。
+_ATTRIBUTE_ESCAPES: tuple[tuple[str, str], ...] = (
+    ("&", "&amp;"),
+    ("<", "&lt;"),
+    (">", "&gt;"),
+    ('"', "&quot;"),
+    ("\n", "&#10;"),
+    ("\r", "&#13;"),
+    ("\t", "&#9;"),
+    ("`", "&#96;"),
+    ("~", "&#126;"),
+)
 
 
 @dataclass(frozen=True, slots=True)
 class Capsule:
-    """胶囊指针：文本 ↔ 段落的解析与纯文本投影见 ``capsule_grammar``，子类只加各自的属性。
+    """胶囊：文本 ↔ 段落的解析见 ``capsule_grammar``，子类声明标签名、属性白名单、取值校验与写法。
 
     基类不给 ``kind`` 默认值：每个子类声明自己的字面量，读取方按 ``isinstance`` 或 ``kind`` 区分。
     """
 
     kind: ClassVar[str]
+    REQUIRED: ClassVar[frozenset[str]]
+    OPTIONAL: ClassVar[frozenset[str]] = frozenset()
+    _LINES: ClassVar[re.Pattern[str]] = re.compile(r"^(\d+)(?:-(\d+))?$")
+    _PAGE: ClassVar[re.Pattern[str]] = re.compile(r"^[1-9]\d*$")
 
-    # 成熟 Markdown 解析器判定围栏与行内代码；只认 commonmark，不引入额外排版语义。
-    _parser: ClassVar[MarkdownIt] = MarkdownIt("commonmark")
+    # 成熟 Markdown 解析器判定围栏与行内代码；只认 commonmark，不引入额外排版语义。不识别 HTML 块（与前端
+    # ``markdownSegments`` 一致）：独占一行的胶囊标签会被当成 HTML 块，紧跟着的围栏就不再是代码。
+    _parser: ClassVar[MarkdownIt] = MarkdownIt("commonmark").disable("html_block")
 
     @staticmethod
     def _record_backticks(state: StateInline, silent: bool) -> bool:
@@ -97,35 +113,58 @@ class Capsule:
             if isinstance(segment, CapsuleSegment)
         ]
 
-    @staticmethod
-    def _escape_attribute(value: str) -> str:
-        """转义要放进 XML 属性的值；``&`` 最先替换，避免把后续实体二次转义。"""
+    @classmethod
+    def from_attributes(cls, attributes: dict[str, str]) -> Self | None:
+        """由已还原转义、且已通过白名单的属性构造胶囊；取值不合法时返回空值（标签按普通文本保留）。"""
 
-        return (
-            value.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-        )
+        raise NotImplementedError
 
     def serialize(self) -> str:
         """序列化为规范形态（固定属性顺序、单空格、自闭合）；所有写入口只经这里产出标签。"""
 
-        if self.kind == "file":
-            return f'<file path="{self._escape_attribute(cast("FileCapsule", self).path)}" />'
-        if self.kind == "ref":
-            capsule = cast("RefCapsule", self)
-            locator = ""
-            if capsule.lines is not None:
-                locator = f' lines="{self._escape_attribute(capsule.lines)}"'
-            elif capsule.page is not None:
-                locator = f' page="{self._escape_attribute(capsule.page)}"'
-            return f'<ref path="{self._escape_attribute(capsule.path)}"{locator} />'
-        if self.kind == "skill":
-            skill = cast("SkillCapsule", self)
-            path = f' path="{self._escape_attribute(skill.path)}"' if skill.path is not None else ""
-            return f'<skill name="{self._escape_attribute(skill.name)}"{path} />'
-        raise TypeError(f"unsupported capsule: {type(self).__name__}")
+        raise NotImplementedError
+
+    @classmethod
+    def _locator(cls, attributes: dict[str, str]) -> dict[str, str] | None:
+        """工作区位置（``lines`` 行范围或 PDF ``page`` 页码，至多一个）；不合法时返回空值。``ref`` 与来自文件的
+        ``quote`` 共用这一条规则。"""
+
+        lines = attributes.get("lines")
+        page = attributes.get("page")
+        if lines is not None and page is not None:
+            return None
+        if lines is not None:
+            match = cls._LINES.fullmatch(lines)
+            if match is None or (match.group(2) is not None and int(match.group(1)) > int(match.group(2))):
+                return None
+            return {"lines": lines}
+        if page is not None:
+            return {"page": page} if cls._PAGE.fullmatch(page) else None
+        return {}
+
+    def _tag(self, *attributes: tuple[str, str | None]) -> str:
+        """按给定顺序写出标签；值为 ``None`` 的属性不写。"""
+
+        written = "".join(
+            f' {name}="{self.escape_attribute(value)}"' for name, value in attributes if value is not None
+        )
+        return f"<{self.kind}{written} />"
+
+    @staticmethod
+    def escape_attribute(value: str) -> str:
+        """按 ``_ATTRIBUTE_ESCAPES`` 转义属性值。"""
+
+        for raw, entity in _ATTRIBUTE_ESCAPES:
+            value = value.replace(raw, entity)
+        return value
+
+    @staticmethod
+    def unescape_attribute(value: str) -> str:
+        """还原 ``escape_attribute``：逆序替换，``&amp;`` 最后还原，避免把 ``&amp;lt;`` 解成 ``<``。"""
+
+        for raw, entity in reversed(_ATTRIBUTE_ESCAPES):
+            value = value.replace(entity, raw)
+        return value
 
 
 # 规则替换要在类存在之后做：类体里拿到的是 staticmethod 对象，这里取到的是原函数。

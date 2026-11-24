@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import type { BrowserDialog, BrowserDownload, BrowserState, BrowserTabSummary } from "@/electron/shared/host-contract";
 import { fakeBrowserCalls, installFakeDesktopHost } from "./fake-desktop-host";
 import { API_ORIGIN as api } from "./e2e-env";
+import { completedState, seedState } from "./transport-fixtures";
 
 /**
  * 浏览器面板上「等你操作」的提示条与下载条：只验证渲染进程交给宿主的参数。宿主状态是静态替身，作答后不会
@@ -102,4 +103,47 @@ test("未知输入状态提示检查页面并保留关闭入口，不显示正�
   await expect(page.getByRole("status").filter({ hasText: "页面操作尚未确认结束" })).toBeVisible();
   await expect(page.getByText("Agent 正在操作这个页面")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "关闭 待检查页" })).toBeEnabled();
+});
+
+test("面板在一次对话里新开标签后，切到别的会话仍跟随当前会话：显示它的标签、新标签开在它名下", async ({ page, request }) => {
+  await request.post(`${api}/__test__/seed-session`, { data: { sessionId: 101, title: "另一个会话" } });
+  await page.route("**/browser-context", (route) => route.fulfill({ json: { limits: { per_session: 4, total: 10 }, download_dir: "/tmp" } }));
+  await openBrowserPanel(page, { tabs: [tab("t100", "甲的页面", null, 100), tab("t101", "乙的页面", null, 101)], downloads: [] });
+  await expect(page.getByRole("tab", { name: "甲的页面" })).toBeVisible();
+  const opened = async () => (await fakeBrowserCalls(page)).filter((call) => call.method === "browser.open").map((call) => call.args[0]);
+
+  await page.getByRole("button", { name: "新标签页", exact: true }).click();
+  await expect.poll(opened).toEqual([100]);
+  await page.getByRole("treeitem", { name: "另一个会话", exact: true }).click();
+  await expect(page).toHaveURL(/sessions\/101$/);
+  await expect(page.getByRole("tab", { name: "乙的页面" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "甲的页面" })).toHaveCount(0);
+  await page.getByRole("button", { name: "新标签页", exact: true }).click();
+  await expect.poll(opened).toEqual([100, 101]);
+});
+
+test("工具卡片「打开」把面板定位到子 Agent 的标签：本次对话里一直有效，切到别的会话才回到跟随", async ({ page, request }) => {
+  await request.post(`${api}/__test__/seed-session`, { data: { sessionId: 101, title: "另一个会话" } });
+  await seedState(request, 100, completedState(3, { id: "command", parts: [{ type: "text", text: "看看子 Agent 的页面" }] }, [
+    { presentation: "activity", type: "tool-call", toolCallId: "page-call", toolName: "browser_navigate", args: { url: "https://example.com/child" }, status: "completed", awaitingUser: false, display_data: { kind: "browser-page", tab_id: "t-child", url: "https://example.com/child", title: "子 Agent 的页面" } },
+    { type: "text", text: "已打开。" },
+  ] as never));
+  await page.route("**/browser-context", (route) => route.fulfill({ json: { limits: { per_session: 4, total: 10 }, download_dir: "/tmp" } }));
+  await openBrowserPanel(page, { tabs: [tab("t100", "甲的页面", null, 100), tab("t-child", "子 Agent 的页面", null, 500), tab("t101", "乙的页面", null, 101)], downloads: [] });
+  await expect(page.getByRole("tab", { name: "甲的页面" })).toBeVisible();
+  const opened = async () => (await fakeBrowserCalls(page)).filter((call) => call.method === "browser.open").map((call) => call.args[0]);
+
+  await page.getByRole("button", { name: "打开网页 1 次" }).click();
+  const open = page.getByRole("button", { name: "在浏览器面板打开：子 Agent 的页面" });
+  await open.click({ force: true });
+  await expect(page.getByRole("tab", { name: "子 Agent 的页面" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "甲的页面" })).toHaveCount(0);
+  // 定位后在面板里新开标签：仍开在子 Agent 名下。
+  await page.getByRole("button", { name: "新标签页", exact: true }).click();
+  await expect.poll(opened).toEqual([500]);
+  await expect(page.getByRole("tab", { name: "子 Agent 的页面" })).toBeVisible();
+
+  await page.getByRole("treeitem", { name: "另一个会话", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "乙的页面" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "子 Agent 的页面" })).toHaveCount(0);
 });

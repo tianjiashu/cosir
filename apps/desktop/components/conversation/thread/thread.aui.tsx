@@ -63,6 +63,7 @@ import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { notify } from "@/lib/notify";
 import { LinkSessionContext, useOpenLink } from "@/components/links/use-open-link";
 import { MarkdownLinkScope } from "@/components/links/markdown-links";
+import { ReplySelection } from "@/components/conversation/quotes/reply-selection";
 
 export type ThreadProps = {
   /** 只渲染 canonical message UI，不提供写入操作。 */
@@ -118,6 +119,7 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
         <ForkOrigin />
         <ThreadPrimitive.Viewport turnAnchor="top" autoScroll={false} className="relative flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden overflow-y-auto">
             <div aria-hidden="true" className="scroll-fade-top" />
+            <ReplySelection workspaceId={workspaceId} />
             {/* 内容列与对话附注同处一个网格，附注在滚动容器里、滚动条在最外侧（见 ConversationAsideSlot）。 */}
             <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto]">
               <div className={cn("col-start-1 row-start-1 mx-auto flex min-w-0 w-full max-w-conversation flex-col px-4 pt-6", isEmpty && "justify-center")}>

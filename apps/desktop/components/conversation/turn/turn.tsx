@@ -108,7 +108,7 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
         return <div key={block.kind === "activity" ? `activity:${block.key}` : `part:${block.index}`}
           hidden={hidden}
           data-slot={block.kind === "narration" ? "prose-part" : block.kind === "deliverables" ? "deliverables-part" : "process-part"} data-part-index={block.index} className="min-w-0">
-          {block.kind === "narration" ? <div className="text-foreground text-chat leading-7">
+          {block.kind === "narration" ? <div className="text-foreground">
             <MessagePrimitive.PartByIndex index={block.index} components={TEXT_PART_COMPONENTS} />
           </div> : block.kind === "agent" ? <AgentMessageRow id={block.part.id} text={block.part.text} source={block.part.source} sessionId={sessionId} />
             : block.kind === "standalone" ? <CallRowByIndex index={block.index} sessionId={sessionId} interactive={interactive} sessionCancelling={cancelling} visible={!hidden} inherited={inherited} />

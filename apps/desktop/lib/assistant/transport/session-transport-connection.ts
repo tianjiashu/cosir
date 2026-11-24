@@ -1,5 +1,6 @@
 import { requestHistoryPage } from "@/lib/assistant/transport/history-page-client";
 import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
+import { releasePendingImages } from "@/lib/assistant/attachments/pending-images";
 import type { ToolCalls } from "@/lib/assistant/tools/tool-call-index";
 import type { TransportState } from "@/lib/assistant/contract";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
@@ -50,7 +51,7 @@ type StreamHandle = { controller: AbortController };
 
 /**
  * 一个 Session 的 Transport 连接：Session 长订阅、投影 store、命令提交、有限重连与后端实例变化，全部在这里，
- * 不依赖 React。主对话与 Workbench 阅读页共用；外壳（React）只按快照渲染、在挂载期间 start / stop。
+ * 不依赖 React。主对话与 Workbench 阅读页共用；外壳（React）只按快照渲染，启停由登记表按有没有页面在看调用。
  *
  * - **首帧即初始状态**：不另读快照。attach 首帧总是完整快照（后端在锁内原子地挂订阅、取快照），store
  *   在它到达时才创建，之后的帧交给 store；首帧不是 full 是协议错误，按断开处理。重连、背压重同步与后端
@@ -64,6 +65,8 @@ type StreamHandle = { controller: AbortController };
  *   并提示正在同步。
  * - **命令**：只投递，结果经订阅到达。发送不依赖订阅：连接已停止（切走 Session）时迟到的上传后发送照常投递、
  *   失败照常回调，否则用户的消息会无声丢失；提交成功时订阅若断着（重连间隙）就立即补上。
+ * - **寿命**：提交（上传 + POST）比页面活得久，顺序链与乐观消息都在连接上，所以连接由会话级登记表
+ *   （`session-transport-connections`）持有：有页面在看或有提交在途就活着，切走再回来拿到的是同一个连接。
  */
 export class SessionTransportConnection {
   private active: StreamHandle | null = null;
@@ -75,6 +78,16 @@ export class SessionTransportConnection {
   private backend: BackendRuntimeSnapshot = getBackendRuntimeSnapshot();
   private unsubscribeBackend: (() => void) | null = null;
   private releaseStore: (() => void) | null = null;
+  /** 上一条提交的结局（成败都算）：提交按点击顺序依次发出。 */
+  private submitted: Promise<void> = Promise.resolve();
+  /** 还没有结局的提交数；归零时通知 {@link onSubmissionsSettled} 的订阅者（登记表据此回收连接）。 */
+  private inFlight = 0;
+  private readonly settledListeners = new Set<() => void>();
+  /**
+   * 后端已收下、乐观消息还在显示的命令：它们的待上传图片（object URL）等乐观消息被正式消息替换再释放，
+   * 否则图片会闪成坏图；连接被回收时一并释放（再没有页面会显示它们）。
+   */
+  private readonly accepted = new Set<UserAddMessageCommand>();
 
   public constructor(private readonly options: SessionTransportConnectionOptions) {
     this.recovery = new SubscriptionRecovery({
@@ -97,7 +110,30 @@ export class SessionTransportConnection {
     return this.active !== null;
   }
 
-  /** 外壳挂载时调用：开始跟随后端实例并打开订阅。可在 `stop` 之后再次调用（StrictMode 的重放）。 */
+  public get traceId(): TraceId {
+    return this.options.traceId;
+  }
+
+  /** 登记表按它认连接：同一 Session 的同一种页面共用一个连接。 */
+  public get key(): string {
+    return SessionTransportConnection.keyOf(this.options);
+  }
+
+  public static keyOf({ sessionId, surface }: Pick<SessionTransportConnectionOptions, "sessionId" | "surface">): string {
+    return `${surface}:${sessionId}`;
+  }
+
+  public get submitting(): boolean {
+    return this.inFlight > 0;
+  }
+
+  /** 在途提交全部有了结局时回调。 */
+  public onSubmissionsSettled = (listener: () => void): (() => void) => {
+    this.settledListeners.add(listener);
+    return () => this.settledListeners.delete(listener);
+  };
+
+  /** 第一个页面挂载时（经登记表）调用：开始跟随后端实例并打开订阅。可在 `stop` 之后再次调用（切回来、StrictMode 的重放）。 */
   public start = (): void => {
     if (this.enabled) return;
     this.enabled = true;
@@ -108,7 +144,7 @@ export class SessionTransportConnection {
     void this.open();
   };
 
-  /** 外壳卸载时调用：关闭订阅、停掉重连与后端跟随。store 留着，迟到的提交仍可收尾。 */
+  /** 最后一个页面卸载时（经登记表）调用：关闭订阅、停掉重连与后端跟随。store 留着，迟到的提交仍可收尾。 */
   public stop = (): void => {
     if (!this.enabled) return;
     this.enabled = false;
@@ -120,6 +156,16 @@ export class SessionTransportConnection {
     this.releaseStore = null;
     releaseCommandObservation(this.options.sessionId);
     if (this.active) this.end(this.active);
+  };
+
+  /**
+   * 登记表回收时调用（没有页面、没有在途提交）：停止，并释放已收下命令的待上传图片。之后仍可 `start`
+   * （StrictMode 的重放会这样走），只是那些乐观消息不再有图。
+   */
+  public dispose = (): void => {
+    this.stop();
+    for (const command of this.accepted) releasePendingImages(command.message.parts);
+    this.accepted.clear();
   };
 
   /** 用户「重新同步」：清零重连预算并立即重开订阅（首帧即完整状态）。 */
@@ -156,18 +202,42 @@ export class SessionTransportConnection {
     }
   };
 
-  /** 提交一条用户消息。只有 `ready` 之后的 runtime 会调用（发送入口随 runtime 挂载）。 */
+  /**
+   * 提交一条用户消息。只有 `ready` 之后的 runtime 会调用（发送入口随 runtime 挂载）。
+   *
+   * 乐观消息立刻出现；发送按点击顺序串行：带图的消息要先上传（见 `pending-images`），期间用户可以接着发下一条，
+   * 并行发送会让后一条先到后端、顺序颠倒。前一条失败不挡后一条。
+   */
   public async submit(command: UserAddMessageCommand, submission: TransportSubmission): Promise<void> {
     const store = this.requireStore();
     store.setPendingCommands([...store.getSnapshot().pendingCommands, command]);
+    this.inFlight += 1;
+    const sent = this.submitted.then(() => submission.send(command));
+    this.submitted = sent.catch(() => undefined);
     try {
-      await submission.send(command);
+      await sent;
+      this.accepted.add(command);
+      this.releaseDisplayed(store);
       this.update({ issue: null });
       if (this.enabled && !this.active) void this.open();
     } catch (error) {
-      // 请求未发出（如附件已失效）与后端拒绝同属提交失败，交给同一个回调恢复草稿并提示。
+      // 请求未发出（如附件已失效）与后端拒绝同属提交失败，交给同一个回调恢复草稿并提示；图片随草稿回到输入框，不释放。
       store.clearPendingCommand(command);
       await submission.onError(error instanceof Error ? error : new Error(String(error)), [command]);
+    } finally {
+      this.inFlight -= 1;
+      if (this.inFlight === 0) for (const listener of [...this.settledListeners]) listener();
+    }
+  }
+
+  /** 已收下的命令不再作为乐观消息显示（正式消息已到）时，释放它的待上传图片。 */
+  private releaseDisplayed(store: TransportFrameStore): void {
+    if (this.accepted.size === 0) return;
+    const displayed = store.getSnapshot().pendingCommands;
+    for (const command of this.accepted) {
+      if (displayed.includes(command)) continue;
+      this.accepted.delete(command);
+      releasePendingImages(command.message.parts);
     }
   }
 
@@ -301,6 +371,7 @@ export class SessionTransportConnection {
     this.releaseStore?.();
     let committed: TransportState | undefined;
     const commit = () => {
+      this.releaseDisplayed(store);
       const current = store.getSnapshot();
       if (committed === current.state) return;
       committed = current.state;

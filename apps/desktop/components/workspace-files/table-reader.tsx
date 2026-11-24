@@ -44,7 +44,7 @@ export function TableReader({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <ReadingToolbar navigation={navigation} info={info} view={view}
-        actions={<AddToChatButton workspaceId={workspaceId} path={info.path} selection={null} />}
+        actions={<AddToChatButton workspaceId={workspaceId} path={info.path} />}
         details={<EncodingControl encoding={encoding} detected={info.encoding} manual={manualEncoding} onChange={setEncoding} onReset={resetEncoding} />}
       />
       <div className="min-h-0 min-w-0 flex-1">

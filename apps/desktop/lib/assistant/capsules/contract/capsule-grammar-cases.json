@@ -1,5 +1,5 @@
 {
-  "description": "输入框胶囊文本语法的跨语言用例。前端 Vitest 与后端 pytest 都读这一份；改语法先改这里，两侧实现必须同时通过。",
+  "description": "输入框胶囊文本语法的跨语言用例。前端 Vitest 与后端 pytest 都读这一份；改语法先改这里，两侧实现必须同时通过。 limits 是两侧共用的上限（摘录原文长度）。",
   "cases": [
     {
       "name": "无胶囊的普通文本原样保留",
@@ -138,6 +138,81 @@
       "segments": [{ "type": "text", "text": "```\n<file path=\"/a\" />\n```" }],
       "plain": "```\n<file path=\"/a\" />\n```",
       "canonical": "```\n<file path=\"/a\" />\n```"
+    },
+    {
+      "name": "独占一行的标签后紧跟围栏：围栏仍是代码（不按 HTML 块识别）",
+      "text": "<quote text=\"摘录\" />\n```\n<file path=\"/a\" />\n```",
+      "segments": [
+        { "type": "capsule", "capsule": { "kind": "quote", "text": "摘录" } },
+        { "type": "text", "text": "\n```\n<file path=\"/a\" />\n```" }
+      ],
+      "plain": "「摘录」\n```\n<file path=\"/a\" />\n```",
+      "canonical": "<quote text=\"摘录\" />\n```\n<file path=\"/a\" />\n```"
+    },
+    {
+      "name": "摘录：原文里的围栏、反引号、标签与删除线全部转义成单行，不被当成代码或胶囊",
+      "text": "看 <quote text=\"| 操作 | 行为 |&#10;|---|---|&#10;| 回车 | 插入 |&#10;&#96;&#96;&#96;py&#10;x = &#96;a&#96; &lt; 1 &amp; &quot;y&quot;&#10;&#96;&#96;&#96;&#10;&lt;file path=&quot;/x&quot; /&gt; &#126;&#126;删&#126;&#126;\" /> 改成表格",
+      "segments": [
+        { "type": "text", "text": "看 " },
+        {
+          "type": "capsule",
+          "capsule": {
+            "kind": "quote",
+            "text": "| 操作 | 行为 |\n|---|---|\n| 回车 | 插入 |\n```py\nx = `a` < 1 & \"y\"\n```\n<file path=\"/x\" /> ~~删~~"
+          }
+        },
+        { "type": "text", "text": " 改成表格" }
+      ],
+      "plain": "看 「操作 行为」 改成表格",
+      "canonical": "看 <quote text=\"| 操作 | 行为 |&#10;|---|---|&#10;| 回车 | 插入 |&#10;&#96;&#96;&#96;py&#10;x = &#96;a&#96; &lt; 1 &amp; &quot;y&quot;&#10;&#96;&#96;&#96;&#10;&lt;file path=&quot;/x&quot; /&gt; &#126;&#126;删&#126;&#126;\" /> 改成表格"
+    },
+    {
+      "name": "摘录：读入时宽容未转义的换行，写出时规范成数字实体",
+      "text": "<quote text=\"第一行\n第二行\" />",
+      "segments": [{ "type": "capsule", "capsule": { "kind": "quote", "text": "第一行\n第二行" } }],
+      "plain": "「第一行」",
+      "canonical": "<quote text=\"第一行&#10;第二行\" />"
+    },
+    {
+      "name": "路径里的反引号与 ~ 也写成数字实体",
+      "text": "<file path=\"/Users/me/~a`b.md\" />",
+      "segments": [
+        { "type": "capsule", "capsule": { "kind": "file", "path": "/Users/me/~a`b.md" } }
+      ],
+      "plain": "~a`b.md",
+      "canonical": "<file path=\"/Users/me/&#126;a&#96;b.md\" />"
+    },
+    {
+      "name": "摘录带批注：批注与原文同在一个胶囊里，空批注不写",
+      "text": "<quote text=\"原文\" note=\"第一行&#10;`x`\" /><quote text=\"另一段\" note=\"\" />",
+      "segments": [
+        { "type": "capsule", "capsule": { "kind": "quote", "text": "原文", "note": "第一行\n`x`" } },
+        { "type": "capsule", "capsule": { "kind": "quote", "text": "另一段" } }
+      ],
+      "plain": "「原文」「另一段」",
+      "canonical": "<quote text=\"原文\" note=\"第一行&#10;&#96;x&#96;\" /><quote text=\"另一段\" />"
+    },
+    {
+      "name": "来自工作区文件的摘录：带路径与行号（规则同 ref），规范写法位置在原文之前",
+      "text": "<quote text=\"def a():\" note=\"为什么\" lines=\"3-4\" path=\"src/a.py\" /><quote page=\"2\" path=\"docs/p.pdf\" text=\"第二页\" />",
+      "segments": [
+        {
+          "type": "capsule",
+          "capsule": {
+            "kind": "quote",
+            "path": "src/a.py",
+            "lines": "3-4",
+            "text": "def a():",
+            "note": "为什么"
+          }
+        },
+        {
+          "type": "capsule",
+          "capsule": { "kind": "quote", "path": "docs/p.pdf", "page": "2", "text": "第二页" }
+        }
+      ],
+      "plain": "「def a():」「第二页」",
+      "canonical": "<quote path=\"src/a.py\" lines=\"3-4\" text=\"def a():\" note=\"为什么\" /><quote path=\"docs/p.pdf\" page=\"2\" text=\"第二页\" />"
     }
   ],
   "notCapsules": [
@@ -150,6 +225,14 @@
     "<ref path=\"a\" lines=\"1\" page=\"2\" />",
     "<file path=\"/a\" extra=\"b\" />",
     "<FILE path=\"/a\" />",
-    "<file path=\"/a\" / >"
-  ]
+    "<file path=\"/a\" / >",
+    "<quote text=\"  \" />",
+    "<quote note=\"a\" />",
+    "<quote text=\"a\" turn=\"1\" />",
+    "<quote lines=\"1\" text=\"没有路径的位置\" />",
+    "<quote path=\"\" text=\"a\" />",
+    "<quote path=\"a.py\" lines=\"1\" page=\"2\" text=\"a\" />",
+    "<quote path=\"a.py\" lines=\"5-1\" text=\"a\" />"
+  ],
+  "limits": { "quoteTextMax": 8000 }
 }

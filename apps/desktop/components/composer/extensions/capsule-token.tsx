@@ -5,6 +5,7 @@ import {
   serializeCapsule,
   type Capsule,
 } from "@/lib/assistant/capsules";
+import type { InlineCapsule } from "@/lib/assistant/composer/quote-cards";
 import { FileChip, SkillChip } from "@/components/composer/token-chips";
 import { ReferenceChip } from "@/components/workspace-references/reference-chip";
 import { useComposerEditorView } from "@/components/composer/composer-editor-context";
@@ -18,7 +19,8 @@ import { baseName } from "@/lib/files/file-name";
  */
 function CapsuleTokenView({ node, editor, getPos }: NodeViewProps) {
   const context = useComposerEditorView();
-  const capsule = node.attrs.capsule as Capsule | null;
+  // 摘录画在编辑器上方的卡片区（`quote-cards`），编辑器文档里只有行内胶囊。
+  const capsule = node.attrs.capsule as InlineCapsule | null;
   if (!capsule) return null;
   const remove = () => removeComposerToken({ node, editor, getPos });
 

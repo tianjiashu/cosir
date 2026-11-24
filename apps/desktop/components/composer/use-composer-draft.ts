@@ -23,11 +23,15 @@ function useComposerDraft(key: string | null): boolean {
   const text = useAuiState((state) => state.composer.text);
   const attachments = useAuiState((state) => state.composer.attachments);
   const ready = useRef(false);
+  // 恢复只做一次：同一输入框同一草稿的 effect 可能重跑（StrictMode 模拟卸载再挂载），而刚写入的正文与附件要等下次
+  // 渲染才反映到 composer 的状态里，重跑时按状态去重会把附件再加一遍（同 id 两张，界面直接崩）。
+  const restoredFor = useRef<{ aui: typeof aui; key: string } | null>(null);
+  const mounted = useRef(false);
   const [restoring, setRestoring] = useState(() => key !== null && Boolean(readComposerDraft(key)));
   useEffect(() => {
     if (!key) return;
     let active = true;
-    ready.current = false;
+    mounted.current = true;
     const unbind = bindComposerDraft(key, (draft) => {
       const result = applyEditDraftToComposer({ composer: aui.composer, text: draft.text,
         attachments: editableDraftAttachments(draft.attachments), mode: "prepend", isStillCurrent: () => active });
@@ -45,8 +49,13 @@ function useComposerDraft(key: string | null): boolean {
         currentLength: current.text.length,
       },
     });
-    // StrictMode 可在加入附件后重启 effect；由共享恢复器去重，仍需恢复正文。
-    if (saved && !current.text) {
+    if (restoredFor.current?.aui === aui && restoredFor.current.key === key) {
+      // 这一份草稿已在恢复或已恢复：重跑的 effect 只重新绑定，在途的恢复照常收尾。
+    } else if (saved && !current.text) {
+      restoredFor.current = { aui, key };
+      // 真正卸载或换了草稿才中止；StrictMode 的模拟卸载不中止，否则未发出图片的重新加入会半途停下。
+      const stillCurrent = () => mounted.current && restoredFor.current?.aui === aui && restoredFor.current.key === key;
+      ready.current = false;
       setRestoring(true);
       void (async () => {
         try {
@@ -63,17 +72,17 @@ function useComposerDraft(key: string | null): boolean {
                 content: attachment.content ?? [],
               })),
             ),
-            isStillCurrent: () => active,
+            isStillCurrent: stillCurrent,
           });
           if (result.error) throw result.error;
           // 尚未上传的图片仍由原附件适配器处理，不能伪装成已经完成的附件。
           for (const attachment of saved.attachments) {
-            if (!active) return;
+            if (!stillCurrent()) return;
             if ("status" in attachment && attachment.status.type !== "complete" && attachment.file)
               await aui.composer.addAttachment(attachment.file);
           }
         } catch (error) {
-          if (active) {
+          if (stillCurrent()) {
             toast.error("部分草稿附件恢复失败，请重新添加");
             void frontendLog(
               "WARNING",
@@ -83,18 +92,20 @@ function useComposerDraft(key: string | null): boolean {
             );
           }
         } finally {
-          if (active) {
+          if (stillCurrent()) {
             ready.current = true;
             setRestoring(false);
           }
         }
       })();
     } else {
+      restoredFor.current = { aui, key };
       ready.current = true;
       setRestoring(false);
     }
     return () => {
       active = false;
+      mounted.current = false;
       unbind();
     };
   }, [aui, key]);

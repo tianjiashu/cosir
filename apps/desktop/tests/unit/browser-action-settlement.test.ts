@@ -92,7 +92,7 @@ const cases: Case[] = [
   { group: "type", name: "元素不可编辑", action: type("e9"), config: { answers: notEditable }, expected: "failed", code: "NOT_INTERACTABLE", note: "输入前检查" },
   { group: "type", name: "元素不可见", action: type("e9"), config: { answers: hidden }, expected: "failed", code: "NOT_INTERACTABLE", note: "输入前检查" },
   { group: "type", name: "focus 命令已派发后失败", action: type("e9"), config: { failAfterDispatch: (m) => (m === "DOM.focus" ? new Error("boom") : undefined) }, expected: "failed", code: "ACTION_FAILED", note: "尚未写入任何字符；focus 可能触发页面 onfocus（视图/页面小副作用未计入）" },
-  { group: "type", name: "clear 的页面函数已派发后失败", action: type("e9", { clear: true }), config: { failAfterDispatch: (m, p) => (m === "Runtime.callFunctionOn" && String(p.functionDeclaration).includes('this.value = ""') ? new Error("boom") : undefined) }, expected: "unknown", code: "ACTION_FAILED", note: "清空可能已发生 → unknown 正确" },
+  { group: "type", name: "clear 的页面函数已派发后失败", action: type("e9", { clear: true }), config: { failAfterDispatch: (m, p) => (m === "Runtime.callFunctionOn" && String(p.functionDeclaration).includes("this.select()") ? new Error("boom") : undefined) }, expected: "unknown", code: "ACTION_FAILED", note: "选中内容可能已发生 → unknown 正确" },
   { group: "type", name: "insertText 已派发后失败", action: type("e9"), config: { failAfterDispatch: (m) => (m === "Input.insertText" ? new Error("boom") : undefined) }, expected: "unknown", code: "ACTION_FAILED", note: "文字可能已写入 → unknown 正确" },
   { group: "type", name: "逐键输入第 2 个字符 keyDown 已派发后失败", action: type("e9", { text: "ab", keyByKey: true }), config: { failAfterDispatch: (m, p) => (m === "Input.dispatchKeyEvent" && p.type === "keyDown" && p.key === "b" ? new Error("boom") : undefined) }, expected: "unknown", code: "ACTION_FAILED", note: "已输入 a → unknown 正确" },
   { group: "type", name: "submit 的 Enter keyDown 已派发后失败", action: type("e9", { text: "a", submit: true }), config: { failAfterDispatch: (m, p) => (m === "Input.dispatchKeyEvent" && p.type === "keyDown" && p.key === "Enter" ? new Error("boom") : undefined) }, expected: "unknown", code: "ACTION_FAILED", note: "已输入 a，提交可能发生 → unknown 正确" },
@@ -126,10 +126,9 @@ const cases: Case[] = [
   { group: "scroll", name: "只有 ref、把元素滚入视野", action: scroll(undefined, "e9"), expected: "done", note: "正常路径" },
 
   // ───────────────────────── wait_for ─────────────────────────
-  { group: "wait_for", name: "textGone 超时", action: waitFor({ textGone: "Loading", seconds: 0.05 }), config: { answers: { innerText: "found" } }, expected: "failed", code: "WAIT_TIMEOUT", note: "只读轮询 → failed 正确" },
-  { group: "wait_for", name: "轮询 evaluate 已派发后失败", action: waitFor({ text: "Done", seconds: 1 }), config: { failAfterDispatch: (m) => (m === "Runtime.evaluate" ? new Error("boom") : undefined) }, expected: "failed", code: "ACTION_FAILED", note: "evaluate 是只读观察，且在 effect 之外 → failed 正确" },
-  { group: "wait_for", name: "轮询页面函数抛错", action: waitFor({ text: "Done", seconds: 1 }), config: { answers: { innerText: new Error("page broke") } }, expected: "failed", code: "ACTION_FAILED", note: "只读观察 → failed 正确" },
-  { group: "wait_for", name: "轮询 evaluate 派发前被闸门拒绝", action: waitFor({ text: "Done", seconds: 1 }), config: { rejectBeforeDispatch: (m) => (m === "Runtime.evaluate" ? new HostMethodError("DIALOG_OPEN", "paused") : undefined) }, expected: "failed", code: "DIALOG_OPEN", note: "无副作用" },
+  { group: "wait_for", name: "textGone 超时", action: waitFor({ textGone: "Loading", seconds: 0.05 }), config: { mentions: true }, expected: "failed", code: "WAIT_TIMEOUT", note: "只读轮询 → failed 正确" },
+  { group: "wait_for", name: "轮询读取失败", action: waitFor({ text: "Done", seconds: 1 }), config: { mentions: new Error("boom") }, expected: "failed", code: "ACTION_FAILED", note: "读快照是只读观察，且在 effect 之外 → failed 正确" },
+  { group: "wait_for", name: "轮询读取被闸门拒绝", action: waitFor({ text: "Done", seconds: 1 }), config: { mentions: new HostMethodError("DIALOG_OPEN", "paused") }, expected: "failed", code: "DIALOG_OPEN", note: "无副作用" },
   { group: "wait_for", name: "纯等待中途取消", action: waitFor({ seconds: 5 }), expected: "failed", abortDuring: 20, note: "纯等待无副作用 → failed 正确" },
   { group: "wait_for", name: "动作前已取消", action: { type: "wait_for", seconds: 5 }, expected: "failed", abortBefore: true, note: "steps 入口取消检查，无副作用" },
 

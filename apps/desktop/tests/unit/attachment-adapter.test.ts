@@ -12,7 +12,7 @@ vi.mock("@/lib/assistant/attachments/attachment-upload", async (importOriginal) 
 
 describe("assistant attachment adapter", () => {
   it("接受图片恢复契约与空 MIME 的图片文件", () => {
-    const adapter = createAttachmentAdapter(7);
+    const adapter = createAttachmentAdapter();
     expect(fileMatchesAccept({ name: "photo.jpg", type: "image/jpeg" }, adapter.accept)).toBe(true);
     expect(fileMatchesAccept({ name: "image-1", type: "image/*" }, adapter.accept)).toBe(true);
     expect(fileMatchesAccept({ name: "native.png", type: "" }, adapter.accept)).toBe(true);
@@ -21,7 +21,7 @@ describe("assistant attachment adapter", () => {
 
   it("creates a pending image attachment for a JPEG file", async () => {
     const file = new File(["image"], "photo.jpg", { type: "image/jpeg" });
-    const attachment = await createAttachmentAdapter(7).add({ file });
+    const attachment = await createAttachmentAdapter().add({ file });
 
     expect(attachment).toMatchObject({
       type: "image",
@@ -34,7 +34,7 @@ describe("assistant attachment adapter", () => {
 
   it("rejects unsupported GIF image uploads before the HTTP request", async () => {
     const file = new File(["image"], "animation.gif", { type: "image/gif" });
-    await expect(createAttachmentAdapter(7).add({ file })).rejects.toThrow("JPEG 和 PNG");
+    await expect(createAttachmentAdapter().add({ file })).rejects.toThrow("JPEG 和 PNG");
   });
 
   it("removes only the Composer reference without deleting the workspace asset", async () => {
@@ -47,27 +47,23 @@ describe("assistant attachment adapter", () => {
       content: [{ type: "image" as const, image: `cosir-attachment://${"a".repeat(64)}` }],
     };
 
-    await expect(createAttachmentAdapter(7).remove(attachment)).resolves.toBeUndefined();
+    await expect(createAttachmentAdapter().remove(attachment)).resolves.toBeUndefined();
   });
 
   it("普通文件不能重新进入图片附件集合", async () => {
-    await expect(createAttachmentAdapter(7).add({ file: new File([], "notes.md", { type: "text/plain" }) }))
+    await expect(createAttachmentAdapter().add({ file: new File([], "notes.md", { type: "text/plain" }) }))
       .rejects.toThrow("JPEG 和 PNG");
   });
 
-  it("相同文件可有两个独立的 UI 身份；上传去重后仍保持各自 id，资源身份只进入 content", async () => {
-    const assetId = "b".repeat(64);
-    const locator = `cosir-attachment://${assetId}`;
-    vi.mocked(uploadAttachment).mockResolvedValue({ id: assetId, name: "same.png", contentType: "image/png", byteSize: 5, width: 1, height: 1, locator, status: "ready" });
-    const adapter = createAttachmentAdapter(1901);
+  it("发送不上传：把文件登记为待上传图片，立即交出带同一 UI 身份的完整附件", async () => {
+    const adapter = createAttachmentAdapter();
     const file = new File(["identical-image"], "same.png", { type: "image/png" });
     const first = await adapter.add({ file }) as PendingAttachment;
     const second = await adapter.add({ file }) as PendingAttachment;
     expect(first.id).not.toBe(second.id);
 
-    const [sentFirst, sentSecond] = await Promise.all([adapter.send(first), adapter.send(second)]);
-    expect(sentFirst).toMatchObject({ id: first.id, content: [{ type: "image", image: locator }] });
-    expect(sentSecond).toMatchObject({ id: second.id, content: [{ type: "image", image: locator }] });
-    expect(uploadAttachment).toHaveBeenCalledTimes(1);
+    const sent = await adapter.send(first);
+    expect(sent).toMatchObject({ id: first.id, status: { type: "complete" }, content: [{ type: "image", image: expect.stringMatching(/^blob:/) }] });
+    expect(uploadAttachment).not.toHaveBeenCalled();
   });
 });

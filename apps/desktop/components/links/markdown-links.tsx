@@ -10,7 +10,8 @@ const InsideMarkdownLink = createContext(false);
 
 /** 字重继承所在文字；颜色与下划线在 styles/markdown.css 统一定义。 */
 const LINK_CLASS = "wrap-anywhere";
-const INLINE_CODE_CLASS = "rounded bg-[var(--inline-code-background,var(--muted))] px-1.5 py-0.5 font-mono text-sm";
+// 字号在 `styles/markdown.css` 的正文排版里（随所在文字缩放），这里只管外观。
+const INLINE_CODE_CLASS = "rounded bg-[var(--inline-code-background,var(--muted))] px-1.5 py-0.5 font-mono";
 
 type MarkdownLinkScopeValue = { opener: LinkOpener; documentDir?: string; icons: boolean };
 

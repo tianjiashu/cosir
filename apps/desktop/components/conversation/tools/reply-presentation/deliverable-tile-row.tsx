@@ -11,7 +11,7 @@ import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 import { baseName } from "@/lib/files/file-name";
 import { cn } from "@/lib/utils";
 import { confirmResourceFailure, fileResourceUrl, useResourceLoadFailure } from "@/lib/workspace-files/resources";
-import { useDeliverableFile, useDeliverableFiles, type DeliverableFileState } from "./use-deliverable-file";
+import { unavailableReason, useDeliverableFile, useDeliverableFiles, type DeliverableFileState } from "@/components/deliverables/use-deliverable-file";
 
 type FileDeliverable = Extract<TransportDeliverable, { type: "file" }>;
 
@@ -28,7 +28,7 @@ function stripImage(
   // SVG 不经 Pillow：方块与灯箱都用原始地址。
   const previewSrc = src && deliverable.kind === "image" ? fileResourceUrl(workspaceId!, path, version!, "tile") : undefined;
   const unreadable = state.info !== null && isUnreadableImage(state.info);
-  const unavailable = state.problem === "gone" ? "已不存在" : state.problem === "denied" ? "无法访问" : unreadable ? "无法预览" : undefined;
+  const unavailable = unavailableReason(state) ?? (unreadable ? "无法预览" : undefined);
   return {
     src,
     previewSrc,
@@ -41,8 +41,8 @@ function stripImage(
 
 /** 单张大图卡上图片显示不了的原因；能显示时为空。 */
 function cardProblem(state: DeliverableFileState, failed: boolean): string | null {
-  if (state.problem === "gone") return "已不存在";
-  if (state.problem === "denied") return "无法访问";
+  const reason = unavailableReason(state);
+  if (reason) return reason;
   if (failed || (state.info !== null && isUnreadableImage(state.info))) return "无法预览";
   return null;
 }

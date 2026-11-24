@@ -8,7 +8,7 @@ import { LoadingState } from "@/components/ui/state-panel";
 import { useSessionAssistantTransportRuntime } from "@/lib/assistant/transport/use-session-assistant-transport-runtime";
 import type { SessionTransportConnection } from "@/lib/assistant/transport/session-transport-connection";
 import type { TransportFrameStore } from "@/lib/assistant/transport/transport-frame-store";
-import { useSessionDeliverableWatch } from "@/components/conversation/tools/reply-presentation/use-session-deliverable-watch";
+import { useSessionDeliverableWatch } from "@/components/deliverables/use-session-deliverable-watch";
 import { useSessionTransportConnection } from "@/lib/assistant/transport/use-session-transport-connection";
 import { newTraceId } from "@/lib/logging/trace-id";
 import { TransportHistoryContext } from "@/lib/assistant/transport/transport-history-context";

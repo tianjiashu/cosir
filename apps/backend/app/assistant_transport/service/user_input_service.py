@@ -5,7 +5,8 @@ HTTP 发送使用；Agent 之间的输入走 ``agent_message``。只读 Session�
 在这里同步拒绝，不让坏数据进外部队列。
 
 正文里的 ``<file>`` / ``<ref>`` / ``<skill>`` 是用户给的指针：这里校验指针可用、把 Skill 的
-``SKILL.md`` 绝对路径补回标签，正文本身不替换成文件或 Skill 内容——模型自己按指针去读。
+``SKILL.md`` 绝对路径补回标签，正文本身不替换成文件或 Skill 内容——模型自己按指针去读。``<quote>``
+摘录自带原文：校验原文长度，来自工作区文件时按 ``ref`` 同样校验路径。
 """
 
 import os
@@ -23,6 +24,7 @@ from app.models.message_context.capsules.capsule_grammar import (
 )
 from app.models.message_context.capsules.grammar.capsule import Capsule
 from app.models.message_context.capsules.grammar.file_capsule import FileCapsule
+from app.models.message_context.capsules.grammar.quote_capsule import QuoteCapsule
 from app.models.message_context.capsules.grammar.ref_capsule import RefCapsule
 from app.models.message_context.capsules.grammar.skill_capsule import SkillCapsule
 from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
@@ -54,7 +56,7 @@ class UserInputService:
 
         异常:
             UserInputRejectedError: 模型配置不存在、模型不支持所选能力、胶囊指向的文件 / 引用 /
-                Skill 不可用。
+                Skill 不可用、摘录原文超长。
             ImageNormalizationError: 本次图片数量或总大小超过统一输入限制。
             KeyError: Session 不存在（接入层映射为 404）。
         """
@@ -79,6 +81,7 @@ class UserInputService:
                     "file": counts["file"],
                     "ref": counts["ref"],
                     "skill": counts["skill"],
+                    "quote": counts["quote"],
                 },
             },
         )
@@ -118,6 +121,15 @@ class UserInputService:
             return SkillCapsule(
                 name=capsule.name, path=cls._skill_file(capsule.name, workspace_root)
             )
+        if isinstance(capsule, QuoteCapsule):
+            if capsule.path is not None:
+                cls._check_workspace_ref(capsule.path, workspace_root)
+            if len(capsule.text) > QuoteCapsule.MAX_TEXT_LENGTH:
+                raise UserInputRejectedError(
+                    "CAPSULE_QUOTE_TOO_LONG",
+                    f"摘录超过 {QuoteCapsule.MAX_TEXT_LENGTH} 字，请缩短选区",
+                )
+            return capsule
         raise TypeError(f"unsupported capsule: {type(capsule).__name__}")
 
     @staticmethod

@@ -30,6 +30,30 @@ describe("终端工作台 store", () => {
     }
   });
 
+  it("用户关闭的会话仍选中时换到其他活跃会话，最后一个活跃会话关闭才收起面板", () => {
+    const store = useTerminalWorkbenchStore.getState();
+    store.syncSessions(SESSION, [terminalSession("t1"), terminalSession("t2"), terminalSession("t3", { status: "exited", exitCode: 0 })]);
+    store.setOpen(SESSION, true);
+    store.select(SESSION, "t1");
+    // 关闭回执先于 snapshot：列表里仍有 t1，下一项只在其他活跃会话里挑。
+    store.closedByUser(SESSION, "t1");
+    expect(session()).toMatchObject({ open: true, activeSessionId: "t2" });
+
+    store.syncSessions(SESSION, [terminalSession("t2"), terminalSession("t3", { status: "exited", exitCode: 0 })]);
+    store.closedByUser(SESSION, "t2");
+    expect(session()).toMatchObject({ open: false, activeSessionId: null });
+  });
+
+  it("关闭请求在途时用户已选中新会话：回执不改选中、不收起面板", () => {
+    const store = useTerminalWorkbenchStore.getState();
+    store.syncSessions(SESSION, [terminalSession("t1")]);
+    store.setOpen(SESSION, true);
+    // 点击关闭 t1 后、回执前新建并选中 t2（snapshot 可能尚未带上 t2）。
+    store.select(SESSION, "t2");
+    store.closedByUser(SESSION, "t1");
+    expect(session()).toMatchObject({ open: true, activeSessionId: "t2" });
+  });
+
   it("按 Session 独立记住面板开关与选中会话", () => {
     const store = useTerminalWorkbenchStore.getState();
     store.syncSessions(SESSION, [terminalSession("t1"), terminalSession("t2")]);

@@ -1,4 +1,4 @@
-import { isDirectoryPath, type RefCapsule } from "@/lib/assistant/capsules";
+import { isDirectoryPath, type QuoteCapsule, type RefCapsule } from "@/lib/assistant/capsules";
 import type { LineRange } from "@/lib/links/resolve-link";
 import { baseName } from "@/lib/files/file-name";
 
@@ -61,6 +61,13 @@ export function refLocatorText(capsule: RefCapsule): string | undefined {
     return lines.start === lines.end ? ` · L${lines.start}` : ` · L${lines.start}–${lines.end}`;
   }
   return capsule.page !== undefined ? ` · p.${capsule.page}` : undefined;
+}
+
+/** 来自工作区文件的摘录的来源说明（`a.py · L12–14`）；来自对话回复的摘录没有来源，返回 null。 */
+export function quoteSourceText(quote: QuoteCapsule): string | null {
+  if (quote.path === undefined) return null;
+  const ref: RefCapsule = { kind: "ref", path: quote.path, lines: quote.lines, page: quote.page };
+  return `${refName(ref)}${refLocatorText(ref) ?? ""}`;
 }
 
 /** 胶囊的完整描述（悬停提示）：路径 + 定位；根目录显示「工作区」。 */

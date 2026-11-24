@@ -1,8 +1,8 @@
-import { ReferenceSelectionMenu } from "@/components/workspace-references/selection-actions";
-import type { DomTextSelection } from "@/lib/workspace-files/dom-selection-locator";
+import { SelectionToolbar } from "@/components/text-selection/selection-toolbar";
+import { TextSelectionContext, useTextSelection } from "@/components/text-selection/use-text-selection";
 import { sourceLinesOfRange } from "@/lib/workspace-files/dom-selection-locator";
-import { workspaceFileRef } from "@/lib/workspace-references/ref-capsule";
-import type { RefCapsule } from "@/lib/assistant/capsules";
+import { fileSelectionQuote, renderedMarkdownExcerpt, sourceExcerpt, wholeFileLines } from "@/lib/workspace-files/file-selection-quote";
+import type { TextSelection } from "@/components/text-viewer/readonly-text-viewer";
 import { AddToChatButton } from "./add-to-chat-button";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -42,7 +42,9 @@ export function TextPreview({
   rendered: boolean;
   view?: ReactNode;
 }) {
-  const [selection, setSelection] = useState<RefCapsule | null>(null);
+  // 选区 → 摘录（带文件位置），交给选区浮条与「添加到对话」（见 `components/text-selection`）。
+  const selection = useTextSelection();
+  const sourceSelection = useRef<TextSelection | null>(null);
   const { page, position, offset, encoding, manualEncoding, tail, before, go, setEncoding, resetEncoding, setPosition } = useTextPage(workspaceId, info);
   const preference = useFilesStore(
     (s) => workspaceFiles(s.byWorkspace, workspaceId).preferences[info.path],
@@ -52,9 +54,11 @@ export function TextPreview({
   const searchTrigger = useRef<HTMLButtonElement>(null);
   const editor = useRef<TextViewerHandle>(null);
   const markdownHost = useRef<HTMLDivElement>(null);
+  const closeSelection = selection.close;
   useEffect(() => {
-    setSelection(null);
-  }, [info.version, encoding, offset, tail, before]);
+    sourceSelection.current = null;
+    closeSelection();
+  }, [closeSelection, info.version, encoding, offset, tail, before]);
   // 带行号打开（`ReadingPosition.reveal`）：整份加载的文件在源码里选中并居中；分段读取的大文件没有
   // 行号到字节偏移的换算，只停在开头并说明。切到源码视图由 `FilePreview` 负责。
   const reveal = position?.reveal;
@@ -82,6 +86,18 @@ export function TextPreview({
       go(next);
     },
   });
+  // 源码视图的选区确定（松开鼠标或键盘）时报告：选中的文字包成代码块，位置是行范围。
+  const settleSource = () => {
+    const value = sourceSelection.current;
+    if (rendered || !value || !page.data) return;
+    const lines = value.startLine !== undefined && value.endLine !== undefined ? { start: value.startLine, end: value.endLine } : null;
+    const quote = fileSelectionQuote(info.path, sourceExcerpt(info.path, value.text), wholeFileLines(page.data.offset, lines));
+    selection.report(quote && {
+      quote,
+      range: null,
+      anchor: { getBoundingClientRect: () => editor.current?.selectionRect() ?? new DOMRect() },
+    });
+  };
   const source = page.data && (
     <CodePreview
       ref={editor}
@@ -89,21 +105,17 @@ export function TextPreview({
       text={page.data.text}
       name={info.name}
       onSelection={(value) => {
-        // 分段读取的大文件没有「整篇行号」映射：拿到整文件指针，不编造行范围。
-        setSelection(
-          value
-            ? workspaceFileRef(
-                info.path,
-                page.data.offset === 0 && value.startLine !== undefined && value.endLine !== undefined
-                  ? { start: value.startLine, end: value.endLine }
-                  : undefined,
-              )
-            : null,
-        );
+        // 编辑器选区随拖动连续变化：这里只记下，松开鼠标或键盘时才报告（见下方容器的 onMouseUp / onKeyUp）。
+        sourceSelection.current = value;
+        if (!value) selection.report(null);
       }}
       wrap={wrap}
       reveal={wholeFile ? reveal : undefined}
-      onRevealed={() => setPosition({ reveal: undefined })}
+      onRevealed={() => {
+        setPosition({ reveal: undefined });
+        // 带行号打开（链接、引用）选中的行算用户要看的选区：浮条出现，Cmd+L 直接摘录这几行。
+        settleSource();
+      }}
       anchor={position?.anchor}
       onAnchorChange={(anchor) => setPosition({ anchor })}
     />
@@ -112,13 +124,13 @@ export function TextPreview({
     <MarkdownPreview
       hostRef={markdownHost}
       text={info.kind === "mermaid" ? mermaidDocument(page.data.text) : page.data.text}
-      onSelectSelection={(value: DomTextSelection | null) => {
-        // 渲染视图按块级 data-source-line 求源码行范围；求不出时退化为整文件指针。
-        const host = markdownHost.current;
-        // Mermaid 的渲染结果是一张图，没有与源码行对应的块：引用整个文件。
-        const lines = value && host && info.kind === "markdown" ? sourceLinesOfRange(value.range, host) : null;
-        setSelection(value ? workspaceFileRef(info.path, lines ?? undefined) : null);
-      }}
+      selection={selection}
+      resolveSelection={(range, host) =>
+        // Mermaid 的渲染结果是一张图，没有与源码行对应的块：只取选中的文字、不给行号。
+        info.kind === "markdown"
+          ? fileSelectionQuote(info.path, renderedMarkdownExcerpt(range, host, page.data.text), wholeFileLines(page.data.offset, sourceLinesOfRange(range, host)))
+          : fileSelectionQuote(info.path, range.toString(), {})
+      }
       workspaceId={workspaceId}
       path={info.path}
       anchor={position?.anchor}
@@ -126,6 +138,7 @@ export function TextPreview({
     />
   );
   return (
+    <TextSelectionContext.Provider value={selection}>
     <div
       className="flex h-full min-h-0 flex-col"
       onKeyDownCapture={(event) => {
@@ -152,11 +165,7 @@ export function TextPreview({
         actions={<>
           <TooltipIconButton ref={searchTrigger} tooltip={withShortcut("查找文件内容", "findInFile")} aria-label="查找文件内容" className="size-8 shrink-0" aria-expanded={find.open}
             onClick={find.toggle}><SearchIcon /></TooltipIconButton>
-          <AddToChatButton
-            workspaceId={workspaceId}
-            path={info.path}
-            selection={selection}
-          />
+          <AddToChatButton workspaceId={workspaceId} path={info.path} />
         </>}
         options={rendered ? undefined : <>
           <ReadingMenuItem checked={wrap} onClick={() => setPreference(workspaceId, info.path, { wrap: !wrap })}>自动换行</ReadingMenuItem>
@@ -176,12 +185,9 @@ export function TextPreview({
         ) : page.isPending ? (
           <LoadingState label="正在读取文件…" />
         ) : (
-          <ReferenceSelectionMenu
-            workspaceId={workspaceId}
-            capsule={selection}
-          >
-            <div className="min-h-0 min-w-0 flex-1">{rendered ? markdown : source}</div>
-          </ReferenceSelectionMenu>
+          <div className="min-h-0 min-w-0 flex-1" onMouseUp={settleSource} onKeyUp={settleSource}>
+            {rendered ? markdown : source}
+          </div>
         )}
       </div>
       {info.size > 2 * 1024 * 1024 && (
@@ -222,6 +228,8 @@ export function TextPreview({
           </Button>
         </div>
       )}
+      <SelectionToolbar state={selection} workspaceId={workspaceId} source="file" />
     </div>
+    </TextSelectionContext.Provider>
   );
 }

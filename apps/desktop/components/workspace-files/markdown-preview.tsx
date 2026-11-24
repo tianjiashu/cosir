@@ -1,7 +1,7 @@
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { createContext, useContext, type ComponentProps, type RefObject } from "react";
-import { useDomSelection } from "@/hooks/use-dom-selection";
-import type { DomTextSelection } from "@/lib/workspace-files/dom-selection-locator";
+import { createContext, useCallback, useContext, useState, type ComponentProps, type RefObject } from "react";
+import { useDomSelectionSource, type TextSelectionState } from "@/components/text-selection/use-text-selection";
+import type { QuoteCapsule } from "@/lib/assistant/capsules";
 import { useQuery } from "@tanstack/react-query";
 import { useWatchedPaths } from "@/lib/workspace-files/file-watch-store";
 import type { ExtraProps } from "streamdown";
@@ -78,7 +78,8 @@ export function MarkdownPreview({
   path,
   anchor,
   onAnchorChange,
-  onSelectSelection,
+  selection,
+  resolveSelection,
 }: {
   /** 滚动容器；阅读器经它做就地查找与大纲跳转。 */
   hostRef: RefObject<HTMLDivElement | null>;
@@ -88,19 +89,29 @@ export function MarkdownPreview({
   /** 打开时恢复到的阅读位置（与源码视图共用）；之后内容异步变高由浏览器的滚动锚定保持。 */
   anchor?: ReadingAnchor;
   onAnchorChange: (anchor: ReadingAnchor) => void;
-  onSelectSelection?: (selection: DomTextSelection | null) => void;
+  /** 选区来源：渲染视图的选区经 `resolveSelection` 换成摘录，交给阅读器的选区浮条。 */
+  selection: TextSelectionState;
+  resolveSelection: (range: Range, host: HTMLElement) => QuoteCapsule | null;
 }) {
-  useDomSelection(host, (value) => onSelectSelection?.(value));
+  // 选区来源要元素本身（挂载后才有），`host` 这个 ref 仍交给查找与大纲。
+  const [element, setElement] = useState<HTMLDivElement | null>(null);
+  const attach = useCallback((node: HTMLDivElement | null) => {
+    host.current = node;
+    setElement(node);
+  }, [host]);
+  const resolve = useCallback((range: Range) => (element ? resolveSelection(range, element) : null), [element, resolveSelection]);
+  useDomSelectionSource(element, selection, resolve);
   useRenderedAnchor(host, anchor, onAnchorChange);
   const documentDir = parentPath(path);
   const opener = useOpenLink("document");
   return (
     <div
-      ref={host}
+      ref={attach}
+      data-slot="markdown-preview"
       className="h-full overflow-auto px-6 py-5"
     >
       {/* 限制行宽：面板铺满时正文仍保持易读的行长。 */}
-      <div className="aui-md mx-auto max-w-3xl">
+      <div className="mx-auto max-w-3xl">
         <PreviewWorkspaceContext.Provider value={workspaceId}>
           <MarkdownLinkScope opener={opener} documentDir={documentDir}>
             <StaticMarkdown components={PREVIEW_COMPONENTS}>{text}</StaticMarkdown>

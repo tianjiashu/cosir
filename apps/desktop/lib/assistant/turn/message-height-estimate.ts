@@ -44,7 +44,8 @@ const ROW_GAP = 24;
 // 用户消息：附件区在气泡上方右对齐、可折行；气泡最宽为列宽的 85%。
 const USER_CHROME = 29;
 const USER_BUBBLE_PADDING = 24;
-const USER_LINE_HEIGHT = 23;
+// 气泡正文与回复同一行高（`--prose-line-height`）。
+const USER_LINE_HEIGHT = 26;
 const USER_LINE_UNITS = 44;
 const ATTACHMENT_GAP = IMAGE_TILE_GAP;
 const IMAGE_HEIGHT = IMAGE_TILE_SIZE.regular.height;
@@ -193,14 +194,16 @@ function assistantHeight(message: ThreadMessage, sessionId?: number): number {
 }
 
 
-// Markdown（`.aui-md`，块间距 `space-y-3`）。标题按级别取行高，含上下外边距。
+// Markdown：镜像 `styles/markdown.css` 的正文排版（字号 15px、行高 `--prose-line-height` 26px、块间距
+// `--prose-gap` 12px），改排版时同步这里。只供虚拟列表首次布局，之后按实测修正，所以是近似值。
 const BLOCK_GAP = 12;
-const PROSE_LINE_HEIGHT = 28;
+const PROSE_LINE_HEIGHT = 26;
 const PROSE_LINE_UNITS = 46;
-const HEADING_HEIGHTS = [36, 32, 28, 24, 24, 24];
+// 标题：行高（字号 × 1.4）加上边距超出块间距的部分（上边距 1.25em）。
+const HEADING_HEIGHTS = [41, 36, 30, 28, 28, 28];
 const HEADING = /^\s*(#{1,6})\s/;
-// 列表项自带上下间距，比正文行高一档。
-const LIST_ITEM_HEIGHT = 36;
+// 列表项：正文行高加项距（0.25em）。
+const LIST_ITEM_HEIGHT = 30;
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
 const TABLE_ROW_HEIGHT = 37;
 const TABLE_CHROME = 3;

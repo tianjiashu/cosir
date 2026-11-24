@@ -1,5 +1,7 @@
 import type { CreateAttachment } from "@assistant-ui/core";
 
+import { joinQuoteCards, splitQuoteCards } from "./quote-cards";
+
 /** 交回输入框的内容：失败恢复与撤回用，附件只有图片，正文自带胶囊标签。 */
 export type RecoveredDraft = {
   text: string;
@@ -101,7 +103,13 @@ export async function applyEditDraftToComposer(options: {
   return result;
 }
 
-/** 恢复的消息在前，用户已经写下的草稿在后；空文本不增加分隔行。 */
+/**
+ * 恢复的消息在前，用户已经写下的草稿在后；空文本不增加分隔行。两边的摘录合进卡片区（恢复的在前），只拼其余正文：
+ * 整段直接相接时，恢复正文结尾若是没闭合的代码块，后面草稿里的摘录就落进代码、不再是卡片。
+ */
 export function mergeDraftText(recovered: string, current: string): string {
-  return recovered && current.trim() ? `${recovered}\n\n${current}` : recovered || current;
+  const restored = splitQuoteCards(recovered);
+  const kept = splitQuoteCards(current);
+  const rest = restored.rest && kept.rest.trim() ? `${restored.rest}\n\n${kept.rest}` : restored.rest || kept.rest;
+  return joinQuoteCards([...restored.quotes, ...kept.quotes], rest);
 }

@@ -7,6 +7,7 @@ import {
   type CosirHost,
   type HostPlatform,
   type HostReply,
+  HOME_DIR_ARGUMENT,
 } from "../shared/host-contract";
 
 /**
@@ -22,6 +23,7 @@ async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
 
 const host: CosirHost = {
   platform: process.platform as HostPlatform,
+  homeDir: process.argv.find((arg) => arg.startsWith(HOME_DIR_ARGUMENT))!.slice(HOME_DIR_ARGUMENT.length),
   backend: {
     snapshot: () => call(HOST_CHANNEL.backendSnapshot),
     restart: () => call(HOST_CHANNEL.backendRestart),

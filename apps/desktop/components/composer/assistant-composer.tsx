@@ -1,4 +1,4 @@
-import type { FC, PropsWithChildren } from "react";
+import { useMemo, type FC, type PropsWithChildren } from "react";
 import { unstable_useComposerInput, useAuiState, useAui } from "@assistant-ui/react";
 
 import { Button } from "@/components/ui/button";
@@ -6,6 +6,8 @@ import { useComposerFiles } from "@/components/composer/use-composer-files";
 import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
 import { useSessionComposerDraft } from "@/components/composer/use-composer-draft";
 import { ComposerEditor } from "@/components/composer/composer-editor";
+import { QuoteBar } from "@/components/conversation/quotes/quote-bar";
+import { joinQuoteCards, splitQuoteCards } from "@/lib/assistant/composer/quote-cards";
 
 /** assistant-ui composer 作为附件入口的图片集合（输入框编辑器与「+」菜单共用）；数量现读 composer 状态，不订阅。 */
 export function useComposerImageSink(): ComposerImageSink {
@@ -29,8 +31,7 @@ function useComposerSubmit(blocked: boolean): { canSubmit: boolean; submit: () =
   const canSend = useAuiState((state) => state.composer.canSend);
   return {
     canSubmit: canSend && !blocked,
-    // assistant-ui 的 send 不返回 Promise，无法在此 await：附件失败由附件适配器
-    // （image-attachment-adapter）记录并提示，assistant-ui 自行恢复草稿与发送状态。
+    // 消息（含待上传图片）当场离开输入框交给 Session 级提交；上传与 POST 的失败都由提交收回乐观消息、放回输入框。
     submit: () => {
       void aui.composer.send();
     },
@@ -83,21 +84,44 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
   const restoringDraft = useSessionComposerDraft(persistSessionDraft);
   const addFiles = useComposerFiles(useComposerImageSink());
   const { canSubmit, submit } = useComposerSubmit(submitDisabled);
+  // 正文里的摘录画成编辑器上方的摘录条，编辑器只拿其余正文；两边的改动都合回同一份正文（见 `quote-cards`）。
+  const { quotes, rest } = useMemo(() => splitQuoteCards(composer.value), [composer.value]);
+  const disabled = composer.isDisabled || hydrating || restoringDraft;
+  const send = () => {
+    if (canSubmit) submit();
+  };
 
   return (
+    <>
+    {quotes.length > 0 && (
+      <div data-slot="composer-quotes" className="flex flex-col gap-1.5 pb-2">
+        {quotes.map((quote, index) => (
+          <QuoteBar
+            key={index}
+            capsule={quote}
+            disabled={disabled}
+            onRemove={() => composer.setText(joinQuoteCards(quotes.filter((_, at) => at !== index), rest))}
+            onNoteChange={(note) => composer.setText(joinQuoteCards(
+              quotes.map((item, at) => (at === index ? { ...item, note: note || undefined } : item)),
+              rest,
+            ))}
+          />
+        ))}
+      </div>
+    )}
     <ComposerEditor
-      value={composer.value}
-      onChange={composer.setText}
-      onSubmit={() => {
-        if (canSubmit) submit();
-      }}
+      value={rest}
+      onChange={(next) => composer.setText(joinQuoteCards(quotes, next))}
+      onAddQuotes={(added, latest) => composer.setText(joinQuoteCards([...quotes, ...added], latest))}
+      onSubmit={send}
       onExternalFiles={addFiles}
       placeholder={placeholder}
       autoFocus={autoFocus}
-      disabled={composer.isDisabled || hydrating || restoringDraft}
+      disabled={disabled}
       hydrating={hydrating || restoringDraft}
       className={className}
       aria-label={ariaLabel}
     />
+    </>
   );
 };

@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { MCPServerConfiguration, MCPTransport } from "@/lib/api/extensions";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { formatMcpServerJson, parseMcpServerJson, validateMcpServerConfiguration } from "@/lib/mcp/server-config-json";
-import { emptyDraft, fromDraft, toDraft, type KeyValueRow, type ServerDraft } from "@/lib/mcp/server-draft";
+import { argsEditableAsLines, emptyDraft, fromDraft, toDraft, withArgsText, type KeyValueRow, type ServerDraft } from "@/lib/mcp/server-draft";
 import { isTestInProgress, type ServerTestState } from "@/lib/mcp/server-test-controller";
 import { MCP_TRANSPORT_LABELS } from "@/lib/mcp/transport-labels";
 import { confirmDiscardUnsaved, useUnsavedChanges } from "@/lib/unsaved-changes";
@@ -61,6 +61,8 @@ export function MCPServerEditor({ server, saving, testState, onTest, onAuthorize
   const result = shownState?.phase === "done" ? shownState.result : null;
   const inProgress = isTestInProgress(testState);
   const update = (patch: Partial<ServerDraft>) => setDraft((current) => ({ ...current, ...patch }));
+  // 文本框里敲出的参数不会含空串或换行（见 withArgsText），所以只读只来自载入的配置（打开时或从 JSON 切回）。
+  const argsLines = argsEditableAsLines(draft.args);
 
   /** 读出当前草稿并校验必填项；不合法时把原因写进弹窗、返回 null。 */
   function readDraft(): MCPServerConfiguration | null {
@@ -121,60 +123,64 @@ export function MCPServerEditor({ server, saving, testState, onTest, onAuthorize
           <DialogTitle>{server ? "编辑 MCP 服务" : "添加 MCP 服务"}</DialogTitle>
         </DialogHeader>
         <form onSubmit={save} className="space-y-4">
-          <div className="flex justify-end">
-            <SegmentedControl aria-label="配置编辑模式" value={editorMode} options={EDITOR_MODE_OPTIONS} onValueChange={selectEditorMode} className="w-36" />
-          </div>
-          {editorMode === "json" ? (
-            <Textarea
-              aria-label="MCP JSON 配置"
-              value={jsonDraft}
-              onChange={(event) => setJsonDraft(event.target.value)}
-              className="min-h-72 font-mono text-xs"
-              spellCheck={false}
-            />
-          ) : (
-            <>
-              <label className="block space-y-1.5 text-sm">
-                <span>服务名称</span>
-                <Input required value={draft.name} onChange={(event) => update({ name: event.target.value })} />
-              </label>
-              <label className="block space-y-1.5 text-sm">
-                <span>传输方式</span>
-                <NativeSelect value={draft.transport} onChange={(event) => update({ transport: event.target.value as MCPTransport })}>
-                  <option value="stdio">{MCP_TRANSPORT_LABELS.stdio}（本机进程）</option>
-                  <option value="sse">{MCP_TRANSPORT_LABELS.sse}</option>
-                  <option value="streamable_http">{MCP_TRANSPORT_LABELS.streamable_http}</option>
-                </NativeSelect>
-              </label>
-              {draft.transport === "stdio" ? (
-                <>
-                  <label className="block space-y-1.5 text-sm">
-                    <span>启动命令</span>
-                    <Input required value={draft.command} onChange={(event) => update({ command: event.target.value })} placeholder="例如：uvx" />
-                  </label>
-                  <label className="block space-y-1.5 text-sm">
-                    <span>命令参数</span>
-                    <Textarea value={draft.argsText} onChange={(event) => update({ argsText: event.target.value })} placeholder="每行一个参数" className="min-h-20 font-mono text-xs" />
-                  </label>
-                  <KeyValueRows label="环境变量" itemLabel="环境变量" addLabel="添加变量" rows={draft.envRows} onChange={(envRows) => update({ envRows })} />
-                </>
-              ) : (
-                <>
-                  <label className="block space-y-1.5 text-sm">
-                    <span>HTTP endpoint</span>
-                    <Input required inputMode="url" value={draft.url} onChange={(event) => update({ url: event.target.value })} placeholder="https://example.com/mcp" />
-                    <span className="text-muted-foreground block text-xs">密钥等值可写成 {"${变量名}"} 或 {"${变量名:-默认值}"}，从本机环境读取。</span>
-                  </label>
-                  <KeyValueRows label="HTTP headers（可选）" itemLabel="HTTP header" addLabel="添加 header" rows={draft.headerRows} onChange={(headerRows) => update({ headerRows })} />
-                  <OAuthFields draft={draft} onChange={update} />
-                </>
-              )}
-              <label className="flex items-center justify-between rounded-lg border px-3 py-2.5 text-sm">
-                <span>启用此服务</span>
-                <Switch checked={draft.enabled} aria-label="启用此服务" onClick={() => update({ enabled: !draft.enabled })} />
-              </label>
-            </>
-          )}
+          {/* 保存期间只读：草稿只在本组件里，成功回执即关闭弹窗，等待期间的输入没有去处。 */}
+          <fieldset disabled={saving} className="m-0 min-w-0 space-y-4 border-0 p-0">
+            <div className="flex justify-end">
+              <SegmentedControl aria-label="配置编辑模式" value={editorMode} options={EDITOR_MODE_OPTIONS} onValueChange={selectEditorMode} className="w-36" />
+            </div>
+            {editorMode === "json" ? (
+              <Textarea
+                aria-label="MCP JSON 配置"
+                value={jsonDraft}
+                onChange={(event) => setJsonDraft(event.target.value)}
+                className="min-h-72 font-mono text-xs"
+                spellCheck={false}
+              />
+            ) : (
+              <>
+                <label className="block space-y-1.5 text-sm">
+                  <span>服务名称</span>
+                  <Input required value={draft.name} onChange={(event) => update({ name: event.target.value })} />
+                </label>
+                <label className="block space-y-1.5 text-sm">
+                  <span>传输方式</span>
+                  <NativeSelect value={draft.transport} onChange={(event) => update({ transport: event.target.value as MCPTransport })}>
+                    <option value="stdio">{MCP_TRANSPORT_LABELS.stdio}（本机进程）</option>
+                    <option value="sse">{MCP_TRANSPORT_LABELS.sse}</option>
+                    <option value="streamable_http">{MCP_TRANSPORT_LABELS.streamable_http}</option>
+                  </NativeSelect>
+                </label>
+                {draft.transport === "stdio" ? (
+                  <>
+                    <label className="block space-y-1.5 text-sm">
+                      <span>启动命令</span>
+                      <Input required value={draft.command} onChange={(event) => update({ command: event.target.value })} placeholder="例如：uvx" />
+                    </label>
+                    <label className="block space-y-1.5 text-sm">
+                      <span>命令参数</span>
+                      <Textarea value={draft.argsText} readOnly={!argsLines} onChange={(event) => setDraft((current) => withArgsText(current, event.target.value))} placeholder="每行一个参数" className="min-h-20 font-mono text-xs" />
+                      {!argsLines && <span className="text-muted-foreground block text-xs">参数里有空值或换行，按行编辑会改变它们，请切到 JSON 编辑。</span>}
+                    </label>
+                    <KeyValueRows label="环境变量" itemLabel="环境变量" addLabel="添加变量" rows={draft.envRows} onChange={(envRows) => update({ envRows })} />
+                  </>
+                ) : (
+                  <>
+                    <label className="block space-y-1.5 text-sm">
+                      <span>HTTP endpoint</span>
+                      <Input required inputMode="url" value={draft.url} onChange={(event) => update({ url: event.target.value })} placeholder="https://example.com/mcp" />
+                      <span className="text-muted-foreground block text-xs">密钥等值可写成 {"${变量名}"} 或 {"${变量名:-默认值}"}，从本机环境读取。</span>
+                    </label>
+                    <KeyValueRows label="HTTP headers（可选）" itemLabel="HTTP header" addLabel="添加 header" rows={draft.headerRows} onChange={(headerRows) => update({ headerRows })} />
+                    <OAuthFields draft={draft} onChange={update} />
+                  </>
+                )}
+                <label className="flex items-center justify-between rounded-lg border px-3 py-2.5 text-sm">
+                  <span>启用此服务</span>
+                  <Switch checked={draft.enabled} aria-label="启用此服务" onClick={() => update({ enabled: !draft.enabled })} />
+                </label>
+              </>
+            )}
+          </fieldset>
           {formError && <Alert tone="destructive">{formError}</Alert>}
           <MCPServerStatusLine
             status={null}

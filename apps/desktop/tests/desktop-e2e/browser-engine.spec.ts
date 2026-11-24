@@ -69,6 +69,16 @@ const PAGES: Record<string, string> = {
     <div style="position: absolute; left: 300px; top: 300px; width: 100px; height: 40px"
       ondragover="event.preventDefault()" ondrop="document.title = 'dropped ' + event.dataTransfer.getData('text')">Drop here</div></body>`,
   "/keys": `<title>Keys</title><input aria-label="Code" onkeyup="window.keys = (window.keys || 0) + 1; document.title = window.keys + ' ' + this.value">`,
+  "/clear": `<title>Clear</title><input aria-label="Query" value="old"> <div contenteditable role="textbox" aria-label="Rich">old rich</div>
+    <script>
+      const kinds = [];
+      addEventListener("beforeinput", (event) => kinds.push(event.inputType));
+      addEventListener("input", () => { document.title = [document.querySelector("input").value, document.querySelector("[contenteditable]").textContent, kinds.join(",")].join("|"); });
+    </script>`,
+  "/wait-frames": `<title>Wait frames</title><p>Main ready</p><iframe src="/wait-frame-late" title="Late"></iframe><div id="host"></div>
+    <script>document.getElementById("host").attachShadow({ mode: "open" }).innerHTML = "<p>Shadow ready</p>";</script>`,
+  "/wait-frame-late": `<p id="state">Loading inside</p><script>setTimeout(() => { document.getElementById("state").textContent = "Frame ready"; }, 3000)</script>`,
+  "/wait-words": `<title>Wait words</title><p>Done</p><a href="/Loading">Reload</a><button>Submit</button><button aria-label="Close">x</button><img alt="logo" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="><p hidden>HiddenWord</p>`,
   "/frames": `<title>Frames</title><body style="margin: 0"><div style="height: 900px">Top of the page</div>
     <iframe src="/frame-same" title="Same"></iframe>
     <iframe id="cross" title="Cross" style="width: 400px; height: 200px"></iframe>
@@ -567,6 +577,53 @@ test("acts on the page through refs: select, wait, type and submit", async () =>
   // 目的：导航后旧 ref 一律失效；潜在缺陷：旧序号恰好指到新页面的另一个元素，点错东西。
   const stale = pageOf(await call("act", { sessionId: 20, actions: [clickOn(load)] })) as ActPage;
   expect(stale).toMatchObject({ execution: { interruption: { code: "REF_STALE" } }, title: "Done" });
+});
+
+// 目的：清空走浏览器原生编辑（页面收到真实的 beforeinput），清空后不填字也成立；潜在缺陷：在页面里改 value 再补发事件，
+// React 的值追踪看不到变化、onChange 不触发，界面空了、应用状态还是旧值；富文本编辑器同样只认原生编辑。
+test("clears a field with native editing, with or without new text", async () => {
+  const page = pageOf(await call("navigate", { sessionId: 25, target: { url: `${origin}/clear` }, context: context(roomy) }));
+  const type = (ref: string, text: string): PageAction => ({ type: "type", ref, text, clear: true, submit: false, keyByKey: false });
+  const query = refOf(page.snapshot, "textbox", "Query");
+  const rich = refOf(page.snapshot, "textbox", "Rich");
+  const cleared = pageOf(await call("act", { sessionId: 25, actions: [type(query, ""), type(rich, "")] })) as ActPage;
+  expect(cleared).toMatchObject({ execution: { interruption: null }, title: "||deleteContentForward,deleteContentForward" });
+  const replaced = pageOf(await call("act", { sessionId: 25, actions: [type(query, "new"), type(rich, "fresh")] })) as ActPage;
+  expect(replaced.title).toMatch(/^new\|fresh\|/);
+});
+
+// 目的：等待的范围与快照相同，iframe 与 Shadow DOM 里的文字也等得到；潜在缺陷：只查主文档，快照里看得见的文字等不到，
+// 等它消失却立即误报成功（加载中的提示还在就往下做）。
+test("waits for text inside iframes and shadow DOM, both appearing and gone", async () => {
+  pageOf(await call("navigate", { sessionId: 26, target: { url: `${origin}/wait-frames` }, context: context(roomy) }));
+  const waited = pageOf(await call("act", { sessionId: 26, actions: [
+    { type: "wait_for", textGone: "Loading inside", seconds: 8 },
+    { type: "wait_for", text: "Frame ready", seconds: 1 },
+    { type: "wait_for", text: "Shadow ready", seconds: 1 },
+  ] })) as ActPage;
+  expect(waited.execution).toMatchObject({ steps: Array(3).fill({ status: "done" }), interruption: null });
+  const stays = pageOf(await call("act", { sessionId: 26, actions: [{ type: "wait_for", textGone: "Shadow ready", seconds: 1 }] })) as ActPage;
+  expect(stays.execution.interruption).toMatchObject({ code: "WAIT_TIMEOUT" });
+  // 跨站 iframe 在另一个进程（子会话）里。
+  pageOf(await call("navigate", { sessionId: 26, target: { url: `${origin}/frames` }, context: context(roomy) }));
+  const cross = pageOf(await call("act", { sessionId: 26, actions: [{ type: "wait_for", text: "Send", seconds: 3 }] })) as ActPage;
+  expect(cross.execution.interruption).toBeNull();
+});
+
+// 目的：等的是页面上的字；潜在缺陷：拿快照的展示行比，链接地址、角色名、ref 等快照语法被当成页面上的字——
+// 等出现立即成功、等消失必然超时。
+test("waits for words on the page, not for the snapshot's syntax", async () => {
+  pageOf(await call("navigate", { sessionId: 27, target: { url: `${origin}/wait-words` }, context: context(roomy) }));
+  const statusOf = async (condition: { text: string } | { textGone: string }) =>
+    (pageOf(await call("act", { sessionId: 27, actions: [{ type: "wait_for", ...condition, seconds: 0.3 }] })) as ActPage).execution.steps[0]!.status;
+  for (const word of ["Done", "Reload", "Submit", "Close", "logo"]) {
+    expect(await statusOf({ text: word }), word).toBe("done");
+    expect(await statusOf({ textGone: word }), word).toBe("failed");
+  }
+  for (const word of ["Loading", "button", "link", "image", "ref=", "url=", "HiddenWord"]) {
+    expect(await statusOf({ text: word }), word).toBe("failed");
+    expect(await statusOf({ textGone: word }), word).toBe("done");
+  }
 });
 
 // 目的：长页面后半段的元素也能读到并操作，ref 跨快照不变；潜在缺陷：截断之后的内容对 Agent 永远不可见。

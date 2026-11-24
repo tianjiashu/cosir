@@ -59,6 +59,11 @@ function AgentEditor({
       if (!saved) return;
       // 等列表刷新后再关闭编辑器，避免返回时短暂显示旧列表。
       await queryClient.invalidateQueries({ queryKey: queryKeys.agents(workspaceId) });
+      // 保存期间的新编辑由会话保留并记为未保存：编辑器留着，关掉就把它们丢了。
+      if (session.store.getState().dirty) {
+        notify.success("已保存，之后的修改尚未保存");
+        return;
+      }
       notify.success("配置更改成功");
       onClose();
     },

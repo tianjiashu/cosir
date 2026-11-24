@@ -1,6 +1,7 @@
 import path from "node:path";
-import { BrowserWindow, nativeTheme, session, shell } from "electron";
+import { app, BrowserWindow, nativeTheme, session, shell } from "electron";
 
+import { HOME_DIR_ARGUMENT } from "../shared/host-contract";
 import { iconPath } from "./app-icon";
 import { APP_ORIGIN } from "./app-protocol";
 import { logDesktopEvent } from "./desktop-log";
@@ -45,6 +46,7 @@ export function createMainWindow(): BrowserWindow {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      additionalArguments: [`${HOME_DIR_ARGUMENT}${app.getPath("home")}`],
     },
   });
   restrictNavigation(window);

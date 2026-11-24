@@ -165,8 +165,13 @@ export type BrowserTabContext = { limits: BrowserTabLimits; downloadDir: string 
 export const THEME_SOURCES = ["system", "light", "dark"] as const;
 type ThemeSource = (typeof THEME_SOURCES)[number];
 
+/** 主窗口 preload 从命令行参数读主目录（沙箱 preload 没有 `os`）；main 在 `window.ts` 按同一前缀写入。 */
+export const HOME_DIR_ARGUMENT = "--cosir-home-dir=";
+
 export type CosirHost = {
   platform: HostPlatform;
+  /** 用户主目录的绝对路径：链接里的 `~` 按它展开（`lib/links/resolve-link.ts`），与后端文件工具同一约定。 */
+  homeDir: string;
   backend: {
     snapshot(): Promise<BackendSnapshot>;
     /** 停止当前后端、重置崩溃恢复次数并重新启动，等到就绪或失败才返回。 */

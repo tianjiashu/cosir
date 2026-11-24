@@ -49,6 +49,7 @@ export async function installFakeDesktopHost(
       },
       cosirHost: {
         platform,
+        homeDir: "/home/e2e",
         backend: {
           snapshot: async () => snapshot,
           restart: async () => snapshot,

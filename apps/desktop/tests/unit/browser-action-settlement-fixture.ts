@@ -29,6 +29,8 @@ export type FixtureConfig = {
   rejectBeforeDispatch?: (method: string, params: Record<string, unknown>, counts: Record<string, number>) => Error | undefined;
   /** 命令派发后页面弹出弹窗（命令以 DIALOG_OPEN 失败，但已派发）。 */
   dialogOnDispatch?: (method: string, params: Record<string, unknown>, counts: Record<string, number>) => boolean;
+  /** 快照读到的页面里有没有要等的文字（`mentions`）；Error 表示读取失败。 */
+  mentions?: boolean | Error;
   /** 动作开始时页面已停住（本标签或同进程别的标签有弹窗）。 */
   pausedBy?: HostMethodError | null;
   initialDialog?: BrowserDialog | null;
@@ -160,6 +162,13 @@ export function makeSession(config: FixtureConfig = {}): Fixture {
       return () => set.delete(handler);
     },
     settle: async () => undefined,
+    // 与 `BrowserTab.mentions` 一致：读快照不在 effect 里，页面停住时经闸门失败。
+    mentions: async () => {
+      const paused = pausedError();
+      if (paused) throw paused;
+      if (config.mentions instanceof Error) throw config.mentions;
+      return config.mentions ?? false;
+    },
     toInput: ({ x, y }: { x: number; y: number }) => ({ x, y }),
     geometry: async () => ({ visual: { x: 0, y: 0, width: 100, height: 50 }, deviceRatio: 1, pageScale: 1, content: { width: 100, height: 50 } }),
     fileChooser: () => config.fileChooser ?? null,

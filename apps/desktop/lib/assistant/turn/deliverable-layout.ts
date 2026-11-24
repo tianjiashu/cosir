@@ -1,5 +1,5 @@
 import { IMAGE_TILE_SIZE } from "@/lib/image/tile-size";
-import type { TransportDeliverable, TransportMessage, TransportToolCallPart } from "../contract";
+import type { TransportDeliverable, TransportToolCallPart } from "../contract";
 
 /** 交付卡里的一项：记录本身与来自哪次调用。 */
 export type DeliverableEntry = { deliverable: TransportDeliverable; toolCallId: string };
@@ -82,18 +82,4 @@ export function deliverableRows(card: Pick<DeliverablesBatch, "items">): { tileR
     cardHeight: groups.card?.size.height ?? 0,
     capsuleRows: Math.ceil(groups.capsules.length / CAPSULES_PER_ROW),
   };
-}
-
-/**
- * 已加载消息里工作区内交付文件的路径（排序去重）：会话订阅界面据此登记文件监听，卡片的现读信息随文件变化刷新。
- * 只认已加载的消息——没加载的历史不渲染卡片，不需要监听；目录与工作区外的条目不现读，也不登记。
- */
-export function workspaceDeliverablePaths(messages: readonly TransportMessage[]): string[] {
-  const paths = new Set<string>();
-  for (const message of messages)
-    for (const part of message.parts)
-      if (part.type === "tool-call")
-        for (const deliverable of part.deliverables ?? [])
-          if (deliverable.type === "file" && deliverable.workspacePath !== null) paths.add(deliverable.workspacePath);
-  return [...paths].sort();
 }

@@ -57,21 +57,21 @@ describe("estimateMessageHeight", () => {
   });
 
   it("用户消息：气泡按折行增高，胶囊按可读名称计入正文", () => {
-    expect(estimateMessageHeight(user(text("问题")))).toBe(100);
-    expect(estimateMessageHeight(user(text("请帮我看看。".repeat(20))))).toBe(146);
+    expect(estimateMessageHeight(user(text("问题")))).toBe(103);
+    expect(estimateMessageHeight(user(text("请帮我看看。".repeat(20))))).toBe(155);
     // 文件、引用、Skill 是正文里的行内胶囊，不再有独立的附件区。
-    expect(estimateMessageHeight(user(text('<file path="/tmp/a.md" />')))).toBe(100);
-    expect(estimateMessageHeight(user(text('前文 <ref path="src/main.py" lines="12-14" /> 后文')))).toBe(100);
+    expect(estimateMessageHeight(user(text('<file path="/tmp/a.md" />')))).toBe(103);
+    expect(estimateMessageHeight(user(text('前文 <ref path="src/main.py" lines="12-14" /> 后文')))).toBe(103);
     expect(estimateMessageHeight(user(image))).toBe(149);
   });
 
   // 目的：长用户消息默认收起，估计按收起高度计；潜在缺陷：按全文估计时长消息滚进视口会被修正数百像素，页面跳动。
   it("用户消息：正文超过收起高度时按开合封顶，开合实时读取", () => {
     const long = user(text(Array.from({ length: 30 }, (_, line) => `第${line}行`).join("\n")));
-    // 53 行外框 + 24 气泡内边距 + 240 收起高度 + 28「显示全部」一行；展开为 30 行 × 23。
+    // 53 行外框 + 24 气泡内边距 + 240 收起高度 + 28「显示全部」一行；展开为 30 行 × 26。
     expect(estimateMessageHeight(long, 9)).toBe(53 + 24 + 240 + 28);
     useDisclosureStore.getState().set(9, "user:u", true);
-    expect(estimateMessageHeight(long, 9)).toBe(53 + 24 + 30 * 23 + 28);
+    expect(estimateMessageHeight(long, 9)).toBe(53 + 24 + 30 * 26 + 28);
     useDisclosureStore.getState().clearSession(9);
     expect(estimateMessageHeight(long, 9)).toBe(53 + 24 + 240 + 28);
   });
@@ -86,10 +86,10 @@ describe("estimateMessageHeight", () => {
 
   it("回答：标题按级别、列表项、表格行、代码行分别计高", () => {
     const base = estimateMessageHeight(assistant(text("一段话")));
-    expect(base).toBe(104);
-    expect(estimateMessageHeight(assistant(text("# 标题\n\n一段话")))).toBe(152);
+    expect(base).toBe(102);
+    expect(estimateMessageHeight(assistant(text("# 标题\n\n一段话")))).toBe(155);
     expect(estimateMessageHeight(assistant(text("### 标题\n\n一段话")))).toBe(144);
-    expect(estimateMessageHeight(assistant(text("- 一\n- 二\n- 三")))).toBe(184);
+    expect(estimateMessageHeight(assistant(text("- 一\n- 二\n- 三")))).toBe(166);
     expect(estimateMessageHeight(assistant(text(table(6)))) - estimateMessageHeight(assistant(text(table(3))))).toBe(3 * 37);
     expect(estimateMessageHeight(assistant(text(code(15)))) - estimateMessageHeight(assistant(text(code(5))))).toBe(205);
   });

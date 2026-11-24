@@ -35,8 +35,8 @@ export function AgentMessageRow({ id, text, source, sessionId }: { id: string; t
       {source.report && <ReportBadge report={source.report} />}
       <DisclosureChevron open={open} />
     </button>
-    {open && <div data-slot="agent-message-body" className="min-w-0 pl-5 text-chat leading-7 wrap-break-word">
-      <div className="aui-md !space-y-3 leading-6"><StaticMarkdown>{text}</StaticMarkdown></div>
+    {open && <div data-slot="agent-message-body" className="min-w-0 pl-5 wrap-break-word">
+      <StaticMarkdown>{text}</StaticMarkdown>
       <div className="text-muted-foreground mt-2 flex items-center gap-2 text-xs">
         <CopyIconButton label="复制消息原文" getText={() => text} logEvent="agent_message_copy_failed" logData={{ sessionId, messageId: id }} />
         <button type="button" className="hover:text-foreground" onClick={() => void openSession(source.sessionId, source.name)}>打开来源会话</button>

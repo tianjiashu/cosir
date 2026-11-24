@@ -1,13 +1,13 @@
 import { readState, seedState } from "./transport-fixtures";
 import { expect, test } from "@playwright/test";
 import { installFakeDesktopHost } from "./fake-desktop-host";
-import { API_ORIGIN, REAL_BACKEND_ORIGIN as REAL_BACKEND } from "./e2e-env";
+import { API_ORIGIN } from "./e2e-env";
 import { WorkspaceFilesBackend } from "./workspace-files-backend";
 
 const backend = new WorkspaceFilesBackend();
 
-test.beforeAll(async ({ request }) => {
-  await backend.start(request);
+test.beforeAll(async () => {
+  await backend.start();
 });
 test.afterAll(async () => {
   await backend.stop();
@@ -31,16 +31,16 @@ test("真实后端：内部链接、原子替换实时更新、搜索和退出",
   await expect(surface.getByText("不可展开", { exact: true })).toBeVisible();
   await surface.getByText("main.py", { exact: true }).click();
   await expect(surface.locator(".cm-content")).toContainText("before update");
-  await request.post(`${REAL_BACKEND}/__test__/files/update`);
+  await backend.api.post("/__test__/files/update");
   await expect(surface.locator(".cm-content")).toContainText("after update", {
     timeout: 10_000,
   });
   await expect(surface.getByText("文件已更新", { exact: true })).toBeVisible();
-  await request.post(`${REAL_BACKEND}/__test__/files/delete`);
+  await backend.api.post("/__test__/files/delete");
   // 真实后端返回 FILE_NOT_FOUND：中性的「文件不存在」而不是错误；文件恢复后由监听自动刷新，无需重新读取。
   await expect(surface.getByText("文件不存在", { exact: true })).toBeVisible();
   await expect(surface.getByRole("alert")).toHaveCount(0);
-  await request.post(`${REAL_BACKEND}/__test__/files/update`);
+  await backend.api.post("/__test__/files/update");
   await expect(surface.locator(".cm-content")).toContainText("after update", {
     timeout: 10000,
   });
@@ -76,7 +76,7 @@ test("真实后端：Markdown 相对图片更新、大文件从末尾反向阅�
   await expect
     .poll(() => asset.evaluate((img: HTMLImageElement) => img.naturalWidth))
     .toBe(20);
-  await request.post(`${REAL_BACKEND}/__test__/files/image-update`);
+  await backend.api.post("/__test__/files/image-update");
   await expect
     .poll(() => asset.evaluate((img: HTMLImageElement) => img.naturalWidth), {
       timeout: 10000,
@@ -101,9 +101,7 @@ test("真实后端：Markdown 相对图片更新、大文件从末尾反向阅�
       async () =>
         (
           await (
-            await request.get(
-              `${REAL_BACKEND}/__test__/files/watch-status`,
-            )
+            await backend.api.get("/__test__/files/watch-status")
           ).json()
         ).subscriptions,
     )
@@ -148,35 +146,30 @@ async function referenceWorkspace(
   return page.getByTestId("workspace-files-surface");
 }
 
-test("引用：行范围指针打开当前文件定位，文件删除后提示，拒绝发送保留胶囊与撤销", async ({
+test("引用：文件指针打开当前文件，文件删除后提示，拒绝发送保留胶囊与撤销", async ({
   page,
   request,
 }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${REAL_BACKEND}/__test__/files/update`);
+  await backend.api.post("/__test__/files/update");
   const surface = await referenceWorkspace(page);
   await surface
     .getByRole("button", { name: "展开目录 src", exact: true })
     .click();
   await surface.getByRole("treeitem", { name: "main.py", exact: true }).click();
-  await surface
-    .locator(".cm-lineNumbers .cm-gutterElement")
-    .filter({ hasText: /^1$/ })
-    .click();
-  await surface.getByRole("button", { name: "添加选区到对话", exact: true }).click();
+  // 没有选区时「添加到对话」添加整个文件：`<ref>` 指针，不携带正文。
+  await surface.getByRole("button", { name: "添加文件到对话", exact: true }).click();
   const input = page.getByLabel("消息输入");
   const capsule = input.locator("[data-workspace-reference]");
   await expect(capsule).toHaveCount(1);
-  // 引用只是路径 + 行范围指针：不携带选取时的正文。
   await expect(capsule).toContainText("main.py");
-  await expect(capsule).toContainText("L1");
-  // 点击引用打开当前文件并定位到行，而不是展示消息里的片段快照。
+  // 点击引用打开当前文件，而不是展示消息里的片段快照。
   await surface.getByRole("button", { name: "切换目录面板", exact: true }).click();
   await capsule.getByRole("button").first().click();
   await expect(surface.locator(".cm-content")).toContainText("after update");
   await expect(surface.getByText("消息里的引用片段", { exact: false })).toHaveCount(0);
   // 文件被删后点击引用：提示不存在，不留下坏标签。
-  await request.post(`${REAL_BACKEND}/__test__/files/delete`);
+  await backend.api.post("/__test__/files/delete");
   await surface.getByRole("button", { name: "关闭标签" }).click();
   await capsule.getByRole("button").first().click();
   await expect(page.getByText("工作区里没有 src/main.py")).toBeVisible();
@@ -201,7 +194,7 @@ test("引用：行范围指针打开当前文件定位，文件删除后提示�
   const keptCapsule = kept.locator("[data-workspace-reference]");
   await expect(keptCapsule).toHaveCount(1);
   const sentBody = JSON.stringify(sent);
-  expect(sentBody).toContain('<ref path=\\"src/main.py\\" lines=\\"1\\" />');
+  expect(sentBody).toContain('<ref path=\\"src/main.py\\" />');
   expect(sentBody).not.toContain("after update");
   await page.keyboard.press("Escape");
   await keptCapsule.getByRole("button", { name: /移除引用/ }).click();
@@ -220,7 +213,7 @@ test("引用：@ 搜索去重、设置页隐藏文件并恢复草稿", async ({
   request,
 }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${REAL_BACKEND}/__test__/files/update`);
+  await backend.api.post("/__test__/files/update");
   await referenceWorkspace(page);
   const input = page.getByLabel("消息输入");
   await input.fill("@src/main");
@@ -363,12 +356,12 @@ test("引用：Session 混合草稿切换后恢复附件并可移除", async ({ 
   await expect(input).toHaveText("草稿乙");
 });
 
-test("引用：目录与文件通过右键添加、选中文本可附带问题", async ({
+test("引用：目录与文件通过右键添加；源码选区摘录并写批注", async ({
   page,
   request,
 }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${REAL_BACKEND}/__test__/files/update`);
+  await backend.api.post("/__test__/files/update");
   const surface = await referenceWorkspace(page);
   await surface
     .getByText("src", { exact: true })
@@ -391,15 +384,18 @@ test("引用：目录与文件通过右键添加、选中文本可附带问题",
     .click();
   await surface
     .getByRole("treeitem", { name: "main.py", exact: true }).click();
+  // 点行号选中第 1 行（真实点击）：浮条出现，写批注、回车成为一条带位置的摘录。
   await surface
     .locator(".cm-lineNumbers .cm-gutterElement")
     .filter({ hasText: /^1$/ })
-    .click({ button: "right" });
-  await page.getByRole("menuitem", { name: "解释", exact: true }).click();
-  await page.keyboard.press("Escape");
-  await expect(input.locator("[data-workspace-reference]")).toHaveCount(3);
-  await expect(capsules.filter({ hasText: "main.py" })).toContainText("L1");
-  await expect(input).toContainText("请解释这段内容。");
+    .click();
+  await page.getByRole("button", { name: "摘录", exact: true }).click();
+  await page.getByLabel("写批注").fill("这行做什么");
+  await page.getByLabel("写批注").press("Enter");
+  const quote = page.locator('[data-slot="composer-quotes"] [data-quote-bar]');
+  await expect(quote).toContainText("main.py · L1");
+  await expect(quote).toContainText("带批注");
+  await expect(capsules).toHaveCount(2);
 });
 
 for (const theme of ["light", "dark"]) {
@@ -408,8 +404,8 @@ for (const theme of ["light", "dark"]) {
     request,
   }, testInfo) => {
     await request.post(`${API_ORIGIN}/__test__/reset`);
-    const visibilityUrl = `${REAL_BACKEND}/workspaces/${backend.workspaceId}/files/visibility`;
-    await request.patch(visibilityUrl, {
+    const visibilityUrl = `/workspaces/${backend.workspaceId}/files/visibility`;
+    await backend.api.patch(visibilityUrl, {
       data: {
         paths: ["src", "alias", "README.md", "src/main.py"],
         ignored: false,
@@ -499,7 +495,7 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
   request,
 }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  const api = `${REAL_BACKEND}/workspaces/${backend.workspaceId}/files/visibility`;
+  const api = `/workspaces/${backend.workspaceId}/files/visibility`;
   const surface = await referenceWorkspace(page);
   const src = surface.getByText("src", { exact: true });
   await src.click();
@@ -556,7 +552,7 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
   await search.fill("src/main.py");
   await search.press("Enter");
   await expect.poll(() => started).toBe(true);
-  await request.patch(api, {
+  await backend.api.patch(api, {
     data: { paths: ["src/main.py", "src/loop"], ignored: true },
   });
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
@@ -576,7 +572,7 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
   await expect(
     surface.getByText("此目录中的内容已被忽略", { exact: true }),
   ).toBeVisible();
-  await request.patch(api, {
+  await backend.api.patch(api, {
     data: { paths: ["src/main.py", "src/loop"], ignored: false },
   });
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
@@ -591,7 +587,7 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
   await expect(
     surface.getByText("没有匹配的文件", { exact: true }),
   ).toBeVisible();
-  await request.patch(api, {
+  await backend.api.patch(api, {
     data: { paths: ["src/main.py"], ignored: false },
   });
 });
@@ -599,7 +595,7 @@ test("浏览器忽略：多选、失败保留、空目录和旧搜索取消", as
 
 test("真实后端：文件地址与文件名查找分离，候选定位和字面路径", async ({ page, request }, testInfo) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
-  await request.post(`${REAL_BACKEND}/__test__/files/link-fixture`);
+  await backend.api.post("/__test__/files/link-fixture");
   await backend.route(page);
   await request.post(`${API_ORIGIN}/__test__/seed-tool-trace`);
   const state = await readState(request, 42);
@@ -629,10 +625,12 @@ test("真实后端：文件地址与文件名查找分离，候选定位和字�
   await surface.getByRole("button", { name: "API.md docs/brand/API.md", exact: true }).click();
   const editor = surface.getByRole("textbox", { name: "只读文件 API.md" });
   await expect(editor).toBeVisible();
-  await expect(surface.getByRole("button", { name: "添加选区到对话", exact: true })).toBeVisible();
+  // 带行号打开选中的行算选区：Ctrl/Cmd+L 打开摘录评论框，回车成为带位置的摘录。
+  await expect(surface.getByRole("button", { name: "摘录选区到对话", exact: true })).toBeVisible();
   await editor.focus();
   await page.keyboard.press("ControlOrMeta+l");
-  await expect(page.getByRole("textbox", { name: "消息输入" })).toContainText("L2");
+  await page.getByLabel("写批注").press("Enter");
+  await expect(page.locator('[data-slot="composer-quotes"] [data-quote-bar]')).toContainText("L2");
   await message.getByRole("link", { name: "root", exact: true }).click();
   await expect(surface).toContainText("ROOT_API");
   await message.getByRole("link", { name: "guide", exact: true }).click();

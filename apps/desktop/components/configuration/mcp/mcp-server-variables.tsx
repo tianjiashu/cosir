@@ -97,18 +97,21 @@ export function MCPServerVariables({ server, onSaved }: { server: MCPServer; onS
           </DialogHeader>
           <form onSubmit={save} className="space-y-3">
             <p className="text-muted-foreground text-xs">值保存在本机的系统 .env 里，配置文件中只保留变量名；保存后会重新测试引用它们的服务。</p>
-            {editable.map((variable) => (
-              <label key={variable.name} className="block space-y-1.5 text-sm">
-                <span className="font-mono">{variable.name}{variable.source === "unset" && variable.has_default && <span className="text-muted-foreground ml-2 font-sans text-xs">可留空，使用默认值</span>}</span>
-                <Input
-                  type="password"
-                  autoComplete="off"
-                  placeholder={variable.source === "cosir" ? "已设置，留空则保持不变" : undefined}
-                  value={values[variable.name] ?? ""}
-                  onChange={(event) => setValues((current) => ({ ...current, [variable.name]: event.target.value }))}
-                />
-              </label>
-            ))}
+            {/* 保存期间只读：成功回执即关闭对话框，等待期间的输入没有去处。 */}
+            <fieldset disabled={mutation.isPending} className="m-0 min-w-0 space-y-3 border-0 p-0">
+              {editable.map((variable) => (
+                <label key={variable.name} className="block space-y-1.5 text-sm">
+                  <span className="font-mono">{variable.name}{variable.source === "unset" && variable.has_default && <span className="text-muted-foreground ml-2 font-sans text-xs">可留空，使用默认值</span>}</span>
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    placeholder={variable.source === "cosir" ? "已设置，留空则保持不变" : undefined}
+                    value={values[variable.name] ?? ""}
+                    onChange={(event) => setValues((current) => ({ ...current, [variable.name]: event.target.value }))}
+                  />
+                </label>
+              ))}
+            </fieldset>
             {error && <Alert tone="destructive">{error}</Alert>}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setOpen(false)}>取消</Button>

@@ -15,11 +15,15 @@
     ``find_files``，可以是目录也可以是文件）。在读一份文件的规则上再拒绝 ``/proc`` 等伪文件树；
     从上层目录遍历时跳过受保护子树由搜索遍历负责（``search/file_walker``）。
 - 受保护路径的事实源是 ``app.core.permission.protected_paths``；读写两侧只在这三个入口消费。
+- 开头的 ``~`` 是用户主目录（模型沿用 shell 写法，配置页也这样显示位置），三个入口在解析前统一展开；
+  ``Path`` 本身不展开它，曾把 ``~/x`` 当作工作区下名为 ``~`` 的目录（写入因此落进工作区）。``~user``、
+  环境变量写法不展开，照常按相对路径处理。前端链接解析遵守同一约定（``lib/links/resolve-link.ts``）。
 - ``blocked_device_reason`` 返回空串表示允许；写类工具自行在解析前后各调一次。
 - 后端自行拼出的内部落盘路径（工具产物）不经本解析器，越界防护由 ``atomic_write_text`` 的
   ``containment_root`` 承担。
 """
 
+import os
 from pathlib import Path
 from typing import ClassVar
 
@@ -148,7 +152,7 @@ class PathResolver:
             return None, input_error
         try:
             workspace = RootDirectory.at(self.workspace_root)
-            raw = Path(path)
+            raw = self._expand_home(path)
             resolved = (raw if raw.is_absolute() else workspace.path / raw).resolve()
             if self._in_scratch(resolved):
                 if ProtectedPaths.current().denies_write(resolved, own_scratch=self.scratch_dir):
@@ -198,6 +202,14 @@ class PathResolver:
         except FileNotFoundError:
             return False
 
+    @staticmethod
+    def _expand_home(path: str) -> Path:
+        """只展开开头的 ``~`` 与 ``~/…``（Windows 上 ``~\\…`` 同样）；其余原样。"""
+
+        if path == "~" or (path[:1] == "~" and path[1:2] in {"/", os.sep}):
+            return Path.home() / path[2:]
+        return Path(path)
+
     def _resolve_unbounded(self, path: str) -> tuple[Path | None, str]:
         """解析用户路径但不强制项目根 containment，是两个读入口的共同底座。
 
@@ -212,7 +224,7 @@ class PathResolver:
             return None, input_error
         try:
             root = self.workspace_root.resolve()
-            raw = Path(path)
+            raw = self._expand_home(path)
             target = raw if raw.is_absolute() else root / raw
             resolved = target.resolve()
         except (OSError, RuntimeError, ValueError) as exc:

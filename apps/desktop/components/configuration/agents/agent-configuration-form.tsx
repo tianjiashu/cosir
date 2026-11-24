@@ -152,7 +152,7 @@ export function AgentConfigurationForm({
         <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">保存范围</span><NativeSelect value={scope} disabled={identityLocked || saving} onChange={(event) => session.setScope(event.target.value as ConfigurationScope)}><option value="workspace">当前工作区</option><option value="system">系统级</option></NativeSelect></label>
       )}
       <div className="grid gap-4 @md:grid-cols-2">
-        <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">Agent ID</span><Input value={form.agent_id} disabled={identityLocked} onChange={(event) => setField("agent_id", event.target.value)} placeholder="主 Agent 调用时使用的 Agent ID" /></label>
+        <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">Agent ID</span><Input value={form.agent_id} disabled={identityLocked || saving} onChange={(event) => setField("agent_id", event.target.value)} placeholder="主 Agent 调用时使用的 Agent ID" /></label>
         <label className="space-y-1.5 text-sm"><span className="text-muted-foreground">角色</span><Input value={form.role} onChange={(event) => setField("role", event.target.value)} placeholder="子 Agent 的身份定义" /></label>
       </div>
       <label className="block space-y-1.5 text-sm"><span className="text-muted-foreground">描述</span><Textarea className="h-24 min-h-24 max-h-24 resize-none overflow-y-auto" value={form.description} onChange={(event) => setField("description", event.target.value)} placeholder="向主 Agent 说明这个子 Agent 负责什么" /></label>

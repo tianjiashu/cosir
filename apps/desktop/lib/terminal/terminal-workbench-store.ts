@@ -38,6 +38,12 @@ type TerminalWorkbenchStore = {
   select: (sessionId: number, terminalSessionId: string | null) => void;
   /** 打开面板、选中会话并请求焦点：工具卡片「在终端中打开」用。 */
   reveal: (sessionId: number, terminalSessionId: string) => void;
+  /**
+   * 用户关闭的会话已被后端收下：它仍是选中项时换到其他活跃会话，没有其他活跃会话才清掉选中并收起面板
+   * （同 VS Code，再次打开会自动新建）。按此刻的状态判断而不是按点击时的标签：回执到达前用户可能已新建并
+   * 选中别的会话，snapshot 也可能还没把关掉的会话移走，所以下一项只在关掉的会话之外挑。
+   */
+  closedByUser: (sessionId: number, terminalSessionId: string) => void;
   consumeAutoCreate: (sessionId: number) => void;
   /** Session（或其所在工作区）删除成功后丢弃该 Session 的桶，避免已删除 Session 的状态常驻。 */
   forget: (sessionIds: readonly number[]) => void;
@@ -127,6 +133,12 @@ export const useTerminalWorkbenchStore = create<TerminalWorkbenchStore>((set) =>
       focusToken: current.focusToken + 1,
       acknowledgedEnds: endedIds(current.sessions),
     })),
+    closedByUser: (sessionId, terminalSessionId) => update(sessionId, (current) => {
+      if (current.activeSessionId !== null && current.activeSessionId !== terminalSessionId) return {};
+      const next = current.sessions?.find((session) => session.terminalSessionId !== terminalSessionId && isActiveTerminalSession(session));
+      if (next) return { activeSessionId: next.terminalSessionId, focusToken: current.focusToken + 1 };
+      return { activeSessionId: null, open: false };
+    }),
     consumeAutoCreate: (sessionId) => update(sessionId, () => ({ autoCreate: false })),
     forget: (sessionIds) => set((state) => {
       if (!sessionIds.some((sessionId) => sessionId in state.bySession)) return state;

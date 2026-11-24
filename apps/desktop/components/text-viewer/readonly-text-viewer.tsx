@@ -23,6 +23,8 @@ export type TextViewerHandle = {
   revealLine: (line: number) => void;
   /** 打开 CodeMirror 自带的跳转到行面板（输入行号或 `行:列`）。 */
   goToLine: () => void;
+  /** 当前选区末端的屏幕矩形（选区浮条的锚点）；没有选区时为 null。 */
+  selectionRect: () => DOMRect | null;
 };
 
 export type TextSelection = {
@@ -75,6 +77,13 @@ export function ReadonlyTextViewer({
     refresh: (term) => (view.current ? refreshFindInEditor(view.current, term) : null),
     goToLine: () => {
       if (view.current) gotoLine(view.current);
+    },
+    selectionRect: () => {
+      const instance = view.current;
+      const range = instance?.state.selection.main;
+      if (!instance || !range || range.empty) return null;
+      const box = instance.coordsAtPos(range.to, -1);
+      return box && new DOMRect(box.left, box.top, Math.max(1, box.right - box.left), box.bottom - box.top);
     },
     revealLine: (line) => {
       const instance = view.current;

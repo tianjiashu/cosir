@@ -1,5 +1,5 @@
 import { userErrorMessage } from "@/lib/errors/user-error-message";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as pdfjs from "pdfjs-dist";
 import {
   ChevronLeftIcon,
@@ -20,12 +20,11 @@ import { ErrorState } from "@/components/ui/state-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
-import { ReferenceSelectionMenu } from "@/components/workspace-references/selection-actions";
+import { SelectionToolbar } from "@/components/text-selection/selection-toolbar";
+import { TextSelectionContext, useDomSelectionSource, useTextSelection } from "@/components/text-selection/use-text-selection";
 import { pdfPageOfRange } from "@/lib/workspace-files/dom-selection-locator";
-import { workspaceFileRef, workspacePageRef } from "@/lib/workspace-references/ref-capsule";
-import type { RefCapsule } from "@/lib/assistant/capsules";
+import { fileSelectionQuote } from "@/lib/workspace-files/file-selection-quote";
 import { workspaceFiles, useFilesStore } from "@/lib/workspace-files/workspace-files-store";
-import { useDomSelection } from "@/hooks/use-dom-selection";
 import { AddToChatButton } from "./add-to-chat-button";
 import { useBackendRuntime } from "@/lib/backend/use-backend-runtime";
 import { useReadingCommand } from "@/lib/workspace-files/reading-commands";
@@ -61,16 +60,18 @@ export default function PdfPreview({
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(0);
   const [error, setError] = useState("");
-  // 文本层里选中的文字作为「当前页」引用添加到对话（与 Markdown 渲染视图同一规则）。
-  const [selection, setSelection] = useState<RefCapsule | null>(null);
-  useDomSelection(container, (value) => {
-    if (!value || !container.current) {
-      setSelection(null);
-      return;
-    }
-    const pageNumber = pdfPageOfRange(value.range, container.current);
-    setSelection(pageNumber !== null ? workspacePageRef(info.path, pageNumber) : workspaceFileRef(info.path));
-  });
+  // 文本层里选中的文字是摘录，位置是起点所在页；选区来源要元素本身，`container` 这个 ref 仍交给 pdf.js。
+  const selection = useTextSelection();
+  const [containerElement, setContainerElement] = useState<HTMLDivElement | null>(null);
+  const attachContainer = useCallback((node: HTMLDivElement | null) => {
+    container.current = node;
+    setContainerElement(node);
+  }, []);
+  const resolveSelection = useCallback((range: Range) => {
+    const page = containerElement && pdfPageOfRange(range, containerElement);
+    return fileSelectionQuote(info.path, range.toString(), page ? { page: String(page) } : {});
+  }, [containerElement, info.path]);
+  useDomSelectionSource(containerElement, selection, resolveSelection);
   // 引用带页码打开时跳到该页；跳完清除，之后照常按滚动位置恢复。
   const revealPage = useFilesStore((s) => workspaceFiles(s.byWorkspace, workspaceId).positions[info.path]?.revealPage);
   useEffect(() => {
@@ -80,7 +81,9 @@ export default function PdfPreview({
     viewer.currentPageNumber = Math.min(Math.max(revealPage, 1), pages);
     useFilesStore.getState().position(workspaceId, info.path, { revealPage: undefined });
   }, [revealPage, pages, workspaceId, info.path]);
-  useEffect(() => setSelection(null), [info.path, info.version]);
+  // 换文件或文件变了，旧选区作废。
+  const closeSelection = selection.close;
+  useEffect(() => closeSelection(), [closeSelection, info.path, info.version]);
   const [showSearch, setShowSearch] = useState(false);
   const [focusKey, setFocusKey] = useState(0);
   const [findResult, setFindResult] = useState<FindResult | null>(null);
@@ -194,6 +197,7 @@ export default function PdfPreview({
     });
   };
   return (
+    <TextSelectionContext.Provider value={selection}>
     <div className="flex h-full min-h-0 flex-col">
       <ReadingToolbar navigation={navigation} info={info}
         actions={<>
@@ -210,7 +214,7 @@ export default function PdfPreview({
             aria-expanded={showSearch} onClick={() => showSearch ? closeSearch() : setShowSearch(true)}>
             <SearchIcon />
           </TooltipIconButton>
-          <AddToChatButton workspaceId={workspaceId} path={info.path} selection={selection} />
+          <AddToChatButton workspaceId={workspaceId} path={info.path} />
         </>}
         // 页面默认随面板宽度适配，缩放是少用操作，放进「更多」让窄面板的工具栏保持一行。
         options={<>
@@ -248,12 +252,12 @@ export default function PdfPreview({
           <FindBar label="在 PDF 中查找" className="absolute top-2 right-4 z-10" result={findResult}
             onSearch={find} onClose={closeSearch} focusKey={focusKey} />
         )}
-        <ReferenceSelectionMenu workspaceId={workspaceId} capsule={selection}>
-          <div ref={container} className="absolute inset-0 overflow-auto">
-            <div ref={viewerElement} className="pdfViewer" />
-          </div>
-        </ReferenceSelectionMenu>
+        <div ref={attachContainer} className="absolute inset-0 overflow-auto">
+          <div ref={viewerElement} className="pdfViewer" />
+        </div>
+        <SelectionToolbar state={selection} workspaceId={workspaceId} source="file" />
       </div>
     </div>
+    </TextSelectionContext.Provider>
   );
 }

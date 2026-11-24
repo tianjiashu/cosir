@@ -204,9 +204,9 @@ function SkillFileReader({ workspaceId, skill, path, onOpenFile }: { workspaceId
           ? <ErrorState className="m-4" message={userErrorMessage(fileQuery.error, "读取文件失败")} onRetry={() => void fileQuery.refetch()} retryLabel="重新读取" />
           : <LoadingState label="正在读取文件…" />
       ) : view === "rendered" ? (
-        <div ref={markdownHost} className="aui-md min-h-0 flex-1 overflow-y-auto px-6 py-5 leading-6">
+        <div ref={markdownHost} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
           <MarkdownLinkScope opener={skillLinks} documentDir={parentPath(path)}>
-            <StaticMarkdown className="!space-y-3">{text}</StaticMarkdown>
+            <StaticMarkdown>{text}</StaticMarkdown>
           </MarkdownLinkScope>
         </div>
       ) : (

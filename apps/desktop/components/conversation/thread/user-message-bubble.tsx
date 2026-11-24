@@ -26,7 +26,7 @@ export function UserMessageBubble({ sessionId, messageId, children }: { sessionI
   const contentId = useId();
   const collapsed = clipped && !open;
   return (
-    <div data-slot="user-message-bubble" className="bg-muted text-foreground rounded-2xl px-4 py-3 text-chat leading-relaxed wrap-break-word [--inline-code-background:color-mix(in_oklab,currentColor_10%,transparent)]">
+    <div data-slot="user-message-bubble" className="bg-muted text-foreground rounded-2xl px-4 py-3 text-chat wrap-break-word [--inline-code-background:color-mix(in_oklab,currentColor_10%,transparent)]">
       <div
         ref={contentRef}
         id={contentId}

@@ -12,14 +12,13 @@ import { useTerminalWorkbenchStore } from "@/lib/terminal/terminal-workbench-sto
 const NOTICE_MS = 4000;
 
 /**
- * 用户新建 / 关闭终端会话：HTTP 命令、失败短提示、日志与之后的选中 / 收起。
+ * 用户新建 / 关闭终端会话：HTTP 命令、失败短提示与日志；之后的选中 / 收起交给工作台 store。
  *
  * 会话列表只读 snapshot：命令成功后不改本地列表，等 snapshot 回推；这里只调整选中与面板开合。
  */
 export function useTerminalSessionActions(
   sessionId: number,
   sessions: readonly TerminalSessionEntry[] | null,
-  tabs: readonly TerminalTab[],
 ) {
   const [creating, setCreating] = useState(false);
   const [notice, setNotice] = useState<TerminalNotice | null>(null);
@@ -90,16 +89,8 @@ export function useTerminalSessionActions(
       if (!confirmed) return;
     }
     void frontendLog("INFO", "terminal_session_closed", "用户关闭终端会话", { data: { sessionId, terminalSessionId: session.terminalSessionId } });
-    // 用户主动关闭的会话不留在标签栏（与「正在看的会话自己退出」不同），选中相邻的活跃会话；
-    // 关掉的是最后一个活跃会话时收起面板（同 VS Code），再次打开会自动新建，不留空面板。
-    const store = useTerminalWorkbenchStore.getState();
-    const next = tabs.find((candidate) => candidate.session.terminalSessionId !== session.terminalSessionId && isActiveTerminalSession(candidate.session));
-    if (!next) {
-      store.select(sessionId, null);
-      store.setOpen(sessionId, false);
-    } else if (store.bySession[sessionId]?.activeSessionId === session.terminalSessionId) {
-      store.select(sessionId, next.session.terminalSessionId);
-    }
+    // 用户主动关闭的会话不留在标签栏（与「正在看的会话自己退出」不同）；之后选谁、要不要收起面板由 store 按此刻状态定。
+    useTerminalWorkbenchStore.getState().closedByUser(sessionId, session.terminalSessionId);
   };
 
   return { creating, notice, createSession, closeTab };

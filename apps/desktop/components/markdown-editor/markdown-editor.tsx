@@ -152,9 +152,9 @@ export function MarkdownEditor({
       </EditorFindScope>
       {rendered && (
         <div ref={preview} className="absolute inset-0 overflow-auto px-6 py-5">
-          <div className="aui-md mx-auto max-w-3xl leading-6">
+          <div className="mx-auto max-w-3xl">
             <MarkdownLinkScope opener={links}>
-              <StaticMarkdown className="!space-y-3">{value}</StaticMarkdown>
+              <StaticMarkdown>{value}</StaticMarkdown>
             </MarkdownLinkScope>
           </div>
         </div>

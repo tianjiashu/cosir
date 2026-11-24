@@ -1,3 +1,4 @@
+import { serializeCapsule } from "@/lib/assistant/capsules";
 import { describe, expect, it } from "vitest";
 import type { JSONContent } from "@tiptap/core";
 import {
@@ -12,6 +13,18 @@ import {
 } from "@/components/composer/composer-document";
 
 describe("composer document conversion", () => {
+  it("摘录胶囊是一个原子节点：多行原文、代码与标签都在节点里，往返后正文不变（撤回、草稿据此还原）", () => {
+    const quote = { kind: "quote" as const, text: "## 标题\n```py\nx = `a`\n```\n<file path=\"/x\" />" };
+    const value = `第一行\n${serializeCapsule(quote)} 这里改一下`;
+    const document = parseComposerDocument(value);
+
+    expect(document.content).toHaveLength(2);
+    expect(document.content?.[1]?.content?.map((node) => node.type)).toEqual(["capsuleToken", "text"]);
+    expect(document.content?.[1]?.content?.[0]?.attrs?.capsule).toEqual(quote);
+    expect(serializeComposerDocument(document)).toBe(value);
+  });
+
+
   it.each([
     "",
     "普通文本",

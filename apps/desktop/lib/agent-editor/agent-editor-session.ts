@@ -59,7 +59,7 @@ function inputFromForm(form: AgentEditorForm): AgentConfigurationInput {
  * - `initial` 为已有配置时 `saved` 为 true：以它为基线，首存即 update。
  * - 工具生成的草稿（`saved: false` 且有 `initial`）从一开始就是未保存内容；空白新建在真正修改前不算未保存。
  * - 保存应答只推进提交时那份快照的基线，期间产生的新编辑保留并继续算作未保存。
- * - 同一时刻只允许一次保存，进行中的重复调用直接返回 false；保存期间范围不可改。
+ * - 同一时刻只允许一次保存，进行中的重复调用直接返回 false；身份（Agent ID 与范围）自首存开始锁定，其余字段保存期间照常可改。
  * - 校验失败或持久化失败直接抛出，由调用方的 mutation 呈现；会话除 `saving` 外不变。
  */
 export function createAgentEditorSession(options: {
@@ -84,8 +84,13 @@ export function createAgentEditorSession(options: {
 
   return {
     store,
+    /**
+     * Agent ID 与范围同属身份：保存中或已保存后改不动（视图同时禁用控件）。首存期间改了它，回执锁定的是
+     * 已提交的 ID 而表单显示新值，之后的 update 就会以旧 ID 寻址、请求体却带新 ID。
+     */
     setField<K extends keyof AgentEditorForm>(key: K, value: AgentEditorForm[K]) {
       const state = store.getState();
+      if (key === "agent_id" && (state.saving || state.savedAgentId !== null)) return;
       const next = { ...state.form, [key]: value };
       store.setState({ form: next, dirty: dirtyAgainst(next, state.scope, state.baseline) });
     },

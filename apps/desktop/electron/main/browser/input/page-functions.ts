@@ -4,7 +4,7 @@ import { certainNoEffect, type BrowserOperation } from "../operation";
 import type { ScrollDirection } from "../params";
 
 /**
- * 在页面里执行的固定函数（滚动、清空字段、选择下拉项）与用它们实现的动作。函数体是本模块里写死的字符串，
+ * 在页面里执行的固定函数（滚动、选中字段内容、选择下拉项）与用它们实现的动作。函数体是本模块里写死的字符串，
  * 不对外开放任意脚本；约定返回空串表示成功，否则是问题说明。
  */
 
@@ -48,9 +48,16 @@ const SCROLL_AREA = `function (direction) {
   return (isPage ? "the page" : "this area") + " is already at the " + edge;
 }`;
 
-export const CLEAR_FIELD = `function () {
-  if ("value" in this) { this.value = ""; this.dispatchEvent(new Event("input", { bubbles: true })); }
-  else if (this.isContentEditable) { this.textContent = ""; this.dispatchEvent(new Event("input", { bubbles: true })); }
+/**
+ * 选中字段的全部内容，交给随后的原生输入替换或删除（`typeText`）。不在页面里改 `value` / `textContent` 再补发事件：
+ * React 的值追踪会把这种赋值当成「没变」而不触发 onChange，富文本编辑器只认原生编辑（实测）。
+ */
+export const SELECT_CONTENTS = `function () {
+  if (typeof this.select === "function") { this.select(); return ""; }
+  const range = document.createRange();
+  range.selectNodeContents(this);
+  getSelection().removeAllRanges();
+  getSelection().addRange(range);
   return "";
 }`;
 

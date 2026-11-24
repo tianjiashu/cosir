@@ -107,3 +107,87 @@ test("草稿的测试结论只对应测过的那份内容：改了任何一处�
   await dialog.getByRole("button", { name: "移除 环境变量" }).click();
   await expect(success).toBeVisible();
 });
+
+test("MCP 编辑框保存期间只读：回执关闭弹窗时不会吞掉等待期间的输入", async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const saved: { name: string }[][] = [];
+  await page.route(`${API_ORIGIN}/workspaces/7/configuration/mcp-servers`, async (route) => {
+    if (route.request().method() !== "PUT") return route.fulfill({ json: listing });
+    const body = route.request().postDataJSON() as { servers: { name: string }[] };
+    saved.push(body.servers);
+    await gate;
+    await route.fulfill({ json: listing });
+  });
+  await page.route(`${API_ORIGIN}/workspaces/7/configuration/mcp-servers/test`, (route) => route.fulfill({
+    json: { status: "completed", success: true, tools: [], error: null, failure_kind: null, needs_sign_in: false, agent_available: true },
+  }));
+  await page.goto("/workspaces/7/configuration/mcp");
+  await page.getByRole("button", { name: "filesystem", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByPlaceholder("每行一个参数").fill("filesystem\n/tmp");
+  await dialog.getByRole("button", { name: "保存服务" }).click();
+  await expect.poll(() => saved.length).toBe(1);
+  for (const field of [dialog.getByRole("textbox", { name: "服务名称" }), dialog.getByPlaceholder("每行一个参数"), dialog.getByRole("switch", { name: "启用此服务" })]) {
+    await expect(field).toBeDisabled();
+  }
+  release();
+  await expect(dialog).toHaveCount(0);
+});
+
+test("填写变量的对话框保存期间只读", async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  await page.route(`${API_ORIGIN}/workspaces/7/configuration/mcp-servers`, (route) => route.fulfill({ json: listing }));
+  await page.route(`${API_ORIGIN}/workspaces/7/configuration/mcp-servers/test`, (route) => route.fulfill({
+    json: { status: "completed", success: true, tools: [], error: null, failure_kind: null, needs_sign_in: false, agent_available: true },
+  }));
+  await page.route(/\/configuration\/environment(\/variables)?$/, async (route) => {
+    if (route.request().method() === "GET") return route.fallback();
+    await gate;
+    await route.fulfill({ json: {} });
+  });
+  await page.goto("/workspaces/7/configuration/mcp");
+  await page.getByRole("button", { name: "填写" }).click();
+  const dialog = page.getByRole("dialog");
+  const value = dialog.locator('input[type="password"]');
+  await value.fill("token-1");
+  await dialog.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(value).toBeDisabled();
+  release();
+  await expect(dialog).toHaveCount(0);
+});
+
+test("JSON 保存的空参数与含换行的参数：表单里只读，只改服务名时原样保存", async ({ page }) => {
+  const args = ["--label", "", "line1\nline2"];
+  const saved: string[][] = [];
+  await page.route(`${API_ORIGIN}/workspaces/7/configuration/mcp-servers`, async (route) => {
+    if (route.request().method() === "PUT") saved.push((route.request().postDataJSON() as { servers: { name: string; args: string[] }[] }).servers.find((item) => item.name === "renamed")!.args);
+    await route.fulfill({ json: { servers: [server("filesystem", { args, enabled: false, status: "disabled" })] } });
+  });
+  await page.goto("/workspaces/7/configuration/mcp");
+  await page.getByRole("button", { name: "filesystem", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByPlaceholder("每行一个参数")).not.toBeEditable();
+  await expect(dialog.getByText("参数里有空值或换行，按行编辑会改变它们，请切到 JSON 编辑。")).toBeVisible();
+  await dialog.getByRole("textbox", { name: "服务名称" }).fill("renamed");
+  await dialog.getByRole("button", { name: "保存服务" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(saved).toEqual([args]);
+});
+
+test("stdio 切到 HTTP 后只提交 HTTP 的字段：隐藏的启动命令与参数不随之保存", async ({ page }) => {
+  const saved: Record<string, unknown>[] = [];
+  await page.route(`${API_ORIGIN}/workspaces/7/configuration/mcp-servers`, async (route) => {
+    if (route.request().method() === "PUT") saved.push((route.request().postDataJSON() as { servers: Record<string, unknown>[] }).servers[0]);
+    await route.fulfill({ json: { servers: [server("demo", { args: ["--label", "${DEMO_LABEL}"], env: { KEY: "v" }, enabled: false, status: "disabled" })] } });
+  });
+  await page.goto("/workspaces/7/configuration/mcp");
+  await page.getByRole("button", { name: "demo", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("combobox", { name: "传输方式" }).selectOption("streamable_http");
+  await dialog.getByLabel("HTTP endpoint").fill("http://127.0.0.1:8080/mcp");
+  await dialog.getByRole("button", { name: "保存服务" }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(saved[0]).toMatchObject({ transport: "streamable_http", url: "http://127.0.0.1:8080/mcp", command: "", args: [], env: {} });
+});

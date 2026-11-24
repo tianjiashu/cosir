@@ -80,4 +80,22 @@ describe("AgentEditorSession", () => {
     expect(session.store.getState().form.description).toBe("保存期间的修改");
     expect(session.store.getState().dirty).toBe(true);
   });
+
+  it("Agent ID 是身份：首存进行中与保存后都改不动，之后的 update 地址与请求体一致", async () => {
+    const session = createAgentEditorSession({ initial: draft, saved: false, scope: "workspace" });
+    let resolve!: (value: AgentConfiguration) => void;
+    const first = session.save(() => new Promise((done) => { resolve = done; }));
+    session.setField("agent_id", "renamed");
+    expect(session.store.getState().form.agent_id).toBe("reviewer");
+    resolve(savedConfiguration("reviewer"));
+    await first;
+
+    session.setField("agent_id", "renamed");
+    session.setField("role", "资深审查");
+    const persist = vi.fn<PersistAgent>(async (input) => savedConfiguration(input.agent_id));
+    await session.save(persist);
+    const [input, target] = persist.mock.calls[0];
+    expect(input.agent_id).toBe("reviewer");
+    expect(target.agentId).toBe("reviewer");
+  });
 });

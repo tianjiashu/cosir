@@ -9,8 +9,8 @@ import { WorkspaceFilesBackend } from "./workspace-files-backend";
  */
 const backend = new WorkspaceFilesBackend();
 
-test.beforeAll(async ({ request }) => {
-  await backend.start(request);
+test.beforeAll(async () => {
+  await backend.start();
 });
 test.afterAll(async () => {
   await backend.stop();

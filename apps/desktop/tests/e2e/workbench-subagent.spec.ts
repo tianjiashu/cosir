@@ -91,3 +91,44 @@ test("两个并行子 Agent 分别订阅，切换回标签页重新订阅并保�
   await expect.poll(() => reviewerSubscriptions(page)).toBe(2);
   expect(await testerSubscriptions(page)).toBe(1);
 });
+
+test("工作台首存子 Agent 草稿：保存中 Agent ID 不可改，之后的更新以同一 ID 寻址", async ({ page, request }) => {
+  await seedState(request, 42, completedState(3, { id: "command", parts: [{ type: "text", text: "配置草稿" }] }, [
+    { presentation: "activity", type: "tool-call", toolCallId: "agent-draft", toolName: "propose_agent_configuration", args: {}, status: "completed", awaitingUser: false, display_data: { kind: "agent-configuration-draft", status: "draft", agent_id: "draft_first", role: "review", description: "audit", system_prompt: "Review." } },
+    { type: "text", text: "配置草稿已准备。" },
+  ] as never));
+  await page.route("**/tools/groups", (route) => route.fulfill({ json: { groups: [] } }));
+  const saved = (body: Record<string, unknown>) => ({ ...body, source: "custom", deletable: true, validation_status: "valid", validation_error: null });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const creates: string[] = [];
+  const updates: { path: string; agentId: string }[] = [];
+  await page.route(/\/configuration\/agents$/, async (route) => {
+    if (route.request().method() !== "POST") return route.fulfill({ json: [] });
+    const body = route.request().postDataJSON();
+    creates.push(body.agent_id);
+    await gate;
+    await route.fulfill({ json: saved(body) });
+  });
+  await page.route(/\/configuration\/agents\/[^/]+$/, async (route) => {
+    if (route.request().method() !== "PUT") return route.fallback();
+    const body = route.request().postDataJSON();
+    updates.push({ path: new URL(route.request().url()).pathname.split("/").at(-1)!, agentId: body.agent_id });
+    await route.fulfill({ json: saved(body) });
+  });
+  await page.goto("/sessions/42");
+  await page.getByRole("button", { name: "编辑配置" }).click();
+  const panel = page.getByRole("complementary", { name: "工作台" });
+  const agentId = panel.getByRole("textbox", { name: "Agent ID" });
+  await expect(agentId).toHaveValue("draft_first");
+  await panel.getByRole("button", { name: "保存配置" }).click();
+  await expect.poll(() => creates).toEqual(["draft_first"]);
+  await expect(agentId).toBeDisabled();
+  // 其余字段在保存期间照常可改，保留到回执之后。
+  await panel.getByRole("textbox", { name: "角色" }).fill("review2");
+  release();
+  await expect(panel.getByRole("button", { name: "保存配置" })).toBeEnabled();
+  await expect(agentId).toHaveValue("draft_first");
+  await panel.getByRole("button", { name: "保存配置" }).click();
+  await expect.poll(() => updates).toEqual([{ path: "draft_first", agentId: "draft_first" }]);
+});

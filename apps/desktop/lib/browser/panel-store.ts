@@ -10,7 +10,7 @@ type TabRef = Pick<BrowserTabSummary, "tabId" | "sessionId" | "openerId">;
  * 浏览器面板正在看哪个 Session 的标签、各 Session 选中的是哪个标签。
  *
  * 默认看当前会话；工具卡片上的「打开」可能来自子 Agent 的对话，所以打开时连同标签所属的 Session 一起
- * 指定。只是界面状态，不持久化。
+ * 指定。指定只在当次对话里有效，换对话时由 `useDockPanels` 回到跟随（`followConversation`）。只是界面状态，不持久化。
  *
  * 选中是这里的事实，标签列表是宿主事实（`host-state-store` 镜像）。两者的交汇只有标签列表变化这一刻：本模块订阅
  * 镜像的每次替换，按前后两份列表执行 `followTabChanges`（弹窗开出的标签跟随、关闭后回到来源），不轮询、

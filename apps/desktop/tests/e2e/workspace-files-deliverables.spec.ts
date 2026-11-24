@@ -1,7 +1,7 @@
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 import type { TransportMessagePart } from "../../lib/assistant/contract";
-import { API_ORIGIN, REAL_BACKEND_ORIGIN } from "./e2e-env";
+import { API_ORIGIN } from "./e2e-env";
 import { completedState, seedState } from "./transport-fixtures";
 import { WorkspaceFilesBackend } from "./workspace-files-backend";
 
@@ -12,18 +12,18 @@ import { WorkspaceFilesBackend } from "./workspace-files-backend";
 const backend = new WorkspaceFilesBackend();
 const SESSION_ID = 42;
 
-test.beforeAll(async ({ request }) => {
-  await backend.start(request);
+test.beforeAll(async () => {
+  await backend.start();
 });
 test.afterAll(async () => {
   await backend.stop();
 });
 
-async function subscriptions(request: APIRequestContext): Promise<number> {
-  return (await (await request.get(`${REAL_BACKEND_ORIGIN}/__test__/files/watch-status`)).json()).subscriptions;
+async function subscriptions(): Promise<number> {
+  return (await (await backend.api.get("/__test__/files/watch-status")).json()).subscriptions;
 }
 
-test("面板关着时会话订阅工作区；文件更新后胶囊大小跟着变，删除后显示「已不存在」；离开会话订阅归零", async ({ page, request }) => {
+test("面板关着时会话订阅工作区；文件更新后胶囊大小跟着变，删除后胶囊与侧栏「产出」都显示「已不存在」且不可点；离开会话订阅归零", async ({ page, request }) => {
   await request.post(`${API_ORIGIN}/__test__/reset`);
   await request.post(`${API_ORIGIN}/__test__/seed-session`, { data: { sessionId: SESSION_ID, title: "交付物现读" } });
   const present: TransportMessagePart = {
@@ -39,14 +39,22 @@ test("面板关着时会话订阅工作区；文件更新后胶囊大小跟着�
   const capsule = page.locator('[data-slot="deliverable-capsule"]').filter({ hasText: "main.py" });
   // 交付时记的是 999 B；现读到的是夹具文件的真实大小。
   await expect(capsule).toContainText("23 B");
-  await expect.poll(() => subscriptions(request)).toBe(1);
+  await expect.poll(() => subscriptions()).toBe(1);
+  await expect(page.locator('[data-slot="aside-deliverable"]').filter({ hasText: "main.py" })).not.toHaveAttribute("data-unavailable", "true");
 
-  await request.post(`${REAL_BACKEND_ORIGIN}/__test__/files/update`);
+  await backend.api.post("/__test__/files/update");
   await expect(capsule).toContainText("22 B", { timeout: 10_000 });
-  await request.post(`${REAL_BACKEND_ORIGIN}/__test__/files/delete`);
+  await backend.api.post("/__test__/files/delete");
   await expect(capsule).toContainText("已不存在", { timeout: 10_000 });
   await expect(capsule).toHaveAttribute("data-unavailable", "true");
+  // 侧栏「产出」读同一份现状：置灰、写明原因、不可点，点了也不弹「工作区里没有」。
+  const asideRow = page.locator('[data-slot="aside-deliverable"]').filter({ hasText: "main.py" });
+  await expect(asideRow).toHaveAttribute("data-unavailable", "true");
+  await expect(asideRow).toContainText("已不存在");
+  await expect(asideRow).toHaveAttribute("aria-disabled", "true");
+  await asideRow.click({ force: true });
+  await expect(page.getByText("工作区里没有")).toHaveCount(0);
 
   await page.goto("/");
-  await expect.poll(() => subscriptions(request)).toBe(0);
+  await expect.poll(() => subscriptions()).toBe(0);
 });

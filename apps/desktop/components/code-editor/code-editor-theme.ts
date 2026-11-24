@@ -50,7 +50,7 @@ export const editorTheme = [
       background: "color-mix(in oklab, var(--muted-foreground) 25%, transparent)",
     },
     "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
-      background: "color-mix(in oklab, var(--info) 25%, transparent)",
+      background: "var(--selection)",
     },
     ".cm-selectionMatch": {
       backgroundColor: "color-mix(in oklab, var(--info) 12%, transparent)",

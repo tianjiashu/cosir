@@ -47,11 +47,10 @@ export function useSessionAssistantTransportRuntime(
   // 气泡里没有编辑框：编辑是撤回后放回主输入框再发送，提交只有新消息这一条路。
   const onNew = useCallback((message: AppendMessage) => {
     const command = toAddMessageCommand(message);
-    // 上传期间最后一张图被移除后，这一批可能已无内容；在提交边界收敛，不创建空消息或驱动 Agent。
+    // 没有内容的消息（只有空白正文）在提交边界收敛，不创建空消息或驱动 Agent。
     if (!command.message.parts.some((part) => part.type !== "text" || part.text.trim().length > 0)) return;
     const current = optionsRef.current;
     // 后端暂停时 UI 仍存活，AUI 已清空提交草稿；在当前 UI 入口恢复并提示，不发送 HTTP。
-    // 附件上传后提交也走此入口。
     if (!getBackendRuntimeSnapshot().available) {
       return current.onError?.(new UserFacingError("本机后端暂不可用，请稍后重试"), [command]);
     }

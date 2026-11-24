@@ -17,7 +17,10 @@ import { chunks } from "./text-chunks";
  */
 
 export type PageTextLine = {
+  /** 给模型读的一行：带标题的 `#`、列表的 `- `、`[image: …]`、`[iframe…]` 等记号。 */
   text: string;
+  /** 同一行的页面文字本身（不带上面的记号）；`wait_for` 按它判断，记号不是页面上的字。 */
+  plain: string;
   /** 与视口里看得见的区域相交（行里任一段文字、标题或图片在视口里）。 */
   visible: boolean;
   /** 标题行：筛选视图据此给命中的行带上所在小节。 */
@@ -54,20 +57,28 @@ export function buildPageText(document: SnapshotDocument): PageText {
   const lines: PageTextLine[] = [];
   let frames = 0;
   let current = "";
+  let plain = "";
   let visible = false;
   /** 正在拼一个表格单元格：块级元素只隔一个空格，不断行。 */
   let inCell = false;
 
+  const collapse = (value: string) => value.replace(/\s+/g, " ").trim();
   const flush = () => {
-    const text = current.replace(/\s+/g, " ").trim();
-    if (text && text !== "-") chunks(text).forEach((chunk) => lines.push({ text: chunk, visible, heading: false }));
+    const text = collapse(current);
+    // 拆成几行时页面文字整段记在第一行（与大纲的文字行一样），跨块边界的一句话也能找到。
+    if (text && text !== "-") chunks(text).forEach((chunk, index) => lines.push({ text: chunk, plain: index === 0 ? collapse(plain) : "", visible, heading: false }));
     current = "";
+    plain = "";
     visible = false;
   };
-  /** 原样拼接：文字节点的名字保留了源码里的首尾空格（实测），空格只来自页面本身，不在行内元素之间另加。 */
-  const append = (piece: string, seen: boolean) => {
+  /**
+   * 原样拼接：文字节点的名字保留了源码里的首尾空格（实测），空格只来自页面本身，不在行内元素之间另加。
+   * `marker` 是这里加的记号（列表符、图片说明），只进展示、不进页面文字。
+   */
+  const append = (piece: string, seen: boolean, marker = false) => {
     if (!piece) return;
     current += piece;
+    plain += marker ? " " : piece;
     visible ||= seen;
   };
   const lineBreak = () => (inCell ? append(" ", false) : flush());
@@ -102,13 +113,13 @@ export function buildPageText(document: SnapshotDocument): PageText {
         if (content) render(content);
         else {
           frames += 1;
-          lines.push({ text: `[iframe${name ? ` "${name}"` : ""}: ${frameContentNote(content)}]`, visible: inView(node), heading: false });
+          lines.push({ text: `[iframe${name ? ` "${name}"` : ""}: ${frameContentNote(content)}]`, plain: "", visible: inView(node), heading: false });
         }
         flush();
         return;
       }
       if (!node.ignored && IMAGE_ROLES.has(role)) {
-        if (name) append(` [image: ${name}] `, inView(node));
+        if (name) append(` [image: ${name}] `, inView(node), true);
         return;
       }
       if (!node.ignored && role === "heading" && name) {
@@ -116,33 +127,37 @@ export function buildPageText(document: SnapshotDocument): PageText {
         if (inCell) { append(` ${name} `, inView(node)); return; }
         flush();
         const level = node.properties?.find((property) => property.name === "level")?.value.value;
-        lines.push({ text: `${"#".repeat(typeof level === "number" ? Math.min(Math.max(level, 1), 6) : 2)} ${name}`, visible: inView(node), heading: true });
+        lines.push({ text: `${"#".repeat(typeof level === "number" ? Math.min(Math.max(level, 1), 6) : 2)} ${name}`, plain: name, visible: inView(node), heading: true });
         return;
       }
       if (!node.ignored && ROW_ROLES.has(role) && !inCell && !outerRows.has(node)) {
         flush();
         const cells: string[] = [];
+        const plainCells: string[] = [];
         let rowVisible = false;
         inCell = true;
         for (const childId of node.childIds ?? []) {
           const child = byId.get(childId);
           if (!child) continue;
           visit(child);
-          const cell = current.replace(/\s+/g, " ").trim();
-          if (cell) cells.push(cell);
+          const cell = collapse(current);
+          if (cell) { cells.push(cell); plainCells.push(collapse(plain)); }
           rowVisible ||= visible;
           current = "";
+          plain = "";
           visible = false;
         }
         inCell = false;
+        // 单元格之间的「 | 」是记号；页面文字里单元格之间只隔一个空格。
         current = cells.join(" | ");
+        plain = plainCells.join(" ");
         visible = rowVisible;
         flush();
         return;
       }
       const block = !node.ignored && node.backendDOMNodeId !== undefined && doc.blocks.has(node.backendDOMNodeId);
       if (block) lineBreak();
-      if (!node.ignored && role === "listitem") append(inCell ? " " : "- ", false);
+      if (!node.ignored && role === "listitem") append(inCell ? " " : "- ", false, true);
       for (const childId of node.childIds ?? []) {
         const child = byId.get(childId);
         if (child) visit(child);
