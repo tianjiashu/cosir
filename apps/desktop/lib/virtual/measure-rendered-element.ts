@@ -12,6 +12,11 @@ import { measureElement, type Virtualizer } from "@tanstack/react-virtual";
  * 隐藏期间新挂载的行同样会被记成 0。
  *
  * `onMeasured` 只在真正测得高度时调用，供调用方维护自己的行高记忆（不能把隐藏时的 0 记进去）。
+ *
+ * 读数与当前尺寸（估计或记忆）恰好相等时，TanStack 的 `resizeItem` 不写 `itemSizeCache`（只在差值非零时写），
+ * 这一行就一直算「没测过」：尺寸跟着 `estimateSize` 走，内容一变（回复落定、行高记忆失效）就悄悄换成新估计、
+ * 不做补偿，下一次真实变化又被当成首次测量去补偿跨过视口的行，正在读的位置因此跳走。估计越准、按记忆回到对话
+ * 时越容易相等，所以这里在相等时把读数记成已测量；不相等的仍交给 `resizeItem` 按差值补偿后写入。
  */
 export function measureRenderedElement<TScrollElement extends Element | Window, TItemElement extends Element>(
   element: TItemElement,
@@ -24,6 +29,11 @@ export function measureRenderedElement<TScrollElement extends Element | Window, 
     return instance.itemSizeCache.get(instance.options.getItemKey(index)) ?? instance.options.estimateSize(index);
   }
   const size = measureElement(element, entry, instance);
+  const index = instance.indexFromElement(element);
+  const key = instance.options.getItemKey(index);
+  if (!instance.itemSizeCache.has(key) && instance.getVirtualItems().find((item) => item.index === index)?.size === size) {
+    instance.itemSizeCache.set(key, size);
+  }
   onMeasured?.(size);
   return size;
 }

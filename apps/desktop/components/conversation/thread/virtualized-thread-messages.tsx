@@ -78,7 +78,7 @@ export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = mem
       const width = containerRef.current?.clientWidth || null;
       const message = messagesById(aui.thread().getState().messages).get(messageId ?? "");
       return (messageId === undefined ? undefined : rememberedMessageHeight(sessionId, width, messageId, message))
-        ?? estimateMessageHeight(message, sessionId);
+        ?? estimateMessageHeight(message, sessionId, width);
     },
     // 浏览器铺满时对话区被隐藏：隐藏期间的读数既不进虚拟列表缓存，也不进按列宽分桶的行高记忆
     // （列宽读成 0 会把整桶换掉）。

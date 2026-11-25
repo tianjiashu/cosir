@@ -89,7 +89,6 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
     }
   });
   const lockScroll = useScrollLock(root, 0);
-  const stopped = outcome?.status === "cancelled" || outcome?.status === "failed";
   // 停止是界面暂态，布局层拿不到：有运行中的活动段就让它说「正在停止…」，没有（正在输出旁白）才单独出一行。
   const stopping = cancelling && phase !== "settled";
   const stoppingSegment = stopping ? layout.blocks.find((block): block is ActivityGroup => block.kind === "activity" && block.live !== null)?.key : undefined;
@@ -122,7 +121,7 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
         </div>;
       })}
       {stopping && stoppingSegment === undefined && <div className={CURRENT_ACTIVITY_SLOT}><ActivityStatus feedback={STOPPING_FEEDBACK} /></div>}
-      {stopped && <p data-slot="partial-reply" className="text-muted-foreground text-2sm">{answerText.trim() ? "回复可能尚未完成。" : "尚未生成回复。"}</p>}
+      {layout.stopped && <p data-slot="partial-reply" className="text-muted-foreground text-2sm">{answerText.trim() ? "回复可能尚未完成。" : "尚未生成回复。"}</p>}
       <ArtifactZone inherited={inherited} sessionId={sessionId} artifacts={layout.artifacts} interactive={interactive} sessionCancelling={cancelling} />
       {layout.nextStep && phase === "settled" && (nextStepActionable
         ? <NextStepCard offer={layout.nextStep.offer} sessionId={sessionId} />

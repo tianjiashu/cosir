@@ -20,21 +20,29 @@ import { projectTurnHeading, TURN_HEADING_HEIGHT } from "./turn-heading";
  * 都会按「真实 − 估计」补偿滚动位置，固定常量（曾为 120px，而回答常见 700px 以上）会让补偿量
  * 达到数百像素，惯性滚动会因此被打断（最初在已移除的 WKWebView 宿主上观察到）。真实高度仍以测量为准，这里只逐行区分 Markdown
  * 的块类型（标题、列表、表格、代码、正文）与用户附件；过程区和工具组读取用户开合覆盖（未传 Session 时
- * 按默认值计），调用行展开体、公式与 Mermaid 不建模。正文常量用单一特性的消息在 `max-w-3xl` 对话列宽下逐项
- * 实测得出。
+ * 按默认值计），调用行展开体、公式与 Mermaid 不建模。正文常量用单一特性的消息在 `max-w-3xl` 对话列宽
+ * （`CALIBRATED_WIDTH`）下逐项实测得出；`width` 是行宽（停靠面板会让它变窄），每行容纳的字数按它与标定列宽之比
+ * 换算——行高记忆按列宽分桶，列宽一变整桶作废、全部回到这里，所以估算也必须认列宽。还没布局、拿不到列宽时按标定列宽算。
  */
-export function estimateMessageHeight(message: ThreadMessage | undefined, sessionId?: number): number {
+export function estimateMessageHeight(message: ThreadMessage | undefined, sessionId?: number, width?: number | null): number {
   if (!message) return ROW_GAP + ASSISTANT_CHROME;
-  // 内容计算按不可变消息版本缓存；开合仍实时读取，不能缓存依赖 Session 偏好的最终高度。
-  return Math.round(message.role !== "user" ? assistantHeight(message, sessionId)
-    : isAgentMessage(message) ? ROW_GAP + agentRowHeight(message.id, message.content.map((part) => part.type === "text" ? part.text : "").join("\n"), sessionId)
-      : userHeight(message, sessionId));
+  const scale = width ? width / CALIBRATED_WIDTH : 1;
+  // 内容计算按不可变消息版本与列宽缓存；开合仍实时读取，不能缓存依赖 Session 偏好的最终高度。
+  return Math.round(message.role !== "user" ? assistantHeight(message, scale, sessionId)
+    : isAgentMessage(message) ? ROW_GAP + agentRowHeight(message.id, message.content.map((part) => part.type === "text" ? part.text : "").join("\n"), scale, sessionId)
+      : userHeight(message, scale, sessionId));
 }
 
-const userEstimates = new WeakMap<ThreadMessage, { fixed: number; text: number }>();
+/** 正文常量标定时的行宽（`max-w-3xl` 对话列的内容宽度）。 */
+const CALIBRATED_WIDTH = 736;
+
+/** `text` 是按 `scale` 折行的正文高度，列宽变了只重算这一项。 */
+const userEstimates = new WeakMap<ThreadMessage, { fixed: number; plain: string; scale: number; text: number }>();
 const assistantEstimates = new WeakMap<ThreadMessage, {
   layout: TurnLayout;
   hasHeading: boolean;
+  /** 正文高度按 `scale` 缓存，列宽变了清空。 */
+  scale: number;
   proseHeights: Map<number, number>;
 }>();
 
@@ -56,7 +64,7 @@ const IMAGE_STACK_HEIGHT = IMAGE_HEIGHT;
  * 气泡正文超过收起高度时按开合封顶（收起高度 + 「显示全部」一行，见 `UserMessageBubble`）。内容部分按
  * 消息版本缓存，开合每次实时读取；是否截断以渲染测量为准，这里的行数只是估计。
  */
-function userHeight(message: ThreadMessage, sessionId?: number): number {
+function userHeight(message: ThreadMessage, scale: number, sessionId?: number): number {
   let estimate = userEstimates.get(message);
   if (!estimate) {
     let text = "";
@@ -73,9 +81,13 @@ function userHeight(message: ThreadMessage, sessionId?: number): number {
     const blockCount = blocks.length + (hasText ? 1 : 0);
     estimate = {
       fixed: ROW_GAP + USER_CHROME + blocks.reduce((sum, block) => sum + block, 0) + Math.max(0, blockCount - 1) * ATTACHMENT_GAP,
-      text: hasText ? textLines(text, USER_LINE_UNITS) * USER_LINE_HEIGHT : 0,
+      plain: hasText ? text : "", scale: Number.NaN, text: 0,
     };
     userEstimates.set(message, estimate);
+  }
+  if (estimate.scale !== scale) {
+    estimate.text = estimate.plain ? textLines(estimate.plain, USER_LINE_UNITS * scale) * USER_LINE_HEIGHT : 0;
+    estimate.scale = scale;
   }
   if (estimate.text === 0) return estimate.fixed;
   if (estimate.text <= USER_MESSAGE_CLAMP_HEIGHT) return estimate.fixed + USER_BUBBLE_PADDING + estimate.text;
@@ -93,9 +105,9 @@ function isAgentMessage(message: ThreadMessage): boolean {
 }
 
 /** 来信默认收起，展开的才解析正文，不做缓存。不含行间距：独立行与回合内的片段间距不同。 */
-function agentRowHeight(id: string, text: string, sessionId?: number): number {
+function agentRowHeight(id: string, text: string, scale: number, sessionId?: number): number {
   const open = sessionId !== undefined && resolveDisclosure(sessionId, agentKey(id), false);
-  return AGENT_LABEL + (open ? AGENT_PANEL_PADDING + markdownHeight(text) : 0);
+  return AGENT_LABEL + (open ? AGENT_PANEL_PADDING + markdownHeight(text, scale) : 0);
 }
 
 // 回答：脚注（操作栏及其前面的区间距）与留白；各区之间的间距。回合按 `projectTurn` 分区计高（规则与渲染
@@ -107,6 +119,11 @@ const ASSISTANT_CHROME = 24;
 const ZONE_GAP = 12;
 const PROCESS_HEADER = 24;
 const PROCESS_ITEM = 28;
+// 活动段内段头与各调用之间是 `gap-1`（process-block）。
+const PROCESS_ITEM_GAP = 4;
+// Run 没有正常完成：一行未完成提示（`text-2sm`），失败时再加一条单行错误条（`py-2` + 一行）。
+const PARTIAL_REPLY_LINE = 20;
+const TURN_ERROR = 36;
 const AWAITING_CARD = 96;
 const CHANGES_CARD_CHROME = 40;
 const CHANGES_FILE_ROW = 28;
@@ -118,10 +135,10 @@ const CAPSULE_ROW_GAP = 8;
 // 交付说明：`text-sm leading-6`，按内容列宽每行约 48 个汉字宽。
 const NOTE_LINE_HEIGHT = 24;
 const NOTE_LINE_UNITS = 48;
-function deliverablesHeight(card: DeliverablesBatch): number {
+function deliverablesHeight(card: DeliverablesBatch, scale: number): number {
   const { tileRows, cardHeight, capsuleRows } = deliverableRows(card);
   const sections = [
-    card.note ? textLines(card.note, NOTE_LINE_UNITS) * NOTE_LINE_HEIGHT : 0,
+    card.note ? textLines(card.note, NOTE_LINE_UNITS * scale) * NOTE_LINE_HEIGHT : 0,
     cardHeight,
     tileRows * IMAGE_TILE_SIZE.regular.height + Math.max(0, tileRows - 1) * IMAGE_TILE_GAP,
     capsuleRows * CAPSULE_HEIGHT + Math.max(0, capsuleRows - 1) * CAPSULE_ROW_GAP,
@@ -134,9 +151,9 @@ function deliverablesHeight(card: DeliverablesBatch): number {
 // 上是可点的卡片，估算拿不到消息位置，按痕迹计、由首次测量修正——只有这一条行会差。
 const NEXT_STEP_ROW = 24;
 const NEXT_STEP_GAP = 8;
-function nextStepHeight(offer: NextStepOffer, open: boolean): number {
+function nextStepHeight(offer: NextStepOffer, open: boolean, scale: number): number {
   if (!open) return NEXT_STEP_ROW;
-  return NEXT_STEP_ROW + NEXT_STEP_GAP + textLines(offer.recap, NOTE_LINE_UNITS) * NOTE_LINE_HEIGHT
+  return NEXT_STEP_ROW + NEXT_STEP_GAP + textLines(offer.recap, NOTE_LINE_UNITS * scale) * NOTE_LINE_HEIGHT
     + NEXT_STEP_GAP + offer.replies.length * NEXT_STEP_ROW;
 }
 
@@ -148,13 +165,17 @@ function awaitingHeight(part: TransportToolCallPart, sessionId?: number): number
   return questionCardHeight(display.questions[Math.min(index, display.questions.length - 1)]);
 }
 
-function assistantHeight(message: ThreadMessage, sessionId?: number): number {
+function assistantHeight(message: ThreadMessage, scale: number, sessionId?: number): number {
   let estimate = assistantEstimates.get(message);
   if (!estimate) {
     const outcome = (message.metadata?.custom?.outcome ?? null) as TransportOutcome | null;
     const layout = message.metadata.custom.turnLayout as TurnLayout;
-    estimate = { layout, hasHeading: projectTurnHeading(layout, outcome) !== null, proseHeights: new Map() };
+    estimate = { layout, hasHeading: projectTurnHeading(layout, outcome) !== null, scale, proseHeights: new Map() };
     assistantEstimates.set(message, estimate);
+  }
+  if (estimate.scale !== scale) {
+    estimate.proseHeights.clear();
+    estimate.scale = scale;
   }
   const { layout, hasHeading, proseHeights } = estimate;
   const open = sessionId === undefined ? layout.defaultProcessOpen : resolveDisclosure(sessionId, processKey(message.id), layout.defaultProcessOpen);
@@ -165,21 +186,23 @@ function assistantHeight(message: ThreadMessage, sessionId?: number): number {
     if (block.kind === "narration") {
       let height = proseHeights.get(block.index);
       if (height === undefined) {
-        height = markdownHeight(block.part.text);
+        height = markdownHeight(block.part.text, scale);
         proseHeights.set(block.index, height);
       }
       blocks.push(height);
     } else if (block.kind === "agent") {
-      blocks.push(agentRowHeight(block.part.id, block.part.text, sessionId));
+      blocks.push(agentRowHeight(block.part.id, block.part.text, scale, sessionId));
     } else if (block.kind === "deliverables") {
-      blocks.push(deliverablesHeight(block));
+      blocks.push(deliverablesHeight(block, scale));
     } else if (block.kind === "standalone") {
       blocks.push(block.part.awaitingUser ? awaitingHeight(block.part, sessionId) : PROCESS_ITEM);
     } else {
       const groupOpen = sessionId !== undefined && resolveDisclosure(sessionId, activityKey(message.id, block.key), false);
-      blocks.push(PROCESS_HEADER + (groupOpen ? block.calls.length : 0) * PROCESS_ITEM);
+      blocks.push(PROCESS_HEADER + (groupOpen ? block.calls.length : 0) * (PROCESS_ITEM_GAP + PROCESS_ITEM));
     }
   }
+  if (layout.stopped) blocks.push(PARTIAL_REPLY_LINE);
+  if (layout.stopped === "failed") blocks.push(TURN_ERROR);
   if (layout.artifacts.length) {
     const cards = layout.artifacts.map((card) => card.kind === "changes" ? CHANGES_CARD_CHROME + card.files.length * CHANGES_FILE_ROW
       : STANDALONE_ARTIFACT_CARD);
@@ -187,7 +210,7 @@ function assistantHeight(message: ThreadMessage, sessionId?: number): number {
   }
   if (layout.nextStep && layout.phase === "settled") {
     const key = nextStepKey(layout.nextStep.part.toolCallId);
-    blocks.push(nextStepHeight(layout.nextStep.offer, sessionId !== undefined && resolveDisclosure(sessionId, key, false)));
+    blocks.push(nextStepHeight(layout.nextStep.offer, sessionId !== undefined && resolveDisclosure(sessionId, key, false), scale));
   }
   if (layout.intro) return ROW_GAP + blocks.reduce((sum, block) => sum + block, 0) + Math.max(0, blocks.length - 1) * ZONE_GAP;
   return ROW_GAP + ASSISTANT_CHROME + blocks.reduce((sum, block) => sum + block + ZONE_GAP, 0);
@@ -212,7 +235,9 @@ const TABLE_DIVIDER = /^\s*\|?\s*:?-{3,}/;
 const CODE_LINE_HEIGHT = 22;
 const CODE_BLOCK_CHROME = 67;
 
-function markdownHeight(text: string): number {
+/** 块间距只在块与块之间（`markdown.css` 的 `> :not(:last-child)`），最后一块之后没有。 */
+function markdownHeight(text: string, scale: number): number {
+  const lineUnits = PROSE_LINE_UNITS * scale;
   let height = 0;
   let codeLines = -1;
   let tableRows = 0;
@@ -241,14 +266,15 @@ function markdownHeight(text: string): number {
       closeTable();
       const heading = HEADING.exec(line);
       if (heading) height += HEADING_HEIGHTS[heading[1].length - 1];
-      else if (LIST_ITEM.test(line)) height += LIST_ITEM_HEIGHT + (textLines(line, PROSE_LINE_UNITS) - 1) * PROSE_LINE_HEIGHT;
-      else height += textLines(line, PROSE_LINE_UNITS) * PROSE_LINE_HEIGHT;
+      else if (LIST_ITEM.test(line)) height += LIST_ITEM_HEIGHT + (textLines(line, lineUnits) - 1) * PROSE_LINE_HEIGHT;
+      else height += textLines(line, lineUnits) * PROSE_LINE_HEIGHT;
     }
     closeTable();
     if (codeLines < 0) height += BLOCK_GAP;
   }
-  // 流式中未闭合的代码块。
+  // 循环在每块之后都加了间距，退掉最后一块的；停在未闭合的代码块里时（流式中）最后一块没加，补上这个代码块。
   if (codeLines > 0) height += CODE_BLOCK_CHROME + codeLines * CODE_LINE_HEIGHT;
+  else if (codeLines < 0) height -= BLOCK_GAP;
   return height;
 }
 

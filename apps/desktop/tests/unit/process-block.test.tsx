@@ -28,6 +28,20 @@ describe("activity group", () => {
     expect(render("running")).toContain('data-call="b" data-visible="false"');
     expect(render("running")).toContain('data-call="a" data-visible="false"');
   });
+  // 目的：段头图标与状态同源、收起时整个调用容器隐藏；潜在缺陷：思考与执行切换时图标位消失导致文字横移、竖线在收起时残留。
+  it("leads the head with an icon and hangs calls under one railed container", () => {
+    const settled = render();
+    const head = settled.slice(settled.indexOf('data-slot="activity-head"'), settled.indexOf("</button>"));
+    expect(head).toContain('data-slot="activity-icon"');
+    expect(head).toContain("lucide-eye");
+    expect(settled).toMatch(/data-slot="activity-calls" hidden=""/);
+    expect(settled.match(/data-slot="activity-calls"/g)).toHaveLength(1);
+    const running = render("running");
+    const live = running.slice(running.indexOf('data-slot="current-activity"'));
+    expect(live).toContain('data-slot="activity-icon"');
+    overrides.set("activity:m:interval:0", true);
+    expect(render()).not.toMatch(/data-slot="activity-calls" hidden/);
+  });
   it("restores user disclosure and retains error/cancel summaries", () => {
     overrides.set("activity:m:interval:0", true);
     expect(render()).toContain('data-call="a" data-visible="true"');

@@ -5,7 +5,7 @@ import { readFileChanges, type FileChange } from "../tools/file-changes";
 import { collectDeliverableBatches, type DeliverablesBatch } from "./deliverable-layout";
 import type { TransportActivity, TransportAgentMessagePart, TransportMessagePart, TransportOutcome, TransportTextPart, TransportToolCallPart } from "../contract";
 import { readNextStepOffer, type NextStepOffer } from "../tools/next-step-offer";
-import { toolHeading, toolMention, toolVerb, type ToolMention } from "../tools/tool-catalog";
+import { toolHeading, toolIconName, toolMention, toolVerb, type ToolMention } from "../tools/tool-catalog";
 import { toolResultSignal } from "../tools/tool-result-signals";
 
 export type TurnPhase = "running" | "suspended" | "settled";
@@ -29,8 +29,8 @@ export type StandaloneItem = { kind: "standalone"; index: number; part: Transpor
 export type CallItem = { kind: "call"; index: number; part: TransportToolCallPart };
 export type AgentItem = { kind: "agent"; index: number; part: TransportAgentMessagePart };
 export type ProcessItem = NarrationItem | CallItem | StandaloneItem | AgentItem;
-/** 一个动词下的调用：次数，与每次调用在摘要里的短语（取不到为 null，见 `toolMention`）。 */
-export type VerbGroup = { label: string; count: number; mentions: (ToolMention | null)[] };
+/** 一个动词下的调用：次数，与每次调用在摘要里的短语（取不到为 null，见 `toolMention`）；`icon` 取这一类第一次调用的工具图标。 */
+export type VerbGroup = { label: string; icon: string | undefined; count: number; mentions: (ToolMention | null)[] };
 /**
  * 活动段：两次中断（旁白、独立工具、Agent 来信）之间的思考与工具调用，用户眼里的「一段工作」，只占一行。
  * `live` 是这段此刻在做什么（执行中的调用，或回合最后一段上的思考、等待）：运行时这一行说它并计这个状态的
@@ -87,6 +87,8 @@ export type TurnLayout = {
   answer: AnswerItem[];
   hasFinalReply: boolean;
   defaultProcessOpen: boolean;
+  /** Run 没有正常完成的结局：回复后有一行未完成提示，失败时还有错误条。渲染与估高共用，不各自判断结局。 */
+  stopped: "failed" | "cancelled" | null;
 };
 
 export function callTitle(part: TransportToolCallPart): string { return toolHeading(part.toolName, part.args).title; }
@@ -138,7 +140,7 @@ export function summarizeCalls(calls: readonly CallItem[]): CallSummary {
   for (const { part } of calls) {
     if (part.presentation !== "quiet") {
       const label = callVerb(part);
-      const group = verbs.get(label) ?? verbs.set(label, { label, count: 0, mentions: [] }).get(label)!;
+      const group = verbs.get(label) ?? verbs.set(label, { label, icon: toolIconName(part.toolName), count: 0, mentions: [] }).get(label)!;
       group.count++;
       if (group.mentions.length < MENTION_LIMIT) group.mentions.push(toolMention(part.toolName, part.args));
     }
@@ -263,7 +265,7 @@ export function projectTurn(parts: readonly TransportMessagePart[], phase: TurnP
   const reported = phase !== "settled" ? NO_ARTIFACTS
     : previous?.artifacts.length === artifacts.length && artifacts.every((card, i) => card === previous.artifacts[i]) ? previous.artifacts : artifacts;
   return { parts, phase, intro, blocks, process: { items }, artifacts: reported, nextStep, answer, hasFinalReply,
-    defaultProcessOpen: !hasFinalReply };
+    defaultProcessOpen: !hasFinalReply, stopped: outcome?.status === "failed" || outcome?.status === "cancelled" ? outcome.status : null };
 }
 
 /**
@@ -302,7 +304,7 @@ function reuseBatch(batch: DeliverablesBatch, previous?: TurnLayout | null): Del
 }
 
 function sameLive(left: ActivityFeedback | null, right: ActivityFeedback | null): boolean {
-  return left === right || (left !== null && right !== null && left.label === right.label && left.animated === right.animated && left.since === right.since);
+  return left === right || (left !== null && right !== null && left.icon === right.icon && left.label === right.label && left.animated === right.animated && left.since === right.since);
 }
 
 /** 改动聚合卡能否复用上一版：参与的调用槽位与 canonical part 身份都没变。 */

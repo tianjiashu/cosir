@@ -53,7 +53,30 @@ describe("estimateMessageHeight", () => {
     const done = outcome("completed", { durationMs: 129000 });
     expect(estimateMessageHeight(projected([call("quiet", "completed", { presentation: "quiet" }), text("回复")], done))).toBe(plainHeight);
     expect(estimateMessageHeight(projected([call("read"), text("回复")], done)) - plainHeight).toBe(37 + 12);
-    expect(estimateMessageHeight(projected([text("回复")], outcome("failed"))) - plainHeight).toBe(37 + 12);
+    // 没正常完成：标题之外还有未完成提示一行，失败时再加错误条（各带一个区间距）。
+    expect(estimateMessageHeight(projected([text("回复")], outcome("cancelled"))) - plainHeight).toBe(37 + 12 + 20 + 12);
+    expect(estimateMessageHeight(projected([text("回复")], outcome("failed"))) - plainHeight).toBe(37 + 12 + 20 + 12 + 36 + 12);
+  });
+
+  // 目的：估值与实测同一量纲（真实布局下 736px 一段短回复实测 86）；潜在缺陷：最后一块后多算块间距、列宽变窄时折行不增高。
+  it("正文只在块与块之间计间距，折行按行宽换算，拿不到行宽时按标定列宽", () => {
+    const short = assistant(text("一段话"));
+    expect(estimateMessageHeight(short)).toBe(86);
+    expect(estimateMessageHeight(short, undefined, 736)).toBe(86);
+    const long = assistant(text("这是一段很长的正文，用来观察窄列宽下的折行。".repeat(20)));
+    const wide = estimateMessageHeight(long, undefined, 736);
+    expect(estimateMessageHeight(long)).toBe(wide);
+    // 440 个字宽：736px 估 11 行（实测 10），488px 估 16 行（实测 16），每行 26px。
+    expect(estimateMessageHeight(long, undefined, 488) - wide).toBe(5 * 26);
+    expect(estimateMessageHeight(user(text("问题".repeat(40))), undefined, 488)).toBeGreaterThan(estimateMessageHeight(user(text("问题".repeat(40))), undefined, 736));
+  });
+
+  it("展开的活动段：每个调用一行加段内间距", () => {
+    const msg = projected([call("a"), call("b"), call("c"), text("回复")], outcome("failed"));
+    const folded = estimateMessageHeight(msg, 803);
+    useDisclosureStore.getState().set(803, "activity:a:interval:0", true);
+    expect(estimateMessageHeight(msg, 803) - folded).toBe(3 * (28 + 4));
+    useDisclosureStore.getState().clearSession(803);
   });
 
   it("用户消息：气泡按折行增高，胶囊按可读名称计入正文", () => {
@@ -86,10 +109,10 @@ describe("estimateMessageHeight", () => {
 
   it("回答：标题按级别、列表项、表格行、代码行分别计高", () => {
     const base = estimateMessageHeight(assistant(text("一段话")));
-    expect(base).toBe(98);
-    expect(estimateMessageHeight(assistant(text("# 标题\n\n一段话")))).toBe(155);
-    expect(estimateMessageHeight(assistant(text("### 标题\n\n一段话")))).toBe(143);
-    expect(estimateMessageHeight(assistant(text("- 一\n- 二\n- 三")))).toBe(162);
+    expect(base).toBe(86);
+    expect(estimateMessageHeight(assistant(text("# 标题\n\n一段话")))).toBe(143);
+    expect(estimateMessageHeight(assistant(text("### 标题\n\n一段话")))).toBe(131);
+    expect(estimateMessageHeight(assistant(text("- 一\n- 二\n- 三")))).toBe(150);
     expect(estimateMessageHeight(assistant(text(table(6)))) - estimateMessageHeight(assistant(text(table(3))))).toBe(3 * 39);
     expect(estimateMessageHeight(assistant(text(code(15)))) - estimateMessageHeight(assistant(text(code(5))))).toBe(220);
   });

@@ -13,6 +13,7 @@ import {
   PuzzleIcon,
   SearchIcon,
   SendIcon,
+  SparklesIcon,
   TerminalIcon,
   type LucideIcon,
   UsersIcon,
@@ -21,7 +22,10 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-/** 工具目录（`lib/assistant/tools/tool-catalog.ts`）里 `icon` 的取值表（lucide 图标名）；没登记的名字回落到扳手。 */
+/**
+ * 图标名（lucide）的取值表：工具目录（`lib/assistant/tools/tool-catalog.ts`）的 `icon`，以及活动行里不属于调用的
+ * 状态图标（`ActivityFeedback.icon`：思考、等待、停止）。没登记的名字回落到扳手。
+ */
 const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   bot: BotIcon,
   "circle-help": CircleHelpIcon,
@@ -36,6 +40,7 @@ const TOOL_ICON_MAP: Record<string, LucideIcon> = {
   puzzle: PuzzleIcon,
   search: SearchIcon,
   send: SendIcon,
+  sparkles: SparklesIcon,
   terminal: TerminalIcon,
   users: UsersIcon,
   wrench: WrenchIcon,

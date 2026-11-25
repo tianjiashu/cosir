@@ -1,13 +1,19 @@
 import type { BackgroundTaskEntry, TransportActivity, TransportToolCallPart } from "../contract";
-import { toolHeading } from "../tools/tool-catalog";
+import { toolHeading, toolIconName } from "../tools/tool-catalog";
 
 /**
  * 活动行要说的状态。`since` 是这个状态的起点，只取后端事实：执行调用取调用的 `startedAt`，思考取模型步的
  * `startedAt`。所以「思考中 12秒」只是这一次思考，执行时计的是那次调用，换状态从头算，刷新也接得上。没有
  * 起点就不计时：静止的等待、模型步之间的空档、还在写参数的调用（后端没有「开始写参数」的时刻）。
+ *
+ * `icon` 是这一行前的图标（取值见 `tool-icons.tsx`，`undefined` 回落扳手）：执行调用时是那个工具的图标，
+ * 其余状态各有一个。与状态在同一处推导，所以「当前是哪次调用」只判一次；每种状态都带图标，思考与执行每一步
+ * 来回切换时文字不会横移。
  */
-export type ActivityFeedback = { label: string; animated: boolean; since?: string };
-export const STOPPING_FEEDBACK: ActivityFeedback = { label: "正在停止…", animated: false };
+export type ActivityFeedback = { icon: string | undefined; label: string; animated: boolean; since?: string };
+export const STOPPING_FEEDBACK: ActivityFeedback = { icon: "x", label: "正在停止…", animated: false };
+const THINKING_ICON = "sparkles";
+const WAITING_ICON = "clock";
 
 /**
  * 「Agent 此刻在做什么」的唯一推导。用户感知的单位是活动段：两次中断（旁白、独立工具、Agent 来信）之间的
@@ -35,7 +41,7 @@ export function segmentActivity(calls: readonly TransportToolCallPart[], board: 
   if (!executing.length) return unowned;
   const lead = executing.find(call => call.status === "running") ?? executing[0];
   const more = executing.length > 1 ? ` · 另 ${executing.length - 1} 项` : "";
-  return { label: toolHeading(lead.toolName, lead.args).title + more, animated: true, since: lead.startedAt ?? undefined };
+  return { icon: toolIconName(lead.toolName), label: toolHeading(lead.toolName, lead.args).title + more, animated: true, since: lead.startedAt ?? undefined };
 }
 
 /**
@@ -50,13 +56,13 @@ export function unownedActivity(activity: TransportActivity | null, background: 
   if (!activity || !["running", "suspended"].includes(activity.status)) return null;
   const jobs = background.filter(job => job.status === "running" || job.status === "settling");
   if (activity.status === "suspended") {
-    if (!jobs.length) return { label: "等待继续", animated: false };
+    if (!jobs.length) return { icon: WAITING_ICON, label: "等待继续", animated: false };
     const allSettling = jobs.every(job => job.status === "settling");
     const label = jobs.length === 1 ? jobs[0].label : `${jobs.length} 项会话`;
-    return { label: `${allSettling ? "等待并入后台结果" : "后台执行"}：${label}`, animated: false };
+    return { icon: WAITING_ICON, label: `${allSettling ? "等待并入后台结果" : "后台执行"}：${label}`, animated: false };
   }
   const model = activity.modelActivity;
   if (model?.phase === "responding" && proseStreaming) return null;
   const suffix = jobs.length ? ` · 后台 ${jobs.length} 项` : "";
-  return { label: (model?.phase === "tool_call" ? "正在准备工具" : "思考中") + suffix, animated: true, since: model?.startedAt };
+  return { icon: THINKING_ICON, label: (model?.phase === "tool_call" ? "正在准备工具" : "思考中") + suffix, animated: true, since: model?.startedAt };
 }

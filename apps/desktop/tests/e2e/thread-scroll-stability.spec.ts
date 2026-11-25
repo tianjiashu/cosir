@@ -11,7 +11,8 @@ import { API_ORIGIN as origin } from "./e2e-env";
  * 每帧把 scrollTop 往上设 60px，下一帧读回：与设定值的偏差就是虚拟列表按「实测 − 估计」做的补偿。
  * 补偿会打断 WKWebView 的惯性滚动，所以这里守住三件事：按内容估计让首次经过的补偿量小；同一次
  * 挂载里再经过时几乎不补偿（消息根节点不得叠加 content-visibility，否则每次经过都回到占位高度）；
- * 切走再回来时按消息 id 记下的实测行高仍然生效。
+ * 切走再回来时按消息 id 记下的实测行高仍然生效。首次经过的门槛同时守着估高与真实布局同步：夹具里有失败回合
+ * （回合末尾的未完成提示与错误条），并在停靠面板那样的窄列宽下再测一遍（估值按列宽折行）。
  */
 const SESSION_ID = 4201;
 const OTHER_SESSION_ID = 4202;
@@ -19,6 +20,7 @@ const PAIRS = 60;
 const ACTIVITY_OUTCOME = { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null };
 // `durationMs` 只属于结局；activity 是固定字段的白名单。
 const OUTCOME = { ...ACTIVITY_OUTCOME, durationMs: 0 };
+const FAILED = { ...OUTCOME, status: "failed" as const, endReason: null, error: { code: "model_error", message: "模型请求失败：上游 500" } };
 const LAUNCH = { modelConfigId: null, reasoningEffort: null };
 
 function answer(index: number): string {
@@ -34,7 +36,7 @@ function longConversation(): TransportState {
   for (let index = 0; index < PAIRS; index += 1) {
     messages.push({ id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index}：${"请帮我看看。".repeat(index % 3 + 1)}` }], turn: index + 1, inherited: false, clientMessageId: null, source: null, outcome: null });
     messages.push({
-      id: `assistant-turn-${index + 1}`, role: "assistant", turn: index + 1, inherited: false, clientMessageId: null, source: null, outcome: OUTCOME,
+      id: `assistant-turn-${index + 1}`, role: "assistant", turn: index + 1, inherited: false, clientMessageId: null, source: null, outcome: index % 10 === 4 ? FAILED : OUTCOME,
       parts: [
         { type: "text", text: answer(index), finalReply: true },
       ],
@@ -166,4 +168,20 @@ test("长对话向上滚动时虚拟列表少修正 scrollTop，切走再回来�
   // 同一次挂载、切走再回来都用实测值；消息根或代码块叠加 content-visibility 时这里约 2000–5000px。
   expect(again.correctionPx).toBeLessThan(600);
   expect(revisit.correctionPx).toBeLessThan(300);
+});
+
+// 目的：停靠面板让对话列变窄（这里 488px）时估值按列宽折行；潜在缺陷：估算只按最宽列标定，窄列宽下首次经过的修正量翻倍。
+test("窄列宽下长对话首次向上滚动的修正量与宽列宽同一量级", async ({ page, request }) => {
+  test.setTimeout(90_000);
+  await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: SESSION_ID, title: "长对话" } });
+  await seedState(request, SESSION_ID, longConversation());
+  await page.setViewportSize({ width: 520, height: 900 });
+  await page.goto(`/sessions/${SESSION_ID}`);
+  const rows = page.locator(".aui-thread-root [data-index]");
+  await expect(rows.first()).toBeVisible();
+  expect(await rows.first().evaluate((row) => row.clientWidth)).toBeLessThan(500);
+  const first = await scrollUpThroughHistory(page);
+  console.log(`[thread-scroll] narrow first=${JSON.stringify(first)}`);
+  // 估值按列宽折行后约 2400px；只按最宽列标定时约 6600px。
+  expect(first.correctionPx).toBeLessThan(3500);
 });

@@ -16,24 +16,26 @@ const streaming = (value: string): TransportMessagePart => ({ type: "text", text
 describe("unowned activity", () => {
   it("names model phases and waits, with background work as a suffix only while running", () => {
     const model = activity(1, "running", { modelActivity: { stepId: "s", phase: "reasoning", startedAt: T0 } });
-    expect(unownedActivity(model)).toEqual({ label: "思考中", animated: true, since: T0 });
+    expect(unownedActivity(model)).toEqual({ icon: "sparkles", label: "思考中", animated: true, since: T0 });
     expect(unownedActivity(model, [job])?.label).toBe("思考中 · 后台 1 项");
     expect(unownedActivity(activity(1, "running", { modelActivity: { stepId: "s", phase: "tool_call", startedAt: T0 } }))).toMatchObject({ label: "正在准备工具" });
     expect(unownedActivity(activity(1, "running", { modelActivity: { stepId: "s", phase: "responding", startedAt: T0 } }))).toBeNull();
     // 步与步之间也是思考，不另起「正在处理」；这几十毫秒没有模型步起点，不计时。
-    expect(unownedActivity(activity(1, "running"))).toEqual({ label: "思考中", animated: true, since: undefined });
+    expect(unownedActivity(activity(1, "running"))).toEqual({ icon: "sparkles", label: "思考中", animated: true, since: undefined });
     expect(unownedActivity(activity(1, "cancelled"))).toBeNull();
-    expect(unownedActivity(activity(1, "suspended"))).toEqual({ label: "等待继续", animated: false });
-    expect(unownedActivity(activity(1, "suspended"), [job])).toEqual({ label: "后台执行：检查导出", animated: false });
-    expect(unownedActivity(activity(1, "suspended"), [{ ...job, status: "settling" }])).toEqual({ label: "等待并入后台结果：检查导出", animated: false });
+    expect(unownedActivity(activity(1, "suspended"))).toEqual({ icon: "clock", label: "等待继续", animated: false });
+    expect(unownedActivity(activity(1, "suspended"), [job])).toEqual({ icon: "clock", label: "后台执行：检查导出", animated: false });
+    expect(unownedActivity(activity(1, "suspended"), [{ ...job, status: "settling" }])).toEqual({ icon: "clock", label: "等待并入后台结果：检查导出", animated: false });
   });
 });
 
 describe("segment activity", () => {
-  const thinking = { label: "思考中", animated: true };
+  const thinking = { icon: "sparkles", label: "思考中", animated: true };
   it("an executing call takes precedence; otherwise the segment says the unowned state", () => {
     const call = toolCallPart("read", "execute_terminal", { args: { intent: "检查登录配置" }, status: "running" });
     expect(segmentActivity([call, { ...call, toolCallId: "other" }], none, thinking)?.label).toBe("检查登录配置 · 另 1 项");
+    // 图标与状态同源：执行中说哪次调用，图标就是那个工具的。
+    expect(segmentActivity([toolCallPart("r", "read_file", { status: "pending" }), call], none, thinking)?.icon).toBe("terminal");
     // 先串行后并行：排在前面的 pending 不是正在执行的那个。
     const queued = toolCallPart("first", "execute_terminal", { args: { intent: "读取说明" }, status: "pending" });
     expect(segmentActivity([queued, { ...call, args: { intent: "修改配置" } }], none, null)?.label).toBe("修改配置 · 另 1 项");
@@ -98,14 +100,14 @@ describe("one segment, one row, one clock", () => {
     const callStart = "2026-11-18T04:00:20.000Z";
     const pending = { ...call, status: "pending" as const, startedAt: null };
     const writing = projectTurn([text("先看看。"), pending], "running", null, null, idle);
-    expect(segments(writing)[0].live).toEqual({ label: "检查配置", animated: true, since: undefined });
+    expect(segments(writing)[0].live).toEqual({ icon: "terminal", label: "检查配置", animated: true, since: undefined });
     const running = projectTurn([text("先看看。"), { ...call, startedAt: callStart }], "running", null, writing, idle);
     expect(segments(running)[0].live?.since).toBe(callStart);
     // 调用之后的下一次思考取新模型步的起点，不接调用、也不接上一次思考。
     const next = "2026-11-18T04:00:21.000Z";
     const step = (id: string, since: string) => activity(1, "running", { modelActivity: { stepId: id, phase: "reasoning", startedAt: since } });
     const thinking = projectTurn([text("先看看。"), { ...call, status: "completed" }], "running", null, running, step("s2", next));
-    expect(segments(thinking)[0].live).toEqual({ label: "思考中", animated: true, since: next });
+    expect(segments(thinking)[0].live).toEqual({ icon: "sparkles", label: "思考中", animated: true, since: next });
     // 同一文案、不同起点：段要换新对象，否则活动行沿用旧计时。
     const later = projectTurn(thinking.parts, "running", null, thinking, step("s3", "2026-11-18T04:00:40.000Z"));
     expect(segments(later)[0]).not.toBe(segments(thinking)[0]);

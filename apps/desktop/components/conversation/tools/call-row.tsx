@@ -38,7 +38,12 @@ export type CallRowProps = {
 };
 
 const ROW_CLASS = "flex min-h-7 w-full min-w-0 items-center gap-2 rounded-md px-1.5 -mx-1.5 py-0.5 text-left text-2sm";
-const CLICKABLE_ROW_CLASS = "hover:bg-muted cursor-pointer";
+/**
+ * 可点的行悬停时图标与标题转成前景色（`group/row` 只挂在可点的行上，不可点的行悬停不变），与回合标题、活动段头
+ * 同一种悬停反馈；展开箭头仍悬停才出现。
+ */
+const CLICKABLE_ROW_CLASS = "group/row cursor-pointer";
+const ROW_HOVER_TEXT = "group-hover/row:text-foreground";
 
 /**
  * 统一调用行：图标 · 标题（意图） · 运行时长 · 目标 · 元信息 · 状态位，所有工具调用从排队到终态都是这一行，只有内容在变。
@@ -96,8 +101,8 @@ function CallRowContent({ sessionId, toolCallId, toolName, args, artifact, inter
 
   const contents = (
     <>
-      <ToolIcon name={toolIconName(toolName)} className="text-muted-foreground size-3.5" aria-hidden="true" />
-      <ThinkingLabel data-slot="call-title" active={feedback.animated && !inherited} className="min-w-0 truncate" title={title}>{title}</ThinkingLabel>
+      <ToolIcon name={toolIconName(toolName)} className={cn("text-muted-foreground size-3.5", ROW_HOVER_TEXT)} aria-hidden="true" />
+      <ThinkingLabel data-slot="call-title" active={feedback.animated && !inherited} className={cn("min-w-0 truncate", ROW_HOVER_TEXT)} title={title}>{title}</ThinkingLabel>
       {!inherited && <CallElapsed startedAt={artifact.startedAt} />}
       {/* 窄时目标先让位（收缩系数更大），标题后让位；路径省略中间目录、保住文件名。 */}
       <span data-slot="call-target" className="text-muted-foreground flex min-w-0 shrink-[4] font-mono text-xs" title={target ?? undefined}>
