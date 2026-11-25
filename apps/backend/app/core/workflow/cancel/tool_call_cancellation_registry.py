@@ -22,11 +22,26 @@ class ToolCallCancellationRegistry:
 
     本类只表达运行时控制信号：工具是否真的被中断、调用终态，仍由工具执行层产出的
     ``ToolObservation`` 与 Run 事实承载。
+
+    它同时登记每个 Session「此刻在执行哪次调用」（执行器在 handler 前后登记与释放）：一批调用逐个执行，
+    同一 Session 同时至多一个。点名停止只对它与已登记后台作业的调用有效，「立即发送」也凭它找到要打断
+    的调用——否则对没开始或不存在的调用打信号会被受理却无人消费。
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._cancelled_calls: set[tuple[int, str]] = set()
+        self._running: dict[int, str] = {}
+
+    def begin(self, session_id: int, tool_call_id: str) -> None:
+        """执行器即将调用 handler：登记为本 Session 当前执行中的调用。"""
+        with self._lock:
+            self._running[session_id] = tool_call_id
+
+    def running_call(self, session_id: int) -> str | None:
+        """本 Session 当前执行中的调用；没有时为 ``None``。"""
+        with self._lock:
+            return self._running.get(session_id)
 
     def mark_cancelled(self, session_id: int, tool_call_id: str) -> bool:
         """记录取消意图；返回是否为新标记（已标记过时为 ``False``）。可从工具线程调用。"""
@@ -49,15 +64,18 @@ class ToolCallCancellationRegistry:
             return (session_id, tool_call_id) in self._cancelled_calls
 
     def clear(self, session_id: int, tool_call_id: str) -> None:
-        """单次调用结束时释放它的信号；重复清理安全。"""
+        """单次调用结束时释放它的信号与执行中登记；重复清理安全。"""
         with self._lock:
             self._cancelled_calls.discard((session_id, tool_call_id))
+            if self._running.get(session_id) == tool_call_id:
+                del self._running[session_id]
 
     def clear_session(self, session_id: int) -> None:
         """执行收尾时回收该 Session 遗留的全部工具级信号；只记清理条数，不记调用 id 列表。"""
         with self._lock:
             removed = {key for key in self._cancelled_calls if key[0] == session_id}
             self._cancelled_calls -= removed
+            self._running.pop(session_id, None)
         if removed:
             log.info(
                 "tool_call_cancellation_session_cleared",

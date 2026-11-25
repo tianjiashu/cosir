@@ -32,9 +32,9 @@ function answer(index: number): string {
 function longConversation(): TransportState {
   const messages: TransportState["messages"] = [];
   for (let index = 0; index < PAIRS; index += 1) {
-    messages.push({ id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index}：${"请帮我看看。".repeat(index % 3 + 1)}` }], turn: index + 1, inherited: false, source: null, outcome: null });
+    messages.push({ id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index}：${"请帮我看看。".repeat(index % 3 + 1)}` }], turn: index + 1, inherited: false, clientMessageId: null, source: null, outcome: null });
     messages.push({
-      id: `assistant-turn-${index + 1}`, role: "assistant", turn: index + 1, inherited: false, source: null, outcome: OUTCOME,
+      id: `assistant-turn-${index + 1}`, role: "assistant", turn: index + 1, inherited: false, clientMessageId: null, source: null, outcome: OUTCOME,
       parts: [
         { type: "text", text: answer(index), finalReply: true },
       ],
@@ -92,7 +92,8 @@ test("已结束的长对话从顶部回到底部一步到位", async ({ page, re
   await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 1000 }).toBeLessThan(3);
 });
 
-test("运行中上翻历史保留不连续尾行之间的高度，正文增长不拖动历史视口", async ({ page, request }) => {
+// 末尾还挂着没并入的插话时，消息流的最后几条不是当前回复：保持挂载要认当前回复本身，不按位置猜。
+for (const interjections of [0, 2]) test(`运行中上翻历史保留不连续尾行之间的高度，正文增长不拖动历史视口（${interjections} 条插话）`, async ({ page, request }) => {
   const state = longConversation();
   // 保持一屏历史窗口以内，隔离分页与不连续渲染区间的行为。
   state.messages = state.messages.slice(0, 80);
@@ -100,6 +101,10 @@ test("运行中上翻历史保留不连续尾行之间的高度，正文增长�
   const last = state.messages.at(-1)!;
   last.outcome = null;
   last.parts = [{ type: "text", text: "正在生成的末尾回复", status: "running" }];
+  state.queued_messages = Array.from({ length: interjections }, (_, index) => ({
+    id: `interjection-${index}`, role: "user" as const, delivery: "immediate" as const, clientMessageId: null,
+    parts: [{ type: "text" as const, text: `插话 ${index}`, status: "completed" as const }],
+  }));
   await request.post(`${origin}/__test__/seed-session`, { data: { sessionId: SESSION_ID, title: "运行中长对话" } });
   await request.post(`${origin}/__test__/seed-state`, { data: { sessionId: SESSION_ID, state, hold: true } });
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -122,11 +127,11 @@ test("运行中上翻历史保留不连续尾行之间的高度，正文增长�
   await request.post(`${origin}/__test__/append-text`, { data: { sessionId: SESSION_ID, messageIndex: 79, partIndex: 0, text: "\n\n流式增长".repeat(30) } });
   await expect(page.locator('[data-index="79"]')).toContainText("流式增长");
   await expect.poll(() => viewport.evaluate(el => el.scrollTop)).toBeCloseTo(before, 0);
-  // 同一交互仍能明确回到底部，且当前两条消息始终挂载。
-  await expect(page.locator('[data-index="78"]')).toHaveCount(1);
+  // 当前回复始终挂载、增长都被量到：点一次就回到真实的底部，不停在增长前的旧底部。
+  await expect(page.locator('[data-index="79"]')).toHaveCount(1);
   await expect(page.getByRole("button", { name: "回到底部", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "回到底部", exact: true }).click({ scroll: "none" });
-  await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(3);
+  await expect.poll(() => viewport.evaluate(el => el.scrollHeight - el.scrollTop - el.clientHeight), { timeout: 1500 }).toBeLessThan(3);
   const bottomBefore = await viewport.evaluate(el => el.scrollTop);
   await request.post(`${origin}/__test__/append-text`, { data: { sessionId: SESSION_ID, messageIndex: 79, partIndex: 0, text: "\n\n回到底部后的增长".repeat(30) } });
   await expect(page.locator('[data-index="79"]')).toContainText("回到底部后的增长");

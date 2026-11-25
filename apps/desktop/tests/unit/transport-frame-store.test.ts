@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { TransportMessage, TransportState } from "@/lib/assistant/contract";
-import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
+import { getOrCreateTransportCommandId, type UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import {
   parseTransportFrame,
   TransportFrameStore,
@@ -87,6 +87,10 @@ const command = (text: string): UserAddMessageCommand => ({
   type: "add-message",
   message: { role: "user", parts: [{ type: "text", text }] },
 });
+/** 后端带回这条命令客户端 id 的正式消息（排队或已并入）。 */
+const echoed = <T extends { clientMessageId: string | null }>(message: T, from: UserAddMessageCommand): T => (
+  { ...message, clientMessageId: getOrCreateTransportCommandId(from) }
+);
 
 /** 接管宿主动画帧：回调留给测试手动触发（由 afterEach 还原全局）。 */
 const deferredScheduler = () => {
@@ -163,8 +167,9 @@ describe("TransportFrameStore", () => {
     store.applyFrame(mutation([{ kind: "set", path: ["queued_messages"], value: [q2, q1] }]));
     expect(store.getSnapshot().items).toEqual([before[0], before[2], before[1]]);
     expect(store.getSnapshot().items[1]).toBe(before[2]);
-    store.setPendingCommands([command("新消息")]);
-    store.applyFrame(mutation([{ kind: "set", path: ["queued_messages", 2], value: queuedMessage("q3", "新消息") }]));
+    const sent = command("新消息");
+    store.setPendingCommands([sent]);
+    store.applyFrame(mutation([{ kind: "set", path: ["queued_messages", 2], value: echoed(queuedMessage("q3", "新消息"), sent) }]));
     expect(store.getSnapshot().pendingCommands).toHaveLength(0);
     expect(store.getSnapshot().items).toHaveLength(4);
     store.applyFrame(full({ ...running([streaming("active", "重连正文")]), queued_messages: [queuedMessage("q1", "重连内容")] }));
@@ -394,28 +399,40 @@ describe("TransportFrameStore 运行中判定（D3）", () => {
 });
 
 describe("TransportFrameStore 乐观命令收敛（D8）", () => {
-  it("snapshot 出现新的用户消息才清除对应的乐观命令，活动与内容变化不清", () => {
+  it("快照里出现带同一客户端 id 的消息才清除那一条命令，活动与内容变化不清，到达顺序不影响", () => {
     const store = new TransportFrameStore(transportState({ messages: [userMessage("1", 1)], activity: activity(1, "completed") }));
-    store.setPendingCommands([command("first"), command("second")]);
+    const first = command("first"), second = command("second");
+    store.setPendingCommands([first, second]);
 
     store.applyFrame(mutation([{ kind: "set", path: ["activity"], value: activity(2, "running") }]));
     expect(store.getSnapshot().pendingCommands).toHaveLength(2);
 
-    store.applyFrame(mutation([{ kind: "set", path: ["messages", 1], value: userMessage("2", 2, "first") }]));
-    expect(store.getSnapshot().pendingCommands.map((item) => item.message.parts[0])).toEqual([{ type: "text", text: "second" }]);
+    // 后发的先到：只清它自己，不按先发先收误收前一条。
+    store.applyFrame(mutation([{ kind: "set", path: ["queued_messages"], value: [echoed(queuedMessage("3", "second"), second)] }]));
+    expect(store.getSnapshot().pendingCommands).toEqual([first]);
 
-    store.applyFrame(mutation([{ kind: "set", path: ["queued_messages"], value: [queuedMessage("3", "second")] }]));
+    store.applyFrame(mutation([{ kind: "set", path: ["messages", 1], value: echoed(userMessage("2", 2, "first"), first) }]));
     expect(store.getSnapshot().pendingCommands).toEqual([]);
   });
 
-  it("Agent 消息到达不认领用户的乐观发送：它不是用户发的", () => {
-    const store = new TransportFrameStore(transportState({ messages: [userMessage("1", 1)], activity: activity(1, "completed") }));
-    store.setPendingCommands([command("mine")]);
+  it("不带本页客户端 id 的新消息不认领乐观发送：Agent 消息、立即发送换出的新身份、并入空窗里重新出现的消息", () => {
+    const earlier = command("earlier");
+    const store = new TransportFrameStore(transportState({
+      messages: [userMessage("1", 1)], activity: activity(1, "running"),
+      queued_messages: [echoed(queuedMessage("q-1", "earlier"), earlier)],
+    }));
+    const mine = command("mine");
+    store.setPendingCommands([mine]);
 
     store.applyFrame(mutation([{ kind: "set", path: ["messages", 1], value: agentMessage("2", 2) }]));
-    expect(store.getSnapshot().pendingCommands).toHaveLength(1);
+    // 立即发送：排队条目以新身份重新入队，客户端 id 随正文保留。
+    store.applyFrame(mutation([{ kind: "set", path: ["queued_messages"], value: [echoed(queuedMessage("q-2", "earlier", "immediate"), earlier)] }]));
+    // 确认删除后排队刷新先到、并入投影后到：消息一帧两头都不在，下一帧才出现在消息流里。
+    store.applyFrame(mutation([{ kind: "set", path: ["queued_messages"], value: [] }]));
+    store.applyFrame(mutation([{ kind: "set", path: ["messages", 2], value: echoed(userMessage("q-2", 2, "earlier"), earlier) }]));
+    expect(store.getSnapshot().pendingCommands).toEqual([mine]);
 
-    store.applyFrame(mutation([{ kind: "set", path: ["messages", 2], value: userMessage("3", 2, "mine") }]));
+    store.applyFrame(mutation([{ kind: "set", path: ["messages", 3], value: echoed(userMessage("4", 3, "mine"), mine) }]));
     expect(store.getSnapshot().pendingCommands).toEqual([]);
   });
 
@@ -480,18 +497,18 @@ describe("history window", () => {
     expect(store.beginHistoryFetch()).not.toBeNull();
   });
 
-  it("插入的旧页与起点更早的新窗口里的用户消息，都不抵消乐观命令", () => {
+  it("插入的旧页与起点更早的新窗口里的用户消息都不认领乐观命令，只有带它客户端 id 的消息才认领", () => {
     const store = new TransportFrameStore(windowed());
-    store.setPendingCommands([command("pending")]);
+    const pending = command("pending");
+    store.setPendingCommands([pending]);
     const fetch = store.beginHistoryFetch()!;
     store.completeHistoryFetch(fetch, { messages: history.slice(2, 4), messageOffset: 2 });
     expect(store.getSnapshot().pendingCommands).toHaveLength(1);
 
-    // 撤回移出消息后，新窗口从更早处起：u0 只是之前没加载，不是新出现的。
     store.applyFrame(full(transportState({ messages: history.slice(0, 4), messageOffset: 0, activity: activity(3, "completed") })));
     expect(store.getSnapshot().pendingCommands).toHaveLength(1);
     store.applyFrame(full(transportState({
-      messages: [...history.slice(0, 4), userMessage("u-new", 4)], messageOffset: 0, activity: activity(3, "completed"),
+      messages: [...history.slice(0, 4), echoed(userMessage("u-new", 4), pending)], messageOffset: 0, activity: activity(3, "completed"),
     })));
     expect(store.getSnapshot().pendingCommands).toHaveLength(0);
   });

@@ -77,6 +77,9 @@ class Constant:
         WAIT_CANCEL_CHECK_SECONDS: float = 0.25
         # terminal_stop 等命令进程收尾的时限；到点仍未退出返回受控错误，结论稍后照常回投。
         COMMAND_STOP_WAIT_SECONDS: float = 10.0
+        # terminal_write 为填入新开终端后，等 shell 跑完启动脚本、出现第一个提示符的时限；到点不关终端，
+        # 只报错让 Agent 改在回复里给命令（启动脚本慢的用户照样能用这个终端）。
+        PREFILL_PROMPT_TIMEOUT_SECONDS: float = 15.0
         # --- Agent 观察 ---
         # 用户最后一次按键后多久内视为「正在打字」：terminal_list / read 据此提示 user typing。
         USER_TYPING_IDLE_SECONDS: float = 3.0

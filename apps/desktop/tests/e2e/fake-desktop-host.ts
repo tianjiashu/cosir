@@ -12,8 +12,9 @@ export type FakeBrowserCall = { method: string; args: unknown[] };
  * 与真实 Electron 一致：只有经文件选择框交给页面的 File 才有本机路径；页面里构造的 File
  * （粘贴、拖放测试数据）没有路径。`directory` 是目录选择框要返回的路径，null 表示用户取消。
  *
- * 内置浏览器只是一份静态状态（`browser.state`，缺省为空）：不开真实网页，作答、定位下载、在文件夹中显示等调用只记进
- * `fakeBrowserCalls`（`browser.failAnswer` 时作答失败），状态不随调用变化；真实标签行为由桌面 E2E 覆盖。
+ * 内置浏览器只是一份状态（`browser.state`，缺省为空）：不开真实网页，作答、定位下载、在文件夹中显示等调用只记进
+ * `fakeBrowserCalls`（`browser.failAnswer` 时作答失败），状态不随调用变化；用例要模拟宿主推送新状态（如 Agent 新开了
+ * 标签）时用 `pushBrowserState`。真实标签行为由桌面 E2E 覆盖。
  *
  * `platform` 缺省是 linux（没有快速查看、没有缩略图）；按平台分支的界面用 darwin / win32 测。文件出口（显示、打开、
  * 快速查看、缩略图）同样只记调用；`thumbnail` 给出时缩略图返回它（data URL），否则按「系统没给出」失败。
@@ -36,6 +37,8 @@ export async function installFakeDesktopHost(
     });
     let snapshot = { generation: 1, status: { state: "ready" }, backendBaseUrl };
     const backendListeners = new Set<(next: typeof snapshot) => void>();
+    let currentBrowserState = browserState;
+    const browserListeners = new Set<(next: typeof browserState) => void>();
     const browserCalls: { method: string; args: unknown[] }[] = [];
     const record = (method: string, args: unknown[]) => {
       browserCalls.push({ method, args });
@@ -46,6 +49,11 @@ export async function installFakeDesktopHost(
       fakeBackendRestart: (baseUrl: string) => {
         snapshot = { ...snapshot, generation: snapshot.generation + 1, backendBaseUrl: baseUrl };
         for (const listener of backendListeners) listener(snapshot);
+      },
+      // 模拟宿主推送浏览器状态（标签出现、关闭）：与真实宿主一样整份推送。
+      fakeBrowserPush: (next: typeof browserState) => {
+        currentBrowserState = next;
+        for (const listener of browserListeners) listener(next);
       },
       cosirHost: {
         platform,
@@ -73,8 +81,11 @@ export async function installFakeDesktopHost(
           },
         },
         browser: {
-          state: async () => browserState,
-          onStateChanged: () => () => undefined,
+          state: async () => currentBrowserState,
+          onStateChanged: (listener: (next: typeof browserState) => void) => {
+            browserListeners.add(listener);
+            return () => browserListeners.delete(listener);
+          },
           // 只记下请求、不模拟标签：用例据此断言「要在内置浏览器打开什么」（地址随 navigate 给出）。
           open: async (...args: unknown[]) => { record("browser.open", args); return "fake-tab"; },
           place: async () => undefined,
@@ -102,4 +113,9 @@ export async function installFakeDesktopHost(
 /** 页面至今对测试宿主内置浏览器的调用。 */
 export async function fakeBrowserCalls(page: Page): Promise<FakeBrowserCall[]> {
   return page.evaluate(() => (window as unknown as { fakeBrowserCalls: FakeBrowserCall[] }).fakeBrowserCalls);
+}
+
+/** 模拟宿主推送一份新的浏览器状态（整份替换），渲染进程经 `browser.onStateChanged` 收到。 */
+export async function pushBrowserState(page: Page, state: BrowserState): Promise<void> {
+  await page.evaluate((next) => (window as unknown as { fakeBrowserPush: (state: unknown) => void }).fakeBrowserPush(next), state);
 }

@@ -30,6 +30,7 @@ from terminal_test_support import (
 
 from app.config.constant import Constant
 from app.tools.terminal_runtime.errors import (
+    TerminalError,
     TerminalIntegrationRequiredError,
     TerminalPrefillRejectedError,
     TerminalSessionCapacityError,
@@ -167,7 +168,7 @@ def test_session_runtimes_orders_active_first_and_keeps_ten_ended(monkeypatch, t
     assert [e["terminalSessionId"] for e in entries[1:]] == ended[2:]
     assert set(entries[0]) == {
         "terminalSessionId", "shellKind", "status", "endReason", "exitCode",
-        "integration", "commandRunning",
+        "integration", "commandRunning", "prefillPending",
         "createdAt",
     }
     assert entries[0]["integration"] == "unavailable"
@@ -377,7 +378,7 @@ def test_prefill_fills_the_prompt_without_running_it(monkeypatch, tmp_path: Path
     assert "input prefill `echo hi`" in result.text
     assert "runs only if the user presses Enter" in result.text
     assert {"type": "input_mark", "by": "agent"} in marks
-    assert runtime._observation.prompt_has_input is True
+    assert runtime._observation.prompt_input == "agent"
 
 
 def test_second_prefill_on_the_same_prompt_is_rejected(monkeypatch, tmp_path: Path) -> None:
@@ -406,10 +407,10 @@ def test_failed_prefill_write_leaves_the_prompt_free(monkeypatch, tmp_path: Path
     workers[0].on_write = full
     with pytest.raises(TerminalWorkerBackpressureError):
         prefill(service, terminal_session_id, "echo first")
-    assert runtime._observation.prompt_has_input is False and "input_mark" not in marks
+    assert runtime._observation.prompt_input is None and "input_mark" not in marks
     workers[0].on_write = None
     prefill(service, terminal_session_id, "echo first")
-    assert runtime._observation.prompt_has_input is True and "input_mark" in marks
+    assert runtime._observation.prompt_input == "agent" and "input_mark" in marks
 
 
 def test_user_typing_on_the_prompt_blocks_prefill_until_the_next_prompt(
@@ -609,3 +610,59 @@ def test_user_input_backpressure_leaves_typing_and_marks_unchanged(monkeypatch, 
         service.require(terminal_session_id, 1).user_input(b"a")
     text = read(service, terminal_session_id).text
     assert "user is typing" not in text and "user typed" not in text
+
+
+def test_prefill_pending_is_projected_until_the_user_takes_over(monkeypatch, tmp_path: Path) -> None:
+    """「待回车」进会话条目：填入置真并重投影；用户第一下按键翻回假、再重投影一次；新提示符也清掉。"""
+    changes: list[int] = []
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker, on_changed=changes.append)
+    terminal_session_id = start(service, tmp_path)
+    prompt(workers[0])
+    runtime = service.require(terminal_session_id, 1)
+    assert session_entries(service)[0]["prefillPending"] is False
+
+    baseline = len(changes)
+    prefill(service, terminal_session_id, "npm login")
+    wait_until(lambda: len(changes) > baseline)
+    assert session_entries(service)[0]["prefillPending"] is True
+    assert runtime.accepts_prefill is False
+
+    after_fill = len(changes)
+    runtime.user_input(b"x")
+    wait_until(lambda: len(changes) > after_fill)
+    assert session_entries(service)[0]["prefillPending"] is False
+    # 之后的按键不再翻转，也不再重投影。
+    settled = len(changes)
+    runtime.user_input(b"y")
+    time.sleep(0.05)
+    assert len(changes) == settled
+
+    prompt(workers[0])
+    assert runtime.accepts_prefill is True
+    prefill(service, terminal_session_id, "ls")
+    prompt(workers[0])  # 用户按了回车、命令结束回到提示符
+    assert session_entries(service)[0]["prefillPending"] is False
+
+
+def test_wait_for_prompt_settles_on_prompt_or_when_it_cannot_come(monkeypatch, tmp_path: Path) -> None:
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
+    runtime = service.require(start(service, tmp_path), 1)
+    threading.Timer(0.05, lambda: prompt(workers[0])).start()
+    assert runtime.wait_for_prompt(2.0, lambda: False) == "settled"
+
+    silent = service.require(start(service, tmp_path), 1)
+    assert silent.wait_for_prompt(0.05, lambda: False) == "timeout"
+    assert silent.wait_for_prompt(2.0, lambda: True) == "cancelled"
+
+    # 没有集成就等不到提示符：立刻收场，由填入准入给出准确原因（make_service 换掉了 worker 构造，放最后）。
+    no_integration, _ = make_service(monkeypatch)
+    plain = no_integration.require(start(no_integration, tmp_path), 1)
+    assert plain.wait_for_prompt(2.0, lambda: False) == "settled"
+
+
+def test_start_rejects_a_workspace_directory_that_is_gone(monkeypatch, tmp_path: Path) -> None:
+    """工作台与 terminal_write 两条新建路径共用这里的目录校验：不起 worker、给出明确错误。"""
+    service, workers = make_service(monkeypatch)
+    with pytest.raises(TerminalError, match="invalid terminal cwd"):
+        service.start(session_id=1, cwd=str(tmp_path / "moved-away"))
+    assert workers == [] and service.session_runtimes(1) == []

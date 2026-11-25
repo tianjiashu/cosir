@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { BrowserDialog, BrowserDownload, BrowserState, BrowserTabSummary } from "@/electron/shared/host-contract";
-import { fakeBrowserCalls, installFakeDesktopHost } from "./fake-desktop-host";
+import { fakeBrowserCalls, installFakeDesktopHost, pushBrowserState } from "./fake-desktop-host";
 import { API_ORIGIN as api } from "./e2e-env";
 import { completedState, seedState } from "./transport-fixtures";
 
@@ -10,7 +10,7 @@ import { completedState, seedState } from "./transport-fixtures";
  */
 
 function tab(tabId: string, title: string, dialog: BrowserDialog | null, sessionId = 100): BrowserTabSummary {
-  return { tabId, sessionId, createdBy: "agent", openerId: null, url: `https://example.com/${tabId}`, title, loading: false, crashed: false, dialog, agentBusy: false, operation: null };
+  return { tabId, sessionId, displaySessionId: sessionId, createdBy: "agent", openerId: null, url: `https://example.com/${tabId}`, title, loading: false, crashed: false, dialog, agentBusy: false, operation: null };
 }
 
 function download(id: string, sessionId: number, filename: string): BrowserDownload {
@@ -133,7 +133,7 @@ test("工具卡片「打开」把面板定位到子 Agent 的标签：本次对�
   await expect(page.getByRole("tab", { name: "甲的页面" })).toBeVisible();
   const opened = async () => (await fakeBrowserCalls(page)).filter((call) => call.method === "browser.open").map((call) => call.args[0]);
 
-  await page.getByRole("button", { name: "打开网页 1 次" }).click();
+  await page.getByRole("button", { name: "打开网页 https://example.com/child" }).click();
   const open = page.getByRole("button", { name: "在浏览器面板打开：子 Agent 的页面" });
   await open.click({ force: true });
   await expect(page.getByRole("tab", { name: "子 Agent 的页面" })).toBeVisible();
@@ -146,4 +146,71 @@ test("工具卡片「打开」把面板定位到子 Agent 的标签：本次对�
   await page.getByRole("treeitem", { name: "另一个会话", exact: true }).click();
   await expect(page.getByRole("tab", { name: "乙的页面" })).toBeVisible();
   await expect(page.getByRole("tab", { name: "子 Agent 的页面" })).toHaveCount(0);
+});
+
+// 目的：「看过」按面板实际显示的会话算；潜在缺陷：只在面板显示当前对话时才记，从父会话的卡片看过子 Agent 的
+// 标签后，子会话仍留着「Agent 打开了 1 个标签页」。
+test("在父会话里经卡片看过子 Agent 新开的标签：子会话的「没看过」随即清掉", async ({ page, request }) => {
+  await seedState(request, 100, completedState(3, { id: "command", parts: [{ type: "text", text: "看看子 Agent 的页面" }] }, [
+    { presentation: "activity", type: "tool-call", toolCallId: "page-call", toolName: "browser_navigate", args: { url: "https://example.com/child" }, status: "completed", awaitingUser: false, display_data: { kind: "browser-page", tab_id: "t-child", url: "https://example.com/child", title: "子 Agent 的页面" } },
+    { type: "text", text: "已打开。" },
+  ] as never));
+  const own = tab("t100", "甲的页面", null, 100);
+  await installFakeDesktopHost(page, { browser: { state: { tabs: [own], downloads: [] } } });
+  await page.goto("/sessions/100");
+  const unseenOfChild = () => page.evaluate(async () => {
+    const modulePath = "/lib/browser/browser-badge.ts";
+    const { useUnseenAgentTabsStore } = await import(modulePath);
+    return useUnseenAgentTabsStore.getState().bySession[500] ?? [];
+  });
+  await expect(page.getByRole("button", { name: /^浏览器，1 个标签页/ })).toBeVisible();
+
+  // 子 Agent 新开了标签：经宿主推送出现，记为没看过。
+  await pushBrowserState(page, { tabs: [own, tab("t-child", "子 Agent 的页面", null, 500)], downloads: [] });
+  await expect.poll(unseenOfChild).toEqual(["t-child"]);
+
+  await page.getByRole("button", { name: "打开网页 https://example.com/child" }).click();
+  await page.getByRole("button", { name: "在浏览器面板打开：子 Agent 的页面" }).click({ force: true });
+  await expect(page.getByRole("tab", { name: "子 Agent 的页面" })).toBeVisible();
+  await expect.poll(unseenOfChild).toEqual([]);
+});
+
+// 目的：子 Agent 在用浏览器也算这个会话在用；潜在缺陷：父会话入口不动，或子 Agent / 分叉的标签混进面板与计数。
+test("子 Agent 在用浏览器：入口呼吸并说「子 Agent」，标签数与面板只算自己的；分叉在用不算", async ({ page }) => {
+  const own = tab("t100", "甲的页面", null, 100);
+  await installFakeDesktopHost(page, { browser: { state: { tabs: [own], downloads: [] } } });
+  await page.goto("/sessions/100");
+  const globe = page.getByRole("button", { name: /^浏览器，/ });
+  await expect(globe).toHaveAccessibleName(/^浏览器，1 个标签页/);
+
+  // 分叉（显示在它自己页上）在用：当前会话不提醒。
+  const fork = { ...tab("t-fork", "分叉的页面", null, 300), agentBusy: true };
+  await pushBrowserState(page, { tabs: [own, fork], downloads: [] });
+  await expect(globe).toHaveAccessibleName("浏览器，1 个标签页，点击打开");
+
+  // 子 Agent（显示在当前会话页上）在用：呼吸，单独说明。
+  const child = { ...tab("t-child", "子 Agent 的页面", null, 500), displaySessionId: 100, agentBusy: true };
+  await pushBrowserState(page, { tabs: [own, fork, child], downloads: [] });
+  await expect(globe).toHaveAccessibleName(/^浏览器，1 个标签页.*子 Agent 正在使用浏览器/);
+
+  // 面板只显示自己的标签；子 Agent 的看不到，所以面板开着也照常提醒。
+  await globe.click();
+  await expect(page.getByRole("tab", { name: "甲的页面" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "子 Agent 的页面" })).toHaveCount(0);
+  await expect(globe).toHaveAccessibleName(/子 Agent 正在使用浏览器/);
+});
+
+test("Agent 正在用浏览器时切到别的会话：那个会话的入口不沿用「正在使用」的保持期", async ({ page, request }) => {
+  await request.post(`${api}/__test__/seed-session`, { data: { sessionId: 101, title: "另一个会话" } });
+  await installFakeDesktopHost(page, { browser: { state: { tabs: [{ ...tab("t100", "甲的页面", null, 100), agentBusy: true }], downloads: [] } } });
+  await page.goto("/sessions/100");
+  const globe = page.getByRole("button", { name: /^浏览器，/ });
+  await expect(globe).toHaveAccessibleName(/Agent 正在使用浏览器/);
+  await page.getByRole("treeitem", { name: "另一个会话", exact: true }).click();
+  await expect(page).toHaveURL(/sessions\/101$/);
+  // 入口换成乙的标签数的当下就不该再说「正在使用」（保持期是 2 秒，等下去会掩盖问题）。
+  await expect(globe).toHaveAccessibleName(/^浏览器，0 个标签页/);
+  expect(await globe.getAttribute("aria-label")).not.toContain("Agent 正在使用浏览器");
+  await page.getByRole("treeitem", { name: "浏览器会话", exact: true }).click();
+  await expect(globe).toHaveAccessibleName(/Agent 正在使用浏览器/);
 });

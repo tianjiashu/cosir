@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   deriveComposerAction,
   isWithdrawableLatestUserMessage,
-  isQueuedUserMessage,
+  messageDelivery,
+  queueBarMessageIdsKey,
 } from "@/lib/assistant/composer/action-policy";
 import { activity, agentMessage, agentMessagePart, assistantMessage, queuedMessage, transportState, userMessage } from "./transport-fixtures";
 
@@ -40,7 +41,7 @@ describe("conversation actions", () => {
       messages: [userMessage("u1", 1), assistantMessage("assistant-u1", 1, [agentMessagePart("a2")])],
       activity: activity(1, "completed"),
     });
-    inherited.messages[1] = { ...inherited.messages[1], inherited: true };
+    inherited.messages[1] = { ...inherited.messages[1], inherited: true, clientMessageId: null };
     expect(isWithdrawableLatestUserMessage(inherited, "u1")).toBe(true);
   });
 
@@ -61,6 +62,19 @@ it("queued messages are not withdrawable and do not block withdrawing the latest
   });
   expect(isWithdrawableLatestUserMessage(snapshot, "consumed")).toBe(true);
   expect(isWithdrawableLatestUserMessage(snapshot, "q2")).toBe(false);
-  expect(isQueuedUserMessage(snapshot, "q2")).toBe(true);
-  expect(isQueuedUserMessage(snapshot, "consumed")).toBe(false);
+});
+
+it("还没并入的消息按去向分流：排队的进排队条（含正在提交的），插话与已并入的留在对话流", () => {
+  const message = (id: string, custom: Record<string, unknown>) => ({ id, role: "user", metadata: { custom } });
+  expect(messageDelivery({ delivery: "next_run" })).toBe("next_run");
+  expect(messageDelivery({ delivery: "immediate" })).toBe("immediate");
+  expect(messageDelivery({ source: null })).toBeNull();
+  expect(messageDelivery(undefined)).toBeNull();
+  expect(queueBarMessageIdsKey([
+    message("done", { source: null }),
+    message("interject", { delivery: "immediate", clientMessageId: null }),
+    message("q1", { delivery: "next_run", clientMessageId: null }),
+    message("pending-q", { pending: true, delivery: "next_run", clientMessageId: null }),
+    message("pending", { pending: true }),
+  ])).toBe("q1|pending-q");
 });

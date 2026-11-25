@@ -13,7 +13,7 @@ import type {
   BrowserTabCreator,
   BrowserTabLimits,
 } from "../../shared/host-contract";
-import { BrowserTab, type EvaluateOutcome, type PageSnapshot, type PageTextRead } from "./browser-tab";
+import { BrowserTab, type EvaluateOutcome, type PageSnapshot, type PageTextRead, type TabOptions } from "./browser-tab";
 import { browserPageWebPreferences, type BrowserSessionEvents } from "./browser-partition";
 import { BrowserDownloads } from "./downloads";
 import { browserError } from "./errors";
@@ -418,7 +418,10 @@ export class BrowserHost implements BrowserSessionEvents {
   private async open(sessionId: number, context: BrowserTabContext, createdBy: BrowserTabCreator, activate: boolean, signal?: AbortSignal): Promise<TabEntry> {
     this.assertCapacity(sessionId, context.limits);
     signal?.throwIfAborted();
-    const entry = this.register({ sessionId, createdBy, openerId: null, downloadDir: context.downloadDir }, activate);
+    const entry = this.register(
+      { sessionId, createdBy, openerId: null, downloadDir: context.downloadDir, displaySessionId: context.displaySessionId },
+      activate,
+    );
     try {
       await this.readyTab(entry, signal);
       logDesktopEvent("INFO", "browser", "browser_tab_opened", { session_id: sessionId, tab_id: entry.tab.tabId, created_by: createdBy });
@@ -456,7 +459,14 @@ export class BrowserHost implements BrowserSessionEvents {
         const adopted = (options as { webContents?: WebContents }).webContents;
         if (!adopted) logDesktopEvent("WARNING", "browser", "browser_popup_without_contents", { session_id: opener.sessionId, tab_id: opener.tabId });
         const entry = this.register(
-          { sessionId: opener.sessionId, createdBy: opener.createdBy, openerId: opener.tabId, downloadDir: opener.downloadDir, adopted },
+          {
+            sessionId: opener.sessionId,
+            createdBy: opener.createdBy,
+            openerId: opener.tabId,
+            downloadDir: opener.downloadDir,
+            displaySessionId: opener.displaySessionId,
+            adopted,
+          },
           false,
         );
         const { tab } = entry;
@@ -487,7 +497,7 @@ export class BrowserHost implements BrowserSessionEvents {
 
   /** 同步登记并开始初始化；任何 await 前，资源和上限名额都已经归 Host 所有。 */
   private register(
-    options: { sessionId: number; createdBy: BrowserTabCreator; openerId: string | null; downloadDir: string; adopted?: WebContents },
+    options: Omit<TabOptions, "tabId" | "events">,
     activate: boolean,
   ): TabEntry {
     const tabId = `t${++this.sequence}`;

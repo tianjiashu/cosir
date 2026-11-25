@@ -41,6 +41,10 @@ export type SessionMessageRequest = {
   message: SessionUserMessage;
   modelConfigId: string;
   reasoningEffort: string | null;
+  /** 用户要求加入队列（⌘回车）；只是意图，后端在空闲、等回答或有终端审批时仍立即处理。 */
+  queue: boolean;
+  /** 乐观消息的命令 id：后端存下并在快照里原样带回，前端据此对账（`reconcilePending`）。 */
+  clientMessageId: string;
 };
 
 /**
@@ -66,8 +70,8 @@ async function postSessionCommand(
 }
 
 /**
- * 发送消息。并入时机由后端决定：Session 有活动 Run（含挂起）时排队，Run 结束后每个 Run 一条依次处理；
- * 空闲时立即处理。排队状态经 snapshot 的 `queued_messages` 投影。
+ * 发送消息。默认立即处理：空闲开新 Run，运行中插话（下一步并入当前 Run）；`queue` 时有活动 Run 就排到它结束后，
+ * 每个 Run 一条依次处理。还没并入的消息经 snapshot 的 `queued_messages` 投影，`delivery` 区分插话与排队。
  */
 export function sendSessionMessage(
   sessionId: number,
@@ -96,8 +100,8 @@ function queuedMessagePath(sessionId: number, messageId: string): string {
 }
 
 /**
- * 排队消息改为立即处理：运行中并入当前 Run，挂起时唤醒，空闲时开新 Run。后端以新身份重新入队，
- * 原条目从队列投影里消失。已被并入时 409 `MESSAGE_CONSUMED`。
+ * 立即发送一条还没并入的消息：排队的原地转为插话（身份不变，从排队条移到对话流），并停下当前
+ * 执行中的工具调用，让模型下一步就看到它；挂起时唤醒，空闲时开新 Run。已被并入时 409 `MESSAGE_CONSUMED`。
  */
 export function sendQueuedSessionMessageNow(sessionId: number, messageId: string, init?: CommandInit): Promise<void> {
   return postSessionCommand(`${queuedMessagePath(sessionId, messageId)}/send-now`, undefined, init);

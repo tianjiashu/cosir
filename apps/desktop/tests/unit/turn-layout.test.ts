@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TransportMessagePart, TransportToolCallPart } from "@/lib/assistant/contract";
-import { aggregateChanges, describeCallProblems, describeVerbCounts, projectTurn, visibleTurnBlock, type ActivityGroup, type TurnLayout } from "@/lib/assistant/turn/turn-layout";
+import { aggregateChanges, describeCallProblems, describeVerbGroups, projectTurn, visibleTurnBlock, type ActivityGroup, type TurnLayout } from "@/lib/assistant/turn/turn-layout";
 
 /** 第一个工具组的摘要：失败、取消与按动词计数只在组上汇总。 */
 const firstGroupSummary = (layout: TurnLayout) => (layout.blocks.find((block) => block.kind === "activity") as ActivityGroup).summary;
@@ -64,7 +64,7 @@ describe("stable conversation projection", () => {
     const after = projectTurn([{ ...wait, status: "failed" }, call("read")], "suspended");
     expect(before.blocks[0]).toMatchObject({ key: "interval:0", calls: [{ part: { toolCallId: "read" } }] });
     expect(after.blocks[0]).toMatchObject({ key: "interval:0" });
-    expect(firstGroupSummary(after).verbCounts).toEqual([{ label: "读取文件", count: 1 }]);
+    expect(firstGroupSummary(after).verbs.map(({ label, count }) => ({ label, count }))).toEqual([{ label: "读取文件", count: 1 }]);
     expect(firstGroupSummary(after).failedCount).toBe(1);
     expect(projectTurn([wait], "suspended").process.items).toEqual([]);
   });
@@ -81,20 +81,27 @@ describe("stable conversation projection", () => {
     expect(layout.blocks.map((item) => item.kind)).toEqual(["activity"]);
     expect((layout.blocks[0] as ActivityGroup).calls.map((item) => item.index)).toEqual([0, 2]);
   });
-  // 目的：组头文案运行中只往后追加；潜在缺陷：按次数排序时后出现的类别次数反超，已显示的类别来回换位。
-  it("group heading lists verbs by first appearance and only appends while counts grow", () => {
+  // 目的：组头文案按首次出现排列；潜在缺陷：按次数排序时后出现的类别次数反超，已显示的类别来回换位。
+  it("group heading lists verbs by first appearance, two at most", () => {
     const write = (id: string) => call(id, { toolName: "write_file" });
-    const edit = (id: string) => call(id, { toolName: "edit_file" });
     const run = (id: string) => call(id, { toolName: "execute_terminal" });
-    const heading = (parts: TransportMessagePart[]) => describeVerbCounts(firstGroupSummary(projectTurn(parts, "running")));
-    const early = heading([write("w"), edit("e"), run("r1")]);
-    const later = heading([write("w"), edit("e"), run("r1"), run("r2")]);
-    expect(later.split(" · ").map((item) => item.split(" ")[0])).toEqual(early.split(" · ").map((item) => item.split(" ")[0]));
-    expect(later.endsWith("2 次")).toBe(true);
-    // 超过三类：只列最早出现的三类，其余并入「等 N 类」，已显示部分不变。
-    const more = heading([write("w"), edit("e"), run("r1"), run("r2"), call("x"), call("y")]);
-    expect(more.startsWith(later)).toBe(true);
-    expect(more.endsWith(" 等 4 类")).toBe(true);
+    const heading = (parts: TransportMessagePart[]) => describeVerbGroups(firstGroupSummary(projectTurn(parts, "running")));
+    expect(heading([write("w1"), write("w2"), write("w3"), run("r1"), run("r2")])).toBe("写入文件 3 次，执行命令 2 次");
+    expect(heading([run("r1"), run("r2"), run("r3"), write("w1"), write("w2"), write("w3"), call("x"), call("y"), call("z")])).toBe("执行命令 3 次，写入文件 3 次 等 3 类");
+  });
+  // 目的：不展开也知道这段碰了什么；潜在缺陷：只写次数时用户读不出任何东西，次数多时列对象又成了噪音。
+  it("names what one or two calls touched and falls back to counts", () => {
+    const read = (id: string, path?: string) => call(id, { args: path ? { path } : {} });
+    const run = (id: string, args: Record<string, unknown> = {}) => call(id, { toolName: "execute_terminal", args });
+    const heading = (...parts: TransportMessagePart[]) => describeVerbGroups(firstGroupSummary(projectTurn(parts, "settled")));
+    expect(heading(read("a", "src/app/auth.py"))).toBe("读取文件 auth.py");
+    expect(heading(read("a", "src/auth.py"), read("b", "src/db.py"))).toBe("读取文件 auth.py、db.py");
+    expect(heading(read("a", "src/auth.py"), read("b", "lib/auth.py"))).toBe("读取文件 auth.py");
+    expect(heading(read("a", "a.py"), read("b", "b.py"), read("c", "c.py"))).toBe("读取文件 3 次");
+    // 写了意图就写意图（自带动作），没写的命令原文难读，只写动词或次数。
+    expect(heading(run("r", { intent: "查看配置项", command: "cat .env" }), read("a", "auth.py"))).toBe("查看配置项，读取文件 auth.py");
+    expect(heading(run("r", { command: "cat .env" }))).toBe("执行命令");
+    expect(heading(run("r1", { intent: "查看配置项" }), run("r2", { command: "ls" }))).toBe("执行命令 2 次");
   });
   it("completed result warnings are counted per call, not per failed item", () => {
     const layout = projectTurn([
@@ -105,11 +112,11 @@ describe("stable conversation projection", () => {
     ], "settled");
     expect(firstGroupSummary(layout).failedCount).toBe(0);
     expect(describeCallProblems(firstGroupSummary(layout))).toBeNull();
-    expect(firstGroupSummary(layout).verbCounts).toEqual([{ label: "读取文件", count: 4 }]);
+    expect(firstGroupSummary(layout).verbs.map(({ label, count }) => ({ label, count }))).toEqual([{ label: "读取文件", count: 4 }]);
   });
   it("unknown tools remain visible and do not acquire invented result semantics", () => {
     const layout = projectTurn([call("future", { toolName: "future_tool", status: "completed", display_data: { kind: "future-result" } })], "settled");
-    expect(firstGroupSummary(layout).verbCounts).toEqual([{ label: "future_tool", count: 1 }]);
+    expect(describeVerbGroups(firstGroupSummary(layout))).toBe("future_tool");
   });
   it("keeps every file operation in order, including repeated edits of one path", () => {
     const change = (id: string, status: string, insertions: number) => call(id, { display_data: { kind: "file-changes", changes: [{ path: "a", status, insertions }] } });

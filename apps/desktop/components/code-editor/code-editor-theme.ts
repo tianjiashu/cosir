@@ -88,7 +88,7 @@ export const editorTheme = [
     ".cm-dialog": {
       padding: "0.375rem 2rem 0.375rem 0.75rem",
       fontFamily: "var(--app-font-sans)",
-      fontSize: "0.75rem",
+      fontSize: "var(--text-xs)",
     },
     ".cm-dialog label": {
       fontSize: "inherit",

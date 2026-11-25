@@ -9,9 +9,9 @@ const LAUNCH = { modelConfigId: null, reasoningEffort: null };
 const snapshot = (status: "completed" | "running" | "suspended"): TransportState => {
   const ended = (runStatus: string) => runStatus === "completed";
   const exchange = (turn: number, runStatus: string) => [
-    { id: `${turn}`, role: "user" as const, turn, inherited: false, source: null, outcome: null,
+    { id: `${turn}`, role: "user" as const, turn, inherited: false, clientMessageId: null, source: null, outcome: null,
       parts: [{ type: "text" as const, text: `问题 ${turn}`, status: "completed" as const }] },
-    { id: `assistant-turn-${turn}`, role: "assistant" as const, turn, inherited: false, source: null,
+    { id: `assistant-turn-${turn}`, role: "assistant" as const, turn, inherited: false, clientMessageId: null, source: null,
       parts: [{ type: "text" as const, text: `回答 ${turn}`, status: ended(runStatus) ? "completed" as const : "running" as const }],
       outcome: ended(runStatus) ? { status: "completed" as const, endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 } : null },
   ];

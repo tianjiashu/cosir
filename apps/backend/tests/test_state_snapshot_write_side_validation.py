@@ -27,7 +27,7 @@ SESSION_ID = 7
 def _message(index: int, role: str) -> dict[str, Any]:
     return {
         "id": f"{role}-{index}", "role": role, "turn": index // 2 + 1, "inherited": False,
-        "outcome": None, "source": None,
+        "outcome": None, "source": None, "clientMessageId": None,
         "parts": [{"type": "text", "text": f"text-{index}", "status": "completed"}],
     }
 

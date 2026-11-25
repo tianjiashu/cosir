@@ -264,7 +264,7 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   const session = requireRecord(value, path);
   requireExactKeys(session, [
     "terminalSessionId", "shellKind", "status", "endReason", "exitCode",
-    "integration", "commandRunning", "createdAt",
+    "integration", "commandRunning", "prefillPending", "createdAt",
   ], path);
   const terminalSessionId = requireString(session.terminalSessionId, `${path}.terminalSessionId`);
   if (terminalSessionId === "" || seenIds.has(terminalSessionId)) throw new TransportSnapshotValidationError(`${path}.terminalSessionId`, "非空且在 Session 内唯一");
@@ -275,6 +275,7 @@ function validateTerminalSession(value: unknown, path: string, seenIds: Set<stri
   if (session.exitCode !== null && !Number.isInteger(session.exitCode)) throw new TransportSnapshotValidationError(`${path}.exitCode`, "整数或 null");
   if (!(TERMINAL_INTEGRATION_STATES as readonly unknown[]).includes(session.integration)) throw new TransportSnapshotValidationError(`${path}.integration`, "受支持的集成状态");
   if (typeof session.commandRunning !== "boolean") throw new TransportSnapshotValidationError(`${path}.commandRunning`, "布尔值");
+  if (typeof session.prefillPending !== "boolean") throw new TransportSnapshotValidationError(`${path}.prefillPending`, "布尔值");
   requireString(session.createdAt, `${path}.createdAt`);
 }
 
@@ -351,7 +352,7 @@ function validateMessages(value: unknown, path: string, ids: Set<string>): void 
 
 function validateMessage(rawMessage: unknown, messagePath: string, ids: Set<string>): void {
   const message = requireRecord(rawMessage, messagePath);
-  requireExactKeys(message, ["id", "role", "parts", "turn", "inherited", "outcome", "source"], messagePath);
+  requireExactKeys(message, ["id", "role", "parts", "turn", "inherited", "outcome", "source", "clientMessageId"], messagePath);
   validateMessageBody(message, messagePath, ids);
   if (requireNullableNonNegativeInteger(message.turn, `${messagePath}.turn`) === null) {
     throw new TransportSnapshotValidationError(`${messagePath}.turn`, "非负整数");
@@ -364,6 +365,10 @@ function validateMessage(rawMessage: unknown, messagePath: string, ids: Set<stri
   if (message.source !== null) {
     if (message.role !== "user") throw new TransportSnapshotValidationError(`${messagePath}.source`, "assistant 消息上为 null");
     validateSource(message.source, `${messagePath}.source`);
+  }
+  if (message.clientMessageId !== null) {
+    if (message.role !== "user") throw new TransportSnapshotValidationError(`${messagePath}.clientMessageId`, "assistant 消息上为 null");
+    requireString(message.clientMessageId, `${messagePath}.clientMessageId`);
   }
 }
 
@@ -420,7 +425,8 @@ export function parseTransportState(value: unknown): TransportState {
     state.queued_messages.forEach((rawMessage, index) => {
       const path = `queued_messages[${index}]`;
       const message = requireRecord(rawMessage, path);
-      requireExactKeys(message, ["id", "role", "parts", "delivery"], path);
+      requireExactKeys(message, ["id", "role", "parts", "delivery", "clientMessageId"], path);
+      if (message.clientMessageId !== null) requireString(message.clientMessageId, `${path}.clientMessageId`);
       validateMessageBody(message, path, ids);
       if (message.delivery !== "immediate" && message.delivery !== "next_run") throw new TransportSnapshotValidationError(`${path}.delivery`, "immediate 或 next_run");
       if (message.role !== "user") throw new TransportSnapshotValidationError(`${path}.role`, "user");

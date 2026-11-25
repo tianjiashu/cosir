@@ -248,3 +248,50 @@ test("面板收起时异常退出在页头标红，打开面板即视为看过",
   await expect(attention).toHaveCount(0);
 });
 
+
+test("Agent 填入命令展开面板、选中那个终端，但焦点留在输入框：首次打开、收起后再展开、开着时切到别的标签都一样", async ({ page, request }) => {
+  await page.goto("/sessions/42");
+  const input = page.getByLabel("消息输入");
+  const entry = page.getByRole("button", { name: /^终端，/ });
+  const create = async () => (await (await request.post(`${origin}/sessions/42/terminal/sessions`, { data: { shell: "auto" } })).json()).terminalSessionId as string;
+  const prefill = (terminalSessionId: string) => request.post(`${origin}/__test__/terminal/prefill`, { data: { sessionId: 42, terminalSessionId } });
+  const typeAndExpectComposer = async (text: string) => {
+    await expect(input).toBeFocused();
+    await page.keyboard.type(text);
+    await expect(input).toContainText(text);
+  };
+
+  // 首次打开：面板从未打开过，窗格随自动展开才挂载。
+  const first = await create();
+  await expect(entry).toHaveAccessibleName(/^终端，1 个运行中会话/);
+  await input.click();
+  await page.keyboard.type("draft");
+  await prefill(first);
+  await expect(panel(page)).toBeVisible();
+  await expect(page.locator(`[data-terminal-session="${first}"]`)).toHaveAttribute("data-active", "true");
+  await typeAndExpectComposer("-a");
+  await expect(screen(page, first)).not.toContainText("-a");
+
+  // 开着时 Agent 填入另一个终端：切到它，焦点不动。
+  const second = await create();
+  await expect(panel(page).getByRole("tab")).toHaveCount(2);
+  await input.click();
+  await prefill(second);
+  await expect(page.locator(`[data-terminal-session="${second}"]`)).toHaveAttribute("data-active", "true");
+  await typeAndExpectComposer("-b");
+
+  // 收起后（窗格已挂载）再由填入展开。
+  await panel(page).getByRole("button", { name: "关闭终端面板" }).click();
+  await expect(panel(page)).toBeHidden();
+  await input.click();
+  await request.post(`${origin}/__test__/terminal/exit`, { data: { sessionId: 42, terminalSessionId: second, exitCode: 0 } });
+  const third = await create();
+  await expect(entry).toHaveAccessibleName(/^终端，2 个运行中会话/);
+  await prefill(third);
+  await expect(panel(page)).toBeVisible();
+  await typeAndExpectComposer("-c");
+
+  // 用户自己切标签仍然拿焦点。
+  await panel(page).getByRole("tab").first().click();
+  await expect(page.locator(`[data-terminal-session="${first}"] .xterm-helper-textarea`)).toBeFocused();
+});

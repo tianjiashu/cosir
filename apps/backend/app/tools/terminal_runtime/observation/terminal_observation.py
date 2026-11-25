@@ -20,6 +20,8 @@ from app.tools.terminal_runtime.observation.line_buffer import TerminalLineBuffe
 
 # 只有用户会发起命令：Agent 只把一行填进提示符，回车只能由用户按。
 InputSource = Literal["user"]
+# 这个提示符上的输入是谁写的：Agent 只能往空行里填一次，之后用户的任何按键都让这一行归用户。
+PromptInput = Literal["agent", "user"]
 
 # 一条命令的状态。结束有三种，区别在「命令是不是真的不在跑了」：
 # - returned：shell 报告返回，带退出结果；
@@ -63,9 +65,10 @@ class TerminalCommand:
 class TerminalObservation:
     """逻辑行 + shell 状态；``information_version`` 在任何 Agent 可见变化时推进。
 
-    ``prompt_has_input`` 是「这个提示符出现之后，用户或 Agent 是否已经往这一行写过东西」：Agent
-    填入的准入依据，也替代了旧的幂等缓存（同一个提示符至多填一次）。它只在 ``shell_prompt`` 到达时
-    复位，与屏幕内容无关。
+    ``prompt_input`` 是「这个提示符出现之后，这一行被谁写过」：``None`` 是空行，``agent`` 是只有 Agent
+    填入过，``user`` 是用户碰过。它同时是 Agent 填入的准入依据（只有空行能填，同一个提示符至多填一次）
+    与「Agent 填的命令用户还没碰过」的事实（:attr:`prefill_pending`），所以用一个值、不拆成两个标志。
+    它只在 ``shell_prompt`` 到达时复位，与屏幕内容无关。
     """
 
     def __init__(self, shell_kind: str, integration: str) -> None:
@@ -78,7 +81,12 @@ class TerminalObservation:
         self.command_counter = 0
         self.latest_command: TerminalCommand | None = None
         self.integration_status = "starting" if integration == "auto" else "off"
-        self.prompt_has_input = False
+        self.prompt_input: PromptInput | None = None
+
+    @property
+    def prefill_pending(self) -> bool:
+        """Agent 填入的命令还停在提示符上、用户没碰过：在等用户回车。"""
+        return self.phase == "editing" and self.prompt_input == "agent"
 
     @property
     def active_command(self) -> TerminalCommand | None:
@@ -141,7 +149,7 @@ class TerminalObservation:
                 self.end_command("prompt_without_command_result")
             self.phase = "editing"
             self.cwd = event.get("cwd")
-            self.prompt_has_input = False
+            self.prompt_input = None
         else:
             raise TerminalError(f"unknown shell observation: {kind}")
         self.information_version += 1
@@ -154,13 +162,13 @@ class TerminalObservation:
             return cursor - 1
         return cursor
 
-    def note_input(self) -> None:
-        """记下「这个提示符上已经有输入」；输入入队成功之后由会话运行时调用（之后 worker 才写进 PTY）。
+    def note_input(self, by: PromptInput) -> None:
+        """记下这个提示符上的输入来源；输入入队成功之后由会话运行时调用（之后 worker 才写进 PTY）。
 
-        Agent 填入与用户按键都算。提示符上已有输入后，Agent 填入被拒（见会话运行时的填入准入），
-        直到下一个 ``shell_prompt`` 把它复位。
+        提示符上已有输入后，Agent 填入被拒（见会话运行时的填入准入），直到下一个 ``shell_prompt``
+        把它复位；用户按键一律覆盖为 ``user``（改过、清空都算用户接手）。
         """
-        self.prompt_has_input = True
+        self.prompt_input = by
 
     def end_command(self, reason: str) -> None:
         """正在执行的命令确知已经结束、但没有退出结果（见 :data:`CommandStatus` 的 ``ended``）。"""

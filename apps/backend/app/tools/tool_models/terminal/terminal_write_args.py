@@ -10,10 +10,13 @@ class TerminalWriteArgs(BaseModel):
 
     model_config = ConfigDict(strict=True, extra="forbid")
 
-    terminal_id: str = Field(
+    terminal_id: str | None = Field(
+        default=None,
         min_length=1,
         max_length=128,
-        description="Terminal ID of a terminal the user opened, from terminal_list.",
+        description=(
+            "A terminal from terminal_list to fill, or null to use an idle terminal or open a new one."
+        ),
     )
     command: str = Field(
         min_length=1,

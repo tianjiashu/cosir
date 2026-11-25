@@ -41,7 +41,7 @@ import { useTerminalSessionActions } from "./use-terminal-session-actions";
  */
 export function TerminalWorkbench({ sessionId }: { sessionId: number }) {
   const state = useTerminalWorkbenchStore(selectTerminalSession(sessionId));
-  const { sessions, open, activeSessionId, focusToken, autoCreate } = state;
+  const { sessions, open, activeSessionId, focusPending, autoCreate } = state;
   const bridge = useReferenceBridge();
   const [everOpened, setEverOpened] = useState(open);
   const [mounted, setMounted] = useState<readonly string[]>([]);
@@ -129,6 +129,7 @@ export function TerminalWorkbench({ sessionId }: { sessionId: number }) {
     }
   }, [activeSessionId]);
   const links = useOpenLink("terminal", sessionId);
+  const consumeFocus = useCallback(() => useTerminalWorkbenchStore.getState().consumeFocus(sessionId), [sessionId]);
 
   const selectSession = (terminalSessionId: string) => {
     useTerminalWorkbenchStore.getState().select(sessionId, terminalSessionId);
@@ -229,7 +230,8 @@ export function TerminalWorkbench({ sessionId }: { sessionId: number }) {
                     sessionId={sessionId}
                     terminalSessionId={terminalSessionId}
                     visible={open && terminalSessionId === activeSessionId}
-                    focusToken={focusToken}
+                    focusPending={focusPending}
+                    onFocused={consumeFocus}
                     workspaceRoot={bridge?.workspaceRoot || undefined}
                     onRuntime={handleRuntime}
                     onSearchResults={handleSearchResults}

@@ -118,16 +118,19 @@ const textMessage = (id, role, text, status, turn) => ({
       ]
     : [{ type: "text", text, status: "completed" }],
   turn,
-  inherited: false,
+  inherited: false, clientMessageId: null,
   outcome: null,
   source: null,
 });
 
-/** 一个回合：用户消息 id 为 `user-{turn}`，回复 id 按契约为 `assistant-turn-{turn}`。测试里每个 Run 只有一个回合。 */
-function stateWithExchange(previous, text, turn, assistantText, status) {
+/**
+ * 一个回合：用户消息 id 为 `user-{turn}`，回复 id 按契约为 `assistant-turn-{turn}`。测试里每个 Run 只有一个回合。
+ * 与后端一致，用户消息带回请求里的客户端 id，前端按它把乐观消息换成正式消息。
+ */
+function stateWithExchange(previous, text, turn, assistantText, status, clientMessageId = null) {
   const next = structuredClone(previous);
   next.messages.push(
-    textMessage(`user-${turn}`, "user", text, "completed", turn),
+    { ...textMessage(`user-${turn}`, "user", text, "completed", turn), clientMessageId },
     textMessage(`assistant-turn-${turn}`, "assistant", assistantText, status, turn),
   );
   next.activity = activityOf(turn, TERMINAL.has(status) ? status : "running", {
@@ -194,8 +197,8 @@ function completedFixture(turn, userMessage, assistantParts) {
   return {
     title: "测试对话",
     messages: [
-      { ...userMessage, turn, inherited: false, outcome: null, source: null },
-      { id: `assistant-turn-${turn}`, role: "assistant", parts: assistantParts, turn, inherited: false, outcome: outcomeOf(activity), source: null },
+      { ...userMessage, turn, inherited: false, clientMessageId: null, outcome: null, source: null },
+      { id: `assistant-turn-${turn}`, role: "assistant", parts: assistantParts, turn, inherited: false, clientMessageId: null, outcome: outcomeOf(activity), source: null },
     ],
     activity,
   };
@@ -285,8 +288,8 @@ function alternatingSequenceState(phase) {
   return {
     title: "测试对话",
     messages: [
-      { id: "user-alternating", role: "user", parts: [{ type: "text", text: "把调度 tick 改成可配置，并补测试", status: "completed" }], turn, inherited: false, outcome: null, source: null },
-      { id: `assistant-turn-${turn}`, role: "assistant", parts, turn, inherited: false, outcome: phase === "running" ? null : { ...outcomeOf(activity), durationMs: 192_000 }, source: null },
+      { id: "user-alternating", role: "user", parts: [{ type: "text", text: "把调度 tick 改成可配置，并补测试", status: "completed" }], turn, inherited: false, clientMessageId: null, outcome: null, source: null },
+      { id: `assistant-turn-${turn}`, role: "assistant", parts, turn, inherited: false, clientMessageId: null, outcome: phase === "running" ? null : { ...outcomeOf(activity), durationMs: 192_000 }, source: null },
     ],
     activity,
   };
@@ -636,17 +639,17 @@ function handleMessage(res, body, sessionId) {
     const finalStatus = text.startsWith("tool-lifecycle-failed") ? "failed"
       : text.startsWith("tool-lifecycle-cancelled") ? "cancelled"
         : "completed";
-    const initialState = stateWithExchange(base, text, turn, "", "running");
+    const initialState = stateWithExchange(base, text, turn, "", "running", body.clientMessageId);
     initialState.messages.at(-1).parts = toolLifecycleParts(turn, "running", "pending");
-    const finalState = stateWithExchange(base, text, turn, "", finalStatus);
+    const finalState = stateWithExchange(base, text, turn, "", finalStatus, body.clientMessageId);
     finalState.messages.at(-1).parts = toolLifecycleParts(turn, finalStatus, finalStatus);
     for (const state of [initialState, finalState]) state.activity.launch = launch;
     void executeToolLifecycle(sessionId, initialState, finalState);
     return;
   }
 
-  const initialState = stateWithExchange(base, text, turn, "", "running");
-  const finalState = stateWithExchange(base, text, turn, "streaming response", "completed");
+  const initialState = stateWithExchange(base, text, turn, "", "running", body.clientMessageId);
+  const finalState = stateWithExchange(base, text, turn, "streaming response", "completed", body.clientMessageId);
   for (const state of [initialState, finalState]) state.activity.launch = launch;
   if (text.startsWith("usage-regression")) {
     const usage = usageFixture(text.includes("second"));
@@ -737,8 +740,9 @@ function handleAttach(res, sessionId) {
 
 /** 编辑排队消息：原地改正文，消息已并入时 409 MESSAGE_CONSUMED。 */
 /**
- * 模拟排队消息的立即发送与删除（编辑也走删除）：与后端一致，立即发送撤回原条目、以新身份按
- * `immediate` 重新入队；删除只撤回。条目已不在队列时 409 `MESSAGE_CONSUMED`。本测试服务不模拟随后的并入。
+ * 模拟还没并入的消息的立即发送与删除（编辑也走删除）：与后端一致，立即发送把排队条目原地改为 `immediate`
+ * （身份不变），插话条目原样保留（后端另停当前工具，这里不模拟）；删除只撤回。条目已不在队列时
+ * 409 `MESSAGE_CONSUMED`。本测试服务不模拟随后的并入。
  */
 function handleQueuedWithdraw(res, sessionId, messageId, sendNow) {
   telemetry.requestBodies.push({ sessionId, queuedMessageId: messageId, operation: sendNow ? "send_now" : "delete" });
@@ -748,9 +752,14 @@ function handleQueuedWithdraw(res, sessionId, messageId, sendNow) {
     jsonResponse(res, 409, { detail: { error: { code: "MESSAGE_CONSUMED", message: "消息已被处理", retryable: false } } });
     return;
   }
+  if (sendNow && queued.delivery === "immediate") {
+    jsonResponse(res, 200, {});
+    return;
+  }
   const next = structuredClone(state);
-  next.queued_messages = next.queued_messages.filter((message) => message.id !== messageId);
-  if (sendNow) next.queued_messages.push({ ...queued, id: `${messageId}-now`, delivery: "immediate" });
+  next.queued_messages = sendNow
+    ? next.queued_messages.map((message) => message.id === messageId ? { ...message, delivery: "immediate" } : message)
+    : next.queued_messages.filter((message) => message.id !== messageId);
   jsonResponse(res, 200, {});
   commit(sessionId, next);
 }
@@ -778,6 +787,7 @@ function createTerminalSession(sessionId, shell) {
       exitCode: null,
       integration: "ready",
       commandRunning: false,
+      prefillPending: false,
       createdAt: new Date().toISOString(),
     },
     output: [],
@@ -1110,6 +1120,14 @@ const server = createServer(async (req, res) => {
     jsonResponse(res, 200, {});
     return;
   }
+  // 模拟 Agent 经 terminal_write 把一行命令填进提示符：只翻 snapshot 的待回车，经 Session 订阅推送。
+  if (req.method === "POST" && url.pathname === "/__test__/terminal/prefill") {
+    const body = await readJson(req);
+    findTerminalSession(body.sessionId, body.terminalSessionId).entry.prefillPending = true;
+    if (states.has(body.sessionId)) commit(body.sessionId, states.get(body.sessionId));
+    jsonResponse(res, 200, {});
+    return;
+  }
   // 模拟 shell 自己退出（含非 0 退出码）：会话进入 exited，连接收到 exit 帧。
   if (req.method === "POST" && url.pathname === "/__test__/terminal/exit") {
     const body = await readJson(req);
@@ -1117,6 +1135,7 @@ const server = createServer(async (req, res) => {
     session.entry = {
       ...session.entry, status: "exited", endReason: "shell_exited", exitCode: body.exitCode,
       commandRunning: false,
+      prefillPending: false,
     };
     for (const socket of session.sockets) socket.send(terminalFrame(session, { type: "exit" }));
     if (states.has(body.sessionId)) commit(body.sessionId, states.get(body.sessionId));

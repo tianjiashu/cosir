@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
 from app.assistant_transport.service import assistant_transport_service as service_module
 from app.assistant_transport.service.assistant_transport_service import AssistantTransportService
 from app.core import session_actor as actor_module
@@ -37,6 +38,7 @@ from app.core.workflow.message_queue.session_message import (
     SessionMessage,
     UserInputBody,
 )
+from app.core.workflow.message_queue.session_message_queue import QueueRead
 from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.run.run_status import RunTransition
 from app.models.session.session_command_errors import SessionCommandConflictError
@@ -71,11 +73,13 @@ class _Queue:
     def ack(self, *ids: int) -> None:
         self.rows = [row for row in self.rows if row.id not in ids]
 
-    async def pending(self, _session_id: int, after_id: int = 0) -> list[SessionMessage]:
+    async def wait_unhandled(self, _session_id: int, after_id: int = 0) -> QueueRead:
         while not any(row.id > after_id for row in self.rows):
             self._changed.clear()
             await self._changed.wait()
-        return list(self.rows)
+        rows = list(self.rows)
+        fresh = [row for row in rows if row.id > after_id]
+        return QueueRead(fresh=fresh, watermark=max(row.id for row in rows))
 
     def pending_nowait(self, _session_id: int) -> list[SessionMessage]:
         return list(self.rows)
@@ -212,7 +216,7 @@ async def chain(monkeypatch):
     # 推进前交出「队列变了」；本文件不验证投影（见 test_session_actor_loop 的「先刷新再投递」）。
     set_event_sink(lambda _event: None)  # 下一个用例由 conftest 的 autouse 夹具换回
     # 开新 Run 前 actor 查模型是否还在；本文件的模型总在（悬空 id 见 test_session_actor_loop）。
-    models = SimpleNamespace(exists=lambda _model_config_id: True)
+    models = SimpleNamespace(available_ids=lambda: frozenset({"test/m1", "test/m2"}))
     for getter, fake in (
         ("get_model_config_service", models),
         ("get_run_ledger", ledger),
@@ -278,13 +282,15 @@ async def chain(monkeypatch):
     cancellation_registry.consume(_CHILD_SESSION_ID)
 
 
-def _send_request(text: str):
+def _send_request(text: str, *, queue: bool = False):
     from app.assistant_transport.request import SendMessageRequest
 
     return SendMessageRequest.model_validate(
         {
             "message": {"role": "user", "parts": [{"type": "text", "text": text}]},
             "modelConfigId": "test/m1",
+            "queue": queue,
+            "clientMessageId": f"pending-{text}",
         }
     )
 
@@ -317,15 +323,29 @@ async def test_phase_stays_driving_until_the_executor_is_released(chain) -> None
     assert await chain.actor.phase() == "idle"
 
 
+async def test_send_while_running_interjects_into_the_current_run(chain) -> None:
+    """运行中默认发送是插话：``immediate`` 直接投进当前驱动的 mailbox，不开新 Run。"""
+    await chain.service.send(_SESSION_ID, _send_request("first"))
+    await _settle()
+    run = chain.ledger.current
+
+    await chain.service.send(_SESSION_ID, _send_request("by the way"))
+    await _settle()
+    assert [row.delivery for row in chain.queue.rows] == ["immediate"]
+    assert chain.actor.mailbox.user_input_ids()
+    assert chain.ledger.current.id == run.id
+    await _finish(run.id, "completed")
+
+
 async def test_sends_while_running_queue_and_drain_one_per_run(chain) -> None:
-    """运行中发送排队（``next_run``）不并入当前 Run；Run 完成后一轮只消费一条，依次接续。"""
+    """运行中要求排队（``next_run``）不并入当前 Run；Run 完成后一轮只消费一条，依次接续。"""
     await chain.service.send(_SESSION_ID, _send_request("first"))
     await _settle()
     first_run = chain.ledger.current
     assert len(_Driver.consumed) == 1
 
-    await chain.service.send(_SESSION_ID, _send_request("second"))
-    await chain.service.send(_SESSION_ID, _send_request("third"))
+    await chain.service.send(_SESSION_ID, _send_request("second", queue=True))
+    await chain.service.send(_SESSION_ID, _send_request("third", queue=True))
     await _settle()
     assert [row.delivery for row in chain.queue.rows] == ["next_run", "next_run"]
     assert len(_Driver.consumed) == 1
@@ -345,7 +365,7 @@ async def test_queued_inputs_wait_after_cancel_and_a_new_send_runs_first(chain) 
     """取消不自动接续；空闲时新发送的是 ``immediate``，先于留下的排队消息被新 Run 选中。"""
     await chain.service.send(_SESSION_ID, _send_request("first"))
     await _settle()
-    await chain.service.send(_SESSION_ID, _send_request("queued"))
+    await chain.service.send(_SESSION_ID, _send_request("queued", queue=True))
     # 等 loop 读到排队消息再停止：停止之后才读到的消息算停止后的新消息，会开新 Run。
     await _settle()
     await chain.service.cancel(_SESSION_ID)
@@ -380,15 +400,16 @@ async def test_send_wakes_a_run_suspended_on_a_question(chain) -> None:
 
 
 async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) -> None:
-    """挂起的 Run 没有执行者：工具调用都已闭合，标记了也没人取，409 TOOL_CALL_NOT_CANCELLABLE。"""
+    """单停只认本 Session 当前执行中的调用：挂起的 Run 没有执行者，有执行者时没开始的调用也不受理，
+    都是 409 TOOL_CALL_NOT_CANCELLABLE。"""
     run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
     with pytest.raises(SessionCommandConflictError) as rejected:
         chain.service.cancel_tool_call(_SESSION_ID, "call-1")
     assert rejected.value.code == "TOOL_CALL_NOT_CANCELLABLE"
 
-    # 挂起时用户发送只排队、不唤醒：仍没有执行者。
-    await chain.service.send(_SESSION_ID, _send_request("hello"))
+    # 挂起时用户要求排队：不唤醒，仍没有执行者。
+    await chain.service.send(_SESSION_ID, _send_request("hello", queue=True))
     await _settle()
     assert not chain.actor.driving
     assert [row.delivery for row in chain.queue.rows] == ["next_run"]
@@ -406,7 +427,14 @@ async def test_tool_call_cancel_needs_an_executor_not_an_active_status(chain) ->
     )
     await _settle()
     assert chain.actor.driving
-    chain.service.cancel_tool_call(_SESSION_ID, "call-1")
+    # 有执行者也只认当前执行中的调用：没开始或不存在的调用不受理。
+    with pytest.raises(SessionCommandConflictError):
+        chain.service.cancel_tool_call(_SESSION_ID, "call-1")
+    tool_call_cancellation_registry.begin(_SESSION_ID, "call-1")
+    try:
+        chain.service.cancel_tool_call(_SESSION_ID, "call-1")
+    finally:
+        tool_call_cancellation_registry.clear(_SESSION_ID, "call-1")
     await _finish(chain.ledger.current.id, "completed")
 
 

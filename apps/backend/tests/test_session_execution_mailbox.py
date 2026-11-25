@@ -40,7 +40,7 @@ async def test_released_drive_leaves_no_user_input_in_the_mailbox(monkeypatch) -
         presentation=UserInputPresentation(text="stop that"),
     )
     mailbox.post(SessionMessage.of(body, message_id=5))
-    assert mailbox.has_user_input()
+    assert mailbox.user_input_ids()
     gate.set()
     await asyncio.wait_for(released.wait(), timeout=2)
-    assert not mailbox.has_user_input()
+    assert not mailbox.user_input_ids()

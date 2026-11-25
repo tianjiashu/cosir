@@ -108,13 +108,14 @@ class ToolExecutor:
     def _run_handler(
         self, tool_name: str, invoke: Callable[[], Any], execution_context: ToolExecutionContext
     ) -> ToolObservation:
-        """调用 handler（或延迟工具的来源）；退出前释放本次调用的工具级取消信号（只有运行中的终端命令会打它）。
+        """调用 handler（或延迟工具的来源）；期间登记为本 Session 执行中的调用，退出前释放登记与工具级取消信号。
 
         handler 跑完就保留真实结果，即使执行期间用户停止了 Session：副作用已经发生，改判为取消会让模型
         误以为操作没执行；Run 级停止交给 workflow 的下一个检查点收敛。
         """
 
         tool_call_id = execution_context.tool_call_id
+        tool_call_cancellation_registry.begin(execution_context.session_id, tool_call_id)
         try:
             result = invoke()
         except Exception as exc:

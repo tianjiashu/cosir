@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session as DbSession
 
 from app.core.workflow.message_queue.session_message import SessionMessage
@@ -54,6 +54,42 @@ class SessionMessageCrud:
         if kinds is not None:
             statement = statement.where(SessionMessageModel.kind.in_(kinds))
         return list(db.scalars(statement).all())
+
+    def promote_returning(
+            self, db: DbSession, session_id: int, message_id: int
+    ) -> SessionMessage | None:
+        """把一条仍在队列中的用户输入原地置为 ``immediate``（已是的不变），返回改后的行；不在队列中或
+        不是用户输入时返回 ``None``。"""
+
+        row = db.scalar(
+            update(SessionMessageModel)
+            .where(
+                SessionMessageModel.id == message_id,
+                SessionMessageModel.session_id == session_id,
+                SessionMessageModel.kind == "user_input",
+            )
+            .values(delivery="immediate")
+            .returning(SessionMessageModel)
+        )
+        return SessionMessage.of_model(row) if row is not None else None
+
+    def mark_interrupted_work(self, db: DbSession, session_id: int, message_ids: list[int]) -> list[int]:
+        """把仍在队列中的这些用户输入记为「已让在途工作让位」，返回仍在队列中（因而标记成功）的行 id。"""
+
+        if not message_ids:
+            return []
+        return list(
+            db.scalars(
+                update(SessionMessageModel)
+                .where(
+                    SessionMessageModel.id.in_(message_ids),
+                    SessionMessageModel.session_id == session_id,
+                    SessionMessageModel.kind == "user_input",
+                )
+                .values(interrupted_work=True)
+                .returning(SessionMessageModel.id)
+            )
+        )
 
     def delete_one_returning(
             self, db: DbSession, session_id: int, message_id: int

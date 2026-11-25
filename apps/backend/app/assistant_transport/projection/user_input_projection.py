@@ -136,7 +136,14 @@ def plan_input_consumed(
         ConversationStateMutation(
             "set",
             ("messages", len(messages)),
-            message(message_id, "user", list(parts), turn=event.turn, source=source),
+            message(
+                message_id,
+                "user",
+                list(parts),
+                turn=event.turn,
+                source=source,
+                client_message_id=event.presentation.client_message_id,
+            ),
         ),
         ConversationStateMutation(
             "set",

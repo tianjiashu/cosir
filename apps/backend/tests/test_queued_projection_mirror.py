@@ -78,3 +78,31 @@ def test_consumption_builds_the_message_without_a_queued_entry() -> None:
     assert user["parts"] == [{"type": "text", "text": "你好", "status": "completed"}]
     assert mutations[-1].path == ("queued_messages",)
     assert mutations[-1].value == []
+
+
+def test_client_message_id_survives_queueing_and_consumption(session_id: int) -> None:
+    """前端按客户端 id 对账乐观消息：排队投影与消费投影都原样带回，不按「新出现了几条」推断。"""
+    queue = depends.get_session_message_queue()
+    service = ConversationStateService()
+    service.get_state(session_id)
+    presentation = UserInputPresentation(text="带身份", client_message_id="pending-abc")
+    queue.put(
+        session_id,
+        SessionMessage.of(
+            UserInputBody(
+                text="带身份",
+                launch=RunLaunch(model_config_id="test/m1"),
+                presentation=presentation,
+            ),
+            delivery="next_run",
+        ),
+    )
+    service.refresh_queued_messages(session_id)
+    [queued] = service.get_state(session_id)["queued_messages"]
+    assert queued["clientMessageId"] == "pending-abc"
+
+    event = InputConsumedEvent(
+        session_id=1, run_id=1, message_id=9, presentation=presentation, turn=1
+    )
+    user = plan_input_consumed(event, empty_snapshot())[0].value
+    assert user["clientMessageId"] == "pending-abc"

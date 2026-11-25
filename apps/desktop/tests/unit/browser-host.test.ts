@@ -55,6 +55,7 @@ class FakeTab {
   readonly tabId: string; readonly sessionId: number; readonly events: TabEvents; readonly options: TabOptions;
   get openerId() { return this.options.openerId; }
   get downloadDir() { return this.options.downloadDir; }
+  get displaySessionId() { return this.options.displaySessionId; }
   get createdBy() { return this.options.createdBy; }
   constructor(options: TabOptions) {
     this.options = options;
@@ -63,11 +64,11 @@ class FakeTab {
   }
   initialize(signal: AbortSignal) { return abortable(this.pending, signal); }
   summary() {
-    return { tabId: this.tabId, sessionId: this.sessionId, createdBy: this.createdBy, openerId: this.openerId, url: this.url, title: this.title, loading: this.loading, crashed: false, dialog: null };
+    return { tabId: this.tabId, sessionId: this.sessionId, displaySessionId: this.displaySessionId, createdBy: this.createdBy, openerId: this.openerId, url: this.url, title: this.title, loading: this.loading, crashed: false, dialog: null };
   }
 }
 
-const context = (perSession = 2, total = 3) => ({ limits: { perSession, total }, downloadDir: "/workspace/.cosir/Download" });
+const context = (perSession = 2, total = 3) => ({ limits: { perSession, total }, downloadDir: "/workspace/.cosir/Download", displaySessionId: 1 });
 const limits = context();
 const tab = (index = 0) => FakeTab.instances[index];
 const flush = async () => { for (let i = 0; i < 12; i += 1) await Promise.resolve(); };
@@ -292,7 +293,8 @@ describe("BrowserHost 资源生命周期", () => {
     expect(response).toMatchObject({ action: "allow", outlivesOpener: true });
     const adopted = { id: "popup-contents" };
     const returned = (response as { createWindow: (options: unknown) => unknown }).createWindow({ webContents: adopted });
-    expect(tab(1).options).toMatchObject({ sessionId: 1, openerId: "t1", downloadDir: context().downloadDir, adopted });
+    // 弹窗沿用开启者在创建时定下的下载目录与显示会话。
+    expect(tab(1).options).toMatchObject({ sessionId: 1, openerId: "t1", downloadDir: context().downloadDir, displaySessionId: context().displaySessionId, adopted });
     expect(returned).toBe(tab(1).contents);
     expect(tab().log.note).toHaveBeenCalledWith(expect.stringContaining("in a new tab t2"));
     tab(1).finish(); await flush();

@@ -130,6 +130,7 @@ def _reply_state(parts: list) -> dict:
                 "inherited": False,
                 "outcome": None,
                 "source": None,
+                "clientMessageId": None,
             },
             {
                 "id": "assistant-turn-3",
@@ -139,6 +140,7 @@ def _reply_state(parts: list) -> dict:
                 "inherited": False,
                 "outcome": None,
                 "source": None,
+                "clientMessageId": None,
             },
         ],
         "queued_messages": [],
@@ -231,6 +233,7 @@ def test_snapshot_rejects_a_source_on_assistant_messages() -> None:
                 "inherited": False,
                 "outcome": None,
                 "source": {"sessionId": 1, "name": "x", "report": None},
+                "clientMessageId": None,
             }
         ],
         "messageOffset": 0,

@@ -16,7 +16,7 @@ function message(id: string): TransportMessage {
     id,
     role: "user",
     turn: 1,
-    inherited: false,
+    inherited: false, clientMessageId: null,
     source: null,
     outcome: null,
     parts: [

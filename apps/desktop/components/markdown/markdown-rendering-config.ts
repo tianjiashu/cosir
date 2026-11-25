@@ -79,14 +79,17 @@ const mermaidOptionsCache = new Map<ResolvedTheme, MermaidOptions>();
  * 所以必须是解析后的字体栈而非 var()。
  */
 function buildMermaidOptions(theme: ResolvedTheme): MermaidOptions {
-  const fontFamily = getComputedStyle(document.documentElement).getPropertyValue("--app-font-sans").trim();
+  const root = getComputedStyle(document.documentElement);
+  const fontFamily = root.getPropertyValue("--app-font-sans").trim();
+  // 图里的文字比正文小一档、取 `text-sm`；Mermaid 按像素量文字宽度，rem 令牌在这里换算成 px。
+  const fontSize = `${parseFloat(root.getPropertyValue("--text-sm")) * parseFloat(root.fontSize)}px`;
   return {
     config: {
       securityLevel: "strict",
       theme: "base",
       darkMode: theme === "dark",
       fontFamily,
-      themeVariables: { ...MERMAID_PALETTE[theme], fontFamily, fontSize: "14px" },
+      themeVariables: { ...MERMAID_PALETTE[theme], fontFamily, fontSize },
     },
   };
 }

@@ -135,7 +135,7 @@ def test_hand_edited_file_takes_effect_on_the_next_read() -> None:
     config = service.get_config("local/llama")
 
     assert (config.model.context_window_k, config.model.supports_thinking) == (32, False)
-    assert service.exists("local/llama") and not service.exists("local/other")
+    assert service.available_ids() == {"local/llama"}
 
 
 def test_broken_file_is_reported_with_location_and_never_overwritten() -> None:
@@ -155,7 +155,7 @@ def test_broken_file_is_reported_with_location_and_never_overwritten() -> None:
         service.check_launch_config("x/m", None)
 
     assert rejected.value.code == "MODEL_CONFIG_FILE_INVALID"
-    assert not service.exists("x/m")
+    assert service.available_ids() == frozenset()
     assert service.path.read_text(encoding="utf-8") == broken
 
 

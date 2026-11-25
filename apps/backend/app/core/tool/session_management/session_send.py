@@ -30,6 +30,7 @@ from app.models.run.run_status import RunStatus
 from app.models.session.session_kind import SessionType
 from app.models.session.session_record import SessionRecord
 from app.service.depends import (
+    get_model_config_service,
     get_session_message_queue,
     get_session_service,
     get_workspace_service,
@@ -158,7 +159,9 @@ class SessionSendTool(HandlerBase):
     ) -> RunLaunch | ToolObservation:
         """只读收件方配置。首 Run 尚未建立时，继承 actor 将选中的启动输入。"""
         if current is None:
-            first = PendingMessages.of(get_session_message_queue().pending_nowait(target.id)).next_input()
+            first = PendingMessages.of(get_session_message_queue().pending_nowait(target.id)).next_input(
+                get_model_config_service().available_ids()
+            )
             if first is not None:
                 launch = cast(LaunchInputBody, first.body).launch
                 return launch

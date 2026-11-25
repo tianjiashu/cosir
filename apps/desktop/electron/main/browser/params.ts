@@ -19,12 +19,12 @@ import type { ConsoleLevel, LogQuery } from "./tab-log";
  * `contract/tool-args.schema.json`——后端照 `model_dump()` 原样发送，每个字段都在，未填的可选字段为 null（后端守卫
  * 测试保证导出文件是最新的，见 `tests/test_browser_contract_guard.py`）。这里按它校验形状、枚举与上限，不再手写第二
  * 份，也不补缺省值；null 只在映射成请求类型时转成「未给」。跨字段规则（url 与 action 二选一等）只在后端，宿主信任
- * 后端已经校验过。手写的只有宿主自己的键（Session、上限、下载目录）与语义检查（打开的地址经 `pageUrl`，
+ * 后端已经校验过。手写的只有宿主自己的键（Session、上限、下载目录、显示会话）与语义检查（打开的地址经 `pageUrl`，
  * 与地址栏同一条规则）。
  */
 
 /** 后端每个请求都带、不属于工具参数的键。 */
-const HOST_KEYS = new Set(["session_id", "limits", "download_dir"]);
+const HOST_KEYS = new Set(["session_id", "limits", "download_dir", "display_session_id"]);
 
 type ToolName = keyof typeof toolArgsSchemas;
 const ajv = new Ajv2020({ allErrors: false, strict: false });
@@ -230,19 +230,20 @@ function sessionId(value: unknown): number {
 }
 
 /**
- * 标签上下文的规则：两个上限都是正的安全整数，下载目录是本机绝对路径。宿主收标签上下文的两条进程边界（后端的工具
- * 请求、渲染进程的「新开标签」IPC）共用这一份规则，各自只取出字段（键名风格不同）、按自己的方式报错；不合规为 null。
+ * 标签上下文的规则：两个上限与显示会话都是正的安全整数，下载目录是本机绝对路径。宿主收标签上下文的两条进程边界
+ * （后端的工具请求、渲染进程的「新开标签」IPC）共用这一份规则，各自只取出字段（键名风格不同）、按自己的方式报错；
+ * 不合规为 null。
  */
-export function tabContextOf(perSession: unknown, total: unknown, downloadDir: unknown): BrowserTabContext | null {
-  if (!positive(perSession) || !positive(total) || typeof downloadDir !== "string" || !path.isAbsolute(downloadDir)) return null;
-  return { limits: { perSession, total }, downloadDir };
+export function tabContextOf(perSession: unknown, total: unknown, downloadDir: unknown, displaySessionId: unknown): BrowserTabContext | null {
+  if (!positive(perSession) || !positive(total) || typeof downloadDir !== "string" || !path.isAbsolute(downloadDir) || !positive(displaySessionId)) return null;
+  return { limits: { perSession, total }, downloadDir, displaySessionId };
 }
 
-/** 后端随请求带来的标签上下文：上限与 Session 所在工作区的下载目录。 */
+/** 后端随请求带来的标签上下文：上限、Session 所在工作区的下载目录与显示会话。 */
 function tabContext(value: Record<string, unknown>): BrowserTabContext {
   const limits = object(value.limits);
-  const context = tabContextOf(limits.per_session, limits.total, value.download_dir);
-  if (!context) throw invalid("limits must carry positive per_session and total, and download_dir must be an absolute path");
+  const context = tabContextOf(limits.per_session, limits.total, value.download_dir, value.display_session_id);
+  if (!context) throw invalid("limits must carry positive per_session and total, download_dir must be an absolute path, and display_session_id must be a positive integer");
   return context;
 }
 

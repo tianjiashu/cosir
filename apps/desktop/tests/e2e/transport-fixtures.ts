@@ -18,8 +18,8 @@ export function completedState(
   return {
     title: "测试对话",
     messages: [
-      { id: user.id, role: "user", parts: user.parts, turn, inherited: false, source: null, outcome: null },
-      { id: `assistant-turn-${turn}`, role: "assistant", parts: assistantParts, turn, inherited: false, outcome, source: null },
+      { id: user.id, role: "user", parts: user.parts, turn, inherited: false, clientMessageId: null, source: null, outcome: null },
+      { id: `assistant-turn-${turn}`, role: "assistant", parts: assistantParts, turn, inherited: false, clientMessageId: null, outcome, source: null },
     ],
     messageOffset: 0, activity: { modelActivity: null, turn, resumable: false, ...activityOutcome, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" },
     terminal_sessions: [], background_tasks: [], foreground_waits: [], terminal_approvals: [], deliverables: [], terminal_permission_mode: "request_approval" as const,

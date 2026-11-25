@@ -47,14 +47,16 @@ function ensureSubscription(): void {
 }
 
 /**
- * 订阅标签列表的每次替换（宿主推送或初值），带上替换前的列表，供需要比较前后变化的界面状态（面板选中）使用。
- * 只观察镜像、不触发宿主订阅：镜像有人用时才会开始接推送。
+ * 订阅标签列表的每次替换（宿主推送或初值），带上替换前的列表，供需要比较前后变化的界面状态（面板选中、页头
+ * 提醒）使用。镜像第一次拿到宿主状态时 `previous` 为 null：之前没有状态，而不是之前没有标签——刷新页面后宿主
+ * 里早就开着的标签不能当成「刚开出来」。只观察镜像、不触发宿主订阅：镜像有人用时才会开始接推送。
  */
 export function onBrowserTabsChange(
-  listener: (tabs: readonly BrowserTabSummary[], previous: readonly BrowserTabSummary[]) => void,
+  listener: (tabs: readonly BrowserTabSummary[], previous: readonly BrowserTabSummary[] | null) => void,
 ): () => void {
   return useBrowserHostStateStore.subscribe((current, previous) => {
-    if (current.state.tabs !== previous.state.tabs) listener(current.state.tabs, previous.state.tabs);
+    if (current.state.tabs === previous.state.tabs) return;
+    listener(current.state.tabs, previous.state === EMPTY_STATE ? null : previous.state.tabs);
   });
 }
 
@@ -62,6 +64,15 @@ export function onBrowserTabsChange(
 export function useSessionBrowserTabs(sessionId: number | null): readonly BrowserTabSummary[] {
   useEffect(ensureSubscription, []);
   return useBrowserHostStateStore(useShallow((store) => store.state.tabs.filter((tab) => tab.sessionId === sessionId)));
+}
+
+/**
+ * 显示在某个会话页上的标签页（`displaySessionId`）：这个会话自己的，加上它委派出的子 Agent 的（分叉不算，它有自己的
+ * 页）。只给页头提醒用，面板与操作仍按所属 Session（`useSessionBrowserTabs`）。
+ */
+export function useDisplayedBrowserTabs(sessionId: number | null): readonly BrowserTabSummary[] {
+  useEffect(ensureSubscription, []);
+  return useBrowserHostStateStore(useShallow((store) => store.state.tabs.filter((tab) => tab.displaySessionId === sessionId)));
 }
 
 /** 单个标签页；已关闭时为 undefined。 */

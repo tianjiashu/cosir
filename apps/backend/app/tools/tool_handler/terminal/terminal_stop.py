@@ -55,10 +55,7 @@ class TerminalStopTool(HandlerBase):
                     f"terminal {terminal_id} is a terminal the user opened; you can stop only "
                     "your own commands still running from execute_terminal."
                 )
-            # driving=False：目标是另一次调用登记的后台条目，不是当前正在执行的工具调用。
-            command_results.request_cancel(
-                execution_context.session_id, terminal_id, driving=False
-            )
+            command_results.request_cancel(execution_context.session_id, terminal_id)
             log.info(
                 "terminal_command_stop_requested",
                 extra={

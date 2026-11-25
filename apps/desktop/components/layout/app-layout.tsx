@@ -32,6 +32,7 @@ import { IsolatedRegion } from "@/components/render-isolation/isolated-region";
 import { configurationPath, resolveConfigurationTab, SYSTEM_CONFIGURATION_TABS, WORKSPACE_CONFIGURATION_TABS } from "@/components/configuration/configuration-tabs";
 import { SessionPage } from "@/components/session/session-page";
 import { StatusDot } from "@/components/ui/status-dot";
+import { StatusLine } from "@/components/ui/status-line";
 import { PanelResizeHandle } from "@/components/ui/panel-resize-handle";
 import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import { Workbench } from "@/components/workbench/workbench";
@@ -343,18 +344,19 @@ export function AppLayout() {
                     onClick={toggleTerminal}
                   >
                     <SquareTerminalIcon />
-                    {terminalBadge.tone === "attention" && <StatusDot tone="attention" />}
+                    {terminalBadge.tone !== null && <StatusDot tone={terminalBadge.tone} />}
                   </TooltipIconButton>
                 )}
                 {conversationSessionId !== null && desktopHost !== null && (
                   <TooltipIconButton
-                    tooltip={[dock.panel === "browser" ? "收起浏览器" : "打开浏览器", dock.conversationTabCount > 0 && `${dock.conversationTabCount} 个标签页`].filter(Boolean).join(" · ")}
-                    aria-label={`浏览器，${dock.conversationTabCount} 个标签页，${dock.panel === "browser" ? "点击收起" : "点击打开"}`}
+                    tooltip={[dock.panel === "browser" ? "收起浏览器" : "打开浏览器", dock.browserBadge.count > 0 && `${dock.browserBadge.count} 个标签页`, dock.browserBadge.hint].filter(Boolean).join(" · ")}
+                    aria-label={`浏览器，${dock.browserBadge.count} 个标签页${dock.browserBadge.hint ? `，${dock.browserBadge.hint}` : ""}，${dock.panel === "browser" ? "点击收起" : "点击打开"}`}
                     aria-pressed={dock.panel === "browser"}
-                    className={cn("size-7", dock.panel === "browser" && "bg-muted text-foreground")}
+                    className={cn("relative size-7", dock.panel === "browser" && "bg-muted text-foreground")}
                     onClick={() => dock.toggle("browser")}
                   >
                     <GlobeIcon />
+                    {dock.browserBadge.tone !== null && <StatusLine tone={dock.browserBadge.tone === "browsing" ? "breathing" : "static"} />}
                   </TooltipIconButton>
                 )}
                 {dock.available.files && (

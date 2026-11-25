@@ -46,7 +46,7 @@ const USER_CHROME = 29;
 const USER_BUBBLE_PADDING = 24;
 // 气泡正文与回复同一行高（`--prose-line-height`）。
 const USER_LINE_HEIGHT = 26;
-const USER_LINE_UNITS = 44;
+const USER_LINE_UNITS = 41;
 const ATTACHMENT_GAP = IMAGE_TILE_GAP;
 const IMAGE_HEIGHT = IMAGE_TILE_SIZE.regular.height;
 // 超过阈值时收成一叠（`ImageStack`）：错开的两层是 transform，不占布局高度，收起态与单张图同高。
@@ -104,8 +104,8 @@ function agentRowHeight(id: string, text: string, sessionId?: number): number {
 // 区卡常量仍是按设计稿（§5.9）取的预估值。
 // 脚注是一行操作条（实测 24px）；悬停显示只改透明度，始终占位。
 const ASSISTANT_CHROME = 24;
-const ZONE_GAP = 16;
-const PROCESS_HEADER = 33;
+const ZONE_GAP = 12;
+const PROCESS_HEADER = 24;
 const PROCESS_ITEM = 28;
 const AWAITING_CARD = 96;
 const CHANGES_CARD_CHROME = 40;
@@ -115,9 +115,9 @@ const STANDALONE_ARTIFACT_CARD = 120;
 const ARTIFACT_GAP = 8;
 // 胶囊行间 `gap-2`。
 const CAPSULE_ROW_GAP = 8;
-// 交付说明：`text-sm leading-6`，按内容列宽每行约 52 个汉字宽。
+// 交付说明：`text-sm leading-6`，按内容列宽每行约 48 个汉字宽。
 const NOTE_LINE_HEIGHT = 24;
-const NOTE_LINE_UNITS = 52;
+const NOTE_LINE_UNITS = 48;
 function deliverablesHeight(card: DeliverablesBatch): number {
   const { tileRows, cardHeight, capsuleRows } = deliverableRows(card);
   const sections = [
@@ -194,23 +194,23 @@ function assistantHeight(message: ThreadMessage, sessionId?: number): number {
 }
 
 
-// Markdown：镜像 `styles/markdown.css` 的正文排版（字号 15px、行高 `--prose-line-height` 26px、块间距
+// Markdown：镜像 `styles/markdown.css` 的正文排版（字号 16px、行高 `--prose-line-height` 26px、块间距
 // `--prose-gap` 12px），改排版时同步这里。只供虚拟列表首次布局，之后按实测修正，所以是近似值。
 const BLOCK_GAP = 12;
 const PROSE_LINE_HEIGHT = 26;
-const PROSE_LINE_UNITS = 46;
+const PROSE_LINE_UNITS = 43;
 // 标题：行高（字号 × 1.4）加上边距超出块间距的部分（上边距 1.25em）。
-const HEADING_HEIGHTS = [41, 36, 30, 28, 28, 28];
+const HEADING_HEIGHTS = [45, 39, 33, 30, 30, 30];
 const HEADING = /^\s*(#{1,6})\s/;
 // 列表项：正文行高加项距（0.25em）。
 const LIST_ITEM_HEIGHT = 30;
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s/;
-const TABLE_ROW_HEIGHT = 37;
+const TABLE_ROW_HEIGHT = 39;
 const TABLE_CHROME = 3;
 const TABLE_ROW = /^\s*\|/;
 const TABLE_DIVIDER = /^\s*\|?\s*:?-{3,}/;
-const CODE_LINE_HEIGHT = 20.5;
-const CODE_BLOCK_CHROME = 62;
+const CODE_LINE_HEIGHT = 22;
+const CODE_BLOCK_CHROME = 67;
 
 function markdownHeight(text: string): number {
   let height = 0;

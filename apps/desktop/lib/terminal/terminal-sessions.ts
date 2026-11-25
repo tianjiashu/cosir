@@ -63,15 +63,31 @@ function isAbnormalTerminalEnd(session: Pick<TerminalSessionEntry, "status" | "e
 }
 
 /**
- * 页头终端入口的状态：会话数写进入口的 tooltip 与无障碍标签（不画数字角标），`attention` 时画红点，
+ * 镜像从 `previous` 换成 `next` 时，新变成「Agent 填入、等你回车」的终端（多个取最后一个）；工作台据此展开面板。
+ *
+ * 只认这一刻的翻转：`previous` 为 null（页面刚拿到首帧、刷新后重连）时不算，免得每次进页面都弹一次；
+ * 新出现就带着待回车的终端（Agent 刚为填入新开的）算翻转。
+ */
+export function newlyPrefilled(
+  previous: readonly TerminalSessionEntry[] | null,
+  next: readonly TerminalSessionEntry[],
+): string | null {
+  if (previous === null) return null;
+  const pending = new Set(previous.filter((session) => session.prefillPending).map((session) => session.terminalSessionId));
+  return next.findLast((session) => session.prefillPending && !pending.has(session.terminalSessionId))?.terminalSessionId ?? null;
+}
+
+/**
+ * 页头终端入口的状态：会话数写进入口的 tooltip 与无障碍标签（不画数字角标），有提醒时画点，
  * 让面板收起时也能看出终端需要处理。
  *
- * - `attention`：有用户还没看过的异常结束（打开面板即视为看过，见 store 的 `acknowledgedEnds`）；
- * - `null`：无需提醒。
+ * - `attention`（红点）：有用户还没看过的异常结束（打开面板即视为看过，见 store 的 `acknowledgedEnds`）；
+ * - `activity`（蓝点）：有 Agent 填入的命令在等用户回车，用户接手或执行后自然消失；
+ * - `null`：无需提醒。异常结束优先：它是出了问题，待回车只是在等你。
  */
 export type TerminalBadge = {
   count: number;
-  tone: "attention" | null;
+  tone: "attention" | "activity" | null;
   /** 提醒的一句话说明（拼进入口的 tooltip 与无障碍标签）；无提醒为 null。 */
   hint: string | null;
 };
@@ -89,6 +105,8 @@ export function terminalBadge(
     const more = failed.length > 1 ? `等 ${failed.length} 个终端` : "";
     return { count, tone: "attention", hint: `「${terminalTitle(sessions, first.terminalSessionId)}」${more}异常结束（${detail}）` };
   }
+  const waiting = sessions.find((session) => session.prefillPending);
+  if (waiting) return { count, tone: "activity", hint: `「${terminalTitle(sessions, waiting.terminalSessionId)}」里有 Agent 填入的命令等你回车` };
   return { count, tone: null, hint: null };
 }
 

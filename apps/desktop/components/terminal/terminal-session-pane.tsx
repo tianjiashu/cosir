@@ -10,9 +10,11 @@ import { xtermPaneTheme } from "./xterm-appearance";
 type TerminalSessionPaneProps = {
   sessionId: number;
   terminalSessionId: string;
-  /** 当前选中且面板可见：只有它可见、可交互并获取焦点。 */
+  /** 当前选中且面板可见：只有它可见、可交互，也只有它执行焦点请求。 */
   visible: boolean;
-  focusToken: number;
+  /** 有一次待执行的焦点请求（见 store 的 `focusPending`）；执行后经 `onFocused` 交回。 */
+  focusPending: boolean;
+  onFocused: () => void;
   workspaceRoot?: string;
   onRuntime: (terminalSessionId: string, runtime: TerminalViewRuntime) => void;
   onSearchResults: (terminalSessionId: string, result: { index: number; count: number }) => void;
@@ -33,7 +35,8 @@ export function TerminalSessionPane({
   sessionId,
   terminalSessionId,
   visible,
-  focusToken,
+  focusPending,
+  onFocused,
   workspaceRoot,
   onRuntime,
   onSearchResults,
@@ -46,8 +49,8 @@ export function TerminalSessionPane({
   const { resolvedTheme } = useThemeState();
   // 回调与工作区根目录经 ref 读取最新值：xterm 与 WS 只按会话身份创建一次，不因父组件重渲染或
   // 根目录变化（如目录加载完成）重建——重建会丢掉超出后端缓冲的历史。
-  const latestRef = useRef({ onRuntime, onSearchResults, onOpenSearch, onOpenLink, workspaceRoot });
-  latestRef.current = { onRuntime, onSearchResults, onOpenSearch, onOpenLink, workspaceRoot };
+  const latestRef = useRef({ onRuntime, onSearchResults, onOpenSearch, onOpenLink, onFocused, workspaceRoot });
+  latestRef.current = { onRuntime, onSearchResults, onOpenSearch, onOpenLink, onFocused, workspaceRoot };
   const initialThemeRef = useRef(resolvedTheme);
 
   useLayoutEffect(() => {
@@ -85,9 +88,12 @@ export function TerminalSessionPane({
     viewRef.current?.refresh();
   }, [visible]);
 
+  // 只执行请求，不因「变得可见」聚焦：Agent 填入命令也会让窗格出现（见 store 的 `focusPending`）。
   useEffect(() => {
-    if (visible) viewRef.current?.focus();
-  }, [focusToken, visible]);
+    if (!visible || !focusPending) return;
+    viewRef.current?.focus();
+    latestRef.current.onFocused();
+  }, [focusPending, visible]);
 
   return (
     <div

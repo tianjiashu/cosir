@@ -350,6 +350,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                     "inherited": False,
                     "outcome": None,
                     "source": None,
+                    "clientMessageId": None,
                 },
                 {
                     "id": "stale-assistant",
@@ -359,6 +360,7 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
                     "inherited": False,
                     "outcome": None,
                     "source": None,
+                    "clientMessageId": None,
                 },
             ],
             "messageOffset": 0,

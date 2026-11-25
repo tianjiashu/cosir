@@ -32,7 +32,7 @@ function codeOf(run: () => unknown): string {
 }
 
 describe("params", () => {
-  const base = { session_id: 7, limits: { per_session: 5, total: 20 }, download_dir: "/ws/.cosir/Download" };
+  const base = { session_id: 7, limits: { per_session: 5, total: 20 }, download_dir: "/ws/.cosir/Download", display_session_id: 3 };
   // 后端照 model_dump() 原样发送：参数模型的每个字段都在，未填的为 null（导出的 schema 按这个形状校验）。
   const navigate = (args: Record<string, unknown>) => ({ ...base, url: null, action: null, tab: null, new_tab: false, viewport: null, color_scheme: null, ...args });
   const snapshot = (args: Record<string, unknown>) => ({ ...base, tab: null, format: "outline", scope: "page", find: null, from_line: null, ...args });
@@ -50,7 +50,7 @@ describe("params", () => {
     expect(parseNavigate(navigate({ url: "https://example.com/a" }))).toMatchObject({ target: { url: "https://example.com/a" }, newTab: false });
     expect(parseNavigate(navigate({ url: "https://example.com/a" }))).not.toHaveProperty("emulation");
     expect(parseNavigate(navigate({ action: "back", tab: "t3" }))).toMatchObject({
-      tab: "t3", target: { action: "back" }, context: { limits: { perSession: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
+      tab: "t3", target: { action: "back" }, context: { limits: { perSession: 5, total: 20 }, downloadDir: "/ws/.cosir/Download", displaySessionId: 3 },
     });
     expect(parseNavigate(navigate({ action: "reload", viewport: { width: 390, height: 844, mobile: true }, color_scheme: "auto" })).emulation)
       .toEqual({ viewport: { width: 390, height: 844, mobile: true }, colorScheme: null });
@@ -58,7 +58,7 @@ describe("params", () => {
     expect(parseNavigate(navigate({ action: "reload", viewport: "auto" })).emulation).toEqual({ viewport: "follow" });
     expect(parseNavigate(navigate({ action: "reload", color_scheme: "dark" })).emulation).toEqual({ colorScheme: "dark" });
     expect(parseSnapshot(snapshot({}))).toEqual({
-      sessionId: 7, view: { format: "outline", scope: "page" }, context: { limits: { perSession: 5, total: 20 }, downloadDir: "/ws/.cosir/Download" },
+      sessionId: 7, view: { format: "outline", scope: "page" }, context: { limits: { perSession: 5, total: 20 }, downloadDir: "/ws/.cosir/Download", displaySessionId: 3 },
     });
     expect(parseSnapshot(snapshot({ format: "text", from_line: 40, scope: "viewport", find: "Buy" }))).toMatchObject({ view: { format: "text", scope: "viewport", find: "Buy", fromLine: 40 } });
     // 每个请求都带上下文（宿主据此刷新上限）；参数模型的字段一个都不能少。
@@ -79,6 +79,7 @@ describe("params", () => {
     expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", tab: "../t1" })))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", limits: { per_session: 0, total: 1 } })))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", download_dir: "relative/dir" })))).toBe("INVALID_PARAMS");
+    expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", display_session_id: 0 })))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseNavigate(navigate({ url: "https://a.b", viewport: { width: 10, height: 844, mobile: false } })))).toBe("INVALID_PARAMS");
     expect(codeOf(() => parseSnapshot(snapshot({ from_line: 0 })))).toBe("INVALID_PARAMS");
   });

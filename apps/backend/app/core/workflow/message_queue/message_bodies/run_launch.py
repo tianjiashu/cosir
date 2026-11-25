@@ -28,7 +28,7 @@ class RunLaunch(BaseModel):
     def from_run(cls, run: "RunRecord | None") -> "RunLaunch | None":
         """沿用某个 Run 已冻结的发起配置；Run 没记录 Agent 或模型时返回 ``None``。
 
-        模型被删后 Run 仍保留原 id，这里照样返回；能否开新 Run 由 ``SessionActor`` 查模型是否还在。
+        模型被删后 Run 仍保留原 id，这里照样返回；能否开新 Run 由 ``Action.decide`` 按现有模型判定。
         """
 
         if run is None or run.agent_id is None or run.model_config_id is None:

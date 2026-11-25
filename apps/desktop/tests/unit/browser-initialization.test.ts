@@ -14,7 +14,7 @@ vi.mock("@/electron/main/desktop-log", () => ({ logDesktopEvent: vi.fn(), append
 import { BrowserHost } from "@/electron/main/browser/browser-host";
 
 const flush = async () => { for (let i = 0; i < 16; i += 1) await Promise.resolve(); };
-const limits = { limits: { perSession: 1, total: 1 }, downloadDir: "/workspace/.cosir/Download" };
+const limits = { limits: { perSession: 1, total: 1 }, downloadDir: "/workspace/.cosir/Download", displaySessionId: 1 };
 
 beforeEach(() => {
   vi.useFakeTimers();

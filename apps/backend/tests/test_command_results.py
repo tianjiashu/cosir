@@ -160,7 +160,7 @@ def test_close_waits_for_in_flight_delivery(
 
     def deliver() -> bool:
         if user_cancel:
-            return registry.request_cancel(1, "call-a", driving=False)
+            return registry.request_cancel(1, "call-a")
         return registry.complete(1, "call-a", CommandConclusion({}))
 
     def close() -> bool:
@@ -174,7 +174,7 @@ def test_close_waits_for_in_flight_delivery(
             assert entered.wait(2)
             assert not registered(registry, 1, "call-a")
             assert not registry.complete(1, "call-a", CommandConclusion({}))
-            assert not registry.request_cancel(1, "call-a", driving=False)
+            assert not registry.request_cancel(1, "call-a")
             closer = executor.submit(close)
             assert closing_started.wait(2)
             with pytest.raises(TimeoutError):
@@ -398,10 +398,10 @@ def test_user_stop_keeps_the_entry_until_the_job_concludes(delivered) -> None:
     registry = CommandResultRegistry()
     job = FakeCommandJob(finish_on_cancel=False)
     _register(registry, "call-b", 1, "b", job=job)
-    assert registry.request_cancel(1, "call-b", driving=False)
+    assert registry.request_cancel(1, "call-b")
     assert job.cancels == 1
     assert list(registry.live_background(1)) == ["call-b"]
-    assert not registry.request_cancel(1, "call-b", driving=False)
+    assert not registry.request_cancel(1, "call-b")
     job.finish(CANCELLED)
     assert delivered == [(1, "call-b")]
     assert registry.live_background(1) == {}
@@ -455,7 +455,7 @@ def test_foreground_waits_contract() -> None:
 
 
 def test_single_stop_before_registration_is_taken_over_by_the_entry():
-    """登记前就被点名停止的调用：登记时接过工具级信号，作业立即收到停止，之后的重复停止被拒。"""
+    """执行中、登记前就被点名停止的调用：登记时接过工具级信号，作业立即收到停止，之后的重复停止被拒。"""
     from app.core.workflow.cancel.tool_call_cancellation_registry import (
         tool_call_cancellation_registry,
     )
@@ -463,10 +463,13 @@ def test_single_stop_before_registration_is_taken_over_by_the_entry():
     registry = CommandResultRegistry()
     job = FakeCommandJob(finish_on_cancel=False)
     try:
-        assert registry.request_cancel(3, "early", driving=True)
+        # 没开始的调用不受理：没有人会消费这个信号。
+        assert not registry.request_cancel(3, "early")
+        tool_call_cancellation_registry.begin(3, "early")
+        assert registry.request_cancel(3, "early")
         registry.register("early", session_id=3, run_id=5, label="build", job=job)
         assert job.cancels == 1
-        assert not registry.request_cancel(3, "early", driving=True)
+        assert not registry.request_cancel(3, "early")
     finally:
         tool_call_cancellation_registry.clear(3, "early")
         registry.close()

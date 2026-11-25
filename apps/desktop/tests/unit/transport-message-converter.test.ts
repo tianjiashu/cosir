@@ -66,6 +66,10 @@ describe("assistant transport converter", () => {
     expect(pending?.metadata.custom).toEqual({ source: null, pending: true });
     expect(toPendingUserMessage(command)?.id).toBe(pending?.id);
   });
+  it("正在提交的排队发送一出现就标为排队，进排队条", () => {
+    const command = { type: "add-message", message: { role: "user", parts: [{ type: "text", text: "later" }] }, queue: true };
+    expect(toPendingUserMessage(command)?.metadata.custom).toEqual({ source: null, pending: true, delivery: "next_run" });
+  });
 
   // 目的：结局与当前活动随消息一并投影，使消息渲染只依赖消息自身事实。潜在缺陷：消息组件回查
   // thread external state 时，只读作用域（无 external state 的 runtime）会在渲染期抛错。
@@ -80,7 +84,7 @@ describe("assistant transport converter", () => {
 
   it("Agent 消息的发送方随 user 消息的 custom 交给渲染层", () => {
     const message: TransportMessage = {
-      id: "11", role: "user", parts: [{ type: "text", text: "做这个", status: "completed" }], turn: 3, inherited: false, outcome: null,
+      id: "11", role: "user", parts: [{ type: "text", text: "做这个", status: "completed" }], turn: 3, inherited: false, clientMessageId: null, outcome: null,
       source: { sessionId: 4, name: "主会话", report: null },
     };
     const converted = toThreadMessage(message, { turn: 3, inherited: false, source: message.source, outcome: null, activity: null });
@@ -88,7 +92,7 @@ describe("assistant transport converter", () => {
   });
 
   it("projects the outcome and activity onto assistant message metadata (D5)", () => {
-    const message: TransportMessage = { id: "assistant-turn-7", role: "assistant", parts: [], turn: 7, inherited: false, source: null, outcome: null };
+    const message: TransportMessage = { id: "assistant-turn-7", role: "assistant", parts: [], turn: 7, inherited: false, clientMessageId: null, source: null, outcome: null };
     const cancelled = outcome("cancelled", { usage: usage({ total_tokens: 42 }) });
     const ended = toThreadMessage(message, { turn: 7, inherited: false, source: null, outcome: cancelled, activity: null });
     expect(ended.metadata.custom).toMatchObject({ turn: 7, inherited: false, outcome: cancelled, activity: null });
@@ -188,7 +192,7 @@ describe("assistant transport converter", () => {
 
       ],
       turn: 1,
-      inherited: false,
+      inherited: false, clientMessageId: null,
       outcome: null,
       source: null,
     };

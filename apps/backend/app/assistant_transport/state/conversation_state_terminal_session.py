@@ -40,6 +40,8 @@ class ConversationTerminalSession(TypedDict):
     integration: TerminalSessionIntegration
     # 集成跟踪到有命令正在执行（started 之后、returned 之前）；无集成时恒为 False，不代表空闲。
     commandRunning: bool
+    # Agent 填入的命令还停在提示符上、用户没碰过：前端据此展开终端面板、页头提示「等你回车」。
+    prefillPending: bool
     createdAt: str
 
 
@@ -61,6 +63,7 @@ def to_terminal_session(session: TerminalSessionSnapshot) -> ConversationTermina
         exitCode=session.exit_code,
         integration=cast(TerminalSessionIntegration, session.integration),
         commandRunning=session.command_running,
+        prefillPending=session.prefill_pending,
         createdAt=session.created_at.isoformat(),
     )
 
@@ -84,5 +87,6 @@ def validate_terminal_sessions(value: object) -> None:
         require_one_of(session["status"], _STATUSES, "terminal session status")
         require_one_of(session["integration"], _INTEGRATIONS, "terminal session integration")
         require_bool(session["commandRunning"], "terminal session commandRunning")
+        require_bool(session["prefillPending"], "terminal session prefillPending")
         require_str(session["endReason"], "terminal session endReason", nullable=True)
         require_int(session["exitCode"], "terminal session exitCode", nullable=True)

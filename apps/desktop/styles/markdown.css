@@ -26,7 +26,7 @@
  */
 :root {
   --prose-font-size: var(--text-chat);
-  /* 15px 字号的 1.73 倍：中文正文读起来不挤，选区的行间缝也不至于太大。 */
+  /* 16px 字号的 1.63 倍：中文正文读起来不挤，选区的行间缝也不至于太大。 */
   --prose-line-height: 1.625rem;
   --prose-gap: 0.75rem;
 }
@@ -153,7 +153,7 @@
 }
 
 .aui-md [data-streamdown="code-block-header"] > span {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   letter-spacing: 0.02em;
 }
 
@@ -231,7 +231,7 @@
 }
 
 .aui-md [data-streamdown="mermaid-block"] > div:first-child > span {
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   letter-spacing: 0.02em;
 }
 

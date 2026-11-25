@@ -45,14 +45,17 @@ class SessionExecution:
         self._mailbox = mailbox
         # 释放后的处理（传播、接续）是调度判定，归 actor；这里只在释放后交出去。
         self._on_released = on_released
-        # 当前后台执行（驱动一个 Run 的子 session）及其 Run；没有执行时为 ``None``，注销时一起清空。
-        self._task: asyncio.Task[None] | None = None
+        # 执行登记：当前执行者驱动的 Run；没有执行者时为 ``None``，注销时清空（与取走信号同步）。
         self._run: RunRecord | None = None
+        # 还活着的驱动任务，含注销之后仍在跑的释放回调：接续会在旧任务的回调里开出新任务，所以同一时刻
+        # 可能不止一个。任务结束时由完成回调移除；等待落定（:meth:`wait_released`）与进程关闭
+        # （:meth:`abort`）都按它，不按登记——登记在回调运行前就已注销。
+        self._tasks: set[asyncio.Task[None]] = set()
 
     @property
     def driving(self) -> bool:
         """是否有执行者；同步判定，不读库——打取消信号必须与执行收尾之间没有 await。"""
-        return self._task is not None and not self._task.done()
+        return self._run is not None
 
     @property
     def stopping(self) -> bool:
@@ -81,9 +84,10 @@ class SessionExecution:
         for message in initial:
             self._mailbox.post(message)
         self._run = run
-        self._task = asyncio.get_running_loop().create_task(self._drive(run, preceding_run))
-        # 兜底：释放边界之外的异常在这里留下日志，不留无人取回失败的 session。
-        self._task.add_done_callback(self._on_drive_done)
+        task = asyncio.get_running_loop().create_task(self._drive(run, preceding_run))
+        self._tasks.add(task)
+        # 移出存活集合；兜底：释放边界之外的异常在这里留下日志，不留无人取回失败的 session。
+        task.add_done_callback(self._on_drive_done)
 
     def cancel(self, reason: CancelReason) -> bool:
         """有执行者时打 Session 取消信号，返回是否打了；没有执行者时什么也不登记（挂起的 Run 归 actor）。"""
@@ -99,27 +103,34 @@ class SessionExecution:
         return self.cancel("user")
 
     async def wait_released(self) -> None:
-        """等当前执行（含释放后的回调）结束；没有执行时立即返回。
+        """等此刻还活着的驱动任务（含释放后的回调）结束；没有时立即返回。
 
-        用 ``asyncio.wait`` 而不是直接 await：等待方被取消时不连带取消执行。
+        用 ``asyncio.wait`` 而不是直接 await：等待方被取消时不连带取消执行。等待期间回调开出的新任务
+        不在等待之列：调用方（停止、停止中的 loop）此时已不接续。
         """
-        if self._task is not None and not self._task.done():
-            await asyncio.wait({self._task})
+        if self._tasks:
+            await asyncio.wait(set(self._tasks))
 
     async def abort(self) -> None:
-        """进程关闭：直接取消执行，不等工作流落定；遗留 running Run 由下次启动收敛。
+        """进程关闭：取消全部还活着的驱动任务并等它们退出，不等工作流落定；遗留 running Run 由下次
+        启动收敛。
 
-        执行被直接取消，收尾与释放回调都不会运行，所以在这里补取信号。
+        注销之后仍在跑的释放回调同样取消：关闭时不汇报、不接续。执行者被取消时收尾不会运行，所以在
+        这里补注销、补取信号。
         """
-        if not self.driving:
+        tasks = set(self._tasks)
+        if not tasks:
             return
-        session = self._task
-        cancellation_registry.request_cancel(self.session_id, "parent")
-        session.cancel()
-        await asyncio.gather(session, return_exceptions=True)
-        self._task = self._run = None
-        self._mailbox.reset()
-        cancellation_registry.consume(self.session_id)
+        registered = self.driving
+        if registered:
+            cancellation_registry.request_cancel(self.session_id, "parent")
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if registered:
+            self._run = None
+            self._mailbox.reset()
+            cancellation_registry.consume(self.session_id)
 
     async def _drive(
         self, run: RunRecord, preceding_run: RunRecord | None
@@ -147,7 +158,7 @@ class SessionExecution:
                     "data": {"session_id": self.session_id, "run_id": run.id},
                 },
             )
-        self._task = self._run = None
+        self._run = None
         # mailbox 只属于一次驱动：未确认的消息仍在外部队列里，残留副本留着只会误导驱动之外的读取方
         # （如批准登记时「页面上有没有新输入」的判定）。
         self._mailbox.reset()
@@ -155,7 +166,8 @@ class SessionExecution:
         await self._on_released(run, reason)
 
     def _on_drive_done(self, done: asyncio.Task[None]) -> None:
-        """执行结束的兜底：异常退出在这里落一条日志，不留无人取回失败的 session。"""
+        """驱动任务（含释放回调）结束：移出存活集合；异常退出在这里落一条日志，不留无人取回失败的 session。"""
+        self._tasks.discard(done)
         if done.cancelled():
             return
         error = done.exception()

@@ -14,7 +14,8 @@ import { Placeholder } from "@tiptap/extension-placeholder";
 import { ComposerEditorViewProvider } from "@/components/composer/composer-editor-context";
 import {
   resolveComposerInsertionPosition,
-  shouldSubmitOnEnter,
+  composerSubmitIntent,
+  type ComposerSubmitIntent,
 } from "@/components/composer/composer-editor-policy";
 import {
   inlineComposerContent,
@@ -50,7 +51,7 @@ type ComposerEditorProps = {
    * 编辑器自己不拼摘录标签：拼在正文末尾会落进结尾的代码块，卡片就没了。
    */
   onAddQuotes: (quotes: readonly QuoteCapsule[], rest: string) => void;
-  onSubmit: () => void;
+  onSubmit: (intent: ComposerSubmitIntent) => void;
   onExternalFiles: (files: readonly File[]) => void | Promise<void>;
   placeholder?: string;
   autoFocus?: boolean;
@@ -174,22 +175,23 @@ export function ComposerEditor({
       scrollMargin: SCROLL_FADE_CARET_MARGIN,
       handleKeyDown: (_view, event) => {
         const current = propsRef.current;
-        const enterEvent = {
-          key: event.key,
-          shiftKey: event.shiftKey,
-          defaultPrevented: event.defaultPrevented,
-          nativeEvent: {
-            isComposing: event.isComposing,
-            keyCode: event.keyCode,
+        if (current.disabled) return false;
+        const intent = composerSubmitIntent(
+          {
+            key: event.key,
+            code: event.code,
+            shiftKey: event.shiftKey,
+            metaKey: event.metaKey,
+            ctrlKey: event.ctrlKey,
+            altKey: event.altKey,
+            defaultPrevented: event.defaultPrevented,
+            nativeEvent: { isComposing: event.isComposing, keyCode: event.keyCode },
           },
-        };
-        if (
-          current.disabled ||
-          !shouldSubmitOnEnter(enterEvent, isComposingRef.current)
-        )
-          return false;
+          isComposingRef.current,
+        );
+        if (intent === null) return false;
         event.preventDefault();
-        current.onSubmit();
+        current.onSubmit(intent);
         return true;
       },
       clipboardTextSerializer: (slice) =>

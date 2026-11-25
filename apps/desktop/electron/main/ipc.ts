@@ -92,7 +92,7 @@ function parseSessionId(value: unknown): number {
 /** 标签上下文来自后端（`GET /sessions/{id}/browser-context`），渲染进程只转交；规则与工具请求同一份（`tabContextOf`）。 */
 function parseTabContext(value: unknown): BrowserTabContext {
   const limits = isPlainObject(value) && isPlainObject(value.limits) ? value.limits : {};
-  const context = isPlainObject(value) ? tabContextOf(limits.perSession, limits.total, value.downloadDir) : null;
+  const context = isPlainObject(value) ? tabContextOf(limits.perSession, limits.total, value.downloadDir, value.displaySessionId) : null;
   if (!context) throw new HostUserError("标签上下文不合法");
   return context;
 }

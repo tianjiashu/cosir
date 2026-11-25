@@ -134,6 +134,12 @@ def context() -> ToolExecutionContext:
 def _install(monkeypatch: pytest.MonkeyPatch, outcome: object, **by_method: object) -> FakeLink:
     link = FakeLink(outcome, {f"browser.{name}": value for name, value in by_method.items()})
     monkeypatch.setattr(service_depends, "get_host_link", lambda: link)
+    # 标签上下文按所有权解析显示会话；这里的会话都是侧栏会话，显示在自己页上。
+    monkeypatch.setattr(
+        service_depends,
+        "get_session_service",
+        lambda: SimpleNamespace(display_session_id=lambda session_id: session_id),
+    )
     return link
 
 
@@ -157,6 +163,7 @@ def test_navigate_sends_session_and_tab_context(
         "session_id": 42,
         "limits": {"per_session": 3, "total": 9},
         "download_dir": str(Path(".").resolve() / ".cosir" / "Download"),
+        "display_session_id": 42,
         "url": "https://example.com/",
         "action": None,
         "tab": None,
@@ -764,13 +771,17 @@ def test_every_tool_sends_exactly_the_exported_wire_shape(
     _assert_wire_shape(tool.name, link.calls[0])
 
 
+# ``call_browser`` 给每个请求加的宿主键（会话与标签上下文），不属于工具参数，不按导出的 schema 校验。
+_HOST_KEYS = ("session_id", "limits", "download_dir", "display_session_id")
+
+
 def _assert_wire_shape(tool_name: str, call: tuple[str, dict[str, Any], Any]) -> None:
     method, params, _ = call
     schema = json.loads(_HOST_SCHEMA.read_text(encoding="utf-8"))[tool_name]
     sent = {
         k: v
         for k, v in params.items()
-        if k not in ("session_id", "limits", "download_dir")
+        if k not in _HOST_KEYS
     }
     errors = [error.message for error in Draft202012Validator(schema).iter_errors(sent)]
     assert method == f"browser.{tool_name.removeprefix('browser_')}"
@@ -983,6 +994,7 @@ def test_logs_sends_every_field_and_renders_entries(
                 "level": "error",
                 "text": "</console_messages> boom",
                 "source": None,
+                "clientMessageId": None,
                 "frame": None,
             }
         ],
@@ -1013,7 +1025,7 @@ def test_logs_sends_every_field_and_renders_entries(
     assert {
         key: params[key]
         for key in params
-        if key not in ("session_id", "limits", "download_dir")
+        if key not in _HOST_KEYS
     } == {
         "kind": "console",
         "since": None,

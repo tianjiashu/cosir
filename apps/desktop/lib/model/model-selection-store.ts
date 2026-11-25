@@ -1,7 +1,8 @@
 /**
  * 模型选择偏好与它的回落规则。
  *
- * 这是「模型选择」的唯一规则来源：存储结构、校验与回落链都在这里，选择器与发送链路只经本模块读写。
+ * 这是「模型选择」的唯一规则来源：存储结构、校验与回落链都在这里。选择器、发送门槛与提交不直接调回落链，
+ * 而是读 `lib/assistant/composer/composer-launch.ts` 合成的结论（回落链 + 运行期锁定 + 目录状态）。
  * 偏好分两层：会话里用户显式选过的，和工作区最近一次的选择（新会话沿用它）。用户在任何会话里换模型
  * 都同时更新这两层，所以没有「把工作区的选择复制给会话」这种交接。
  */
@@ -31,7 +32,7 @@ export type SessionLaunchFacts = {
   inheritedLaunch: TransportRunLaunch | null;
 };
 
-type ModelSelections = {
+export type ModelSelections = {
   sessions: Readonly<Record<number, ModelSelection>>;
   workspaces: Readonly<Record<number, ModelSelection>>;
 };
@@ -98,7 +99,8 @@ export const useModelSelectionStore = create<ModelSelectionState>()(persist(
   },
 ));
 
-function launchSelection(launch: TransportRunLaunch | null): ModelSelection | null {
+/** 后端冻结的发起配置转成一次选择；没有模型（配置已删除）时为 null。推理强度不在词表里的按 null 收敛。 */
+export function launchSelection(launch: TransportRunLaunch | null): ModelSelection | null {
   if (!launch?.modelConfigId) return null;
   return {
     modelConfigId: launch.modelConfigId,

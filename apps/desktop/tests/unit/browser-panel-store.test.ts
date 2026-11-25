@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserTabSummary } from "@/electron/shared/host-contract";
 
 // 截住面板对标签镜像的订阅，按宿主推送的样子手动触发。
-const tabsChange = vi.hoisted(() => ({ listener: null as null | ((tabs: readonly BrowserTabSummary[], previous: readonly BrowserTabSummary[]) => void) }));
+const tabsChange = vi.hoisted(() => ({ listener: null as null | ((tabs: readonly BrowserTabSummary[], previous: readonly BrowserTabSummary[] | null) => void) }));
 vi.mock("@/lib/browser/host-state-store", () => ({
   onBrowserTabsChange: (listener: NonNullable<typeof tabsChange.listener>) => {
     tabsChange.listener = listener;
@@ -15,7 +15,7 @@ import { displayedTab, followTabChanges, revealBrowserTab, useBrowserPanelStore 
 import { useDockStore } from "@/lib/layout/dock-store";
 
 function tab(tabId: string, sessionId = 7, openerId: string | null = null): BrowserTabSummary {
-  return { tabId, sessionId, openerId, createdBy: "agent", url: "https://example.com", title: "", loading: false, crashed: false, dialog: null, agentBusy: false, operation: null };
+  return { tabId, sessionId, displaySessionId: sessionId, openerId, createdBy: "agent", url: "https://example.com", title: "", loading: false, crashed: false, dialog: null, agentBusy: false, operation: null };
 }
 
 afterEach(() => {

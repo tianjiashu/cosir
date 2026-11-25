@@ -26,7 +26,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 
 from app.config.logging.logger import log
 from app.core.events import ToolCallStatusChangedEvent
@@ -74,6 +74,11 @@ def expired_notice(tool_call_id: str, cause: ExpiryCause) -> NoticeBody:
     )
 
 
+def _expirable(keep: frozenset[str]) -> list[str]:
+    """上下文里仍在等用户回应、且不在 ``keep`` 里的调用 id。"""
+    return [call_id for call_id, _ in _message_context().awaiting_decision_calls() if call_id not in keep]
+
+
 def expire_decisions(*, step_id: str, keep: frozenset[str] = frozenset()) -> list[str]:
     """把上下文里仍在等待、等用户回应的决定作废，返回被作废的调用 id；工作线程执行。
 
@@ -83,7 +88,7 @@ def expire_decisions(*, step_id: str, keep: frozenset[str] = frozenset()) -> lis
     """
     rc = _runtime_context()
     context = _message_context()
-    expired = [call_id for call_id, _ in context.awaiting_decision_calls() if call_id not in keep]
+    expired = _expirable(keep)
     if not expired:
         return []
     with main_db_factory().begin() as db:
@@ -118,13 +123,17 @@ def expire_on_user_input(step_id: str) -> list[NoticeBody]:
     """mailbox 里有用户输入时，先作废等用户回应的等待决定，返回告知模型的通知；工作线程执行。
 
     每次模型请求前经 ``notices.request_notices`` 调用（取通知之前）、而不是在写那条输入的事务里：
-    通知要与这批通知合成一条、排在输入前面，写输入时才结算就来不及了。代价是结算与输入不同事务——输入随后确认失败（极少：投递后、
-    并入前被撤回）时提问已作废而输入没写入，可接受。排在这条输入前面的决定（先作答、后发消息）会先
-    结算占位，所以它回答的调用不作废；排在后面的决定并入时发现占位已作废，只确认不写入。
+    通知要与这批通知合成一条、排在输入前面，写输入时才结算就来不及了。作废前先经
+    ``mark_interrupted_work`` 按队列事实确认这条输入还在、并记下它打断过工作：这里不持 Session 闸门，
+    读到的副本可能刚被用户撤回；标记之后才撤回的，撤回方会告诉模型。排在这条输入前面的决定（先作答、
+    后发消息）会先结算占位，所以它回答的调用不作废；排在后面的决定并入时发现占位已作废，只确认不写入。
     """
     rc = _runtime_context()
     effects = IncomingDecisionEffects.of(rc.mailbox.ordered())
-    if effects.user_input is None:
+    if effects.user_input is None or not _expirable(effects.answered_before_input):
+        return []
+    queue = service_depends.get_session_message_queue()
+    if not queue.mark_interrupted_work(rc.session.id, [cast(int, effects.user_input.id)]):
         return []
     return [
         expired_notice(call_id, "user_message")

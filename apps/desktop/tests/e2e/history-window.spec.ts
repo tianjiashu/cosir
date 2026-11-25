@@ -19,9 +19,9 @@ type SeedState = Omit<TransportState, "messageOffset" | "terminal_sessions" | "b
 function longConversation(pairs = PAIRS): SeedState {
   const messages: TransportState["messages"] = [];
   for (let index = 0; index < pairs; index += 1) {
-    messages.push({ id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index}`, status: "completed" }], turn: index + 1, inherited: false, outcome: null, source: null } as TransportState["messages"][number]);
+    messages.push({ id: `u-${index}`, role: "user", parts: [{ type: "text", text: `问题 ${index}`, status: "completed" }], turn: index + 1, inherited: false, clientMessageId: null, outcome: null, source: null } as TransportState["messages"][number]);
     const parts: TransportState["messages"][number]["parts"] = [{ type: "text", text: `第 ${index} 轮回答。${"说明。".repeat(20)}`, status: "completed" }];
-    messages.push({ id: `assistant-turn-${index + 1}`, role: "assistant", turn: index + 1, inherited: false, outcome: OUTCOME, source: null, parts } as TransportState["messages"][number]);
+    messages.push({ id: `assistant-turn-${index + 1}`, role: "assistant", turn: index + 1, inherited: false, clientMessageId: null, outcome: OUTCOME, source: null, parts } as TransportState["messages"][number]);
   }
   // `durationMs` 只属于结局；activity 是固定字段的白名单，多一个键整份快照就无效。
   const activity = {modelActivity: null, turn: pairs, resumable: false, status: OUTCOME.status, endReason: OUTCOME.endReason, error: null, usage: null, contextWindowTotal: null, launch: LAUNCH, startedAt: "2026-10-27T00:00:00.000Z" };

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useElementSize } from "@/hooks/use-element-size";
 import type { DockSizing } from "@/components/layout/dock-frame";
 import { PANEL_DOCK_GUTTER } from "@/components/ui/panel-dock";
-import { useSessionBrowserTabs } from "@/lib/browser/host-state-store";
+import { useBrowserBadge, useMarkShownSessionSeen } from "@/lib/browser/browser-badge";
 import { useBrowserPanelStore } from "@/lib/browser/panel-store";
 import { useDockStore } from "@/lib/layout/dock-store";
 import { useAppHotkey } from "@/lib/keyboard/shortcuts";
@@ -17,7 +17,8 @@ const MAIN_MIN_WIDTH = 400;
  *
  * 面板的选择在 `useDockStore`，这里只把它与「能不能显示」合起来：文件面板要有工作区且当前页面允许看文件
  * （配置与观测页不行）；工作台要有标签；浏览器显示 `panel-store` 指定的 Session，没指定时跟随当前会话。
- * 指定只在发起它的那次对话里有效：换到另一个对话就回到跟随（去配置、观测页再回来不算换）。
+ * 指定只在发起它的那次对话里有效：换到另一个对话就回到跟随（去配置、观测页再回来不算换）。面板此刻显示哪个会话
+ * 只有这里知道，所以「看过」（面板显示的会话）与入口提醒（当前会话、面板是否正显示它）都在这里派生。
  * 不满足条件时面板不渲染，但选择保留，条件恢复后原样出现。宽度：主区与面板共享侧栏之外的宽度，`containerRef`
  * 挂在二者的共同容器上；收窄只限制显示值，不覆盖各面板自己的宽度偏好。
  */
@@ -38,7 +39,6 @@ export function useDockPanels({ workspaceId, filesVisible, conversationSessionId
     lastConversation.current = conversationSessionId;
   }, [conversationSessionId]);
   const browserSessionId = pinnedBrowserSession ?? conversationSessionId;
-  const conversationTabs = useSessionBrowserTabs(conversationSessionId);
 
   const available: Record<DockPanel, boolean> = {
     files: filesVisible && workspaceId !== null,
@@ -46,6 +46,9 @@ export function useDockPanels({ workspaceId, filesVisible, conversationSessionId
     browser: true,
   };
   const panel = selected !== null && available[selected] ? selected : null;
+  const shownBrowserSession = panel === "browser" ? browserSessionId : null;
+  useMarkShownSessionSeen(shownBrowserSession);
+  const browserBadge = useBrowserBadge(conversationSessionId, shownBrowserSession !== null && shownBrowserSession === conversationSessionId);
 
   const toggle = useCallback((next: DockPanel) => {
     // 从页头打开浏览器：回到跟随当前会话（卡片上的「打开」可能指定过子 Agent 的 Session）。
@@ -82,8 +85,8 @@ export function useDockPanels({ workspaceId, filesVisible, conversationSessionId
     workbenchTabs,
     workbenchActiveTabId: workbench.activeTabId,
     browserSessionId,
-    /** 页头地球按钮的角标：当前会话的标签数。 */
-    conversationTabCount: conversationTabs.length,
+    /** 页头地球按钮的状态：当前会话的标签数与两段式提醒。 */
+    browserBadge,
     /** 当前面板铺满对话区（主区隐藏）；面板不可显示时不算。 */
     maximized: panel !== null && maximized,
     toggleMaximized,

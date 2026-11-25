@@ -91,6 +91,6 @@ export function followTabChanges(
 
 onBrowserTabsChange((next, previous) => {
   const { selected } = useBrowserPanelStore.getState();
-  const followed = followTabChanges(selected, previous, next);
+  const followed = followTabChanges(selected, previous ?? [], next);
   if (followed !== selected) useBrowserPanelStore.setState({ selected: followed });
 });

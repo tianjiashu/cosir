@@ -313,9 +313,8 @@ def _turn_messages(
         if opened_by_input:
             # 只按展示绑定投影，不读 SDK 正文（正文是带 ``<user_input>`` 包装的模型输入）。
             input_metadata = cast(UserMessageMetadata, opener_metadata)
-            parts, source = build_turn_input(
-                cast(UserInputPresentation, input_metadata.presentation), input_metadata.source
-            )
+            presentation = cast(UserInputPresentation, input_metadata.presentation)
+            parts, source = build_turn_input(presentation, input_metadata.source)
             turn_messages.append(
                 message(
                     user_message_id(cast(int, opener.message_id)),
@@ -324,6 +323,7 @@ def _turn_messages(
                     turn=turn,
                     inherited=inherited,
                     source=source,
+                    client_message_id=presentation.client_message_id,
                 )
             )
         reply = message(reply_id(turn), "assistant", [], turn=turn, inherited=inherited)

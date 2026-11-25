@@ -90,7 +90,8 @@ for (const delivery of ["direct", "send-now", "child"] as const) {
       await page.goto(`app://cosir/sessions/${session}`);
       const input = page.getByLabel("消息输入");
       await input.fill(delivery === "child" ? "start-child-approval" : "start-approval");
-      await input.press("Enter");
+      // 首条消息点「发送」：模型目录还在加载时按钮禁用，点击会自动等到它可用（回车不会等）。
+      await page.getByRole("button", { name: "发送", exact: true }).click();
       const card = page.getByRole("region", { name: "终端执行批准" });
       if (delivery === "send-now") {
         await expect.poll(() => fs.existsSync(path.join(workspacePath, "queue-ready.txt")), { timeout: 30_000 }).toBe(true);

@@ -49,6 +49,7 @@ class ConversationStateMessage(TypedDict):
     inherited: bool
     outcome: ConversationStateOutcome | None
     source: ConversationStateMessageSource | None
+    clientMessageId: str | None
 
 
 class ConversationQueuedMessage(TypedDict):
@@ -61,3 +62,4 @@ class ConversationQueuedMessage(TypedDict):
     role: Literal["user"]
     parts: list[ConversationStatePart]
     delivery: Delivery
+    clientMessageId: str | None

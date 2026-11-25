@@ -14,15 +14,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Literal
-
-from sqlalchemy.orm import Session as DbSession
+from typing import Literal, cast
 
 from app.assistant_transport.request import DecisionRequest, SendMessageRequest
 from app.assistant_transport.state.snapshot_window import HistoryPage
 from app.assistant_transport.stream.session_sse_stream import SessionSseStream
 from app.config.logging.logger import log
 from app.core.tool.terminal_approval.registry import terminal_approvals
+from app.core.workflow.cancel.tool_call_cancellation_registry import tool_call_cancellation_registry
 from app.core.workflow.message_queue.session_message import (
     RunLaunch,
     SessionMessage,
@@ -49,12 +48,11 @@ class AssistantTransportService:
     # ── 命令 ──────────────────────────────────────────────────────────────
 
     async def send(self, session_id: int, request: SendMessageRequest) -> None:
-        """发送：Session 有活动 Run（含挂起）时排队（``next_run``），空闲时立即处理（``immediate``）；
-        等用户回答提问或此页面有终端审批时立即处理；Actor 负责投递新输入并收敛旧等待。
-
-        排队消息在当前 Run 结束后每个 Run 一条依次处理，用户可在队列里改为立即发送或删除；只在等
-        后台结果的挂起，排队不唤醒 Run。判定阶段与入队在 Session 闸门内完成，actor 不会在两者
-        之间开出或落定 Run；执行者自行结束不经闸门，此时排队的消息由刚结束的 Run 收尾时接续。
+        """发送：默认立即处理——空闲开新 Run，运行中插话（下一次模型请求前并入，同批没开始的调用让位），
+        挂起时唤醒；用户要求排队（``request.queue``）时有活动 Run 就以 ``next_run`` 排到它结束后，每个
+        Run 一条依次处理，用户可在队列里立即发送或删除。判定规则在 ``SessionActor.user_input_delivery``，
+        判定阶段与入队在 Session 闸门内完成，actor 不会在两者之间开出或落定 Run；执行者自行结束不经
+        闸门，此时排队的消息由刚结束的 Run 收尾时接续。
 
         Agent 身份沿用 Session 当前 Run：Session 不绑定 Agent，身份随发起配置走，子 Agent 的 Session
         不能因为用户在它的页面里发一条消息就退回 ``main_agent``。尚无 Run 时用 ``main_agent``。
@@ -79,7 +77,7 @@ class AssistantTransportService:
         )
         space = await asyncio.to_thread(session_runtime_spaces.get_or_create, session_id)
         async with space.async_operation():
-            delivery = await space.actor.user_input_delivery()
+            delivery = await space.actor.user_input_delivery(queue=request.queue)
             await asyncio.to_thread(
                 session_runtime_spaces.enqueue,
                 session_id,
@@ -92,76 +90,77 @@ class AssistantTransportService:
         """切换会话的终端权限（规则在 ``SessionService.set_terminal_permission_mode``）。"""
         self._sessions.set_terminal_permission_mode(session_id, mode)
 
-    async def send_queued_now(self, session_id: int, message_id: int) -> None:
-        """把一条排队中的用户输入改为立即处理：撤回原行，以 ``immediate`` 重新入队（同一事务）。
+    async def send_now(self, session_id: int, message_id: int) -> None:
+        """「立即发送」：让一条还没并入的用户输入现在就被处理。
 
-        重新入队得到新的消息身份，actor 把它当作新到达的消息照常判定：有执行者就并入当前 Run，
-        挂起就唤醒，空闲就以它开新 Run。不原地改 ``delivery``：actor 只按水位之后的新消息推进，
-        原地更新唤不醒它。正文（含胶囊指针）、图片与发起配置原样沿用。
+        排队（``next_run``）的原地改为 ``immediate``（``SessionMessageQueue.promote``，身份不变）；插话
+        （``immediate``）的不改内容，两者都登记为待 actor 重新判定。随后在同一闸门内投递，并停下本 Session 当前执行中的
+        工具调用：新输入已在 mailbox 里，tools_node 会跳过同批还没开始的调用，模型下一步就看到它。停止
+        复用单停的信号，只对会轮询取消的工具即时生效（终端、浏览器、MCP 等），读文件、网页抓取这类没有
+        取消点的照常跑完。没有执行中的调用（模型在输出、挂起、空闲、停止中）时不打断任何东西：这一行
+        由 actor 当作待重判的消息照常判定——挂起被唤醒、空闲开新 Run（停止或失败后留下的插话也由此
+        处理）、停止中等驱动落定后再判定，排队投影也随之刷新。
 
         异常:
             SessionCommandConflictError: ``MESSAGE_CONSUMED``（消息已不在队列中，或不是用户输入）。
+            UserInputRejectedError: 这条输入的模型已从配置删除（``MODEL_CONFIG_UNAVAILABLE``）等，同发送。
             KeyError: Session 不存在。
         """
         space = await asyncio.to_thread(session_runtime_spaces.get_or_create, session_id)
         async with space.async_operation():
-            await asyncio.to_thread(self._send_queued_now, session_id, message_id)
+            await asyncio.to_thread(self._make_immediate, session_id, message_id)
             await space.actor.accept_immediate_input()
-        await asyncio.to_thread(self._states.refresh_queued_messages, session_id)
-
-    def _send_queued_now(self, session_id: int, message_id: int) -> None:
-        # 先认 Session：队列对不存在的 Session 只是「没有这一行」，会被说成 MESSAGE_CONSUMED 而不是 404。
-        self._sessions.get_session(session_id)
-        with main_db_factory().begin() as db:
-            queued = self._withdraw_user_input(db, session_id, message_id)
-            new_id = session_runtime_spaces.enqueue(
-                session_id, SessionMessage.of(queued.body, delivery="immediate"), db=db
-            )
+            interrupted = tool_call_cancellation_registry.running_call(session_id)
+            if interrupted is not None and not self._cancel_call(session_id, interrupted):
+                interrupted = None
+            if interrupted is not None:
+                # 停下了在途调用：这条输入打断过工作，之后再撤回要告诉模型（见 ``SessionActor.withdraw_input``）。
+                await asyncio.to_thread(self._queue.mark_interrupted_work, session_id, [message_id])
         log.info(
             "queued_message_sent_now",
             extra={
-                "msg": "排队消息已改为立即处理",
+                "msg": "用户输入改为立即处理",
                 "data": {
                     "session_id": session_id,
                     "message_id": message_id,
-                    "new_message_id": new_id,
+                    "interrupted_call_id": interrupted,
                 },
             },
         )
 
+    def _make_immediate(self, session_id: int, message_id: int) -> None:
+        # 先认 Session：队列对不存在的 Session 只是「没有这一行」，会被说成 MESSAGE_CONSUMED 而不是 404。
+        self._sessions.get_session(session_id)
+        with main_db_factory().begin() as db:
+            promoted = self._queue.promote(db, session_id, message_id)
+            if promoted is None:
+                raise SessionCommandConflictError(
+                    "MESSAGE_CONSUMED", "这条消息已不在队列中", retryable=False
+                )
+            # 与发送同一道准入：模型已删除的输入开不了 Run（调度会跳过它），在这里拒绝、事务回滚，
+            # 用户才知道要编辑或删除它，而不是点了没反应。
+            launch = cast(UserInputBody, promoted.body).launch
+            service_depends.get_model_config_service().check_launch_config(
+                launch.model_config_id, launch.reasoning_effort
+            )
+
     async def delete_queued(self, session_id: int, message_id: int) -> None:
-        """删除一条排队中的用户输入。
+        """删除一条还没并入的用户输入（排队的或插话，编辑也经这里移出）。
+
+        在 Session 闸门内交给 actor（``SessionActor.withdraw_input``）：投递也在闸门内，删除与投递因此
+        不会交错，mailbox 里不会留下已删除输入的副本。
 
         异常:
             SessionCommandConflictError: ``MESSAGE_CONSUMED``（消息已不在队列中，或不是用户输入）。
             KeyError: Session 不存在。
         """
-        await asyncio.to_thread(self._delete_queued, session_id, message_id)
-        # 撤回不新增行、不唤醒 actor，排队投影由这里刷新。
+        # 先认 Session：队列对不存在的 Session 只是「没有这一行」，会被说成 MESSAGE_CONSUMED 而不是 404。
+        await asyncio.to_thread(self._sessions.get_session, session_id)
+        space = await asyncio.to_thread(session_runtime_spaces.get_or_create, session_id)
+        async with space.async_operation():
+            await asyncio.to_thread(space.actor.withdraw_input, message_id)
+        # 用户输入本来就投影在排队区，删除后由这里刷新（可能附带的撤回通知不投影）。
         await asyncio.to_thread(self._states.refresh_queued_messages, session_id)
-
-    def _delete_queued(self, session_id: int, message_id: int) -> None:
-        self._sessions.get_session(session_id)
-        with main_db_factory().begin() as db:
-            self._withdraw_user_input(db, session_id, message_id)
-        log.info(
-            "queued_message_deleted",
-            extra={
-                "msg": "排队消息已删除",
-                "data": {"session_id": session_id, "message_id": message_id},
-            },
-        )
-
-    def _withdraw_user_input(
-        self, db: DbSession, session_id: int, message_id: int
-    ) -> SessionMessage:
-        """在调用方事务内撤回一条排队中的用户输入；不是用户输入时抛错，事务回滚、行保留。"""
-        queued = self._queue.withdraw(db, session_id, message_id)
-        if queued is None or not isinstance(queued.body, UserInputBody):
-            raise SessionCommandConflictError(
-                "MESSAGE_CONSUMED", "这条消息已不在队列中", retryable=False
-            )
-        return queued
 
     async def withdraw(self, session_id: int, message_id: int) -> None:
         """撤回最新一条已并入的用户输入开启的回合（语义见 ``TurnWithdrawalService``），不开新 Run。
@@ -233,22 +232,26 @@ class AssistantTransportService:
         这次调用登记了后台结果时撤销登记，不要求 Run 在执行（后台工作本来就在 Run 之外）：前台条目
         由撤销回调唤醒工具线程、以取消结果收尾；后台条目回投取消结论：有活动 Run 就交给它（不论
         登记它的是哪个 Run）；Session 空闲时先结算占位，结论留在队列里随下一次推进并入、不开新 Run。
-        没有登记时只中止当前执行中的工具调用：看执行者而不是 Run 状态，挂起的 Run 没有执行者，标记了
-        也没人取。
+        没有登记时只中止本 Session 当前执行中的那次调用（执行器登记）：没开始、已结束或不存在的调用
+        不受理，挂起的 Run 没有执行者，自然也没有执行中的调用。
 
         异常:
             KeyError: Session 不存在。
             SessionCommandConflictError: ``TOOL_CALL_NOT_CANCELLABLE``（没有可取消的对象：调用已结束、
-                已标记过取消，或 Session 当前没有执行者）。
+                已标记过取消、还没开始或不存在）。
         """
         self._sessions.get_session(session_id)
-        if terminal_approvals.cancel_call(session_id, tool_call_id):
-            return
-        driving = session_runtime_spaces.get_or_create(session_id).actor.driving
-        if not command_results.request_cancel(session_id, tool_call_id, driving=driving):
+        if not self._cancel_call(session_id, tool_call_id):
             raise SessionCommandConflictError(
                 "TOOL_CALL_NOT_CANCELLABLE", "这次工具调用已结束或已在取消", retryable=False
             )
+
+    @staticmethod
+    def _cancel_call(session_id: int, tool_call_id: str) -> bool:
+        """单停一次调用：先撤它的终端审批，再停后台作业或当前执行中的调用；没有可停的返回 False。"""
+        return terminal_approvals.cancel_call(
+            session_id, tool_call_id
+        ) or command_results.request_cancel(session_id, tool_call_id)
 
     def background_tool_call(self, session_id: int, tool_call_id: str) -> None:
         """把一次前台等待中的工具调用转到后台；结论以后作为 ``background_result`` 回投。

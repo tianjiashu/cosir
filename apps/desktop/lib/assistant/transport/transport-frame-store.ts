@@ -15,6 +15,7 @@ import {
   type TransportState,
 } from "@/lib/assistant/contract";
 import {
+  getOrCreateTransportCommandId,
   toPendingUserMessage,
   toThreadMessageWithRenderContext,
   type TransportMessageRenderContext,
@@ -252,7 +253,7 @@ export class TransportFrameStore {
     this.state = next;
     if (structural) {
       this.rebuildAllItems();
-      this.reconcilePending(previous);
+      this.reconcilePending();
       this.publishNow();
       this.emitActivityTransition(previous);
     } else {
@@ -335,7 +336,7 @@ export class TransportFrameStore {
     this.historyFetch = null;
     this.state = shareUnchanged(previous, state);
     this.rebuildAllItems();
-    this.reconcilePending(previous);
+    this.reconcilePending();
     this.publish();
     this.emitActivityTransition(previous);
   }
@@ -349,18 +350,19 @@ export class TransportFrameStore {
   }
 
   /**
-   * 乐观命令的收敛：snapshot 里新出现了用户消息（排队或已并入）就按出现顺序去掉同样数量的最早
-   * 乐观命令。命令被拒由提交方按 HTTP 结果经 `clearPendingCommand` 收回，不经这里。
+   * 乐观命令的收敛：快照里出现了带同一客户端 id 的用户消息（排队或已并入）就去掉那一条命令。命令被拒由
+   * 提交方按 HTTP 结果经 `clearPendingCommand` 收回，不经这里。
    *
-   * 只数完整历史里不早于此前窗口起点的消息：新窗口可能比旧窗口起得更早（撤回移出消息后整体
-   * 前移），那些更早的用户消息只是之前没加载，不是刚出现的。
+   * 按身份对账、不按「新出现了几条」推断：HTTP 响应与推送帧谁先到没有保证，立即发送会让排队消息换身份，
+   * 确认删除与并入投影之间也可能有一帧里消息两头都不在——计数在这些地方都会收错命令。客户端 id 由
+   * 提交时随请求发出（`getOrCreateTransportCommandId`），后端在三处投影里原样带回。
    */
-  private reconcilePending(previous: TransportState): void {
+  private reconcilePending(): void {
     if (this.pendingCommands.length === 0) return;
-    const known = userMessageIds(previous, previous.messageOffset);
-    const appeared = [...userMessageIds(this.state, previous.messageOffset)].filter((id) => !known.has(id)).length;
-    if (appeared === 0) return;
-    this.pendingCommands = this.pendingCommands.slice(appeared);
+    const arrived = clientMessageIds(this.state);
+    const remaining = this.pendingCommands.filter((command) => !arrived.has(getOrCreateTransportCommandId(command)));
+    if (remaining.length === this.pendingCommands.length) return;
+    this.pendingCommands = remaining;
     this.composeItems();
   }
 
@@ -551,18 +553,11 @@ function isMessageContentMutation(
     && mutation.path[2] === "parts";
 }
 
-/**
- * 完整历史中位置不早于 `from` 的用户消息 id，加上排队消息。Agent 消息（`source` 非空）不算：
- * 它不是用户发的，计入会把用户还在等确认的乐观发送错收回。
- */
-function userMessageIds(state: TransportState, from: number): Set<string> {
+/** 快照里已有的客户端 id：已加载的用户消息与排队消息（Agent 消息与历史输入没有）。 */
+function clientMessageIds(state: TransportState): Set<string> {
   const ids = new Set<string>();
-  state.messages.forEach((message, index) => {
-    if (message.role === "user" && message.source === null && state.messageOffset + index >= from) {
-      ids.add(message.id);
-    }
-  });
-  for (const message of state.queued_messages ?? []) ids.add(message.id);
+  for (const message of state.messages) if (message.clientMessageId !== null) ids.add(message.clientMessageId);
+  for (const message of state.queued_messages ?? []) if (message.clientMessageId !== null) ids.add(message.clientMessageId);
   return ids;
 }
 

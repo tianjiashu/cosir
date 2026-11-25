@@ -5,7 +5,7 @@ import { readFileChanges, type FileChange } from "../tools/file-changes";
 import { collectDeliverableBatches, type DeliverablesBatch } from "./deliverable-layout";
 import type { TransportActivity, TransportAgentMessagePart, TransportMessagePart, TransportOutcome, TransportTextPart, TransportToolCallPart } from "../contract";
 import { readNextStepOffer, type NextStepOffer } from "../tools/next-step-offer";
-import { toolHeading, toolVerb } from "../tools/tool-catalog";
+import { toolHeading, toolMention, toolVerb, type ToolMention } from "../tools/tool-catalog";
 import { toolResultSignal } from "../tools/tool-result-signals";
 
 export type TurnPhase = "running" | "suspended" | "settled";
@@ -29,7 +29,8 @@ export type StandaloneItem = { kind: "standalone"; index: number; part: Transpor
 export type CallItem = { kind: "call"; index: number; part: TransportToolCallPart };
 export type AgentItem = { kind: "agent"; index: number; part: TransportAgentMessagePart };
 export type ProcessItem = NarrationItem | CallItem | StandaloneItem | AgentItem;
-export type VerbCount = { label: string; count: number };
+/** 一个动词下的调用：次数，与每次调用在摘要里的短语（取不到为 null，见 `toolMention`）。 */
+export type VerbGroup = { label: string; count: number; mentions: (ToolMention | null)[] };
 /**
  * 活动段：两次中断（旁白、独立工具、Agent 来信）之间的思考与工具调用，用户眼里的「一段工作」，只占一行。
  * `live` 是这段此刻在做什么（执行中的调用，或回合最后一段上的思考、等待）：运行时这一行说它并计这个状态的
@@ -45,12 +46,12 @@ export type ActivityGroup = { kind: "activity"; key: string; index: number; call
 export type DeliverablesBlock = DeliverablesBatch;
 export type TurnBlock = NarrationItem | StandaloneItem | AgentItem | ActivityGroup | DeliverablesBlock;
 /**
- * 工具组摘要：按动词计数、失败与取消数，以及这一段的产出——文件改动的增删行数之和（逐次操作相加，不是
+ * 工具组摘要：按动词归组的调用（次数与对象短语）、失败与取消数，以及这一段的产出——文件改动的增删行数之和（逐次操作相加，不是
  * 工作区净变化）与产出的图片（按出现顺序）。只在组上有，回合过程不另做汇总。问题之外的结果信号（非零退出、
  * 部分成功）仍只留在调用行。
  */
 export type CallSummary = {
-  verbCounts: VerbCount[];
+  verbs: VerbGroup[];
   failedCount: number;
   cancelledCount: number;
   diff: { insertions: number; deletions: number };
@@ -107,23 +108,40 @@ export function describeCallProblems(summary: CallSummary): string | null {
   ].filter(Boolean).join(" · ") || null;
 }
 
+/** 同一动词至多几次调用时写出对象；再多就是噪音，改写次数。 */
+const MENTION_LIMIT = 2;
+/** 组头至多写几类动词，其余并入「等 N 类」：写出对象后一类就可能很长，两类保证一行（估高按一行算）。 */
+const VERB_GROUP_LIMIT = 2;
+
 /**
- * 工具组头的计数文案。按首次出现排列、只取最早的三类：运行中次数一直在涨，按次数排会让已显示的类别
- * 来回换位；文案因此只往后追加（新类别并入「等 N 类」），不会改动已显示的部分。三类上限让组头保持一行
- * （估高按一行算）。
+ * 工具组头的摘要：让用户不展开就知道这段碰了什么。同一动词调用不超过两次且每次都取得到短语时写出对象
+ * （`读取文件 auth.py、db.py`；写了意图的直接写意图，`查看配置项`），否则写次数（只有一次又取不到对象时
+ * 只写动词）。动词按首次出现排列：运行中次数一直在涨，按次数排会让已显示的类别来回换位。
  */
-export function describeVerbCounts(summary: CallSummary): string {
-  const shown = summary.verbCounts.slice(0, 3).map(({ label, count }) => `${label} ${count} 次`).join(" · ");
-  return shown + (summary.verbCounts.length > 3 ? ` 等 ${summary.verbCounts.length} 类` : "");
+export function describeVerbGroups(summary: CallSummary): string {
+  const shown = summary.verbs.slice(0, VERB_GROUP_LIMIT).map(describeVerbGroup).join("，");
+  return shown + (summary.verbs.length > VERB_GROUP_LIMIT ? ` 等 ${summary.verbs.length} 类` : "");
+}
+
+function describeVerbGroup({ label, count, mentions }: VerbGroup): string {
+  const named = mentions.filter((mention): mention is ToolMention => mention !== null);
+  if (count > MENTION_LIMIT || named.length < count) return count === 1 ? label : `${label} ${count} 次`;
+  const texts = [...new Set(named.map((mention) => mention.text))].join("、");
+  return named[0].standalone ? texts : `${label} ${texts}`;
 }
 
 /** Summaries count calls, not files/steps. Control calls can expose errors without pretending to be work. */
 export function summarizeCalls(calls: readonly CallItem[]): CallSummary {
-  const verbs = new Map<string, number>();
+  const verbs = new Map<string, VerbGroup>();
   let failedCount = 0, cancelledCount = 0, insertions = 0, deletions = 0;
   const images: CallImage[] = [];
   for (const { part } of calls) {
-    if (part.presentation !== "quiet") verbs.set(callVerb(part), (verbs.get(callVerb(part)) ?? 0) + 1);
+    if (part.presentation !== "quiet") {
+      const label = callVerb(part);
+      const group = verbs.get(label) ?? verbs.set(label, { label, count: 0, mentions: [] }).get(label)!;
+      group.count++;
+      if (group.mentions.length < MENTION_LIMIT) group.mentions.push(toolMention(part.toolName, part.args));
+    }
     if (part.status === "failed") failedCount++;
     else if (part.status === "cancelled") cancelledCount++;
     if (part.display_data?.kind === CHANGES_KIND) {
@@ -131,7 +149,7 @@ export function summarizeCalls(calls: readonly CallItem[]): CallSummary {
     }
     images.push(...callImages(part.display_data));
   }
-  return { verbCounts: [...verbs].map(([label, count]) => ({ label, count })), failedCount, cancelledCount, diff: { insertions, deletions }, images };
+  return { verbs: [...verbs.values()], failedCount, cancelledCount, diff: { insertions, deletions }, images };
 }
 
 /**

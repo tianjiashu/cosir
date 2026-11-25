@@ -42,7 +42,8 @@ export type ShortcutScope =
   | "replaceInput"
   | "terminal"
   | "questionCard"
-  | "modelPicker";
+  | "modelPicker"
+  | "composer";
 
 /**
  * 作用范围的嵌套：焦点在子范围里时，父范围的快捷键也在监听（全局监听挂在 document 上，覆盖一切）。
@@ -60,6 +61,7 @@ export const SCOPE_PARENTS: Record<Exclude<ShortcutScope, "global">, readonly Sh
   terminal: ["global"],
   questionCard: ["global"],
   modelPicker: ["global"],
+  composer: ["global"],
 };
 
 /** 条目在哪些范围监听。 */
@@ -178,6 +180,8 @@ export const SHORTCUTS = {
 
   // ---- 对话里的卡片与选择器 ----
   questionSubmit: { keys: "mod+enter", label: "提交回答", scope: "questionCard" },
+  // 对话输入框：回车发送（运行中即插话）是文字编辑语义，不在这里；⌘回车是另一件事——排到当前运行之后。
+  queueMessage: { keys: "mod+enter", label: "加入队列", scope: "composer" },
   selectAllModels: { keys: "mod+a", label: "全选当前搜索结果", scope: "modelPicker" },
 } as const satisfies Record<string, ShortcutDefinition>;
 

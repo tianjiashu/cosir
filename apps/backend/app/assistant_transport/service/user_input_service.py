@@ -87,7 +87,9 @@ class UserInputService:
         )
         return UserInputBody(
             text=text,
-            presentation=UserInputPresentation(text=text, image_paths=image_paths),
+            presentation=UserInputPresentation(
+                text=text, image_paths=image_paths, client_message_id=command.client_message_id
+            ),
             launch=RunLaunch(
                 agent_id=agent_id,
                 model_config_id=model_config_id,

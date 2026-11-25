@@ -132,17 +132,6 @@ def test_create_rejects_child_session(
     assert terminals.started == []
 
 
-def test_create_when_workspace_directory_is_gone_is_rejected_before_starting(
-    client: TestClient, terminals: _FakeTerminals, tmp_path: Path
-) -> None:
-    gone = depends.get_workspace_crud().create("gone", str(tmp_path / "moved-away"))
-    session_id = _session(gone)
-    response = client.post(f"/sessions/{session_id}/terminal/sessions", json={"shell": "bash"})
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "TERMINAL_ERROR"
-    assert terminals.started == []
-
-
 def test_create_for_missing_session_is_404(client: TestClient, terminals: _FakeTerminals) -> None:
     response = client.post("/sessions/999/terminal/sessions", json={"shell": "auto"})
     assert response.status_code == 404

@@ -10,7 +10,7 @@ import { Fragment, memo, useCallback, useMemo, useRef, type FC } from "react";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { rememberMessageHeight, rememberedMessageHeight } from "@/lib/assistant/turn/message-height-cache";
 import { estimateMessageHeight } from "@/lib/assistant/turn/message-height-estimate";
-import { queuedMessageIdsKey } from "@/lib/assistant/transport/transport-state-operations";
+import { queueBarMessageIdsKey } from "@/lib/assistant/composer/action-policy";
 import { VirtualizedThreadMessageRow, type MessageComponents } from "@/components/conversation/thread/virtualized-thread-message-row";
 import { useThreadHistoryPaging } from "@/components/conversation/thread/use-thread-history-paging";
 import { measureRenderedElement } from "@/lib/virtual/measure-rendered-element";
@@ -24,8 +24,8 @@ type VirtualizedThreadMessagesProps = {
 
 /**
  * 按消息 id 定位的对话虚拟列表；不负责消息内容状态维护。
- * 排队消息不在消息流里（由输入框上方的队列区渲染），这里滤掉。
- * 运行中始终保留末尾两条消息（最新回合的用户输入与正在输出的回复）挂载，避免流式增长时被移出可见区后丢失测量。
+ * 排队消息不在消息流里（由输入框上方的排队条渲染），这里滤掉；插话照常留在消息流。
+ * 运行中始终保留正在输出的回复挂载，避免流式增长时被移出可见区后丢失测量。
  *
  * 屏幕外消息只由这里跳过，消息根节点不能再叠加 `content-visibility`：视口外但在 overscan 内的行会被
  * 浏览器按占位高度布局，虚拟列表量到假高度，行接近视口时再按真实高度修正一次 scrollTop，卸载后
@@ -43,7 +43,8 @@ export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = mem
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollElement = useThreadViewport((state) => state.element.viewport);
   const threadMessageIds = unstable_useThreadMessageIds();
-  const queuedIdsKey = useAuiState((state) => queuedMessageIdsKey(state.thread.state));
+  // 排队的消息画在输入框上方的排队条里（含正在提交的排队发送），插话照常留在消息流。
+  const queuedIdsKey = useAuiState((state) => queueBarMessageIdsKey(state.thread.messages));
   // The external-store runtime creates a trailing optimistic assistant while sending/queuing.
   // Only canonical backend replies own execution UI; sending feedback belongs to the user row.
   const optimisticId = useAuiState((state) => {
@@ -55,12 +56,14 @@ export const VirtualizedThreadMessages: FC<VirtualizedThreadMessagesProps> = mem
     const queued = new Set(queuedIdsKey.split("|"));
     return threadMessageIds.filter((id) => id !== optimisticId && !queued.has(id));
   }, [queuedIdsKey, optimisticId, threadMessageIds]);
-  const isRunning = useAuiState((state) => state.thread.isRunning);
+  // 当前回复（frame store 只把运行中状态挂在 `activity.turn` 那一回合的回复上；运行时发送时补的乐观回复不算）；
+  // 返回 id 字符串，流式 token 不让列表重渲染。不按位置猜：末尾可能是还没并入的插话与正在提交的消息。
+  const activeReplyId = useAuiState((state) => state.thread.messages
+    .findLast((message) => message.status?.type === "running" && !message.metadata.isOptimistic)?.id ?? null);
   const activeIndexes = useMemo(() => {
-    if (!isRunning) return [];
-    const last = messageIds.length - 1;
-    return [last - 1, last].filter((index) => index >= 0);
-  }, [isRunning, messageIds]);
+    const index = activeReplyId === null ? -1 : messageIds.indexOf(activeReplyId);
+    return index >= 0 ? [index] : [];
+  }, [activeReplyId, messageIds]);
   // TanStack 把 key 函数身份作为布局缓存依赖；滚动重渲染不能让所有未测行重新估高。
   const getItemKey = useCallback((index: number) => messageIds[index] ?? index, [messageIds]);
   const virtualizer = useVirtualizer({

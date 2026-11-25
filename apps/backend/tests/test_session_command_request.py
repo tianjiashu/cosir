@@ -15,6 +15,7 @@ def _send(**overrides: object) -> SendMessageRequest:
         {
             "message": _message(),
             "modelConfigId": "test/m1",
+            "clientMessageId": "pending-1",
             **overrides,
         }
     )
@@ -41,6 +42,7 @@ def test_text_parts_are_joined_and_images_map_to_asset_ids() -> None:
                 ],
             },
             "modelConfigId": "test/m1",
+            "clientMessageId": "pending-2",
         }
     )
 
@@ -56,6 +58,8 @@ def test_text_parts_are_joined_and_images_map_to_asset_ids() -> None:
         {"delivery": "immediate"},
         {"runId": 1},
         {"modelConfigId": ""},
+        # 客户端 id 是前端对账乐观消息的唯一依据，必须带上。
+        {"clientMessageId": ""},
         # 附件不再有独立字段：本机文件与工作区引用是正文里的胶囊。
         {"message": _message(attachments=[])},
     ],

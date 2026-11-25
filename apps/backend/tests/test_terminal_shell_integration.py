@@ -167,6 +167,31 @@ def test_prefill_fills_the_prompt_without_running_it(terminal: _Terminal) -> Non
     assert executed.wait_result["end_reason"] == "matched", executed.text
 
 
+def test_fresh_terminal_can_be_filled_once_it_reaches_its_first_prompt(
+    terminal: _Terminal, tmp_path: Path
+) -> None:
+    """terminal_write 新开终端的路径：刚握手的 shell 还在跑启动脚本，等到第一个提示符再填；
+    「待回车」投影进会话条目，用户回车执行后消失。"""
+    fresh = terminal.service.start(
+        session_id=1, cwd=str(tmp_path), shell=terminal.runtime.spec.executable
+    )
+    assert fresh.wait_for_prompt(15.0, lambda: False) == "settled"
+    assert fresh.accepts_prefill
+    fresh.prefill("echo FRESH-FILLED", run_id=1, tool_call_id="call-fresh")
+    entry = next(
+        e for e in session_entries(terminal.service, 1)
+        if e["terminalSessionId"] == fresh.terminal_session_id
+    )
+    assert entry["prefillPending"] is True
+    assert fresh.user_input(b"\r") == "accepted"
+    executed = fresh.read(
+        wait=TerminalWait(until="match", pattern="^FRESH-FILLED$", timeout_ms=5000),
+        is_cancelled=lambda: False,
+    )
+    assert executed.wait_result["end_reason"] == "matched", executed.text
+    assert fresh.prefill_pending is False
+
+
 def test_match_reports_running_command(terminal: _Terminal) -> None:
     terminal.user("sleep 0.3; echo READY-NOW; sleep 30")
     # 锚定整行：只认命令输出的那一行。不加 ^ 时，命令行回显到一半（``…; echo READY-NOW`` 还没接上

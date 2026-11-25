@@ -17,22 +17,22 @@ afterEach(() => {
 });
 
 describe("openUserTab", () => {
-  it("按 Session 现读后端给的上限与下载目录，转成宿主契约的字段名交给宿主，并把面板切到新标签", async () => {
-    requestJson.mockResolvedValue({ limits: { per_session: 5, total: 20 }, download_dir: "/ws/.cosir/downloads" });
+  it("按 Session 现读后端给的上限、下载目录与显示会话，转成宿主契约的字段名交给宿主，并把面板切到新标签", async () => {
+    requestJson.mockResolvedValue({ limits: { per_session: 5, total: 20 }, download_dir: "/ws/.cosir/downloads", display_session_id: 3 });
     open.mockResolvedValue("t4");
     navigate.mockResolvedValue(undefined);
 
     await expect(openUserTab(7, "https://example.com")).resolves.toBe("t4");
 
     expect(requestJson).toHaveBeenCalledWith("/sessions/7/browser-context");
-    expect(open).toHaveBeenCalledWith(7, { limits: { perSession: 5, total: 20 }, downloadDir: "/ws/.cosir/downloads" });
+    expect(open).toHaveBeenCalledWith(7, { limits: { perSession: 5, total: 20 }, downloadDir: "/ws/.cosir/downloads", displaySessionId: 3 });
     expect(navigate).toHaveBeenCalledWith("t4", { url: "https://example.com" });
     expect(useBrowserPanelStore.getState()).toMatchObject({ sessionId: 7, selected: { 7: "t4" } });
   });
 
   // 潜在缺陷：开标签与首次导航绑成一次调用时，地址打不开就整个报「无法新开标签页」，可标签已经开出来、面板却没切过去。
   it("地址打不开时标签照样开出并切过去，导航失败单独提示", async () => {
-    requestJson.mockResolvedValue({ limits: { per_session: 5, total: 20 }, download_dir: "/ws/.cosir/downloads" });
+    requestJson.mockResolvedValue({ limits: { per_session: 5, total: 20 }, download_dir: "/ws/.cosir/downloads", display_session_id: 3 });
     open.mockResolvedValue("t5");
     navigate.mockRejectedValue(new Error("加载失败"));
 

@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { create } from "zustand";
 
 import type { TerminalSessionEntry } from "@/lib/assistant/contract";
-import { isActiveTerminalSession, terminalBadge } from "@/lib/terminal/terminal-sessions";
+import { isActiveTerminalSession, newlyPrefilled, terminalBadge } from "@/lib/terminal/terminal-sessions";
 
 /**
  * 每个 Session 的终端工作台 UI 状态。
@@ -12,11 +12,16 @@ import { isActiveTerminalSession, terminalBadge } from "@/lib/terminal/terminal-
  *   由 SessionPage 置回 null（不能挂在 Assistant 会话卸载上：渲染恢复会重挂会话而终端面板不动，清空
  *   会卸掉正在使用的 xterm），再回来时不按过期列表挂载窗格、判定自动新建。
  * - `open` / `activeSessionId` 是纯 UI 偏好：每个 Session 独立记住，切走再回来恢复；不持久化。
- * - `focusToken` 递增即请求把焦点放到当前终端（打开面板、切换标签、从卡片跳转）。
+ * - `focusPending` 是一次待执行的焦点请求：只有用户操作（打开面板、切换标签、从卡片跳转、关掉标签后换到相邻的）
+ *   置位，由可见的那个窗格执行一次后经 `consumeFocus` 清除；收起面板即作废。焦点只来自请求、不随「变得可见」
+ *   顺带给：Agent 填入命令也会让面板出现，那时用户可能正在输入框打字。请求放在 store 而不是窗格里记「处理过
+ *   哪一次」：Agent 新开的终端窗格挂载时也要能分辨请求是不是早已执行过。
  * - `acknowledgedEnds` 是用户已经看过的已结束会话：面板打开期间结束的、或打开面板时已在列表里的都算
  *   看过；页头角标只为没看过的异常结束提醒，避免同一次退出一直标红。
  * - `autoCreate` 表示「本次打开时若没有活跃会话需新建一个默认终端」：打开时 snapshot 可能尚未
  *   到达，由工作台在会话列表已知后执行并清除；只在打开那一刻置位，会话退出不会触发新建。
+ * - Agent 把命令填进某个终端（镜像里它的 `prefillPending` 翻成 true，见 `newlyPrefilled`）时，展开面板并
+ *   选中它，不发焦点请求：抢焦点会把用户在输入框里的按键（含回车）送进终端。
  *
  * 页头按钮在 SessionPage 之外，因此状态放在按 sessionId 分桶的全局 store，而不是组件 state。
  */
@@ -24,7 +29,7 @@ export type TerminalWorkbenchSessionState = {
   sessions: TerminalSessionEntry[] | null;
   open: boolean;
   activeSessionId: string | null;
-  focusToken: number;
+  focusPending: boolean;
   autoCreate: boolean;
   acknowledgedEnds: readonly string[];
 };
@@ -45,6 +50,7 @@ type TerminalWorkbenchStore = {
    */
   closedByUser: (sessionId: number, terminalSessionId: string) => void;
   consumeAutoCreate: (sessionId: number) => void;
+  consumeFocus: (sessionId: number) => void;
   /** Session（或其所在工作区）删除成功后丢弃该 Session 的桶，避免已删除 Session 的状态常驻。 */
   forget: (sessionIds: readonly number[]) => void;
 };
@@ -53,7 +59,7 @@ const EMPTY: TerminalWorkbenchSessionState = {
   sessions: null,
   open: false,
   activeSessionId: null,
-  focusToken: 0,
+  focusPending: false,
   autoCreate: false,
   acknowledgedEnds: [],
 };
@@ -104,42 +110,50 @@ export const useTerminalWorkbenchStore = create<TerminalWorkbenchStore>((set) =>
         if (current.sessions === sessions) return state;
         // 面板开着时结束的会话用户看得见，直接算看过；收起时只保留仍在列表里的记录，列表外的无需再记。
         const ended = endedIds(sessions);
-        const acknowledgedEnds = current.open ? ended : current.acknowledgedEnds.filter((id) => ended.includes(id));
+        const prefilled = newlyPrefilled(current.sessions, sessions);
+        const open = current.open || prefilled !== null;
+        const acknowledgedEnds = open ? ended : current.acknowledgedEnds.filter((id) => ended.includes(id));
         return { bySession: { ...state.bySession, [sessionId]: {
-          ...current, sessions, activeSessionId: reconcileActive(sessions, current.activeSessionId), acknowledgedEnds,
+          ...current,
+          sessions,
+          open,
+          activeSessionId: prefilled ?? reconcileActive(sessions, current.activeSessionId),
+          autoCreate: prefilled === null && current.autoCreate,
+          acknowledgedEnds,
         } } };
       });
     },
     setOpen: (sessionId, open) => update(sessionId, (current) => ({
       open,
       autoCreate: open && !current.open && !hasActiveSession(current.sessions),
-      focusToken: open ? current.focusToken + 1 : current.focusToken,
+      focusPending: open,
       acknowledgedEnds: open ? endedIds(current.sessions) : current.acknowledgedEnds,
     })),
     toggle: (sessionId) => update(sessionId, (current) => ({
       open: !current.open,
       autoCreate: !current.open && !hasActiveSession(current.sessions),
-      focusToken: current.open ? current.focusToken : current.focusToken + 1,
+      focusPending: !current.open,
       acknowledgedEnds: current.open ? current.acknowledgedEnds : endedIds(current.sessions),
     })),
-    select: (sessionId, terminalSessionId) => update(sessionId, (current) => ({
+    select: (sessionId, terminalSessionId) => update(sessionId, () => ({
       activeSessionId: terminalSessionId,
-      focusToken: current.focusToken + 1,
+      focusPending: true,
     })),
     reveal: (sessionId, terminalSessionId) => update(sessionId, (current) => ({
       open: true,
       activeSessionId: terminalSessionId,
       autoCreate: false,
-      focusToken: current.focusToken + 1,
+      focusPending: true,
       acknowledgedEnds: endedIds(current.sessions),
     })),
     closedByUser: (sessionId, terminalSessionId) => update(sessionId, (current) => {
       if (current.activeSessionId !== null && current.activeSessionId !== terminalSessionId) return {};
       const next = current.sessions?.find((session) => session.terminalSessionId !== terminalSessionId && isActiveTerminalSession(session));
-      if (next) return { activeSessionId: next.terminalSessionId, focusToken: current.focusToken + 1 };
-      return { activeSessionId: null, open: false };
+      if (next) return { activeSessionId: next.terminalSessionId, focusPending: true };
+      return { activeSessionId: null, open: false, focusPending: false };
     }),
     consumeAutoCreate: (sessionId) => update(sessionId, () => ({ autoCreate: false })),
+    consumeFocus: (sessionId) => update(sessionId, () => ({ focusPending: false })),
     forget: (sessionIds) => set((state) => {
       if (!sessionIds.some((sessionId) => sessionId in state.bySession)) return state;
       const bySession = { ...state.bySession };

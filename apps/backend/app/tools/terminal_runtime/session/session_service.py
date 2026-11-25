@@ -1,8 +1,8 @@
 """终端会话集合的唯一所有者：归属、容量、创建 / 关闭、终态历史与副作用线程。
 
 单会话操作（读取、填入、订阅、用户输入）由调用方经 ``require`` 取到 runtime 后直接调用，本服务
-不做转发。会话只由用户新建（工作台 HTTP），Agent 工具只列出、读取与填入；两侧共用这里的归属与
-生命周期规则，所以集合管理不能放进任何一侧。活会话与有限终态历史只存在当前后端进程，不持久化、
+不做转发。会话由用户在工作台新建（HTTP），或由 ``terminal_write`` 在没有空闲终端时为填入新开；两种都是
+用户的终端（不进沙箱、由用户关闭），共用这里的归属与生命周期规则，所以集合管理不能放进任何一侧。活会话与有限终态历史只存在当前后端进程，不持久化、
 不跨重启恢复。
 
 线程边界：
@@ -17,10 +17,12 @@ import threading
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
 from app.tools.terminal_runtime.errors import (
+    TerminalError,
     TerminalSessionCapacityError,
     TerminalSessionNotFoundError,
     TerminalSessionOwnershipError,
@@ -56,8 +58,16 @@ class TerminalSessionService:
         shell: str = "auto",
         integration: str = "auto",
     ) -> TerminalSessionRuntime:
-        """在 ``cwd``（调用方已确认存在的目录，用户会话是工作区根）创建会话并完成 worker 握手；
-        容量受全进程活跃会话上限约束。"""
+        """在 ``cwd``（工作区根）创建会话并完成 worker 握手；容量受全进程活跃会话上限约束。
+
+        两条新建路径（工作台、``terminal_write``）共用这里的目录校验：工作区目录可能已被移走，给出明确
+        错误而不是让 worker 启动失败。
+
+        异常:
+            TerminalError: ``cwd`` 不是目录；shell 不可用、容量、状态与 worker 失败见各子类。
+        """
+        if not Path(cwd).is_dir():
+            raise TerminalError(f"invalid terminal cwd: {cwd}")
         spec = resolve_session_shell(shell, integration=integration)
         with self._registry_lock:
             if not self._accepting:

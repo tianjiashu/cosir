@@ -211,6 +211,7 @@ class ConversationStateService:
                 role="user",
                 parts=list(build_presentation_parts(item.body.presentation)),
                 delivery=item.delivery,
+                clientMessageId=item.body.presentation.client_message_id,
             )
             for item in get_session_message_queue().pending_nowait(session_id)
             if item.project_to_transport and isinstance(item.body, UserInputBody)

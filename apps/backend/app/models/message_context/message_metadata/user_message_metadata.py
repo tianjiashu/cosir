@@ -58,11 +58,16 @@ class UserInputPresentation(BaseModel):
     「胶囊指针可用」由入队边界 ``UserInputService`` 保证：那里 stat 本机文件、校验工作区引用、
     解析 Skill 并写回路径。本模型只承载已成立的事实，不再重复校验自身——它在每次快照重建与
     context 读取时都会被 ``model_validate``，为上游已保证的数据反复付出代价没有收益。
+
+    ``client_message_id`` 是发送这条输入的客户端给它起的身份（前端乐观消息的 id）：排队、并入与冷重建
+    三处投影原样带回，前端按它把乐观消息换成正式消息，不按「新出现了几条」推断。后端不解读、不校验
+    唯一性；只有用户从界面发送的输入才有，模型看不到它。
     """
 
     model_config = ConfigDict(extra="forbid")
     text: str
     image_paths: list[str] = Field(default_factory=list)
+    client_message_id: str | None = None
 
 
 class UserMessageMetadata(MessageMetadata):

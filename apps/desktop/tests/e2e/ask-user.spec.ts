@@ -35,9 +35,9 @@ function askingState(): TransportState {
   return {
     title: "测试对话",
     messages: [
-      { id: "u-1", role: "user", turn: 1, inherited: false, source: null, outcome: null,
+      { id: "u-1", role: "user", turn: 1, inherited: false, clientMessageId: null, source: null, outcome: null,
         parts: [{ type: "text", text: "把登录改成会话制", status: "completed" }] },
-      { id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, source: null, outcome: null,
+      { id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, clientMessageId: null, source: null, outcome: null,
         parts: [
           { type: "text", text: "有三处需要你定。", status: "completed" },
           {

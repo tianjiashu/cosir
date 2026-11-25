@@ -32,6 +32,7 @@ def test_nested_tool_parts_serialize_through_actual_routes(presentation):
             "inherited": False,
             "outcome": None,
             "source": None,
+            "clientMessageId": None,
             "parts": [
                 {
                     "type": "tool-call",

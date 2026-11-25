@@ -47,7 +47,8 @@ class TerminalSessionStateError(TerminalError):
 
 
 class TerminalPrefillRejectedError(TerminalError):
-    """当前不满足「把一行命令填进空提示符」的条件（无 shell 集成、不在提示符、提示符已有输入）。
+    """当前不满足「把一行命令填进空提示符」的条件：无 shell 集成、不在提示符、提示符已有输入；或本
+    Session 已有一条填入的命令在等用户、新开的终端没能走到提示符、本机没有带集成的 shell。
 
     不可重试到同一提示符：用户敲了半行或已经填过一次时，Agent 应把命令写进回复里，或等下一个
     提示符；原因由 message 写清。

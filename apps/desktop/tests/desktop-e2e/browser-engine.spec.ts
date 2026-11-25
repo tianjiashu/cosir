@@ -158,7 +158,7 @@ let app: ElectronApplication;
 
 const LIMITS = { perSession: 2, total: 3 };
 const DOWNLOAD_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "cosir-browser-downloads-"));
-const context = (limits: { perSession: number; total: number }) => ({ limits, downloadDir: DOWNLOAD_DIR });
+const context = (limits: { perSession: number; total: number }) => ({ limits, downloadDir: DOWNLOAD_DIR, displaySessionId: 1 });
 
 test.beforeAll(async () => {
   server = http.createServer((request, response) => {
@@ -265,7 +265,7 @@ function call<M extends HostMethod>(method: M, request: HostRequest<M>): Promise
     const { host } = (globalThis as unknown as { browserHarness: { host: Record<string, (...args: unknown[]) => Promise<unknown>> } }).browserHarness;
     try {
       // 每个请求都带标签上下文（宿主据此刷新上限）；用例没指定时给宽松的上限。
-      const withContext = { context: { limits: { perSession: 5, total: 50 }, downloadDir }, ...request };
+      const withContext = { context: { limits: { perSession: 5, total: 50 }, downloadDir, displaySessionId: 1 }, ...request };
       return { ok: true as const, value: await host[method](withContext, new AbortController().signal) as unknown as Page };
     } catch (error) {
       const failure = error as { code?: string; message?: string };
@@ -316,7 +316,7 @@ function link(method: string, sessionId: number, params: Record<string, unknown>
   return app.evaluate(async (_electron, { method, sessionId, params, downloadDir }) => {
     const { invoke } = (globalThis as unknown as { browserHarness: { invoke: (method: string, params: unknown) => Promise<unknown> } }).browserHarness;
     try {
-      const value = await invoke(method, { session_id: sessionId, limits: { per_session: 5, total: 50 }, download_dir: downloadDir, ...params });
+      const value = await invoke(method, { session_id: sessionId, limits: { per_session: 5, total: 50 }, download_dir: downloadDir, display_session_id: sessionId, ...params });
       return { ok: true as const, value: value as Record<string, unknown> };
     } catch (error) {
       const failure = error as { code?: string; message?: string };

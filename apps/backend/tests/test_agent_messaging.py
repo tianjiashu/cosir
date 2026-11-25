@@ -203,6 +203,11 @@ def test_target_without_first_run_inherits_its_queued_launch(env, tmp_path, monk
         "get_session_message_queue",
         lambda: SimpleNamespace(pending_nowait=lambda _: pending),
     )
+    monkeypatch.setattr(
+        session_send,
+        "get_model_config_service",
+        lambda: SimpleNamespace(available_ids=lambda: frozenset({"test/m7"})),
+    )
     assert _send(_PARENT, target.id, "hi", tmp_path).status == "error"
     assert not env.enqueued
     pending.append(

@@ -289,6 +289,7 @@ def _validate_queued_message(value: object, seen_message_ids: set[str]) -> None:
     if message["role"] != "user":
         raise ValueError("queued_messages must contain user messages")
     require_one_of(message["delivery"], _DELIVERIES, "queued message delivery")
+    require_str(message["clientMessageId"], "queued message clientMessageId", nullable=True)
 
 
 def _validate_message(value: object, seen_message_ids: set[str]) -> None:
@@ -304,6 +305,10 @@ def _validate_message(value: object, seen_message_ids: set[str]) -> None:
         if message["role"] != "user":
             raise ValueError("only user messages carry a source")
         _validate_source(message["source"])
+    if message["clientMessageId"] is not None:
+        if message["role"] != "user":
+            raise ValueError("only user messages carry a clientMessageId")
+        require_non_empty_str(message["clientMessageId"], "snapshot message clientMessageId")
 
 
 def _validate_message_fields(

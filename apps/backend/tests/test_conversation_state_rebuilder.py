@@ -163,6 +163,7 @@ def test_validate_snapshot_rejects_outcome_of_non_terminal_status() -> None:
                     "durationMs": 0,
                 },
                 "source": None,
+                "clientMessageId": None,
             }
         ],
         "messageOffset": 0,
@@ -199,6 +200,7 @@ def test_validate_snapshot_rejects_outcome_on_user_message() -> None:
                     "durationMs": 0,
                 },
                 "source": None,
+                "clientMessageId": None,
             }
         ],
         "messageOffset": 0,
@@ -362,7 +364,9 @@ def test_rebuild_restores_capsule_text_and_images_from_context_input() -> None:
     )
     image_id = "a" * 64
     text = '请查看 <ref path="src/a.py" lines="1-2" />'
-    presentation = UserInputPresentation(text=text, image_paths=[f"attachments/{image_id}.png"])
+    presentation = UserInputPresentation(
+        text=text, image_paths=[f"attachments/{image_id}.png"], client_message_id="pending-xyz"
+    )
     row = SessionContextRecord(
         id=1,
         session_id=7,
@@ -380,6 +384,8 @@ def test_rebuild_restores_capsule_text_and_images_from_context_input() -> None:
         {"type": "text", "text": text, "status": "completed"},
         {"type": "image", "image": f"cosir-attachment://{image_id}"},
     ]
+    # 冷重建同样带回客户端 id：并入后才重连的页面仍能把乐观消息对上正式消息。
+    assert state["messages"][0]["clientMessageId"] == "pending-xyz"
     validate_snapshot(state)
 
 

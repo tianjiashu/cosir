@@ -142,7 +142,11 @@ def runtime_stub(**overrides: Any) -> SimpleNamespace:
         tool_definitions={},
         tool_executor=None,
         run_state=run_state_stub(),
-        message_queue=SimpleNamespace(ack=lambda _session, ids: set(ids)),
+        # 替身里外部行都还在：确认与让位标记都按「行仍在队列中」成立。
+        message_queue=SimpleNamespace(
+            ack=lambda _session, ids: set(ids),
+            mark_interrupted_work=lambda _session, ids: bool(ids),
+        ),
         mailbox=RunMailbox(),
         session_space=SimpleNamespace(session_tool_schemas=(), session_deferred_schemas=()),
         event_sink=lambda _event: None,

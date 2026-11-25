@@ -118,5 +118,7 @@ export function toAddMessageCommand(message: AppendMessage): UserAddMessageComma
   return {
     type: "add-message",
     message: { role: "user", parts },
+    // 输入框以 `steer: false` 表达加入队列（见 `useComposerSubmit`）；其余提交入口不带，即默认发送。
+    queue: message.steer === false,
   };
 }

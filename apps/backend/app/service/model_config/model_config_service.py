@@ -75,14 +75,13 @@ class ModelConfigService:
 
         return ModelConfigRecord(*self.read().find(config_id))
 
-    def exists(self, config_id: str) -> bool:
-        """模型是否还在文件里；文件写坏时也视为不可用（调用方据此不开新 Run）。"""
+    def available_ids(self) -> frozenset[str]:
+        """文件里现有的全部模型 id；文件写坏时视为一个都没有（调度据此不开新 Run）。"""
 
         try:
-            self.get_config(config_id)
-        except (KeyError, ModelConfigFileError):
-            return False
-        return True
+            return frozenset(record.id for record in self.list_configs())
+        except ModelConfigFileError:
+            return frozenset()
 
     def check_launch_config(
         self, model_config_id: str, reasoning_effort: ReasoningEffort | None

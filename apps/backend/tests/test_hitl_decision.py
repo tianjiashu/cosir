@@ -128,6 +128,7 @@ def test_session_message_kind_follows_body_and_roundtrips_through_storage() -> N
         payload=message.body.model_dump(mode="json"),
         delivery="immediate",
         project_to_transport=False,
+        interrupted_work=False,
     )
     restored = SessionMessage.of_model(row)
     assert restored.body == message.body
@@ -262,6 +263,7 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
                 "inherited": False,
                 "outcome": None,
                 "source": None,
+                "clientMessageId": None,
                 "parts": [
                     {
                         "presentation": "activity",
@@ -299,8 +301,10 @@ def test_running_part_can_move_to_pending_then_to_completed() -> None:
 def _prepare_rc(acked: dict[int, SessionMessage]):
     tool = _definition("hitl_tool", hitl=True)
     return runtime_stub(
+        # ``acked`` 是仍在队列中的行：确认与让位标记都只对它们成立。
         message_queue=SimpleNamespace(
-            ack=lambda _session, ids: {i: acked[i] for i in ids if i in acked}
+            ack=lambda _session, ids: {i: acked[i] for i in ids if i in acked},
+            mark_interrupted_work=lambda _session, ids: any(i in acked for i in ids),
         ),
         tool_definitions={"hitl_tool": tool},
     )

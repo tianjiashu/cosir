@@ -33,12 +33,12 @@ export function toolCallPart(toolCallId: string, toolName: string, overrides: Pa
 
 /** 用户消息；第二个参数是它所在的回合（夹具里常与回复、活动的回合号一一对应）。 */
 export function userMessage(id: string, turn: number, text = "hello"): TransportMessage {
-  return { id, role: "user", parts: [textPart(text)], turn, inherited: false, source: null, outcome: null };
+  return { id, role: "user", parts: [textPart(text)], turn, inherited: false, clientMessageId: null, source: null, outcome: null };
 }
 
 /** Agent 消息：另一个 Agent 交来、开启回合的 user 消息，带发送方。 */
 export function agentMessage(id: string, turn: number, text = "请完成子会话", sourceSessionId = 9): TransportMessage {
-  return { id, role: "user", parts: [textPart(text)], turn, inherited: false, outcome: null, source: { sessionId: sourceSessionId, name: "主会话", report: null } };
+  return { id, role: "user", parts: [textPart(text)], turn, inherited: false, clientMessageId: null, outcome: null, source: { sessionId: sourceSessionId, name: "主会话", report: null } };
 }
 
 /** 回合途中到达的 Agent 消息。 */
@@ -53,7 +53,7 @@ export function assistantMessage(
   parts: TransportMessagePart[] = [textPart("answer")],
   outcome: TransportOutcome | null = null,
 ): TransportMessage {
-  return { id, role: "assistant", parts, turn, inherited: false, outcome, source: null };
+  return { id, role: "assistant", parts, turn, inherited: false, clientMessageId: null, outcome, source: null };
 }
 
 export function outcome(
@@ -84,7 +84,7 @@ export function activity(
 }
 
 export function queuedMessage(id: string, text = "queued", delivery: TransportQueuedMessage["delivery"] = "next_run"): TransportQueuedMessage {
-  return { id, role: "user", parts: [textPart(text)], delivery };
+  return { id, role: "user", parts: [textPart(text)], delivery, clientMessageId: null };
 }
 
 export function usage(overrides: Partial<TransportUsage> = {}): TransportUsage {
@@ -109,6 +109,7 @@ export function terminalSession(terminalSessionId: string, overrides: Partial<Te
     exitCode: null,
     integration: "ready",
     commandRunning: false,
+    prefillPending: false,
     createdAt: "2026-10-27T00:00:00.000Z",
     ...overrides,
   };

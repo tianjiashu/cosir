@@ -29,12 +29,14 @@ NoticeKind = Literal[
     "configuration_changed",
     "terminal_permissions",
     "read_files_changed",
+    "input_withdrawn",
 ]
 NoticeLevel = Literal["session", "run", "turn"]
 
 # 通知分级：级别决定通知从哪来、存在哪、丢了或所在回合被撤回时怎么办。分界只看一个问题——
 # 这件事能不能事后从持久化事实与上下文里重新算出来：
-# - session：发生过一次的事件（分叉交接、后端重启、派生 Session 被用户停止或删除、提问作废）。事后推不出
+# - session：发生过一次的事件（分叉交接、后端重启、派生 Session 被用户停止或删除、提问作废、用户撤回了打断过
+#   工作的输入）。事后推不出
 #   「模型还没被告知」，所以由事件发生处经外部队列投一次，确认与写入 context 同一事务、不会丢；所在
 #   回合被撤回时重新投递（``turn_withdrawal_service``），否则之后的 Run 永远看不到。
 # - run：此刻成立的状态（工具准入、还有哪些事没了结、Agent 看到的配置）。不入队，经 ``mailbox.notify``
@@ -65,6 +67,7 @@ NOTICE_LEVELS: dict[NoticeKind, NoticeLevel] = {
     "model_continuation": "turn",
     # 所在回合被撤回时重新投递：提问仍是作废的，模型还得知道。
     "decision_expired": "session",
+    "input_withdrawn": "session",
 }
 
 # 通知的唤醒范围（见 ``WakeScope``）：通知多半只提醒、不值得单独跑一轮模型。例外是「等着的东西没了」：
@@ -82,6 +85,7 @@ NOTICE_WAKE_SCOPES: dict[NoticeKind, WakeScope] = {
     "user_cancelled": "none",
     "model_continuation": "none",
     "decision_expired": "none",
+    "input_withdrawn": "none",
 }
 
 

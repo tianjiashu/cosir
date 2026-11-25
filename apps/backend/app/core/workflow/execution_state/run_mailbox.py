@@ -19,7 +19,8 @@ class RunMailbox:
 
     - 外部队列行的副本（:meth:`post`，有 ``id``）：事实仍在外部队列，``prepare_input`` 并入时才
       确认删除；执行结束、取消或进程退出时未确认的留在外部队列，下次执行开始时重新投递。别的 Session、
-      工具与 HTTP 交来的输入一律先进外部队列，再由调度方投到这里。
+      工具与 HTTP 交来的输入一律先进外部队列，再由调度方投到这里。副本是外部队列的子集：行在确认之外被
+      删除（用户撤回）时，由投递方在同一 Session 闸门内经 :meth:`discard` 拿掉副本。
     - 本次执行自己产生的通知（:meth:`notify`，没有 ``id``）：工具准入、旧终端失效、续写提示只对
       这次执行的下一次请求有意义，不落库、不需要确认，随 :meth:`reset` 丢弃。只收 ``NoticeBody``，
       所以执行内无法绕过外部队列投递别的输入。
@@ -103,10 +104,18 @@ class RunMailbox:
         with self._lock:
             return any(entry[2].wakes(run_id) for entry in self._heap)
 
-    def has_user_input(self) -> bool:
-        """已投递且尚未处理的立即用户输入接替旧模型批次；Agent 消息不具有此语义。"""
+    def user_input_ids(self) -> list[int]:
+        """已投递、尚未并入的用户输入（外部队列行 id）。在途工作是否为它们让位由
+        ``SessionMessageQueue.mark_interrupted_work`` 按事实裁决：闸门外读到的副本可能刚被撤回。
+        Agent 消息不让在途工作让位。"""
         with self._lock:
-            return any(entry[2].kind == "user_input" for entry in self._heap)
+            return [cast(int, entry[2].id) for entry in self._heap if entry[2].kind == "user_input"]
+
+    def discard(self, row_id: int) -> None:
+        """拿掉一行已撤回的副本（不在时什么也不做）；去重记录保留，同一行不会再被投进来。"""
+        with self._lock:
+            self._heap = [entry for entry in self._heap if entry[2].id != row_id]
+            heapq.heapify(self._heap)
 
     def _push(self, message: SessionMessage) -> None:
         heapq.heappush(self._heap, (type(message.body).PRIORITY, next(self._order), message))

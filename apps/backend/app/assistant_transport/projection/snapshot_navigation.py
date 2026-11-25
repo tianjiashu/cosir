@@ -26,8 +26,10 @@ def message(
     turn: int,
     inherited: bool = False,
     source: ConversationStateMessageSource | None = None,
+    client_message_id: str | None = None,
 ) -> ConversationStateMessage:
-    """构造消息骨架；结局只在 Run 终态时由 Run 事件投影写入，来源只给 Agent 消息。"""
+    """构造消息骨架；结局只在 Run 终态时由 Run 事件投影写入，来源只给 Agent 消息，客户端 id 只给
+    用户从界面发送的输入。"""
 
     return {
         "id": message_id,
@@ -37,6 +39,7 @@ def message(
         "inherited": inherited,
         "outcome": None,
         "source": source,
+        "clientMessageId": client_message_id,
     }
 
 

@@ -11,11 +11,11 @@ const parentState: TransportState = {
   title: "主会话",
   messages: [
     {
-      id: "1", role: "user", turn: 1, inherited: false, outcome: null, source: null,
+      id: "1", role: "user", turn: 1, inherited: false, clientMessageId: null, outcome: null, source: null,
       parts: [{ type: "text", text: "前后端一起改", status: "completed" }],
     },
     {
-      id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, source: null,
+      id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, clientMessageId: null, source: null,
       outcome: { status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 },
       parts: [{presentation: "standalone",
         type: "tool-call", awaitingUser: false, toolCallId: "call-fork", toolName: "fork_session", status: "completed",
@@ -79,8 +79,8 @@ test("手动分叉的历史可读、截图可查看，但不操作来源会话",
     ...parentState, activity: null,
     fork: { sourceSessionId: 991, sourceTitle: "已删除的来源", sessionType: "user_fork", initialLaunch: LAUNCH },
     messages: [
-      { ...parentState.messages[0], inherited: true },
-      { ...parentState.messages[1], inherited: true,
+      { ...parentState.messages[0], inherited: true, clientMessageId: null },
+      { ...parentState.messages[1], inherited: true, clientMessageId: null,
         outcome: null,
         parts: [
           { type: "tool-call", presentation: "standalone", toolCallId: "history-8:child", toolName: "fork_session", status: "pending", awaitingUser: false, args: {}, display_data: { kind: "fork-session-result", title: "来源子会话", child_session_id: 991 } },
@@ -103,12 +103,12 @@ test("继承历史共用文件、终端和错误展示，展开状态跨虚拟�
   const sourceRequests: string[] = [];
   page.on("request", req => { if (/\/sessions\/991\b/.test(req.url())) sourceRequests.push(req.url()); });
   const history: TransportState["messages"] = Array.from({ length: 100 }, (_, index) => ({
-    id: `assistant-turn-${index + 1}`, role: "assistant", turn: index + 1, inherited: true, outcome: null, source: null,
+    id: `assistant-turn-${index + 1}`, role: "assistant", turn: index + 1, inherited: true, clientMessageId: null, outcome: null, source: null,
     parts: [{ type: "text", status: "completed", text: `历史说明 ${index}。${"保留背景。".repeat(30)}` }],
   }));
   await seedState(request, 9, {
     ...parentState, activity: null,
-    messages: [...history, { id: "assistant-turn-101", role: "assistant", turn: 101, inherited: true, outcome: null, source: null, parts: [
+    messages: [...history, { id: "assistant-turn-101", role: "assistant", turn: 101, inherited: true, clientMessageId: null, outcome: null, source: null, parts: [
       { type: "text", text: "继承展示验收", status: "completed" },
       { type: "tool-call", presentation: "activity", toolCallId: "context-file", toolName: "read_file", status: "completed", awaitingUser: false,
         args: { path: "src/review.py" }, display_data: { kind: "read-file-meta", path: "src/review.py", file_size: 4096, line_range: { start: 12, end: 24 }, truncated: true } },

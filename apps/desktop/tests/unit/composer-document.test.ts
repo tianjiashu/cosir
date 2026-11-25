@@ -1,9 +1,11 @@
+import { isMacKeyboard } from "@/lib/keyboard/shortcuts";
+import { platform } from "@/lib/platform";
 import { serializeCapsule } from "@/lib/assistant/capsules";
 import { describe, expect, it } from "vitest";
 import type { JSONContent } from "@tiptap/core";
 import {
   resolveComposerInsertionPosition,
-  shouldSubmitOnEnter,
+  composerSubmitIntent,
 } from "@/components/composer/composer-editor-policy";
 import {
   insertionCommandContent,
@@ -104,13 +106,20 @@ describe("composer Enter submission policy", () => {
   function event(overrides: Partial<{
     key: string;
     shiftKey: boolean;
+    metaKey: boolean;
+    ctrlKey: boolean;
+    altKey: boolean;
     defaultPrevented: boolean;
     isComposing: boolean;
     keyCode: number;
   }> = {}) {
     return {
       key: overrides.key ?? "Enter",
+      code: "Enter",
       shiftKey: overrides.shiftKey ?? false,
+      metaKey: overrides.metaKey ?? false,
+      ctrlKey: overrides.ctrlKey ?? false,
+      altKey: overrides.altKey ?? false,
       defaultPrevented: overrides.defaultPrevented ?? false,
       nativeEvent: {
         isComposing: overrides.isComposing ?? false,
@@ -119,13 +128,23 @@ describe("composer Enter submission policy", () => {
     };
   }
 
-  it("只提交未被输入法或其它处理器占用的普通 Enter", () => {
-    expect(shouldSubmitOnEnter(event(), false)).toBe(true);
-    expect(shouldSubmitOnEnter(event({ shiftKey: true }), false)).toBe(false);
-    expect(shouldSubmitOnEnter(event({ isComposing: true }), false)).toBe(false);
-    expect(shouldSubmitOnEnter(event({ keyCode: 229 }), false)).toBe(false);
-    expect(shouldSubmitOnEnter(event(), true)).toBe(false);
-    expect(shouldSubmitOnEnter(event({ defaultPrevented: true }), false)).toBe(false);
+  it("普通 Enter 发送，未被输入法或其它处理器占用时才提交", () => {
+    expect(composerSubmitIntent(event(), false)).toBe("send");
+    expect(composerSubmitIntent(event({ shiftKey: true }), false)).toBeNull();
+    expect(composerSubmitIntent(event({ isComposing: true }), false)).toBeNull();
+    expect(composerSubmitIntent(event({ keyCode: 229 }), false)).toBeNull();
+    expect(composerSubmitIntent(event(), true)).toBeNull();
+    expect(composerSubmitIntent(event({ defaultPrevented: true }), false)).toBeNull();
+  });
+
+  it("主修饰键 + Enter 加入队列，其余修饰组合不提交", () => {
+    const mac = isMacKeyboard(platform);
+    const primary = mac ? { metaKey: true } : { ctrlKey: true };
+    const other = mac ? { ctrlKey: true } : { metaKey: true };
+    expect(composerSubmitIntent(event(primary), false)).toBe("queue");
+    expect(composerSubmitIntent(event({ ...primary, isComposing: true }), false)).toBeNull();
+    expect(composerSubmitIntent(event(other), false)).toBeNull();
+    expect(composerSubmitIntent(event({ altKey: true }), false)).toBeNull();
   });
 });
 

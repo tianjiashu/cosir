@@ -1,5 +1,5 @@
 import { moveMessageToComposer } from "@/lib/assistant/composer/move-to-composer";
-import { GitForkIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, Loader2Icon, PencilIcon, PlayIcon, Trash2Icon, Undo2Icon, ZapIcon } from "lucide-react";
+import { GitForkIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, CopyIcon, Loader2Icon, PlayIcon, Undo2Icon } from "lucide-react";
 import { useContext, createContext, memo, Profiler, useEffect, useMemo, useRef, useState, type FC } from "react";
 import {
   AuiIf,
@@ -30,20 +30,22 @@ import { TooltipIconButton } from "@/components/ui/tooltip-icon-button";
 import {
   deriveComposerAction,
   isWithdrawableLatestUserMessage,
-  isQueuedUserMessage,
+  messageDelivery,
 } from "@/lib/assistant/composer/action-policy";
 import { readRuntimeTransportState } from "@/lib/assistant/transport/transport-state-operations";
-import { isActiveRunStatus, type InputDelivery, type TransportActivity, type TransportMessageSource } from "@/lib/assistant/contract";
+import { isActiveRunStatus, type TransportActivity, type TransportMessageSource } from "@/lib/assistant/contract";
+import { shortcutLabel } from "@/lib/keyboard/shortcuts";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { cn } from "@/lib/utils";
-import { useActiveRunLaunch } from "@/lib/assistant/run-launch";
+import { COMPOSER_LAUNCH_BLOCKER_TEXT, useComposerLaunch, type ComposerLaunchBlocker } from "@/lib/assistant/composer/composer-launch";
 import { AttachmentWorkspaceContext } from "@/components/conversation/thread/attachment-context";
 import { VirtualizedThreadMessages } from "@/components/conversation/thread/virtualized-thread-messages";
 import { ConversationAsideSlot } from "@/components/conversation/thread/conversation-aside";
 import { EmptyThreadFrameContext } from "@/components/conversation/thread/empty-thread-frame";
-import { QueuedMessages } from "@/components/conversation/thread/queued-messages";
+import { QueuedMessageBar, QueuedMessageRow } from "@/components/conversation/thread/queued-message-bar";
+import { QueuedMessageActions } from "@/components/conversation/thread/queued-message-actions";
 import { AgentInboundMessage } from "@/components/conversation/thread/agent-message";
-import { deleteQueuedSessionMessage, sendQueuedSessionMessageNow, withdrawSessionMessage } from "@/lib/assistant/session-commands";
+import { withdrawSessionMessage } from "@/lib/assistant/session-commands";
 import type { AssistantPerformanceProbe } from "@/lib/assistant/assistant-performance-probe";
 import { UserMessageContent, useHasUserMessageContent } from "@/components/conversation/thread/user-message-content";
 import { UserMessageImages } from "@/components/conversation/thread/user-message-images";
@@ -136,8 +138,11 @@ export const Thread: FC<ThreadProps> = memo(function Thread({ readonly = false, 
                   <ThreadPrimitive.ViewportFooter className="bg-background sticky bottom-0 mt-auto flex min-w-0 flex-col gap-4 pb-4 md:pb-6">
                     <div aria-hidden="true" className="scroll-fade-bottom" />
                     <ScrollToBottomButton />
-                    <QueuedMessages components={messageComponents} />
-                    <ComposerBoundary performanceProbe={performanceProbe} />
+                    {/* 排队条贴在输入框上方，两者是一组。 */}
+                    <div className="flex min-w-0 flex-col gap-2">
+                      <QueuedMessageBar components={messageComponents} />
+                      <ComposerBoundary performanceProbe={performanceProbe} />
+                    </div>
                   </ThreadPrimitive.ViewportFooter>
                 )}
               </div>
@@ -198,10 +203,12 @@ const ComposerBoundary = memo(function ComposerBoundary({
 });
 
 const Composer = memo(function Composer() {
-  // 运行期配置锁定：活动 Run 期间模型显示 Run 冻结的配置且只读，发送也用这份配置。
-  const runLaunch = useActiveRunLaunch();
-  // 运行中照常可以发送（后端排进队列，当前 Run 结束后依次处理）；只有停止请求在途时不提交，避免与停止交错。
+  // 运行中照常可以发送：回车插话（下一步并入当前 Run），⌘回车排到当前 Run 结束后；只有停止请求在途时不提交，
+  // 避免与停止交错。运行中占位文字提示排队的键，回车发送不用教。
   const { cancelling = false, sessionId, workspaceId, workspaceRoot } = useThreadContext();
+  // 这次发送用哪个发起配置、能不能发：选择器、发送按钮与回车读同一份结论（运行期锁定也在其中）。
+  const launch = useComposerLaunch({ sessionId, workspaceId });
+  const running = useAuiState((state) => isActiveRunStatus(readRuntimeTransportState(state.thread.state)?.activity?.status));
   return (
     <ComposerInsertionProvider>
       <ComposerFeedbackProvider>
@@ -212,21 +219,21 @@ const Composer = memo(function Composer() {
               <ComposerImageAttachments />
               <InlineComposerInput
                 persistSessionDraft
-                placeholder={COMPOSER_PLACEHOLDER}
+                placeholder={running ? `${shortcutLabel("queueMessage")} 加入队列` : COMPOSER_PLACEHOLDER}
                 className={COMPOSER_EDITOR_CLASS_NAME}
                 autoFocus
-                submitDisabled={cancelling}
+                submitDisabled={cancelling || launch.blocker !== null}
                 aria-label="消息输入"
               />
             </div>
             <ComposerToolbar
               add={<ThreadComposerAddMenu workspaceRoot={workspaceRoot} />}
-              action={<ComposerAction />}
+              action={<ComposerAction sendBlocker={launch.blocker} />}
             />
             <ComposerFeedback />
           </ComposerPrimitive.Root>
           <ComposerConfigBar
-            config={<><ModelSelector scope={{ sessionId, workspaceId }} locked={runLaunch} /><TerminalPermissionSelector sessionId={sessionId} /></>}
+            config={<><ModelSelector scope={{ sessionId, workspaceId }} launch={launch} /><TerminalPermissionSelector sessionId={sessionId} /></>}
             status={<SessionContextUsage />}
           />
         </div>
@@ -242,7 +249,8 @@ const ThreadComposerAddMenu: FC<{ workspaceRoot?: string }> = ({ workspaceRoot }
   return <ComposerAddMenu images={useComposerImageSink()} workspaceRoot={workspaceRoot} workspaceId={workspaceId} disabled={composer.isDisabled} />;
 };
 
-const ComposerAction: FC = () => {
+/** `sendBlocker`：模型还不能用的原因（见 `useComposerLaunch`），有值时发送按钮禁用并说明原因。 */
+const ComposerAction: FC<{ sendBlocker: ComposerLaunchBlocker | null }> = ({ sendBlocker }) => {
   const isRunning = useAuiState((state) => state.thread.isRunning);
   const isDraftEmpty = useAuiState((state) =>
     state.composer.text.trim().length === 0 && state.composer.attachments.length === 0,
@@ -333,18 +341,16 @@ const ComposerAction: FC = () => {
   }
 
   // 一个按钮位：有草稿就是发送，停止只在草稿为空时出现（见 `deriveComposerAction`）。Run 活动期间
-  // 发出去是排队还是立即处理由后端定（挂着提问时会立即处理），这里不预告，去向看输入框上方的队列区。
+  // 按钮与回车同为插话（⌘回车才排队）；并入时机由后端最终判定，这里不预告。
   return (
-    <ComposerSendButton aria-label="发送">
+    <ComposerSendButton
+      aria-label="发送"
+      blocked={sendBlocker !== null}
+      title={sendBlocker === null ? undefined : COMPOSER_LAUNCH_BLOCKER_TEXT[sendBlocker]}
+    >
       <ArrowUpIcon className="size-4" />
     </ComposerSendButton>
   );
-};
-
-/** 排队条目的状态说明：`next_run` 等当前运行结束后依次处理；`immediate` 已改为立即处理、等待并入。 */
-const QUEUED_LABELS: Record<InputDelivery, string> = {
-  next_run: "排队中",
-  immediate: "即将处理",
 };
 
 const ThreadMessage: FC = () => {
@@ -363,10 +369,10 @@ function messageSource(custom: Record<string, unknown> | undefined): TransportMe
 }
 
 const UserMessage: FC = () => {
-  const messageId = useAuiState((state) => state.message.id);
-  const queued = useAuiState((state) => isQueuedUserMessage(readRuntimeTransportState(state.thread.state), messageId));
-  // 排队消息只在输入框上方的队列区渲染（见 QueuedMessages），消息流里已滤掉。
-  return queued ? <QueuedMessageView /> : <UserMessageView />;
+  const { sessionId } = useThreadContext();
+  const queued = useAuiState((state) => messageDelivery(state.message.metadata.custom) === "next_run");
+  // 排队的消息只在输入框上方的排队条里渲染（见 QueuedMessageBar），消息流里已滤掉；插话照常是气泡。
+  return queued ? <QueuedMessageRow sessionId={sessionId} /> : <UserMessageView />;
 };
 
 /**
@@ -407,6 +413,8 @@ const WithdrawMessageButton: FC = () => {
 const UserMessageView: FC = () => {
   const messageId = useAuiState((state) => state.message.id);
   const pending = useAuiState((state) => state.message.metadata.custom?.pending === true);
+  // 后端队列里还没并入的插话：操作同排队条（立即发送、编辑、删除），停止或失败后留下的也由此处理。
+  const interjection = useAuiState((state) => !pending && messageDelivery(state.message.metadata.custom) === "immediate");
   const hasContent = useHasUserMessageContent();
   // 渲染失败时的纯文本兜底：只拼正文，胶囊所在位置留空。
   const userText = useAuiState((state) => state.message.parts.map((part) => part.type === "text" ? part.text : "").join(""));
@@ -418,11 +426,12 @@ const UserMessageView: FC = () => {
     if (!isWithdrawableLatestUserMessage(transportState, messageId)) return false;
 
     // Transport runtime 可能在 canonical snapshot 到达前乐观渲染新的用户命令；
-    // 此期间不能因为旧 snapshot 仍在，就把上一条用户消息重新标记为可撤回。排队消息不算：
+    // 此期间不能因为旧 snapshot 仍在，就把上一条用户消息重新标记为可撤回。后端队列里还没并入的消息不算：
     // 它们排在已并入的消息之后，但不妨碍撤回最新一条已并入的消息。
     const latestRenderedUserMessageId = [...state.thread.messages]
       .reverse()
-      .find((message) => message.role === "user" && !isQueuedUserMessage(transportState, message.id))?.id;
+      .find((message) => message.role === "user"
+        && (message.metadata.custom?.pending === true || messageDelivery(message.metadata.custom) === null))?.id;
     return latestRenderedUserMessageId === messageId;
   });
 
@@ -455,7 +464,8 @@ const UserMessageView: FC = () => {
         )}
       </div>
       <div className="mt-1 h-6 shrink-0">
-        {pending ? <span role="status" className="text-muted-foreground text-xs leading-6">正在发送</span> : <ActionBarPrimitive.Root
+        {pending ? <span role="status" className="text-muted-foreground text-xs leading-6">正在发送</span>
+          : interjection ? <QueuedMessageActions sessionId={sessionId} /> : <ActionBarPrimitive.Root
           className={cn("flex h-6 gap-1 transition-opacity", REVEAL_ON_MESSAGE_HOVER)}
         >
           {canWithdraw && <WithdrawMessageButton />}
@@ -465,115 +475,6 @@ const UserMessageView: FC = () => {
           </ActionBarPrimitive.Copy>
         </ActionBarPrimitive.Root>}
       </div>
-    </MessagePrimitive.Root>
-  );
-};
-
-/** 写入 effect 需要的一次性草稿快照；与 message 对象解耦，避免写入被 transport 更新打断。 */
-type QueuedCommand = "send_now" | "edit" | "delete";
-
-const QUEUED_COMMAND_FAILURE: Record<QueuedCommand, string> = {
-  send_now: "立即发送失败",
-  edit: "编辑失败",
-  delete: "删除失败",
-};
-
-/**
- * 队列区里的一条排队消息：立即发送、编辑、删除。
- *
- * 编辑 = 删除这一条 + 把正文与附件放回输入框（排在输入框已有内容之前，见 `moveMessageToComposer`），
- * 改完照常发送、重新排队；删除失败（已被并入）时不动输入框。命令只投递，结果以 snapshot 的 `queued_messages` 为准：立即发送后
- * 条目以新身份重新入队或直接被并入，撤回后条目消失。消息恰好已被并入时后端 409，消费投影随即
- * 把它移出队列区。
- */
-const QueuedMessageView: FC = () => {
-  const message = useAuiState((state) => state.message);
-  const messageId = message.id;
-  const hasContent = useHasUserMessageContent();
-  const delivery = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages
-    ?.find((message) => message.id === messageId)?.delivery ?? "next_run");
-  const { sessionId } = useThreadContext();
-  const [busy, setBusy] = useState<QueuedCommand | null>(null);
-
-  const canonical = useAuiState((state) => readRuntimeTransportState(state.thread.state)?.queued_messages
-    ?.find((item) => item.id === messageId));
-  const moveToComposer = async () => {
-    if (message.role !== "user" || !canonical) return;
-    await moveMessageToComposer({
-      sessionId,
-      message,
-      canonical,
-      remove: () => deleteQueuedSessionMessage(sessionId, messageId),
-    });
-  };
-
-  const run = async (command: QueuedCommand) => {
-    if (busy !== null) return;
-    setBusy(command);
-    try {
-      if (command === "send_now") await sendQueuedSessionMessageNow(sessionId, messageId);
-      else if (command === "edit") await moveToComposer();
-      else await deleteQueuedSessionMessage(sessionId, messageId);
-      void frontendLog("INFO", "queued_message_command_accepted", "排队消息命令已受理", {
-        data: { sessionId, messageId, command },
-      });
-    } catch (error) {
-      notify.error(QUEUED_COMMAND_FAILURE[command], { error, fallback: "这条消息可能已开始处理，请以对话内容为准" });
-      void frontendLog("WARNING", "queued_message_command_failed", "排队消息命令失败", {
-        data: { sessionId, messageId, command },
-        error,
-      });
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  return (
-    <MessagePrimitive.Root
-      data-role="user"
-      data-queued={delivery}
-      className="bg-muted/40 flex items-start gap-2 rounded-2xl px-3 py-2"
-    >
-      <div className="min-w-0 flex-1">
-        <span className="text-muted-foreground text-xs">{QUEUED_LABELS[delivery]}</span>
-        <UserMessageImages />
-        {hasContent && (
-          <div className="text-foreground line-clamp-3 text-sm leading-relaxed wrap-break-word">
-            <UserMessageContent />
-          </div>
-        )}
-      </div>
-      <ActionBarPrimitive.Root className="flex shrink-0 gap-1">
-        {delivery === "next_run" && (
-          <TooltipIconButton
-            tooltip="立即发送"
-            aria-label="立即发送"
-            size="sm"
-            disabled={busy !== null}
-            onClick={() => void run("send_now")}
-          >
-            {busy === "send_now" ? <Loader2Icon className="animate-spin" /> : <ZapIcon />}
-          </TooltipIconButton>
-        )}
-        <TooltipIconButton
-          tooltip="编辑（放回输入框）"
-          aria-label="编辑"
-          size="sm"
-          disabled={busy !== null}
-          onClick={() => void run("edit")}
-        >
-          {busy === "edit" ? <Loader2Icon className="animate-spin" /> : <PencilIcon />}
-        </TooltipIconButton>
-        <TooltipIconButton
-          tooltip="删除"
-          aria-label="删除"
-          size="sm"
-          disabled={busy !== null}
-          onClick={() => void run("delete")}
-        >
-          {busy === "delete" ? <Loader2Icon className="animate-spin" /> : <Trash2Icon />}
-        </TooltipIconButton>
-      </ActionBarPrimitive.Root>
     </MessagePrimitive.Root>
   );
 };

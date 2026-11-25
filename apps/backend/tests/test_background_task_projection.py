@@ -60,6 +60,7 @@ def _messages(*parts: dict[str, object]) -> list[dict[str, object]]:
             "inherited": False,
             "outcome": None,
             "source": None,
+            "clientMessageId": None,
         }
     ]
 

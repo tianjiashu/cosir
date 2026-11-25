@@ -181,20 +181,23 @@ class CommandResultRegistry:
         # 命令在 handler 通过准入后、交接作业前就可能被点名停止。登记后接过该信号，
         # 工具线程返回时会清理它；此后单停直接按活条目处理。
         if tool_call_cancellation_registry.is_cancelled(session_id, tool_call_id):
-            self.request_cancel(session_id, tool_call_id, driving=False)
+            self.request_cancel(session_id, tool_call_id)
         return work
 
-    def request_cancel(self, session_id: int, tool_call_id: str, *, driving: bool) -> bool:
-        """单停：停下作业，条目留到作业带着取消结论收尾；用户点卡片停止与 Agent 的 ``terminal_stop`` 共用。
+    def request_cancel(self, session_id: int, tool_call_id: str) -> bool:
+        """单停：停下作业，条目留到作业带着取消结论收尾；用户点卡片停止、立即发送与 Agent 的
+        ``terminal_stop`` 共用。
 
-        工作还在工具线程、尚未登记时（``driving``）先打工具信号，登记会接过它。
+        没有登记条目时，只有本 Session 当前执行中的那次调用能停：打工具信号，由工具轮询（终端命令
+        登记作业时接过它）；没开始、已结束或不存在的调用返回 False，不受理一个无人消费的信号。
         """
         with self._lock:
             entry = self._entries.get((session_id, tool_call_id))
             if entry is None:
-                return driving and tool_call_cancellation_registry.mark_cancelled(
-                    session_id,
-                    tool_call_id,
+                return tool_call_cancellation_registry.running_call(
+                    session_id
+                ) == tool_call_id and tool_call_cancellation_registry.mark_cancelled(
+                    session_id, tool_call_id
                 )
             if entry.stop_requested:
                 return False

@@ -203,6 +203,11 @@ export type TransportMessage = {
    * 它不是用户说的话：另行渲染、不可编辑，也不认领用户的乐观发送。
    */
   source: TransportMessageSource | null;
+  /**
+   * 发出这条输入的客户端给它起的身份（乐观消息的命令 id），只有用户从界面发送的输入非空。前端按它把
+   * 乐观消息换成正式消息（`reconcilePending`），不按「新出现了几条」推断。
+   */
+  clientMessageId: string | null;
 };
 
 /**
@@ -255,6 +260,8 @@ export type TransportQueuedMessage = {
   role: "user";
   parts: TransportMessagePart[];
   delivery: InputDelivery;
+  /** 同 `TransportMessage.clientMessageId`。 */
+  clientMessageId: string | null;
 };
 
 /** 终端会话生命周期：`starting` / `running` 为活跃，其余为已结束。 */
@@ -276,6 +283,8 @@ export type TerminalSessionEntry = {
   integration: "starting" | "ready" | "unavailable" | "off";
   /** 集成跟踪到有命令正在执行；无集成（integration 非 ready）时恒为 false，不代表空闲。 */
   commandRunning: boolean;
+  /** Agent 填入的命令还停在提示符上、用户没碰过：工作台据此展开面板，页头提示「等你回车」。 */
+  prefillPending: boolean;
   createdAt: string;
 };
 

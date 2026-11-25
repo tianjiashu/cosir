@@ -41,13 +41,14 @@ describe("toolHeading", () => {
     expect(toolHeading("browser_evaluate", { expression: "a".repeat(70) }).target).toBe(`${"a".repeat(60)}…`);
   });
 
-  it("终端工具按 terminal_id 拼目标，MCP 与 Skill 按动作拼目标", () => {
-    expect(toolHeading("terminal_write", { terminal_id: "term_1", command: "npm test" }).target).toBe("term_1 · npm test");
-    expect(toolHeading("terminal_write", { terminal_id: "term_1" }).target).toBe("term_1");
+  it("填入终端只写命令（终端可能由后端挑或新开），其余终端工具按 terminal_id；MCP 与 Skill 按动作拼目标", () => {
+    expect(toolHeading("terminal_write", { terminal_id: "term_1", command: "npm test" }).target).toBe("npm test");
+    expect(toolHeading("terminal_write", { terminal_id: null, command: "npm login" }).target).toBe("npm login");
+    expect(toolHeading("terminal_write", { terminal_id: "term_1" }).target).toBeNull();
     expect(toolHeading("terminal_read", { terminal_id: "call-1" }).target).toBe("call-1");
     expect(toolHeading("terminal_stop", { terminal_id: "call-1" })).toMatchObject({ title: "停止命令", target: "call-1" });
-    // 流式参数里命令先于终端 id 到达时不拼出「null · 命令」。
-    expect(toolHeading("terminal_write", { command: "npm test" }).target).toBeNull();
+    // 不指定终端时只有命令，同样显示命令。
+    expect(toolHeading("terminal_write", { command: "npm test" }).target).toBe("npm test");
     // MCP 工具按名字前缀认成一族，目标取名字里的「服务/工具」。
     expect(toolHeading("mcp__fs__read_file", { path: "a" })).toMatchObject({ title: "调用 MCP", target: "fs/read_file" });
     expect(toolHeading("mcp__classify__run", { intent: "refund" }).title).toBe("调用 MCP");

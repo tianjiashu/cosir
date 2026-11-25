@@ -138,7 +138,7 @@ test("新建会话请求、Assistant Transport 流和增量 UI 均正常工作",
   await secondResponsePromise;
   const streamLogUrl = `${API_ORIGIN}/__test__/last-stream`;
   // 订阅不随 Run 结束关闭：以第二个回合的回复写入结局作为本次输出结束。
-  await expect.poll(async () => (await request.get(streamLogUrl)).text()).toContain('"turn":2,"inherited":false,"outcome":{"status":"completed"');
+  await expect.poll(async () => (await request.get(streamLogUrl)).text()).toContain('"turn":2,"inherited":false,"clientMessageId":null,"outcome":{"status":"completed"');
   const streamBody = await (await request.get(streamLogUrl)).text();
   await expect.poll(() => assistantRequests.length).toBe(2);
   expect(assistantRequests[1]?.status).toBe(200);

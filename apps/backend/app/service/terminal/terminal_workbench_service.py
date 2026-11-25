@@ -19,7 +19,6 @@ from app.service.depends import (
     get_terminal_session_service,
     get_workspace_service,
 )
-from app.tools.terminal_runtime.errors import TerminalError
 
 
 class TerminalWorkbenchSessionTypeError(Exception):
@@ -48,13 +47,9 @@ class TerminalWorkbenchService:
                 f"session type {session.session_type} does not support terminal workbench"
             )
         workspace = get_workspace_service().get_workspace(session.workspace_id)
-        # 会话从工作区根启动；目录可能已被移走，这里给出明确错误而不是让 worker 启动失败。
-        root = Path(workspace.root_path).resolve()
-        if not root.is_dir():
-            raise TerminalError(f"invalid terminal cwd: {workspace.root_path}")
         runtime = get_terminal_session_service().start(
             session_id=session_id,
-            cwd=str(root),
+            cwd=str(Path(workspace.root_path).resolve()),
             shell=shell,
         )
         terminal_session_id = runtime.terminal_session_id

@@ -581,7 +581,8 @@ test("同名标签消歧、溢出菜单、临时替换和关闭后的目录入�
   await expect(surface.getByRole("tab", { name: "test/index.ts", exact: true })).toHaveAttribute("aria-selected", "true");
   const active = surface.getByRole("tab", { name: "test/index.ts", exact: true });
   const list = surface.getByRole("tablist", { name: "文件预览标签" });
-  expect((await active.boundingBox())!.x).toBeGreaterThanOrEqual((await list.boundingBox())!.x);
+  // 滚动位置按整像素取，标签宽是小数时会差不到 1px。
+  expect((await active.boundingBox())!.x).toBeGreaterThanOrEqual((await list.boundingBox())!.x - 1);
   await expect(surface.getByRole("tab", { name: "src/index.ts", exact: true })).toHaveCount(1);
   await page.evaluate(async () => {
     const modulePath = "/lib/workspace-files/workspace-files-store.ts";

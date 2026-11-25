@@ -100,7 +100,7 @@ export function Turn({ sessionId, readonly, cancelling, footerAction }: TurnProp
 
   return (
     <div ref={root}
-      data-slot="turn" data-inherited={inherited || undefined} data-phase={phase} className="flex min-w-0 flex-col gap-4">
+      data-slot="turn" data-inherited={inherited || undefined} data-phase={phase} className="flex min-w-0 flex-col gap-3">
       <LiveTurnHeading layout={layout} outcome={outcome} startedAt={activity?.startedAt}
         open={processOpen} onToggle={() => { lockScroll(); setProcessOpen(!processOpen); }} />
       {layout.blocks.map((block) => {

@@ -84,6 +84,8 @@ class TerminalSessionSnapshot:
     exit_code: int | None
     integration: str
     command_running: bool
+    # Agent 填入的命令还停在提示符上、用户没碰过（见 ``TerminalObservation.prefill_pending``）。
+    prefill_pending: bool
     # 给模型的一行摘要（terminal_list 用）：身份、当前状态与最近命令。
     summary: str
 
@@ -374,7 +376,7 @@ class TerminalSessionRuntime(ObservedTerminal):
             # 与入队之间、和填入的命令拼在一起。入队非阻塞、不与读线程交互，可在锁内进行。
             self._admit_prefill()
             self._worker.write({"type": "prefill", "text": command})
-            self._observation.note_input()
+            self._observation.note_input("agent")
             self._stream.publish("input_mark", by="agent")
             self._last_read = None
             log.info(
@@ -391,9 +393,12 @@ class TerminalSessionRuntime(ObservedTerminal):
                 },
             )
             last = self._observation.buffer.last_line
-            return self._build_result(
+            result = self._build_result(
                 last - Constant.Terminal.READ_DEFAULT_TAIL + 1, last, "tail", prefilled=preview
             )
+        # 「待回车」进了会话条目：锁外交给 service 重投影，界面据此展开终端面板。
+        self.notify_changed()
+        return result
 
     def notify_changed(self) -> None:
         """影响 snapshot 会话条目的变化（生命周期、集成）：交给 service 在锁外整表重投影该 Session。"""
@@ -404,31 +409,72 @@ class TerminalSessionRuntime(ObservedTerminal):
     def _user_typing(self) -> bool:
         return time.monotonic() - self._user_last_input < Constant.Terminal.USER_TYPING_IDLE_SECONDS
 
+    @property
+    def accepts_prefill(self) -> bool:
+        """此刻能否填入（与 :meth:`prefill` 的准入同一条规则）：``terminal_write`` 挑空闲终端时用。"""
+        with self._condition:
+            return self._status == "running" and self._prompt_refusal() is None
+
+    @property
+    def prefill_pending(self) -> bool:
+        """Agent 填入的命令还停在提示符上、用户还没碰过（任意按键即接手）。"""
+        with self._condition:
+            return self._observation.prefill_pending
+
+    def wait_for_prompt(
+        self, timeout: float, is_cancelled: Callable[[], bool]
+    ) -> Literal["settled", "timeout", "cancelled"]:
+        """等新开的 shell 走到第一个提示符，或确知走不到（集成不可用、会话结束）；不填入。
+
+        刚握手完的 shell 还在跑启动脚本，集成尚未 ready、也不在提示符，立刻填入必被拒。``settled`` 只说
+        「不用再等」，能不能填仍由 :meth:`prefill` 的准入判定、给出准确原因。在会话锁上等，shell 事件
+        ``notify_all`` 唤醒，时间片只为复查取消（同 ``ObservedTerminal._wait``）。
+        """
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while True:
+                if is_cancelled():
+                    return "cancelled"
+                observation = self._observation
+                if (
+                    self._status not in _ACTIVE
+                    or observation.integration_status in ("unavailable", "off")
+                    or (self._status == "running" and observation.phase == "editing")
+                ):
+                    return "settled"
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return "timeout"
+                self._condition.wait(min(remaining, Constant.Terminal.WAIT_CANCEL_CHECK_SECONDS))
+
     def _admit_prefill(self) -> None:
         """持锁调用：判定这次填入能否落到提示符，不能时抛错；用户输入从不经过这里。
 
-        会话须在运行（``starting`` 握手未完成、终态后 worker 已不接受输入），其余三个条件都是 shell
-        集成与观察给出的既有事实，任一不满足即拒绝：
+        会话须在运行（``starting`` 握手未完成、终态后 worker 已不接受输入），其余条件见
+        :meth:`_prompt_refusal`。
+        """
+        if self._status != "running":
+            raise TerminalSessionStateError(f"terminal session is {self._status}")
+        reason = self._prompt_refusal()
+        if reason is not None:
+            raise TerminalPrefillRejectedError(reason)
+
+    def _prompt_refusal(self) -> str | None:
+        """持锁调用：提示符不接受填入的原因，接受时为 None。三个条件都是 shell 集成与观察给出的既有事实：
+
         - 没有 shell 集成就看不到提示符，无法确认行里是否为空；
         - 有命令在执行（或尚未回到提示符）时，填入会落进正在运行的程序；
         - 这个提示符出现后已经有输入（用户敲了半行，或同一提示符上已经填过一次）时再填会拼进已有
           内容。最后一条也覆盖了旧的幂等缓存：同一个提示符至多填一次。
         """
-        if self._status != "running":
-            raise TerminalSessionStateError(f"terminal session is {self._status}")
         if self._observation.integration_status != "ready":
-            raise TerminalPrefillRejectedError(
-                "this shell has no shell integration, so its prompt cannot be detected"
-            )
+            return "this shell has no shell integration, so its prompt cannot be detected"
         # 有命令在执行时 phase 必为 executing，这一条同时覆盖「命令在跑」与「尚未回到提示符」。
         if self._observation.phase != "editing":
-            raise TerminalPrefillRejectedError(
-                "a command is running in this terminal (or it is not at its prompt)"
-            )
-        if self._observation.prompt_has_input:
-            raise TerminalPrefillRejectedError(
-                "the prompt already has input (typed by the user or filled earlier)"
-            )
+            return "a command is running in this terminal (or it is not at its prompt)"
+        if self._observation.prompt_input is not None:
+            return "the prompt already has input (typed by the user or filled earlier)"
+        return None
 
     def user_input(self, data: bytes) -> UserInputResult:
         """用户原始按键：只做内存更新与非阻塞入队；从不因 Agent 被拒。要拿会话锁，WS 路由经
@@ -442,6 +488,7 @@ class TerminalSessionRuntime(ObservedTerminal):
         with self._condition:
             if self._status not in _ACTIVE:
                 return "session_ended"
+            was_pending = self._observation.prefill_pending
             try:
                 self._worker.write(
                     {"type": "raw", "data_base64": base64.b64encode(data).decode("ascii")}
@@ -449,9 +496,12 @@ class TerminalSessionRuntime(ObservedTerminal):
             except TerminalWorkerUnavailableError:
                 return "session_ended"
             self._user_marks.record(self._observation.buffer)
-            self._observation.note_input()
+            self._observation.note_input("user")
             self._user_last_input = time.monotonic()
             self._last_input_by = "user"
+        # 用户接手了 Agent 填入的那一行：「待回车」只在这一下翻转，之后的按键不再重投影。
+        if was_pending:
+            self.notify_changed()
         return "accepted"
 
     def resize(self, rows: int, columns: int) -> None:
@@ -497,6 +547,7 @@ class TerminalSessionRuntime(ObservedTerminal):
                 exit_code=self._exit_code,
                 integration=self._observation.integration_status,
                 command_running=self._observation.active_command is not None,
+                prefill_pending=self._observation.prefill_pending,
                 summary=render_terminal_summary(self._facts(), self._observation),
             )
 

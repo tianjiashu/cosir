@@ -13,10 +13,10 @@ from app.tools.browser_runtime.tab_context import BrowserTabContext
 
 @app.get("/sessions/{session_id}/browser-context", response_model=BrowserContextResponse)
 async def get_browser_context(session_id: int) -> BrowserContextResponse:
-    """返回该 Session 的标签上限与下载目录；Session 不存在时 404。"""
+    """返回该 Session 的标签上限、下载目录与显示会话；Session 不存在时 404。"""
 
     try:
-        context = BrowserTabContext.from_session(session_id)
+        context = BrowserTabContext.for_session(session_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="session not found") from exc
     return BrowserContextResponse.from_domain(context)

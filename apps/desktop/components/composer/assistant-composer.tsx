@@ -6,6 +6,7 @@ import { useComposerFiles } from "@/components/composer/use-composer-files";
 import type { ComposerImageSink } from "@/components/composer/assistant-composer-attachments";
 import { useSessionComposerDraft } from "@/components/composer/use-composer-draft";
 import { ComposerEditor } from "@/components/composer/composer-editor";
+import type { ComposerSubmitIntent } from "@/components/composer/composer-editor-policy";
 import { QuoteBar } from "@/components/conversation/quotes/quote-bar";
 import { joinQuoteCards, splitQuoteCards } from "@/lib/assistant/composer/quote-cards";
 
@@ -26,14 +27,16 @@ export function useComposerImageSink(): ComposerImageSink {
  * 因为它们额外按 `thread.isRunning && !capabilities.queue` 禁用——那是「运行中只能靠客户端队列插话」
  * 的模型，而这里运行中发送与编辑排队消息由后端队列承接，能否提交由本应用判定。
  */
-function useComposerSubmit(blocked: boolean): { canSubmit: boolean; submit: () => void } {
+function useComposerSubmit(blocked: boolean): { canSubmit: boolean; submit: (intent: ComposerSubmitIntent) => void } {
   const aui = useAui();
   const canSend = useAuiState((state) => state.composer.canSend);
   return {
     canSubmit: canSend && !blocked,
     // 消息（含待上传图片）当场离开输入框交给 Session 级提交；上传与 POST 的失败都由提交收回乐观消息、放回输入框。
-    submit: () => {
-      void aui.composer.send();
+    // 意图借 assistant-ui 的 `steer` 带到 `onNew`：本应用没有接 runtime 的 queue 适配器，它原样留在 AppendMessage
+    // 上（`toAddMessageCommand` 读出），单次生效、不残留；`steer: false` 即加入队列。
+    submit: (intent) => {
+      void aui.composer.send({ steer: intent === "send" });
     },
   };
 }
@@ -53,7 +56,7 @@ export const ComposerSendButton: FC<PropsWithChildren<{
       aria-label={ariaLabel}
       title={title}
       disabled={!canSubmit}
-      onClick={submit}
+      onClick={() => submit("send")}
     >
       {children}
     </Button>
@@ -87,8 +90,8 @@ export const InlineComposerInput: FC<InlineComposerInputProps> = ({
   // 正文里的摘录画成编辑器上方的摘录条，编辑器只拿其余正文；两边的改动都合回同一份正文（见 `quote-cards`）。
   const { quotes, rest } = useMemo(() => splitQuoteCards(composer.value), [composer.value]);
   const disabled = composer.isDisabled || hydrating || restoringDraft;
-  const send = () => {
-    if (canSubmit) submit();
+  const send = (intent: ComposerSubmitIntent) => {
+    if (canSubmit) submit(intent);
   };
 
   return (

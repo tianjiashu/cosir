@@ -64,6 +64,7 @@ class SessionMessage:
     ``id`` 为 ``None`` 只有两种情形：入队前，以及执行内通知（``RunMailbox.notify``，不落库、不需要
     确认）。
     ``kind`` 由 body 类型决定（经 :meth:`of` 构造），持久化时单独成列，读回时按它还原 body。
+    ``interrupted_work`` 是队列行上的事实，只由 ``SessionMessageQueue.mark_interrupted_work`` 写，入队时总为假。
     """
 
     id: int | None
@@ -71,6 +72,7 @@ class SessionMessage:
     body: MessageBody
     delivery: Delivery = "immediate"
     project_to_transport: bool = True
+    interrupted_work: bool = False
 
     def wakes(self, run_id: int | None) -> bool:
         """可否推进指定的活动 Run（驱动中不挂起、挂起中唤醒）；None 表示可否凭此消息新建 Run。
@@ -110,4 +112,5 @@ class SessionMessage:
             body=body,
             delivery=row.delivery,
             project_to_transport=row.project_to_transport,
+            interrupted_work=row.interrupted_work,
         )

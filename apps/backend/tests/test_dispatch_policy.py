@@ -29,6 +29,7 @@ from app.models.run.run_status import RunStatus
 
 _LAUNCH = RunLaunch(model_config_id="test/m1")
 _OTHER = RunLaunch(model_config_id="test/m2")
+_AVAILABLE = frozenset({"test/m1", "test/m2"})
 
 
 def _run(status: str, launch: RunLaunch = _LAUNCH) -> RunRecord:
@@ -84,8 +85,10 @@ def _phase(current, driving) -> Phase:
     return "idle"
 
 
-def _next(current, driving, pending, fresh):
-    return Action.decide(_phase(current, driving), current, PendingMessages.of(pending), fresh)
+def _next(current, driving, pending, fresh, available=_AVAILABLE):
+    return Action.decide(
+        _phase(current, driving), current, PendingMessages.of(pending), fresh, available
+    )
 
 
 @pytest.mark.parametrize("status", ["completed", "suspended"])
@@ -135,21 +138,40 @@ def test_new_run_takes_the_launch_of_the_input_it_consumes() -> None:
     """排队消息一轮一条：新 Run 用最早那条排队输入自己的配置。"""
     pending = [_user(1, _OTHER, "next_run"), _user(2, _LAUNCH, "next_run")]
     action = _next(_run("completed", _LAUNCH), False, pending, pending[-1:])
-    assert action == StartRun(_OTHER)
+    assert action == StartRun(_OTHER, pending[0])
 
 
 def test_immediate_input_jumps_ahead_of_queued_inputs() -> None:
     """取消后留着排队消息时，新发送 / 立即发送的那条先跑。"""
     pending = [_user(1, _OTHER, "next_run"), _user(2, _LAUNCH, "immediate")]
     action = _next(_run("cancelled", _OTHER), False, pending, pending[-1:])
-    assert action == StartRun(_LAUNCH)
-    assert PendingMessages.of(pending).initial(fresh_run=True) == [pending[1]]
+    assert action == StartRun(_LAUNCH, pending[1])
+    assert PendingMessages.of(pending).for_new_run(pending[1]) == [pending[1]]
 
 
 def test_new_run_without_user_input_inherits_the_current_run_launch() -> None:
     pending = [_result(1)]
     action = _next(_run("cancelled", _OTHER), False, pending, pending)
-    assert action == StartRun(_OTHER)
+    assert action == StartRun(_OTHER, None)
+
+
+def test_input_whose_model_was_deleted_does_not_block_a_later_input() -> None:
+    """停止后留下的插话用的模型被删了：它开不了 Run，用户换模型发的新输入照样开出新 Run，旧的留在队列里。"""
+    pending = [_user(1, _LAUNCH), _user(2, _OTHER)]
+    action = _next(_run("cancelled"), False, pending, pending[-1:], frozenset({"test/m2"}))
+    assert action == StartRun(_OTHER, pending[1], ("test/m1",))
+
+
+def test_only_inputs_whose_model_was_deleted_stay() -> None:
+    """有输入但模型都删了：不动，也不退回继承当前 Run——那会开出一个没有输入开头的 Run。"""
+    pending = [_user(1, _LAUNCH), _result(2)]
+    action = _next(_run("cancelled", _OTHER), False, pending, pending, frozenset({"test/m2"}))
+    assert action == Stay(("test/m1",))
+
+
+def test_inherited_launch_whose_model_was_deleted_stays() -> None:
+    action = _next(_run("cancelled"), False, [_result(1)], [_result(1)], frozenset())
+    assert action == Stay(("test/m1",))
 
 
 def test_no_launch_to_inherit_stays() -> None:
@@ -193,12 +215,13 @@ def test_suspended_run_ignores_notices_and_next_run_inputs() -> None:
 def test_fresh_run_receives_one_user_input_resumed_run_only_immediate() -> None:
     """新 Run 接收全部非用户输入与一条用户输入；唤醒 / 续跑只接收 ``immediate``。"""
     pending = [_user(1, delivery="next_run"), _notice(2), _user(3, delivery="next_run"), _result(4)]
-    assert PendingMessages.of(pending).initial(fresh_run=True) == [
+    messages = PendingMessages.of(pending)
+    assert messages.for_new_run(messages.next_input(_AVAILABLE)) == [
         pending[0],
         pending[1],
         pending[3],
     ]
-    assert PendingMessages.of(pending).initial(fresh_run=False) == [pending[1], pending[3]]
+    assert messages.immediate() == [pending[1], pending[3]]
 
 
 def _agent(message_id: int, launch: RunLaunch = _OTHER) -> SessionMessage:
@@ -211,28 +234,38 @@ def _agent(message_id: int, launch: RunLaunch = _OTHER) -> SessionMessage:
 def test_agent_message_starts_a_run_with_its_own_launch_without_a_current_run() -> None:
     """委派刚建的子 Session 没有 Run、无从继承：Agent 消息自带的配置开出第一个 Run。"""
     pending = [_agent(1)]
-    assert Action.decide("idle", None, PendingMessages.of(pending), pending) == StartRun(_OTHER)
+    action = Action.decide("idle", None, PendingMessages.of(pending), pending, _AVAILABLE)
+    assert action == StartRun(_OTHER, pending[0])
 
 
 def test_agent_message_and_user_input_share_the_one_input_per_run_channel() -> None:
     """两类输入都携带配置、一个新 Run 只消费一条：先到的 immediate 先跑，其余留给后续 Run。"""
     pending = [_agent(1), _user(2), _notice(3)]
-    assert PendingMessages.of(pending).next_input() is pending[0]
-    assert PendingMessages.of(pending).initial(fresh_run=True) == [pending[0], pending[2]]
+    assert PendingMessages.of(pending).next_input(_AVAILABLE) is pending[0]
+    assert PendingMessages.of(pending).for_new_run(pending[0]) == [pending[0], pending[2]]
 
 
 @pytest.mark.parametrize(
-    ("phase", "awaits", "expected"),
+    ("phase", "queue", "awaits", "approval", "expected"),
     [
-        ("idle", False, "immediate"),
-        ("idle", True, "immediate"),
-        ("driving", False, "next_run"),
-        ("driving", True, "next_run"),
-        # 只在等后台结果的挂起：消息排队，不唤醒。
-        ("suspended", False, "next_run"),
-        # 挂着提问：用户直接说话就是回应，消息唤醒同一个 Run。
-        ("suspended", True, "immediate"),
+        # 默认插话：任何阶段都立即处理（驱动中并入当前 Run，挂起时唤醒，空闲开新 Run）。
+        ("idle", False, False, False, "immediate"),
+        ("driving", False, False, False, "immediate"),
+        ("suspended", False, False, False, "immediate"),
+        # 要求排队：有活动 Run 才排到它结束后。
+        ("idle", True, False, False, "immediate"),
+        ("driving", True, False, False, "next_run"),
+        ("suspended", True, False, False, "next_run"),
+        # 挂着提问：排到 Run 结束后会互相等死，仍立即处理（这句话就是回应）。
+        ("suspended", True, True, False, "immediate"),
+        # 终端审批在等：新输入取代它。
+        ("driving", True, False, True, "immediate"),
     ],
 )
-def test_send_delivery(phase, awaits: bool, expected: str) -> None:
-    assert SessionActor._send_delivery(phase, awaits_user_reply=awaits, awaits_terminal_approval=False) == expected
+def test_send_delivery(phase, queue: bool, awaits: bool, approval: bool, expected: str) -> None:
+    assert (
+        SessionActor._send_delivery(
+            phase, queue=queue, awaits_user_reply=awaits, awaits_terminal_approval=approval
+        )
+        == expected
+    )

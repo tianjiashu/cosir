@@ -14,6 +14,8 @@ class RunCommand:
 
     text: str
     image_asset_ids: list[str] = field(default_factory=list)
+    # 客户端给这条输入起的身份，随展示绑定原样带回（见 ``UserInputPresentation.client_message_id``）。
+    client_message_id: str | None = None
 
 
 __all__ = ["RunCommand"]

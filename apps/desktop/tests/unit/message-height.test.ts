@@ -52,8 +52,8 @@ describe("estimateMessageHeight", () => {
     for (const duration of [0, 129000]) expect(estimateMessageHeight(withDuration(duration))).toBe(plainHeight);
     const done = outcome("completed", { durationMs: 129000 });
     expect(estimateMessageHeight(projected([call("quiet", "completed", { presentation: "quiet" }), text("回复")], done))).toBe(plainHeight);
-    expect(estimateMessageHeight(projected([call("read"), text("回复")], done)) - plainHeight).toBe(37 + 16);
-    expect(estimateMessageHeight(projected([text("回复")], outcome("failed"))) - plainHeight).toBe(37 + 16);
+    expect(estimateMessageHeight(projected([call("read"), text("回复")], done)) - plainHeight).toBe(37 + 12);
+    expect(estimateMessageHeight(projected([text("回复")], outcome("failed"))) - plainHeight).toBe(37 + 12);
   });
 
   it("用户消息：气泡按折行增高，胶囊按可读名称计入正文", () => {
@@ -86,12 +86,12 @@ describe("estimateMessageHeight", () => {
 
   it("回答：标题按级别、列表项、表格行、代码行分别计高", () => {
     const base = estimateMessageHeight(assistant(text("一段话")));
-    expect(base).toBe(102);
+    expect(base).toBe(98);
     expect(estimateMessageHeight(assistant(text("# 标题\n\n一段话")))).toBe(155);
-    expect(estimateMessageHeight(assistant(text("### 标题\n\n一段话")))).toBe(144);
-    expect(estimateMessageHeight(assistant(text("- 一\n- 二\n- 三")))).toBe(166);
-    expect(estimateMessageHeight(assistant(text(table(6)))) - estimateMessageHeight(assistant(text(table(3))))).toBe(3 * 37);
-    expect(estimateMessageHeight(assistant(text(code(15)))) - estimateMessageHeight(assistant(text(code(5))))).toBe(205);
+    expect(estimateMessageHeight(assistant(text("### 标题\n\n一段话")))).toBe(143);
+    expect(estimateMessageHeight(assistant(text("- 一\n- 二\n- 三")))).toBe(162);
+    expect(estimateMessageHeight(assistant(text(table(6)))) - estimateMessageHeight(assistant(text(table(3))))).toBe(3 * 39);
+    expect(estimateMessageHeight(assistant(text(code(15)))) - estimateMessageHeight(assistant(text(code(5))))).toBe(220);
   });
 
   it("completed process folding uses the same outcome rule as rendering", () => {
@@ -124,11 +124,11 @@ describe("estimateMessageHeight", () => {
   it("交付卡按胶囊行估高，同一行再多几枚不变高，是独立的块、与改动卡无关，说明按行加高", () => {
     const present = (count: number) => call("p", "completed", { toolName: "present_deliverables", presentation: "quiet", deliverables: Array.from({ length: count }, (_, i) => deliveredFile(`f${i}.md`)) });
     const base = estimateMessageHeight(assistant(text("完")));
-    expect(estimateMessageHeight(assistant(text("完"), present(1))) - base).toBe(36 + 16);
+    expect(estimateMessageHeight(assistant(text("完"), present(1))) - base).toBe(36 + 12);
     expect(estimateMessageHeight(assistant(text("完"), present(3)))).toBe(estimateMessageHeight(assistant(text("完"), present(1))));
     expect(estimateMessageHeight(assistant(text("完"), present(4))) - estimateMessageHeight(assistant(text("完"), present(3)))).toBe(44);
     const change = call("w", "completed", { display_data: { kind: "file-changes", changes: [{ path: "a", status: "added" }] } });
-    expect(estimateMessageHeight(assistant(text("完"), change, present(1))) - estimateMessageHeight(assistant(text("完"), change))).toBe(36 + 16);
+    expect(estimateMessageHeight(assistant(text("完"), change, present(1))) - estimateMessageHeight(assistant(text("完"), change))).toBe(36 + 12);
     const noted = (note: string) => ({ ...present(1), display_data: { kind: "deliverables", note } });
     // 说明一行 24、与胶囊之间 gap-2；长说明按每行约 52 个汉字折行。
     expect(estimateMessageHeight(assistant(text("完"), noted("报告"))) - estimateMessageHeight(assistant(text("完"), present(1)))).toBe(24 + 8);
@@ -140,11 +140,11 @@ describe("estimateMessageHeight", () => {
     const present = (...deliverables: ReturnType<typeof deliveredFile>[]) => call("p", "completed", { toolName: "present_deliverables", presentation: "quiet", deliverables });
     const images = (count: number, extra: ReturnType<typeof deliveredFile>[] = []) => present(...Array.from({ length: count }, (_, i) => deliveredFile(`i${i}.png`, { kind: "image", width: 800, height: 400 })), ...extra);
     const base = estimateMessageHeight(assistant(text("完")));
-    expect(estimateMessageHeight(assistant(text("完"), images(1))) - base).toBe(180 + 16);
+    expect(estimateMessageHeight(assistant(text("完"), images(1))) - base).toBe(180 + 12);
     // 单张 SVG 没有宽高，渲染是方块，估高也按方块。
-    expect(estimateMessageHeight(assistant(text("完"), present(deliveredFile("a.svg", { kind: "svg" })))) - base).toBe(96 + 16);
-    expect(estimateMessageHeight(assistant(text("完"), images(2))) - base).toBe(96 + 16);
-    expect(estimateMessageHeight(assistant(text("完"), images(2, [deliveredFile("a.md")]))) - base).toBe(96 + 8 + 36 + 16);
+    expect(estimateMessageHeight(assistant(text("完"), present(deliveredFile("a.svg", { kind: "svg" })))) - base).toBe(96 + 12);
+    expect(estimateMessageHeight(assistant(text("完"), images(2))) - base).toBe(96 + 12);
+    expect(estimateMessageHeight(assistant(text("完"), images(2, [deliveredFile("a.md")]))) - base).toBe(96 + 8 + 36 + 12);
   });
 
   it("long Agent input starts compact and only grows on explicit disclosure", () => {

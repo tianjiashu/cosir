@@ -17,6 +17,7 @@ class BrowserTabLimitsResponse(BaseModel):
 class BrowserContextResponse(BaseModel):
     limits: BrowserTabLimitsResponse
     download_dir: str
+    display_session_id: int
 
     @classmethod
     def from_domain(cls, context: BrowserTabContext) -> "BrowserContextResponse":
@@ -25,4 +26,5 @@ class BrowserContextResponse(BaseModel):
                 per_session=context.limits.per_session, total=context.limits.total
             ),
             download_dir=context.download_dir,
+            display_session_id=context.display_session_id,
         )

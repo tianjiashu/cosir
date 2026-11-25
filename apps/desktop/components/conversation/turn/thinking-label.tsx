@@ -33,7 +33,7 @@ export function ThinkingLabel({ active, className, style, ...props }: ComponentP
 }
 
 /** 活动行的版面：回复出现前（线程级）、回合内的活动段与停止行同一行高，交接时不跳。 */
-export const CURRENT_ACTIVITY_SLOT = "flex min-h-8 items-center text-2sm";
+export const CURRENT_ACTIVITY_SLOT = "flex min-h-6 items-center text-2sm";
 
 /**
  * 回合当前活动：运行中文案扫光，挂起等待与停止静止。读屏播报与定位都认这一个元素，同一时刻只有一个所有者

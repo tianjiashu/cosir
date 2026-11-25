@@ -57,6 +57,7 @@ const image = (name: string): TransportDeliverable => {
 const STUB_FILES: Record<string, StubFile> = {
   "季度复盘报告.md": { size: 12_400 },
   "data/达人投放明细_2026Q3_去重后_含退款订单_v2.csv": { size: 325_632 },
+  "notes/2026Q3_投放复盘_最终版_含附录与数据口径说明.md": { size: 900 },
   "chart.png": { size: 1413, kind: "image", width: 640, height: 400 },
   "photo.png": { size: 3387, kind: "image", width: 800, height: 600 },
   "long.png": { size: 2789, kind: "image", width: 300, height: 1200 },

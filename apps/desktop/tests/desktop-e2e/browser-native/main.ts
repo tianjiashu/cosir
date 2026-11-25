@@ -98,7 +98,7 @@ const server = http.createServer((req, res) => {
     <button id="covered" onclick="window.count++">Covered</button>
     <script>let r=document.getElementById('covered').getBoundingClientRect();let cover=document.createElement('div');cover.style.cssText='position:absolute;background:black;z-index:9;left:'+r.x+'px;top:'+r.y+'px;width:'+r.width+'px;height:'+r.height+'px';document.body.append(cover);</script>`);
 });
-const context = { limits: { perSession: 20, total: 30 }, downloadDir: path.join(root, "downloads") };
+const context = { limits: { perSession: 20, total: 30 }, downloadDir: path.join(root, "downloads"), displaySessionId: 1 };
 const signal = () => new AbortController().signal;
 const tab = (id: string): BrowserTab => (host as unknown as { tabs: Map<string, { tab: BrowserTab }> }).tabs.get(id)!.tab;
 const evaluate = async <T>(target: BrowserTab, expression: string): Promise<T> => {

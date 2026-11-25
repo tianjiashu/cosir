@@ -341,3 +341,125 @@ def test_stop_times_out_with_a_controlled_error(
 
     assert stopped.status == "error"
     assert "has not exited after" in (stopped.content or "")
+
+
+# ---- terminal_write：不指定终端时复用空闲的、没有就新开 ----
+
+
+class _PromptingWorker(ReadyWorker):
+    """握手时就跑完启动脚本、停在第一个提示符：模拟刚新开、马上可填的 shell。"""
+
+    def start(self, spec: Any, cwd: str, on_event: Any) -> None:
+        super().start(spec, cwd, on_event)
+        self.screen(["$ "], cursor=(0, 2))
+        self.shell("shell_prompt", cwd=cwd)
+
+
+@pytest.fixture
+def write_service(monkeypatch):
+    service, workers = make_service(monkeypatch, worker_type=_PromptingWorker)
+    monkeypatch.setattr(depends, "get_terminal_session_service", lambda: service)
+    monkeypatch.setattr(
+        "app.tools.tool_handler.terminal.terminal_write.should_stop_call",
+        lambda session_id, tool_call_id: False,
+    )
+    monkeypatch.setattr(
+        "app.tools.tool_handler.terminal.terminal_write.prefill_shell", lambda: "auto"
+    )
+    return service, workers
+
+
+def _write(tmp_path: Path, command: str = "npm login", terminal_id: str | None = None) -> Any:
+    return TerminalWriteTool().execute(
+        terminal_id=terminal_id, command=command, execution_context=_context(tmp_path)
+    )
+
+
+def test_write_opens_a_terminal_when_there_is_none(write_service, tmp_path) -> None:
+    service, workers = write_service
+
+    filled = _write(tmp_path)
+
+    assert filled.status == "success"
+    [runtime] = service.session_runtimes(1)
+    assert (filled.content or "").startswith(f"opened a new terminal {runtime.terminal_session_id}")
+    assert workers[0].writes == [{"type": "prefill", "text": "npm login"}]
+    assert runtime.initial_cwd == str(tmp_path)
+    assert runtime.prefill_pending
+
+
+def test_write_reuses_the_newest_idle_terminal(write_service, tmp_path) -> None:
+    service, workers = write_service
+    service.start(session_id=1, cwd=str(tmp_path), shell="auto")  # noqa: S604 - 显式 shell 取值，测试不启动真实 shell
+    newest = service.start(session_id=1, cwd=str(tmp_path), shell="auto")  # noqa: S604 - 显式 shell 取值，测试不启动真实 shell
+
+    filled = _write(tmp_path)
+
+    assert filled.status == "success" and not (filled.content or "").startswith("opened")
+    assert len(workers) == 2 and workers[1].writes == [{"type": "prefill", "text": "npm login"}]
+    assert newest.prefill_pending
+
+
+def test_write_opens_a_new_terminal_when_every_terminal_is_busy(write_service, tmp_path) -> None:
+    service, workers = write_service
+    busy = service.start(session_id=1, cwd=str(tmp_path), shell="auto")  # noqa: S604 - 显式 shell 取值，测试不启动真实 shell
+    busy.user_input(b"vim")  # 用户敲了半行：这一行归用户，不能再填
+
+    filled = _write(tmp_path)
+
+    assert (filled.content or "").startswith("opened a new terminal")
+    assert workers[0].writes == [{"type": "raw", "data_base64": "dmlt"}]
+    assert workers[1].writes == [{"type": "prefill", "text": "npm login"}]
+
+
+def test_only_one_filled_command_waits_for_the_user(write_service, tmp_path) -> None:
+    """上一条还没被处理时再填会失败，而不是再开一个终端。"""
+    service, workers = write_service
+    _write(tmp_path)
+    other = service.start(session_id=1, cwd=str(tmp_path), shell="auto")  # noqa: S604 - 显式 shell 取值，测试不启动真实 shell
+
+    for terminal_id in (None, other.terminal_session_id):
+        refused = _write(tmp_path, "echo again", terminal_id)
+        assert refused.status == "error" and "has not been touched by the user yet" in (refused.content or "")
+    assert len(workers) == 2 and workers[1].writes == []
+
+    # 用户接手那一行（敲了任意键）后，就可以再填。
+    service.session_runtimes(1)[0].user_input(b"\x15")
+    assert _write(tmp_path, "echo again").status == "success"
+
+
+def test_write_keeps_a_new_terminal_whose_shell_never_reaches_a_prompt(
+    monkeypatch, tmp_path
+) -> None:
+    service, workers = make_service(monkeypatch, worker_type=ReadyWorker)
+    monkeypatch.setattr(depends, "get_terminal_session_service", lambda: service)
+    monkeypatch.setattr(
+        "app.tools.tool_handler.terminal.terminal_write.should_stop_call", lambda *_: False
+    )
+    monkeypatch.setattr("app.tools.tool_handler.terminal.terminal_write.prefill_shell", lambda: "auto")
+    monkeypatch.setattr(Constant.Terminal, "PREFILL_PROMPT_TIMEOUT_SECONDS", 0.05)
+
+    refused = _write(tmp_path)
+
+    assert refused.status == "error" and "did not reach a prompt in time" in (refused.content or "")
+    [runtime] = service.session_runtimes(1)
+    assert runtime.active and workers[0].writes == []
+
+
+def test_prefill_shell_falls_back_to_an_integrated_shell(monkeypatch) -> None:
+    from app.tools.terminal_runtime.session.shell_resolver import prefill_shell
+
+    installed = {"zsh", "bash"}
+    monkeypatch.setattr(
+        "app.tools.shell.host_shells.shutil.which",
+        lambda value: value if value == "/usr/local/bin/fish" else (
+            f"/bin/{value.removeprefix('/bin/')}" if value.removeprefix("/bin/") in installed else None
+        ),
+    )
+    monkeypatch.setattr("app.tools.shell.host_shells.os.path.isfile", lambda _path: False)
+    assert prefill_shell(system="Darwin", environ={"SHELL": "/bin/zsh"}) == "auto"
+    # 默认 shell 没有集成：换第一个已安装、有集成的，而不是开一个永远填不进去的终端。
+    assert prefill_shell(system="Darwin", environ={"SHELL": "/usr/local/bin/fish"}) == "bash"
+    installed.clear()
+    with pytest.raises(TerminalPrefillRejectedError, match="no installed shell"):
+        prefill_shell(system="Darwin", environ={"SHELL": "/usr/local/bin/fish"})

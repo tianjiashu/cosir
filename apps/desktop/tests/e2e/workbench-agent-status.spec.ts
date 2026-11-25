@@ -10,7 +10,7 @@ function snapshot(turn: number | null, status = "completed", text = "阅读内�
   return {
     title: "子 Agent",
     messages: [{
-      id: `assistant-turn-${turn}`, role: "assistant", turn, inherited: false,
+      id: `assistant-turn-${turn}`, role: "assistant", turn, inherited: false, clientMessageId: null,
       parts: [{ type: "text", text, status: ended ? "completed" : "running" }],
       outcome: ended ? { status, endReason: null, error: null, usage: null, contextWindowTotal: null, durationMs: 0 } : null,
       source: null,

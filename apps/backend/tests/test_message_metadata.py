@@ -101,6 +101,7 @@ def _running_state(part: dict) -> dict:
                 "inherited": False,
                 "outcome": None,
                 "source": None,
+                "clientMessageId": None,
             }
         ],
         "activity": {

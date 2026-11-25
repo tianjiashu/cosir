@@ -36,6 +36,7 @@ def _entry(terminal_session_id: str = "term_1", **overrides: Any) -> dict[str, A
         "exitCode": None,
         "integration": "ready",
         "commandRunning": False,
+        "prefillPending": False,
         "createdAt": "2026-10-27T00:00:00+00:00",
     }
     entry.update(overrides)
@@ -59,6 +60,7 @@ class _FakeRuntime:
             exit_code=entry["exitCode"],
             integration=entry["integration"],
             command_running=entry["commandRunning"],
+            prefill_pending=entry["prefillPending"],
             summary="",
         )
 

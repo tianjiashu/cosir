@@ -111,6 +111,8 @@ export type TabOptions = {
   openerId: string | null;
   /** Session 所在工作区的下载目录（本机绝对路径），标签创建时定下；下载本身由 `BrowserHost` 登记。 */
   downloadDir: string;
+  /** 标签显示在哪个会话页上（见 `BrowserTabSummary.displaySessionId`），标签创建时定下。 */
+  displaySessionId: number;
   /** 页面开出的标签：Chromium 已建好的 webContents（保留 opener）；新建的标签不传。 */
   adopted?: WebContents;
   events: TabEvents;
@@ -149,6 +151,7 @@ export class BrowserTab {
   readonly createdBy: BrowserTabCreator;
   readonly openerId: string | null;
   readonly downloadDir: string;
+  readonly displaySessionId: number;
   readonly log = new TabLog();
   /** 当前修改操作的落定结论（每个动作落定时记下），由页面结果取走（`BrowserHost.result`）。 */
   readonly settleNotes = new SettleNotes();
@@ -189,6 +192,7 @@ export class BrowserTab {
     this.createdBy = options.createdBy;
     this.openerId = options.openerId;
     this.downloadDir = options.downloadDir;
+    this.displaySessionId = options.displaySessionId;
     this.events = events;
     this.adopted = options.adopted !== undefined;
     // 收养时也要传同一份 webPreferences：实测只给 `overrideBrowserWindowOptions` 时，网页 preload 在收养的页面里
@@ -584,6 +588,7 @@ export class BrowserTab {
       operation: this.operation?.state ?? null,
       tabId: this.tabId,
       sessionId: this.sessionId,
+      displaySessionId: this.displaySessionId,
       createdBy: this.createdBy,
       openerId: this.openerId,
       url: contents.getURL(),

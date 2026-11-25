@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TransportState } from "@/lib/assistant/contract";
-import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
+import { getOrCreateTransportCommandId, type UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import { SessionTransportConnection } from "@/lib/assistant/transport/session-transport-connection";
 import type { TransportFrameStore } from "@/lib/assistant/transport/transport-frame-store";
 import { activity, transportState, userMessage } from "./transport-fixtures";
@@ -246,12 +246,15 @@ describe("SessionTransportConnection 命令", () => {
     context.connection.stop();
   });
 
-  it("乐观消息保留到 snapshot 出现该用户消息；HTTP 拒绝时收回并交给失败回调", async () => {
+  it("乐观消息保留到 snapshot 出现带它客户端 id 的用户消息；HTTP 拒绝时收回并交给失败回调", async () => {
     const context = setup();
     const stream = await ready(context);
-    await context.connection.submit(command("hello"), { send: async () => undefined, onError: vi.fn() });
+    const hello = command("hello");
+    await context.connection.submit(hello, { send: async () => undefined, onError: vi.fn() });
     expect(context.store().getSnapshot().pendingCommands).toHaveLength(1);
-    stream.push({ session_id: 7, kind: "mutation", mutations: [{ kind: "set", path: ["messages", 0], value: userMessage("1", 1, "hello") }] });
+    stream.push({ session_id: 7, kind: "mutation", mutations: [{ kind: "set", path: ["messages", 0], value: {
+      ...userMessage("1", 1, "hello"), clientMessageId: getOrCreateTransportCommandId(hello),
+    } }] });
     await flush();
     expect(context.store().getSnapshot().pendingCommands).toHaveLength(0);
 

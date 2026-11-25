@@ -385,6 +385,7 @@ def _seed_run(owner: _MemorySnapshotOwner, session_id: int, run_id: int, call_id
             "inherited": False,
             "outcome": None,
             "source": None,
+            "clientMessageId": None,
         }
     )
     projector.process(
@@ -990,6 +991,7 @@ def test_completed_terminal_event_uses_authoritative_output() -> None:
             "inherited": False,
             "outcome": None,
             "source": None,
+            "clientMessageId": None,
         }
     )
     projector.process(
@@ -1186,6 +1188,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
             "inherited": False,
             "outcome": None,
             "source": None,
+            "clientMessageId": None,
         },
         {
             "id": "m1",
@@ -1204,6 +1207,7 @@ def test_real_storage_backed_terminal_event_updates_snapshot(
             "inherited": False,
             "outcome": None,
             "source": None,
+            "clientMessageId": None,
         },
     ]
     state["activity"] = {

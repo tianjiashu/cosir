@@ -1,13 +1,14 @@
 import { useCallback, useMemo, useRef } from "react";
 
-import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
+import { getOrCreateTransportCommandId, type UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import { recoverRejectedCommands } from "@/lib/assistant/composer/composer-drafts";
 import { sendSessionMessage, type SessionMessageRequest } from "@/lib/assistant/session-commands";
 import { showErrorDialog } from "@/lib/confirm/confirm-store";
 import { notify } from "@/lib/notify";
 import { activeRunLaunch } from "@/lib/assistant/run-launch";
+import { COMPOSER_LAUNCH_BLOCKER_TEXT, resolveComposerLaunch, sessionLaunchFacts } from "@/lib/assistant/composer/composer-launch";
 import { useModelCatalog } from "@/lib/model/catalog";
-import { resolveModelSelection, useModelSelectionStore } from "@/lib/model/model-selection-store";
+import { useModelSelectionStore } from "@/lib/model/model-selection-store";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import type { RuntimeSessionContext } from "@/components/conversation-runtime/runtime/runtime-types";
 import { useSessionAssistantTransportRuntime } from "@/lib/assistant/transport/use-session-assistant-transport-runtime";
@@ -24,8 +25,8 @@ import { sessionDisplayTitle } from "@/lib/session-title/session-display-title";
 export function useRuntimeTransport(
   context: RuntimeSessionContext,
 ): ReturnType<typeof useSessionAssistantTransportRuntime> {
-  // 发送时按与选择器相同的回落链取模型，目录取最近一次渲染时的值。
-  const catalog = useModelCatalog().catalog;
+  // 提交时与输入框读同一份结论（`resolveComposerLaunch`），目录取最近一次渲染时的值。
+  const catalog = useModelCatalog();
   const catalogRef = useRef(catalog);
   catalogRef.current = catalog;
   const attachmentAdapter = useMemo(
@@ -62,34 +63,32 @@ export function useRuntimeTransport(
     adapters: attachmentAdapter == null ? undefined : { attachments: attachmentAdapter },
     submitMessage: async (command) => {
       const state = context.store.getSnapshot().state;
-      // 运行期配置锁定：活动期间发送用它冻结的配置（composer 也只显示这份）。
-      const runLaunch = activeRunLaunch(state);
-      const preferred = resolveModelSelection(
-        catalogRef.current?.models ?? [],
-        useModelSelectionStore.getState(),
-        { sessionId: context.sessionId, workspaceId: context.workspaceId },
-        { lastLaunch: state.activity?.launch ?? null, inheritedLaunch: state.fork?.initialLaunch ?? null },
-      );
-      const launch = runLaunch ?? {
-        modelConfigId: preferred?.modelConfigId ?? null,
-        reasoningEffort: preferred?.reasoningEffort ?? null,
-      };
-      if (launch.modelConfigId === null) {
-        throw new UserFacingError(runLaunch ? "当前运行的模型配置已删除，请停止后重新选择" : "请先选择模型后再发送");
+      // 输入框在不能发时已禁用发送；这里是最后一道检查（「下一步建议」按钮不经过输入框）。
+      const launch = resolveComposerLaunch({
+        catalog: catalogRef.current,
+        selections: useModelSelectionStore.getState(),
+        scope: { sessionId: context.sessionId, workspaceId: context.workspaceId },
+        runLaunch: activeRunLaunch(state),
+        facts: sessionLaunchFacts(state),
+      });
+      if (launch.selection === null) {
+        throw new UserFacingError(COMPOSER_LAUNCH_BLOCKER_TEXT[launch.blocker]);
       }
       // 正文里的胶囊标签就是机器可读的指针，原样发送；只有待上传图片在这里上传、换成附件 locator。
       const parts = await uploadPendingImages(context.workspaceId, command.message.parts, context.traceId);
       const message = { ...command.message, parts } as SessionMessageRequest["message"];
       const request: SessionMessageRequest = {
         message,
-        modelConfigId: launch.modelConfigId,
-        reasoningEffort: launch.reasoningEffort,
+        modelConfigId: launch.selection.modelConfigId,
+        reasoningEffort: launch.selection.reasoningEffort,
+        queue: command.queue === true,
+        clientMessageId: getOrCreateTransportCommandId(command),
       };
       void frontendLog("INFO", "assistant_session_command_prepared", "Session 命令已准备发送", {
         traceId: context.traceId,
         data: {
           sessionId: context.sessionId,
-          launchLocked: runLaunch !== null,
+          launchLocked: launch.locked,
           partCount: message.parts.length,
         },
       });

@@ -11,12 +11,12 @@ const snapshot: TransportState = {
   title: "子会话",
   messages: [
     {
-      id: "11", role: "user", turn: 1, inherited: false, outcome: null,
+      id: "11", role: "user", turn: 1, inherited: false, clientMessageId: null, outcome: null,
       source: { sessionId: 9, name: "主会话", report: null },
       parts: [{ type: "text", text: "请检查登录流程", status: "completed" }],
     },
     {
-      id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, source: null,
+      id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, clientMessageId: null, source: null,
       parts: [{ type: "text", text: "检查完毕", status: "completed" }],
       outcome: { status: "completed", endReason: "stop", error: null, usage: null, contextWindowTotal: null, durationMs: 0 },
     },
@@ -37,9 +37,9 @@ test("途中来信不切开回复：只有一个标题和脚注，展开过程�
   await seedState(request, 42, {
     ...snapshot,
     messages: [
-      { id: "10", role: "user", turn: 1, inherited: false, outcome: null, source: null, parts: [{ type: "text", text: "检查登录", status: "completed" }] },
+      { id: "10", role: "user", turn: 1, inherited: false, clientMessageId: null, outcome: null, source: null, parts: [{ type: "text", text: "检查登录", status: "completed" }] },
       {
-        id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, source: null,
+        id: "assistant-turn-1", role: "assistant", turn: 1, inherited: false, clientMessageId: null, source: null,
         parts: [
           { type: "text", text: "先看入口", status: "completed" },
           { type: "agent-message", id: "11", text: "顺便看注册", source: { sessionId: 9, name: "主会话", report: null } },

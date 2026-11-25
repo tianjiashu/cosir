@@ -41,7 +41,7 @@ for (const colorScheme of ["light", "dark"] as const) test(`I6–I9 ${colorSchem
   const more = { type: "text" as const, text: "已定位配置，继续检查。" };
   await seed(request, model([prose, { ...call, status: "completed" }, more], "reasoning"));
   await expect(feedback).toHaveCount(1);
-  await expect(head).toHaveText("执行命令 1 次");
+  await expect(head).toHaveText("核对身份验证配置");
   expect(await text.evaluate(el => el === (window as unknown as { intentProse: Element }).intentProse)).toBe(true);
   const long = toolCallPart("long", "execute_terminal", { status: "running", args: { intent: "Review".repeat(26), command: "cat long.ts" } });
   await seed(request, model([prose, { ...call, status: "completed" }, more, long]));

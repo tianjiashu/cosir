@@ -25,7 +25,7 @@ function state(approvals: TerminalApproval[]): TransportState {
   return {
     title: "审批",
     messages: [
-      { id: "u-1", role: "user", turn: 1, inherited: false, source: null, outcome: null,
+      { id: "u-1", role: "user", turn: 1, inherited: false, clientMessageId: null, source: null, outcome: null,
         parts: [{ type: "text", text: "装一下依赖然后跑测试", status: "completed" }] },
     ],
     messageOffset: 0,

@@ -244,7 +244,7 @@ def test_foreground_cancel_retains_real_output(tmp_path) -> None:
             execution_context=_context(tmp_path, "call-cancel-output"),
         )
         _wait_for(marker.exists)
-        assert command_results.request_cancel(_SESSION_ID, "call-cancel-output", driving=False)
+        assert command_results.request_cancel(_SESSION_ID, "call-cancel-output")
         observation = result.result(timeout=5)
     assert observation.status == "cancelled"
     assert "before-cancel" in observation.display_data["output"]

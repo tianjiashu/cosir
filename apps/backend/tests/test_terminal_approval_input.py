@@ -67,6 +67,11 @@ async def harness(canonical_store, monkeypatch):
     sessions.display_session_id = lambda sid: SessionService.display_session_id(sessions, sid)
     monkeypatch.setattr(depends, "get_session_service", lambda: sessions)
     monkeypatch.setattr(depends, "get_session_message_queue", lambda: queue)
+    # 输入用的模型都在：调度读现有模型，立即发送与发送同一道模型准入。
+    models = SimpleNamespace(
+        available_ids=lambda: frozenset({"test/m1"}), check_launch_config=lambda *_a: None
+    )
+    monkeypatch.setattr(depends, "get_model_config_service", lambda: models)
     monkeypatch.setattr(transport_module, "main_db_factory", lambda: canonical_store.factory)
     space = session_runtime_spaces.get_or_create(session_id)
     tasks = []
@@ -77,7 +82,7 @@ async def harness(canonical_store, monkeypatch):
         task = asyncio.create_task(asyncio.Event().wait())
         tasks.append(task)
         space.actor._event_loop = asyncio.get_running_loop()
-        space.actor._execution._task = task
+        space.actor._execution._tasks.add(task)
         space.actor._execution._run = SimpleNamespace(id=run_id)
 
     driving(space, run.id)
@@ -88,15 +93,18 @@ async def harness(canonical_store, monkeypatch):
     request = SendMessageRequest.model_validate(
         {
             "modelConfigId": "test/m1",
+            "clientMessageId": "pending-1",
             "message": {"role": "user", "parts": [{"type": "text", "text": "new instruction"}]},
         }
     )
+    queue_request = request.model_copy(update={"queue": True})
     yield SimpleNamespace(
         service=service,
         space=space,
         queue=queue,
         id=session_id,
         request=request,
+        queue_request=queue_request,
         run=run,
         store=canonical_store,
         driving=driving,
@@ -114,7 +122,7 @@ async def test_plain_send_posts_input_before_releasing_old_approval(harness):
     h = harness
     old = approval(h.id)
     seen = []
-    terminal_approvals.set_listener(lambda _id: seen.append(h.space.mailbox.has_user_input()))
+    terminal_approvals.set_listener(lambda _id: seen.append(bool(h.space.mailbox.user_input_ids())))
     await h.service.send(h.id, h.request)
     assert old.decision == "cancelled" and old.ready.is_set()
     assert old.cancel_cause == "user_message"
@@ -128,11 +136,11 @@ async def test_plain_send_posts_input_before_releasing_old_approval(harness):
         await h.service.decide_terminal(h.id, old.request_id, "approve")
 
 
-async def test_plain_send_without_approval_still_queues(harness):
+async def test_queue_request_without_approval_still_queues(harness):
     h = harness
-    await h.service.send(h.id, h.request)
+    await h.service.send(h.id, h.queue_request)
     assert [m.delivery for m in h.queue.pending_nowait(h.id)] == ["next_run"]
-    assert not h.space.mailbox.has_user_input()
+    assert not h.space.mailbox.user_input_ids()
 
 
 @pytest.mark.parametrize("failure", ["prepare", "commit", "send_now"])
@@ -153,11 +161,11 @@ async def test_failed_input_never_revokes_approval(harness, monkeypatch, failure
         monkeypatch.setattr(session_runtime_spaces, "enqueue", fail)
     with pytest.raises((ValueError, RuntimeError, SessionCommandConflictError)):
         if failure == "send_now":
-            await h.service.send_queued_now(h.id, 999)
+            await h.service.send_now(h.id, 999)
         else:
             await h.service.send(h.id, h.request)
     assert old.decision is None and not old.ready.is_set()
-    assert not h.space.mailbox.has_user_input()
+    assert not h.space.mailbox.user_input_ids()
 
 
 async def test_send_now_preserves_input_order_and_revokes_only_after_commit(harness):
@@ -165,7 +173,7 @@ async def test_send_now_preserves_input_order_and_revokes_only_after_commit(harn
     queued = h.queue.put(h.id, user("earlier", delivery="next_run"))
     target = h.queue.put(h.id, user("send now", delivery="next_run"))
     old = approval(h.id)
-    await h.service.send_queued_now(h.id, target)
+    await h.service.send_now(h.id, target)
     assert old.decision == "cancelled"
     assert h.queue.pending_nowait(h.id)[0].id == queued
     assert [m.body.text for m in h.space.mailbox.ordered()] == ["send now"]
@@ -199,7 +207,7 @@ async def test_approval_winning_first_keeps_its_real_result(harness):
     h = harness
     old = approval(h.id)
     await h.service.decide_terminal(h.id, old.request_id, "approve")
-    await h.service.send(h.id, h.request)
+    await h.service.send(h.id, h.queue_request)
     assert old.decision == "approve"
     assert [m.delivery for m in h.queue.pending_nowait(h.id)] == ["next_run"]
 
@@ -269,15 +277,15 @@ async def test_actor_loop_revokes_approval_after_sender_disappears(harness):
     old = approval(h.id)
     h.queue.put(h.id, user())
     pending = h.queue.pending_nowait(h.id)
-    await h.space.actor._advance(pending, pending)
+    await h.space.actor._advance(pending)
     assert old.decision == "cancelled"
-    assert h.space.mailbox.has_user_input()
+    assert h.space.mailbox.user_input_ids()
     # loop 旧快照重复投递时不能再次撤销新回合合法审批。
     h.space.mailbox.pop()
     current = approval(h.id, call="new-round")
-    await h.space.actor._advance(pending, pending)
+    await h.space.actor._advance(pending)
     assert current.decision is None
-    assert not h.space.mailbox.has_user_input()
+    assert not h.space.mailbox.user_input_ids()
 
 
 async def test_approval_cannot_overtake_committed_input_after_sender_disconnects(harness):
@@ -286,7 +294,7 @@ async def test_approval_cannot_overtake_committed_input_after_sender_disconnects
     h.queue.put(h.id, user())
     with pytest.raises(SessionCommandConflictError):
         await h.service.decide_terminal(h.id, old.request_id, "approve")
-    assert old.decision == "cancelled" and h.space.mailbox.has_user_input()
+    assert old.decision == "cancelled" and h.space.mailbox.user_input_ids()
 
 
 async def test_late_child_registration_yields_to_the_parent_input(harness):

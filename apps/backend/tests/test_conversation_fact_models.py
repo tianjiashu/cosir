@@ -154,6 +154,7 @@ def test_presentation_is_a_plain_binding() -> None:
     assert presentation.model_dump() == {
         "text": '描述 <ref path="src/a.py" lines="1-2" />',
         "image_paths": [f"attachments/{asset}.png"],
+        "client_message_id": None,
     }
 
 

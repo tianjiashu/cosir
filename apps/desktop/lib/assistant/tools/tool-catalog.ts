@@ -12,6 +12,7 @@
  * 没有目标、标题回落到动词。参数难读的工具（终端命令、页面脚本）自己带 `intent` 参数，标题优先用它；它不参与
  * 状态或结果判断。
  */
+import { baseName } from "@/lib/files/file-name";
 
 /** 调用行标题：动词（或意图）+ 目标，如 `读取文件` + `src/a.ts`；没写意图的命令在目标里露首行、全文归展开体。 */
 export type ToolHeading = {
@@ -82,10 +83,9 @@ function patchTargets(args: ToolArgs): string | null {
   return withMore(paths);
 }
 
-/** 填入终端：`终端 · 要填入的一行命令`；命令参数还没到时只有终端。 */
+/** 填入终端：要填入的那一行命令。终端 id 不是用户认得的名字，而且不指定时由后端挑或新开，不进目标。 */
 function terminalInput(args: ToolArgs): string | null {
-  const id = terminalId(args);
-  return joined(id, " · ", str(args.command)) ?? id;
+  return str(args.command);
 }
 
 function skillTarget(args: ToolArgs): string | null {
@@ -179,6 +179,27 @@ export function toolVerb(toolName: string): string {
 
 export function toolIconName(toolName: string): string | undefined {
   return catalogEntry(toolName)?.icon;
+}
+
+/**
+ * 工具组摘要里提到这次调用的短语（`读取文件 auth.py、db.py` 里的 `auth.py`）。写了意图时就是意图本身，它自带
+ * 动作，`standalone` 表示不再接在动词后面；否则是目标，路径只留文件名（全路径在展开的调用行里）。命令、脚本
+ * 没写意图时没有短语：原文难读，摘要宁可只写动词或次数。
+ */
+export type ToolMention = { text: string; standalone: boolean };
+
+/** 摘要里非路径目标（搜索词、网址）的长度上限：摘要一行要放下两三个短语。 */
+const MENTION_MAX = 40;
+
+export function toolMention(toolName: string, args: ToolArgs | null | undefined): ToolMention | null {
+  const entry = catalogEntry(toolName);
+  const parameters = args ?? {};
+  if (entry === undefined) return null;
+  const intent = entry.intent ? str(parameters.intent)?.trim() ?? null : null;
+  if (intent) return { text: intent, standalone: true };
+  const target = entry.target?.(parameters) ?? null;
+  if (target === null) return null;
+  return { text: entry.pathTarget ? baseName(target) : clipped(target, MENTION_MAX)!, standalone: false };
 }
 
 /** 调用行标题：带意图的工具写了意图就用它，否则用动词；目标取不到时为 null。 */

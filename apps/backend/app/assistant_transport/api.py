@@ -119,7 +119,8 @@ async def send_message(
     request: SendMessageRequest,
     service: AssistantTransportService = Depends(get_assistant_transport_service),
 ) -> JSONResponse:
-    """发送消息：有活动 Run（含挂起）时排队，当前 Run 结束后每个 Run 一条依次处理；空闲时立即处理。"""
+    """发送消息：默认立即处理（运行中插话，下一次模型请求前并入）；请求 ``queue`` 时，有活动 Run 就排队到
+    它结束后每个 Run 一条依次处理（规则见 ``SessionActor.user_input_delivery``）。"""
 
     return await _accept(session_id, "send", service.send(session_id, request))
 
@@ -130,12 +131,10 @@ async def send_queued_message_now(
     message_id: int,
     service: AssistantTransportService = Depends(get_assistant_transport_service),
 ) -> JSONResponse:
-    """把排队中的用户消息改为立即处理：运行中并入当前 Run，挂起时唤醒，空闲时开新 Run（已并入时
+    """立即发送一条还没并入的用户消息：转为立即处理并停下当前执行中的工具调用（已并入时
     409 ``MESSAGE_CONSUMED``）。"""
 
-    return await _accept(
-        session_id, "send_queued_now", service.send_queued_now(session_id, message_id)
-    )
+    return await _accept(session_id, "send_now", service.send_now(session_id, message_id))
 
 
 @app.delete("/sessions/{session_id}/queued-messages/{message_id}")

@@ -52,7 +52,8 @@ from app.core.workflow.cancel.run_cancellation_registry import (
     CancelReason,
     cancel_end_reason,
 )
-from app.core.workflow.dispatch_policy import Action, Deliver, Phase, StartRun, Wake
+from app.core.workflow.dispatch_policy import Action, Deliver, Phase, StartRun, Stay, Wake
+from app.core.workflow.message_queue.message_bodies.notice import NoticeBody
 from app.core.workflow.message_queue.pending_messages import PendingMessages
 from app.core.workflow.message_queue.session_message import Delivery, SessionMessage
 from app.core.workflow.user_decision.decision_expiry import (
@@ -69,6 +70,7 @@ from app.models.run.run_status import (
 )
 from app.models.session.session_command_errors import SessionCommandConflictError
 from app.service import depends as service_depends
+from app.storage.store_engines import main_db_factory
 
 if TYPE_CHECKING:
     from concurrent.futures import Future
@@ -93,7 +95,7 @@ class SessionActor:
         self._loop_task: asyncio.Task[None] | None = None
         # actor 所在的事件循环，``start`` 时记下；:meth:`request_cancel` 据此从任意线程投递取消。
         self._event_loop: asyncio.AbstractEventLoop | None = None
-        # 已判定过的最大消息 id：之后到达的才算新消息。
+        # 已判定过的最大消息 id：之后入队的才算新消息（原地改过的由队列另行交回，见 ``QueueRead``）。
         # 外部队列「取出不删除」：行要等 prepare_input 写进 context 时才确认删除
         self._watermark = 0
         self._stopping = False
@@ -182,10 +184,9 @@ class SessionActor:
     async def _loop(self) -> None:
         """常驻监听：按水位等新消息，醒来后推进一次；单轮推进失败只记录，不杀死 loop。
 
-        ``pending`` 是该 Session 全部未确认的消息（含已判定过、尚未被 ``prepare_input`` 消费的），回答
-        「现在队列里有什么」；``fresh`` 是其中 id 大于水位的那部分，回答「这次是什么把我叫醒的」——
-        只有它们触发推进，残留消息随下一次推进一并投递。已发起停止时先等本次执行（含收尾）落定
-        再判定，避免往即将作废的 mailbox 投递。
+        醒来时读到的 ``fresh`` 回答「这次是什么把我叫醒的」（水位之后入队的与待重判的），只有它们触发
+        推进；「现在队列里有什么」由 :meth:`_advance` 在闸门内重读，残留消息随推进一并投递。已发起
+        停止时先等本次执行（含收尾）落定再判定，避免往即将作废的 mailbox 投递。
 
         读队列本身失败（库不可用、行反序列化失败、停止中等待执行失败）时不重试：记录后进入
         :meth:`_halt_loop` 的停止态，让「调度器不可用」成为一个明确、可观察的事实，而不是把失败
@@ -193,9 +194,8 @@ class SessionActor:
         """
         while True:
             try:
-                pending = await self._queue.pending(self.session_id, self._watermark)
-                fresh = [message for message in pending if cast(int, message.id) > self._watermark]
-                self._watermark = max(cast(int, message.id) for message in pending)
+                read = await self._queue.wait_unhandled(self.session_id, self._watermark)
+                fresh, self._watermark = read.fresh, read.watermark
                 if self._execution.stopping:
                     # 停止中：等执行与收尾结束再判定；loop 被取消时不连带取消执行。
                     await self._execution.wait_released()
@@ -210,86 +210,100 @@ class SessionActor:
                 self._halt_loop()
                 return
             try:
-                await self._advance(pending, fresh)
+                await self._advance(fresh)
             except Exception:
                 # 单轮失败只记录，不杀死 loop：队列行仍在，下一次被新消息唤醒时随之一并重读。水位已经
-                # 前移，否则待处理行会让 ``pending`` 立刻返回、loop 空转。
+                # 前移，否则待处理行会让 ``wait_unhandled`` 立刻返回、loop 空转。
                 log.exception(
                     "session_actor_advance_failed",
                     extra={"msg": "Session 调度推进失败", "data": {"session_id": self.session_id}},
                 )
 
-    async def _advance(self, pending: list[SessionMessage], fresh: list[SessionMessage]) -> None:
+    async def _advance(self, woken_by: list[SessionMessage]) -> None:
         """在 Session 闸门内按 ``Action.decide`` 推进一次：投递、唤醒、新开 Run 或不动。
+
+        ``woken_by`` 是闸门外读到的、触发这次推进的消息，只用来认「哪些是新的」；判定用的队列在闸门内
+        重读。闸门外的快照可能已过期：拿到闸门之前，另一次推进开出的驱动可能已消费其中的输入并结束，
+        按快照判定会再按那条输入开一个 Run——它拿不到输入（``prepare_input`` 跳过已确认的行），模型却
+        照样被请求、凭空再回答一次。所以新消息也只认重读时仍在队列里的。
 
         新建 Run 后先登记执行再发布快照：顺序反过来时，一次投影异常就会留下「running 但没有执行者」
         的 Session；快照发布属于观测旁路，失败只记录。
         """
         if self._stopping:
             return
-        if fresh:
+        if woken_by:
             # 有新消息入队：交出「队列变了」的事实，由消费方把排队投影同步到队列现状（入队方可能在
             # 自己的事务里写入，提交后才由这里读到）。
             await asyncio.to_thread(event_sink(), SessionQueueChangedEvent(session_id=self.session_id))
         async with self._space.async_operation():
+            pending = await asyncio.to_thread(self._queue.pending_nowait, self.session_id)
+            woken_ids = {message.id for message in woken_by}
+            fresh = [message for message in pending if message.id in woken_ids]
             current = await asyncio.to_thread(self._sessions.require_current_run, self.session_id)
-            action = Action.decide(self._phase(current), current, PendingMessages.of(pending), fresh)
+            available = await asyncio.to_thread(
+                service_depends.get_model_config_service().available_ids
+            )
+            pending_messages = PendingMessages.of(pending)
+            action = Action.decide(self._phase(current), current, pending_messages, fresh, available)
+            if isinstance(action, StartRun | Stay) and action.unavailable:
+                log.warning(
+                    "session_actor_model_unavailable",
+                    extra={
+                        "msg": "输入的模型已从配置删除，这些输入留在队列里、不开新 Run",
+                        "data": {"session_id": self.session_id, "models": list(action.unavailable)},
+                    },
+                )
             if isinstance(action, Deliver):
-                self._deliver(action.messages)
+                await self._deliver(action.messages)
             elif isinstance(action, Wake):
                 woken = await asyncio.to_thread(
                     self._ledger.transition, cast(RunRecord, current).id,
                     RunTransition.WAKE,
                 )
                 if woken is not None:
-                    self._start(woken, pending, fresh_run=False, preceding_run=None)
+                    self._start(woken, pending_messages.immediate(), preceding_run=None)
             elif isinstance(action, StartRun):
-                launch = action.launch
-                # 模型在配置文件里，Run 只存 id：模型被删或文件写坏后，发起配置可能
-                # 指向不存在的模型。开不了新 Run 就不动，消息留在队列里等用户换模型再发，
-                # 与原来外键置空后 ``RunLaunch.from_run`` 返回 None 的「不动」一致；
-                # 判定规则（``Action.decide``）保持纯函数，不读文件。
-                models = service_depends.get_model_config_service()
-                if not await asyncio.to_thread(models.exists, launch.model_config_id):
-                    log.warning(
-                        "session_actor_model_unavailable",
-                        extra={
-                            "msg": "发起配置的模型不可用，暂不开新 Run",
-                            "data": {"session_id": self.session_id, "model": launch.model_config_id},
-                        },
-                    )
-                else:
-                    # 新 Run 只改当前活动：``create_run`` 提交后投影 RunInitializedEvent，前端经
-                    # 增量收到，不重建、不推整份快照（长对话里每轮重发全部历史）。
-                    run = await asyncio.to_thread(self._ledger.create_run, self.session_id, launch)
-                    self._start(run, pending, fresh_run=True, preceding_run=current)
+                # 新 Run 只改当前活动：``create_run`` 提交后投影 RunInitializedEvent，前端经
+                # 增量收到，不重建、不推整份快照（长对话里每轮重发全部历史）。
+                run = await asyncio.to_thread(self._ledger.create_run, self.session_id, action.launch)
+                self._start(run, pending_messages.for_new_run(action.input), preceding_run=current)
 
-    async def user_input_delivery(self) -> Delivery:
-        """调用方持输入准入闸门；按执行阶段和此页面的真实等待决定并入时机。"""
+    async def user_input_delivery(self, *, queue: bool) -> Delivery:
+        """调用方持输入准入闸门；按用户意图、执行阶段和此页面的真实等待决定并入时机。"""
         phase = await self.phase()
         awaits_reply = phase == "suspended" and await asyncio.to_thread(
             service_depends.get_tool_decision_service().awaits_user_reply, self.session_id
         )
         return self._send_delivery(
             phase,
+            queue=queue,
             awaits_user_reply=awaits_reply,
             awaits_terminal_approval=bool(terminal_approvals.displayed(self.session_id)),
         )
 
     @staticmethod
     def _send_delivery(
-        phase: Phase, *, awaits_user_reply: bool, awaits_terminal_approval: bool
+        phase: Phase, *, queue: bool, awaits_user_reply: bool, awaits_terminal_approval: bool
     ) -> Delivery:
-        """用户发送一条消息时的并入时机。
+        """用户发送一条消息时的并入时机：默认 ``immediate``，用户要求排队才可能 ``next_run``。
 
-        - 空闲：``immediate``。取消后队列里可能还留着旧的排队消息，新发送的这条应先跑（见
-          ``PendingMessages.next_input``）。
-        - 挂起且有决定在等用户回应（提问）：``immediate``，消息唤醒同一个 Run——用户没答、
-          直接说了新的话，这句话就是回应，提问随它开启的新回合作废（``decision_expiry``）。
-        - 有终端批准在此页面等待：``immediate``，新输入取代尚未批准的旧调用。
-        - 其余（驱动中、只在等后台结果的挂起）：``next_run`` 排队，当前 Run 结束后依次处理。
+        - 没要求排队：``immediate``。驱动中是插话，下一次模型请求前并入；挂起（含只等后台结果）时
+          唤醒同一个 Run；空闲时开新 Run。
+        - 要求排队，但 Session 空闲：``immediate``。没有要等的 Run；取消后队列里可能还留着旧的排队
+          消息，新发送的这条应先跑（见 ``PendingMessages.next_input``）。
+        - 要求排队，但挂起且有决定在等用户回应（提问）：``immediate``。排到 Run 结束后，Run 又在等这句
+          回应，会互相等死；用户没答、直接说了新的话，这句话就是回应，提问随它开启的新回合作废。
+        - 要求排队，但有终端批准在此页面等待：``immediate``，新输入取代尚未批准的旧调用。
+        - 其余（驱动中、只在等后台结果的挂起）：``next_run``，当前 Run 正常结束后依次处理；被停止或失败时
+          不自动接续（理由见 ``CONTINUE_AFTER_STATUSES``）。
         """
-        if phase == "idle" or awaits_terminal_approval or (phase == "suspended" and awaits_user_reply):
+        if (
+            not queue
+            or phase == "idle"
+            or awaits_terminal_approval
+            or (phase == "suspended" and awaits_user_reply)
+        ):
             return "immediate"
         return "next_run"
 
@@ -301,25 +315,77 @@ class SessionActor:
         pending = await asyncio.to_thread(self._queue.pending_nowait, self.session_id)
         immediate = PendingMessages.of(pending).immediate()
         if self.driving and not self._execution.stopping:
-            self._deliver(immediate)
+            await self._deliver(immediate)
         elif any(m.kind == "user_input" for m in immediate):
             terminal_approval_yielding.supersede(self.session_id)
 
-    def _deliver(self, messages: list[SessionMessage]) -> None:
-        """首次投递用户输入后撤销旧审批；HTTP 接管和常驻 loop 共用此真实投递边界。"""
-        user_ids = []
+    async def _deliver(self, messages: list[SessionMessage]) -> None:
+        """首次投递用户输入后撤销旧审批；HTTP 接管和常驻 loop 共用此真实投递边界，调用方持 Session 闸门。
+
+        撤销了这个会话自己的审批，输入就打断过在途工作（``mark_interrupted_work``）：闸门内行一定还在，
+        标记必然成立。
+        """
+        user_ids: list[int] = []
         for message in messages:
             if self.mailbox.post(message) and message.kind == "user_input":
-                user_ids.append(message.id)
+                user_ids.append(cast(int, message.id))
         if not user_ids:
             return
-        terminal_approval_yielding.supersede(self.session_id)
+        if terminal_approval_yielding.supersede(self.session_id):
+            await asyncio.to_thread(self._queue.mark_interrupted_work, self.session_id, user_ids)
         log.info(
-            "user_input_taken_over",
+            "user_input_delivered",
             extra={
                 "msg": "立即用户输入已投递，旧终端审批已收敛",
                 "data": {"session_id": self.session_id, "message_ids": user_ids},
             },
+        )
+
+    def withdraw_input(self, message_id: int) -> None:
+        """用户删除一条还没并入的输入（删除、编辑前的移出）：投递（:meth:`_deliver`）的逆操作；调用方持
+        Session 闸门，工作线程执行。
+
+        删行、拿掉 mailbox 里的副本在同一闸门内完成，副本因此始终是外部队列的子集：闸门内的判定方
+        （审批让位、投递）看到的副本就是事实，闸门外的判定方（同批调用、提问作废）另由
+        ``mark_interrupted_work`` 的条件更新裁决。输入已打断过在途工作时，同一事务投一条 session 级通知
+        告诉模型它被撤回了——让位的结果已写进上下文，不说的话模型会去找一条不存在的消息；没打断过的
+        就像没发过，不告诉模型。
+
+        异常:
+            SessionCommandConflictError: ``MESSAGE_CONSUMED``（已并入，或不是用户输入），事务回滚、行保留。
+        """
+        with main_db_factory().begin() as db:
+            withdrawn = self._queue.withdraw(db, self.session_id, message_id)
+            if withdrawn is None or withdrawn.kind != "user_input":
+                raise SessionCommandConflictError(
+                    "MESSAGE_CONSUMED", "这条消息已不在队列中", retryable=False
+                )
+            if withdrawn.interrupted_work:
+                self._queue.put(self.session_id, SessionMessage.of(self._withdrawn_notice()), db=db)
+        self.mailbox.discard(message_id)
+        log.info(
+            "user_input_withdrawn",
+            extra={
+                "msg": "还没并入的用户输入已撤回",
+                "data": {
+                    "session_id": self.session_id,
+                    "message_id": message_id,
+                    "interrupted_work": withdrawn.interrupted_work,
+                },
+            },
+        )
+
+    @staticmethod
+    def _withdrawn_notice() -> NoticeBody:
+        """告诉模型：让它停下工作的那条用户输入被撤回了，不会到达。正文不复述被撤回的内容。"""
+        return NoticeBody(
+            content=(
+                "The user withdrew a message they sent while you were working; it will not arrive. "
+                "Work that yielded to it did not happen: tool calls marked as superseded by a new user "
+                "message were not run, and a terminal approval or question it ended stays ended. "
+                "Continue from the current state."
+            ),
+            notice_kind="input_withdrawn",
         )
 
     def cancel_drive(self, run_id: int) -> None:
@@ -491,7 +557,7 @@ class SessionActor:
                 raise SessionCommandConflictError("RUN_NOT_RESUMABLE", "当前运行不可恢复")
             pending = await asyncio.to_thread(self._queue.pending_nowait, self.session_id)
             # 恢复清空结束原因：把迁移前的记录交给驱动，「用户已停止」据此推导。
-            self._start(resumed, pending, fresh_run=False, preceding_run=current)
+            self._start(resumed, PendingMessages.of(pending).immediate(), preceding_run=current)
 
     async def phase(self) -> Phase:
         """读当前 Run 得出执行阶段；供闸门外的调用方（HTTP 命令）判断活动。
@@ -526,19 +592,18 @@ class SessionActor:
     def _start(
             self,
             run: RunRecord,
-            pending: list[SessionMessage],
+            initial: list[SessionMessage],
             *,
-            fresh_run: bool,
             preceding_run: RunRecord | None,
     ) -> None:
-        """按 ``PendingMessages.initial`` 选出初始消息，把 Run 交给执行登记；调用方持 Session 闸门。
+        """把 Run 与它开始时投递的消息（``PendingMessages.immediate`` / ``for_new_run``）交给执行登记；
+        调用方持 Session 闸门。
 
         ``preceding_run`` 是这次驱动之前 Session 的当前 Run（见 ``RuntimeContext.preceding_run``）。
 
         异常:
             ValueError: 该 Session 已有执行（调用方违约）。
         """
-        initial = PendingMessages.of(pending).initial(fresh_run=fresh_run)
         self._execution.start(run, initial, preceding_run)
         if any(m.kind == "user_input" for m in initial):
             terminal_approval_yielding.supersede(self.session_id)
@@ -571,7 +636,7 @@ class SessionActor:
                 pending = await asyncio.to_thread(self._queue.pending_nowait, self.session_id)
                 if pending:
                     # 剩余消息都没被这个 Run 消费：当作新到达的消息再判定一次。
-                    await self._advance(pending, pending)
+                    await self._advance(pending)
                     return
         except Exception:
             log.exception(

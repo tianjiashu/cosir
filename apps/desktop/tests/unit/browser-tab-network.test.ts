@@ -29,7 +29,7 @@ function events(): TabEvents {
 }
 
 async function openTab(): Promise<BrowserTab> {
-  const tab = new BrowserTab({ tabId: "t1", sessionId: 1, createdBy: "agent", openerId: null, downloadDir: "/tmp", events: events() });
+  const tab = new BrowserTab({ tabId: "t1", sessionId: 1, createdBy: "agent", openerId: null, downloadDir: "/tmp", displaySessionId: 1, events: events() });
   await tab.initialize(new AbortController().signal);
   return tab;
 }

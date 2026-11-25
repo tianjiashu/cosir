@@ -19,7 +19,8 @@ from app.models.run.run_command import RunCommand
 
 
 class SendMessageRequest(BaseModel):
-    """发送消息；并入时机不由请求决定：后端按 Session 是否有活动 Run 定排队还是立即处理。
+    """发送消息；``queue`` 只表达用户意图（⌘回车「加入队列」），并入时机由后端结合 Session 阶段判定：
+    等用户回答或有终端审批时仍立即处理（见 ``SessionActor.user_input_delivery``）。
 
     发起配置随消息携带，只在这条消息开新 Run 时生效（见 ``RunLaunch``）。
     """
@@ -30,6 +31,9 @@ class SendMessageRequest(BaseModel):
     # 模型名由后端配置事实读取，请求只携带配置身份。
     modelConfigId: str = Field(min_length=1)
     reasoningEffort: ReasoningEffort | None = None
+    queue: bool = False
+    # 前端乐观消息的 id：存进展示绑定，快照里原样带回，前端据此对账（见 ``UserInputPresentation``）。
+    clientMessageId: str = Field(min_length=1, max_length=128)
 
     def to_run_command(self) -> RunCommand:
         """text part 按出现顺序用换行连成胶囊正文；图片只携带已上传附件 id。"""
@@ -45,6 +49,7 @@ class SendMessageRequest(BaseModel):
                     if isinstance(part, AssistantImagePart)
                 )
             ),
+            client_message_id=self.clientMessageId,
         )
 
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
+import { getOrCreateTransportCommandId, type UserAddMessageCommand } from "@/lib/assistant/transport-message-converter";
 import { sessionTransportConnections } from "@/lib/assistant/transport/session-transport-connections";
 import type { SessionTransportConnection, SessionTransportConnectionOptions } from "@/lib/assistant/transport/session-transport-connection";
 import { transportState, userMessage } from "./transport-fixtures";
@@ -129,9 +129,12 @@ describe("会话级连接登记表", () => {
   it("页面在时，正式消息替换乐观消息后释放它的图片", async () => {
     const streams = attachStreams();
     const page = await mount();
-    await page.connection.submit(imageCommand("hello", "blob:hello"), { send: async () => undefined, onError: vi.fn() });
+    const hello = imageCommand("hello", "blob:hello");
+    await page.connection.submit(hello, { send: async () => undefined, onError: vi.fn() });
     expect(released).toEqual([]);
-    streams.push({ session_id: 7, kind: "mutation", mutations: [{ kind: "set", path: ["messages", 0], value: userMessage("1", 1, "hello") }] });
+    streams.push({ session_id: 7, kind: "mutation", mutations: [{ kind: "set", path: ["messages", 0], value: {
+      ...userMessage("1", 1, "hello"), clientMessageId: getOrCreateTransportCommandId(hello),
+    } }] });
     await flush();
     expect(pendingCount(page.connection)).toBe(0);
     expect(released).toEqual(["blob:hello"]);

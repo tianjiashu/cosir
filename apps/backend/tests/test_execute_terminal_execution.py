@@ -300,7 +300,7 @@ def test_foreground_cancel_stops_command_and_waits_for_result(
     if stop_run:
         cancellation_registry.request_cancel(1, "user")
     else:
-        assert command_results.request_cancel(1, "call-1", driving=False)
+        assert command_results.request_cancel(1, "call-1")
     observation = result.result(timeout=2)
     assert command.stopped.is_set()
     assert observation.status == "cancelled" and observation.background is None

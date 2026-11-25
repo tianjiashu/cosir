@@ -34,6 +34,8 @@ export type UserAddMessageCommand = {
     /** 正文（带 `<file>` / `<ref>` / `<skill>` 胶囊标签）与已上传图片的 locator，无旁挂附件。 */
     parts: ReadonlyArray<{ type: "text"; text: string } | { type: "image"; image: string }>;
   };
+  /** 用户要求加入队列（⌘回车）；缺省是默认发送，运行中即插话。 */
+  queue?: boolean;
 };
 
 /**
@@ -288,7 +290,8 @@ export function toThreadMessageWithRenderContext(
         steps: undefined,
         submittedFeedback: undefined,
         timing: undefined,
-        custom: { source: context.source },
+        // 还没并入的消息带上去向（见 `messageDelivery`）：排队的画在输入框上方，插话的留在对话流里。
+        custom: "delivery" in message ? { source: context.source, delivery: message.delivery } : { source: context.source },
       },
     };
     return userMessage;
@@ -340,6 +343,8 @@ export function toPendingUserMessage(command: unknown): ThreadMessage | null {
     parts: messageParts,
   }, { turn: null, inherited: false, source: null, outcome: null, activity: null });
   pending.metadata.custom.pending = true;
+  // 正在提交的排队发送一出现就在排队条里，不先落进对话流再跳过去。
+  if (command.queue) pending.metadata.custom.delivery = "next_run";
   return pending;
 }
 

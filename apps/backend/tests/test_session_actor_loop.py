@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
+
 from app.core import session_actor as actor_module
 from app.core import session_execution as execution_module
 from app.core import session_recall
@@ -25,6 +26,7 @@ from app.core.workflow.message_queue.session_message import (
     SessionMessage,
     UserInputBody,
 )
+from app.core.workflow.message_queue.session_message_queue import QueueRead
 from app.models.message_context.message_metadata.user_message_metadata import UserInputPresentation
 from app.models.run.run_status import RunTransition
 from app.models.session.session_command_errors import SessionCommandConflictError
@@ -52,11 +54,13 @@ class _Queue:
     def ack(self, *ids: int) -> None:
         self.rows = [row for row in self.rows if row.id not in ids]
 
-    async def pending(self, _session_id: int, after_id: int = 0) -> list[SessionMessage]:
+    async def wait_unhandled(self, _session_id: int, after_id: int = 0) -> QueueRead:
         while not any(row.id > after_id for row in self.rows):
             self._changed.clear()
             await self._changed.wait()
-        return list(self.rows)
+        rows = list(self.rows)
+        fresh = [row for row in rows if row.id > after_id]
+        return QueueRead(fresh=fresh, watermark=max(row.id for row in rows))
 
     def pending_nowait(self, _session_id: int) -> list[SessionMessage]:
         return list(self.rows)
@@ -174,9 +178,9 @@ def harness(monkeypatch):
             refreshed.append([message.id for message in queue.pending_nowait(_SESSION_ID)])
 
     set_event_sink(sink)  # 下一个用例由 conftest 的 autouse 夹具换回
-    # 模型配置文件替身：开新 Run 前 actor 查模型是否还在，列在 ``missing`` 里的视为已删除。
+    # 模型配置文件替身：每次推进 actor 读一次现有模型，列在 ``missing`` 里的视为已删除。
     missing: set[str] = set()
-    models = SimpleNamespace(exists=lambda model_config_id: model_config_id not in missing)
+    models = SimpleNamespace(available_ids=lambda: frozenset({"test/m1", "test/m2"}) - missing)
     for getter, fake in (
         ("get_model_config_service", models),
         ("get_run_ledger", ledger),
@@ -242,19 +246,53 @@ async def test_new_message_on_idle_session_starts_a_run_with_all_pending(harness
     await harness.actor.abort()
 
 
-async def test_input_whose_model_was_deleted_stays_queued_until_a_new_input(harness) -> None:
-    """模型从配置文件删掉后 Run 仍留着原 id：开不了新 Run 就不动，消息留在队列里。"""
+async def test_input_whose_model_was_deleted_stays_queued_without_blocking_a_new_input(harness) -> None:
+    """模型从配置文件删掉后消息仍留着原 id：它开不了 Run、留在队列里，换模型发的新输入照样开出新 Run；
+    模型回来后，下一次推进再把它交给新 Run。"""
 
-    harness.missing_models.add(_user().launch.model_config_id)
+    harness.missing_models.add("test/m1")
     harness.actor.start()
-    harness.queue.put(_user("old model"))
+    stranded = harness.queue.put(_user("old model"))
+    await _settle()
+    assert harness.ledger.created == []
+
+    newer = harness.queue.put(
+        _user("new model").model_copy(update={"launch": RunLaunch(model_config_id="test/m2")})
+    )
+    await _settle()
+    assert [run.model_config_id for run in harness.ledger.created] == ["test/m2"]
+    assert _Driver.drives[-1][1] == [newer.id]
+    assert [row.id for row in harness.queue.pending_nowait(_SESSION_ID)] == [stranded.id]
+
+    harness.missing_models.clear()
+    await _finish(harness.ledger.created[-1].id)
+    assert [run.model_config_id for run in harness.ledger.created] == ["test/m2", "test/m1"]
+    assert _Driver.drives[-1][1] == [stranded.id]
+    await harness.actor.abort()
+
+
+async def test_loop_judges_the_queue_inside_the_gate_not_the_snapshot_it_woke_with(
+    harness, monkeypatch
+) -> None:
+    """loop 醒来时在闸门外读到的快照可能已过期：拿到闸门之前，另一次驱动已消费了其中的输入并结束。
+    判定只用闸门内重读的队列——按快照会再按那条已消费的输入开一个 Run，它拿不到输入，模型会凭空
+    再回答一次，用户真正发的消息反而排到后面。"""
+
+    consumed = harness.queue.put(_user("consumed elsewhere"))
+    newer = harness.queue.put(_user("newer"))
+    real_wait = harness.queue.wait_unhandled
+
+    async def stale_read(session_id: int, after_id: int = 0) -> QueueRead:
+        read = await real_wait(session_id, after_id)
+        harness.queue.ack(consumed.id)  # 读完快照、进闸门之前被别的驱动消费
+        return read
+
+    monkeypatch.setattr(harness.queue, "wait_unhandled", stale_read)
+    harness.actor.start()
     await _settle()
 
-    assert harness.ledger.created == []
-    harness.missing_models.clear()
-    harness.queue.put(_user("new model"))
-    await _settle()
-    assert len(harness.ledger.created) == 1
+    [run] = harness.ledger.created
+    assert _Driver.drives == [(run.id, [newer.id])]
     await harness.actor.abort()
 
 
@@ -462,18 +500,18 @@ async def test_phase_turns_idle_after_the_run_completes(harness) -> None:
 async def test_queue_read_failure_halts_the_loop_instead_of_killing_it_silently(harness) -> None:
     """读队列失败（坏行/库不可用）记录后进入停止态；之后不再调度任何 Run。"""
     actor = harness.actor
-    healthy_pending = harness.queue.pending
+    healthy_wait = harness.queue.wait_unhandled
 
-    async def broken(_session_id: int, _after_id: int = 0) -> list[SessionMessage]:
+    async def broken(_session_id: int, _after_id: int = 0) -> QueueRead:
         raise ValueError("bad row")
 
-    harness.queue.pending = broken
+    harness.queue.wait_unhandled = broken
     actor.start()
     await _settle()
 
     assert actor.stopped.is_set()
     # 停止态不自动恢复：队列恢复可用、再来一条消息，也不会开出 Run。
-    harness.queue.pending = healthy_pending
+    harness.queue.wait_unhandled = healthy_wait
     harness.queue.put(_user())
     await _settle()
     assert harness.ledger.created == []

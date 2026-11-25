@@ -8,6 +8,10 @@
 
 子 Agent 没有新输入来接替它，让位或被撤销时停下它这次驱动，免得模型换个说法再申请；已启动的独立
 后台工作不收回。用户停止与删除不经这里（见 ``registry.cancel_originated``）。
+
+用户撤回输入同样在显示会话的闸门内（``SessionActor.withdraw_input``），所以闸门内看到的 mailbox 副本
+就是仍在队列里的输入。显示会话自己的审批让位时把输入记为「已打断」（``mark_interrupted_work``），撤回时
+模型才知道这次审批为什么没了；子 Agent 的不记，它的模型看不到父页面上那条输入。
 """
 
 from __future__ import annotations
@@ -46,8 +50,11 @@ def admit(
         if should_stop_call(origin_session_id, tool_call_id):
             return request.yielded("call_cancelled")
         # mailbox 只在驱动期间有内容（驱动收尾即清空）：这里看到的就是尚未并入的新输入。
-        if space.mailbox.has_user_input():
-            if display_id != origin_session_id:
+        inputs = space.mailbox.user_input_ids()
+        if inputs:
+            if display_id == origin_session_id:
+                service_depends.get_session_message_queue().mark_interrupted_work(display_id, inputs)
+            else:
                 session_runtime_spaces.get_or_create(origin_session_id).actor.request_cancel_drive(run_id)
             return request.yielded("user_message")
         return terminal_approvals.request(
@@ -63,16 +70,21 @@ def admit(
         )
 
 
-def supersede(display_session_id: int) -> None:
-    """用户输入已投进这个页面所属会话：撤销页面上的全部批准，原调用以取消收尾。
+def supersede(display_session_id: int) -> bool:
+    """用户输入已投进这个页面所属会话：撤销页面上的全部批准，原调用以取消收尾；返回是否撤销了这个
+    会话自己的批准（调用方据此把输入记为「已打断」，子 Agent 的不算，理由见模块说明）。
 
     调用方持显示会话闸门、在事件循环上。子 Agent 的批准先停它所属的驱动、再解除等待，迟到的停止
     不误伤后来的 Run。
     """
     from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
+    own = False
     for request in terminal_approvals.displayed(display_session_id):
         if request.origin_session_id != display_session_id:
             origin = session_runtime_spaces.get_or_create(request.origin_session_id)
             origin.actor.cancel_drive(request.run_id)
+        else:
+            own = True
         terminal_approvals.cancel(request, "user_message")
+    return own

@@ -57,8 +57,8 @@ test("inherited prose has no process heading", async ({ page, request }) => {
   const inheritedReply = "继承来的回复正文。";
   await seedState(request, 42, transportState({
     messages: [
-      { ...userMessage("u0", 1, "之前的问题"), inherited: true },
-      { ...assistantMessage("assistant-turn-1", 1, [text(inheritedReply)]), inherited: true },
+      { ...userMessage("u0", 1, "之前的问题"), inherited: true, clientMessageId: null },
+      { ...assistantMessage("assistant-turn-1", 1, [text(inheritedReply)]), inherited: true, clientMessageId: null },
       userMessage("u", 2, "继续"),
       assistantMessage("assistant-turn-2", 2, [text(reply, true)], outcome("completed", { durationMs: 3000 })),
     ],

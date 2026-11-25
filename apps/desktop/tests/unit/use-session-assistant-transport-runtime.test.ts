@@ -121,6 +121,15 @@ describe("toAddMessageCommand", () => {
       { type: "image", image: locator },
     ]);
   });
+
+  // 加入队列的意图借 assistant-ui 的 `steer` 穿过 composer.send：本应用没接 queue 适配器，它必须原样到这里。
+  it("maps steer: false to a queue request and anything else to a plain send", () => {
+    const base = { role: "user", content: [{ type: "text", text: "hi" }] };
+    const command = (extra: object) => toAddMessageCommand({ ...base, ...extra } as unknown as Parameters<typeof toAddMessageCommand>[0]);
+    expect(command({ steer: false }).queue).toBe(true);
+    expect(command({ steer: true }).queue).toBe(false);
+    expect(command({}).queue).toBe(false);
+  });
 });
 
 

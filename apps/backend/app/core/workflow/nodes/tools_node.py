@@ -31,6 +31,19 @@ from app.models.message_context.message_metadata.tool_message_metadata import To
 from app.service import depends as service_depends
 
 
+async def _yields_to_user_input(rc: RuntimeContext) -> bool:
+    """本批还没开始的调用是否要为已投递的用户输入让位（插话的语义：同批没开始的调用让位）。
+
+    mailbox 副本只说明「投递过」：本节点不持 Session 闸门，读到之后用户可能已撤回它，所以由
+    ``mark_interrupted_work`` 按队列事实裁决并记下「已打断」，撤回方据此告诉模型。
+    """
+    ids = rc.mailbox.user_input_ids()
+    if not ids:
+        return False
+    queue = service_depends.get_session_message_queue()
+    return await asyncio.to_thread(queue.mark_interrupted_work, rc.session.id, ids)
+
+
 async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
     """按顺序执行当前模型批次的调用，观察并入批次副本后流转到 observe 节点。
 
@@ -72,8 +85,11 @@ async def _tools_node(state: ReactExecutionState) -> dict[str, Any]:
         visible = context.visible_tool_facts()
         batch_facts: list[ToolResultFacts] = []
         observations = []
+        # 一旦让位，本批剩下的调用都不再执行；让位前每个调用开始前都要按事实重新判定一次。
+        yielded = False
         for call in calls:
-            if rc.mailbox.has_user_input():
+            yielded = yielded or await _yields_to_user_input(rc)
+            if yielded:
                 observation = tool_cancelled(
                     call.tool_name,
                     call.call_id,

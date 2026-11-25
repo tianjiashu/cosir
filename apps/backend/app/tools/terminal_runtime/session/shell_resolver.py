@@ -17,7 +17,7 @@ from app.tools.shell.host_shells import (
     find_shell,
     user_default_shell,
 )
-from app.tools.terminal_runtime.errors import ShellResolutionError
+from app.tools.terminal_runtime.errors import ShellResolutionError, TerminalPrefillRejectedError
 from app.tools.terminal_runtime.worker_client import ShellSpec
 from app.utils.host_platform import is_windows
 
@@ -73,6 +73,30 @@ def resolve_session_shell(
 
     executable = locate(user_default_shell(environ) if value == "auto" else value)
     return ShellSpec(_kind_of(executable), executable, (executable,), integration)
+
+
+def prefill_shell(*, system: str | None = None, environ: Mapping[str, str] | None = None) -> str:
+    """Agent 为填入新开终端时用哪个 shell：用户默认 shell 有集成就用它，否则取第一个已安装、有集成的。
+
+    填入要靠集成看到提示符，开一个没有集成的 shell 只会得到一个永远填不进去的终端，所以宁可换 shell
+    也不照搬 ``auto``；用户自己新建终端时仍按 ``auto``。
+
+    异常:
+        TerminalPrefillRejectedError: 本机没有任何有集成的 shell。
+    """
+    try:
+        default = resolve_session_shell("auto", system=system, environ=environ).kind
+    except ShellResolutionError:
+        default = None
+    if default in INTEGRATED_SHELLS:
+        return "auto"
+    for kind in available_shells(system=system, environ=environ):
+        if kind in INTEGRATED_SHELLS:
+            return kind
+    raise TerminalPrefillRejectedError(
+        "no installed shell supports shell integration (zsh, bash or PowerShell), so a new terminal "
+        "could not show a prompt to fill"
+    )
 
 
 def available_session_shells(

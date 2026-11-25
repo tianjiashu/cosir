@@ -34,7 +34,9 @@ ACTIVE_RUN_STATUSES = frozenset({_RUNNING, _SUSPENDED})
 ERROR_RUN_STATUSES = frozenset({_FAILED, _CANCELLED})
 TERMINAL_RUN_STATUSES = frozenset({_COMPLETED}) | ERROR_RUN_STATUSES
 # 执行结束后自动接续剩余消息的落定状态（且未收到取消）；停止之后到达的消息由调度 loop 判定，
-# 取消与失败不自动接续——留着的消息等新消息到来再一起推进。
+# 取消与失败不自动接续——留着的消息等新消息到来再一起推进。这是有意的：⌘回车排队的消息往往以「前面那件事
+# 做成了」为前提，用户按停止多半是发现方向不对、要接管；停了还自己跑下一件，正是用户最不想看到的。
+# 留下的排队消息由用户立即发送、编辑或删除；直接发新消息时新消息先跑，排队的随后按序接续。
 CONTINUE_AFTER_STATUSES = frozenset({_COMPLETED, _SUSPENDED})
 
 

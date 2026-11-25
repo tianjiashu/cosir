@@ -124,6 +124,11 @@ export type BrowserDownload = {
 export type BrowserTabSummary = {
   tabId: string;
   sessionId: number;
+  /**
+   * 标签显示在哪个会话页上（后端按所有权解析，随标签上下文带来）：子 Agent 的标签是最近的面向用户的会话，其余是
+   * `sessionId` 自己。只用于页头提醒把子 Agent 在用浏览器算作这个会话在用；操作权限与面板显示仍按 `sessionId`。
+   */
+  displaySessionId: number;
   createdBy: BrowserTabCreator;
   /** 页面用 `window.open` / `target=_blank` 开出的标签记下来源标签（来源已关闭时仍保留 id）；否则为 null。 */
   openerId: string | null;
@@ -158,9 +163,10 @@ export type BrowserTabLimits = { perSession: number; total: number };
 
 /**
  * 新开标签需要的后端事实（后端按 Session 解析：`GET /sessions/{id}/browser-context`，Agent 侧经工具参数带来）：
- * 上限，以及这个 Session 所在工作区的下载目录（本机绝对路径）。下载目录在标签创建时定下，页面开出的标签沿用来源标签的。
+ * 上限、这个 Session 所在工作区的下载目录（本机绝对路径）与显示会话（见 `BrowserTabSummary.displaySessionId`）。
+ * 下载目录与显示会话在标签创建时定下，页面开出的标签沿用来源标签的。
  */
-export type BrowserTabContext = { limits: BrowserTabLimits; downloadDir: string };
+export type BrowserTabContext = { limits: BrowserTabLimits; downloadDir: string; displaySessionId: number };
 
 export const THEME_SOURCES = ["system", "light", "dark"] as const;
 type ThemeSource = (typeof THEME_SOURCES)[number];

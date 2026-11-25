@@ -1,13 +1,13 @@
 # 交互终端契约
 
-终端归 Session 所有：会话只由用户在终端面板创建和关闭，Agent 只能列出、读取、停止自己的命令，以及把一行命令填进空提示符（不执行，回车只能由用户按）。「终端」在读取与停止时同时指用户的交互会话（id 形如 `term_…`）与 Agent 自己仍在运行的 `execute_terminal` 命令（id 是那次调用的 `tool_call_id`）。本文只记稳定契约与职责边界，具体参数以代码为准。会话、运行中命令、填入准入与等待都是进程内协调状态，不持久化、不跨后端重启。
+终端归 Session 所有：会话由用户在终端面板创建，或由 `terminal_write` 在没有空闲终端时为填入新开（两者都是用户终端，只由用户关闭）；Agent 只能列出、读取、停止自己的命令，以及把一行命令填进空提示符（不执行，回车只能由用户按）。「终端」在读取与停止时同时指用户的交互会话（id 形如 `term_…`）与 Agent 自己仍在运行的 `execute_terminal` 命令（id 是那次调用的 `tool_call_id`）。本文只记稳定契约与职责边界，具体参数以代码为准。会话、运行中命令、填入准入与等待都是进程内协调状态，不持久化、不跨后端重启。
 
 ## Agent 工具（4 个）
 
 - `terminal_list()`：纯文本，一行一个终端：先是用户会话（当前状态与最近命令结果，状态措辞与 read / write header 同源；活跃在前、随后是最近结束的会话），再是 Agent 自己运行中的命令。`terminal_list` / `terminal_read` / `terminal_stop` 开放给所有 Agent（子 Agent 也能读、停自己的命令）；`terminal_write` 只给侧栏会话。
 - `terminal_read(terminal_id, start_line, limit, tail, pattern, wait)`：按绝对行号读取；默认尾部 40 行，`limit ≤ 400`。`pattern`（Python 正则，不与 `tail` 同用）把读取变成搜索：从 `start_line`（缺省最早保留行）扫到末行，只返回命中行，`limit` 限制命中数，超出时提示续搜的 `start_line`；搜索总按逻辑行。无变化、无等待且涉及可变区的重复读取只返回一行提示。
 - `terminal_stop(terminal_id)`：停止 Agent 自己仍在运行的命令（连同它启动的进程），结束原因与结论仍以 `<background_result>` 回投；用户打开的终端不能停。前台命令与后台命令都走这条（`command_results.request_cancel`）。
-- `terminal_write(terminal_id, command)`：把**一行**命令填进用户终端的提示符，**不执行、不等待**；参数模型与 worker 两侧都拒绝空串、回车与控制字符。只有 shell 集成就绪、停在提示符、且这个提示符出现后还没有任何输入时才允许（见「Agent 填入」）。返回填入后的尾部观察；用户是否按回车、之后发生了什么，由 `terminal_read` 观察。
+- `terminal_write(terminal_id?, command)`：把**一行**命令填进用户终端的提示符，**不执行、不等待用户回车**；参数模型与 worker 两侧都拒绝空串、回车与控制字符。指定 `terminal_id` 时只有它 shell 集成就绪、停在提示符、且这个提示符出现后还没有任何输入时才允许（见「Agent 填入」）；不指定时用最近新建的空闲终端，没有就在工作区根用带集成的 shell（默认 shell 没有集成时换一个已安装的）新开一个、等第一个提示符（`PREFILL_PROMPT_TIMEOUT_SECONDS`，超时保留终端并报错）再填。同一 Session 已有一条用户还没碰过的填入时拒绝（用户按任意键——编辑、清空、移动光标——即接手，之后可以再填）。返回填入后的尾部观察（新开时首行说明）；用户是否按回车、之后发生了什么，由 `terminal_read` 观察。
 
 ## Agent 填入
 
@@ -15,8 +15,8 @@
 - 准入只读 shell 集成给出的既有事实，任一不满足即 `TERMINAL_PREFILL_REJECTED`（advice：把命令写进回复，或等用户清掉提示符后再试）：
   - 没有 shell 集成：看不到提示符，无法确认行里是否为空；
   - 有命令在执行，或尚未回到提示符（`phase != editing`）：填入会落进正在运行的程序；
-  - `prompt_has_input` 为真：这个提示符出现之后，用户已经敲过字（或已经填过一次），再填会拼进已有内容。
-- `prompt_has_input` 在用户原始输入被接受与 Agent 填入被接受时置真，在 `shell_prompt` 事件到达时复位；它是「这一行是否还空着」的唯一事实，与屏幕内容无关。
+  - `prompt_input` 不为空：这个提示符出现之后，用户已经敲过字（或已经填过一次），再填会拼进已有内容。
+- `prompt_input`（`agent` / `user` / 空）在 Agent 填入被接受时记为 `agent`、用户原始输入被接受时记为 `user`，在 `shell_prompt` 事件到达时复位；它是「这一行是否还空着、被谁写过」的唯一事实，与屏幕内容无关。停在提示符且为 `agent` 即 `prefill_pending`（投影进 snapshot 的 `prefillPending`）：填入后与用户第一下按键时各重投影一次。
 - 填入成功后发布 `input_mark{by:"agent"}`（终端里的 Agent 输入色条），不改变输入权：用户随后按键照常送达。
 - 非交互的多行脚本走 `execute_terminal`；多步操作用户可先写脚本文件，再让 Agent 填运行它的一行命令。
 

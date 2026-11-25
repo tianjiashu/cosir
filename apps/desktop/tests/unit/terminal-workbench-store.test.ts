@@ -140,11 +140,53 @@ describe("终端工作台 store", () => {
     expect(session().activeSessionId).toBeNull();
   });
 
+  it("Agent 填入命令时展开面板并选中那个终端，但不抢焦点；首帧与已在等的不重复触发", () => {
+    const store = useTerminalWorkbenchStore.getState();
+    // 首帧（镜像为 null）就带着待回车：进页面、刷新不弹。
+    store.syncSessions(SESSION, [terminalSession("t1", { prefillPending: true })]);
+    expect(session()).toMatchObject({ open: false });
+
+    store.syncSessions(SESSION, [terminalSession("t1"), terminalSession("t2")]);
+    // Agent 为填入新开了 t3：新出现就带着待回车也算翻转。
+    store.syncSessions(SESSION, [terminalSession("t1"), terminalSession("t2"), terminalSession("t3", { prefillPending: true })]);
+    expect(session()).toMatchObject({ open: true, activeSessionId: "t3", autoCreate: false, focusPending: false });
+
+    // 用户收起面板后，同一条待回车不再把它展开；下一次填入才会。
+    store.setOpen(SESSION, false);
+    store.syncSessions(SESSION, [terminalSession("t1"), terminalSession("t2"), terminalSession("t3", { prefillPending: true, commandRunning: true })]);
+    expect(session().open).toBe(false);
+    store.syncSessions(SESSION, [terminalSession("t1", { prefillPending: true }), terminalSession("t2"), terminalSession("t3")]);
+    expect(session()).toMatchObject({ open: true, activeSessionId: "t1" });
+  });
+
+  it("页头角标：待回车亮蓝点，异常结束的红点优先", () => {
+    const badge = (sessions: Parameters<typeof terminalBadge>[0]) => terminalBadge(sessions, []);
+    expect(badge([terminalSession("t1", { prefillPending: true })])).toMatchObject({
+      tone: "activity", hint: "「终端」里有 Agent 填入的命令等你回车",
+    });
+    expect(badge([terminalSession("t1", { prefillPending: true }), terminalSession("t2", { status: "failed" })]).tone).toBe("attention");
+    expect(badge([terminalSession("t1")]).tone).toBeNull();
+  });
+
   it("reveal 打开面板、选中会话并请求焦点", () => {
     const store = useTerminalWorkbenchStore.getState();
     store.syncSessions(SESSION, [terminalSession("t1"), terminalSession("t2")]);
     store.reveal(SESSION, "t2");
-    expect(session()).toMatchObject({ open: true, activeSessionId: "t2", autoCreate: false, focusToken: 1 });
+    expect(session()).toMatchObject({ open: true, activeSessionId: "t2", autoCreate: false, focusPending: true });
+  });
+
+  it("焦点请求只来自用户操作、执行一次即清；收起面板作废未执行的请求", () => {
+    const store = useTerminalWorkbenchStore.getState();
+    store.syncSessions(SESSION, [terminalSession("t1"), terminalSession("t2")]);
+    store.setOpen(SESSION, true);
+    expect(session().focusPending).toBe(true);
+    store.consumeFocus(SESSION);
+    store.select(SESSION, "t2");
+    expect(session().focusPending).toBe(true);
+    // 请求还没被窗格执行就收起：之后 Agent 填入命令展开面板时不能补执行它。
+    store.setOpen(SESSION, false);
+    store.syncSessions(SESSION, [terminalSession("t1", { prefillPending: true }), terminalSession("t2")]);
+    expect(session()).toMatchObject({ open: true, activeSessionId: "t1", focusPending: false });
   });
 });
 

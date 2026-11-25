@@ -63,7 +63,7 @@ describe("names users recognize", () => {
 
   it("calls a terminal by the same name the badge and the tab use", () => {
     const entry = (id: string, status: TerminalSessionEntry["status"], exitCode: number | null = null): TerminalSessionEntry => ({
-      terminalSessionId: id, shellKind: "zsh", status, endReason: null, exitCode, integration: "ready", commandRunning: false, createdAt: "2026-01-01",
+      terminalSessionId: id, shellKind: "zsh", status, endReason: null, exitCode, integration: "ready", commandRunning: false, prefillPending: false, createdAt: "2026-01-01",
     });
     const sessions = [entry("a", "running"), entry("b", "running"), entry("c", "exited", 1)];
     expect([terminalTitle(sessions, "a"), terminalTitle(sessions, "c"), terminalTitle(sessions, "x")]).toEqual(["终端 1", "终端 3", null]);

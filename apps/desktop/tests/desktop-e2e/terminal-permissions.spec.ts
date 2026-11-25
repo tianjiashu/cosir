@@ -59,7 +59,8 @@ test("approves the exact command, runs it in Rust and switches the next run to f
     await page.goto(`app://cosir/sessions/${session}`);
     await expect(page.getByRole("button", { name: "终端权限：请求批准" })).toBeVisible();
     await page.getByLabel("消息输入").fill("request-test");
-    await page.getByLabel("消息输入").press("Enter");
+    // 首条消息点「发送」：模型目录还在加载时按钮禁用，点击会自动等到它可用（回车不会等）。
+    await page.getByRole("button", { name: "发送", exact: true }).click();
     const card = page.getByRole("region", { name: "终端执行批准" });
     await expect(card).toBeVisible({ timeout: 30_000 });
     expect(fs.existsSync(path.join(outside, "approved.txt"))).toBe(false);
