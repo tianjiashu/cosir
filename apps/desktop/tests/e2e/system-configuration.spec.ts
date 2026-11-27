@@ -248,3 +248,43 @@ test("子 Agent 保存期间的新编辑不随成功回执丢失：编辑器留�
   await expect.poll(() => submitted).toEqual(["first", "second"]);
   await expect(description).toHaveCount(0);
 });
+
+// 目的：配置页编辑器打开期间文件被外部改动，保存给出冲突而不是盖掉；载入后表单换成外部版本，再存以新版本为基准。
+test("子 Agent 编辑期间文件被外部改动：保存得到冲突，选载入换成外部版本", async ({ page }) => {
+  let agent: Record<string, unknown> = {
+    agent_id: "reviewer", role: "review", description: "original", system_prompt: "simple", allowed_tool_groups: [], max_steps: 100,
+    model_config_id: null, model_settings: {}, source: "user_file", path: ".cosir/agents/reviewer.json", revision: "r0", deletable: true,
+    validation_status: "valid", validation_error: null, file_name: "reviewer.json",
+  };
+  const submitted: { description: unknown; base: unknown }[] = [];
+  await page.route((url) => url.origin === API_ORIGIN && /^\/configuration\/agents(\/[^/]+)?$/.test(url.pathname), async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: [agent] });
+    const { base_revision: base, ...body } = route.request().postDataJSON();
+    submitted.push({ description: body.description, base });
+    if (base !== agent.revision) {
+      return route.fulfill({ status: 409, json: { detail: { code: "configuration_revision_conflict", message: "配置文件已在别处修改，保存未生效", current_revision: agent.revision } } });
+    }
+    agent = { ...agent, ...body, revision: `r${submitted.length}` };
+    await route.fulfill({ json: agent });
+  });
+  await page.goto("/configuration/agents");
+  await page.getByRole("button", { name: "编辑 reviewer" }).click();
+  const description = page.getByPlaceholder("向主 Agent 说明这个子 Agent 负责什么");
+  await description.fill("mine");
+  agent = { ...agent, description: "hand edited", revision: "r-external" };
+
+  await page.getByRole("button", { name: "保存配置" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("子 Agent「reviewer」已在别处修改")).toBeVisible();
+  await dialog.getByRole("button", { name: "载入外部版本" }).click();
+
+  await expect(description).toHaveValue("hand edited");
+  expect(agent.description).toBe("hand edited");
+  await description.fill("mine again");
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await expect(description).toHaveCount(0);
+  expect(submitted).toEqual([
+    { description: "mine", base: "r0" },
+    { description: "mine again", base: "r-external" },
+  ]);
+});

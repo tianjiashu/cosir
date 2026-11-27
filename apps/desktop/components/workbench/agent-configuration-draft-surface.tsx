@@ -7,8 +7,8 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import type { ConfigurationScope } from "@/lib/api/configuration-scope";
-import { saveAgentConfiguration } from "@/lib/api/configuration";
-import type { PersistAgent } from "@/lib/agent-editor/agent-editor-session";
+import { getAgentConfiguration, saveAgentConfiguration } from "@/lib/api/configuration";
+import type { LoadLatestAgent, PersistAgent } from "@/lib/agent-editor/agent-editor-session";
 import { confirmCloseWorkbenchTab } from "@/lib/workbench/drafts";
 import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
@@ -37,9 +37,10 @@ export function AgentConfigurationDraftSurface({
   const toolGroupsQuery = useQuery(toolGroupsQueryOptions());
 
   const owner = (scope: ConfigurationScope) => (scope === "workspace" ? workspaceId : null);
-  const persist: PersistAgent = (input, { scope, agentId }) => saveAgentConfiguration(owner(scope), agentId, input);
+  const persist: PersistAgent = (input, { scope, agentId, baseRevision }) => saveAgentConfiguration(owner(scope), agentId, input, baseRevision);
+  const loadLatest: LoadLatestAgent = ({ scope, agentId }) => getAgentConfiguration(owner(scope), agentId);
   const saveMutation = useMutation({
-    mutationFn: () => tab.session.save(persist),
+    mutationFn: () => tab.session.save(persist, loadLatest),
     onSuccess: (saved) => {
       if (!saved) return;
       void queryClient.invalidateQueries({ queryKey: queryKeys.agents(owner(tab.session.store.getState().scope)) });

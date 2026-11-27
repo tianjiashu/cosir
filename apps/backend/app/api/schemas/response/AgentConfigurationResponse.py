@@ -22,6 +22,7 @@ class AgentConfigurationResponse(BaseModel):
         model_settings: 模型参数覆盖项。
         source: ``builtin`` 为系统内置子 Agent（来自配置文件，可以修改、不能删除），否则为 ``user_file``。
         path: 配置文件路径；无文件时为 None。
+        revision: 配置文件的内容版本；无文件时为 None。更新时作为 ``base_revision`` 带回。
         deletable: 是否可删除。
         validation_status: 配置校验状态。
         validation_error: 校验失败原因；通过时为 None。
@@ -47,6 +48,7 @@ class AgentConfigurationResponse(BaseModel):
     model_settings: dict[str, Any] = Field(default_factory=dict)
     source: str
     path: str | None = None
+    revision: str | None = None
     deletable: bool
     validation_status: str
     validation_error: str | None = None
@@ -74,6 +76,7 @@ class AgentConfigurationResponse(BaseModel):
             model_settings=configuration.model_settings,
             source="builtin" if entry.builtin else "user_file",
             path=str(entry.path) if entry.path else None,
+            revision=entry.revision,
             deletable=not entry.builtin,
             validation_status="valid",
             validation_error=None,

@@ -13,6 +13,7 @@ class MainAgentPromptResponse(BaseModel):
     """把主 Agent prompt 配置文档投影为配置中心响应。"""
 
     content: str
+    revision: str | None
     path: str
     token_length: int
     max_tokens: int
@@ -25,6 +26,7 @@ class MainAgentPromptResponse(BaseModel):
 
         return MainAgentPromptResponse(
             content=document.content,
+            revision=document.revision,
             path=str(document.path),
             token_length=document.token_length,
             max_tokens=document.max_tokens,

@@ -61,9 +61,11 @@ class AgentConfiguration:
 class AgentConfigurationEntry:
     """注册表里一个子 Agent 的配置事实。
 
-    ``path`` 为它的配置文件；``builtin`` 的是系统内置子 Agent（同样来自配置文件），可以修改、不能删除。
+    ``path`` 为它的配置文件；``revision`` 是该文件的内容版本（没有文件时为 None），界面更新时作为前置条件
+    带回；``builtin`` 的是系统内置子 Agent（同样来自配置文件），可以修改、不能删除。
     """
 
     configuration: AgentConfiguration
     path: Path | None
+    revision: str | None
     builtin: bool

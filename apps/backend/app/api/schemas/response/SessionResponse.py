@@ -83,10 +83,15 @@ class SessionResponse(BaseModel):
             session_id=record.id,
             workspace_id=record.workspace_id,
             title=record.title,
-            extra=SessionResponseExtra(fork=(
-                SessionResponseFork(tree_parent_session_id=record.extra.fork.tree_parent_session_id)
-                if record.extra.fork is not None else None
-            )),
+            extra=SessionResponseExtra(
+                fork=(
+                    SessionResponseFork(
+                        tree_parent_session_id=record.extra.fork.tree_parent_session_id
+                    )
+                    if record.extra.fork is not None
+                    else None
+                )
+            ),
             session_type=record.session_type,
             parent_session_id=record.parent_session_id,
             unstarted=record.unstarted,

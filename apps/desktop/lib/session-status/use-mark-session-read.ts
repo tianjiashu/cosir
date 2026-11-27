@@ -2,12 +2,8 @@ import { useEffect, useState } from "react";
 
 import { markSessionRead } from "@/lib/api/workspaces";
 import { frontendLog } from "@/lib/logging/frontend-log";
+import { onWindowAttentionChange, windowAttentive } from "@/lib/window-attention";
 import { useSessionStatusStore } from "./session-status-store";
-
-/** 你此刻能看到页面：窗口可见且有焦点（藏到托盘、切到别的应用都不算）。 */
-function attentive(): boolean {
-  return document.visibilityState === "visible" && document.hasFocus();
-}
 
 /**
  * 你正看着的会话有未读结果时告诉后端「看过了」。「正在看」只有这里知道：会话页在切到配置页时保活、订阅还在，
@@ -24,19 +20,9 @@ function attentive(): boolean {
  */
 export function useMarkSessionRead(sessionId: number | null): void {
   const unread = useSessionStatusStore((state) => (sessionId === null ? false : state.sessions[sessionId]?.unread ?? false));
-  const [visible, setVisible] = useState(attentive);
+  const [visible, setVisible] = useState(windowAttentive);
 
-  useEffect(() => {
-    const update = () => setVisible(attentive());
-    window.addEventListener("focus", update);
-    window.addEventListener("blur", update);
-    document.addEventListener("visibilitychange", update);
-    return () => {
-      window.removeEventListener("focus", update);
-      window.removeEventListener("blur", update);
-      document.removeEventListener("visibilitychange", update);
-    };
-  }, []);
+  useEffect(() => onWindowAttentionChange(() => setVisible(windowAttentive())), []);
 
   useEffect(() => {
     if (sessionId === null || !unread || !visible) return;

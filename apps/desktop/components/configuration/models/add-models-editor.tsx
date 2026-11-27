@@ -17,6 +17,7 @@ import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
 import { confirmDiscardUnsaved, useUnsavedChanges } from "@/lib/unsaved-changes";
+import { useUnmountSignal } from "@/hooks/use-unmount-signal";
 import { ConnectionFields, connectionFieldsComplete } from "./connection-fields";
 import { capabilitiesValid, DEFAULT_CAPABILITIES, pickCapabilities } from "./model-capability-fields";
 import { ModelDraftList, type ModelDraft } from "./model-draft-list";
@@ -35,7 +36,8 @@ function fieldsOf(draft: ModelDraft): ModelConfigFields {
  *
  * 只有一个提交动作「测试并保存」：逐个探活（进度逐行显示），通过的一次写入，失败的留在卡里写明原因，
  * 改完可再提交——「测试通过才能保存」按模型把关，单个失败不拖累其余。新建连接时首次保存即建出连接，
- * 之后连接字段锁定，再提交的模型追加到这个连接下。全部保存后卡片关闭。
+ * 之后连接字段锁定，再提交的模型追加到这个连接下。全部保存后卡片关闭。测试途中卡片被关掉（离开页面并确认放弃）时
+ * 探活随之中止、不再写入。
  */
 export function AddModelsEditor({ connection, onClose }: { connection?: ModelConnection; onClose: () => void }) {
   const queryClient = useQueryClient();
@@ -45,6 +47,7 @@ export function AddModelsEditor({ connection, onClose }: { connection?: ModelCon
   const [drafts, setDrafts] = useState<ModelDraft[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const lifetime = useUnmountSignal();
 
   const creating = connection === undefined;
   const target = connection ?? fields;
@@ -92,9 +95,11 @@ export function AddModelsEditor({ connection, onClose }: { connection?: ModelCon
     setBusy(true);
     setError(null);
     const credentials = { base_url: target.base_url, api_key: target.api_key };
+    const signal = lifetime();
     const passed = await testModelDrafts(credentials, drafts.map(fieldsOf), (name, test) => {
       setDrafts((current) => current.map((draft) => (draft.model_name === name ? { ...draft, test } : draft)));
-    });
+    }, signal);
+    if (signal.aborted) return;
     if (passed.length === 0) {
       setError("没有模型通过测试，请检查连接信息或模型设置后重试");
       setBusy(false);

@@ -25,6 +25,7 @@ class WorkspaceInstructionDocument:
     """workspace 指令正文及其实际文件位置和预算元数据。"""
 
     content: str
+    revision: str | None
     path: Path
     relative_path: str
     token_length: int
@@ -47,43 +48,56 @@ class WorkspaceInstructionConfigurationService:
         ``AGENTS.md``。
         """
 
-        found = find_workspace_instruction_file(self.root)
-        path = found[1] if found is not None else self.root / "AGENTS.md"
+        path = self._effective_path()
         if not path.exists():
-            return self._document("", path=path, exists=False)
-        raw = file_store.read_text(path, root=self.root)
-        return self._document(raw, path=path, exists=True)
+            return self._document("", revision=None, path=path, exists=False)
+        text = file_store.read_revised_text(path, root=self.root)
+        return self._document(text.content, revision=text.revision, path=path, exists=True)
 
-    def update(self, content: str) -> WorkspaceInstructionDocument:
-        """校验 token 预算并原子更新当前有效指令文件。
+    def update(self, content: str, *, base_revision: str | None) -> WorkspaceInstructionDocument:
+        """校验 token 预算，以 ``base_revision`` 为前置条件原子更新当前有效指令文件。
 
         没有既有候选时写入 workspace 根目录 ``AGENTS.md``；已有嵌套候选时保持其路径不变，
-        以保证配置页面与运行时的有效文件一致。已固化系统提示词的 Session 不受影响。
+        以保证配置页面与运行时的有效文件一致。有效文件在编辑期间换了位置（比如更浅处新出现一份）
+        时，新位置的版本对不上基准，同样按冲突处理。已固化系统提示词的 Session 不受影响。
+
+        异常:
+            ConfigurationRevisionConflict: 有效文件在读取之后被别处改过或换了位置。
         """
 
-        document = self.read()
-        next_document = self._document(content, path=document.path, exists=True)
-        if next_document.token_length > next_document.max_tokens:
+        path = self._effective_path()
+        draft = self._document(content, revision=None, path=path, exists=True)
+        if draft.token_length > draft.max_tokens:
             raise WorkspaceInstructionConfigurationError(
-                "workspace AGENTS.md 超出 token 预算: "
-                f"{next_document.token_length} > {next_document.max_tokens}"
+                "workspace AGENTS.md 超出 token 预算: " f"{draft.token_length} > {draft.max_tokens}"
             )
-        file_store.write_text_atomic(document.path, content, root=self.root)
+        revision = file_store.write_text_if_revision(
+            path, content, root=self.root, base_revision=base_revision
+        )
         log.info(
             "configuration_workspace_instruction_written",
             extra={
                 "msg": "workspace AGENTS.md 配置已保存",
-                "data": {"workspace_root": str(self.root), "path": str(document.path)},
+                "data": {"workspace_root": str(self.root), "path": str(path)},
             },
         )
-        return next_document
+        return self._document(content, revision=revision, path=path, exists=True)
 
-    def _document(self, content: str, *, path: Path, exists: bool) -> WorkspaceInstructionDocument:
+    def _effective_path(self) -> Path:
+        """运行时会选中的指令文件；没有候选时为 workspace 根目录的 ``AGENTS.md``。"""
+
+        found = find_workspace_instruction_file(self.root)
+        return found[1] if found is not None else self.root / "AGENTS.md"
+
+    def _document(
+        self, content: str, *, revision: str | None, path: Path, exists: bool
+    ) -> WorkspaceInstructionDocument:
         """把正文和路径投影为配置文档；不执行写入侧校验。"""
 
         relative_path = str(path.relative_to(self.root).as_posix())
         return WorkspaceInstructionDocument(
             content=content,
+            revision=revision,
             path=path,
             relative_path=relative_path,
             token_length=TokenEstimator.estimate(content) if content else 0,

@@ -9,7 +9,9 @@ import { userErrorMessage } from "@/lib/errors/user-error-message";
 import { frontendLog } from "@/lib/logging/frontend-log";
 import { notify } from "@/lib/notify";
 import { queryKeys } from "@/lib/query/query-keys";
+import { useFieldEdits } from "@/lib/form/use-field-edits";
 import { confirmDiscardUnsaved, useUnsavedChanges } from "@/lib/unsaved-changes";
+import { useUnmountSignal } from "@/hooks/use-unmount-signal";
 import { ConnectionFields, connectionFieldsComplete } from "./connection-fields";
 import { testModel } from "./test-model-drafts";
 
@@ -18,20 +20,21 @@ import { testModel } from "./test-model-drafts";
  *
  * 只改名称直接保存；改了地址或 Key 时，先用该连接下第一个模型按新凭据测一次——验证的是 Key 与地址，
  * 不逐个复测全部模型（几十个模型逐个探活代价过高，模型本身没变）。连接下还没有模型时无从测试，直接保存。
+ *
+ * 编辑副本只记改过的字段（`useFieldEdits`）：配置文件可在外部改，列表重新读取后没碰过的字段跟着变、保存时不提交。
+ * 测试途中编辑器被关掉（离开页面并确认放弃）时探活随之中止、不再写入。
  */
 export function ConnectionEditor({ connection, onClose }: { connection: ModelConnection; onClose: () => void }) {
   const queryClient = useQueryClient();
-  const original: ModelConnectionFields = { name: connection.name, base_url: connection.base_url, api_key: connection.api_key };
-  const [fields, setFields] = useState(original);
+  const live: ModelConnectionFields = { name: connection.name, base_url: connection.base_url, api_key: connection.api_key };
+  const { values: fields, changes: edited, dirty, edit } = useFieldEdits(live, (value, current) => String(value).trim() === current);
+  const lifetime = useUnmountSignal();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const changes = Object.fromEntries(
-    (Object.keys(original) as (keyof ModelConnectionFields)[])
-      .filter((key) => fields[key].trim() !== original[key])
-      .map((key) => [key, fields[key].trim()]),
+    Object.entries(edited).map(([key, value]) => [key, String(value).trim()]),
   ) as Partial<ModelConnectionFields>;
-  const dirty = Object.keys(changes).length > 0;
   const probe = changes.base_url !== undefined || changes.api_key !== undefined ? connection.models[0] : undefined;
   useUnsavedChanges(`连接「${connection.name}」`, dirty);
 
@@ -40,7 +43,9 @@ export function ConnectionEditor({ connection, onClose }: { connection: ModelCon
     setBusy(true);
     setError(null);
     if (probe) {
-      const test = await testModel({ base_url: fields.base_url, api_key: fields.api_key }, probe);
+      const signal = lifetime();
+      const test = await testModel({ base_url: fields.base_url, api_key: fields.api_key }, probe, signal);
+      if (signal.aborted) return;
       if (test.kind === "failed") {
         setError(`用「${probe.model_name}」测试未通过：${test.message}`);
         setBusy(false);
@@ -65,7 +70,7 @@ export function ConnectionEditor({ connection, onClose }: { connection: ModelCon
 
   return (
     <div className="grid gap-3">
-      <ConnectionFields value={fields} onChange={setFields} disabled={busy} />
+      <ConnectionFields value={fields} onChange={edit} disabled={busy} />
       {error && <Alert tone="destructive">{error}</Alert>}
       <div className="flex flex-wrap items-center justify-end gap-2">
         {probe && <span className="text-muted-foreground mr-auto text-xs">改了地址或 Key，保存前会用「{probe.model_name}」测试一次</span>}

@@ -11,6 +11,7 @@ class WorkspaceInstructionResponse(BaseModel):
     """序列化 workspace 当前有效指令文件及 token 预算。"""
 
     content: str
+    revision: str | None
     path: str
     relative_path: str
     token_length: int
@@ -24,6 +25,7 @@ class WorkspaceInstructionResponse(BaseModel):
 
         return WorkspaceInstructionResponse(
             content=document.content,
+            revision=document.revision,
             path=str(document.path),
             relative_path=document.relative_path,
             token_length=document.token_length,

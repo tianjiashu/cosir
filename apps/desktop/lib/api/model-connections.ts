@@ -76,8 +76,10 @@ export const deleteModelConfig = (connectionId: string, modelName: string) =>
   requestJson<{ config_id: string; deleted: boolean }>(modelPath(connectionId, modelName), { method: "DELETE" });
 
 /** 按「这个连接 + 这个模型 + 这组能力」做一次真实探活，不落库。 */
-export const testDraftModelConfig = (input: ModelConfigFields & Pick<ModelConnectionFields, "base_url" | "api_key">) =>
-  postJson<ModelConfigTestResult>(`${ROOT}/test`, input, { timeoutMs: CONNECTION_TEST_TIMEOUT_MS });
+export const testDraftModelConfig = (
+  input: ModelConfigFields & Pick<ModelConnectionFields, "base_url" | "api_key">,
+  options?: Pick<RequestOptions, "signal">,
+) => postJson<ModelConfigTestResult>(`${ROOT}/test`, input, { ...options, timeoutMs: CONNECTION_TEST_TIMEOUT_MS });
 
 /** 远端模型目录；远端失败时后端返回空列表。 */
 export const discoverModels = (

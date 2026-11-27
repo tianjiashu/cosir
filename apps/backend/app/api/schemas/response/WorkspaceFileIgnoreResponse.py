@@ -11,6 +11,7 @@ class WorkspaceFileIgnoreResponse(BaseModel):
     """序列化 workspace 忽略规则正文及规则数量。"""
 
     content: str
+    revision: str | None
     path: str
     exists: bool
     rule_count: int
@@ -22,6 +23,7 @@ class WorkspaceFileIgnoreResponse(BaseModel):
 
         return WorkspaceFileIgnoreResponse(
             content=document.content,
+            revision=document.revision,
             path=str(document.path),
             exists=document.exists,
             rule_count=document.rule_count,

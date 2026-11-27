@@ -25,6 +25,7 @@ class GlobalInstructionDocument:
     """全局指令文本及其预算元数据。"""
 
     content: str
+    revision: str | None
     path: Path
     token_length: int
     max_tokens: int
@@ -42,30 +43,37 @@ class InstructionConfigurationService:
 
         self.root.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
-            return self._document("")
-        raw = file_store.read_text(self.path, root=self.root)
-        return self._document(raw)
+            return self._document("", revision=None)
+        text = file_store.read_revised_text(self.path, root=self.root)
+        return self._document(text.content, revision=text.revision)
 
-    def update(self, content: str) -> GlobalInstructionDocument:
-        """校验 token 预算后原子写入全局指令；已固化系统提示词的 Session 不受影响。"""
+    def update(self, content: str, *, base_revision: str | None) -> GlobalInstructionDocument:
+        """校验 token 预算后，以 ``base_revision`` 为前置条件原子写入；已固化系统提示词的 Session 不受影响。
 
-        document = self._document(content)
-        if document.token_length > document.max_tokens:
+        异常:
+            ConfigurationRevisionConflict: 文件在读取之后被别处改过。
+        """
+
+        draft = self._document(content, revision=None)
+        if draft.token_length > draft.max_tokens:
             raise InstructionConfigurationError(
-                f"全局 AGENTS.md 超出 token 预算: {document.token_length} > {document.max_tokens}"
+                f"全局 AGENTS.md 超出 token 预算: {draft.token_length} > {draft.max_tokens}"
             )
-        file_store.write_text_atomic(self.path, content, root=self.root)
+        revision = file_store.write_text_if_revision(
+            self.path, content, root=self.root, base_revision=base_revision
+        )
         log.info(
             "configuration_global_instruction_written",
             extra={"msg": "系统全局指令已保存", "data": {"path": str(self.path)}},
         )
-        return document
+        return self._document(content, revision=revision)
 
-    def _document(self, content: str) -> GlobalInstructionDocument:
+    def _document(self, content: str, *, revision: str | None) -> GlobalInstructionDocument:
         """把正文投影为文档对象，并附上 token 预算元数据（预算值取自 ``Constant.SystemPrompt``）。
 
         参数:
             content: 全局指令正文，空串合法（``token_length`` 记 0）。
+            revision: 正文的内容版本，文件不存在时为 ``None``。
 
         返回:
             含正文、路径、``token_length`` 与 ``max_tokens`` 的文档对象。
@@ -79,6 +87,7 @@ class InstructionConfigurationService:
 
         return GlobalInstructionDocument(
             content=content,
+            revision=revision,
             path=self.path,
             token_length=TokenEstimator.estimate(content) if content else 0,
             max_tokens=Constant.SystemPrompt.GLOBAL_INSTRUCTION_MAX_FILE_TOKENS,

@@ -8,7 +8,9 @@ token 预算检查、路径边界与原子写入由 ``InstructionConfigurationSe
 from __future__ import annotations
 
 from app.api.configuration.errors import raise_configuration_error
-from app.api.schemas.request.GlobalInstructionUpdateRequest import GlobalInstructionUpdateRequest
+from app.api.schemas.request.ConfigurationDocumentUpdateRequest import (
+    ConfigurationDocumentUpdateRequest,
+)
 from app.api.schemas.response.GlobalInstructionResponse import GlobalInstructionResponse
 from app.app import app
 from app.service.configuration.instructions.global_instruction_service import (
@@ -26,10 +28,10 @@ async def get_global_instruction_configuration() -> GlobalInstructionResponse:
 
 @app.put("/configuration/global-instructions", response_model=GlobalInstructionResponse)
 async def update_global_instruction_configuration(
-    payload: GlobalInstructionUpdateRequest,
+    payload: ConfigurationDocumentUpdateRequest,
 ) -> GlobalInstructionResponse:
     try:
-        document = InstructionConfigurationService().update(payload.content)
+        document = InstructionConfigurationService().update(payload.content, base_revision=payload.base_revision)
         return GlobalInstructionResponse.from_document(document)
     except Exception as exc:
         raise_configuration_error(exc)

@@ -16,7 +16,7 @@ const ROOT = "/configuration/model-connections";
 const FILE_PATH = "/home/test/.cosir/config/models.json";
 
 /** 有状态的模型配置后端：按真实接口形状增删改，记录每次写入与测试请求供断言。 */
-function mockModelBackend(page: Page, initial: Connection[], { failing = new Set<string>(), discovered = [] as string[] } = {}) {
+function mockModelBackend(page: Page, initial: Connection[], { failing = new Set<string>(), discovered = [] as string[], testDelayMs = 0 } = {}) {
   const connections = structuredClone(initial);
   const calls = { tests: [] as Record<string, unknown>[], writes: [] as { method: string; path: string; body: unknown }[] };
   const toModel = (connectionId: string, fields: Pick<Model, "model_name" | "context_window_k"> & Partial<Model>): Model => ({
@@ -36,8 +36,9 @@ function mockModelBackend(page: Page, initial: Connection[], { failing = new Set
     if (path === `${ROOT}/discover`) return route.fulfill({ json: { models: discovered } });
     if (path === `${ROOT}/test`) {
       calls.tests.push(body!);
+      if (testDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, testDelayMs));
       const ok = !failing.has(String(body!.model_name));
-      return route.fulfill({ json: ok ? { success: true, elapsed_ms: 8 } : { success: false, elapsed_ms: 5, error_message: "模型不存在" } });
+      return route.fulfill({ json: ok ? { success: true, elapsed_ms: 8 } : { success: false, elapsed_ms: 5, error_message: "模型不存在" } }).catch(() => undefined);
     }
     calls.writes.push({ method: request.method(), path, body });
     if (request.method() === "DELETE" && !path.slice(ROOT.length + 1).includes("/")) {
@@ -65,7 +66,8 @@ function mockModelBackend(page: Page, initial: Connection[], { failing = new Set
     }
     return route.fulfill({ json: connection });
   });
-  return { calls, failing };
+  // `connections` 外露：测试可以模拟配置文件在外部被改（手改、git、Agent），下一次读取即可见。
+  return { calls, failing, connections };
 }
 
 const demo: Connection = {
@@ -177,6 +179,96 @@ test("删除连接只关掉作用在它上面的编辑器，别的连接上没�
   await page.getByRole("dialog").getByRole("button", { name: "删除", exact: true }).click();
   await expect(page.getByRole("region", { name: "连接 Packy" })).toHaveCount(0);
   await expect(nameField).toHaveValue("Demo 改名中");
+});
+
+/** 删除另一个连接：失效并重新读取模型列表（编辑器保持打开），用来让外部改动进入页面。 */
+async function deleteConnection(page: Page, name: string) {
+  await page.getByRole("region", { name: `连接 ${name}` }).getByRole("button", { name: `删除连接 ${name}` }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "删除", exact: true }).click();
+  await expect(page.getByRole("region", { name: `连接 ${name}` })).toHaveCount(0);
+}
+
+const spare: Connection = { connection_id: "spare", name: "Spare", base_url: "https://spare.example/v1", api_key: "spare-key", models: [] };
+
+test("编辑连接期间配置文件在外部换了 Key：没碰过的字段跟着刷新，保存只提交改过的名称", async ({ page }) => {
+  const { calls, connections } = mockModelBackend(page, [demo, spare]);
+  await page.goto("/configuration/models");
+  const card = page.getByRole("region", { name: "连接 Demo" });
+  await card.getByRole("button", { name: "编辑连接 Demo" }).click();
+  connections[0]!.api_key = "rotated-key";
+  connections[0]!.base_url = "https://new.example/v1";
+  await deleteConnection(page, "Spare");
+
+  // 没碰过的编辑器不算有修改：显示最新值，按钮仍是不可用的「保存」，取消不需要确认。
+  await expect(card.getByRole("textbox", { name: "API Base URL" })).toHaveValue("https://new.example/v1");
+  await expect(card.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+  await card.getByRole("textbox", { name: "连接名称" }).fill("Renamed");
+  await card.getByRole("button", { name: "保存", exact: true }).click();
+  await expect.poll(() => calls.writes.filter((write) => write.method === "PUT")).toEqual([{ method: "PUT", path: `${ROOT}/demo`, body: { name: "Renamed" } }]);
+  expect(calls.tests).toHaveLength(0);
+});
+
+test("没碰过的连接编辑器在列表刷新后取消不弹确认", async ({ page }) => {
+  const { connections } = mockModelBackend(page, [demo, spare]);
+  await page.goto("/configuration/models");
+  const card = page.getByRole("region", { name: "连接 Demo" });
+  await card.getByRole("button", { name: "编辑连接 Demo" }).click();
+  connections[0]!.api_key = "rotated-key";
+  await deleteConnection(page, "Spare");
+  await card.getByRole("button", { name: "取消" }).click();
+  await expect(page.getByText("放弃未保存的修改？")).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "编辑连接 Demo" })).toBeVisible();
+});
+
+test("编辑模型能力期间外部改了上下文窗口：只提交勾选的能力，不把窗口改回去", async ({ page }) => {
+  const { calls, connections } = mockModelBackend(page, [demo, spare]);
+  await page.goto("/configuration/models");
+  const card = page.getByRole("region", { name: "连接 Demo" });
+  await card.getByRole("button", { name: "编辑模型 demo-model" }).click({ force: true });
+  connections[0]!.models[0]!.context_window_k = 256;
+  await deleteConnection(page, "Spare");
+
+  await expect(card.getByRole("spinbutton", { name: "demo-model 上下文窗口（K）" })).toHaveValue("256");
+  await card.getByRole("checkbox", { name: "demo-model 图片输入" }).check();
+  await card.getByRole("button", { name: "测试并保存" }).click();
+  await expect.poll(() => calls.writes.filter((write) => write.method === "PUT")).toEqual([
+    { method: "PUT", path: `${ROOT}/demo/models/demo-model`, body: { supports_image: true } },
+  ]);
+  expect(calls.tests.at(-1)).toMatchObject({ context_window_k: 256, supports_image: true });
+});
+
+test("切到别的应用再切回（失焦再聚焦、可见性不变）就重读模型配置，刚读过也照读", async ({ page }) => {
+  const { connections } = mockModelBackend(page, [demo]);
+  await page.goto("/configuration/models");
+  const card = page.getByRole("region", { name: "连接 Demo" });
+  await expect(card.getByText("api.example.com")).toBeVisible();
+  connections[0]!.base_url = "https://edited.example/v1";
+
+  // 无头浏览器没有真实的应用切换：模拟窗口失去焦点再回来，页面可见性全程不变。
+  await page.evaluate(() => {
+    const realHasFocus = document.hasFocus.bind(document);
+    document.hasFocus = () => false;
+    window.dispatchEvent(new Event("blur"));
+    document.hasFocus = realHasFocus;
+    window.dispatchEvent(new Event("focus"));
+  });
+  await expect(card.getByText("edited.example")).toBeVisible();
+});
+
+test("测试并保存途中离开页面并确认放弃：探活中止，修改不写入", async ({ page }) => {
+  const { calls } = mockModelBackend(page, [demo], { testDelayMs: 1500 });
+  await page.goto("/configuration/models");
+  const card = page.getByRole("region", { name: "连接 Demo" });
+  await card.getByRole("button", { name: "编辑连接 Demo" }).click();
+  await card.getByPlaceholder("请输入 API Key").fill("typed-key");
+  await card.getByRole("button", { name: "测试并保存" }).click();
+  await expect.poll(() => calls.tests.length).toBe(1);
+
+  await page.getByText("MCP 服务", { exact: true }).first().click();
+  await page.getByRole("button", { name: "放弃修改" }).click();
+  await expect(page).toHaveURL(/\/configuration\/mcp$/);
+  await page.waitForTimeout(2500);
+  expect(calls.writes).toEqual([]);
 });
 
 test("输入框的模型选择器按连接分组", async ({ page }) => {

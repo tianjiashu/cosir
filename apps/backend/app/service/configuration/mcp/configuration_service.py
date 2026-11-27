@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -65,32 +66,87 @@ class MCPConfigurationService:
 
         return MCPServerEntry.for_servers(visible_servers(self.scope.workspace_root))
 
-    def update(self, servers: list[MCPServerConfig]) -> list[MCPServerEntry]:
-        """整表替换本作用域的服务列表，返回更新后的可见服务。
-
-        只写本作用域的文件。本机记录随之裁到「仍存在的服务的当前配置」（``MCPMachineState.keep_only``）：
-        连接参数没变的服务照旧可用，保存的正是测过的草稿时也立即可用；删掉的服务与改掉的旧参数要重新测试，
-        删掉的服务连同授权一起丢掉。
+    def create(self, config: MCPServerConfig) -> list[MCPServerEntry]:
+        """在本作用域新增一个服务，返回更新后的可见服务。
 
         异常:
-            MCPConfigurationError: 服务名称重复。
+            MCPConfigurationError: 已有同名服务，或配置文件本身无效（文件写坏时一律拒绝写入）。
         """
 
-        configuration = MCPConfiguration.of(servers)
+        return self._change("created", config.name, lambda servers: [*servers, config])
+
+    def replace(self, name: str, config: MCPServerConfig) -> list[MCPServerEntry]:
+        """用编辑框里的一份定义替换服务 ``name``（``config.name`` 不同即改名），其余服务不动。
+
+        异常:
+            KeyError: 本作用域没有这个服务（可能已在外部被删）。
+            MCPConfigurationError: 改名撞上已有服务，或配置文件本身无效。
+        """
+
+        def change(servers: list[MCPServerConfig]) -> list[MCPServerConfig]:
+            if not any(server.name == name for server in servers):
+                raise KeyError(name)
+            return [config if server.name == name else server for server in servers]
+
+        return self._change("replaced", name, change)
+
+    def set_enabled(self, name: str, enabled: bool) -> list[MCPServerEntry]:
+        """只改服务 ``name`` 的启用开关，定义的其余部分以文件里的为准。
+
+        异常:
+            KeyError: 本作用域没有这个服务。
+        """
+
+        def change(servers: list[MCPServerConfig]) -> list[MCPServerConfig]:
+            if not any(server.name == name for server in servers):
+                raise KeyError(name)
+            return [
+                server.model_copy(update={"enabled": enabled}) if server.name == name else server
+                for server in servers
+            ]
+
+        return self._change("enabled" if enabled else "disabled", name, change)
+
+    def delete(self, name: str) -> list[MCPServerEntry]:
+        """删除服务 ``name``（连同它的本机测试记录与授权）；已经不在时什么也不做。"""
+
+        return self._change(
+            "deleted", name, lambda servers: [server for server in servers if server.name != name]
+        )
+
+    def _change(
+        self,
+        action: str,
+        name: str,
+        change: Callable[[list[MCPServerConfig]], list[MCPServerConfig]],
+    ) -> list[MCPServerEntry]:
+        """在文件锁内读出最新的服务列表、应用这一项改动、整份校验后写回，返回更新后的可见服务。
+
+        为什么按服务改而不接收整表：配置文件可以在外部改（手改、git、Agent 写文件），配置页手上的列表随时
+        可能过期；拿整表覆盖会把别人改过的服务悄悄改回去，本机记录还会按旧列表裁掉被漏掉的服务。按服务改时
+        只有目标服务按界面的意图变化，其余以文件为准。
+
+        本机记录随之裁到「仍存在的服务的当前配置」（``MCPMachineState.keep_only``）：连接参数没变的服务照旧
+        可用，保存的正是测过的草稿时也立即可用；删掉的服务与改掉的旧参数要重新测试，删掉的服务连同授权一起丢掉。
+        """
+
         with file_store.locked(self.scope.mcp_servers_file):
+            current = MCPConfiguration.read(self.scope).servers
+            configuration = MCPConfiguration.of(change(list(current)))
             file_store.write_json(
                 self.scope.mcp_servers_file,
                 configuration,
                 root=self.scope.cosir_dir,
             )
             MCPMachineState.keep_only(
-                self.scope, [ScopedMCPServer(self.scope, server) for server in servers]
+                self.scope,
+                [ScopedMCPServer(self.scope, server) for server in configuration.servers],
             )
         log.info(
-            "configuration_mcp_servers_written",
+            "configuration_mcp_server_written",
             extra={
                 "msg": "MCP 服务配置已保存",
-                "data": {"scope": self.scope.key, "server_count": len(servers)},
+                "data": {"scope": self.scope.key, "server_name": name, "action": action},
             },
         )
         return self.visible()

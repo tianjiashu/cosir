@@ -2,6 +2,7 @@ import { createStore } from "zustand/vanilla";
 
 import type { ConfigurationScope } from "@/lib/api/configuration-scope";
 import type { AgentConfiguration, AgentConfigurationInput } from "@/lib/api/configuration";
+import { saveResolvingConflicts } from "@/lib/configuration/revision-conflict";
 import { UserFacingError } from "@/lib/errors/user-facing-error";
 import { modelSettingsFromForm, modelSettingsToForm, type ModelSettingsForm } from "@/lib/agent-editor/model-settings-form";
 
@@ -11,11 +12,14 @@ type AgentEditorForm = Omit<AgentConfigurationInput, "max_steps" | "model_settin
   model_settings: ModelSettingsForm;
 };
 
-/** 本次保存的目标：`agentId` 为 null 时 create，否则 update 这份已保存的配置。 */
+/** 本次保存的目标：`agentId` 为 null 时 create，否则以 `baseRevision` 为前置条件 update 这份已保存的配置。 */
 export type PersistAgent = (
   input: AgentConfigurationInput,
-  target: { scope: ConfigurationScope; agentId: string | null },
+  target: { scope: ConfigurationScope; agentId: string | null; baseRevision: string | null },
 ) => Promise<AgentConfiguration>;
+
+/** 冲突后选「载入外部版本」时重读这份配置的最新内容。 */
+export type LoadLatestAgent = (target: { scope: ConfigurationScope; agentId: string }) => Promise<AgentConfiguration>;
 
 type AgentEditorState = {
   form: AgentEditorForm;
@@ -25,6 +29,8 @@ type AgentEditorState = {
   baseline: AgentEditorForm | null;
   /** 已保存配置的 Agent ID；非 null 后再保存走 update。 */
   savedAgentId: string | null;
+  /** 基线对应的文件版本：update 的前置条件，只随保存成功与载入外部版本推进。 */
+  revision: string | null;
   dirty: boolean;
   /** 保存请求进行中：挡住重复保存与范围修改。放在会话而非视图里，面板卸载重挂也不会丢。 */
   saving: boolean;
@@ -56,15 +62,18 @@ function inputFromForm(form: AgentEditorForm): AgentConfigurationInput {
  * 一次子 Agent 配置编辑的唯一 working copy owner：
  * 配置页持有到离开编辑器，工作台草稿标签持有到关闭标签。
  *
- * - `initial` 为已有配置时 `saved` 为 true：以它为基线，首存即 update。
+ * - `initial` 为已有配置时 `saved` 带它的文件版本：以它为基线，首存即 update，版本作为前置条件。
  * - 工具生成的草稿（`saved: false` 且有 `initial`）从一开始就是未保存内容；空白新建在真正修改前不算未保存。
  * - 保存应答只推进提交时那份快照的基线，期间产生的新编辑保留并继续算作未保存。
  * - 同一时刻只允许一次保存，进行中的重复调用直接返回 false；身份（Agent ID 与范围）自首存开始锁定，其余字段保存期间照常可改。
- * - 校验失败或持久化失败直接抛出，由调用方的 mutation 呈现；会话除 `saving` 外不变。
+ * - 文件在编辑期间被别处改过（配置页与工作台草稿写同一份文件，也可能被手改）时，由用户选覆盖或载入外部版本；
+ *   载入会以最新配置重置表单与基线。
+ * - 校验失败、取消冲突或持久化失败直接抛出，由调用方的 mutation 呈现；会话除 `saving` 外不变。
  */
 export function createAgentEditorSession(options: {
   initial: Partial<AgentConfigurationInput> | null;
-  saved: boolean;
+  /** 已保存过的配置给出它的文件版本；工具生成的草稿与空白新建为 false。 */
+  saved: false | { revision: string | null };
   scope: ConfigurationScope;
 }) {
   const form = editorForm(options.initial);
@@ -78,6 +87,7 @@ export function createAgentEditorSession(options: {
     scope: options.scope,
     baseline,
     savedAgentId: options.saved ? form.agent_id : null,
+    revision: options.saved ? options.saved.revision : null,
     dirty: dirtyAgainst(form, options.scope, baseline),
     saving: false,
   }));
@@ -100,18 +110,32 @@ export function createAgentEditorSession(options: {
       if (state.saving || state.savedAgentId !== null) return;
       store.setState({ scope, dirty: dirtyAgainst(state.form, scope, state.baseline) });
     },
-    /** 返回 false 表示已有保存在进行、本次未发起。 */
-    async save(persist: PersistAgent): Promise<boolean> {
+    /** 返回 false 表示没有写入：已有保存在进行、本次未发起，或冲突后选了载入外部版本。 */
+    async save(persist: PersistAgent, loadLatest: LoadLatestAgent): Promise<boolean> {
       const before = store.getState();
       if (before.saving) return false;
       const submitted = before.form;
       const input = inputFromForm(submitted);
+      const { scope, savedAgentId: agentId } = before;
       store.setState({ saving: true });
       try {
-        const saved = await persist(input, { scope: before.scope, agentId: before.savedAgentId });
+        const result = await saveResolvingConflicts(
+          `子 Agent「${submitted.agent_id}」`,
+          before.revision,
+          (baseRevision) => persist(input, { scope, agentId, baseRevision }),
+        );
+        if (result === "reload") {
+          // 只有 update 会冲突，此时 agentId 必已存在。
+          const latest = await loadLatest({ scope, agentId: agentId! });
+          const latestForm = editorForm(latest);
+          store.setState({ form: latestForm, baseline: latestForm, revision: latest.revision, dirty: false });
+          return false;
+        }
+        const { saved } = result;
         store.setState((current) => ({
           baseline: submitted,
           savedAgentId: saved.agent_id,
+          revision: saved.revision,
           dirty: JSON.stringify(current.form) !== JSON.stringify(submitted),
         }));
         return true;

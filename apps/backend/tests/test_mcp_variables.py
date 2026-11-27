@@ -136,8 +136,8 @@ def test_configuration_page_shows_variable_status_and_workspace_literals(
         "env": {"A": "${SET_TOKEN}", "B": "${UNSET_TOKEN}", "C": "${OPTIONAL:-1}", "MODE": "local"},
     }
 
-    workspace = client.put("/workspaces/7/configuration/mcp-servers", json={"servers": [server]})
-    system = client.put("/configuration/mcp-servers", json={"servers": [{**server, "name": "sys"}]})
+    workspace = client.post("/workspaces/7/configuration/mcp-servers", json=server)
+    system = client.post("/configuration/mcp-servers", json={**server, "name": "sys"})
 
     assert workspace.status_code == 200, workspace.text
     [listed] = [item for item in workspace.json()["servers"] if item["scope"] == "workspace"]

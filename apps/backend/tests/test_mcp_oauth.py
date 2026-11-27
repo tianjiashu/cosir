@@ -279,7 +279,7 @@ def test_saving_drops_test_records_and_credentials_of_removed_servers_together()
     MCPMachineState.record_pass(server, MCPServerCatalog())
     MCPMachineState.update_oauth(server, "http://127.0.0.1:1/mcp", tokens={"access_token": "x"})
 
-    MCPConfigurationService().update([])
+    MCPConfigurationService().delete("remote")
 
     assert MCPMachineState.read().scopes == {}
 
@@ -318,7 +318,7 @@ def test_testing_a_draft_with_another_url_keeps_the_saved_servers_sign_in() -> N
     async def scenario() -> None:
         async with _protected_server() as (auth, base):
             saved = _server(base)
-            MCPConfigurationService().update([saved.config])
+            MCPConfigurationService().create(saved.config)
             assert (await _sign_in(saved)).success is True
             assert _page_status() == "available"
 
@@ -340,7 +340,7 @@ def test_passing_test_clears_a_stale_sign_in_required_mark() -> None:
     async def scenario() -> None:
         async with _protected_server() as (auth, base):
             server = _server(base)
-            MCPConfigurationService().update([server.config])
+            MCPConfigurationService().create(server.config)
             with pytest.raises(BaseException) as error:
                 await _call_through_pool(server)  # Agent 调用发现没有令牌，打上「需要重新登录」
             assert MCPFailure.from_exception(error.value, server).kind == MCPFailureKind.AUTHORIZATION_REQUIRED
@@ -349,7 +349,7 @@ def test_passing_test_clears_a_stale_sign_in_required_mark() -> None:
             # 用户改为在请求头里写静态 token（地址不变），保存并测试，测试通过。
             auth.valid_tokens.add("static-token")
             fixed = server.config.model_copy(update={"headers": {"Authorization": "Bearer static-token"}})
-            MCPConfigurationService().update([fixed])
+            MCPConfigurationService().replace("remote", fixed)
             result = await MCPConfigurationService().test(fixed)
             assert result.success is True
 
@@ -365,7 +365,7 @@ def test_signing_in_before_saving_keeps_the_sign_in_after_saving() -> None:
             draft = _server(base)
             assert (await _sign_in(draft)).success is True
 
-            MCPConfigurationService().update([draft.config])
+            MCPConfigurationService().create(draft.config)
 
             assert _page_status() == "available"
             assert json.loads(await _call_through_pool(draft)) == {"echo": "hi"}
@@ -381,7 +381,7 @@ def test_saving_keeps_only_the_current_url_sign_in() -> None:
     MCPMachineState.update_oauth(saved, "http://127.0.0.1:1/mcp", tokens={"access_token": "kept"})
     MCPMachineState.update_oauth(saved, "http://127.0.0.1:1/other", needs_authorization=True)
 
-    MCPConfigurationService().update([saved.config])
+    MCPConfigurationService().create(saved.config)
 
     assert set(MCPMachineState.read().server(saved).oauth) == {"http://127.0.0.1:1/mcp"}
 

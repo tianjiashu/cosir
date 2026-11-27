@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { InfoIcon, NetworkIcon, PlusIcon, WrenchIcon } from "lucide-react";
 
@@ -8,7 +8,14 @@ import { MCPServerRow } from "@/components/configuration/mcp/mcp-server-row";
 import { useMCPServerTests } from "@/components/configuration/mcp/use-mcp-server-tests";
 import { EmptyState, ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { saveMCPServers, type MCPServer, type MCPServerConfiguration } from "@/lib/api/extensions";
+import {
+  createMCPServer,
+  deleteMCPServer,
+  replaceMCPServer,
+  setMCPServerEnabled,
+  type MCPServer,
+  type MCPServerConfiguration,
+} from "@/lib/api/extensions";
 import { scopeOf } from "@/lib/api/configuration-scope";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
 import { notify } from "@/lib/notify";
@@ -35,13 +42,14 @@ export function MCPConfigurationPanel({ workspaceId }: { workspaceId: number | n
 
   const serversQuery = useQuery(mcpServersQueryOptions(workspaceId));
   const allServers = serversQuery.data?.servers ?? [];
-  // 本作用域自己的服务：整表保存只能提交它们，继承来的系统级服务不能写进工作区文件。
+  // 本作用域自己的服务：只有它们能在这里编辑、启停与删除，继承来的系统级服务只读。
   const ownServers = allServers.filter((server) => server.scope === scope);
   const inheritedServers = allServers.filter((server) => server.scope !== scope);
 
-  // 整表 PUT：保存、启停、删除都提交完整列表，因此同一时刻只允许一次写入（按钮在忙时禁用），避免基于旧列表互相覆盖。
+  // 写入按服务寻址、只带这一项的意图（后端基于最新文件合并，页面列表过期也不会覆盖别的服务）。每次写入返回完整
+  // 列表直接落进缓存，所以同一时刻只发一次（按钮在忙时禁用）：并发时响应先后不定，旧列表会盖住新列表。
   const saveMutation = useMutation({
-    mutationFn: (next: MCPServerConfiguration[]) => saveMCPServers(workspaceId, next),
+    mutationFn: (write: () => Promise<{ servers: MCPServer[] }>) => write(),
     onSuccess: (saved) => {
       queryClient.setQueryData(queryKeys.mcpServers(workspaceId), saved);
       if (workspaceId === null) void invalidateMcpServers(queryClient, null);
@@ -64,6 +72,9 @@ export function MCPConfigurationPanel({ workspaceId }: { workspaceId: number | n
     testServers(testable.filter((server) => using.has(server.name)));
   }
 
+  // 测试控制器常驻（离开页面不丢进行中的授权）；只有编辑框草稿那一路随面板卸载结束——草稿本身随之消失。
+  useEffect(() => () => tests.clear(DRAFT_KEY), [tests]);
+
   // 打开和关闭编辑框都丢掉草稿的测试进展：上一份草稿的结论不带进新草稿，进行中的授权随之结束。
   function openEditor(server: MCPServer | null) {
     tests.clear(DRAFT_KEY);
@@ -75,11 +86,12 @@ export function MCPConfigurationPanel({ workspaceId }: { workspaceId: number | n
     setEditing(undefined);
   }
 
-  /** 编辑框保存：替换同名或追加，提交整表；失败抛给编辑框显示。 */
+  /** 编辑框保存：编辑已有服务即替换它（可改名），否则新增；失败抛给编辑框显示。 */
   async function saveServer(config: MCPServerConfiguration) {
     const editingName = editing?.server?.name;
-    const next = editingName ? ownServers.map((item) => (item.name === editingName ? config : item)) : [...ownServers, config];
-    await saveMutation.mutateAsync(next);
+    await saveMutation.mutateAsync(() => (editingName
+      ? replaceMCPServer(workspaceId, editingName, config)
+      : createMCPServer(workspaceId, config)));
     closeEditor();
     notify.success("MCP 配置已保存");
     // 保存即测：不交互的测试不会弹出任何东西，用户马上知道 Agent 能不能用。
@@ -87,21 +99,19 @@ export function MCPConfigurationPanel({ workspaceId }: { workspaceId: number | n
   }
 
   function toggleServer(server: MCPServer) {
-    const next = ownServers.map((item) => (item.name === server.name ? { ...item, enabled: !item.enabled } : item));
-    saveMutation.mutate(next, {
+    saveMutation.mutate(() => setMCPServerEnabled(workspaceId, server.name, !server.enabled), {
       onSuccess: () => notify.success(`已${server.enabled ? "停用" : "启用"} ${server.name}`),
       onError: (error) => notify.error(`${server.enabled ? "停用" : "启用"} ${server.name} 失败`, { error, fallback: "保存 MCP 配置失败" }),
     });
   }
 
   async function deleteServer(server: MCPServer) {
-    const next = ownServers.filter((item) => item.name !== server.name);
     const deleted = await confirmDelete({
       target: `MCP 服务「${server.name}」`,
       consequence: server.overrides
         ? "删除后本工作区改用系统级同名服务。"
         : "删除后 Agent 将无法再调用它提供的工具。",
-      action: () => saveMutation.mutateAsync(next),
+      action: () => saveMutation.mutateAsync(() => deleteMCPServer(workspaceId, server.name)),
       failureFallback: "删除 MCP 服务失败",
     });
     if (deleted) notify.success(`已删除 MCP 服务 ${server.name}`);

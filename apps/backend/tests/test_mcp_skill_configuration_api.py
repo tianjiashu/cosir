@@ -90,11 +90,10 @@ def _server(name: str = "local-search", **overrides) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_mcp_configuration_can_be_read_and_replaced(client, system_cosir) -> None:
+def test_mcp_server_can_be_created_and_read(client, system_cosir) -> None:
     assert client.get("/configuration/mcp-servers").json() == {"servers": []}
-    response = client.put(
-        "/configuration/mcp-servers",
-        json={"servers": [_server(args=["server.py"], env={"MODE": "local"})]},
+    response = client.post(
+        "/configuration/mcp-servers", json=_server(args=["server.py"], env={"MODE": "local"})
     )
 
     assert response.status_code == 200
@@ -104,9 +103,47 @@ def test_mcp_configuration_can_be_read_and_replaced(client, system_cosir) -> Non
     saved = json.loads((system_cosir / "config" / "mcp_servers.json").read_text(encoding="utf-8"))
     assert set(saved) == {"servers"}
 
-    conflict = client.put("/configuration/mcp-servers", json={"servers": [_server(), _server()]})
+    conflict = client.post("/configuration/mcp-servers", json=_server())
     assert conflict.status_code == 400
     assert conflict.json()["detail"]["message"] == "MCP 服务名称必须唯一"
+
+
+def test_mcp_writes_change_only_the_target_server_and_keep_external_edits(
+    client, system_cosir, tools_ok
+) -> None:
+    """配置页手上的列表可能已过期：按服务的写入只动目标服务，外部改过、加上的服务原样保留，测试记录也保留。"""
+
+    client.post("/configuration/mcp-servers", json=_server("a"))
+    client.post("/configuration/mcp-servers", json=_server("b"))
+    client.post("/configuration/mcp-servers/test", json=_server("b"))
+    path = system_cosir / "config" / "mcp_servers.json"
+    edited = json.loads(path.read_text(encoding="utf-8"))
+    edited["servers"].append(_server("x", args=["added-by-git.py"]))
+    path.write_text(json.dumps(edited), encoding="utf-8")
+
+    toggled = client.patch("/configuration/mcp-servers/a", json={"enabled": False})
+
+    assert toggled.status_code == 200
+    saved = json.loads(path.read_text(encoding="utf-8"))["servers"]
+    assert [(item["name"], item["enabled"]) for item in saved] == [("a", False), ("b", True), ("x", True)]
+    assert saved[2]["args"] == ["added-by-git.py"]
+    statuses = {item["name"]: item["status"] for item in toggled.json()["servers"]}
+    assert statuses["b"] == "available"
+
+
+def test_mcp_replace_renames_and_reports_missing_or_taken_names(client, system_cosir) -> None:
+    client.post("/configuration/mcp-servers", json=_server("a"))
+    client.post("/configuration/mcp-servers", json=_server("b"))
+
+    renamed = client.put("/configuration/mcp-servers/a", json=_server("c"))
+    assert [item["name"] for item in renamed.json()["servers"]] == ["c", "b"]
+
+    taken = client.put("/configuration/mcp-servers/c", json=_server("b"))
+    assert (taken.status_code, taken.json()["detail"]["message"]) == (400, "MCP 服务名称必须唯一")
+    assert client.put("/configuration/mcp-servers/gone", json=_server("gone")).status_code == 404
+    assert client.patch("/configuration/mcp-servers/gone", json={"enabled": True}).status_code == 404
+    # 删除已不在的服务（例如刚在外部删掉）不算错误。
+    assert client.delete("/configuration/mcp-servers/gone").status_code == 200
 
 
 def test_hand_edited_duplicate_names_report_the_invariant(client, system_cosir) -> None:
@@ -138,11 +175,11 @@ def test_mcp_draft_test_counts_once_the_same_config_is_saved(client, tools_ok) -
         "needs_sign_in": False,
         "agent_available": False,
     }
-    saved = client.put("/configuration/mcp-servers", json={"servers": [config]})
+    saved = client.post("/configuration/mcp-servers", json=config)
     assert saved.json()["servers"][0]["status"] == "available"
 
     edited = client.put(
-        "/configuration/mcp-servers", json={"servers": [{**config, "args": ["other.py"]}]}
+        "/configuration/mcp-servers/local-search", json={**config, "args": ["other.py"]}
     )
     assert edited.json()["servers"][0]["status"] == "untested"
 
@@ -151,7 +188,7 @@ def test_testing_an_edited_draft_does_not_revoke_the_saved_server(client, tools_
     """编辑已测试的服务、测了新草稿后取消：已保存的服务仍然可用（回归：草稿曾顶掉已保存记录）。"""
 
     config = _server()
-    client.put("/configuration/mcp-servers", json={"servers": [config]})
+    client.post("/configuration/mcp-servers", json=config)
     client.post("/configuration/mcp-servers/test", json=config)
 
     draft = client.post("/configuration/mcp-servers/test", json={**config, "args": ["draft.py"]})
@@ -162,11 +199,11 @@ def test_testing_an_edited_draft_does_not_revoke_the_saved_server(client, tools_
 
 def test_deleted_server_must_be_retested_when_added_back(client, tools_ok) -> None:
     config = _server()
-    client.put("/configuration/mcp-servers", json={"servers": [config]})
+    client.post("/configuration/mcp-servers", json=config)
     client.post("/configuration/mcp-servers/test", json=config)
 
-    client.put("/configuration/mcp-servers", json={"servers": []})
-    readded = client.put("/configuration/mcp-servers", json={"servers": [config]})
+    client.delete("/configuration/mcp-servers/local-search")
+    readded = client.post("/configuration/mcp-servers", json=config)
 
     assert readded.json()["servers"][0]["status"] == "untested"
 
@@ -186,7 +223,7 @@ def test_successful_test_with_a_broken_saved_file_is_not_a_server_error(
 
 def test_mcp_saved_server_test_failure_revokes_availability(client, tools_ok) -> None:
     config = _server()
-    client.put("/configuration/mcp-servers", json={"servers": [config]})
+    client.post("/configuration/mcp-servers", json=config)
 
     assert client.post("/configuration/mcp-servers/test", json=config).json()["agent_available"]
     assert client.get("/configuration/mcp-servers").json()["servers"][0]["status"] == "available"
@@ -201,7 +238,7 @@ def test_mcp_saved_server_test_failure_revokes_availability(client, tools_ok) ->
 # B7 潜在缺陷：网络抖一下就撤销测试记录，Agent 失去这个服务、用户还得重测。
 def test_a_transient_test_failure_keeps_the_server_available(client, monkeypatch) -> None:
     config = _server()
-    client.put("/configuration/mcp-servers", json={"servers": [config]})
+    client.post("/configuration/mcp-servers", json=config)
 
     async def reachable(server, interaction=None):
         return MCPServerCatalog(tools=_SEARCH_TOOLS)
@@ -228,7 +265,8 @@ def test_an_invalid_expanded_url_only_marks_that_server(client, monkeypatch) -> 
         "enabled": True,
     }
 
-    saved = client.put("/configuration/mcp-servers", json={"servers": [_server(), broken]})
+    client.post("/configuration/mcp-servers", json=_server())
+    saved = client.post("/configuration/mcp-servers", json=broken)
     listed = client.get("/configuration/mcp-servers")
 
     assert (saved.status_code, listed.status_code) == (200, 200)
@@ -269,14 +307,11 @@ def test_invalid_utf8_mcp_configuration_is_a_client_error(client, system_cosir) 
 def test_workspace_mcp_lists_inherited_servers_and_writes_only_its_own_file(
     client, workspace, system_cosir, tools_ok
 ) -> None:
-    client.put(
-        "/configuration/mcp-servers",
-        json={"servers": [_server("shared"), _server("system-only")]},
-    )
+    client.post("/configuration/mcp-servers", json=_server("shared"))
+    client.post("/configuration/mcp-servers", json=_server("system-only"))
 
-    saved = client.put(
-        "/workspaces/7/configuration/mcp-servers",
-        json={"servers": [_server("shared", command="node")]},
+    saved = client.post(
+        "/workspaces/7/configuration/mcp-servers", json=_server("shared", command="node")
     )
 
     assert saved.status_code == 200

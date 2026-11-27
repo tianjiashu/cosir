@@ -7,11 +7,13 @@ FastAPI/Pydantic 把模块当作类型注解从而报错）。
 """
 
 from app.api.schemas.request.AgentConfigurationRequest import AgentConfigurationRequest
+from app.api.schemas.request.ConfigurationDocumentUpdateRequest import (
+    ConfigurationDocumentUpdateRequest,
+)
 from app.api.schemas.request.CreateWorkspaceRequest import CreateWorkspaceRequest
 from app.api.schemas.request.EnvironmentChangeRequest import EnvironmentChangeRequest
 from app.api.schemas.request.EnvironmentUpdateRequest import EnvironmentUpdateRequest
 from app.api.schemas.request.ForkSessionRequest import ForkSessionRequest
-from app.api.schemas.request.GlobalInstructionUpdateRequest import GlobalInstructionUpdateRequest
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
 from app.api.schemas.response.DeleteSessionResponse import DeleteSessionResponse
 from app.api.schemas.response.DeleteWorkspaceResponse import DeleteWorkspaceResponse
@@ -32,6 +34,7 @@ from app.api.schemas.response.WorkspaceResponse import WorkspaceResponse
 __all__ = [
     "AgentConfigurationRequest",
     "AgentConfigurationResponse",
+    "ConfigurationDocumentUpdateRequest",
     "CreateWorkspaceRequest",
     "DeleteSessionResponse",
     "DeleteWorkspaceResponse",
@@ -43,7 +46,6 @@ __all__ = [
     "EnvironmentUpdateRequest",
     "ForkSessionRequest",
     "GlobalInstructionResponse",
-    "GlobalInstructionUpdateRequest",
     "HealthResponse",
     "SessionObservationResponse",
     "SessionResponse",

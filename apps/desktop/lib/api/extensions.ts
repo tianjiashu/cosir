@@ -177,12 +177,31 @@ function mcpServerConfiguration(server: MCPServerConfiguration): MCPServerConfig
   };
 }
 
-/** 整表替换本作用域自己的服务；调用方只传本作用域的条目，不能混入继承来的系统级服务。 */
-export function saveMCPServers(workspaceId: number | null, servers: MCPServerConfiguration[]): Promise<{ servers: MCPServer[] }> {
-  return requestJson(
-    configurationApiPath(workspaceId, "/mcp-servers"),
-    jsonRequestInit({ servers: servers.map(mcpServerConfiguration) }, { method: "PUT" }),
-  );
+/**
+ * 服务的写操作按服务寻址、只带这一项的意图，后端在文件锁内基于最新文件合并：配置文件可在外部改，
+ * 页面手上的列表可能已过期，所以不提交整表。都返回写入后本作用域看得到的完整列表。
+ */
+type MCPServerList = { servers: MCPServer[] };
+const mcpServerPath = (workspaceId: number | null, name: string) =>
+  configurationApiPath(workspaceId, `/mcp-servers/${encodeURIComponent(name)}`);
+
+export function createMCPServer(workspaceId: number | null, server: MCPServerConfiguration): Promise<MCPServerList> {
+  return requestJson(configurationApiPath(workspaceId, "/mcp-servers"), jsonRequestInit(mcpServerConfiguration(server), { method: "POST" }));
+}
+
+/** 用编辑框里的定义替换服务 `name`（`server.name` 不同即改名）；服务已不在时 404。 */
+export function replaceMCPServer(workspaceId: number | null, name: string, server: MCPServerConfiguration): Promise<MCPServerList> {
+  return requestJson(mcpServerPath(workspaceId, name), jsonRequestInit(mcpServerConfiguration(server), { method: "PUT" }));
+}
+
+/** 只改启用开关，定义的其余部分以配置文件为准。 */
+export function setMCPServerEnabled(workspaceId: number | null, name: string, enabled: boolean): Promise<MCPServerList> {
+  return requestJson(mcpServerPath(workspaceId, name), jsonRequestInit({ enabled }, { method: "PATCH" }));
+}
+
+/** 删除服务（连同本机测试记录与授权）；已不在时照常返回列表。 */
+export function deleteMCPServer(workspaceId: number | null, name: string): Promise<MCPServerList> {
+  return requestJson(mcpServerPath(workspaceId, name), { method: "DELETE" });
 }
 
 /** 连接测试：从不打开浏览器，需要授权时结果的 `failure_kind` 为 `authorization_required`。 */

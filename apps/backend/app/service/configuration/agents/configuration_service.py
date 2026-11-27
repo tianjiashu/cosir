@@ -76,14 +76,23 @@ class AgentConfigurationService:
         self.directory = self.registry.source.directory(self.scope)
 
     def list_entries(self) -> list[AgentConfigurationEntry]:
-        """列出当前作用域的本地子 Agent，不直接扫描磁盘文件。"""
+        """列出当前作用域的本地子 Agent：内容来自注册表，版本来自磁盘文件。
 
+        版本必须先于注册表读取：注册表按文件签名重读，先取版本保证内容不比版本旧。反过来时，两次读取
+        之间的外部写入会让版本比界面上的内容新，保存就会盖过用户没看到的那次改动；现在这个顺序下
+        最坏是一次多余的冲突提示。
+        """
+
+        revisions = {
+            path.stem: file_store.file_revision(path, root=self.directory)
+            for path in sorted(self.directory.glob("*.json"))
+        }
         profiles = (
             self.registry.list_system_sub_agents()
             if self.workspace_root is None
             else self.registry.list_workspace_sub_agents(self.workspace_root)
         )
-        return [self._entry(profile) for profile in profiles]
+        return [self._entry(profile, revisions.get(profile.agent_id)) for profile in profiles]
 
     def create(self, document: AgentConfiguration) -> AgentConfigurationEntry:
         """校验并创建当前作用域的 Agent JSON；注册表按文件签名在下一次读取时看到它。
@@ -100,23 +109,44 @@ class AgentConfigurationService:
             profile = self._profile_from_document(document, target)
             if self.registry.resolve(self.scope, document.agent_id) is not None:
                 raise AgentConfigurationError(f"Agent 已注册，不允许重复创建: {document.agent_id}")
-            file_store.write_json(target, document.to_json_document(), root=self.directory)
-        return self._saved(profile, target)
+            # 「文件不存在」就是新建的前置条件；同名文件已存在在上面以 FileExistsError 拒绝。
+            revision = file_store.write_text_if_revision(
+                target,
+                file_store.json_text(document.to_json_document()),
+                root=self.directory,
+                base_revision=None,
+            )
+        return self._saved(profile, target, revision)
 
-    def update(self, agent_id: str, document: AgentConfiguration) -> AgentConfigurationEntry:
-        """无损更新当前作用域的 JSON 文档。"""
+    def update(
+        self, agent_id: str, document: AgentConfiguration, *, base_revision: str | None
+    ) -> AgentConfigurationEntry:
+        """以 ``base_revision`` 为前置条件整份替换当前作用域的 JSON 文档。
+
+        配置页编辑器与工作台草稿写同一份文件，外部也可能手改或经 git 改动；基准对不上就拒绝，
+        由用户选覆盖还是载入。
+
+        异常:
+            KeyError: 当前作用域没有这个本地子 Agent。
+            ConfigurationRevisionConflict: 文件在读取之后被别处改过。
+        """
 
         self._validate_agent_id(agent_id)
         if document.agent_id != agent_id:
             raise AgentConfigurationError("Agent ID 不可变，请使用新建后删除完成迁移")
         target = self._path_for(agent_id)
         profile = self._profile_from_document(document, target)
-        existing = self.registry.resolve_local(self.scope, agent_id)
-        if existing is None or existing.agent_type is not AgentProfileType.CHILD:
-            raise KeyError(agent_id)
         with file_store.locked(target):
-            file_store.write_json(target, document.to_json_document(), root=self.directory)
-        return self._saved(profile, target)
+            existing = self.registry.resolve_local(self.scope, agent_id)
+            if existing is None or existing.agent_type is not AgentProfileType.CHILD:
+                raise KeyError(agent_id)
+            revision = file_store.write_text_if_revision(
+                target,
+                file_store.json_text(document.to_json_document()),
+                root=self.directory,
+                base_revision=base_revision,
+            )
+        return self._saved(profile, target, revision)
 
     def delete(self, agent_id: str) -> None:
         """删除当前作用域的 JSON Agent。"""
@@ -140,7 +170,7 @@ class AgentConfigurationService:
             },
         )
 
-    def _saved(self, profile: AgentProfile, target: Path) -> AgentConfigurationEntry:
+    def _saved(self, profile: AgentProfile, target: Path, revision: str) -> AgentConfigurationEntry:
         """写入成功后的收尾：记日志并返回带文件位置的条目（新建与更新共用）。"""
 
         log.info(
@@ -150,19 +180,20 @@ class AgentConfigurationService:
                 "data": {"agent_id": profile.agent_id, "scope": str(self.scope)},
             },
         )
-        return self._entry(profile, path=target)
-
-    def _entry(
-        self, profile: AgentProfile, *, path: Path | None = None
-    ) -> AgentConfigurationEntry:
-        """注册表 profile 加上它的文件位置。"""
-
-        if path is None:
-            candidate = self._path_for(profile.agent_id)
-            path = candidate if candidate.exists() else None
         return AgentConfigurationEntry(
             configuration=AgentConfiguration.from_profile(profile),
-            path=path,
+            path=target,
+            revision=revision,
+            builtin=self._is_builtin(profile.agent_id),
+        )
+
+    def _entry(self, profile: AgentProfile, revision: str | None) -> AgentConfigurationEntry:
+        """注册表 profile 加上它的文件位置与内容版本（没有文件时二者都为 None）。"""
+
+        return AgentConfigurationEntry(
+            configuration=AgentConfiguration.from_profile(profile),
+            path=self._path_for(profile.agent_id) if revision is not None else None,
+            revision=revision,
             builtin=self._is_builtin(profile.agent_id),
         )
 

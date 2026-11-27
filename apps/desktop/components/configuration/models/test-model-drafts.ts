@@ -12,10 +12,18 @@ export type ModelTestState =
 
 type DraftConnection = Pick<ModelConnectionFields, "base_url" | "api_key">;
 
-/** 按「连接 + 模型 + 它的能力」做一次真实探活；单个模型的编辑器直接用它把关「测试通过才能保存」。 */
-export async function testModel(connection: DraftConnection, model: ModelConfigFields): Promise<Extract<ModelTestState, { kind: "passed" | "failed" }>> {
+/**
+ * 按「连接 + 模型 + 它的能力」做一次真实探活；单个模型的编辑器直接用它把关「测试通过才能保存」。
+ *
+ * 探活不落库，`signal` 中止时只是不再等结果（返回失败）；调用方在写入前自己检查 `signal.aborted`。
+ */
+export async function testModel(
+  connection: DraftConnection,
+  model: ModelConfigFields,
+  signal?: AbortSignal,
+): Promise<Extract<ModelTestState, { kind: "passed" | "failed" }>> {
   try {
-    const result = await testDraftModelConfig({ ...connection, ...model });
+    const result = await testDraftModelConfig({ ...connection, ...model }, { signal });
     return result.success
       ? { kind: "passed", elapsedMs: result.elapsed_ms }
       : { kind: "failed", message: result.error_message };
@@ -29,19 +37,21 @@ export async function testModel(connection: DraftConnection, model: ModelConfigF
  *
  * 每个模型的开始与结果经 `onState` 立即回报，界面逐行显示进度，不等整批结束；单个失败不影响其余。
  * 返回通过测试的模型（保持输入顺序），调用方只保存这些——「测试通过才能保存」按模型把关。
+ * `signal` 中止后不再开始新的探活。
  */
 export async function testModelDrafts(
   connection: DraftConnection,
   models: readonly ModelConfigFields[],
   onState: (modelName: string, state: ModelTestState) => void,
+  signal?: AbortSignal,
 ): Promise<ModelConfigFields[]> {
   const passed = new Set<string>();
   let cursor = 0;
   const worker = async () => {
-    while (cursor < models.length) {
+    while (cursor < models.length && !signal?.aborted) {
       const model = models[cursor++]!;
       onState(model.model_name, { kind: "testing" });
-      const state = await testModel(connection, model);
+      const state = await testModel(connection, model, signal);
       if (state.kind === "passed") passed.add(model.model_name);
       onState(model.model_name, state);
     }

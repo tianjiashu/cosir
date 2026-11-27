@@ -42,11 +42,12 @@ export const mcpServersQueryOptions = (workspaceId: number | null) => queryOptio
 });
 
 /**
- * 模型配置文件可以在外部编辑器里手改：只对这一个查询开启窗口聚焦重拉，切回应用即看到改动
- * （各编辑卡的未保存内容是组件本地状态，不受重拉影响）。
+ * 模型配置文件可以在外部编辑器里手改：只对这一个查询开启窗口聚焦重拉，切回应用即看到改动，且不受缓存新鲜期
+ * 限制（`"always"`：改完文件马上切回也要读到）。编辑卡只记用户改过的字段（`useFieldEdits`），没碰过的字段随重拉
+ * 更新、保存时不提交，所以重拉不会打断编辑，也不会把外部改动写回去。
  */
 export const modelConnectionsQueryOptions = () => queryOptions({
   queryKey: queryKeys.modelConnections(),
   queryFn: ({ signal }) => getModelConnections({ signal }),
-  refetchOnWindowFocus: true,
+  refetchOnWindowFocus: "always",
 });

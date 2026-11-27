@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ErrorState, LoadingState } from "@/components/ui/state-panel";
 import { scopeOf } from "@/lib/api/configuration-scope";
-import { deleteAgentConfiguration, saveAgentConfiguration, type AgentConfiguration } from "@/lib/api/configuration";
+import { deleteAgentConfiguration, getAgentConfiguration, saveAgentConfiguration, type AgentConfiguration } from "@/lib/api/configuration";
 import { modelOptionId, unknownModelName, useModelCatalog, type ModelCatalog } from "@/lib/model/catalog";
 import { createAgentEditorSession } from "@/lib/agent-editor/agent-editor-session";
 import { confirmDelete } from "@/lib/confirm/confirm-store";
@@ -48,14 +48,17 @@ function AgentEditor({
 }) {
   const queryClient = useQueryClient();
   const [session] = useState(() => createAgentEditorSession({
-    initial, saved: initial !== null, scope: scopeOf(workspaceId),
+    initial, saved: initial ? { revision: initial.revision } : false, scope: scopeOf(workspaceId),
   }));
   const dirty = useStore(session.store, (state) => state.dirty);
   const saving = useStore(session.store, (state) => state.saving);
   useUnsavedChanges(initial ? `子 Agent「${initial.agent_id}」` : "新建子 Agent", dirty);
 
   const mutation = useMutation({
-    mutationFn: () => session.save((input, { agentId }) => saveAgentConfiguration(workspaceId, agentId, input)),
+    mutationFn: () => session.save(
+      (input, { agentId, baseRevision }) => saveAgentConfiguration(workspaceId, agentId, input, baseRevision),
+      ({ agentId }) => getAgentConfiguration(workspaceId, agentId),
+    ),
     onSuccess: async (saved) => {
       if (!saved) return;
       // 等列表刷新后再关闭编辑器，避免返回时短暂显示旧列表。

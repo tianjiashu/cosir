@@ -14,6 +14,7 @@ class GlobalInstructionResponse(BaseModel):
 
     参数:
         content: 全局指令正文。
+        revision: 正文的内容版本，文件不存在时为 None；保存时作为 ``base_revision`` 带回。
         path: 指令文件路径。
         token_length: 正文 token 估算数。
         max_tokens: 允许的最大 token 数。
@@ -30,6 +31,7 @@ class GlobalInstructionResponse(BaseModel):
     """
 
     content: str
+    revision: str | None
     path: str
     token_length: int
     max_tokens: int
@@ -54,6 +56,7 @@ class GlobalInstructionResponse(BaseModel):
 
         return GlobalInstructionResponse(
             content=document.content,
+            revision=document.revision,
             path=str(document.path),
             token_length=document.token_length,
             max_tokens=document.max_tokens,

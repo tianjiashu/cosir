@@ -15,6 +15,9 @@ from typing import Any
 
 from app.api.configuration.errors import raise_configuration_error
 from app.api.schemas.request.AgentConfigurationRequest import AgentConfigurationRequest
+from app.api.schemas.request.AgentConfigurationUpdateRequest import (
+    AgentConfigurationUpdateRequest,
+)
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
 from app.app import app
 from app.service.configuration.agents.configuration_service import (
@@ -47,11 +50,13 @@ async def create_configuration_agent(
 
 @app.put("/configuration/agents/{agent_id}", response_model=AgentConfigurationResponse)
 async def update_configuration_agent(
-    agent_id: str, payload: AgentConfigurationRequest
+    agent_id: str, payload: AgentConfigurationUpdateRequest
 ) -> AgentConfigurationResponse:
     try:
         return AgentConfigurationResponse.from_entry(
-            AgentConfigurationService().update(agent_id, payload.to_configuration())
+            AgentConfigurationService().update(
+                agent_id, payload.to_configuration(), base_revision=payload.base_revision
+            )
         )
     except Exception as exc:
         raise_configuration_error(exc)

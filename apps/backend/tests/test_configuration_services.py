@@ -144,7 +144,8 @@ def test_agent_configuration_round_trip_preserves_model_override(
 
     updated = service.update(
         "reviewer",
-        AgentConfiguration(
+        base_revision=_entry(service, "reviewer").revision,
+        document=AgentConfiguration(
             agent_id="reviewer",
             role="child",
             description="审查变更",
@@ -176,10 +177,12 @@ def test_builtin_agent_is_editable_but_not_deletable(
     )
     registry = _configuration_registry()
     service = _service(monkeypatch, registry)
-    current = _document(service, "general-purpose")
-    updated = AgentConfiguration(**{**current.__dict__, "description": "可编辑的系统通用 Agent"})
+    current = _entry(service, "general-purpose")
+    updated = AgentConfiguration(
+        **{**current.configuration.__dict__, "description": "可编辑的系统通用 Agent"}
+    )
 
-    service.update("general-purpose", updated)
+    service.update("general-purpose", updated, base_revision=current.revision)
 
     assert (
         registry.resolve(AgentProfileRegistry.SYSTEM_WORKSPACE, "general-purpose").description
@@ -199,9 +202,9 @@ def test_global_instruction_enforces_token_budget(
     service = InstructionConfigurationService(path=tmp_path / "root" / "AGENTS.md")
     monkeypatch.setattr(service, "root", tmp_path / "root")
     with pytest.raises(InstructionConfigurationError):
-        service.update("超预算内容")  # 5 个 CJK 字符 ≈ 5 token > 4
+        service.update("超预算内容", base_revision=None)  # 5 个 CJK 字符 ≈ 5 token > 4
 
-    document = service.update("合规内容")
+    document = service.update("合规内容", base_revision=None)
     assert document.token_length == 4
     assert (tmp_path / "root" / "AGENTS.md").read_text(encoding="utf-8") == "合规内容"
 

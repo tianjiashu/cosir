@@ -32,6 +32,7 @@ class WorkspaceFileIgnoreDocument:
     """workspace 忽略规则正文及校验元数据。"""
 
     content: str
+    revision: str | None
     path: Path
     exists: bool
     rule_count: int
@@ -52,15 +53,21 @@ class WorkspaceFileIgnoreConfigurationService:
         """读取规则文件；缺失时返回空正文但不创建文件。"""
 
         if not self.path.exists():
-            return self._document("", exists=False)
-        content = file_store.read_text(self.path, root=self.cosir_dir)
-        return self._document(content, exists=True)
+            return self._document("", revision=None, exists=False)
+        text = file_store.read_revised_text(self.path, root=self.cosir_dir)
+        return self._document(text.content, revision=text.revision, exists=True)
 
-    def update(self, content: str) -> WorkspaceFileIgnoreDocument:
-        """校验标准 gitignore 语法、大小和规则数后原子写入规则文件。"""
+    def update(self, content: str, *, base_revision: str | None) -> WorkspaceFileIgnoreDocument:
+        """校验标准 gitignore 语法、大小和规则数后，以 ``base_revision`` 为前置条件原子写入规则文件。
+
+        异常:
+            ConfigurationRevisionConflict: 文件在读取之后被别处改过。
+        """
 
         self._validate(content)
-        file_store.write_text_atomic(self.path, content, root=self.cosir_dir)
+        revision = file_store.write_text_if_revision(
+            self.path, content, root=self.cosir_dir, base_revision=base_revision
+        )
         log.info(
             "configuration_workspace_fileignore_written",
             extra={
@@ -71,13 +78,16 @@ class WorkspaceFileIgnoreConfigurationService:
                 },
             },
         )
-        return self._document(content, exists=True)
+        return self._document(content, revision=revision, exists=True)
 
-    def _document(self, content: str, *, exists: bool) -> WorkspaceFileIgnoreDocument:
+    def _document(
+        self, content: str, *, revision: str | None, exists: bool
+    ) -> WorkspaceFileIgnoreDocument:
         """把规则正文投影为配置文档，不改变正文。"""
 
         return WorkspaceFileIgnoreDocument(
             content=content,
+            revision=revision,
             path=self.path,
             exists=exists,
             rule_count=len(valid_rule_lines(content)),

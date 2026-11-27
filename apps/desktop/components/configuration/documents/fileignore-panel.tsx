@@ -18,7 +18,7 @@ export function FileIgnorePanel({ workspaceId }: { workspaceId: number }) {
     queryKey: queryKeys.workspaceFileIgnore(workspaceId),
     label: ".fileignore",
     load: (options) => getWorkspaceFileIgnoreConfiguration(workspaceId, options),
-    save: (content) => updateWorkspaceFileIgnoreConfiguration(workspaceId, content),
+    save: (content, baseRevision) => updateWorkspaceFileIgnoreConfiguration(workspaceId, content, baseRevision),
     saveFailedEvent: "workspace_fileignore_save_failed",
   });
   useAppHotkey("saveConfiguration", state.save);

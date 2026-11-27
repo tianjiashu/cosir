@@ -215,3 +215,100 @@ test("Markdown 编辑器：标题加粗、强调倾斜，深色下保持", async
   await expect(heading).toHaveCSS("font-weight", "700");
   await expect(emphasis).toHaveCSS("font-style", "italic");
 });
+
+/**
+ * 带内容版本的配置文档：GET 返回当前正文与版本；PUT 的 `base_revision` 对不上就 409
+ * `configuration_revision_conflict`（与后端同形），对上就写入并换新版本。`externalEdit` 模拟手改 / git / Agent 写文件。
+ */
+async function routeRevisedDocument<T extends { content: string }>(page: Page, path: string, initial: T) {
+  let generation = 0;
+  let current = { ...initial, revision: "r0" };
+  const submitted: { content: string; base: string | null }[] = [];
+  await page.route(`${API_ORIGIN}${path}`, async (route) => {
+    if (route.request().method() !== "PUT") return route.fulfill({ json: current });
+    const body = route.request().postDataJSON() as { content: string; base_revision: string | null };
+    submitted.push({ content: body.content, base: body.base_revision });
+    if (body.base_revision !== current.revision) {
+      return route.fulfill({
+        status: 409,
+        json: { detail: { code: "configuration_revision_conflict", message: "配置文件已在别处修改，保存未生效", current_revision: current.revision } },
+      });
+    }
+    current = { ...current, content: body.content, revision: `r${++generation}` };
+    await route.fulfill({ json: current });
+  });
+  return {
+    submitted,
+    current: () => current.content,
+    externalEdit(content: string) {
+      current = { ...current, content, revision: `r${++generation}` };
+    },
+  };
+}
+
+// 目的：编辑期间文件被外部改动，保存不再静默覆盖；潜在缺陷：覆盖后基准没跟上这次写入，下一次保存自己和自己冲突。
+test("Markdown 配置：外部改动后保存得到冲突，选覆盖以最新版本为基准再存", async ({ page }) => {
+  const document = await routeRevisedDocument(page, "/configuration/main-agent-prompt", mainAgentPrompt);
+  await page.goto("/configuration/main-agent");
+  const editor = page.getByRole("textbox", { name: "Markdown 源码编辑器" });
+  await expect(editor).toHaveText("# 主 Agent 协议");
+  await editor.fill("# 我的修改");
+  document.externalEdit("# Agent 写入的版本");
+
+  await page.getByRole("button", { name: /保存主 Agent 提示词/ }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("主 Agent 提示词已在别处修改")).toBeVisible();
+  expect(document.current()).toBe("# Agent 写入的版本");
+  await dialog.getByRole("button", { name: "用我的版本覆盖" }).click();
+
+  await expect(page.getByText("主 Agent 提示词已保存", { exact: true })).toBeVisible();
+  expect(document.submitted).toEqual([
+    { content: "# 我的修改", base: "r0" },
+    { content: "# 我的修改", base: "r1" },
+  ]);
+  expect(document.current()).toBe("# 我的修改");
+  await expect(page.getByText("有未保存更改", { exact: true })).toHaveCount(0);
+
+  // 覆盖后的基准是这次写入的版本：接着改、接着存不再冲突。
+  await editor.fill("# 第二次修改");
+  await page.keyboard.press("ControlOrMeta+s");
+  await expect.poll(() => document.submitted.at(-1)).toEqual({ content: "# 第二次修改", base: "r2" });
+  await expect(dialog).toHaveCount(0);
+});
+
+test(".fileignore：外部改动后保存选载入，草稿换成外部版本", async ({ page }) => {
+  const document = await routeRevisedDocument(page, "/workspaces/7/configuration/fileignore", {
+    content: "node_modules/\n", path: ".cosir/.fileignore", exists: true, rule_count: 1, max_rules: 500,
+  });
+  await page.goto("/workspaces/7/configuration/fileignore");
+  const editor = page.getByRole("textbox");
+  await expect(editor).toHaveValue("node_modules/\n");
+  await editor.fill("dist/\n");
+  document.externalEdit("node_modules/\ncoverage/\n");
+
+  await page.getByRole("button", { name: "保存 .fileignore" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "载入外部版本" }).click();
+
+  await expect(editor).toHaveValue("node_modules/\ncoverage/\n");
+  await expect(page.getByText("有未保存更改")).toHaveCount(0);
+  expect(document.submitted).toEqual([{ content: "dist/\n", base: "r0" }]);
+  expect(document.current()).toBe("node_modules/\ncoverage/\n");
+});
+
+test("全局 AGENTS.md：冲突时取消，草稿与失败提示都保留", async ({ page }) => {
+  const document = await routeRevisedDocument(page, "/configuration/global-instructions", {
+    content: "# 本机约束", path: ".cosir/AGENTS.md", token_length: 4, max_tokens: 32768, effective_on: "next_run",
+  });
+  await page.goto("/configuration/instructions");
+  const editor = page.getByRole("textbox", { name: "Markdown 源码编辑器" });
+  await editor.fill("# 我的约束");
+  document.externalEdit("# git 拉下来的约束");
+
+  await page.getByRole("button", { name: /保存全局 AGENTS\.md/ }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "取消", exact: true }).click();
+
+  await expect(page.getByText("配置文件已在别处修改，保存未生效")).toBeVisible();
+  await expect(editor).toHaveText("# 我的约束");
+  await expect(page.getByText("有未保存更改", { exact: true })).toBeVisible();
+  expect(document.current()).toBe("# git 拉下来的约束");
+});

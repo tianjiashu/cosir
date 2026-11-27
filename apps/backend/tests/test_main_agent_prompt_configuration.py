@@ -7,7 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.configuration import main_agent_prompt as main_agent_prompt_api
-from app.api.schemas.request.MainAgentPromptUpdateRequest import MainAgentPromptUpdateRequest
+from app.api.schemas.request.ConfigurationDocumentUpdateRequest import (
+    ConfigurationDocumentUpdateRequest,
+)
 from app.app import app
 from app.config import configuration
 from app.config.configuration import build_agent_registry
@@ -64,14 +66,19 @@ def test_main_prompt_update_validates_budget_and_writes_atomically(tmp_path: Pat
         root=target.parent,
     )
 
-    saved = service.update("新的主 Agent 协议")
+    base = service.read().revision
+    saved = service.update("新的主 Agent 协议", base_revision=base)
 
     assert saved.source == "user_file"
+    assert saved.revision == service.read().revision
     assert target.read_text(encoding="utf-8") == "新的主 Agent 协议"
     with pytest.raises(MainAgentPromptConfigurationError):
-        service.update("   ")
+        service.update("   ", base_revision=saved.revision)
     with pytest.raises(MainAgentPromptConfigurationError):
-        service.update("x" * (Constant.SystemPrompt.AGENT_PERSONA_MAX_TOKENS * 8))
+        service.update(
+            "x" * (Constant.SystemPrompt.AGENT_PERSONA_MAX_TOKENS * 8),
+            base_revision=saved.revision,
+        )
     assert target.read_text(encoding="utf-8") == "新的主 Agent 协议"
 
 
@@ -132,7 +139,10 @@ def test_update_api_saves_the_file_and_registry_sees_it(
 
     response = asyncio.run(
         main_agent_prompt_api.update_main_agent_prompt_configuration(
-            MainAgentPromptUpdateRequest(content="新协议")
+            ConfigurationDocumentUpdateRequest(
+                content="新协议",
+                base_revision=MainAgentPromptConfigurationService().read().revision,
+            )
         )
     )
 
@@ -144,9 +154,11 @@ def test_update_api_saves_the_file_and_registry_sees_it(
 def test_update_api_is_registered_as_http_endpoint(system_data: Path) -> None:
     """配置中心应把主 Agent prompt 更新暴露为标准 HTTP 接口。"""
 
-    response = TestClient(app, headers=TRUSTED_HEADERS).put(
+    client = TestClient(app, headers=TRUSTED_HEADERS)
+    base = client.get("/configuration/main-agent-prompt").json()["revision"]
+    response = client.put(
         "/configuration/main-agent-prompt",
-        json={"content": "HTTP 新协议"},
+        json={"content": "HTTP 新协议", "base_revision": base},
     )
 
     assert response.status_code == 200

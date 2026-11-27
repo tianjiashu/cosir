@@ -10,7 +10,12 @@ from typing import Any
 
 from app.api.configuration.errors import raise_configuration_error
 from app.api.schemas.request.AgentConfigurationRequest import AgentConfigurationRequest
-from app.api.schemas.request.GlobalInstructionUpdateRequest import GlobalInstructionUpdateRequest
+from app.api.schemas.request.AgentConfigurationUpdateRequest import (
+    AgentConfigurationUpdateRequest,
+)
+from app.api.schemas.request.ConfigurationDocumentUpdateRequest import (
+    ConfigurationDocumentUpdateRequest,
+)
 from app.api.schemas.response.AgentConfigurationResponse import AgentConfigurationResponse
 from app.api.schemas.response.WorkspaceFileIgnoreResponse import WorkspaceFileIgnoreResponse
 from app.api.schemas.response.WorkspaceInstructionResponse import WorkspaceInstructionResponse
@@ -74,12 +79,14 @@ async def create_workspace_configuration_agent(
 async def update_workspace_configuration_agent(
     workspace_id: int,
     agent_id: str,
-    payload: AgentConfigurationRequest,
+    payload: AgentConfigurationUpdateRequest,
 ) -> AgentConfigurationResponse:
     """更新 workspace 本地子 Agent。"""
 
     try:
-        saved = _agent_service(workspace_id).update(agent_id, payload.to_configuration())
+        saved = _agent_service(workspace_id).update(
+            agent_id, payload.to_configuration(), base_revision=payload.base_revision
+        )
         return AgentConfigurationResponse.from_entry(saved)
     except Exception as exc:
         raise_configuration_error(exc)
@@ -119,13 +126,15 @@ async def get_workspace_instruction_configuration(
 )
 async def update_workspace_instruction_configuration(
     workspace_id: int,
-    payload: GlobalInstructionUpdateRequest,
+    payload: ConfigurationDocumentUpdateRequest,
 ) -> WorkspaceInstructionResponse:
     """保存 workspace AGENTS.md，并通知当前进程中匹配的 workspace。"""
 
     try:
         root = resolve_workspace_root(workspace_id)
-        document = WorkspaceInstructionConfigurationService(root).update(payload.content)
+        document = WorkspaceInstructionConfigurationService(root).update(
+            payload.content, base_revision=payload.base_revision
+        )
         return WorkspaceInstructionResponse.from_document(document)
     except Exception as exc:
         raise_configuration_error(exc)
@@ -152,13 +161,15 @@ async def get_workspace_fileignore_configuration(workspace_id: int) -> Workspace
 )
 async def update_workspace_fileignore_configuration(
     workspace_id: int,
-    payload: GlobalInstructionUpdateRequest,
+    payload: ConfigurationDocumentUpdateRequest,
 ) -> WorkspaceFileIgnoreResponse:
     """校验并保存 workspace .fileignore。"""
 
     try:
         root = resolve_workspace_root(workspace_id)
-        document = WorkspaceFileIgnoreConfigurationService(root).update(payload.content)
+        document = WorkspaceFileIgnoreConfigurationService(root).update(
+            payload.content, base_revision=payload.base_revision
+        )
         return WorkspaceFileIgnoreResponse.from_document(document)
     except Exception as exc:
         raise_configuration_error(exc)

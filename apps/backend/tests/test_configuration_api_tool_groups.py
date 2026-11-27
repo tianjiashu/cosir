@@ -65,7 +65,7 @@ def tool_registry(monkeypatch: pytest.MonkeyPatch) -> ToolRegistry:
 
 
 def _entry(configuration: AgentConfiguration) -> AgentConfigurationEntry:
-    return AgentConfigurationEntry(configuration=configuration, path=None, builtin=False)
+    return AgentConfigurationEntry(configuration=configuration, path=None, revision=None, builtin=False)
 
 
 def _payload(groups: list[str]) -> AgentConfigurationRequest:

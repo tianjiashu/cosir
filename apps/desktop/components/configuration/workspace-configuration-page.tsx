@@ -20,7 +20,7 @@ const PANELS = {
         queryKey: queryKeys.instruction("workspace", workspaceId),
         label: "工作区 AGENTS.md",
         load: (options) => getWorkspaceInstructionConfiguration(workspaceId, options),
-        save: (content) => updateWorkspaceInstructionConfiguration(workspaceId, content),
+        save: (content, baseRevision) => updateWorkspaceInstructionConfiguration(workspaceId, content, baseRevision),
         saveFailedEvent: "markdown_configuration_save_failed",
       }}
       placeholder="写入当前工作区的项目约束…"

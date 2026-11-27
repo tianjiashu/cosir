@@ -43,8 +43,25 @@ const failed = (error: string, needsSignIn = false): MCPServerTestResult => ({
  *
  * 授权在后端占着一条回调监听，被取代的授权都要通知后端结束：换代时回收进行中的那一个，授权地址迟到
  * （等它的那一代已被取代）时当场取消，不打开浏览器。不经这两处就丢掉授权，监听会挂到后端时限才结束。
+ *
+ * 生命周期跟后端的授权流程一致，不跟页面：后端授权是进程级的（用户在浏览器里登录完就记下结果，不需要页面在场），
+ * 所以每个作用域一个常驻实例（{@link forScope}），离开配置页再回来，进行中的授权、它的取消入口与迟到的授权地址都还
+ * 接得上。只服务于编辑框草稿的那一路例外：草稿随编辑框消失，由面板在关闭编辑框与卸载时 {@link clear}。
+ * 删除工作区不必回收实例：后端已按作用域取消授权，workspace id 不复用。
  */
 export class MCPServerTestController {
+  private static readonly scopes = new Map<number | null, MCPServerTestController>();
+
+  /** 作用域（`null` 为系统级）的常驻实例；首次取得时用 `api()` 绑定接口，之后原样复用。 */
+  static forScope(workspaceId: number | null, api: () => MCPServerTestApi): MCPServerTestController {
+    let controller = MCPServerTestController.scopes.get(workspaceId);
+    if (!controller) {
+      controller = new MCPServerTestController(api());
+      MCPServerTestController.scopes.set(workspaceId, controller);
+    }
+    return controller;
+  }
+
   private states: Readonly<Record<string, ServerTestState>> = {};
   private readonly generations = new Map<string, number>();
   private readonly listeners = new Set<() => void>();

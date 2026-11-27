@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from app.api.configuration.errors import raise_configuration_error
-from app.api.schemas.request.MainAgentPromptUpdateRequest import MainAgentPromptUpdateRequest
+from app.api.schemas.request.ConfigurationDocumentUpdateRequest import (
+    ConfigurationDocumentUpdateRequest,
+)
 from app.api.schemas.response.MainAgentPromptResponse import MainAgentPromptResponse
 from app.app import app
 from app.service.configuration.instructions.main_agent_prompt_service import (
@@ -23,12 +25,12 @@ async def get_main_agent_prompt_configuration() -> MainAgentPromptResponse:
 
 @app.put("/configuration/main-agent-prompt", response_model=MainAgentPromptResponse)
 async def update_main_agent_prompt_configuration(
-    payload: MainAgentPromptUpdateRequest,
+    payload: ConfigurationDocumentUpdateRequest,
 ) -> MainAgentPromptResponse:
     """保存主 Agent prompt；Registry 按文件签名在下一次读取时生效。"""
 
     try:
-        document = MainAgentPromptConfigurationService().update(payload.content)
+        document = MainAgentPromptConfigurationService().update(payload.content, base_revision=payload.base_revision)
         return MainAgentPromptResponse.from_document(document)
     except Exception as exc:
         raise_configuration_error(exc)

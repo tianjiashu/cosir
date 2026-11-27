@@ -28,11 +28,11 @@ describe("configuration API", () => {
     expect(requestJson).toHaveBeenLastCalledWith("/configuration/agents", undefined);
     await getAgentConfigurations(3);
     expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agents", undefined);
-    await saveAgentConfiguration(null, null, input);
+    await saveAgentConfiguration(null, null, input, null);
     expect(requestJson).toHaveBeenLastCalledWith("/configuration/agents", expect.objectContaining({ method: "POST" }));
-    await saveAgentConfiguration(3, null, input);
+    await saveAgentConfiguration(3, null, input, null);
     expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agents", expect.objectContaining({ method: "POST" }));
-    await saveAgentConfiguration(3, "a/b", input);
+    await saveAgentConfiguration(3, "a/b", input, "r1");
     expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agents/a%2Fb", expect.objectContaining({ method: "PUT" }));
     await deleteAgentConfiguration(null, "reviewer");
     expect(requestJson).toHaveBeenLastCalledWith("/configuration/agents/reviewer", { method: "DELETE" });
@@ -40,7 +40,7 @@ describe("configuration API", () => {
     expect(requestJson).toHaveBeenLastCalledWith("/workspaces/3/configuration/agents/reviewer", { method: "DELETE" });
   });
 
-  it("sends agent model overrides without configuration version metadata", async () => {
+  it("sends agent model overrides with the base revision the edit started from", async () => {
     jsonRequestInit.mockClear();
     requestJson.mockResolvedValueOnce({ agent_id: "reviewer" });
     const { saveAgentConfiguration } = await import("@/lib/api/configuration");
@@ -53,18 +53,16 @@ describe("configuration API", () => {
       max_steps: 100,
       model_config_id: null,
       model_settings: { temperature: 0.2 },
-    });
+    }, "r1");
 
     expect(requestJson).toHaveBeenCalledWith(
       "/configuration/agents/reviewer",
       expect.objectContaining({ method: "PUT" }),
     );
     expect(jsonRequestInit).toHaveBeenCalledWith(
-      expect.objectContaining({ model_config_id: null }),
+      expect.objectContaining({ model_config_id: null, base_revision: "r1" }),
       { method: "PUT" },
     );
-    expect(jsonRequestInit.mock.calls[0][0]).not.toHaveProperty("version");
-    expect(jsonRequestInit.mock.calls[0][0]).not.toHaveProperty("expected_version");
   });
 
   it("preserves clear/unchanged environment operations without version metadata", async () => {

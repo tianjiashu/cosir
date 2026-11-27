@@ -12,7 +12,7 @@ const agentDraft = {
 };
 
 const persistAgent: PersistAgent = async (input) => ({
-  ...input, source: "user_file", deletable: true,
+  ...input, source: "user_file", revision: "r1", deletable: true,
   validation_status: "valid", validation_error: null,
 });
 
@@ -65,7 +65,7 @@ describe("workbench store", () => {
   it("关闭已保存过的草稿记下已保存标记，重新打开时从原始草稿新建会话并清除标记", async () => {
     const store = useWorkbenchStore.getState();
     store.openAgentConfigurationDraft(7, { sessionId: 20, toolCallId: "call-1", draft: agentDraft });
-    await agentDraftTab(7, "call-1").session.save(persistAgent);
+    await agentDraftTab(7, "call-1").session.save(persistAgent, async () => { throw new Error("不应冲突"); });
     store.closeTab(7, "agent-config-draft:20:call-1");
     expect(workbench(7).savedDraftIds).toEqual(["20:call-1"]);
 
@@ -106,7 +106,7 @@ describe("workbench store", () => {
   it("删除 Session 移除已保存过的草稿时不记已保存标记，未受影响的工作区桶保持原引用", async () => {
     const store = useWorkbenchStore.getState();
     store.openAgentConfigurationDraft(7, { sessionId: 20, toolCallId: "call-1", draft: agentDraft });
-    await agentDraftTab(7, "call-1").session.save(persistAgent);
+    await agentDraftTab(7, "call-1").session.save(persistAgent, async () => { throw new Error("不应冲突"); });
     store.openAgent(8, { sessionId: 31, title: "保留" });
     const untouched = workbench(8);
 

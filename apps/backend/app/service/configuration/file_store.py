@@ -1,4 +1,4 @@
-"""配置文件的安全读写：路径包含校验、路径锁、原子替换，以及配置 JSON 的统一读写格式。
+"""配置文件的安全读写：路径包含校验、路径锁、原子替换、内容版本前置条件，以及配置 JSON 的统一读写格式。
 
 本模块只做文件层面的事，不解释 Agent、Markdown 或 env 的业务含义；调用方先完成业务校验再写入。
 写入目标必须由后端根据固定路径函数与已校验标识生成：路径检查只阻止词法路径逃出给定根目录，不探测
@@ -7,12 +7,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock, RLock
 from typing import Any, TypeVar
@@ -33,6 +35,37 @@ class ConfigurationFileError(OSError):
 
 class ConfigurationPathError(ValueError):
     """配置目标不在受信任目录内。"""
+
+
+class ConfigurationRevisionConflict(Exception):
+    """整份替换的写入前置条件不成立：文件在读取之后被别处改过（手改、git、Agent 写文件）。
+
+    ``current_revision`` 是锁内读到的当前版本（文件不存在为 ``None``），接入层原样交给前端，用户选择
+    「覆盖」时以它为基准再写一次。不继承 ``ValueError`` / ``OSError``：它不是内容错误也不是读写失败。
+    """
+
+    def __init__(self, current_revision: str | None) -> None:
+        super().__init__("配置文件已在别处修改，保存未生效")
+        self.current_revision = current_revision
+
+
+@dataclass(frozen=True)
+class RevisedText:
+    """一次读取得到的正文与它的内容版本（同一份字节算出，二者不会错位）。"""
+
+    content: str
+    revision: str
+
+
+def text_revision(content: str) -> str:
+    """一段即将写入的正文落盘后的版本；与 :func:`file_revision` 对同一份字节算出的值相同。"""
+
+    return _bytes_revision(content.encode("utf-8"))
+
+
+def _bytes_revision(raw: bytes) -> str:
+    # 版本只认内容：mtime 精度不够、git 会保留时间戳；外部写回相同内容也不算冲突。
+    return hashlib.sha256(raw).hexdigest()
 
 
 def assert_safe_child(root: Path, candidate: Path) -> Path:
@@ -62,6 +95,44 @@ def read_text(path: Path, *, root: Path) -> str:
     try:
         return target.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
+        log.error(
+            "configuration_read_failed",
+            extra={
+                "msg": "配置文件读取失败",
+                "data": {"path": str(target), "error_type": type(exc).__name__},
+            },
+        )
+        raise ConfigurationFileError(f"configuration read failed: {target}") from exc
+
+
+def read_revised_text(path: Path, *, root: Path) -> RevisedText:
+    """读取 UTF-8 配置文件，连同内容版本一起返回；换行按通用换行规则归一为 ``\\n``（与 :func:`read_text` 一致）。"""
+
+    target = assert_safe_child(root, path)
+    try:
+        raw = target.read_bytes()
+        content = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    except (OSError, UnicodeDecodeError) as exc:
+        log.error(
+            "configuration_read_failed",
+            extra={
+                "msg": "配置文件读取失败",
+                "data": {"path": str(target), "error_type": type(exc).__name__},
+            },
+        )
+        raise ConfigurationFileError(f"configuration read failed: {target}") from exc
+    return RevisedText(content=content, revision=_bytes_revision(raw))
+
+
+def file_revision(path: Path, *, root: Path) -> str | None:
+    """文件当前的内容版本；不存在时为 ``None``（「期望不存在」也是一种前置条件）。"""
+
+    target = assert_safe_child(root, path)
+    try:
+        return _bytes_revision(target.read_bytes())
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
         log.error(
             "configuration_read_failed",
             extra={
@@ -142,6 +213,38 @@ def write_text_atomic(path: Path, content: str, *, root: Path) -> None:
                 temporary_path.unlink(missing_ok=True)
 
 
+def write_text_if_revision(
+    path: Path, content: str, *, root: Path, base_revision: str | None
+) -> str:
+    """整份替换的写入：锁内比对当前版本与 ``base_revision``，一致才原子写入，返回新版本。
+
+    路径锁只挡本进程的写入方；外部写入者（编辑器、git）不拿这把锁，比对到替换之间只剩极短的
+    时间窗，按「低概率事件在一处边界兜住」接受。
+
+    异常:
+        ConfigurationRevisionConflict: 当前版本与 ``base_revision`` 不一致。
+        ConfigurationFileError: 读取当前版本或写入失败。
+    """
+
+    with _path_lock(path):
+        current = file_revision(path, root=root)
+        if current != base_revision:
+            log.warning(
+                "configuration_revision_conflict",
+                extra={
+                    "msg": "配置文件已在别处修改，拒绝覆盖",
+                    "data": {
+                        "path": str(path),
+                        "base_revision": base_revision,
+                        "current_revision": current,
+                    },
+                },
+            )
+            raise ConfigurationRevisionConflict(current)
+        write_text_atomic(path, content, root=root)
+    return text_revision(content)
+
+
 def delete_file(path: Path, *, root: Path) -> None:
     """在路径锁内删除配置文件；文件是否存在由调用方在同一临界区里先判定。"""
 
@@ -168,8 +271,14 @@ def delete_file(path: Path, *, root: Path) -> None:
 def write_json(path: Path, document: BaseModel | dict[str, Any], *, root: Path) -> None:
     """按配置 JSON 的统一格式原子写入：缩进 2、保留中文、末尾换行，所有配置文件看起来一致。"""
 
+    write_text_atomic(path, json_text(document), root=root)
+
+
+def json_text(document: BaseModel | dict[str, Any]) -> str:
+    """配置 JSON 的统一落盘文本；需要带版本前置条件写入时交给 :func:`write_text_if_revision`。"""
+
     data = document.model_dump(mode="json") if isinstance(document, BaseModel) else document
-    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n", root=root)
+    return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
 
 def read_json_model(

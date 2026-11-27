@@ -159,4 +159,13 @@ describe("MCPServerTestController", () => {
 
     expect(controller.getSnapshot()["draft"]).toBeUndefined();
   });
+
+  // 潜在缺陷：控制器随页面卸载丢失，离开配置页再回来看不到进行中的授权，也取消不了它。
+  it("keeps one controller per scope so an authorization outlives the page that started it", () => {
+    const api = () => controllerWith({}).api;
+    const system = MCPServerTestController.forScope(null, api);
+    expect(MCPServerTestController.forScope(null, api)).toBe(system);
+    expect(MCPServerTestController.forScope(901, api)).not.toBe(system);
+    expect(MCPServerTestController.forScope(901, api)).toBe(MCPServerTestController.forScope(901, api));
+  });
 });

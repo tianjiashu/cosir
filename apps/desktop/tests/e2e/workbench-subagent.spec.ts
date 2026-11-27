@@ -132,3 +132,40 @@ test("工作台首存子 Agent 草稿：保存中 Agent ID 不可改，之后的
   await panel.getByRole("button", { name: "保存配置" }).click();
   await expect.poll(() => updates).toEqual([{ path: "draft_first", agentId: "draft_first" }]);
 });
+
+// 目的：工作台草稿首存后与配置页写同一份文件；之后的更新带首存版本，外部改过就冲突，选覆盖以最新版本为基准再存。
+test("工作台草稿首存后文件被改：更新得到冲突，选覆盖以最新版本重存", async ({ page, request }) => {
+  await seedState(request, 42, completedState(3, { id: "command", parts: [{ type: "text", text: "配置草稿" }] }, [
+    { presentation: "activity", type: "tool-call", toolCallId: "agent-draft", toolName: "propose_agent_configuration", args: {}, status: "completed", awaitingUser: false, display_data: { kind: "agent-configuration-draft", status: "draft", agent_id: "draft_first", role: "review", description: "audit", system_prompt: "Review." } },
+    { type: "text", text: "配置草稿已准备。" },
+  ] as never));
+  await page.route("**/tools/groups", (route) => route.fulfill({ json: { groups: [] } }));
+  let revision = "r0";
+  const saved = (body: Record<string, unknown>) => ({ ...body, revision, source: "custom", deletable: true, validation_status: "valid", validation_error: null });
+  const updates: unknown[] = [];
+  await page.route(/\/configuration\/agents$/, async (route) => {
+    if (route.request().method() !== "POST") return route.fulfill({ json: [] });
+    await route.fulfill({ json: saved(route.request().postDataJSON()) });
+  });
+  await page.route(/\/configuration\/agents\/[^/]+$/, async (route) => {
+    if (route.request().method() !== "PUT") return route.fallback();
+    const { base_revision: base, ...body } = route.request().postDataJSON();
+    updates.push(base);
+    if (base !== revision) {
+      return route.fulfill({ status: 409, json: { detail: { code: "configuration_revision_conflict", message: "配置文件已在别处修改，保存未生效", current_revision: revision } } });
+    }
+    revision = `r${updates.length}`;
+    await route.fulfill({ json: saved(body) });
+  });
+  await page.goto("/sessions/42");
+  await page.getByRole("button", { name: "编辑配置" }).click();
+  const panel = page.getByRole("complementary", { name: "工作台" });
+  await panel.getByRole("button", { name: "保存配置" }).click();
+  await expect(page.getByText("配置已保存", { exact: true })).toBeVisible();
+
+  revision = "r-external";
+  await panel.getByRole("textbox", { name: "角色" }).fill("review2");
+  await panel.getByRole("button", { name: "保存配置" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "用我的版本覆盖" }).click();
+  await expect.poll(() => updates).toEqual(["r0", "r-external"]);
+});

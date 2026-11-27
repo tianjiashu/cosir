@@ -31,6 +31,7 @@ class MainAgentPromptDocument:
     """主 Agent 系统提示词及其预算和来源元数据。"""
 
     content: str
+    revision: str | None
     path: Path
     token_length: int
     max_tokens: int
@@ -96,10 +97,11 @@ class MainAgentPromptConfigurationService:
                         "data": {"path": str(self.path), "error_type": type(exc).__name__},
                     },
                 )
-            return self._document("", source="user_file", path=self.path)
+                return self._document("", revision=None)
+            return self._document("", revision=file_store.text_revision(""))
 
         try:
-            raw = file_store.read_text(self.path, root=self.root)
+            text = file_store.read_revised_text(self.path, root=self.root)
         except ConfigurationFileError as exc:
             log.error(
                 "configuration_main_agent_prompt_read_failed",
@@ -108,21 +110,24 @@ class MainAgentPromptConfigurationService:
                     "data": {"path": str(self.path), "error_type": type(exc).__name__},
                 },
             )
-            return self._document("", source="user_file", path=self.path)
+            # 版本未知：给 None，保存先得到冲突、由用户决定是否覆盖读不了的原文，不会静默盖掉。
+            return self._document("", revision=None)
 
-        return self._document(raw, source="user_file", path=self.path)
+        return self._document(text.content, revision=text.revision)
 
-    def update(self, content: str) -> MainAgentPromptDocument:
+    def update(self, content: str, *, base_revision: str | None) -> MainAgentPromptDocument:
         """校验并原子更新主 Agent prompt。
 
         参数：
             content: 新的非空 UTF-8 prompt 正文；空白文本不被接受。
+            base_revision: 编辑开始时读到的版本，作为整份替换的前置条件。
 
         返回：
             保存后的用户文件文档。
 
         异常：
             MainAgentPromptConfigurationError: 正文为空白或超出 Agent prompt token 预算。
+            ConfigurationRevisionConflict: 文件在读取之后被别处改过。
             OSError: 配置文件无法安全写入。
 
         副作用：
@@ -131,13 +136,14 @@ class MainAgentPromptConfigurationService:
         """
 
         self._assert_writable(content)
-        document = self._document(content, source="user_file", path=self.path)
-        file_store.write_text_atomic(self.path, content, root=self.root)
+        revision = file_store.write_text_if_revision(
+            self.path, content, root=self.root, base_revision=base_revision
+        )
         log.info(
             "configuration_main_agent_prompt_written",
             extra={"msg": "主 Agent 系统提示词已保存", "data": {"path": str(self.path)}},
         )
-        return document
+        return self._document(content, revision=revision)
 
     @staticmethod
     def _assert_writable(content: str) -> None:
@@ -160,13 +166,7 @@ class MainAgentPromptConfigurationService:
                 f"主 Agent 系统提示词超出 token 预算: {token_length} > {max_tokens}"
             )
 
-    @staticmethod
-    def _document(
-        content: str,
-        *,
-        source: str,
-        path: Path,
-    ) -> MainAgentPromptDocument:
+    def _document(self, content: str, *, revision: str | None) -> MainAgentPromptDocument:
         """把正文转换为带预算元数据的文档（不执行空白或预算校验）。
 
         校验职责分离：读取侧接受空白与超预算正文（空白表示未配置，超预算由系统提示词构建层
@@ -175,8 +175,9 @@ class MainAgentPromptConfigurationService:
 
         return MainAgentPromptDocument(
             content=content,
-            path=path,
+            revision=revision,
+            path=self.path,
             token_length=TokenEstimator.estimate(content),
             max_tokens=Constant.SystemPrompt.AGENT_PERSONA_MAX_TOKENS,
-            source=source,
+            source="user_file",
         )

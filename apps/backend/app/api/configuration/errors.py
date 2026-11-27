@@ -14,6 +14,7 @@ from typing import NoReturn
 from fastapi import HTTPException
 
 from app.api.schemas.response.SkillImportConflictResponse import SkillImportConflictResponse
+from app.service.configuration.file_store import ConfigurationRevisionConflict
 from app.service.configuration.skills.skill_import import SkillImportConflict
 
 
@@ -28,7 +29,9 @@ def raise_configuration_error(exc: Exception) -> NoReturn:
 
     异常:
         HTTPException: 404（``KeyError``，目标配置不存在）、409（``SkillImportConflict``，导入与现有
-            同名 Skill 冲突，``detail.conflict`` 带明细；``FileExistsError``，同名配置已存在）、
+            同名 Skill 冲突，``detail.conflict`` 带明细；``FileExistsError``，同名配置已存在；
+            ``ConfigurationRevisionConflict``，整份替换的基准版本已过期，``detail.current_revision``
+            带当前版本）、
             400（``ConfigurationPathError`` / ``AgentConfigurationError`` /
             ``InstructionConfigurationError`` / ``EnvironmentConfigurationError`` /
             ``AgentProfileConfigError`` / ``ValueError``，请求内容或路径不合法）、
@@ -48,6 +51,15 @@ def raise_configuration_error(exc: Exception) -> NoReturn:
                 "code": "skill_import_conflict",
                 "message": str(exc),
                 "conflict": SkillImportConflictResponse.from_conflict(exc).model_dump(),
+            },
+        ) from exc
+    if isinstance(exc, ConfigurationRevisionConflict):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "configuration_revision_conflict",
+                "message": str(exc),
+                "current_revision": exc.current_revision,
             },
         ) from exc
     if isinstance(exc, FileExistsError):

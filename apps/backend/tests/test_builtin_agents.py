@@ -31,7 +31,9 @@ def _system_directory(registry: AgentProfileRegistry) -> Path:
     return registry.source.directory(SYSTEM)
 
 
-def _service(monkeypatch: pytest.MonkeyPatch, registry: AgentProfileRegistry, workspace: Path | None = None):
+def _service(
+    monkeypatch: pytest.MonkeyPatch, registry: AgentProfileRegistry, workspace: Path | None = None
+):
     monkeypatch.setattr(
         "app.service.configuration.agents.configuration_service.get_agent_registry",
         lambda: registry,
@@ -54,10 +56,15 @@ def test_edit_survives_rebuild(monkeypatch: pytest.MonkeyPatch) -> None:
     """改造前的缺陷：代码定义先注册，同名文件被跳过，重启后编辑丢失。"""
 
     service = _service(monkeypatch, build_agent_registry())
-    current = next(entry for entry in service.list_entries() if entry.configuration.agent_id == "general-purpose")
+    current = next(
+        entry
+        for entry in service.list_entries()
+        if entry.configuration.agent_id == "general-purpose"
+    )
     service.update(
         "general-purpose",
         AgentConfiguration(**{**current.configuration.__dict__, "description": "用户改过的说明"}),
+        base_revision=current.revision,
     )
 
     rebuilt = build_agent_registry()
@@ -97,7 +104,9 @@ def test_builtin_agents_cannot_be_deleted(monkeypatch: pytest.MonkeyPatch) -> No
     assert all(entry.builtin for entry in service.list_entries())
 
 
-def test_workspace_cannot_shadow_builtin_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workspace_cannot_shadow_builtin_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """工作区与系统作用域的 agent_id 冲突照旧拒绝：内置子 Agent 不会被工作区同名文件顶替。"""
 
     registry = build_agent_registry()

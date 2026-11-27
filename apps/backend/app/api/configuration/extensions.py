@@ -8,10 +8,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from app.api.configuration.errors import raise_configuration_error
-from app.api.schemas.request.MCPServersUpdateRequest import MCPServersUpdateRequest
+from app.api.schemas.request.MCPServerEnabledUpdateRequest import MCPServerEnabledUpdateRequest
 from app.api.schemas.request.SkillsEnabledUpdateRequest import SkillsEnabledUpdateRequest
 from app.api.schemas.request.SkillsImportRequest import SkillsImportRequest
 from app.api.schemas.response.MCPServersResponse import MCPServersResponse
@@ -39,6 +40,7 @@ from app.service.configuration.mcp.configuration_service import (
     MCPServerTestResult,
     PendingAuthorization,
 )
+from app.service.configuration.mcp.configuration_view import MCPServerEntry
 from app.service.configuration.skills.catalog import SkillInfo
 from app.service.configuration.skills.configuration_service import SkillConfigurationService
 from app.service.configuration.skills.configuration_view import (
@@ -71,20 +73,72 @@ async def get_workspace_mcp_servers(workspace_id: int) -> MCPServersResponse:
     return _list_mcp_servers(workspace_id)
 
 
-@app.put("/configuration/mcp-servers", response_model=MCPServersResponse)
-async def update_system_mcp_servers(payload: MCPServersUpdateRequest) -> MCPServersResponse:
-    """整表替换并保存系统级 MCP 服务配置。"""
-
-    return _update_mcp_servers(None, payload)
+# 写操作按服务寻址、只表达这一项的意图（新增、替换、启停、删除），后端在文件锁内基于最新文件合并：
+# 配置文件可以在外部改，配置页手上的列表可能已过期，不接收整表覆盖。
 
 
-@app.put(f"{_WORKSPACE}/mcp-servers", response_model=MCPServersResponse)
-async def update_workspace_mcp_servers(
-    workspace_id: int, payload: MCPServersUpdateRequest
+@app.post("/configuration/mcp-servers", response_model=MCPServersResponse)
+async def create_system_mcp_server(payload: MCPServerConfig) -> MCPServersResponse:
+    """新增一个系统级 MCP 服务。"""
+
+    return _write_mcp_servers(None, lambda service: service.create(payload))
+
+
+@app.post(f"{_WORKSPACE}/mcp-servers", response_model=MCPServersResponse)
+async def create_workspace_mcp_server(
+    workspace_id: int, payload: MCPServerConfig
 ) -> MCPServersResponse:
-    """整表替换并保存工作区自己的 MCP 服务配置。"""
+    """新增一个工作区自己的 MCP 服务。"""
 
-    return _update_mcp_servers(workspace_id, payload)
+    return _write_mcp_servers(workspace_id, lambda service: service.create(payload))
+
+
+@app.put("/configuration/mcp-servers/{name}", response_model=MCPServersResponse)
+async def replace_system_mcp_server(name: str, payload: MCPServerConfig) -> MCPServersResponse:
+    """替换一个系统级 MCP 服务的定义（``payload.name`` 不同即改名）。"""
+
+    return _write_mcp_servers(None, lambda service: service.replace(name, payload))
+
+
+@app.put(f"{_WORKSPACE}/mcp-servers/{{name}}", response_model=MCPServersResponse)
+async def replace_workspace_mcp_server(
+    workspace_id: int, name: str, payload: MCPServerConfig
+) -> MCPServersResponse:
+    """替换一个工作区 MCP 服务的定义（``payload.name`` 不同即改名）。"""
+
+    return _write_mcp_servers(workspace_id, lambda service: service.replace(name, payload))
+
+
+@app.patch("/configuration/mcp-servers/{name}", response_model=MCPServersResponse)
+async def set_system_mcp_server_enabled(
+    name: str, payload: MCPServerEnabledUpdateRequest
+) -> MCPServersResponse:
+    """启用或停用一个系统级 MCP 服务。"""
+
+    return _write_mcp_servers(None, lambda service: service.set_enabled(name, payload.enabled))
+
+
+@app.patch(f"{_WORKSPACE}/mcp-servers/{{name}}", response_model=MCPServersResponse)
+async def set_workspace_mcp_server_enabled(
+    workspace_id: int, name: str, payload: MCPServerEnabledUpdateRequest
+) -> MCPServersResponse:
+    """启用或停用一个工作区 MCP 服务。"""
+
+    return _write_mcp_servers(workspace_id, lambda service: service.set_enabled(name, payload.enabled))
+
+
+@app.delete("/configuration/mcp-servers/{name}", response_model=MCPServersResponse)
+async def delete_system_mcp_server(name: str) -> MCPServersResponse:
+    """删除一个系统级 MCP 服务；已经不在时照常返回列表。"""
+
+    return _write_mcp_servers(None, lambda service: service.delete(name))
+
+
+@app.delete(f"{_WORKSPACE}/mcp-servers/{{name}}", response_model=MCPServersResponse)
+async def delete_workspace_mcp_server(workspace_id: int, name: str) -> MCPServersResponse:
+    """删除一个工作区 MCP 服务；已经不在时照常返回列表。"""
+
+    return _write_mcp_servers(workspace_id, lambda service: service.delete(name))
 
 
 @app.post("/configuration/mcp-servers/test", response_model=MCPServerTestResponse)
@@ -151,11 +205,12 @@ def _list_mcp_servers(workspace_id: int | None) -> MCPServersResponse:
         raise_configuration_error(exc)
 
 
-def _update_mcp_servers(
-    workspace_id: int | None, payload: MCPServersUpdateRequest
+def _write_mcp_servers(
+    workspace_id: int | None,
+    write: Callable[[MCPConfigurationService], list[MCPServerEntry]],
 ) -> MCPServersResponse:
     try:
-        return MCPServersResponse.from_entries(_mcp_service(workspace_id).update(payload.servers))
+        return MCPServersResponse.from_entries(write(_mcp_service(workspace_id)))
     except Exception as exc:
         raise_configuration_error(exc)
 
