@@ -317,8 +317,8 @@ class _Actor:
     def __init__(self) -> None:
         self.reasons: list[str] = []
 
-    def request_cancel(self, reason: str) -> None:
-        self.reasons.append(reason)
+    def request_recall(self) -> None:
+        self.reasons.append("parent")
 
 
 class _SessionCrud:

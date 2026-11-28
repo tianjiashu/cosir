@@ -136,6 +136,7 @@ class SessionSseStream:
                     for mutation in frame.mutations
                 ],
                 "resync_reason": frame.resync_reason,
+                "revision": frame.revision,
             }
             if frame.state is not None:
                 payload["state"] = frame.state

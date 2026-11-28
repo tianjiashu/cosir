@@ -350,7 +350,17 @@ export class SessionTransportConnection {
       return;
     }
     if (frame.kind !== "full") throw new Error("Session 长订阅的首帧必须是完整快照");
-    const store = new TransportFrameStore(frame.state, { performanceProbe: this.options.performanceProbe ?? undefined });
+    const store = new TransportFrameStore(frame.state, {
+      performanceProbe: this.options.performanceProbe ?? undefined,
+      revision: frame.revision,
+      onHistoryPageRejected: (error) => {
+        void frontendLog("WARNING", "assistant_history_page_rejected", "更早历史的一页合并后不满足快照契约，丢弃", {
+          traceId: this.options.traceId,
+          data: { sessionId: this.options.sessionId },
+          error,
+        });
+      },
+    });
     this.store = store;
     void frontendLog("INFO", "assistant_transport_initial_state", "Session 长订阅首帧已到达", {
       traceId: this.options.traceId,

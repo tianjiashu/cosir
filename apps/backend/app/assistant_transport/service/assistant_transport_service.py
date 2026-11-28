@@ -224,7 +224,7 @@ class AssistantTransportService:
         space = await asyncio.to_thread(session_runtime_spaces.get_or_create, session_id)
         # 只撤本会话自己发起的：用户停止不动子 Session，子 Agent 显示在这里的批准留给用户处理。
         terminal_approvals.cancel_originated(session_id, "stopped")
-        await space.actor.cancel("user")
+        await space.actor.cancel()
 
     def cancel_tool_call(self, session_id: int, tool_call_id: str) -> None:
         """取消一次工具调用。

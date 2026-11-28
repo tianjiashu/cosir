@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import replace
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import suppress
 from threading import RLock
 from typing import cast
@@ -77,6 +78,9 @@ class ConversationStateService:
         self._context_source = depends.get_session_context_crud()
         self._lock = RLock()
         self._subscribers: dict[int, set[Subscriber]] = {}
+        # 每个 Session 已发布到第几帧（见 ``TransportFrame.revision``）；只在 ``_lock`` 内读写。不随工作副本卸载
+        # 重置：重建后的帧号接着往上走，前端拿到的号始终可比。
+        self._revisions: dict[int, int] = {}
 
     def get_state(self, session_id: int) -> ConversationStateSnapshot:
         """返回离开后端的快照：只带最近一段历史（``window_snapshot``），首次访问时懒重建。
@@ -109,7 +113,9 @@ class ConversationStateService:
         with self._lock:
             space = session_runtime_spaces.get_or_create(session_id)
             state = space.get_working_snapshot(lambda: self._materialize(session_id))
-            return copy.deepcopy(history_page(state["messages"], end))
+            return copy.deepcopy(
+                history_page(state["messages"], end, self._revisions.get(session_id, 0))
+            )
 
     # ── 进程内与队列事实的整表刷新 ──────────────────────────────────────────
 
@@ -183,19 +189,23 @@ class ConversationStateService:
             space = session_runtime_spaces.get(session_id)
             if space is None or not space.has_snapshot():
                 return
-            state = space.get_working_snapshot(lambda: self._materialize(session_id))
-            mutations = tuple(
-                mutation
-                for key, produce in producers.items()
-                if (mutation := ConversationStateMutation("set", (key,), produce(state))).changes(
-                    state
+            try:
+                state = space.get_working_snapshot(lambda: self._materialize(session_id))
+                mutations = tuple(
+                    mutation
+                    for key, produce in producers.items()
+                    if (mutation := ConversationStateMutation("set", (key,), produce(state))).changes(
+                        state
+                    )
                 )
-            )
-            if not mutations:
-                return
-            for mutation in mutations:
-                mutation.apply_to(state)
-            self._validate_or_discard(space, state, mutations)
+                if not mutations:
+                    return
+                for mutation in mutations:
+                    mutation.apply_to(state)
+                validate_mutated(state, mutations)
+            except Exception:
+                self._discard(space)
+                raise
             self._publish(
                 TransportFrame(session_id=session_id, kind="mutation", mutations=mutations)
             )
@@ -249,29 +259,33 @@ class ConversationStateService:
         session_id = event.session_id
         with self._lock:
             space = session_runtime_spaces.get_or_create(session_id)
-            state = space.get_working_snapshot(lambda: self._materialize(session_id))
             mutations: list[ConversationStateMutation] = []
+            try:
+                state = space.get_working_snapshot(lambda: self._materialize(session_id))
 
-            def apply(planned: Iterable[ConversationStateMutation]) -> None:
-                # 逐条按应用前的状态判定：同一计划里前一条可能改变后一条的目标。空操作不应用、不发布。
-                for mutation in planned:
-                    if mutation.changes(state):
-                        mutation.apply_to(state)
-                        mutations.append(mutation)
+                def apply(planned: Iterable[ConversationStateMutation]) -> None:
+                    # 逐条按应用前的状态判定：同一计划里前一条可能改变后一条的目标。空操作不应用、不发布。
+                    for mutation in planned:
+                        if mutation.changes(state):
+                            mutation.apply_to(state)
+                            mutations.append(mutation)
 
-            apply(plan_event(event, state, presentation_catalog(get_tool_registry())))
-            # 看板与交付清单由工具 part 派生：每个工具状态事件之后都重算，不看事件带了什么——
-            # 漏带后台记录的状态事件也能让看板收敛。工具状态事件频率低，token 帧等其余事件不重算。
-            if isinstance(event, ToolCallStatusChangedEvent):
-                background = self._background_tasks(session_id, state)
-                deliverables = project_session_deliverables(state["messages"])
-                apply(
-                    (
-                        ConversationStateMutation("set", ("background_tasks",), background),
-                        ConversationStateMutation("set", ("deliverables",), deliverables),
+                apply(plan_event(event, state, presentation_catalog(get_tool_registry())))
+                # 看板与交付清单由工具 part 派生：每个工具状态事件之后都重算，不看事件带了什么——
+                # 漏带后台记录的状态事件也能让看板收敛。工具状态事件频率低，token 帧等其余事件不重算。
+                if isinstance(event, ToolCallStatusChangedEvent):
+                    background = self._background_tasks(session_id, state)
+                    deliverables = project_session_deliverables(state["messages"])
+                    apply(
+                        (
+                            ConversationStateMutation("set", ("background_tasks",), background),
+                            ConversationStateMutation("set", ("deliverables",), deliverables),
+                        )
                     )
-                )
-            self._validate_or_discard(space, state, mutations)
+                validate_mutated(state, mutations)
+            except Exception:
+                self._discard(space)
+                raise
             change = TransportFrame(
                 session_id=session_id, kind="mutation", mutations=tuple(mutations)
             )
@@ -286,7 +300,8 @@ class ConversationStateService:
 
         工作副本只是投影缓存：没人看、也没有流式输出在往里写时留着它只占内存（每个打开过的长对话
         一份完整历史，进程生命周期内不释放）。下次读取或事件到达时按 canonical 记录重建。Run 还在
-        运行时不卸载：流式正文没落库，重建会丢掉正在输出的内容。在最后一个订阅者离开、以及 Run
+        运行时不卸载：草稿行每块都落库，但重建把它当成已完成的段，之后的增量会另起一段并重复触发重建的
+        那一块（投影失败时的 ``_discard`` 接受这个代价）。在最后一个订阅者离开、以及 Run
         状态变化（结束、挂起）这两个时刻判断。
         """
 
@@ -345,7 +360,10 @@ class ConversationStateService:
             self._subscribers.setdefault(session_id, set()).add(subscriber)
             try:
                 first_frame = TransportFrame(
-                    session_id=session_id, kind="full", state=self.get_state(session_id)
+                    session_id=session_id,
+                    kind="full",
+                    state=self.get_state(session_id),
+                    revision=self._revisions.get(session_id, 0),
                 )
             except Exception:
                 self._subscribers[session_id].discard(subscriber)
@@ -377,6 +395,7 @@ class ConversationStateService:
 
         with self._lock:
             subscribers = self._subscribers.pop(session_id, set())
+            self._revisions.pop(session_id, None)
             for subscriber in subscribers:
                 with suppress(RuntimeError):
                     subscriber.loop.call_soon_threadsafe(subscriber.close)
@@ -396,23 +415,20 @@ class ConversationStateService:
             with suppress(RuntimeError):
                 subscriber.loop.call_soon_threadsafe(subscriber.close)
 
-    @staticmethod
-    def _validate_or_discard(
-        space: SessionRuntimeSpace,
-        state: ConversationStateSnapshot,
-        mutations: Sequence[ConversationStateMutation],
-    ) -> None:
-        """变更已写进工作副本后的契约检查；须持 ``_lock`` 调用。
+    def _discard(self, space: SessionRuntimeSpace) -> None:
+        """投影失败（规划违约、变更违约、冷读失败）后收敛；须持 ``_lock`` 调用。
 
-        违约时丢弃工作副本再抛出：读取不再校验，留着它会把违约内容发给之后的读取方；丢弃后下次
-        读取或事件到达时按 canonical 重建（重建结果在物化时整份校验）。违约的变更不发布。
+        失败可能发生在变更写了一半之后，工作副本已不可信：丢弃它，下次读取或事件到达时按 canonical 重建
+        （重建结果在物化时整份校验）；违约的变更不发布。订阅中的客户端手里是失败之前的状态，之后的增量
+        都缺了这一步，要它们重新 attach 取得重建后的完整快照——不通知的话，客户端会一直停在缺口上。
         """
 
-        try:
-            validate_mutated(state, mutations)
-        except ValueError:
-            space.unload_snapshot()
-            raise
+        space.unload_snapshot()
+        self._publish(
+            TransportFrame(
+                session_id=space.session_id, kind="resync_required", resync_reason="projection_failed"
+            )
+        )
 
     def _materialize(self, session_id: int) -> ConversationStateSnapshot:
         """工作副本的加载函数：重建并整份校验一次；之后由 ``validate_mutated`` 守住每次变更。"""
@@ -474,8 +490,14 @@ class ConversationStateService:
         return state
 
     def _publish(self, change: TransportFrame) -> None:
-        """把帧交给各订阅者；须持 ``_lock`` 调用。full 帧的 ``state`` 是已裁好的窗口副本，工作副本不经它改变。"""
+        """给帧编上本 Session 的下一个 revision 再交给各订阅者；须持 ``_lock`` 调用。``resync_required`` 不属于
+        发布序列、不编号（见 ``TransportFrame.revision``）。full 帧的 ``state`` 是已裁好的窗口副本，工作副本
+        不经它改变。"""
 
+        if change.kind != "resync_required":
+            revision = self._revisions.get(change.session_id, 0) + 1
+            self._revisions[change.session_id] = revision
+            change = replace(change, revision=revision)
         for subscriber in tuple(self._subscribers.get(change.session_id, set())):
             try:
                 subscriber.loop.call_soon_threadsafe(subscriber.offer, change)

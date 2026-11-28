@@ -117,7 +117,11 @@ def _can_coalesce(previous: TransportFrame, current: TransportFrame) -> bool:
 
 
 def _coalesce(previous: TransportFrame, current: TransportFrame) -> TransportFrame:
-    """合并相邻的 append-text 帧，且不物化 full state。"""
+    """合并相邻的 append-text 帧，且不物化 full state。
+
+    合并帧取后一帧的 revision、内容却含前一帧；前端只按 revision 回放窗口外的变更，所以能合并的帧必须只写
+    窗口内（当前回合的回复），由 ``test_coalescible_frames_only_target_the_active_reply`` 守住。
+    """
 
     left, right = previous.mutations[0], current.mutations[0]
     return TransportFrame(
@@ -130,6 +134,7 @@ def _coalesce(previous: TransportFrame, current: TransportFrame) -> TransportFra
                 value=f"{left.value}{right.value}",
             ),
         ),
+        revision=current.revision,
     )
 
 

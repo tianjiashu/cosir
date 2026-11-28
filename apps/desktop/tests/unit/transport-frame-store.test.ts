@@ -20,10 +20,12 @@ const running = (messages: TransportMessage[]): TransportState => transportState
   activity: activity(1, "running"),
 });
 
+// 帧号按到达顺序递增；用例里的历史页默认读在这些帧之前（revision 0），专门测先后的用例另给号。
+let revision = 0;
 const mutation = (mutations: TransportFrameEnvelope["mutations"]): TransportFrameEnvelope => ({
-  session_id: 1, kind: "mutation", mutations,
+  session_id: 1, kind: "mutation", mutations, revision: ++revision,
 });
-const full = (state: TransportState): TransportFrameEnvelope => ({ session_id: 1, kind: "full", mutations: [], state });
+const full = (state: TransportState): TransportFrameEnvelope => ({ session_id: 1, kind: "full", mutations: [], state, revision: 0 });
 
 describe("增量与完整快照遵守同一当前契约", () => {
   const validTool = () => toolCallPart("c", "read_file");
@@ -61,13 +63,48 @@ describe("增量与完整快照遵守同一当前契约", () => {
     expect(() => store.applyFrame(mutation([{ kind: "set", path: ["messages", 0, "outcome"], value: { ...outcome("completed"), durationMs: null } }]))).toThrow("durationMs");
   });
 
-  it("历史页回放错误增量时保留原窗口", () => {
+  it("历史页回放错误增量时丢弃这一页、保留原窗口，交给调用方记录，之后可以重翻", () => {
     const initial = transportState({ messageOffset: 1, messages: [assistantMessage("later", 1)] });
-    const store = new TransportFrameStore(initial);
+    const rejected = vi.fn();
+    const store = new TransportFrameStore(initial, { onHistoryPageRejected: rejected });
     const fetch = store.beginHistoryFetch()!;
     store.applyFrame(mutation([{ kind: "set", path: ["messages", 0, "parts", 0, "status"], value: "future-status" }]));
-    expect(() => store.completeHistoryFetch(fetch, { messageOffset: 0, messages: [assistantMessage("earlier", 1, [validTool()])] })).toThrow("status");
+    expect(store.completeHistoryFetch(fetch, { messageOffset: 0, messages: [assistantMessage("earlier", 1, [validTool()])] , revision: 0 })).toBe(true);
+    expect(rejected).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("status") }));
     expect(store.getSnapshot().state).toBe(initial);
+    expect(store.beginHistoryFetch()).not.toBeNull();
+  });
+
+  it("暂存的页在之后某帧里合并失败：那一帧的窗口内增量照常生效、不抛出，页被丢弃", () => {
+    const initial = transportState({ messageOffset: 1, messages: [assistantMessage("later", 1, [validTool()])] });
+    const rejected = vi.fn();
+    const store = new TransportFrameStore(initial, { onHistoryPageRejected: rejected, revision: 1 });
+    const fetch = store.beginHistoryFetch()!;
+    // 页号 3、已收到 1：先暂存。
+    expect(store.completeHistoryFetch(fetch, { messageOffset: 0, messages: [assistantMessage("earlier", 1, [toolCallPart("e", "read_file")])], revision: 3 })).toBe(true);
+    expect(rejected).not.toHaveBeenCalled();
+    // 号 4 的帧追上了页：窗口内的增量合法；落在页里的那条比页新、要回放，回放后违约。
+    expect(() => store.applyFrame({ session_id: 1, kind: "mutation", revision: 4, mutations: [
+      { kind: "set", path: ["messages", 1, "parts", 0, "status"], value: "completed" },
+      { kind: "set", path: ["messages", 0, "parts", 0, "status"], value: "future-status" },
+    ] })).not.toThrow();
+    expect(rejected).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot().state.messageOffset).toBe(1);
+    expect((store.getSnapshot().state.messages[0].parts[0] as unknown as { status: string }).status).toBe("completed");
+    expect(store.beginHistoryFetch()).not.toBeNull();
+  });
+
+  it("页暂存期间来了背压重同步：页仍暂存、号不被改小；随后的完整快照作废它，可以重翻并立即合并", () => {
+    const store = new TransportFrameStore(transportState({ messageOffset: 1, messages: [assistantMessage("later", 1)] }), { revision: 1 });
+    const fetch = store.beginHistoryFetch()!;
+    expect(store.completeHistoryFetch(fetch, { messageOffset: 0, messages: [assistantMessage("earlier", 1)], revision: 5 })).toBe(true);
+    expect(store.beginHistoryFetch()).toBeNull();
+    store.applyFrame({ session_id: 1, kind: "resync_required", revision: 0, mutations: [], resync_reason: "subscriber_backpressure" });
+    expect(store.getSnapshot().state.messageOffset).toBe(1);
+    store.applyFrame({ ...full(transportState({ messageOffset: 1, messages: [assistantMessage("later", 1)] })), revision: 7 });
+    const again = store.beginHistoryFetch()!;
+    expect(store.completeHistoryFetch(again, { messageOffset: 0, messages: [assistantMessage("earlier", 1)], revision: 7 })).toBe(true);
+    expect(store.getSnapshot().state.messageOffset).toBe(0);
   });
 
   it("混合帧被拒后，不把其中的历史增量留在翻页缓冲中", () => {
@@ -78,7 +115,7 @@ describe("增量与完整快照遵守同一当前契约", () => {
       { kind: "set", path: ["messages", 1, "parts", 0, "status"], value: "future-status" },
     ]))).toThrow("status");
     const earlier = assistantMessage("earlier", 1, [toolCallPart("earlier-call", "read_file")]);
-    expect(store.completeHistoryFetch(fetch, { messageOffset: 0, messages: [earlier] })).toBe(true);
+    expect(store.completeHistoryFetch(fetch, { messageOffset: 0, messages: [earlier] , revision: 0 })).toBe(true);
     expect(store.getSnapshot().state.messages[0]).toBe(earlier);
   });
 });
@@ -250,7 +287,7 @@ describe("TransportFrameStore", () => {
   it("marks a slow connection for resync and ignores later mutations until a full frame", () => {
     const store = new TransportFrameStore(running([streaming("m-1", "old")]));
     const before = store.getSnapshot();
-    store.applyFrame({ session_id: 1, kind: "resync_required", mutations: [], resync_reason: "subscriber_backpressure" });
+    store.applyFrame({ session_id: 1, kind: "resync_required", revision: 0, mutations: [], resync_reason: "subscriber_backpressure" });
     expect(store.getSnapshot().resyncRequired).toBe(true);
     expect(store.getSnapshot().state).toBe(before.state);
 
@@ -473,7 +510,7 @@ describe("history window", () => {
     expect(store.beginHistoryFetch()).toBeNull();
     store.applyFrame(mutation([setText(3, "late a1")]));
 
-    expect(store.completeHistoryFetch(fetch!, { messages: history.slice(2, 4), messageOffset: 2 })).toBe(true);
+    expect(store.completeHistoryFetch(fetch!, { messages: history.slice(2, 4), messageOffset: 2 , revision: 0 })).toBe(true);
     expect(store.getSnapshot().state.messageOffset).toBe(2);
     expect(store.getSnapshot().state.messages.map((message) => message.id)).toEqual(["u1", "a1", "u2", "a2"]);
     expect(texts(store)[1]).toBe("late a1");
@@ -486,14 +523,14 @@ describe("history window", () => {
     const store = new TransportFrameStore(windowed());
     const fetch = store.beginHistoryFetch()!;
     store.applyFrame(full(windowed()));
-    expect(store.completeHistoryFetch(fetch, { messages: history.slice(2, 4), messageOffset: 2 })).toBe(false);
+    expect(store.completeHistoryFetch(fetch, { messages: history.slice(2, 4), messageOffset: 2 , revision: 0 })).toBe(false);
     expect(store.getSnapshot().state.messageOffset).toBe(4);
   });
 
   it("与已加载部分不衔接的页丢弃，之后可以重新翻", () => {
     const store = new TransportFrameStore(windowed());
     const fetch = store.beginHistoryFetch()!;
-    expect(store.completeHistoryFetch(fetch, { messages: history.slice(0, 2), messageOffset: 0 })).toBe(false);
+    expect(store.completeHistoryFetch(fetch, { messages: history.slice(0, 2), messageOffset: 0 , revision: 0 })).toBe(false);
     expect(store.beginHistoryFetch()).not.toBeNull();
   });
 
@@ -502,7 +539,7 @@ describe("history window", () => {
     const pending = command("pending");
     store.setPendingCommands([pending]);
     const fetch = store.beginHistoryFetch()!;
-    store.completeHistoryFetch(fetch, { messages: history.slice(2, 4), messageOffset: 2 });
+    store.completeHistoryFetch(fetch, { messages: history.slice(2, 4), messageOffset: 2 , revision: 0 });
     expect(store.getSnapshot().pendingCommands).toHaveLength(1);
 
     store.applyFrame(full(transportState({ messages: history.slice(0, 4), messageOffset: 0, activity: activity(3, "completed") })));
@@ -511,5 +548,82 @@ describe("history window", () => {
       messages: [...history.slice(0, 4), echoed(userMessage("u-new", 4), pending)], messageOffset: 0, activity: activity(3, "completed"),
     })));
     expect(store.getSnapshot().pendingCommands).toHaveLength(0);
+  });
+});
+
+describe("历史页与增量按 revision 排定先后", () => {
+  // 后端：后台命令的输出已到 "A"（帧 1 之前），帧 2 追加 "B"。页取自同一工作副本，读取时已发布到几号就含到几号。
+  const old = (output: string, seq: number) => assistantMessage("old", 1, [toolCallPart("cmd", "execute_terminal", {
+    status: "pending",
+    background: { label: "command", startedAt: "2026-10-27T00:00:00.000Z", endedAt: null },
+    display_data: { kind: "terminal-result", output },
+    terminal_output_seq: seq,
+  })]);
+  const appendB: TransportFrameEnvelope = { session_id: 1, kind: "mutation", revision: 2, mutations: [
+    { kind: "append-text", path: ["messages", 0, "parts", 0, "display_data", "output"], value: "B" },
+    { kind: "set", path: ["messages", 0, "parts", 0, "terminal_output_seq"], value: 2 },
+  ] };
+  const pageWithB = { messageOffset: 0, messages: [old("AB", 2)], revision: 2 };
+  const pageWithoutB = { messageOffset: 0, messages: [old("A", 1)], revision: 1 };
+  const output = (store: TransportFrameStore) =>
+    (store.getSnapshot().state.messages[0].parts[0] as unknown as { display_data: { output: string } }).display_data.output;
+  const opened = () => new TransportFrameStore(
+    transportState({ messageOffset: 1, messages: [assistantMessage("new", 2)] }),
+    { revision: 1 },
+  );
+
+  it("页已含 B、B 的帧先到：缓存里不比页新的增量不回放", () => {
+    const store = opened();
+    const fetch = store.beginHistoryFetch()!;
+    store.applyFrame(appendB);
+    expect(store.completeHistoryFetch(fetch, pageWithB)).toBe(true);
+    expect(output(store)).toBe("AB");
+  });
+
+  it("页已含 B、页先到：页暂存到 B 的帧到达，那一帧并入页里、不再应用", () => {
+    const store = opened();
+    const fetch = store.beginHistoryFetch()!;
+    expect(store.completeHistoryFetch(fetch, pageWithB)).toBe(true);
+    expect(store.getSnapshot().state.messageOffset).toBe(1);
+    store.applyFrame(appendB);
+    expect(store.getSnapshot().state.messageOffset).toBe(0);
+    expect(output(store)).toBe("AB");
+  });
+
+  it("页读在 B 之前、B 的帧先到：缓存的 B 在合并时回放", () => {
+    const store = opened();
+    const fetch = store.beginHistoryFetch()!;
+    store.applyFrame(appendB);
+    expect(store.completeHistoryFetch(fetch, pageWithoutB)).toBe(true);
+    expect(output(store)).toBe("AB");
+  });
+
+  it("页读在 B 之前、页先到：立即合并，B 的帧随后直接落在页上", () => {
+    const store = opened();
+    const fetch = store.beginHistoryFetch()!;
+    expect(store.completeHistoryFetch(fetch, pageWithoutB)).toBe(true);
+    expect(store.getSnapshot().state.messageOffset).toBe(0);
+    store.applyFrame(appendB);
+    expect(output(store)).toBe("AB");
+  });
+
+  it("空闲会话之后不再有帧：首帧的号已追上页的号，页立即合并", () => {
+    const store = new TransportFrameStore(
+      transportState({ messageOffset: 1, messages: [assistantMessage("new", 2)] }),
+      { revision: 2 },
+    );
+    const fetch = store.beginHistoryFetch()!;
+    expect(store.completeHistoryFetch(fetch, pageWithB)).toBe(true);
+    expect(output(store)).toBe("AB");
+  });
+
+  it("暂存的页被完整快照作废", () => {
+    const store = opened();
+    const fetch = store.beginHistoryFetch()!;
+    expect(store.completeHistoryFetch(fetch, pageWithB)).toBe(true);
+    store.applyFrame(full(transportState({ messageOffset: 1, messages: [assistantMessage("new", 2)] })));
+    store.applyFrame(appendB);
+    expect(store.getSnapshot().state.messageOffset).toBe(1);
+    expect(store.beginHistoryFetch()).not.toBeNull();
   });
 });

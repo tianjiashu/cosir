@@ -64,7 +64,7 @@ class SessionRuntimeSpaceRegistry:
                 self._spaces[session_id] = space
                 # 事件循环已关闭（进程退出中）时不再拉起：没有可运行 actor 的循环。
                 if self._loop is not None and not self._loop.is_closed():
-                    self._loop.call_soon_threadsafe(space.actor.start)
+                    space.actor.schedule_start(self._loop)
             return space
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
@@ -75,7 +75,7 @@ class SessionRuntimeSpaceRegistry:
             self._loop = loop
             spaces = tuple(self._spaces.values())
         for space in spaces:
-            loop.call_soon_threadsafe(space.actor.start)
+            space.actor.schedule_start(loop)
 
     def enqueue(
         self, session_id: int, message: SessionMessage, *, db: DbSession | None = None

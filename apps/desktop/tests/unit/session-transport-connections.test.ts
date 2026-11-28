@@ -30,7 +30,7 @@ function attachStreams() {
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const body = new ReadableStream<Uint8Array>({ start: (value) => { controller = value; } });
     const send = (frame: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
-    send({ session_id: 7, kind: "full", mutations: [], state: transportState() });
+    send({ session_id: 7, kind: "full", revision: 0, mutations: [], state: transportState() });
     push = send;
     return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
   }));
@@ -132,7 +132,7 @@ describe("会话级连接登记表", () => {
     const hello = imageCommand("hello", "blob:hello");
     await page.connection.submit(hello, { send: async () => undefined, onError: vi.fn() });
     expect(released).toEqual([]);
-    streams.push({ session_id: 7, kind: "mutation", mutations: [{ kind: "set", path: ["messages", 0], value: {
+    streams.push({ session_id: 7, kind: "mutation", revision: 1, mutations: [{ kind: "set", path: ["messages", 0], value: {
       ...userMessage("1", 1, "hello"), clientMessageId: getOrCreateTransportCommandId(hello),
     } }] });
     await flush();

@@ -86,13 +86,16 @@ def _context_row(
     )
 
 
+@pytest.mark.event_sink_failure_expected
 def test_workflow_event_dispatcher_swallows_projector_failure() -> None:
+    from app.core.events.event_sink import event_sink, set_event_sink
     from app.core.workflow.node_helper.common import emit, execution_scope
 
     def failing_sink(_event: object) -> None:
         raise RuntimeError("projector unavailable")
 
-    with execution_scope(SimpleNamespace(event_sink=failing_sink), SimpleNamespace()):
+    set_event_sink(failing_sink)  # 下一个用例由 conftest 的 autouse 夹具换回
+    with execution_scope(SimpleNamespace(event_sink=event_sink()), SimpleNamespace()):
         emit(RunInitializedEvent(created_at=_RUN_CREATED_AT, session_id=7, run_id=11))
 
 

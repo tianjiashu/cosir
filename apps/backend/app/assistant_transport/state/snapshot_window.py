@@ -18,10 +18,11 @@ from app.config.constant import Constant
 
 
 class HistoryPage(TypedDict):
-    """``messages`` 是完整历史里 ``[messageOffset, end)`` 的一段。"""
+    """``messages`` 是完整历史里 ``[messageOffset, end)`` 的一段；``revision`` 是读取时已发布到的帧号。"""
 
     messages: list[ConversationStateMessage]
     messageOffset: int
+    revision: int
 
 
 def window_snapshot(state: ConversationStateSnapshot) -> ConversationStateSnapshot:
@@ -37,7 +38,9 @@ def window_snapshot(state: ConversationStateSnapshot) -> ConversationStateSnapsh
     )
 
 
-def history_page(messages: list[ConversationStateMessage], end: int) -> HistoryPage:
+def history_page(
+    messages: list[ConversationStateMessage], end: int, revision: int
+) -> HistoryPage:
     """完整历史中 ``end`` 之前的一页。
 
     异常:
@@ -48,7 +51,7 @@ def history_page(messages: list[ConversationStateMessage], end: int) -> HistoryP
     if end > len(messages):
         raise ValueError("history page end is beyond the current history")
     start = _turn_start(messages, end - Constant.Transport.HISTORY_WINDOW_MESSAGES)
-    return HistoryPage(messages=messages[start:end], messageOffset=start)
+    return HistoryPage(messages=messages[start:end], messageOffset=start, revision=revision)
 
 
 def _turn_start(messages: list[ConversationStateMessage], start: int) -> int:

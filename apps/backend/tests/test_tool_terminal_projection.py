@@ -16,6 +16,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from pydantic import BaseModel, ConfigDict
+
 from app.assistant_transport.projection.event_projection import plan_event
 from app.assistant_transport.service.conversation_event_projector import (
     ConversationEventProjector,
@@ -58,7 +60,6 @@ from app.core.workflow.nodes import tools_node
 from app.models.message_context.message_metadata.tool_message_metadata import ToolMessageMetadata
 from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 from app.tools.tool_handler.file.read_file import ReadFileTool
-from pydantic import BaseModel, ConfigDict
 from tests.runtime_context_stub import admitting, runtime_stub
 from tests.tool_executor_fakes import emit_running
 
@@ -775,8 +776,10 @@ def test_malformed_display_data_still_emits_failed_terminal(
     assert recorder.events[-1].result.display_data is None
 
 
+@pytest.mark.event_sink_failure_expected
 def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
-    """观测是旁路：真实 ``emit`` 下 sink 抛异常，``_execute_call`` 仍原样返回观察。"""
+    """观测是旁路：消费方抛异常时由 sink 端口兜住，``_execute_call`` 仍原样返回观察。"""
+    from app.core.events.event_sink import event_sink, set_event_sink
 
     calls: list[Any] = []
 
@@ -784,11 +787,12 @@ def test_event_sink_failure_does_not_break_execute_call(tmp_path: Path) -> None:
         calls.append(event)
         raise RuntimeError("sink exploded")
 
+    set_event_sink(_exploding_sink)  # 下一个用例由 conftest 的 autouse 夹具换回
     rc, batch = _runtime(
         tmp_path,
         _make_read_file_executor(tmp_path),
         projected={"call-ok": "read_file"},
-        event_sink=_exploding_sink,
+        event_sink=event_sink(),
     )
 
     with execution_scope(rc, SimpleNamespace()):  # type: ignore[arg-type]

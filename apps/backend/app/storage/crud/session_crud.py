@@ -10,6 +10,7 @@
 ``init_storage()`` 之后实例化；本类不创建、不释放引擎。
 """
 
+from collections.abc import Collection
 from typing import cast
 
 from sqlalchemy import delete, func, select, update
@@ -41,6 +42,7 @@ class SessionCrud:
 
     # 结果是否已读存在 extra 里（``SessionExtra.result_unread``），按 JSON 路径读写，不整体反序列化。
     _RESULT_UNREAD = func.json_extract(SessionModel.extra, "$.result_unread")
+    _RECALLED_THROUGH = func.json_extract(SessionModel.extra, "$.recalled_through_run_id")
     _CURRENT_RUN_STATUS = select(
         SessionModel.id, RunModel.status, _RESULT_UNREAD.label("unread")
     ).outerjoin(RunModel, SessionModel.current_run_id == RunModel.id)
@@ -388,6 +390,31 @@ class SessionCrud:
             if db.scalar(select(SessionModel.id).where(SessionModel.id == session_id)) is None:
                 raise KeyError(session_id)
             return False
+
+    def mark_recalled(self, session_ids: Collection[int]) -> None:
+        """把这些 Session 的 ``SessionExtra.recalled_through_run_id`` 一次记为各自此刻的当前 Run。
+
+        一条 UPDATE 直接取各行的 ``current_run_id`` 列，不先读再写：读写之间开出的新 Run 不会漏记，整批同时生效。
+        还没有 Run 的不写；只能传 Agent 派生的 Session（调用方 ``SessionService.mark_recalled`` 保证）。
+        """
+        with self._db_factory.begin() as db:
+            db.execute(
+                update(SessionModel)
+                .where(
+                    SessionModel.id.in_(list(session_ids)),
+                    SessionModel.current_run_id.is_not(None),
+                )
+                .values(
+                    extra=func.json_set(
+                        SessionModel.extra, "$.recalled_through_run_id", SessionModel.current_run_id
+                    ),
+                    updated_at=SessionModel.updated_at,
+                )
+            )
+
+    def recalled_through(self, session_id: int, db: DbSession) -> int | None:
+        """读收回截止（见 :meth:`mark_recalled`）；在调用方事务里读，判定与随后的写入同一笔提交。"""
+        return db.scalar(select(self._RECALLED_THROUGH).where(SessionModel.id == session_id))
 
     def set_current_run_id(
             self,

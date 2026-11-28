@@ -339,9 +339,10 @@ function validateBackgroundTask(value: unknown, path: string, seenIds: Set<strin
  */
 export function parseHistoryPage(value: unknown, loadedIds: ReadonlySet<string>): TransportHistoryPage {
   const page = requireRecord(value, "history");
-  requireExactKeys(page, ["messages", "messageOffset"], "history");
+  requireExactKeys(page, ["messages", "messageOffset", "revision"], "history");
   validateMessages(page.messages, "history.messages", new Set(loadedIds));
   if (requireNullableNonNegativeInteger(page.messageOffset, "history.messageOffset") === null) throw new TransportSnapshotValidationError("history.messageOffset", "非负整数");
+  if (requireNullableNonNegativeInteger(page.revision, "history.revision") === null) throw new TransportSnapshotValidationError("history.revision", "非负整数");
   return page as unknown as TransportHistoryPage;
 }
 

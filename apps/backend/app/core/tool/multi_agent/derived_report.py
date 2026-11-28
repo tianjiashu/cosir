@@ -11,7 +11,11 @@ Agent 消息，会开启发起方的 Run，若按发送方回报，父子会互�
 
 不汇报的情形：
 - Run 由用户输入开启（用户在工作台或侧栏直接和它对话）：那是用户与它之间的事；
-- 上游收回（``parent_cancelled``）：发起方已不要它的结果；
+- 上游收回，两种情形各管一半：
+  - Run 被上游停下（``parent_cancelled``）：连「被停止」的通知也不留，发起方要的就是它停；
+  - Run 在收回截止（``SessionExtra.recalled_through_run_id``）之内：收回只发停止请求，赶不上已写完成、
+    还在收尾或汇报还没入队的 Run，截止在收回发起时同步记下（连同整棵派生子树），汇报入队时在同一写
+    事务里判定，与撤回删除已入队汇报的写事务由 SQLite 写锁排定先后；
 - 删除、重启、进程关闭：这些路径不经 actor 的落定点。
 被用户停止或删除时不交结论，只给发起方留一条 Session 级通知（:func:`report_deleted` 由删除入口调用）。
 通知只唤醒发起方挂起的 Run、不开新 Run（``NOTICE_WAKE_SCOPES``，与单停后台命令的回执一致）：
@@ -24,6 +28,8 @@ Agent 消息，会开启发起方的 Run，若按发送方回报，父子会互�
 from __future__ import annotations
 
 from collections.abc import Collection, Iterable
+
+from sqlalchemy.orm import Session as DbSession
 
 from app.config.constant import Constant
 from app.config.logging.logger import log
@@ -40,6 +46,8 @@ from app.models.run.run_record import RunRecord
 from app.models.run.run_status import ACTIVE_RUN_STATUSES, RunStatus
 from app.models.session.session_record import SessionRecord
 from app.service import depends as service_depends
+from app.storage.store_engines import main_db_factory
+from app.storage.write_transaction import begin_immediate
 
 
 def report_settled(run: RunRecord) -> None:
@@ -65,6 +73,7 @@ def report_settled(run: RunRecord) -> None:
                 deriving_call_id=session.extra.deriving_call_id,
             ),
             data={"session_id": session.id, "run_id": run.id},
+            settled=run,
         )
         return
     report = AgentReport(
@@ -75,6 +84,7 @@ def report_settled(run: RunRecord) -> None:
         deriver_id,
         _report_text(run),
         MessageSource(session_id=session.id, name=session.title, report=report),
+        settled=run,
         data={"session_id": session.id, "run_id": run.id, "status": run.status},
     )
 
@@ -117,7 +127,12 @@ def _stopped_notice(
 
 
 def _deliver_report(
-    deriver_id: int, text: str, source: MessageSource, *, data: dict[str, object]
+    deriver_id: int,
+    text: str,
+    source: MessageSource,
+    *,
+    settled: RunRecord,
+    data: dict[str, object],
 ) -> None:
     """以发起方当前 Run 的配置投递一条汇报：汇报开出的新 Run 是发起方自己的，配置沿用它的。"""
     launch = RunLaunch.from_run(service_depends.get_session_service().require_current_run(deriver_id))
@@ -131,14 +146,40 @@ def _deliver_report(
             },
         )
         return
-    _deliver(deriver_id, SessionMessage.of(AgentMessageBody(text=text, source=source, launch=launch)), data=data)
+    _deliver(
+        deriver_id,
+        SessionMessage.of(AgentMessageBody(text=text, source=source, launch=launch)),
+        data=data,
+        settled=settled,
+    )
 
 
-def _deliver(deriver_id: int, message: SessionMessage, *, data: dict[str, object]) -> None:
+def _deliver(
+    deriver_id: int,
+    message: SessionMessage,
+    *,
+    data: dict[str, object],
+    settled: RunRecord | None = None,
+) -> None:
+    """投进发起方的外部队列；``settled`` 是这条消息所报的 Run，它在收回截止之内时放弃。
+
+    截止判定与入队在同一个 ``BEGIN IMMEDIATE`` 事务里：判定之后、入队之前提交的收回截止，会让迟到的
+    汇报漏过撤回（撤回删的只是它提交那一刻队列里已有的汇报）。
+    """
     from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
     try:
-        session_runtime_spaces.enqueue(deriver_id, message)
+        with begin_immediate(main_db_factory()) as db:
+            if settled is not None and _recalled(settled, db):
+                log.info(
+                    "derived_report_dropped_recalled",
+                    extra={
+                        "msg": "派生方已收回这个 Run，汇报放弃",
+                        "data": {"deriver_id": deriver_id, "kind": message.kind, **data},
+                    },
+                )
+                return
+            session_runtime_spaces.enqueue(deriver_id, message, db=db)
     except KeyError:
         log.info(
             "derived_report_dropped_deriver_missing",
@@ -152,6 +193,11 @@ def _deliver(deriver_id: int, message: SessionMessage, *, data: dict[str, object
             "data": {"deriver_id": deriver_id, "kind": message.kind, **data},
         },
     )
+
+
+def _recalled(run: RunRecord, db: DbSession) -> bool:
+    through = service_depends.get_session_crud().recalled_through(run.session_id, db)
+    return through is not None and run.id <= through
 
 
 def has_open_work(session_id: int) -> bool:

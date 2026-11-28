@@ -162,6 +162,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "llm: 真实调用 LLM 的端到端冒烟测试（需要联网与 DEEPSEEK_API_KEY，默认不进普通 pytest）",
+    "event_sink_failure_expected: 用例有意让事件消费失败（sink 端口记录后吞掉），不按投影违约判失败",
 ]
 
 [tool.coverage.run]

@@ -25,6 +25,8 @@ import { parseTransportState, validateTransportUpdate } from "@/lib/assistant/tr
 
 type TransportFrameBase = {
   session_id: number;
+  /** 本 Session 已发布到第几帧（后端工作副本锁内递增）；只用来与历史页的 `revision` 比先后。 */
+  revision: number;
   mutations: Array<{
     kind: "set" | "append-text";
     path: Array<string | number>;
@@ -39,6 +41,8 @@ export type TransportFrameEnvelope =
   | (TransportFrameBase & { kind: "mutation" | "resync_required"; state?: TransportState });
 
 type TransportMutation = TransportFrameEnvelope["mutations"][number];
+/** 缓存的增量连同所在帧的号：页合并时只回放号比页新的。 */
+type RevisedMutation = { revision: number; mutation: TransportMutation };
 
 /** 一次往上翻页：`end` 是请求时的 `messageOffset`，`generation` 用来认出期间被完整快照替换的窗口。 */
 export type HistoryFetch = { generation: number; end: number };
@@ -77,6 +81,13 @@ type PublicationKind = "stream" | "canonical" | "pending";
 export type TransportFrameStoreOptions = {
   /** 注入开发期性能探针；生产构建不传入该能力。 */
   performanceProbe?: AssistantPerformanceProbe;
+  /** 初始状态所在 full 帧的号：空闲会话之后可能再无帧到达，翻页要拿它和页的号比。 */
+  revision?: number;
+  /**
+   * 一页合并时回放缓存增量后不满足快照契约，被丢弃（之后可以重翻）。合并可能发生在之后某个无关帧的处理里，
+   * 不能把异常抛进那一帧、拆掉长订阅，所以交给调用方记录。
+   */
+  onHistoryPageRejected?: (error: unknown) => void;
 };
 
 /**
@@ -120,8 +131,10 @@ export function parseTransportFrame(value: unknown): TransportFrameEnvelope {
   if (frame.resync_reason !== undefined && frame.resync_reason !== null && typeof frame.resync_reason !== "string") {
     throw new Error("transport frame resync_reason is invalid");
   }
+  if (!Number.isInteger(frame.revision) || (frame.revision as number) < 0) throw new Error("transport frame revision is invalid");
   const base = {
     session_id: frame.session_id as number,
+    revision: frame.revision as number,
     mutations,
     resync_reason: frame.resync_reason as string | null | undefined,
   };
@@ -143,8 +156,11 @@ export function parseTransportFrame(value: unknown): TransportFrameEnvelope {
  *
  * 历史窗口：`state.messages` 只含已加载的一段，`messageOffset` 是它前面还没加载的条数。增量路径里的
  * 消息下标是完整历史里的位置，只在 `localize` 这一处换算成本地位置；指向未加载消息的增量丢弃，
- * 那一页加载时后端会给出它当时的内容。翻页请求在途时这些增量先缓存，页到达后回放落在页内的，
- * 免得页内容恰好在请求期间更新而丢失。位置只在完整快照处才会变：完整快照替换窗口、作废在途翻页。
+ * 那一页加载时后端会给出它当时的内容。页与帧走两条通道，先后只按 `revision` 比：页带读取那一刻
+ * 后端已发布到的帧号，号不大于它的增量已含在页里。翻页在途时落在未加载区的增量连同帧号先缓存；页到达时
+ * 若帧还没追上页的号，页先暂存，等追上的那一帧到达再合并——之前的增量都已缓存、之后的都直接落在合并后
+ * 的窗口上，合并时只回放号比页新的那些。不按「页到了就回放全部缓存」：已含在页里的 `append-text`
+ * 会重复。位置只在完整快照处才会变：完整快照替换窗口、作废在途翻页（含暂存的页）。
  */
 /**
  * 完整快照与上一份状态的结构共享：内容没变的消息（按 id）与顶层字段沿用旧对象。
@@ -183,11 +199,16 @@ export class TransportFrameStore {
   private scheduledFrameTimestamp: number | null = null;
   private readonly performanceProbe: AssistantPerformanceProbe | undefined;
   private historyGeneration = 0;
-  private historyFetch: (HistoryFetch & { buffered: TransportMutation[] }) | null = null;
+  private historyFetch: (HistoryFetch & { buffered: RevisedMutation[]; page: TransportHistoryPage | null }) | null = null;
+  /** 最近收到的帧号（见 `TransportFrameEnvelope.revision`），与历史页的号比先后。 */
+  private receivedRevision = 0;
+  private readonly onHistoryPageRejected: ((error: unknown) => void) | undefined;
 
   public constructor(initialState: TransportState, options: TransportFrameStoreOptions = {}) {
     this.state = initialState;
     this.performanceProbe = options.performanceProbe;
+    this.receivedRevision = options.revision ?? 0;
+    this.onHistoryPageRejected = options.onHistoryPageRejected;
     this.rebuildAllItems();
     this.snapshot = this.makeSnapshot();
   }
@@ -220,19 +241,22 @@ export class TransportFrameStore {
     }
     if (frame.kind === "full") {
       this.resyncRequired = false;
+      this.receivedRevision = frame.revision;
       this.replaceState(frame.state);
       this.recordFrame(frame, startedAt);
       return;
     }
 
-    const buffered: TransportMutation[] = [];
+    this.receivedRevision = frame.revision;
+    const buffered: RevisedMutation[] = [];
     const mutations = frame.mutations.flatMap((mutation) => {
       const local = this.localize(mutation);
-      if (local === null && this.historyFetch) buffered.push(mutation);
+      if (local === null && this.historyFetch) buffered.push({ revision: frame.revision, mutation });
       return local === null ? [] : [local];
     });
     if (mutations.length === 0) {
       this.historyFetch?.buffered.push(...buffered);
+      this.mergeHeldPage();
       this.recordFrame(frame, startedAt);
       return;
     }
@@ -262,43 +286,64 @@ export class TransportFrameStore {
       if (activeRowOnly && contentOnlyIndexes.size > 0) this.publishOnNextAnimationFrame();
       else this.publishNow();
     }
+    this.mergeHeldPage();
     this.recordFrame(frame, startedAt);
   }
 
   /** 开始往上翻一页；已加载到最早或已有在途翻页时返回 null。 */
   public beginHistoryFetch(): HistoryFetch | null {
     if (this.state.messageOffset === 0 || this.historyFetch) return null;
-    this.historyFetch = { generation: this.historyGeneration, end: this.state.messageOffset, buffered: [] };
+    this.historyFetch = { generation: this.historyGeneration, end: this.state.messageOffset, buffered: [], page: null };
     return { generation: this.historyGeneration, end: this.state.messageOffset };
   }
 
   /**
-   * 把取到的一页插到已加载消息前面，并回放请求期间落在这一页里的增量。窗口已被完整快照替换、
-   * 或这一页与已加载部分不衔接时丢弃，返回 false。
-   *
-   * 不经过 `reconcilePending`：页里的用户消息是更早的历史，不是刚并入的乐观命令。
+   * 收下取到的一页：帧已追上页的号就立即合并，否则暂存到追上的那一帧（见类说明）。窗口已被完整快照
+   * 替换、或这一页与已加载部分不衔接时丢弃，返回 false。
    */
   public completeHistoryFetch(fetch: HistoryFetch, page: TransportHistoryPage): boolean {
     const current = this.historyFetch;
     if (!current || current.generation !== fetch.generation || current.generation !== this.historyGeneration) return false;
-    this.historyFetch = null;
-    if (page.messageOffset + page.messages.length !== this.state.messageOffset) return false;
-    let next = { ...this.state, messages: [...page.messages, ...this.state.messages], messageOffset: page.messageOffset };
-    for (const mutation of current.buffered) {
-      const local = this.localize(mutation, page.messageOffset);
-      if (local !== null) next = applyMutation(next, local);
+    if (page.messageOffset + page.messages.length !== this.state.messageOffset) {
+      this.historyFetch = null;
+      return false;
     }
-    parseTransportState(next);
-    this.cancelScheduledCommit();
-    this.state = next;
-    this.rebuildAllItems();
-    this.publishNow();
+    current.page = page;
+    this.mergeHeldPage();
     return true;
   }
 
   /** 翻页失败或被放弃：结束在途状态，之后可以重新翻。 */
   public abortHistoryFetch(fetch: HistoryFetch): void {
     if (this.historyFetch?.generation === fetch.generation && this.historyFetch.end === fetch.end) this.historyFetch = null;
+  }
+
+  /**
+   * 暂存的页在帧追上它的号后插到已加载消息前面，并回放号比页新、落在这一页里的缓存增量。
+   *
+   * 不经过 `reconcilePending`：页里的用户消息是更早的历史，不是刚并入的乐观命令。
+   */
+  private mergeHeldPage(): void {
+    const current = this.historyFetch;
+    const page = current?.page;
+    if (!current || !page || this.receivedRevision < page.revision) return;
+    this.historyFetch = null;
+    let next = { ...this.state, messages: [...page.messages, ...this.state.messages], messageOffset: page.messageOffset };
+    for (const { revision, mutation } of current.buffered) {
+      if (revision <= page.revision) continue;
+      const local = this.localize(mutation, page.messageOffset);
+      if (local !== null) next = applyMutation(next, local);
+    }
+    try {
+      parseTransportState(next);
+    } catch (error) {
+      this.onHistoryPageRejected?.(error);
+      return;
+    }
+    this.cancelScheduledCommit();
+    this.state = next;
+    this.rebuildAllItems();
+    this.publishNow();
   }
 
   public setPendingCommands(commands: readonly UserAddMessageCommand[]): void {

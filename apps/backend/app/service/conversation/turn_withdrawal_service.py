@@ -128,8 +128,9 @@ class TurnWithdrawalService:
     def _recall_derived(session_id: int, calls: frozenset[str]) -> frozenset[int]:
         """以 ``parent`` 原因收回这一回合派生的 Session，返回它们的 id；只发起停止、不等待。
 
-        收回在移出提交之前：被收回的 Run 以 ``parent_cancelled`` 落定，不再汇报。已经落定、汇报已入队的
-        由调用方在同一写事务里按来源删掉。
+        收回在移出提交之前，经 ``SessionActor.request_recall`` 先记下收回截止：它们当前及更早的 Run 不再汇报，
+        汇报入队时在同一写事务里判定截止（``derived_report``）。截止提交之前已入队的汇报由调用方在随后的
+        写事务里按来源删掉；两笔写事务由 SQLite 写锁排定先后，迟到的汇报两头都漏不掉。
         """
         from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
@@ -139,7 +140,7 @@ class TurnWithdrawalService:
             if session.extra.deriving_call_id in calls
         ]
         for session in derived:
-            session_runtime_spaces.get_or_create(session.id).actor.request_cancel("parent")
+            session_runtime_spaces.get_or_create(session.id).actor.request_recall()
         return frozenset(session.id for session in derived)
 
     @staticmethod

@@ -53,7 +53,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-const fullFrame = (state: TransportState) => ({ session_id: 7, kind: "full", mutations: [], state });
+const fullFrame = (state: TransportState) => ({ session_id: 7, kind: "full", revision: 0, mutations: [], state });
 
 function setup() {
   const fetchImpl = vi.fn<typeof fetch>();
@@ -92,7 +92,7 @@ describe("SessionTransportConnection 首帧即初始状态", () => {
 
     stream.push(fullFrame(transportState({ activity: activity(1, "running") })));
     await flush();
-    stream.push({ session_id: 7, kind: "mutation", mutations: [{ kind: "set", path: ["activity", "status"], value: "completed" }] });
+    stream.push({ session_id: 7, kind: "mutation", revision: 1, mutations: [{ kind: "set", path: ["activity", "status"], value: "completed" }] });
     await flush();
 
     expect(context.store().getSnapshot().state.activity?.status).toBe("completed");
@@ -115,7 +115,7 @@ describe("SessionTransportConnection 首帧即初始状态", () => {
     context.fetchImpl.mockResolvedValueOnce(stream.response).mockResolvedValue(controllableStream().response);
     context.connection.start();
     await flush();
-    stream.push({ session_id: 7, kind: "mutation", mutations: [] });
+    stream.push({ session_id: 7, kind: "mutation", revision: 1, mutations: [] });
     await flush();
     await flush();
 
@@ -146,7 +146,7 @@ describe("SessionTransportConnection 断开与重连", () => {
     const context = setup();
     const stream = await ready(context);
     context.fetchImpl.mockResolvedValueOnce(controllableStream().response);
-    stream.push({ session_id: 7, kind: "resync_required", mutations: [], resync_reason: "subscriber_backpressure" });
+    stream.push({ session_id: 7, kind: "resync_required", revision: 0, mutations: [], resync_reason: "subscriber_backpressure" });
     stream.end();
     await flush();
     expect(context.fetchImpl).toHaveBeenCalledTimes(2);
@@ -252,7 +252,7 @@ describe("SessionTransportConnection 命令", () => {
     const hello = command("hello");
     await context.connection.submit(hello, { send: async () => undefined, onError: vi.fn() });
     expect(context.store().getSnapshot().pendingCommands).toHaveLength(1);
-    stream.push({ session_id: 7, kind: "mutation", mutations: [{ kind: "set", path: ["messages", 0], value: {
+    stream.push({ session_id: 7, kind: "mutation", revision: 1, mutations: [{ kind: "set", path: ["messages", 0], value: {
       ...userMessage("1", 1, "hello"), clientMessageId: getOrCreateTransportCommandId(hello),
     } }] });
     await flush();

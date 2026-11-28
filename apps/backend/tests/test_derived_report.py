@@ -249,7 +249,7 @@ async def test_stopped_children_do_not_wake_the_deriver(derived, stop):
     if stop == "user":
         await AssistantTransportService().cancel(child_id)
     else:
-        await spaces.get_or_create(child_id).actor.cancel("parent")
+        await asyncio.to_thread(spaces.get_or_create(child_id).actor.request_recall)
     derived.model.child_gate.set()
     await _until(child_id, lambda: _runs(child_id)[-1].status != "running")
     await _settle(child_id, derived.parent.id)
@@ -364,3 +364,168 @@ async def test_a_deriver_waiting_across_a_restart_wakes_up(derived):
     [run] = _runs(derived.parent.id)
     assert run.status == "completed"
     assert any("The backend restarted" in text for text in derived.model.parent_notices)
+
+
+# ── 收回赶不上已写完成的 Run：收回截止挡住迟到的汇报 ──────────────────────────────────────
+
+
+class _ReleaseGatedModel(_Model):
+    """子 Session 的驱动在 ``close()`` 上停住：Run 已写 completed，执行者还没释放（真实的收尾窗口）。"""
+
+    def __init__(self) -> None:
+        super().__init__("answer")
+        self.last_was_child = False
+        self.release = asyncio.Event()
+        self.child_releasing = asyncio.Event()
+
+    async def stream(self, messages, *, tools):
+        inputs = [str(m.get("content")) for m in messages if m["role"] == "user"]
+        self.last_was_child = any('from="parent"' in t and ASSIGNMENT in t for t in inputs)
+        async for frame in super().stream(messages, tools=tools):
+            yield frame
+
+    async def close(self):
+        if self.last_was_child:
+            self.child_releasing.set()
+            await self.release.wait()
+
+
+async def _parent_idle_with_child_releasing(derived) -> int:
+    derived.model = _ReleaseGatedModel()
+    _send(derived.parent.id, derived.model_config.id, "start")
+    await asyncio.wait_for(derived.model.child_releasing.wait(), 8)
+    child_id = _child_id(derived.parent.id)
+    parent_actor = spaces.get_or_create(derived.parent.id).actor
+    await _until(
+        derived.parent.id,
+        lambda: not parent_actor.driving and _runs(derived.parent.id)[-1].status == "completed",
+    )
+    assert _runs(child_id)[-1].status == "completed" and spaces.get_or_create(child_id).actor.driving
+    return child_id
+
+
+async def test_withdrawal_while_the_child_is_releasing_drops_its_report(derived):
+    child_id = await _parent_idle_with_child_releasing(derived)
+    target = depends.get_session_context_service().latest_user_input(derived.parent.id)
+
+    await AssistantTransportService().withdraw(derived.parent.id, target.message_id)
+    derived.model.release.set()
+    await _settle(child_id, derived.parent.id)
+
+    assert [run.final_output for run in _runs(derived.parent.id)] == ["parent saw 0 reports"]
+    assert _pending_kinds(derived.parent.id) == []
+
+
+async def test_a_recalled_deriver_is_not_restarted_by_a_releasing_child(derived):
+    """父 Session 自己被它的派生方收回（逐层向下收回到子 Session），子 Session 的迟到汇报不再开出父 Run。"""
+    child_id = await _parent_idle_with_child_releasing(derived)
+
+    # 父 Session 在这里是顶层会话，没有派生方可记截止；直接走它被收回时的停止，收回照常逐层落到子 Session。
+    await spaces.get_or_create(derived.parent.id).actor._cancel("parent")
+    await _until(child_id, lambda: cancellation_registry.is_cancelled(child_id))
+    derived.model.release.set()
+    await _settle(child_id, derived.parent.id)
+
+    assert [run.final_output for run in _runs(derived.parent.id)] == ["parent saw 0 reports"]
+    assert _pending_kinds(derived.parent.id) == []
+
+
+async def test_a_releasing_child_still_reports_without_a_recall(derived):
+    """对照：同一收尾窗口、不收回，汇报照常开出父 Run。"""
+    child_id = await _parent_idle_with_child_releasing(derived)
+    derived.model.release.set()
+    # 汇报在子 Session 释放执行者时才投出，可能晚于它的落定：等父 Run 真的开出来。
+    await _until(derived.parent.id, lambda: len(_runs(derived.parent.id)) == 2)
+    await _settle(child_id, derived.parent.id)
+
+    assert [run.final_output for run in _runs(derived.parent.id)] == [
+        "parent saw 0 reports",
+        "parent saw 1 reports",
+    ]
+
+
+@pytest.mark.parametrize("gate", ["before_transaction", "inside_transaction"])
+async def test_withdrawal_while_the_report_is_being_delivered_drops_it(derived, monkeypatch, gate):
+    """子 Session 已释放、汇报还没入队时撤回：判定与入队在同一写事务里，迟到的汇报两头都漏不掉。
+
+    ``before_transaction``：汇报还没开事务，撤回整个做完（截止先提交），汇报事务随后看到截止放弃。
+    ``inside_transaction``：汇报事务已持写锁，撤回写截止要排在它之后，提交后撤回事务删掉这份汇报。
+    """
+    from app.core.tool.multi_agent import derived_report
+
+    arrived, release = threading.Event(), threading.Event()
+
+    def hold() -> None:
+        arrived.set()
+        assert release.wait(10), "report was never released"
+
+    if gate == "before_transaction":
+        begin = derived_report.begin_immediate
+
+        def gated_begin(factory):
+            hold()
+            return begin(factory)
+
+        monkeypatch.setattr(derived_report, "begin_immediate", gated_begin)
+    else:
+        enqueue = spaces.enqueue
+
+        def gated_enqueue(session_id, message, **kwargs):
+            if message.kind == "agent_message" and message.body.source.report is not None:
+                hold()
+            return enqueue(session_id, message, **kwargs)
+
+        monkeypatch.setattr(spaces, "enqueue", gated_enqueue)
+    derived.model = _Model("answer")
+    try:
+        _send(derived.parent.id, derived.model_config.id, "start")
+        assert await asyncio.to_thread(arrived.wait, 8)
+        child_id = _child_id(derived.parent.id)
+        parent_actor = spaces.get_or_create(derived.parent.id).actor
+        await _until(derived.parent.id, lambda: not parent_actor.driving)
+        target = depends.get_session_context_service().latest_user_input(derived.parent.id)
+        withdrawal = asyncio.create_task(
+            AssistantTransportService().withdraw(derived.parent.id, target.message_id)
+        )
+        if gate == "before_transaction":
+            await withdrawal
+        else:
+            await asyncio.sleep(0.1)
+            assert not withdrawal.done()  # 截止的写入排在持写锁的汇报事务之后
+        release.set()
+        await withdrawal
+        await _settle(child_id, derived.parent.id)
+    finally:
+        release.set()
+
+    assert [run.final_output for run in _runs(derived.parent.id)] == ["parent saw 0 reports"]
+    assert _pending_kinds(derived.parent.id) == []
+
+
+async def test_new_work_after_a_recall_is_reported(derived):
+    """收回之后派生方交来新工作：新 Run 编号在截止之后，照常汇报。"""
+    from app.core.workflow.message_queue.session_message import AgentMessageBody
+    from app.models.message_context.conversation_input import MessageSource
+
+    derived.model = _Model("answer")
+    _send(derived.parent.id, derived.model_config.id, "start")
+    await asyncio.wait_for(derived.model.child_started.wait(), 8)
+    child_id = _child_id(derived.parent.id)
+    await _settle(child_id, derived.parent.id)
+    await asyncio.to_thread(spaces.get_or_create(child_id).actor.request_recall)
+    await _settle(child_id, derived.parent.id)
+
+    spaces.enqueue(
+        child_id,
+        SessionMessage.of(
+            AgentMessageBody(
+                text=f"{ASSIGNMENT} again",
+                source=MessageSource(session_id=derived.parent.id, name="parent"),
+                launch=RunLaunch(model_config_id=derived.model_config.id),
+            )
+        ),
+    )
+    await _settle(child_id, derived.parent.id)
+
+    assert len(_runs(child_id)) == 2
+    assert _runs(derived.parent.id)[-1].final_output == "parent saw 2 reports"

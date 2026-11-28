@@ -27,7 +27,7 @@ describe("shared loaded-window tool index", () => {
     const listener = vi.fn();
     const off = useBackgroundTasksStore.subscribe(listener);
     historicalReads = 0;
-    store.applyFrame({ session_id: 6, kind: "mutation", mutations: [{ kind: "append-text", path: ["messages", 1000, "parts", 0, "text"], value: "b" }] });
+    store.applyFrame({ session_id: 6, kind: "mutation", revision: 1, mutations: [{ kind: "append-text", path: ["messages", 1000, "parts", 0, "text"], value: "b" }] });
     store.flushScheduledPublication();
     commit();
     expect(historicalReads).toBe(0);
@@ -42,11 +42,11 @@ describe("shared loaded-window tool index", () => {
     const original = toolCallPart("c", "read_file");
     const store = new TransportFrameStore(transportState({ messages: [assistantMessage("m", 1, [original])] }));
     const before = store.getSnapshot().toolCalls;
-    store.applyFrame({ session_id: 6, kind: "mutation", mutations: [{ kind: "set", path: ["messages", 0, "parts", 0, "status"], value: "completed" }] });
+    store.applyFrame({ session_id: 6, kind: "mutation", revision: 1, mutations: [{ kind: "set", path: ["messages", 0, "parts", 0, "status"], value: "completed" }] });
     expect(store.getSnapshot().toolCalls.get("c")?.status).toBe("completed");
     expect(before.get("c")).toBe(original);
     expect(before.get("c")?.status).toBe("running");
-    store.applyFrame({ session_id: 6, kind: "full", mutations: [], state: transportState({ messages: [assistantMessage("new", 2, [toolCallPart("other", "read_file")])] }) });
+    store.applyFrame({ session_id: 6, kind: "full", revision: 0, mutations: [], state: transportState({ messages: [assistantMessage("new", 2, [toolCallPart("other", "read_file")])] }) });
     expect([...store.getSnapshot().toolCalls.keys()]).toEqual(["other"]);
   });
 
@@ -54,14 +54,14 @@ describe("shared loaded-window tool index", () => {
     const recent = assistantMessage("recent", 2);
     const store = new TransportFrameStore(transportState({ messageOffset: 1, messages: [recent] }));
     const fetch = store.beginHistoryFetch()!;
-    store.applyFrame({ session_id: 6, kind: "mutation", mutations: [{ kind: "set", path: ["messages", 0, "parts", 0, "status"], value: "cancelled" }] });
+    store.applyFrame({ session_id: 6, kind: "mutation", revision: 1, mutations: [{ kind: "set", path: ["messages", 0, "parts", 0, "status"], value: "cancelled" }] });
     expect(store.getSnapshot().toolCalls.size).toBe(0);
-    expect(store.completeHistoryFetch(fetch, { messageOffset: 0, messages: [assistantMessage("old", 1, [toolCallPart("old-call", "read_file")])] })).toBe(true);
+    expect(store.completeHistoryFetch(fetch, { messageOffset: 0, messages: [assistantMessage("old", 1, [toolCallPart("old-call", "read_file")])] , revision: 0 })).toBe(true);
     expect(store.getSnapshot().toolCalls.get("old-call")?.status).toBe("cancelled");
-    store.applyFrame({ session_id: 6, kind: "full", mutations: [], state: transportState({ messageOffset: 1, messages: [recent] }) });
+    store.applyFrame({ session_id: 6, kind: "full", revision: 0, mutations: [], state: transportState({ messageOffset: 1, messages: [recent] }) });
     const stale = store.beginHistoryFetch()!;
-    store.applyFrame({ session_id: 6, kind: "full", mutations: [], state: transportState() });
-    expect(store.completeHistoryFetch(stale, { messageOffset: 0, messages: [assistantMessage("old", 1, [toolCallPart("old-call", "read_file")])] })).toBe(false);
+    store.applyFrame({ session_id: 6, kind: "full", revision: 0, mutations: [], state: transportState() });
+    expect(store.completeHistoryFetch(stale, { messageOffset: 0, messages: [assistantMessage("old", 1, [toolCallPart("old-call", "read_file")])] , revision: 0 })).toBe(false);
     expect(store.getSnapshot().toolCalls.size).toBe(0);
   });
 });

@@ -21,10 +21,10 @@ class SessionStopTool(HandlerBase):
     """以上游停止（``parent``）停下派生 Session，与撤销委派、撤回回合同一条路（``SessionActor.cancel``）。
 
     为什么是 ``parent`` 而不是 ``user``：Agent 停掉自己派生的 Session，意思是「这份结果我不要了」，它的后台
-    命令与下级 Session 一并收回（``SessionRecall``）；Run 以 ``parent_cancelled`` 落定，不汇报、不留通知，
-    调用方自己知道停了它。
+    命令与下级 Session 一并收回（``SessionRecall``）；它当前及更早的 Run 都不再汇报（含已写完成、还在收尾的，
+    见 ``SessionActor.request_recall``），也不留通知，调用方自己知道停了它。
 
-    只投递、不等待（与 HTTP 取消的 202 一致）：工具线程不能等对方的 Session 闸门，``request_cancel`` 交给
+    只投递、不等待（与 HTTP 取消的 202 一致）：工具线程不能等对方的 Session 闸门，``request_recall`` 交给
     actor 的事件循环。没有活动 Run 时什么也不做并明说，不假装停下了什么。活动判定与投递之间的竞争无害：
     actor 在闸门内重新判定，对已落定的 Run 取消是空操作。
     """
@@ -65,7 +65,7 @@ class SessionStopTool(HandlerBase):
                 content=f"session {session.id} is idle; nothing to stop.",
                 display_data=display,
             )
-        session_runtime_spaces.get_or_create(session.id).actor.request_cancel("parent")
+        session_runtime_spaces.get_or_create(session.id).actor.request_recall()
         log.info(
             "derived_session_stop_requested",
             extra={

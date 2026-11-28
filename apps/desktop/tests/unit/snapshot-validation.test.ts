@@ -301,10 +301,11 @@ describe("history window", () => {
   });
 
   it("更早的一页与已加载消息 id 不得重复", () => {
-    const page = { messages: [userMessage("u0", 1), assistantMessage("a0", 1)], messageOffset: 0 };
+    const page = { messages: [userMessage("u0", 1), assistantMessage("a0", 1)], messageOffset: 0, revision: 3 };
     expect(parseHistoryPage(page, new Set(["u1"])).messages).toHaveLength(2);
     expect(() => parseHistoryPage(page, new Set(["a0"]))).toThrow(TransportSnapshotValidationError);
     expect(() => parseHistoryPage({ ...page, extra: 1 }, new Set())).toThrow(TransportSnapshotValidationError);
+    expect(() => parseHistoryPage({ ...page, revision: -1 }, new Set())).toThrow("history.revision");
   });
 });
 

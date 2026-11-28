@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -195,13 +196,40 @@ def monkeypatch(reset_runtime_singletons: None) -> Iterator[pytest.MonkeyPatch]:
 
 
 @pytest.fixture(autouse=True)
+def fail_on_swallowed_projection_errors(request: pytest.FixtureRequest) -> Iterator[None]:
+    """sink 端口在生产里吞掉消费失败（见 ``core.events.event_sink``）；测试里投影违约仍要让用例失败。
+
+    有意注入消费失败的用例标 ``event_sink_failure_expected``。
+    """
+
+    failures: list[logging.LogRecord] = []
+
+    class _Collector(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if record.getMessage() == "event_sink_failed":
+                failures.append(record)
+
+    collector = _Collector(level=logging.ERROR)
+    logger = logging.getLogger("coding_agent.backend")
+    logger.addHandler(collector)
+    try:
+        yield
+    finally:
+        logger.removeHandler(collector)
+    if failures and request.node.get_closest_marker("event_sink_failure_expected") is None:
+        first = failures[0]
+        detail = "".join(traceback.format_exception(*first.exc_info)) if first.exc_info else ""
+        pytest.fail(f"事件消费失败被 sink 端口吞掉了 {len(failures)} 次（投影违约？）：\n{detail}")
+
+
+@pytest.fixture(autouse=True)
 def reopen_background_registry() -> Iterator[None]:
     """lifespan 关闭会关闭进程级后台结果登记表（此后不再投递）；同进程后续用例需重新开放。"""
 
     from app.core.events.event_sink import set_event_sink
     from app.core.tool.background_commands import set_background_commands
-    from app.core.tool.file_change_notices import set_file_change_notices
     from app.core.tool.external_tools import set_external_tools
+    from app.core.tool.file_change_notices import set_file_change_notices
     from app.service import depends
     from app.tools.file_system.read_changes import read_changes
     from app.tools.mcp.mcp_tools import MCPExternalTools

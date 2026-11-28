@@ -280,6 +280,7 @@ def test_real_sqlite_malformed_metadata_fails_and_not_as_empty_state(
         store.state.get_state(store.session.id)
 
 
+@pytest.mark.event_sink_failure_expected
 def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durable(
     canonical_store, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -300,14 +301,13 @@ def test_post_commit_projector_failure_leaves_real_run_facts_and_cold_read_durab
         lambda: FailingProjector(),
     )
     stats = RunUsageStats(**_USAGE)
-    # 终态落库先于投影：投影失败向上传播，但已提交的 Run 事实与用量必须完好。
-    with pytest.raises(RuntimeError, match="SSE failed after commit"):
-        service.transition(
-            run.id,
-            RunTransition.COMPLETE,
-            final_output="durable final summary",
-            usage_stats=stats,
-        )
+    # 终态落库先于投影：投影失败由 sink 端口兜住、不向上传播，已提交的 Run 事实与用量必须完好。
+    assert service.transition(
+        run.id,
+        RunTransition.COMPLETE,
+        final_output="durable final summary",
+        usage_stats=stats,
+    ) is not None
     persisted = store.runs.get(run.id)
     assert persisted.status == "completed"
     assert persisted.final_output == "durable final summary"

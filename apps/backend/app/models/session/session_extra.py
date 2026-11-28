@@ -5,13 +5,11 @@ from pydantic import BaseModel, ConfigDict
 from app.models.enums.reasoning_effort import ReasoningEffort
 from app.models.run.run_record import RunRecord
 from app.models.session.session_kind import (
+    AGENT_DERIVED_SESSION_TYPES,
     FORK_SESSION_TYPES,
     USER_FACING_SESSION_TYPES,
     SessionType,
 )
-
-# Agent 派生出的 Session：记下派生它的那次工具调用（撤回那一回合时据此收回）。
-_AGENT_DERIVED_TYPES = frozenset({SessionType.DELEGATED, SessionType.AGENT_FORK})
 
 
 class SessionForkLaunch(BaseModel):
@@ -61,14 +59,19 @@ class SessionExtra(BaseModel):
     # 两处都按 JSON 路径原地改写（``SessionCrud.set_result_unread``），不整体改写 extra。委派子 Agent 的结果
     # 汇报给派生方、不给用户看，所以只有侧栏会话会带。
     result_unread: bool = False
+    # 被收回时的当前 Run：它及更早的 Run 不再汇报（``derived_report``）。停止不等落定，赶不上已写完成的 Run，
+    # 所以要一份持久事实；之后新工作开出的 Run 编号更大，照常汇报。写入方见 ``SessionService.mark_recalled``。
+    recalled_through_run_id: int | None = None
 
     def validate_session_type(self, session_type: SessionType) -> None:
         """在持久化读取边界一次校验类型与附属数据，错误数据直接失败。"""
         if (self.fork is not None) != (session_type in FORK_SESSION_TYPES):
             raise ValueError(f"{session_type} carries invalid fork metadata")
         # 只有 Agent 派生出的 Session 能带；委派与 Agent fork 两个入口总会写上。
-        if self.deriving_call_id is not None and session_type not in _AGENT_DERIVED_TYPES:
+        if self.deriving_call_id is not None and session_type not in AGENT_DERIVED_SESSION_TYPES:
             raise ValueError(f"{session_type} carries invalid deriving call metadata")
+        if self.recalled_through_run_id is not None and session_type not in AGENT_DERIVED_SESSION_TYPES:
+            raise ValueError(f"{session_type} carries invalid recall metadata")
         # 用户新建的会话恒为整个工作区；可写根只来自派生或从已收窄的会话分叉。
         if self.writable_root is not None and session_type is SessionType.USER:
             raise ValueError(f"{session_type} carries invalid writable root")

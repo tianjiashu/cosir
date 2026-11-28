@@ -81,22 +81,13 @@ def publish_settled(settled: Iterable[SessionContextRecord]) -> None:
         space = session_runtime_spaces.get(record.session_id)
         if space is None or not space.has_snapshot():
             continue
-        try:
-            sink(
-                ToolCallStatusChangedEvent(
-                    session_id=record.session_id,
-                    run_id=record.run_id,
-                    tool_call_id=tool_call_id,
-                    # 结算后的行已带新状态与提示（见 ``settle_placeholders``），按写入的事实投影。
-                    result=cast(ToolMessageMetadata, record.metadata),
-                )
+        # 投影失败由 sink 端口记录后吞掉；工作副本被丢弃时下次重建读到结算后的行。
+        sink(
+            ToolCallStatusChangedEvent(
+                session_id=record.session_id,
+                run_id=record.run_id,
+                tool_call_id=tool_call_id,
+                # 结算后的行已带新状态与提示（见 ``settle_placeholders``），按写入的事实投影。
+                result=cast(ToolMessageMetadata, record.metadata),
             )
-        except (KeyError, ValueError):
-            log.warning(
-                "background_placeholder_projection_skipped",
-                extra={
-                    "msg": "占位已结算，snapshot 投影跳过（下次重建读到）",
-                    "data": {"session_id": record.session_id, "tool_call_id": tool_call_id},
-                },
-                exc_info=True,
-            )
+        )

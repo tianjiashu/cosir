@@ -320,10 +320,14 @@ export type BackgroundTaskEntry = {
 };
 
 /** Session 级 Transport state。 */
-/** 更早历史的一页：完整历史中 `[messageOffset, messageOffset + messages.length)` 这一段。 */
+/**
+ * 更早历史的一页：完整历史中 `[messageOffset, messageOffset + messages.length)` 这一段。`revision` 是读取时
+ * 后端已发布到的帧号：号不大于它的帧，内容都已含在页里（与帧的 `revision` 同一序列）。
+ */
 export type TransportHistoryPage = {
   messages: TransportMessage[];
   messageOffset: number;
+  revision: number;
 };
 
 export type TransportState = {

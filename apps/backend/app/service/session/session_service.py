@@ -22,6 +22,7 @@ from app.models.session.session_command_errors import SessionCommandConflictErro
 from app.models.session.session_extra import SessionExtra, SessionFork
 from app.models.session.session_fork_errors import SessionForkConflictError
 from app.models.session.session_kind import (
+    AGENT_DERIVED_SESSION_TYPES,
     FORK_SESSION_TYPES,
     USER_FACING_SESSION_TYPES,
     SessionType,
@@ -252,6 +253,31 @@ class SessionService:
             return
         if self._session.set_result_unread(run.session_id, True):
             service_depends.get_session_feed().publish_status(run.session_id)
+
+    def mark_recalled(self, session_id: int) -> None:
+        """派生方收回这个 Session：它与它整棵派生子树此刻的当前 Run 及更早的，都不再汇报
+        （见 ``SessionExtra.recalled_through_run_id``）。
+
+        两处写各挡一个窗口，缺一不可：发起时写整棵子树，挡住收回逐层传下去之前下级落定的汇报（否则中间层据此
+        开出截止之后的 Run 又向上汇报）；收回传到每一层时再写一次，补上发起之后才派生出的下级。
+
+        异常:
+            KeyError: Session 不存在。
+            ValueError: Session 不是 Agent 派生的，没有派生方能收回它。
+        """
+        root = self._session.get(session_id)
+        if root.session_type not in AGENT_DERIVED_SESSION_TYPES:
+            raise ValueError(f"{root.session_type} session {session_id} has no deriver to recall it")
+        subtree: list[int] = []
+        pending = [session_id]
+        while pending:
+            current = pending.pop()
+            subtree.append(current)
+            try:
+                pending.extend(derived.id for derived in self.list_derived_sessions(current))
+            except KeyError:
+                continue  # 下级与收回并发被删：没有可挡的汇报
+        self._session.mark_recalled(subtree)
 
     def mark_result_read(self, session_id: int) -> None:
         """用户看过了这个会话的结果（前端在会话页可见、窗口有焦点时发），变了才推送状态。

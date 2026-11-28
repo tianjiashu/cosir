@@ -169,25 +169,16 @@ class LiveOutputChannel:
             self._wake_loop(self._schedule_drain)
 
     def _publish(self, data: ToolCallRuntimeUpdateData, *, seq: int) -> None:
-        """在事件循环上交给 sink；失败只记日志，最终工具结果仍会带权威展示数据到达。"""
-        try:
-            self._sink(
-                ToolCallRuntimeUpdateEvent(
-                    session_id=self._context.session_id,
-                    run_id=self._context.run_id,
-                    tool_call_id=self._context.tool_call_id,
-                    seq=seq,
-                    data=data,
-                )
+        """在事件循环上交给 sink；失败由 sink 端口记录，最终工具结果仍会带权威展示数据到达。"""
+        self._sink(
+            ToolCallRuntimeUpdateEvent(
+                session_id=self._context.session_id,
+                run_id=self._context.run_id,
+                tool_call_id=self._context.tool_call_id,
+                seq=seq,
+                data=data,
             )
-        except Exception:
-            log.exception(
-                "terminal_output_publish_failed",
-                extra={
-                    "msg": "终端运行期更新发布失败，继续等待最终工具结果",
-                    "data": self._log_data(seq=seq, update=data.kind),
-                },
-            )
+        )
 
 
 def _iter_chunks(texts: list[str]) -> Iterator[str]:

@@ -74,6 +74,10 @@ class _Ledger:
         self.current: SimpleNamespace | None = None
         self.created: list[SimpleNamespace] = []
         self.fail_create = False
+        self.recalled: list[int] = []
+
+    def mark_recalled(self, session_id: int) -> None:
+        self.recalled.append(session_id)
 
     def create_run(self, session_id: int, launch: RunLaunch) -> SimpleNamespace:
         if self.fail_create:
@@ -358,7 +362,7 @@ async def test_cancelled_run_does_not_continue_until_a_new_message(harness) -> N
     await harness.actor.abort()
 
 
-async def test_request_cancel_from_a_worker_thread_runs_cancel_on_the_actor_loop(
+async def test_request_recall_from_a_worker_thread_marks_then_cancels_on_the_actor_loop(
     harness, monkeypatch
 ) -> None:
     calls: list[tuple[str, asyncio.AbstractEventLoop]] = []
@@ -366,27 +370,29 @@ async def test_request_cancel_from_a_worker_thread_runs_cancel_on_the_actor_loop
     async def cancel(reason: str) -> None:
         calls.append((reason, asyncio.get_running_loop()))
 
-    monkeypatch.setattr(harness.actor, "cancel", cancel)
+    monkeypatch.setattr(harness.actor, "_cancel", cancel)
     harness.actor.start()
 
-    await asyncio.to_thread(harness.actor.request_cancel, "parent")
+    await asyncio.to_thread(harness.actor.request_recall)
     await _settle()
 
+    assert harness.ledger.recalled == [_SESSION_ID]
     assert calls == [("parent", asyncio.get_running_loop())]
     await harness.actor.abort()
 
 
-async def test_request_cancel_before_start_is_dropped_without_raising(harness, monkeypatch) -> None:
+async def test_request_recall_before_start_still_marks_but_drops_the_stop(harness, monkeypatch) -> None:
     calls: list[str] = []
 
     async def cancel(reason: str) -> None:
         calls.append(reason)
 
-    monkeypatch.setattr(harness.actor, "cancel", cancel)
+    monkeypatch.setattr(harness.actor, "_cancel", cancel)
 
-    harness.actor.request_cancel("parent")
+    harness.actor.request_recall()
     await _settle()
 
+    assert harness.ledger.recalled == [_SESSION_ID]
     assert calls == []
 
 
@@ -547,6 +553,9 @@ class _FakeActor:
         self.stopped = 0
         self.aborted = 0
 
+    def schedule_start(self, loop) -> None:
+        loop.call_soon_threadsafe(self.start)
+
     def start(self) -> None:
         self.started += 1
 
@@ -644,7 +653,7 @@ async def test_recalling_a_suspended_run_drops_background_entries(harness) -> No
         job=FakeCommandJob(),
     )
     try:
-        await harness.actor.cancel("parent")
+        await harness.actor._cancel("parent")
         assert run.status == "cancelled"
         assert cancelled == ["t1"]
         # 被撤销的后台条目随即把占位行推到 cancelled。
@@ -670,17 +679,17 @@ async def test_user_stop_keeps_background_work_in_every_phase(harness) -> None:
     try:
         suspended = harness.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
         suspended.status = "suspended"
-        await harness.actor.cancel("user")
+        await harness.actor.cancel()
         assert suspended.status == "cancelled"
 
         harness.actor.start()
         harness.queue.put(_user())
         await _settle()
         running = harness.ledger.created[-1]
-        await harness.actor.cancel("user")
+        await harness.actor.cancel()
         await _finish(running.id, "cancelled")
 
-        await harness.actor.cancel("user")
+        await harness.actor.cancel()
         assert dropped == []
         assert harness.settled == []
         assert command_results.pending(_SESSION_ID) == ["keep"]
@@ -711,7 +720,7 @@ async def test_recalling_a_running_run_drops_work_after_the_signal(harness) -> N
         label="terminal:t2",
         job=FakeCommandJob(on_cancel),
     )
-    await harness.actor.cancel("parent")
+    await harness.actor._cancel("parent")
     assert dropped == [run.id]
     assert signalled_at_drop == [True]
     late = FakeCommandJob()
@@ -742,7 +751,7 @@ async def test_recalling_an_idle_session_drops_its_background_work(harness) -> N
     )
     try:
         await _finish(run.id, "completed")
-        await harness.actor.cancel("parent")
+        await harness.actor._cancel("parent")
         assert dropped == ["parent"]
         assert not command_results.has_work(_SESSION_ID)
         assert harness.settled == [(_SESSION_ID, ["call-idle"])]
@@ -793,7 +802,7 @@ async def test_stopping_a_run_suspended_on_a_question_expires_it_and_tells_the_m
     run = harness.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
 
-    await harness.actor.cancel("user")
+    await harness.actor.cancel()
 
     assert run.status == "cancelled"
     assert harness.expired == [(_SESSION_ID, "已停止")]

@@ -328,4 +328,4 @@ async def test_attach_envelopes_encode_session_view_frames_without_run_fields() 
         "terminal_permission_mode": "request_approval",
         "queued_messages": [],
     }
-    assert set(first) == {"session_id", "kind", "mutations", "resync_reason", "state"}
+    assert set(first) == {"session_id", "kind", "mutations", "resync_reason", "revision", "state"}

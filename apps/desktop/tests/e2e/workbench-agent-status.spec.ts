@@ -53,7 +53,7 @@ const test = base.extend<{ agent: Fixture }>({
       },
     };
     function frame(id: number, state: Snapshot) {
-      return `data: ${JSON.stringify({ kind: "full", session_id: id, state, mutations: [] })}\n\n`;
+      return `data: ${JSON.stringify({ kind: "full", session_id: id, state, mutations: [], revision: 0 })}\n\n`;
     }
     const server = createServer((req, res) => {
       res.setHeader("Access-Control-Allow-Origin", req.headers.origin ?? "*");

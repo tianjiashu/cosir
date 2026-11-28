@@ -435,8 +435,13 @@ function settleAwaiting(state, match, change) {
 }
 
 /** 向 Session 的全部订阅推送一帧，并记入最近一轮的流日志。 */
+/** 与后端 `ConversationStateService._revisions` 一致：每个 Session 已发布到第几帧，历史页带读取时的值。 */
+const revisions = new Map();
+
 function publish(sessionId, frame) {
-  const encoded = `data: ${JSON.stringify(frame)}\n\n`;
+  const revision = (revisions.get(sessionId) ?? 0) + 1;
+  revisions.set(sessionId, revision);
+  const encoded = `data: ${JSON.stringify({ ...frame, revision })}\n\n`;
   lastStreamBody += encoded;
   for (const res of subscribers.get(sessionId) ?? []) res.write(encoded);
 }
@@ -731,7 +736,7 @@ function handleAttach(res, sessionId) {
   subscribers.set(sessionId, set);
   set.add(res);
   res.on("close", () => set.delete(res));
-  writeSse(res, { session_id: sessionId, kind: "full", mutations: [], state: wireState(sessionId) });
+  writeSse(res, { session_id: sessionId, kind: "full", mutations: [], state: wireState(sessionId), revision: revisions.get(sessionId) ?? 0 });
   // seeded 的运行中 Run 没有执行者：首个订阅到来时模拟后端继续执行它。
   if (isActive(states.get(sessionId).activity?.status) && states.get(sessionId).activity.status === "running" && !executors.has(sessionId)) {
     continueRun(sessionId);
@@ -1346,7 +1351,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     const start = turnStart(messages, end - HISTORY_WINDOW_MESSAGES);
-    jsonResponse(res, 200, { messages: messages.slice(start, end), messageOffset: start });
+    jsonResponse(res, 200, { messages: messages.slice(start, end), messageOffset: start, revision: revisions.get(Number(historyRoute[1])) ?? 0 });
     return;
   }
   const withdrawRoute = url.pathname.match(/^\/sessions\/(\d+)\/messages\/([^/]+)\/withdraw$/);

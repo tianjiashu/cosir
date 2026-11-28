@@ -59,15 +59,16 @@ def test_window_keeps_the_tail_and_starts_at_a_user_message() -> None:
 def test_history_page_returns_the_turns_before_end() -> None:
     messages = cast(Any, _messages(4, answers_per_turn=2))
 
-    page = history_page(messages, 6)
+    page = history_page(messages, 6, 9)
     assert page["messageOffset"] == 0
     assert [message["id"] for message in page["messages"]] == ["u-0", "a-0-0", "a-0-1", "u-1", "a-1-0", "a-1-1"]
-    assert history_page(messages, 0) == {"messages": [], "messageOffset": 0}
+    assert page["revision"] == 9
+    assert history_page(messages, 0, 0) == {"messages": [], "messageOffset": 0, "revision": 0}
 
 
 def test_history_page_rejects_positions_from_a_replaced_snapshot() -> None:
     with pytest.raises(ValueError):
-        history_page(cast(Any, _messages(1)), 3)
+        history_page(cast(Any, _messages(1)), 3, 0)
 
 
 def test_without_any_user_message_the_window_keeps_its_raw_start() -> None:

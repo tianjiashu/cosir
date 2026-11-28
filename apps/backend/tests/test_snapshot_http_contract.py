@@ -1,5 +1,7 @@
 """真实 FastAPI 响应序列化回归；直接调用路由无法发现运行时类型引用缺失。"""
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -15,7 +17,7 @@ def test_history_uses_real_storage_over_http(backend_env, tmp_path):
     client = TestClient(app, headers=TRUSTED_HEADERS)
     page = client.get(f"/sessions/{session.id}/assistant/messages?end=0")
     assert page.status_code == 200, page.text
-    assert page.json() == {"messages": [], "messageOffset": 0}
+    assert page.json() == {"messages": [], "messageOffset": 0, "revision": 0}
 
 
 @pytest.mark.parametrize("presentation", ["activity", "standalone", "quiet"])
@@ -49,7 +51,7 @@ def test_nested_tool_parts_serialize_through_actual_routes(presentation):
 
     class Source:
         def get_history_page(self, session_id, end):
-            return {"messages": state["messages"], "messageOffset": 0}
+            return {"messages": state["messages"], "messageOffset": 0, "revision": 0}
 
     app.dependency_overrides[get_assistant_transport_service] = Source
     try:
@@ -76,3 +78,51 @@ def test_snapshot_json_schema_resolves_runtime_types():
         "standalone",
         "quiet",
     ]
+
+
+async def test_history_page_carries_the_revision_of_the_last_published_frame(backend_env, tmp_path):
+    """历史页与帧共用一个序列：页带读取那一刻已发布到的帧号，前端据此分辨在途增量是否已含在页里。"""
+    workspace = depends.get_workspace_crud().create("revision-contract", str(tmp_path))
+    session = depends.get_session_crud().create(workspace.id, "revision-contract")
+    states = depends.get_conversation_state_service()
+    subscriber, unsubscribe, first = states.subscribe_with_snapshot(session.id)
+    try:
+        assert states.get_history_page(session.id, 0)["revision"] == first.revision
+
+        states.refresh_terminal_permission(session.id, "full_access")
+        frame = await asyncio.wait_for(subscriber.get(), 2)
+        assert frame.revision == first.revision + 1
+        assert states.get_history_page(session.id, 0)["revision"] == frame.revision
+    finally:
+        unsubscribe()
+
+
+async def test_revision_stays_monotonic_across_unload_resubscribe_republish_and_delete(backend_env, tmp_path):
+    """帧号跨工作副本卸载与重建、重新订阅、撤回后的整份重发都只往上走；页号始终等于最后发出的号。"""
+    from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
+
+    workspace = depends.get_workspace_crud().create("revision-lifecycle", str(tmp_path))
+    session = depends.get_session_crud().create(workspace.id, "revision-lifecycle")
+    states = depends.get_conversation_state_service()
+
+    subscriber, unsubscribe, first = states.subscribe_with_snapshot(session.id)
+    states.refresh_terminal_permission(session.id, "full_access")
+    published = (await asyncio.wait_for(subscriber.get(), 2)).revision
+    assert published == first.revision + 1
+    unsubscribe()  # 最后一个订阅者离开、没有 Run：工作副本卸载
+    assert not session_runtime_spaces.get_or_create(session.id).has_snapshot()
+
+    _, unsubscribe, again = states.subscribe_with_snapshot(session.id)  # 重建
+    assert again.revision == published == states.get_history_page(session.id, 0)["revision"]
+    unsubscribe()
+
+    subscriber, unsubscribe, _ = states.subscribe_with_snapshot(session.id)
+    states.republish_from_canonical(session.id)
+    republished = await asyncio.wait_for(subscriber.get(), 2)
+    assert republished.kind == "full" and republished.revision == published + 1
+    assert states.get_history_page(session.id, 0)["revision"] == republished.revision
+    unsubscribe()
+
+    session_runtime_spaces.mark_deleted(session.id)
+    states.release_deleted_session(session.id)
+    assert session.id not in states._revisions

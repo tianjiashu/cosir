@@ -248,7 +248,7 @@ async def chain(monkeypatch):
         "get_or_create",
         lambda session_id: SimpleNamespace(
             actor=SimpleNamespace(
-                request_cancel=lambda reason: child_cancels.append((session_id, reason))
+                request_recall=lambda: child_cancels.append((session_id, "parent"))
             )
         ),
     )
@@ -674,7 +674,7 @@ async def test_parent_stop_recalls_children_at_once(chain, phase) -> None:
         run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
         run.status = "suspended" if phase == "suspended" else "completed"
 
-    await chain.actor.cancel("parent")
+    await chain.actor._cancel("parent")
 
     # 收回在发起停止时就完成，不等 Run 落定。
     assert chain.child_cancels == [(_CHILD_SESSION_ID, "parent")]
@@ -700,7 +700,7 @@ async def test_placeholder_settle_failure_does_not_block_running_cancel(chain, m
     run = chain.ledger.current
     _register_background_work("call-bg", "background", [])
 
-    await chain.actor.cancel("parent")
+    await chain.actor._cancel("parent")
     await _finish(run.id, "cancelled")
 
     assert not cancellation_registry.is_cancelled(_SESSION_ID)
@@ -717,7 +717,7 @@ async def test_placeholder_settle_failure_does_not_block_suspended_cancel(
     run.status = "suspended"
     _register_background_work("call-bg", "background", [])
 
-    await chain.actor.cancel("parent")
+    await chain.actor._cancel("parent")
 
     assert run.status == "cancelled"
 
@@ -741,7 +741,7 @@ async def test_parent_stop_records_parent_reason(chain) -> None:
     run = chain.ledger.create_run(_SESSION_ID, RunLaunch(model_config_id="test/m1"))
     run.status = "suspended"
 
-    await chain.actor.cancel("parent")
+    await chain.actor._cancel("parent")
 
     assert run.status == "cancelled" and run.end_reason == "parent_cancelled"
     assert not any(isinstance(row.body, NoticeBody) for row in chain.queue.rows)

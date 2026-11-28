@@ -24,11 +24,11 @@ actor 随 ``SessionRuntimeSpace`` 物化而创建，由注册表在事件循环�
   活动判断都只看阶段，不各自组合两者：执行者的释放滞后于 Run 落定。
 - **执行登记归 ``SessionExecution``。** 至多一个后台执行，以及取消信号「有执行者才打、注销执行时取走」
   的不变量都在那里；actor 只决定何时启动、释放后怎么处理（:meth:`_after_drive`）。
-- **取消编排归 actor。** 停止有两种语义（见 :meth:`cancel`）：用户停止只打断当前驱动，后台工作与
+- **取消编排归 actor。** 停止有两种语义（见 :meth:`_cancel`）：用户停止只打断当前驱动，后台工作与
   子 Session 照常运行；上游停止另外收回这个 Session 交出去的一切（``SessionRecall``）。有执行者就交给
   ``SessionExecution.cancel`` 打信号，工作流在检查点落定；挂起的 Run 没有执行者，在闸门内直接迁移为
-  cancelled。上游停止下游从工具或工作线程发起，经 :meth:`request_cancel` 投递到 actor 所在的事件
-  循环、不等待。
+  cancelled。上游停止下游从工具或工作线程发起，经 :meth:`request_recall` 先记下收回截止、再投递到
+  actor 所在的事件循环、不等待。
 """
 
 from __future__ import annotations
@@ -93,7 +93,8 @@ class SessionActor:
         # 执行登记：至多一个后台执行，释放后回到 :meth:`_after_drive`。
         self._execution = SessionExecution(self.session_id, self.mailbox, self._after_drive)
         self._loop_task: asyncio.Task[None] | None = None
-        # actor 所在的事件循环，``start`` 时记下；:meth:`request_cancel` 据此从任意线程投递取消。
+        # actor 所在的事件循环，排队拉起（:meth:`schedule_start`）或 ``start`` 时记下；:meth:`request_recall`
+        # 据此从任意线程投递停止。
         self._event_loop: asyncio.AbstractEventLoop | None = None
         # 已判定过的最大消息 id：之后入队的才算新消息（原地改过的由队列另行交回，见 ``QueueRead``）。
         # 外部队列「取出不删除」：行要等 prepare_input 写进 context 时才确认删除
@@ -117,6 +118,15 @@ class SessionActor:
         return service_depends.get_session_message_queue()
 
     # ── 生命周期 ──────────────────────────────────────────────────────────
+
+    def schedule_start(self, loop: asyncio.AbstractEventLoop) -> None:
+        """把 :meth:`start` 排到 ``loop`` 上；任意线程可调。
+
+        事件循环在排队这一刻就记下，不等 ``start`` 真正执行：工作线程物化 space 后紧接着就可能
+        :meth:`request_recall`，那时 ``start`` 还排在循环上，没有循环可投递就会把收回的停止丢掉。
+        """
+        self._event_loop = loop
+        loop.call_soon_threadsafe(self.start)
 
     def start(self) -> None:
         """在当前事件循环上拉起监听 loop；重复调用无效果。
@@ -227,8 +237,8 @@ class SessionActor:
         按快照判定会再按那条输入开一个 Run——它拿不到输入（``prepare_input`` 跳过已确认的行），模型却
         照样被请求、凭空再回答一次。所以新消息也只认重读时仍在队列里的。
 
-        新建 Run 后先登记执行再发布快照：顺序反过来时，一次投影异常就会留下「running 但没有执行者」
-        的 Session；快照发布属于观测旁路，失败只记录。
+        新开与唤醒都是先提交 Run 迁移、再登记执行；中间同步投影的事件不会抛出（消费失败由 sink 端口兜住，
+        见 ``core.events.event_sink``），所以提交了的 running Run 一定接着有执行者。
         """
         if self._stopping:
             return
@@ -398,7 +408,18 @@ class SessionActor:
             self.cancel_drive, run_id
         )
 
-    async def cancel(self, reason: CancelReason = "user") -> None:
+    async def cancel(self) -> None:
+        """用户停止这个 Session（打断，语义见 :meth:`_cancel`）；只发起停止，不等执行落定。
+
+        上游收回不走这里，走 :meth:`request_recall`：收回必须先记下持久的收回截止，绕过它的
+        ``parent`` 停止会让已写完成的 Run 照样汇报。
+
+        异常:
+            KeyError: Session 不存在。
+        """
+        await self._cancel("user")
+
+    async def _cancel(self, reason: CancelReason) -> None:
         """停止这个 Session；只发起停止，不等执行落定。重复取消幂等。
 
         两种语义按 ``reason`` 区分：
@@ -429,27 +450,29 @@ class SessionActor:
             else:
                 await self._cancel_suspended(reason)
 
-    def request_cancel(self, reason: CancelReason) -> None:
-        """从任意线程发起 :meth:`cancel`，只投递、不等待；失败只记录。
+    def request_recall(self) -> None:
+        """上游收回这个 Session（撤销委派、撤回回合、收回向下传播）：先记下收回截止，再发起 ``parent`` 停止。
 
-        给上游停止下游用（收回向下传播、撤销委派）：调用方多在工具或工作线程里，没有可 await 的事件
-        循环；在事件循环上的调用方（``SessionRecall``）正持自己的 Session 闸门，等对方的闸门会让父子互等。
-        能 await 且可以等的调用方（HTTP 用户停止）直接用 :meth:`cancel`。
+        截止（``SessionService.mark_recalled``）在返回前提交，挡住停止赶不上的 Run 的汇报，调用方随后的写事务
+        （撤回）一定排在它之后；要写库，须在工作线程里调用。停止只投递、不等待：调用方多在工作线程里，
+        ``SessionRecall`` 还持着自己的闸门，等对方会父子互等。没有事件循环（装配之前、退出中）时记录后放弃，
+        截止照样记下：前者没有执行可停，后者遗留的 running Run 由下次启动收敛。
 
-        actor 尚未拉起（注册表还没 ``bind_loop``）或事件循环已关闭（进程退出中）时没有执行取消的
-        地方，记录后放弃：前者只在启动瞬间出现，后者遗留的 running Run 由下次启动收敛。
+        异常:
+            KeyError: Session 不存在。
         """
+        self._sessions.mark_recalled(self.session_id)
         loop = self._event_loop
         if loop is None or loop.is_closed():
             log.warning(
                 "session_cancel_request_dropped",
                 extra={
                     "msg": "actor 未在运行的事件循环上，放弃发起停止",
-                    "data": {"session_id": self.session_id, "reason": reason, "started": loop is not None},
+                    "data": {"session_id": self.session_id, "reason": "parent", "started": loop is not None},
                 },
             )
             return
-        future = asyncio.run_coroutine_threadsafe(self.cancel(reason), loop)
+        future = asyncio.run_coroutine_threadsafe(self._cancel("parent"), loop)
         future.add_done_callback(self._log_cancel_failure)
 
     def _log_cancel_failure(self, done: Future[None]) -> None:
@@ -580,8 +603,8 @@ class SessionActor:
 
         有执行者即 ``driving``，不看 Run 状态——workflow 先写终态或挂起，执行者还要跑完 STOP Hook、
         收束工具调用才释放，这段时间另开执行会出现两个执行者。不存在「running 但没有执行者」：新 Run
-        与执行登记在同一次 Session 闸门内完成，``RunDriver`` 返回前一定把 Run 落定为终态或挂起，重启时
-        遗留的 running Run 先由 lifespan 收敛为 cancelled。
+        与执行登记在同一次 Session 闸门内完成（中间的投影不抛出，见 :meth:`_advance`），``RunDriver`` 返回前
+        一定把 Run 落定为终态或挂起，重启时遗留的 running Run 先由 lifespan 收敛为 cancelled。
         """
         if self.driving:
             return "driving"

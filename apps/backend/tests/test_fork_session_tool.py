@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from app.config.settings import Settings
+from app.core.tool.multi_agent import assignment_handover
 from app.core.tool.multi_agent import fork_session as fork_module
 from app.core.tool.schemas import ToolExecutionContext
 from app.models.session.session_extra import SessionExtra
@@ -78,7 +79,7 @@ def env(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
 
     monkeypatch.setattr(fork_module, "prepare_agent_message", prepare)
     monkeypatch.setattr(
-        fork_module.session_runtime_spaces,
+        assignment_handover.session_runtime_spaces,
         "enqueue",
         lambda session_id, message: state.enqueued.append((session_id, message)),
     )

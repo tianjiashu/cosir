@@ -26,6 +26,8 @@ class SessionType(StrEnum):
 
 
 FORK_SESSION_TYPES = frozenset({SessionType.USER_FORK, SessionType.AGENT_FORK})
+# Agent 派生出的 Session：有派生方（``SessionRecord.deriver_id()``），记着派生它的调用，能被派生方收回。
+AGENT_DERIVED_SESSION_TYPES = frozenset({SessionType.DELEGATED, SessionType.AGENT_FORK})
 
 DerivationKind = Literal["delegate", "fork"]
 

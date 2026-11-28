@@ -743,15 +743,18 @@ def test_async_handler_is_rejected_at_registration() -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.event_sink_failure_expected
 def test_emit_swallows_projector_failure() -> None:
-    """事件 sink 失败只能记录降级，不得把异常带回工作流节点。"""
+    """事件消费失败由 sink 端口记录后吞掉，不得把异常带回工作流节点。"""
     from app.core.events import AssistantPartClosedEvent
+    from app.core.events.event_sink import event_sink, set_event_sink
     from app.core.workflow.node_helper.common import emit, execution_scope
 
     def failing_sink(_event: object) -> None:
         raise RuntimeError("projector exploded")
 
-    with execution_scope(SimpleNamespace(event_sink=failing_sink), SimpleNamespace()):
+    set_event_sink(failing_sink)  # 下一个用例由 conftest 的 autouse 夹具换回
+    with execution_scope(SimpleNamespace(event_sink=event_sink()), SimpleNamespace()):
         emit(AssistantPartClosedEvent(source_sequence=1, session_id=1, run_id=1, turn=1, part="text"))
 
 

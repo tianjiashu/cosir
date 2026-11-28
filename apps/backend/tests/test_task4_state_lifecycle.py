@@ -381,10 +381,12 @@ def test_get_state_returns_preinstalled_snapshot_without_rebuild() -> None:
     ]
 
 
-def test_transition_propagates_post_commit_projector_failure(
+@pytest.mark.event_sink_failure_expected
+def test_transition_survives_post_commit_projector_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """状态迁移在原子更新成功之后投影失败必须向上传播（与 create_run 一致）。"""
+    """状态迁移在原子更新成功之后投影失败不向上传播（与 create_run 一致，由 sink 端口兜住）：调用方照常
+    拿到迁移结果、接着登记执行，不会留下「running 但没有执行者」的 Run。"""
 
     class FakeRunCrud:
         def update_status_if_in(self, **_kwargs: object) -> SimpleNamespace:
@@ -404,8 +406,7 @@ def test_transition_propagates_post_commit_projector_failure(
     service = RunLedger.__new__(RunLedger)
     service._run = FakeRunCrud()
 
-    with pytest.raises(RuntimeError, match="transport unavailable"):
-        service.transition(7, RunTransition.COMPLETE)
+    assert service.transition(7, RunTransition.COMPLETE) is not None
     monkeypatch.undo()
 
 

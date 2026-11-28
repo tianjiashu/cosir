@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+
 from app.core.context.context_entry import ContextEntry
 from app.core.context.runtime_message_context_manager import RuntimeMessageContextManager
 from app.core.events import RunStatusChangedEvent
@@ -330,6 +331,7 @@ def test_failed_run_persists_usage_and_controlled_error_before_projector() -> No
     assert order == ["database", "event"]
 
 
+@pytest.mark.event_sink_failure_expected
 def test_terminal_run_projector_failure_is_non_fatal_after_database_commit() -> None:
     run = _run_record()
     committed: list[str] = []
@@ -354,9 +356,8 @@ def test_terminal_run_projector_failure_is_non_fatal_after_database_commit() -> 
     original_getter = ledger_module.get_conversation_event_projector
     ledger_module.get_conversation_event_projector = lambda: _Projector()
     try:
-        # 终态落库先于投影：投影失败向上传播，但已提交的 Run 事实完好。
-        with pytest.raises(RuntimeError, match="transport unavailable"):
-            service.transition(11, RunTransition.COMPLETE, final_output="done")
+        # 终态落库先于投影：投影失败由 sink 端口兜住、不向上传播，已提交的 Run 事实完好。
+        assert service.transition(11, RunTransition.COMPLETE, final_output="done") is run
     finally:
         ledger_module.get_conversation_event_projector = original_getter
 

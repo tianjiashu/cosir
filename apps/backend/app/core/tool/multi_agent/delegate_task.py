@@ -17,6 +17,7 @@ from app.core.agents.agent_profile import (
 from app.core.permission.writable_root import WritableRootError, narrow
 from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.args.delegate_task_args import DelegateTaskArgs
+from app.core.tool.multi_agent.assignment_handover import hand_over_assignment
 from app.core.tool.multi_agent.derivation import child_depth
 from app.core.tool.multi_agent.session_tool_scope import freeze_tool_surface, tools_for_session
 from app.core.tool.results.tool_cancelled import tool_cancelled
@@ -30,7 +31,6 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
-from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.message_queue.session_message import RunLaunch
 from app.models.message_context.conversation_input import MessageSource
 from app.models.session.session_extra import SessionExtra
@@ -39,7 +39,6 @@ from app.service.depends import (
     get_run_ledger,
     get_session_service,
 )
-from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
 
 class DelegateTaskTool(HandlerBase):
@@ -123,14 +122,9 @@ class DelegateTaskTool(HandlerBase):
             ``delegate_task_exception`` 日志，不向上抛异常。
 
         副作用:
-            创建 child Session（记下派生它的这次调用），经调度入口投递任务说明，由子 Session 的 actor
-            开出 Run（不等待 child 执行结束）；写日志。
+            创建 child Session（记下派生它的这次调用），投递任务说明，由子 Session 的 actor 开出 Run
+            （不等待 child 执行结束）；本 Session 正被收回时一并收回它、按取消返回（``hand_over_assignment``）。
         """
-
-        if cancellation_registry.is_cancelled(execution_context.session_id):
-            return tool_cancelled(
-                tool_name=self.name,
-            )
 
         from app.config.configuration import get_agent_registry
 
@@ -204,7 +198,8 @@ class DelegateTaskTool(HandlerBase):
             model_config_id = child_agent_model_config_id or parent_run.model_config_id
             # 子 Session 的 actor 新开 Run。任务说明是父 Agent 说的话，以 Agent 消息投递：子 Agent 不会
             # 把它读成用户的请求。
-            session_runtime_spaces.enqueue(
+            handed_over = hand_over_assignment(
+                execution_context.session_id,
                 child_session.id,
                 prepare_agent_message(
                     message,
@@ -218,6 +213,8 @@ class DelegateTaskTool(HandlerBase):
                     ),
                 ),
             )
+            if not handed_over:
+                return tool_cancelled(tool_name=self.name)
             return tool_success(
                 tool_name=self.name,
                 content=json.dumps(

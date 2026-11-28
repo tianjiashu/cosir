@@ -20,6 +20,7 @@ from app.config.logging.logger import log
 from app.core.permission.writable_root import WritableRootError, narrow
 from app.core.tool.multi_agent.agent_message import prepare_agent_message
 from app.core.tool.multi_agent.args.fork_session_args import ForkSessionArgs
+from app.core.tool.multi_agent.assignment_handover import hand_over_assignment
 from app.core.tool.multi_agent.derivation import child_depth
 from app.core.tool.results.tool_cancelled import tool_cancelled
 from app.core.tool.results.tool_error import tool_error
@@ -32,12 +33,10 @@ from app.core.tool.schemas import (
 )
 from app.core.tool.schemas.tool_grouping import TOOL_GROUP_CHILD_AGENT
 from app.core.tool.tool_base import HandlerBase
-from app.core.workflow.cancel.run_cancellation_registry import cancellation_registry
 from app.core.workflow.message_queue.session_message import RunLaunch
 from app.models.message_context.conversation_input import MessageSource
 from app.models.session.session_fork_errors import SessionForkConflictError
 from app.service.depends import get_run_ledger, get_session_service
-from app.session_runtime.session_runtime_space_registry import session_runtime_spaces
 
 
 class ForkSessionTool(HandlerBase):
@@ -86,8 +85,6 @@ class ForkSessionTool(HandlerBase):
         失败路径都收口为工具错误观察：源 Session 正被删除等结构性操作占用时提示重试或自己做；
         其余异常记录 ``fork_session_exception`` 后返回通用错误，不向上抛。
         """
-        if cancellation_registry.is_cancelled(execution_context.session_id):
-            return tool_cancelled(tool_name=self.name)
         try:
             parent_session = self._session_service.get_session(execution_context.session_id)
             # 分叉不换身份：模型与推理强度都沿用发起它的这个 Run（它正在运行，
@@ -121,7 +118,8 @@ class ForkSessionTool(HandlerBase):
             )
             # 交接通知已随分支写入队列（优先级在前），任务说明开出的第一个 Run 先读到身份再读到任务。
             fork_root = fork.extra.writable_root
-            session_runtime_spaces.enqueue(fork.id, assignment)
+            if not hand_over_assignment(parent_session.id, fork.id, assignment):
+                return tool_cancelled(tool_name=self.name)
             return tool_success(
                 tool_name=self.name,
                 content=json.dumps(
